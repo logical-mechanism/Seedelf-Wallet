@@ -28,8 +28,9 @@
 // by itself, since it still shows where it went in. Mixing again takes
 // those first; Bring it back anyway takes one as it is, after a warning.
 // After a restore, with no records, the worker asks Koios what made each
-// box: one a deposit made is not mixed yet too, and one Koios hasn't said of
-// waits the same way until it has (independent review M14).
+// box: one a deposit made is not mixed yet too, said as Koios said it (whose
+// deposit, and why no mix followed, the wallet can't know), and one Koios
+// hasn't said of waits the same way until it has (independent review M14).
 // The chains that aren't all sent are listed: being sent (no box comes back
 // meanwhile), or stopped partway, and why. A mix from the private balance
 // can be stopped before its boxes go in: it then comes back directly. What
@@ -181,24 +182,53 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
 export const anywayBox = (status?: Pick<LovejoinStatus, "notMixed" | "unsure">) => status?.unsure?.[0] ?? status?.notMixed[0];
 
 /**
+ * What Bring it back anyway's warning says of the box it takes (anywayBox).
+ * After a restore, one a deposit made (`deposits`) is said as Koios said it,
+ * never as the user's deposit or a stopped chain's: whose deposit it was,
+ * and why no mix followed it, the wallet can't know (independent review M14).
+ */
+export function anywayWarning(status?: Pick<LovejoinStatus, "notMixed" | "unsure" | "deposits" | "fromPublic">): string {
+  const box = anywayBox(status);
+  const has = (list?: Array<{ txHash: string; txIndex: number }>) =>
+    !!box && !!list?.some((b) => b.txHash === box.txHash && b.txIndex === box.txIndex);
+  const found = has(status?.deposits);
+  if (has(status?.unsure)) {
+    return "Koios hasn't said how it went into the pool, so the wallet can't tell whether it was mixed. If a deposit made it, bringing it back now shows where it went in: anyone can tie that deposit to your private balance. Refresh in a minute to ask Koios again.";
+  }
+  if (has(status?.fromPublic)) {
+    return found
+      ? "Koios says your public account paid the deposit that put it into the pool, and no mix has moved it since. Brought back now, it shows where it went in: anyone can tie your public account to your private balance. Mix again from my public account hides it first, and ties nothing new."
+      : "Its mix from your public account stopped before mixing it, so it's still the box that deposit made. Brought back now, it shows where it went in: anyone can tie your public account to your private balance. Mix again from my public account hides it first, and ties nothing new.";
+  }
+  return found
+    ? "Koios says a deposit put it into the pool, and no mix has moved it since, so it's still that deposit's box. Brought back now, it shows where it went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first."
+    : "Its chain stopped before mixing it, so it's still the box your deposit made. Brought back now, it shows where it went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first.";
+}
+
+/**
  * The wallet's boxes that a chain of its made and didn't finish mixing, or,
- * after a restore, that a deposit made: they never come back by themselves.
- * Mixing again takes them first: Mix again from my public account those a
- * mix from it made (`fromPublic` of them), Mix my boxes again the rest.
- * Bring it back anyway takes one as it is. After a restore, a box whose
- * making Koios hasn't said of yet (`unsure` of them) waits too, until it
- * has, and Mix my boxes again refuses meanwhile (independent review M14).
+ * after a restore, that a deposit made (`deposits` of them): they never
+ * come back by themselves. Those a deposit made are said as Koios said it,
+ * never as a stopped chain's: the wallet can't know whose deposit it was,
+ * or why no mix followed it. Mixing again takes them first: Mix again from
+ * my public account those a mix from it made (`fromPublic` of them), Mix my
+ * boxes again the rest. Bring it back anyway takes one as it is. After a
+ * restore, a box whose making Koios hasn't said of yet (`unsure` of them)
+ * waits too, until it has, and Mix my boxes again refuses meanwhile
+ * (independent review M14).
  */
 export function NotMixed({
   count,
   fromPublic = 0,
   unsure = 0,
+  deposits = 0,
   busy,
   onAnyway,
 }: {
   count: number;
   fromPublic?: number;
   unsure?: number;
+  deposits?: number;
   busy: boolean;
   onAnyway: () => void;
 }) {
@@ -211,6 +241,14 @@ export function NotMixed({
   const many = amounts.hidden || first > 1;
   const which = amounts.hidden ? "Some of your boxes aren't" : first === 1 ? "One of your boxes isn't" : `${first} of your boxes aren't`;
   const them = many ? "them" : "it";
+  // After a restore, those a deposit made: as Koios said, never a stopped chain's or the user's deposit (M14).
+  const found = Math.min(deposits, known);
+  const stopped = known - found;
+  const why = !found
+    ? `a chain stopped before mixing ${them}`
+    : !stopped
+      ? `Koios says a deposit put ${them} into the pool, and no mix has moved ${them} since`
+      : `a chain stopped before mixing ${amounts.hidden ? "some" : stopped === 1 ? "one" : stopped}, and Koios says a deposit put ${amounts.hidden || found > 1 ? "the others" : "the other"} into the pool, with no mix since`;
   // A mix from the public account made them: the account pays to mix them again, and the private balance stays out of it (§2.10).
   const takes =
     fromPublic >= known
@@ -229,7 +267,7 @@ export function NotMixed({
         <span>
           {!known
             ? `${which} known to be mixed yet: Koios hasn't said how ${many ? "they" : "it"} went into the pool. ${many ? "They don't come" : "It doesn't come"} back by ${many ? "themselves" : "itself"} meanwhile. ${asks}`
-            : `${which} mixed yet: a chain stopped before mixing ${them}. ${many ? "They never come" : "It never comes"} back by ${many ? "themselves" : "itself"}, since each still shows where it went in. ${takes}${unsure > 0 ? ` Koios hasn't said yet how ${more} went in: ${waits} ${asks}` : ""}`}
+            : `${which} mixed yet: ${why}. ${many ? "They never come" : "It never comes"} back by ${many ? "themselves" : "itself"}, since each still shows where it went in. ${takes}${unsure > 0 ? ` Koios hasn't said yet how ${more} went in: ${waits} ${asks}` : ""}`}
         </span>
         <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
           Bring one back anyway
@@ -353,7 +391,7 @@ export function Lovejoin({
       await load();
     }, "now");
 
-  /** Brings back a box its chain didn't mix, as it is: it shows where it went in (anywayBox). */
+  /** Brings back a box not mixed yet, as it is: it shows where it went in (anywayBox, anywayWarning). */
   const anyway = () => {
     const box = anywayBox(status);
     setAsking(undefined);
@@ -476,6 +514,7 @@ export function Lovejoin({
         count={notMixed}
         fromPublic={publicNotMixed}
         unsure={unsure.size}
+        deposits={status?.deposits?.length ?? 0}
         busy={busy || mixingAgain}
         onAnyway={() => setAsking({ anyway: true })}
       />
@@ -657,13 +696,7 @@ export function Lovejoin({
             </>
           }
         >
-          <p className="note">
-            {firstUnsure
-              ? "Koios hasn't said how it went into the pool, so the wallet can't tell whether it was mixed. If a deposit made it, bringing it back now shows where it went in: anyone can tie that deposit to your private balance. Refresh in a minute to ask Koios again."
-              : taken && theirs.has(`${taken.txHash}#${taken.txIndex}`)
-                ? "Its mix from your public account stopped before mixing it, so it's still the box that deposit made. Brought back now, it shows where it went in: anyone can tie your public account to your private balance. Mix again from my public account hides it first, and ties nothing new."
-                : "Its chain stopped before mixing it, so it's still the box your deposit made. Brought back now, it shows where it went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first."}
-          </p>
+          <p className="note">{anywayWarning(status)}</p>
         </Modal>
       )}
       {asking && "privateAnyway" in asking && (

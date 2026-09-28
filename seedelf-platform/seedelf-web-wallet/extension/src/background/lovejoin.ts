@@ -2326,13 +2326,14 @@ export class LovejoinService {
    *
    * A box no record accounts for, when more boxes could come back than there
    * are due times (a restore), is held as not mixed yet when a deposit made
-   * it, or while Koios hasn't said what did (`unsure`, listed last): found.
+   * it (`deposits`), or while Koios hasn't said what did (`unsure`, listed
+   * last): found.
    */
   private async sortOut(
     network: NetworkName,
     owned: OutRef[],
     listed: OutRef[],
-  ): Promise<{ unmixed: OutRef[]; free: OutRef[]; unsure: OutRef[] }> {
+  ): Promise<{ unmixed: OutRef[]; free: OutRef[]; unsure: OutRef[]; deposits: OutRef[] }> {
     const now = this.deps.now();
     const before = await this.read(network);
     const { chains } = before;
@@ -2371,7 +2372,7 @@ export class LovejoinService {
       if (unsure.length) s.unsure = unsure.length;
       else delete s.unsure;
     });
-    return { unmixed, free, unsure };
+    return { unmixed, free, unsure, deposits };
   }
 
   /**
@@ -2550,7 +2551,7 @@ export class LovejoinService {
     if (!this.available(network)) return { available: false, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [], chains: [] };
     await this.cuts(network);
     const { owned, listed } = await this.ours(network);
-    const { unmixed, free: back, unsure } = await this.sortOut(network, owned, listed);
+    const { unmixed, free: back, unsure, deposits } = await this.sortOut(network, owned, listed);
     await this.scheduleFound(network, back.length);
     const schedule = await this.read(network);
     const { due, chains } = schedule;
@@ -2561,6 +2562,7 @@ export class LovejoinService {
       due: [...due].sort((a, b) => a - b),
       notMixed: unmixed,
       ...(unsure.length ? { unsure } : {}),
+      ...(deposits.length ? { deposits } : {}),
       fromPublic: fromPublic(owned, schedule),
       chains: chains
         .filter((c) => !c.done)
@@ -2795,7 +2797,7 @@ export class LovejoinService {
     // Nor while a payment may still go through: Home's banner watches that one until it's settled (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { pool, owned, listed } = await this.ours(network);
-    const { unmixed, free: back, unsure } = await this.sortOut(network, owned, listed);
+    const { unmixed, free: back, unsure, deposits } = await this.sortOut(network, owned, listed);
     const reserved = await this.reservedBoxes(network);
     let chosen: OutRef | undefined;
     if (box) {
@@ -2809,8 +2811,11 @@ export class LovejoinService {
         );
       }
       if (!anyway && unmixed.some((b) => ref(b) === ref(chosen!))) {
+        // After a restore, one a deposit made: whose deposit, and why no mix followed it, the wallet can't know (M14).
         throw new Error(
-          "That box wasn't mixed: its chain stopped before mixing it. Brought back now, it shows where it went in. Mix your boxes again first, or bring it back anyway.",
+          deposits.some((b) => ref(b) === ref(chosen!))
+            ? "That box wasn't mixed: Koios says a deposit put it into the pool, and no mix has moved it since. Brought back now, it shows where it went in. Mix your boxes again first, or bring it back anyway."
+            : "That box wasn't mixed: its chain stopped before mixing it. Brought back now, it shows where it went in. Mix your boxes again first, or bring it back anyway.",
         );
       }
     } else {
@@ -2818,12 +2823,13 @@ export class LovejoinService {
       const rows = new Map(pool.map((u) => [outpoint(u), u]));
       [chosen] = backOrder(free(back, reserved), rows, ownLeaves(await this.read(network)), least, this.deps.now());
       if (!chosen) {
-        // Mix my boxes again refuses while Koios hasn't said of a box (againBoxes): it's never "first" then (M14).
+        // Mix my boxes again refuses while Koios hasn't said of a box (againBoxes): it's never "first" then. Those
+        // known not to be mixed are said apart from those Koios hasn't said of, which may be (M14).
         throw new Error(
           unsure.length && unsure.length === unmixed.length
             ? "Koios hasn't said yet how your boxes went into Lovejoin's pool, so none comes back until it has. Try again in a minute, or choose one to bring back anyway."
             : unsure.length
-              ? "Your boxes in Lovejoin's pool weren't mixed yet, and Koios hasn't said yet how some went in. Mix them again once it has, or choose one to bring back anyway."
+              ? "Some of your boxes in Lovejoin's pool weren't mixed yet, and Koios hasn't said yet how the others went in. Mix them again (Mix my boxes again once Koios has said), or choose one to bring back anyway."
               : unmixed.length
                 ? "Your boxes in Lovejoin's pool weren't mixed yet. Mix them again first, or choose one to bring back anyway."
                 : "None of your boxes is in Lovejoin's pool.",

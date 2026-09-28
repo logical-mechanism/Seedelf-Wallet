@@ -1079,6 +1079,13 @@ export interface LovejoinStatus {
    */
   unsure?: Array<{ txHash: string; txIndex: number }>;
   /**
+   * Of `notMixed`: boxes after a restore, with no record of the chain that
+   * made them, that Koios said a deposit made. Whose deposit it was, and why
+   * no mix followed it, the wallet can't know, so they're never said to be
+   * the user's deposit or a stopped chain's (independent review M14).
+   */
+  deposits?: Array<{ txHash: string; txIndex: number }>;
+  /**
    * Its boxes a mix from the public account put where they are: the
    * account's, which paid for it in the open. Mixed again, the account pays,
    * or the private balance ties itself to it (privacy review §2.10).
