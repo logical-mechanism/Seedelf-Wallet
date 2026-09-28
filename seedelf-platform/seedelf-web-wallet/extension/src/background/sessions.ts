@@ -186,6 +186,8 @@ type RecordedTx = SessionTx & {
   inputs?: string[];
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
+  /** A swap's: the least its order asks for, recorded before it's sent (independent review L24). */
+  minAmountOut?: string;
 };
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
@@ -1791,8 +1793,10 @@ export class SessionService {
     const bytes = hexBytes(whole);
     if (txId(bytes) !== built.txHash) throw new Error("Putting the signature in changed the transaction, so it wasn't sent.");
     return this.sendRecorded(network, built.index, built.kind, built.txHash, bytes, SESSION_TX, {
-      // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked at.
+      // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked
+      // at, and its own minimum the one shown.
       orders: built.kind === "swap" ? built.orders : undefined,
+      minAmountOut: built.kind === "swap" ? built.quote?.minAmountOut : undefined,
       after: (s) => {
         if (built.kind === "swap" && built.quote && s.swap) {
           s.swap = { ...s.swap, amountOut: built.quote.amountOut, minAmountOut: built.quote.minAmountOut };
@@ -2158,9 +2162,9 @@ export class SessionService {
    * Records a session's transaction, then submits it, so the record always
    * knows what may be on its way. Its page watches it, not Home's banner.
    * `kept`: where it was kept for Send, cleared once it's sent if that still
-   * holds `keptHash` (this transaction, or the chain it's part of). `orders`:
-   * a swap's, recorded with it. `after`: what else the record gains once
-   * it's sent.
+   * holds `keptHash` (this transaction, or the chain it's part of). `orders`
+   * and `minAmountOut`: a swap's, recorded with it. `after`: what else the
+   * record gains once it's sent.
    */
   private async sendRecorded(
     network: NetworkName,
@@ -2169,7 +2173,12 @@ export class SessionService {
     txHash: string,
     bytes: Uint8Array<ArrayBuffer>,
     kept: string,
-    { after, keptHash = txHash, orders }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[] } = {},
+    {
+      after,
+      keptHash = txHash,
+      orders,
+      minAmountOut,
+    }: { after?: (s: SessionRecord) => void; keptHash?: string; orders?: string[]; minAmountOut?: string } = {},
   ): Promise<PendingTx> {
     const { wallet, session, now } = this.deps;
     const mine = (s: SessionRecord) => s.txs.find((t) => t.txHash === txHash);
@@ -2181,7 +2190,14 @@ export class SessionService {
         delete again.unsent;
         again.sending = true;
       } else {
-        s.txs.push({ kind, txHash, at: now(), sending: true, ...(orders ? { orders } : {}) });
+        s.txs.push({
+          kind,
+          txHash,
+          at: now(),
+          sending: true,
+          ...(orders ? { orders } : {}),
+          ...(minAmountOut ? { minAmountOut } : {}),
+        });
       }
     });
     try {
@@ -2331,10 +2347,12 @@ export class SessionService {
       address,
       createdAt: s.createdAt,
       stage,
-      txs: txs.map(({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, ...t }) => t),
+      txs: txs.map(
+        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, minAmountOut: _min, ...t }) => t,
+      ),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
-      ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix) } : {}),
+      ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix, s.swap) } : {}),
       ...(s.site ? { site: s.site } : {}),
       ...(s.mix ? { mix: s.mix } : {}),
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
@@ -2541,9 +2559,17 @@ function chainView(chain: NonNullable<SessionRecord["chain"]>, txs: RecordedTx[]
   };
 }
 
-/** Where a swap or a mix that runs itself is at, for its timeline. A mix's chain is its return. */
-function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage"], mix: boolean): SessionAuto {
+/**
+ * Where a swap or a mix that runs itself is at, for its timeline. A mix's
+ * chain is its return. `txs`: those shown. The least its order asks for,
+ * once one is placed: that copy's own (Review it myself, or a fresh quote,
+ * can ask for other than was approved), or, recorded before each kept its
+ * own, the swap's as last sent (independent review L24).
+ */
+function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage"], mix: boolean, swap?: SessionView["swap"]): SessionAuto {
   const has = (kind: SessionTx["kind"], confirmed = false) => txs.some((t) => t.kind === kind && (!confirmed || t.confirmed));
+  const order = txs.findLast((t) => t.kind === "swap");
+  const placedMinOut = order ? (order.minAmountOut ?? swap?.minAmountOut) : undefined;
   const step: SessionAuto["step"] =
     stage === "closed"
       ? "done"
@@ -2561,6 +2587,7 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     stopping: !!auto.stopping,
     filled: !!auto.filled,
     approvedMinOut: auto.approved.minAmountOut,
+    ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),
     ...(auto.retry ? { retry: { at: auto.retry.at, error: auto.retry.error } } : {}),
     ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),

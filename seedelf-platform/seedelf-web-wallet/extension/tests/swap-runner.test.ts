@@ -205,3 +205,36 @@ describe("a swap's return after Stop's cancel (independent review L16)", () => {
     expect(t.koios.submitted).toHaveLength(1);
   });
 });
+
+describe("the least a swap's order asks for (independent review L24)", () => {
+  it("is the placed order's, once one is: Review it myself after a pause asks for less than was approved", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    // The price moved: the runner pauses rather than ask for less.
+    t.minswap.estimate = { ...t.minswap.estimate, amount_out: "900000000", min_amount_out: "895500000" };
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({ why: "price" });
+    expect(view.auto!.placedMinOut).toBeUndefined();
+    // The user reviews the new price and sends it.
+    const review = await sessions.swapBuild("preprod", 0);
+    expect(review.quote!.minAmountOut).toBe("895500000");
+    await sessions.txSubmit("preprod", review.txHash, "swap");
+    view = (await sessions.list("preprod"))[0]!;
+    expect(view.auto).toMatchObject({ approvedMinOut: "902083681", placedMinOut: "895500000" });
+    // Kept with the copy that was sent, and never shown with the transaction.
+    expect((await bookOf(t)).sessions[0]!.txs.at(-1)).toMatchObject({ kind: "swap", minAmountOut: "895500000" });
+    expect(view.txs.at(-1)).not.toHaveProperty("minAmountOut");
+  });
+
+  it("is the runner's own when a fresh quote asks for more than was approved", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    t.minswap.estimate = { ...t.minswap.estimate, amount_out: "910000000", min_amount_out: "905450000" };
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto).toMatchObject({ approvedMinOut: "902083681", placedMinOut: "905450000" });
+  });
+});

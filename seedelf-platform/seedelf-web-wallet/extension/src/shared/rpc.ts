@@ -807,6 +807,12 @@ export interface SessionAuto {
   /** The least the user approved receiving. */
   approvedMinOut: string;
   /**
+   * The least the order placed asks for, once one is: Review it myself, or
+   * a fresh quote above the approved least, asks for other than was
+   * approved (independent review L24).
+   */
+  placedMinOut?: string;
+  /**
    * Its next step, found as the wallet unlocked, waits until then (ms), so
    * it doesn't go out the moment the wallet unlocks (privacy review §3.1).
    */

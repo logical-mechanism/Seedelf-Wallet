@@ -2019,7 +2019,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     if (i > at) return "todo";
     return auto.paused || auto.retry ? "paused" : "now";
   };
-  const least = sides ? amountOf(auto.approvedMinOut, sides.get) : undefined;
+  // What the order placed asks for, once one is; the approved least before (independent review L24).
+  const least = sides ? amountOf((tx("swap") && auto.placedMinOut) || auto.approvedMinOut, sides.get) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
     {
       title: failed ? "Not funded" : "Funded",
