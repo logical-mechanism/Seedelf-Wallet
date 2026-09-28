@@ -1968,7 +1968,9 @@ export class SessionService {
     if (await this.pendingChain(network, built.index)) {
       throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
     }
+    let was: Pick<SessionRecord, "chain" | "lovejoinSkipped"> = {};
     await this.update(network, built.index, (s) => {
+      was = { ...(s.chain ? { chain: s.chain } : {}), ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}) };
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
     });
@@ -1993,7 +1995,17 @@ export class SessionService {
       boxes: summary.lovejoin?.boxes ?? 0,
       again: !!summary.lovejoin?.again,
     };
-    await (lovejoin ? lovejoin.recordChain(network, record, start) : start());
+    try {
+      await (lovejoin ? lovejoin.recordChain(network, record, start) : start());
+    } catch (e) {
+      // It never started: the session says what it said before, not that this chain is on its way.
+      await this.update(network, built.index, (s) => {
+        if (s.chain?.last !== record.txs.at(-1)!.txHash) return;
+        delete s.chain;
+        Object.assign(s, was);
+      }).catch(() => undefined);
+      throw e;
+    }
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
     return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };

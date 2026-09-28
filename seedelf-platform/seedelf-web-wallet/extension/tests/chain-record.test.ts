@@ -108,6 +108,8 @@ describe("a session's return chain and its record (independent review L28)", CHA
     await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("QUOTA_BYTES");
     expect(await t.wallet.withKeys(() => t.session.get(`${SESSION_CHAIN_PREFIX}preprod.0`))).toBeUndefined();
     expect((await reserved(t))?.["session.0"]?.until).toBeDefined();
+    // The session doesn't show a chain on its way.
+    expect((await sessions.list("preprod"))[0]!.chain).toBeUndefined();
     await sessions.runAll("preprod");
     expect(t.koios.submitted.length).toBe(submits);
   });
