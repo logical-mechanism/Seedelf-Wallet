@@ -252,34 +252,41 @@ describe("the watch of a payment that may still go through", () => {
     };
   }
 
-  it("stays when a payment checked before it went maybe sent goes through after it (final review money-submit-1)", async () => {
+  // Each submit is in the watch as maybe sent before it goes to Koios
+  // (independent review M1), so a payment sent while another is on its way
+  // waits for it, as a new review does: two never go out at once.
+  it("keeps the one on its way when a payment is sent beside it, which waits and sends nothing (final review money-submit-1)", async () => {
     const t = await unlocked();
     const moveIn = await t.moveIn.build("preprod", "5000000", []);
     const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
-    // The move-in's Send is on its way when the payment's goes unanswered.
-    let paid: PendingTx | undefined;
-    whileSubmitting(t, async () => (paid = await t.send.submit("preprod", payment.txHash)));
+    // The payment's Send is pressed while the move-in's is on its way.
+    let paid: unknown;
+    whileSubmitting(t, async () => (paid = await t.send.submit("preprod", payment.txHash).catch((e: unknown) => e)));
     expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ kind: "move-in", confirmations: null });
-    expect(paid).toMatchObject({ txHash: payment.txHash, maybeSent: true });
+    expect((paid as Error).message).toBe(MAYBE_SENT_WAIT);
+    expect(ids(t)).toEqual([moveIn.txHash]);
 
-    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: payment.txHash, maybeSent: true });
-    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
-    const spent = await spentSet(t.session);
-    for (const tx of t.koios.submitted) for (const o of txInputs(tx)) expect(spent).toContain(o);
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash });
+    expect(await t.session.get(pendingKey("preprod"))).not.toHaveProperty("maybeSent");
+    // The payment is kept as reviewed, never sent: its UTxOs aren't held back.
+    expect(await t.session.get(SESSION_SEND)).not.toHaveProperty("sentCbor");
+    expect(await spentSet(t.session)).toEqual(new Set(txInputs(t.koios.submitted[0]!)));
   });
 
-  it("stays when another goes maybe sent beside it, which is held back all the same", async () => {
+  it("keeps the one on its way maybe sent when Koios doesn't answer it, and the payment sent beside it still waits", async () => {
     const t = await unlocked();
     const moveIn = await t.moveIn.build("preprod", "5000000", []);
     const payment = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
-    whileSubmitting(t, () => t.send.submit("preprod", payment.txHash), true);
+    let paid: unknown;
+    whileSubmitting(t, async () => (paid = await t.send.submit("preprod", payment.txHash).catch((e: unknown) => e)), true);
     expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
+    expect((paid as Error).message).toBe(MAYBE_SENT_WAIT);
+    expect(ids(t)).toEqual([moveIn.txHash]);
 
-    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: payment.txHash, maybeSent: true });
+    expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
     // The move-in is kept as sent, for Send again, and its UTxOs are held back.
     expect(await t.session.get(SESSION_BUILT)).toHaveProperty("sentCbor");
-    const spent = await spentSet(t.session);
-    for (const tx of t.koios.submitted) for (const o of txInputs(tx)) expect(spent).toContain(o);
+    expect(await spentSet(t.session)).toEqual(new Set(txInputs(t.koios.submitted[0]!)));
   });
 
   it("isn't taken by Lovejoin's withdraw or mix sent beside it, and is once it's settled", async () => {
@@ -447,10 +454,10 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.lock();
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.pending("preprod")).toBeNull();
-    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeUndefined();
   });
 
-  it("is sent again by the worker's run at unlock, the network shown or not", async () => {
+  it("is only looked for at unlock, and sent again by the worker's run two minutes on, the network shown or not (independent review L9)", async () => {
     const t = await unlocked();
     const summary = await again(t);
     unanswered(t);
@@ -458,11 +465,16 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.lock();
     t.clock.now += 5 * 60_000;
     await t.wallet.unlock(PASSWORD);
+    // The unlock's run, and Home's first look: nothing goes out the moment the wallet unlocks.
+    expect(await t.pending.watch("preprod", true)).toBe(true);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
+    expect(ids(t)).toEqual([summary.txHash]);
+    await busyFor(t, 2 * 60_000);
     expect(await t.pending.watch("preprod")).toBe(false);
     expect(ids(t)).toEqual([summary.txHash, summary.txHash]);
     // Taken: an ordinary sent payment, which a lock may forget.
     expect(await t.session.get(pendingKey("preprod"))).not.toHaveProperty("maybeSent");
-    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeUndefined();
   });
 
   it("goes into the Seedelf history when a private one lands after the lock", async () => {
@@ -489,7 +501,7 @@ describe("a payment that may still go through, across a lock (final review money
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "expired" });
     expect(await spentSet(t.session)).toEqual(new Set());
-    expect(await t.store.get("maybeSent.preprod")).toBeNull();
+    expect(await t.store.get("maybeSent.preprod")).toBeUndefined();
 
     const withdraw = privately(t);
     const privateOne = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
@@ -502,14 +514,14 @@ describe("a payment that may still go through, across a lock (final review money
     await expect(again(t)).resolves.toBeDefined();
   });
 
-  it("is deleted with the wallet", async () => {
+  it("is kept through Remove wallet, for the same phrase restored here to watch again (independent review M2)", async () => {
     const t = await unlocked();
     const summary = await again(t);
     unanswered(t);
     await t.send.submit("preprod", summary.txHash);
     expect(t.local.data.has(SEALED)).toBe(true);
     await t.wallet.reset();
-    expect(t.local.data.has(SEALED)).toBe(false);
+    expect(t.local.data.has(SEALED)).toBe(true);
   });
 });
 

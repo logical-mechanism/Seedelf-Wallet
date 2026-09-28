@@ -107,7 +107,7 @@ describe("the worker's runs", () => {
   it("go on with the other network when one fails, and stop the alarm with nothing to do on any", async () => {
     const { ctx, alarm } = runner({ mainnet: { fails: true }, preprod: { maybeSent: true } });
     await runNetworks(ctx, alarm);
-    expect(ctx.pending.watch).toHaveBeenCalledWith("preprod");
+    expect(ctx.pending.watch).toHaveBeenCalledWith("preprod", false);
     expect(alarm.on).toBe(true);
 
     const quiet = runner({});

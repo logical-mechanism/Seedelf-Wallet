@@ -57,6 +57,12 @@ export async function rememberSent(session: Area, network: NetworkName, tx: Uint
   await session.set(SESSION_SENT_PREFIX + network, [...kept, { txHash, txCbor, sentAt: now }].slice(-KEEP));
 }
 
+/** Forgets `txHash`, kept as it was about to be sent, and refused: it never went out (pending.ts). Call it while unlocked. */
+export async function forgetSent(session: Area, network: NetworkName, txHash: string): Promise<void> {
+  const kept = (await session.get<SentTx[]>(SESSION_SENT_PREFIX + network)) ?? [];
+  if (kept.some((s) => s.txHash === txHash)) await session.set(SESSION_SENT_PREFIX + network, kept.filter((s) => s.txHash !== txHash));
+}
+
 /** The transactions sent on `network` in the last 20 minutes, oldest first. Call it while unlocked. */
 export async function recentlySent(session: Area, network: NetworkName, now = Date.now()): Promise<SentTx[]> {
   return ((await session.get<SentTx[]>(SESSION_SENT_PREFIX + network)) ?? []).filter((s) => now - s.sentAt < SENT_KEEP_MS);

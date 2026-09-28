@@ -52,6 +52,7 @@
 
 import { NETWORKS, type NetworkName } from "../networks";
 import type {
+  AtStake,
   DappTxSummary,
   LeftBehindUtxo,
   LeftOutUtxo,
@@ -3005,6 +3006,26 @@ export class SessionService {
     change(s);
     await this.save(network, book);
     return s;
+  }
+
+  /**
+   * What removing the wallet would leave at this network's one-time
+   * accounts, from the sealed book alone (no Koios request): each session
+   * not closed, unless its funding was turned away, and each closed one with
+   * something no return takes left at its account. Nothing reads those
+   * accounts without the book, and a restore doesn't find them yet
+   * (independent review M5).
+   */
+  async atStake(network: NetworkName): Promise<AtStake["sessions"]> {
+    const book = await this.book(network);
+    return book.sessions
+      .filter((s) => (s.closedAt ? !!s.leftBehind?.length : !s.txs[0]?.unsent))
+      .map((s) => ({
+        index: s.index,
+        kind: s.site ? "site" : s.mix ? "mix" : "swap",
+        ...(s.site ? { origin: s.site.origin } : {}),
+        ...(s.closedAt ? { leftBehind: true } : {}),
+      }));
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {

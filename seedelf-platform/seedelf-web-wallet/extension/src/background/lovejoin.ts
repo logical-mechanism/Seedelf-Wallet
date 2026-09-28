@@ -1954,8 +1954,8 @@ export class LovejoinService {
     });
   }
 
-  /** Whether a chain of the wallet's is being sent (recorded, and neither all sent nor stopped). */
-  private async chainsSending(network: NetworkName): Promise<boolean> {
+  /** Whether a chain of the wallet's is being sent (recorded, and neither all sent nor stopped). Remove wallet says so first. */
+  async chainsSending(network: NetworkName): Promise<boolean> {
     await this.cuts(network);
     return (await this.read(network)).chains.some((c) => !c.ended);
   }

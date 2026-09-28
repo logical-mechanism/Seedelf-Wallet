@@ -485,7 +485,10 @@ export class Koios {
    * Submits a signed transaction; returns its hash. Retried only when Koios
    * says its node was unreachable: otherwise, if an answer were lost, a
    * second submit would fail with "inputs already spent" and hide the fact
-   * that the first one went through.
+   * that the first one went through. An answer cut off after its status (the
+   * timeout covers the body too), or one that isn't the hash it should be,
+   * may have gone through all the same: it's a KoiosBusyError, maybe sent
+   * (independent review L2).
    */
   async submitTx(txCbor: Uint8Array<ArrayBuffer>): Promise<string> {
     let response: Response;
@@ -504,9 +507,14 @@ export class Koios {
         if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED);
         throw new KoiosBusyError(unreachable(e));
       }
-      text = await response.text();
+      // Koios's gateway answers a 429 before passing anything on, whatever its body.
       if (response.status === 429) throw new KoiosBusyError(koiosTrouble(429, "submittx"), false);
       if (response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
+      try {
+        text = await response.text();
+      } catch (e) {
+        throw new KoiosBusyError(unreachable(e));
+      }
       // Found live: a Koios backend whose own node was down answered. The
       // transaction never reached the network, so it's safe to send again,
       // and the gateway likely picks another backend.
@@ -538,7 +546,15 @@ export class Koios {
       );
     }
     if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
-    return JSON.parse(text) as string;
+    let id: unknown;
+    try {
+      id = JSON.parse(text);
+    } catch {
+      id = undefined;
+    }
+    // Taken, with an answer that isn't a transaction's id: it may well be on its way.
+    if (typeof id !== "string") throw new KoiosBusyError(`Koios took the transaction, and its answer couldn't be read (${text.slice(0, 100)}).`);
+    return id;
   }
 
   /**

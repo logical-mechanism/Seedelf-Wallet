@@ -25,7 +25,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { DappSite, SessionView, Status } from "../../shared/rpc";
+import type { AtStake, DappSite, SessionView, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -50,6 +50,7 @@ import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
+import { plural } from "../format";
 import { usePreferences } from "../preferences";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
@@ -991,19 +992,82 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
 
 const CONFIRM_TEXT = "delete wallet";
 
-function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (status: Status) => void }) {
+/** A private session as Remove wallet's list names it: by its number, from 1, and a site's by its host. */
+function sessionName(s: AtStake["sessions"][number]): string {
+  const name = `private session ${s.index + 1}`;
+  if (s.kind === "site" && s.origin) return `${name} (${new URL(s.origin).host})`;
+  return s.kind === "mix" ? `${name} (a mix)` : s.kind === "swap" ? `${name} (a swap)` : name;
+}
+
+/**
+ * What removing the wallet would leave behind, in plain words: a line for
+ * each thing on each network (independent review M2, M5). A restore finds
+ * the public account, the private balance and Lovejoin's boxes; it doesn't
+ * find what private sessions' one-time accounts hold yet, and nothing
+ * watches a payment that may still go through until the same phrase is
+ * restored here, before any other wallet is made here: that deletes its
+ * record (pending.ts adoptKept).
+ */
+export function atStakeLines(stake: AtStake[]): string[] {
+  return stake.flatMap((s) => {
+    const on = NETWORKS[s.network].label;
+    const lines: string[] = [];
+    if (s.unreadable) lines.push(`${on}: Seedelf Wallet couldn't read what's still open there.`);
+    if (s.maybeSent) {
+      lines.push(
+        `${on}: a payment Koios didn't answer may still go through. An encrypted record of it stays in this browser: restoring this same recovery phrase here watches it again, but making or restoring another wallet here first deletes that record. While nothing watches it, a payment made here or elsewhere could pay twice.`,
+      );
+    }
+    const open = s.sessions.filter((x) => !x.leftBehind);
+    if (open.length) {
+      lines.push(
+        `${on}: ${plural(open.length, "private session")} still open: ${open.map(sessionName).join(", ")}. What ${open.length === 1 ? "its one-time account holds" : "their one-time accounts hold"} doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.`,
+      );
+    }
+    const left = s.sessions.filter((x) => x.leftBehind);
+    if (left.length) {
+      lines.push(
+        `${on}: something no return takes is left at the account of ${left.map(sessionName).join(", ")}, and it doesn't show after a restore yet.`,
+      );
+    }
+    if (s.chainSending) {
+      lines.push(`${on}: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.`);
+    }
+    return lines;
+  });
+}
+
+export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (status: Status) => void }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // What removing it would leave behind, as the worker reads it: undefined while it reads, null when it couldn't.
+  const [stake, setStake] = useState<AtStake[] | null>();
+  const [anyway, setAnyway] = useState(false);
   const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
+  const held = stake === null || !!stake?.length;
+
+  const check = () => {
+    setStake(undefined);
+    setAnyway(false);
+    call("reset-check", {}).then(setStake, (e: Error) => {
+      setStake(null);
+      setError(e.message);
+    });
+  };
+  useEffect(check, []);
 
   async function remove() {
     setBusy(true);
+    setError(undefined);
     try {
-      onRemoved(await call("reset-wallet", {}));
+      // Anything listed stays behind only when the user said so a second time; the worker checks again.
+      onRemoved(await call("reset-wallet", { force: held && anyway }));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
+      // Something may have opened since the list was read.
+      check();
     }
   }
 
@@ -1015,15 +1079,49 @@ function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (s
       backDisabled={busy}
       error={error}
       foot={
-        <button type="button" className="danger" onClick={remove} disabled={busy || !confirmed}>
-          {busy ? "Removing…" : "Remove wallet"}
+        <button
+          type="button"
+          className="danger"
+          onClick={remove}
+          disabled={busy || !confirmed || stake === undefined || (held && !anyway)}
+        >
+          {busy ? "Removing…" : stake === undefined ? "Checking…" : "Remove wallet"}
         </button>
       }
     >
-      <p className="note">
-        This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings them back,
-        here or in Seedelf Wallet on another device.
+      <p className="note" data-testid="remove-wallet-note">
+        This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings back your
+        public account, your private balance and your Lovejoin boxes, here or in Seedelf Wallet on another device. What
+        private sessions' one-time accounts hold doesn't show after a restore yet: bring it back first.
       </p>
+      {held && (
+        <Callout tone="warn" testId="remove-at-stake">
+          {stake === null
+            ? "Seedelf Wallet couldn't check what's still open, which removing it would leave behind."
+            : "Still open, which removing the wallet leaves behind:"}
+          {!!stake?.length && (
+            <ul className="dapp-points">
+              {atStakeLines(stake).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </Callout>
+      )}
+      {held && (
+        <div className="setting-row">
+          <span id="remove-anyway-label">Remove it anyway, leaving that behind</span>
+          <button
+            type="button"
+            role="switch"
+            className="switch"
+            aria-checked={anyway}
+            aria-labelledby="remove-anyway-label"
+            onClick={() => setAnyway(!anyway)}
+            disabled={busy}
+          />
+        </div>
+      )}
       <Callout tone="warn">
         Make sure you have your recovery phrase first (Show recovery phrase). Without it, removing the wallet loses your
         funds for good.
