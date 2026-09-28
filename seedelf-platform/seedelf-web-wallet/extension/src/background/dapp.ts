@@ -48,7 +48,9 @@
 //             Another's is left to the stranger's path, never named.
 //             `signData` is CIP-8, with the address's key.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
-//             and what it spends is remembered (spent.ts).
+//             and what it spends is remembered (spent.ts), apart from what
+//             the wallet spent itself. One already on chain, sent again, is
+//             a success, and leaves nothing behind.
 // Limits      What a site asks for without the user costs the wallet little:
 //             calls at the same time share one reading of the account; a
 //             site gets a few fresh readings, UTxO lookups and submits a
@@ -93,7 +95,7 @@ import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
-import { outpoint, rememberSpent, reservedSet, spentSet } from "./spent";
+import { outpoint, rememberSiteSpent, reservedSet, spentSet } from "./spent";
 import { SESSION_BALANCES_PREFIX } from "./wallet";
 import { isTrap } from "./wasm";
 
@@ -1351,15 +1353,20 @@ export class DappService {
     try {
       await koios.submitTx(bytes);
     } catch (e) {
-      // Sent already, by the site itself or an earlier call: that's a success.
+      // Sent already, by the site itself or an earlier call: that's a
+      // success. Nothing new went out, so nothing is kept of it: a site
+      // resending old transactions can't fill the wallet's memory of what
+      // it spent (independent review L7).
       const status = e instanceof SpentInputError ? await koios.txStatus([id]).catch(() => undefined) : undefined;
       if (status?.get(id) == null) {
         throw new DappError({ code: TxSendError.Failure, info: (e as Error).message });
       }
+      return id;
     }
     const { wallet, session, wasm, now } = this.deps;
     await wallet.withKeys(async () => {
-      await rememberSpent(session, network, bytes);
+      // Apart from what the wallet spent itself, under a cap of its own (spent.ts).
+      await rememberSiteSpent(session, bytes);
       const key = SESSION_DAPP_SIGNED + network + suffix(holder);
       const kept = (await session.get<Signed[]>(key)) ?? [];
       // One the wallet didn't sign is kept here too, for this site's next
