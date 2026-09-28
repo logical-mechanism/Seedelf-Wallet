@@ -53,11 +53,30 @@ export async function rememberSpent(session: Area, network: NetworkName, tx: Uin
   await rememberSent(session, network, tx, now);
 }
 
-/** Forgets `outpoints`: a transaction that never landed spent nothing (pending.ts). Call it while unlocked. */
-export async function forgetSpent(session: Area, outpoints: readonly string[], now = Date.now()): Promise<void> {
+/**
+ * Forgets `outpoints`: a transaction that never landed spent nothing
+ * (pending.ts). One another transaction had spent already (`before`, from
+ * `spentAt` just before this one was remembered) goes back to when that one
+ * spent it, and stays (independent review M1). Call it while unlocked.
+ */
+export async function forgetSpent(
+  session: Area,
+  outpoints: readonly string[],
+  before: Readonly<Record<string, number>> = {},
+  now = Date.now(),
+): Promise<void> {
   const spent = await kept(session, now);
-  for (const o of outpoints) delete spent[o];
+  for (const o of outpoints) {
+    if (before[o] !== undefined) spent[o] = before[o];
+    else delete spent[o];
+  }
   await session.set(SESSION_SPENT, spent);
+}
+
+/** When each of `outpoints` the wallet has spent was spent (ms), for `forgetSpent` to put back. Call it while unlocked. */
+export async function spentAt(session: Area, outpoints: readonly string[], now = Date.now()): Promise<Record<string, number>> {
+  const spent = await kept(session, now);
+  return Object.fromEntries(outpoints.flatMap((o) => (spent[o] === undefined ? [] : [[o, spent[o]]])));
 }
 
 /** The outpoints spent within SPENT_KEEP_MS. Call it while unlocked. */

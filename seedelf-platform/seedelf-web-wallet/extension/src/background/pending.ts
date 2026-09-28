@@ -45,7 +45,8 @@ import { txInputs } from "./cbor";
 import { forgetContractView } from "./contract-scan";
 import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
-import { forgetSpent, outpoint, rememberSpent } from "./spent";
+import { forgetSent, recentlySent } from "./sent-txs";
+import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
 
@@ -380,9 +381,10 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     }
   }
   if (submitted !== undefined && submitted !== s.txHash) {
-    // Something went out, and what isn't known: it stays maybe sent, as written ahead.
+    // Something went out, and what isn't known: it stays maybe sent, as written ahead, and
+    // says so, so no caller takes it for one that never went out (a session's funding, say).
     if (s.contract) await forgetContractView(deps, s.network).catch(() => undefined);
-    throw new Error(`Koios answered with another transaction id (${submitted}).`);
+    throw new KoiosBusyError(`Koios answered with another transaction id (${submitted}).`, true);
   }
 
   const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
@@ -405,6 +407,13 @@ interface Ahead {
   /** The watch had this very one already, maybe sent (Send again), and keeps it as it first was. */
   again: boolean;
   nonce?: string;
+  /**
+   * What it wrote over, put back as it was if `s` is refused: the watch of
+   * a payment settled (a Send taken, watched for its confirmations), when
+   * each of its UTxOs another transaction had spent already was spent, and
+   * whether `s` was kept as sent already.
+   */
+  before?: { watched?: Watched; spent: Record<string, number>; sent: boolean };
 }
 
 /**
@@ -438,20 +447,26 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
   };
   return inTurn(deps, s.network, async () => {
     await restoreNow(deps, s.network);
-    const was = await wallet.withKeys(async () => {
+    const { was, before } = await wallet.withKeys(async () => {
       const was = await session.get<Watched>(key);
-      if (unsettled(was) && was.txHash !== s.txHash) return was;
+      if (unsettled(was) && was.txHash !== s.txHash) return { was };
+      // What's there already, for a refusal to put back as it was.
+      const before = {
+        watched: was,
+        spent: await spentAt(session, record.inputs!),
+        sent: (await recentlySent(session, s.network)).some((t) => t.txHash === s.txHash),
+      };
       await rememberSpent(session, s.network, bytes);
       // Send sends these very bytes again, and asks giveme.my nothing.
       await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
       if (!unsettled(was)) await session.set(key, record);
-      return was;
+      return { was, before };
     });
     if (unsettled(was)) {
       if (was.txHash !== s.txHash) throw new Error(MAYBE_SENT_WAIT);
       return { record: was, again: true };
     }
-    const ahead: Ahead = { record, again: false };
+    const ahead: Ahead = { record, again: false, before };
     try {
       await deps.store.set(sealedName(s.network), record);
       ahead.nonce = await deps.store.sealedAs(sealedName(s.network));
@@ -467,19 +482,28 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
 
 /**
  * Takes back what `writeAhead` wrote for `s`, refused: its watch, its UTxOs
- * held back, Send's copy as sent. Only while the watch still has it as it
- * was written: one sent again meanwhile (the watch's run) may have gone
- * after all, and stays; that one is returned. Call it in the network's turn.
+ * held back, Send's copy as sent. What it wrote over goes back as it was: the
+ * watch of the payment before it, and what another transaction had spent
+ * already. A lock meanwhile took those, and they stay gone; it was put back
+ * after the unlock (restoreNow), and goes all the same. Only while the watch
+ * still has it as it was written: one sent again meanwhile (the watch's run)
+ * may have gone after all, and stays; that one is returned. Call it in the
+ * network's turn.
  */
-async function undoAhead(deps: PendingDeps, s: Sending, { record }: Ahead): Promise<Watched | undefined> {
+async function undoAhead(deps: PendingDeps, s: Sending, ahead: Ahead): Promise<Watched | undefined> {
   const { wallet, session } = deps;
+  const { record } = ahead;
   const key = pendingKey(s.network);
   const found = await wallet.withKeys(async () => {
     const cur = await session.get<Watched>(key);
     if (cur?.txHash !== record.txHash) return { undone: false };
     if (!writtenAhead(cur, record)) return { undone: false, kept: cur };
-    await forgetSpent(session, record.inputs ?? []);
-    await session.remove(key);
+    // Put back after a lock (restoreNow set its resentAt): what it wrote over went with the lock.
+    const before = cur.resentAt === record.resentAt ? ahead.before : undefined;
+    await forgetSpent(session, record.inputs ?? [], before?.spent);
+    if (!before?.sent) await forgetSent(session, s.network, s.txHash);
+    if (before?.watched) await session.set(key, before.watched);
+    else await session.remove(key);
     const kept = await session.get<{ txHash?: string }>(s.key);
     if (kept?.txHash === s.txHash) await session.set(s.key, s.kept);
     return { undone: true };
