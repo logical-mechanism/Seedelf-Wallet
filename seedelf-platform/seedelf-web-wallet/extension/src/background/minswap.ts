@@ -115,7 +115,7 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  * - Minswap (V1) and MinswapStable: the sender's and the receiver's
  *   addresses. V1's passes on a real order Minswap built on preprod.
  * - MinswapV2: the canceller's key, and the refund and success receivers.
- * - SundaeSwap: the destination address. SundaeSwapV3: the owner's key.
+ * - SundaeSwap: the destination address.
  * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
  *   beneficiary's addresses.
  * - Splash and SplashStable: the cancelling key and the redeemer's address.
@@ -129,7 +129,6 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
   "MinswapV2",
   "MinswapStable",
   "SundaeSwap",
-  "SundaeSwapV3",
   "WingRiders",
   "WingRidersV2",
   "WingRidersStableV2",
@@ -144,8 +143,19 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
  * or a quote be refused (final review sessions-4): VyFinance names its
  * owner as one 56-byte field, the key and the staking part together, and
  * MuesliSwap's orders are staked to its own key, not the sender's.
+ *
+ * SundaeSwapV3 too (independent review M16). Minswap builds its orders at
+ * SundaeSwap's V3 order script under a fixed staking part that isn't the
+ * sender's (f217f435…, the same for every sender, seen 2026-09-27), so the
+ * check refuses every one, after the swap is funded. And the order's owner
+ * is the sender's stake key, so cancelling one needs the session's stake
+ * key 2/i as well as its payment key 0/i, which the wallet never signs
+ * with; V3 orders don't expire, so an order it couldn't cancel would wait
+ * at the DEX for good. It comes back only with all three: the V3 order
+ * script and that staking part pinned in `checkOrder`, and a cancel that
+ * may be signed by 0/i and 2/i, and by nothing else.
  */
-const MAINNET_REFUSED = ["VyFinance", "MuesliSwap"];
+const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SundaeSwapV3"];
 
 /** What routing leaves out on `network`. */
 export function excludedProtocols(network: "preprod" | "mainnet"): string[] {

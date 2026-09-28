@@ -306,7 +306,7 @@ describe("a swap's quote", () => {
 
   it("leaves out of mainnet's routing the DEXes whose orders the check refuses, and won't quote a route through one it can't check (final review sessions-4)", async () => {
     // VyFinance names its owner as one 56-byte field; MuesliSwap stakes its orders to its own key.
-    expect(excludedProtocols("mainnet")).toEqual([...DIRECT_PROTOCOLS, "VyFinance", "MuesliSwap"]);
+    expect(excludedProtocols("mainnet")).toEqual([...DIRECT_PROTOCOLS, "VyFinance", "MuesliSwap", "SundaeSwapV3"]);
     expect(MAINNET_PROTOCOLS).not.toContain("VyFinance");
     expect(MAINNET_PROTOCOLS).not.toContain("MuesliSwap");
     const t = await unlocked();
@@ -323,8 +323,8 @@ describe("a swap's quote", () => {
     // On preprod, the check alone stands.
     await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["MinswapV2", "CswapV1"] });
     // Through DEXes whose orders name the owner's key as a field of its own: quoted.
-    via("MinswapV2", "SundaeSwapV3", "Splash");
-    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["MinswapV2", "SundaeSwapV3", "Splash"] });
+    via("MinswapV2", "SundaeSwap", "Splash");
+    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["MinswapV2", "SundaeSwap", "Splash"] });
   });
 
   it("refuses an ask before Minswap sees it", () => {
