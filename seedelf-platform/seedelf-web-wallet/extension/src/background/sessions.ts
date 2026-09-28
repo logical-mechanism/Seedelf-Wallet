@@ -53,6 +53,7 @@ import { NETWORKS, type NetworkName } from "../networks";
 import type {
   DappTxSummary,
   LeftBehindUtxo,
+  LeftOutUtxo,
   LovejoinFunding,
   Paid,
   PendingTx,
@@ -262,6 +263,13 @@ interface SessionRecord {
   lovejoinSkipped?: string;
   /** What's at its account that no return takes (SessionView's). It doesn't hold the session open. */
   leftBehind?: LeftBehindUtxo[];
+  /**
+   * When a return last found nothing at its account that pays for its own
+   * way back (all of it left behind): a mix of the boxes again then has no
+   * chain to send, so Lovejoin may bring them back meanwhile (independent
+   * review H1). Cleared once a return is built again.
+   */
+  nothingBack?: number;
   closedAt?: number;
 }
 
@@ -454,8 +462,12 @@ function returnable(s: SessionRecord, rows: KoiosUtxo[]): KoiosUtxo[] {
   return behind.size ? rows.filter((u) => !behind.has(outpoint(u))) : rows;
 }
 
-/** WebAssembly couldn't build a return because what it takes doesn't pay for its own deposit and fee. */
-const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace/i;
+/**
+ * WebAssembly couldn't build a return because what it takes doesn't pay for
+ * its own deposit and fee: the session's own too little, or nothing but a
+ * stranger's tokens that don't pay their way (api::NOTHING_PAYS).
+ */
+const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace|pays for its own way back/i;
 
 /** A swap that runs itself and has something left to do without the user. */
 function running(s: SessionRecord): boolean {
@@ -464,13 +476,16 @@ function running(s: SessionRecord): boolean {
 
 /**
  * A mix of the wallet's boxes again whose chain may still spend them: from
- * its funding on (unless that never went) until its return is sent.
+ * its funding on (unless that never went) until its return is sent, and not
+ * while nothing at its account can come back (`nothingBack`): no chain goes
+ * then, so its boxes aren't held for one (independent review H1).
  */
 function mixingAgain(s: SessionRecord): boolean {
   return (
     !!s.mix?.again &&
     !s.closedAt &&
     !s.auto?.failed &&
+    s.nothingBack === undefined &&
     !s.txs[0]?.unsent &&
     !s.txs.some((t) => t.kind === "back" && !t.unsent)
   );
@@ -1769,6 +1784,9 @@ export class SessionService {
     if (unpriced.length) await this.leaveBehind(network, index, unpriced, "script");
     const rows = held.filter(measurable);
     if (!rows.length) {
+      await this.update(network, index, (r) => {
+        r.nothingBack ??= now();
+      });
       throw new NothingComesBack(
         "What's at the session's account holds a reference script the wallet can't price, so no return can take it. It stays there.",
       );
@@ -1827,6 +1845,7 @@ export class SessionService {
         });
       }
       if (chain) {
+        await this.leftBy(network, index, rows, chain.leftOut);
         const back = chain.txs[chain.txs.length - 1]!;
         const { delay } = await lovejoin.settings();
         return {
@@ -1877,10 +1896,15 @@ export class SessionService {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (/locked/i.test(message) || !TOO_LITTLE.test(message)) throw e;
-      // What's left (a stranger's token on a little ADA, say) doesn't pay its own way back: it stays, rather than be tried for ever.
+      // Even the session's own doesn't pay its way back (WebAssembly takes a stranger's token only when it pays
+      // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
       await this.leaveBehind(network, index, rows, "fee");
+      await this.update(network, index, (r) => {
+        r.nothingBack ??= now();
+      });
       throw new NothingComesBack("What's left at the session's account is too little to pay for its own way back, so it stays there.");
     }
+    await this.leftBy(network, index, rows, result.leftOut);
     return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
   }
 
@@ -1906,6 +1930,28 @@ export class SessionService {
         ...rows.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason, lovelace: u.value })),
       ];
     });
+  }
+
+  /**
+   * After a return of `rows` is built (independent review H1, H2): only
+   * what WebAssembly left out because it doesn't pay its own way back
+   * (`cost`, a stranger's tokens) is left behind, never the rest; what was
+   * left behind for its fee and comes back now isn't anymore; and a return
+   * is found again (`nothingBack`).
+   */
+  private async leftBy(network: NetworkName, index: number, rows: KoiosUtxo[], leftOut: LeftOutUtxo[] = []): Promise<void> {
+    const key = (u: { txHash: string; txIndex: number }) => `${u.txHash}#${u.txIndex}`;
+    const left = new Set(leftOut.map(key));
+    const stays = rows.filter((u) => leftOut.some((l) => l.reason === "cost" && key(l) === outpoint(u)));
+    const back = new Set(rows.map(outpoint).filter((o) => !left.has(o)));
+    const record = (await this.book(network)).sessions.find((r) => r.index === index);
+    const cleared = (record?.leftBehind ?? []).some((b) => b.reason === "fee" && back.has(key(b)));
+    if (!stays.length && !cleared && record?.nothingBack === undefined) return;
+    await this.update(network, index, (r) => {
+      r.leftBehind = (r.leftBehind ?? []).filter((b) => !(b.reason === "fee" && back.has(key(b))));
+      delete r.nothingBack;
+    });
+    if (stays.length) await this.leaveBehind(network, index, stays, "fee");
   }
 
   /**
