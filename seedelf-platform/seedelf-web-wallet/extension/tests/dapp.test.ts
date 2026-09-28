@@ -522,13 +522,14 @@ describe("the dApp connector", () => {
     await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { public: { inputs: [held!], collateral: [collateral] } });
     t.clock.now += 31_000;
     expect((await t.dapp.call(s, "getUtxos", [])) as string[]).toHaveLength(offered - 1);
-    // A site that names it anyway, as an input or as collateral, or spends the chain's collateral, is refused
-    // before anything is looked up or asked.
+    // A site that names it anyway, as an input or as collateral, or spends the chain's collateral or puts it
+    // up (independent review L32), is refused before anything is looked up or asked.
     const calls = t.koios.calls.length;
     for (const tx of [
       siteTx({ inputs: [held!] }),
       siteTx({ inputs: [free!], collateral: [held!] }),
       siteTx({ inputs: [free!, collateral] }),
+      siteTx({ inputs: [free!], collateral: [collateral] }),
     ]) {
       await expect(t.dapp.call(s, "signTx", [tx, false])).rejects.toMatchObject({
         failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") },
@@ -546,11 +547,10 @@ describe("the dApp connector", () => {
       await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
       await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
     };
-    // The chain's collateral put up as collateral is what getCollateral gives a site: that's still asked.
-    await asked(siteTx({ inputs: [free!], collateral: [collateral] }));
-    // Once the chain is all sent, it lets go: the UTxO is the site's to spend again.
+    // Once the chain is all sent, it lets go: the UTxO is the site's to spend again, and the collateral to put up.
     await t.lovejoin.release("preprod", "public");
     await asked(siteTx({ inputs: [held!] }));
+    await asked(siteTx({ inputs: [free!], collateral: [collateral] }));
   });
 
   it("refuses a transaction over 64 KiB before reading any of it: no Koios request, no prompt", async () => {

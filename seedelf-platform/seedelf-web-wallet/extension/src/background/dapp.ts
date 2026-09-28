@@ -855,6 +855,10 @@ export class DappService {
   private async collateral(network: NetworkName, holder: Holder, params: unknown): Promise<string[] | null> {
     const { collateral } = await this.available(network, holder);
     if (!collateral) return null;
+    // While the account's own Lovejoin chain is being sent, its collateral
+    // backs the chain's mixes, and a site's transaction whose contract fails
+    // would take it: none is offered then (`heldForLovejoin`).
+    if (await this.chainHolds(network, holder, outpoint(collateral.utxo))) return null;
     const amount = (params as { amount?: unknown } | null | undefined)?.amount;
     if (amount !== undefined && amount !== null) {
       const { lovelace } = this.readAmount(amount);
@@ -1000,10 +1004,12 @@ export class DappService {
    * mix for a site on a session. Its next step would be refused as a double
    * spend, and the chain would stop partway, its boxes less mixed. The view
    * leaves those UTxOs out already, but a site can still name one it read
-   * before, or found elsewhere. The chain's collateral may still be put up as
-   * collateral (`getCollateral` gives it on the public account), only never
-   * spent. A chain built and kept for Send holds nothing here, and one that's
-   * done or stopped lets go. Refused before anything is looked up.
+   * before, or found elsewhere. Nor is the chain's collateral put up as a
+   * site's collateral (`getCollateral` offers none meanwhile): a site that
+   * flips a signed transaction's validity flag has the network take it, and
+   * the chain stops with it (independent review L32). A chain built and kept
+   * for Send holds nothing here, and one that's done or stopped lets go.
+   * Refused before anything is looked up.
    *
    * Only the holder's own chain: another's UTxOs aren't this holder's to sign
    * anyway (another account's key, a Seedelf UTxO's proof, a Lovejoin box's),
@@ -1013,21 +1019,26 @@ export class DappService {
    * a stranger's does.
    */
   private async heldForLovejoin(network: NetworkName, holder: Holder, inputs: string[], collateral: string[]): Promise<void> {
-    const { wallet, session } = this.deps;
-    const only = chainOwner(holder?.index);
-    const held = await wallet.withKeys(() => reservedSet(session, network, { sending: true, only }));
-    const used = [
-      ...new Set([
-        ...inputs.filter((o) => held.inputs.has(o) || held.collateral.has(o)),
-        ...collateral.filter((o) => held.inputs.has(o)),
-      ]),
-    ];
+    const held = await this.chainHeld(network, holder);
+    const used = [...new Set([...inputs, ...collateral].filter((o) => held.inputs.has(o) || held.collateral.has(o)))];
     if (!used.length) return;
     const [first] = used;
     throw new DappError({
       code: TxSignError.ProofGeneration,
       info: `This transaction uses ${used.length === 1 ? `a UTxO (${first})` : `${used.length} UTxOs (${first} and ${used.length - 1} more)`} that a chain still being sent through Lovejoin needs, so the wallet won't sign it: the rest of that chain would be refused. Wait for it to finish, then try again.`,
     });
+  }
+
+  /** What the holder's own Lovejoin chain being sent will spend and put up (spent.ts's reservations). */
+  private chainHeld(network: NetworkName, holder: Holder): Promise<{ inputs: Set<string>; collateral: Set<string> }> {
+    const { wallet, session } = this.deps;
+    return wallet.withKeys(() => reservedSet(session, network, { sending: true, only: chainOwner(holder?.index) }));
+  }
+
+  /** Whether the holder's own Lovejoin chain being sent needs `o`. */
+  private async chainHolds(network: NetworkName, holder: Holder, o: string): Promise<boolean> {
+    const held = await this.chainHeld(network, holder);
+    return held.inputs.has(o) || held.collateral.has(o);
   }
 
   /**
