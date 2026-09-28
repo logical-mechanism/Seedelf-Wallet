@@ -119,15 +119,27 @@ const NOT_READY = "That mix isn't ready to send. Review it again.";
  * from now at the latest: one that never reached a node shows nothing, so
  * it's only known never to have gone once the wallet stops holding what it
  * spends (SPENT_KEEP_MS, two hours), and the copy says so (independent
- * review L5).
+ * review L5). Past that, only Koios not answering keeps it unsure.
  */
 const publicMaybeWait = (left: number) => {
+  if (left <= 0) {
+    return "Your last mix from the public account stopped at a transaction that may have gone through, and the wallet couldn't reach Koios to check whether it did. No other mix from the account is built until it knows. Try again in a minute.";
+  }
   const minutes = Math.max(1, Math.ceil(left / 60_000));
   const hours = Math.floor(minutes / 60);
   const unit = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
   const about = hours ? `${unit(hours, "hour")}${minutes % 60 ? ` ${unit(minutes % 60, "minute")}` : ""}` : unit(minutes, "minute");
   return `Your last mix from the public account stopped at a transaction that may have gone through, and the network hasn't shown it yet. No other mix from the account is built until the wallet knows: once the network shows it, or what it spends, that takes a few minutes. If it never went through, the wallet can only be sure two hours after it was sent, in about ${about}.`;
 };
+
+/**
+ * A mix from the public account stopped at a transaction that may have gone
+ * through: the progress Home, the UTxOs page and the Lovejoin page ask for
+ * looks for it (tx_status, and utxo_info when that says nothing) at most this
+ * often on a network, as the alarm does a payment that may still go through.
+ * Its Review and Send look each time (independent review L5).
+ */
+export const PUBLIC_LOOK_MS = 2 * 60_000;
 
 /** A chained transaction Koios didn't answer, or asked to slow down for: tried again this many times, waiting CHAIN_BUSY_MS longer each time. */
 export const CHAIN_RETRIES = 4;
@@ -809,6 +821,8 @@ export class LovejoinService {
   private starting = new Set<string>();
   /** The pool as a swap's review last read it, by network (room). */
   private rooms = new Map<NetworkName, { at: number; room: { others: number; free: number } }>();
+  /** When progress last looked for a public mix's transaction that may have gone through, by network (PUBLIC_LOOK_MS). */
+  private looked = new Map<NetworkName, number>();
 
   constructor(private readonly deps: LovejoinDeps) {}
 
@@ -823,8 +837,8 @@ export class LovejoinService {
   ): Promise<{ total: number; sent: number; stopped?: string; maybeSent?: true } | null> {
     if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
     let s = await this.sendingOf(network);
-    // Stopped at a transaction that may have gone through: looked for first, and said as it now stands.
-    if (s?.maybe !== undefined) {
+    // Stopped at a transaction that may have gone through: looked for first, now and then, and said as it now stands.
+    if (s?.maybe !== undefined && this.lookDue(network)) {
       await this.publicUnsettled(network).catch(() => undefined);
       s = await this.sendingOf(network);
     }
@@ -835,11 +849,25 @@ export class LovejoinService {
     await this.cuts(network);
     const lastOf = async () => (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
     let last = await lastOf();
-    if (last?.maybe) {
+    if (last?.maybe && this.lookDue(network)) {
       await this.publicUnsettled(network).catch(() => undefined);
       last = await lastOf();
     }
     return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped, ...maybe(last.maybe) } : null;
+  }
+
+  /**
+   * Whether progress looks for a public mix's transaction that may have gone
+   * through now: at most every PUBLIC_LOOK_MS on a network, however often
+   * Home and the UTxOs page ask. Counted as it's asked, so calls at once look
+   * once.
+   */
+  private lookDue(network: NetworkName): boolean {
+    const now = this.deps.now();
+    const last = this.looked.get(network);
+    if (last !== undefined && now >= last && now - last < PUBLIC_LOOK_MS) return false;
+    this.looked.set(network, now);
+    return true;
   }
 
   /** Whether Lovejoin is deployed on `network` (networks.ts: the UI's gate is the same). */

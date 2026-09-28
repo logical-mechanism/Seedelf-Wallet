@@ -6,7 +6,7 @@
 // account is built until the network settles it (independent review L5).
 import { describe, expect, it } from "vitest";
 
-import { CHAIN_CUT } from "../src/background/lovejoin";
+import { CHAIN_CUT, PUBLIC_LOOK_MS } from "../src/background/lovejoin";
 import { CHAINS, lovejoinOf, PASSWORD, publicFunded, type Tested } from "./chain-fixtures";
 
 const DEPOSIT_INPUT = `${"e6".repeat(32)}#0`;
@@ -69,6 +69,8 @@ describe("a mix from the public account's first transaction, marked while it's s
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT, maybeSent: true });
     await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("may have gone through");
     t.koios.confirmations = 1;
+    // The page looks for it again after a while (PUBLIC_LOOK_MS).
+    t.clock.now += PUBLIC_LOOK_MS;
     expect(await t.lovejoin.progress("preprod")).toMatchObject({ sent: 1 });
     expect((await t.lovejoin.progress("preprod"))?.maybeSent).toBeUndefined();
   });
