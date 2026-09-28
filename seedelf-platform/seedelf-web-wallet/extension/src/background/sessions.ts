@@ -1021,18 +1021,26 @@ export class SessionService {
       // empty. What the session's own transactions paid it must show spent (independent review M4).
       const listed = new Set(rows.map(outpoint));
       if (!ownGone(s, await this.spentStates(network, ownOuts(s)), listed)) throw new Error(NOT_CAUGHT_UP);
+      // What's left behind, as far as the account still has it (independent review L19): one a transaction
+      // took since (the site's, or a later return) points to nothing, and keeps no record, nor the site's
+      // origin. A read that's behind may miss one still there: the session's own were checked with Koios
+      // above, and a stranger's no return takes anyway.
+      const left = (s.leftBehind ?? []).filter((b) => listed.has(`${b.txHash}#${b.txIndex}`));
       // Closed, nothing shows a site's session again (the dApps page and
       // Bring everything back take open ones), and which site had one says
       // something about the user: its record goes, `next` keeping its index
       // from being used again (privacy review §3.12). One with something no
-      // return takes left at its account (`leftBehind`) stays, closed, to
+      // return takes still at its account (`leftBehind`) stays, closed, to
       // point to it.
       const book = await this.book(network);
       const closing = book.sessions.find((r) => r.index === index)!;
-      if (closing.leftBehind?.length) closing.closedAt = now();
+      if (left.length) {
+        closing.leftBehind = left;
+        closing.closedAt = now();
+      }
       await this.save(network, {
         ...book,
-        sessions: closing.leftBehind?.length ? book.sessions : book.sessions.filter((r) => r !== closing),
+        sessions: left.length ? book.sessions : book.sessions.filter((r) => r !== closing),
       });
     });
   }

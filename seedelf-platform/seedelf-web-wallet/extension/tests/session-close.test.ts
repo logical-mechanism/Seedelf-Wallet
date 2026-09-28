@@ -218,6 +218,84 @@ describe("disconnecting a site's session", () => {
   });
 });
 
+describe("disconnecting a site's session with something left behind (independent review L19)", () => {
+  /** A site's session 0, its funding in and brought back, that recorded `left` as left behind at its account. */
+  async function leftBehind(t: T, left: Array<[string, "fee" | "script"]>) {
+    const now = t.clock.now;
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: "0f".repeat(32), at: now, confirmed: true }],
+          site: { origin: ORIGIN },
+          leftBehind: left.map(([h, reason]) => ({ txHash: h.repeat(32), txIndex: 0, reason, lovelace: "1200000" })),
+        },
+      ],
+    });
+  }
+
+  it("forgets what a transaction took since, and the record with it when nothing's left", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    // Too little to pay its way back, once; a later return (or the site) took it after all.
+    await leftBehind(t, [["e3", "fee"]]);
+    t.koios.addedToAccounts.push(atSession("e3".repeat(32), 0, "1200000"));
+    t.koios.spent.add(`${"e3".repeat(32)}#0`);
+    await sessions.disconnect("preprod", 0);
+    // Nothing points anywhere: the record goes, the site's origin with it.
+    expect(await t.store.get("sessions.preprod")).toEqual({ next: 1, sessions: [] });
+  });
+
+  it("keeps the record, closed, for what's still at the account, and only that", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await leftBehind(t, [
+      ["e3", "fee"],
+      ["e4", "script"],
+    ]);
+    t.koios.addedToAccounts.push(atSession("e3".repeat(32), 0, "1200000"), atSession("e4".repeat(32), 0, "1200000"));
+    t.koios.spent.add(`${"e3".repeat(32)}#0`);
+    await sessions.disconnect("preprod", 0);
+    const [view] = await sessions.list("preprod");
+    expect(view).toMatchObject({ stage: "closed", leftBehind: [{ txHash: "e4".repeat(32), reason: "script" }] });
+    const kept = await t.store.get<{ sessions: Array<{ leftBehind: unknown[] }> }>("sessions.preprod");
+    expect(kept!.sessions[0]!.leftBehind).toHaveLength(1);
+  });
+
+  it("waits for Koios, rather than forget it, when it's the session's own and the read doesn't list it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    // The funding's leftover, too little to pay its way back: left behind. Koios knows it, unspent.
+    const now = t.clock.now;
+    const funding = "0a".repeat(32);
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [{ kind: "out", txHash: funding, at: now, confirmed: true, outs: [`${funding}#0`] }],
+          site: { origin: ORIGIN },
+          leftBehind: [{ txHash: funding, txIndex: 0, reason: "fee", lovelace: "1200000" }],
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession(funding, 0, "1200000"));
+    // A read behind it doesn't list it: refused, never taken for gone.
+    const real = t.koios.fetch;
+    t.koios.fetch = hiding(t, [`${funding}#0`]);
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    // Listed: the record stays, closed, for it.
+    t.koios.fetch = real;
+    await sessions.disconnect("preprod", 0);
+    expect((await sessions.list("preprod"))[0]).toMatchObject({ stage: "closed", leftBehind: [{ txHash: funding }] });
+  });
+});
+
 describe("forgetting a swap whose funding never showed", () => {
   it("won't, once Koios knows its funding landed: the swap goes on", async () => {
     const t = await unlocked();
