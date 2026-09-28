@@ -191,7 +191,7 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
    - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints its SHA-256. The zip is reproducible: the same commit and toolchain give the same bytes.
 6. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 8](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
 7. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([plans/launch-review.md](plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
-8. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made on preprod's fixtures, so they show its badge and strip ([store/README.md](store/README.md), *Graphic assets*).
+8. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
 9. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
 10. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
 

@@ -7,8 +7,12 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 - **Mainnet, with preprod for testing.** The store's build (`npm run package`) opens on Cardano mainnet, where ADA is real money. The welcome screen, before a wallet exists, and Settings can switch it to preprod, Cardano's test network, and a strip on every screen says so while it's there.
 - **Lovejoin is on,** on both networks, for private sessions' returns (a Settings switch turns it off), and says where it's chosen that it has had no third-party audit.
 - **The privacy policy** is [privacy-policy.md](privacy-policy.md) on the `seedelf-web-wallet` branch.
-- **The Privacy practices form** declares *Authentication information* and *Financial and payment information*.
-- **Still the owner's call:** a new listing, or an update of the unlisted preprod item (chunk 11c). An update keeps the testers' installs, which stay on preprod: a wallet made before the switch, with no network chosen, is a preprod wallet (`NetworkChoice`), so an update never moves a test wallet to mainnet. Chrome disables the update until each tester accepts the new hosts (mainnet's Koios and CoinGecko).
+- **The Privacy practices form** declares *Authentication information* and *Financial and payment information*, and, on this review's reading, *Location* and *Web history* too (see *Data usage* below).
+- **Still the owner's call:** a new listing, or an update of the unlisted preprod item (chunk 11c). **An update, if that item was ever submitted**, otherwise a new listing by default:
+  - An update keeps one install link and the testers on it. Their wallets stay on preprod: a wallet made before the switch, with no network chosen, is a preprod wallet (`NetworkChoice`), so an update never moves a test wallet to mainnet.
+  - Chrome disables the extension for each tester until they accept the new permissions (mainnet's Koios, CoinGecko, `sidePanel`, `scripting`). They keep their wallet; they just have to click through.
+  - A new listing leaves two items with the same name unless the old one is unpublished, and every tester has to reinstall and restore.
+  - Either way it's a full review: the listing goes from an unlisted preprod test to a public mainnet wallet, with new hosts. While it's in review the already-published version stays installable, so an update risks nothing the testers have.
 - **Privacy review (2026-09-27):** the description, the justifications and the policy say that giveme.my is ours, and what Koios and giveme.my, sites and Minswap can still see ([plans/privacy-review.md](../plans/privacy-review.md), §2.4, §2.5, §2.12). Recheck the data usage answers below before submitting.
 
 ## Before you upload
@@ -89,7 +93,7 @@ Open source (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 | Marquee promo tile | None. It's optional, and the store doesn't feature crypto extensions. |
 | Video | None |
 
-The screenshots are made from the recorded preprod fixtures and the public test phrase (`e2e/store-images.spec.ts`), so no real wallet appears. They show preprod's badge, its test tokens and, since the network switch, its strip saying test ADA has no value. That's honest for a wallet that has preprod, but the listing is for mainnet: regenerate them from mainnet-shaped fixtures before a public launch, or say in a caption that they show the test network.
+The screenshots show the wallet on **mainnet**, as the listing's build opens, with the MAINNET badge and no test-network strip. They're made by `e2e/store-images.spec.ts` from the recorded fixtures and the public BIP39 test phrase, never a real wallet: the fake Koios answers mainnet's requests from the same recordings, writing their addresses with mainnet's prefix and network tag, and each test token stands in for one on the wallet's mainnet list (USDM and DJED). So the balances, the Seedelf paid and the pool staked with are the fixtures', not anyone's holdings, and every screen is the real UI.
 
 **Additional fields:**
 
@@ -127,14 +131,17 @@ Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract buil
 All code ships in the package, including the WebAssembly module (Rust compiled to wasm). The page CSP's 'wasm-unsafe-eval' is only there to compile that bundled module. The extension fetches data (JSON and CBOR) from Koios, giveme.my, CoinGecko (ADA's price) and, for swaps, Minswap's aggregator, never code.
 ```
 
-**Data usage.** Check these two, and leave the rest unchecked:
+**Data usage.** Check these two, then the two under them, and leave the rest unchecked:
 
 - **Authentication information:** the recovery phrase and the password. The phrase is kept encrypted on the device; the password is never stored.
 - **Financial and payment information:** the wallet's addresses, balances, staking and transactions, sent to Koios and giveme.my to read the chain and to send transactions. giveme.my is the developer's own service: it receives each private transaction, with the IP address. When the user connects a site, it sees the public account's addresses, balance and UTxOs, and what the user signs for it. For a swap, Minswap's aggregator gets the one-time account's address and the tokens and amounts, and builds the swap for it. CoinGecko is asked only for ADA's price, and gets nothing about the wallet.
 
-**To decide before this submission (privacy review §2.5):** whether giveme.my, the developer's own service, receiving the IP address with each private transaction means checking **Location** (Google lists the IP address under it). Its own logs leave out raw IP addresses.
+**Two more to decide, both recommended checked.** Google's User Data FAQ answers "Do I have to disclose data handled locally?" with *"Yes. Extensions are required to disclose how they handle user data, even when data is processed or stored locally on a user's device and is not transmitted to external servers or third parties,"* and defines *handle* as "collecting, transmitting, using, or sharing". Over-declaring costs a fuller privacy label; under-declaring is what gets an extension pulled.
 
-**To decide at the next submission (chunk 15):** whether to check **Web history** as well. The wallet keeps the list of sites the user connected (their addresses and when), sealed on the device, and Google's FAQ counts data handled only on the device.
+- **Location — check it** (privacy review §2.5). The dashboard lists the IP address under *Location* ("region, IP address, GPS coordinates, or information about things near the user's device"). The wallet doesn't read the IP itself, but every private transaction goes to **giveme.my, which the developer runs**, so the developer's own service receives it. That is the developer handling it, not a third party's incidental logging. giveme.my's app logs leave out raw IP addresses, which limits the retention, not the receipt. (Koios, CoinGecko and Minswap see it too, but those are third parties' servers.)
+- **Web history — check it** (chunk 15). Once the user turns on connecting sites, the wallet keeps a `DappSite { origin, connectedAt }` for each one: the site's address and when it was connected. It's sealed on the device and never sent anywhere, but that's the shape Google's *Web history* covers ("the list of web pages a user has visited, as well as associated data such as page title and time of visit"), and the FAQ above says local-only doesn't exempt it. It's the user's own connection list, not browsing they didn't choose — say so in the policy rather than leaving the box clear.
+
+If either is left unchecked, write the reason here before submitting, so the next release doesn't quietly reopen it.
 
 Then certify all three statements: no selling or transferring data outside the approved use cases, no use unrelated to the single purpose, and no creditworthiness or lending use.
 

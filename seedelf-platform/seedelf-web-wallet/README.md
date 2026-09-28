@@ -33,12 +33,14 @@ So money that sits stays staked in the public account, and is made private when 
 - **Send** (private, a transfer): send funds privately from your private balance to any Seedelfs, by their full names.
 - **Make public** (a withdrawal): send funds from your private balance to any Cardano addresses, or remove a Seedelf.
 
-**Next: dApps, privately** ([plans/chunk-15-dapp-connector.md](docs/plans/chunk-15-dapp-connector.md))
+**Also in v1: dApps, privately** ([plans/chunk-15-dapp-connector.md](docs/plans/chunk-15-dapp-connector.md)). All four are built:
 
-1. **The connector** (chunk 15, built): sites connect over CIP-30, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
-2. **Private sessions** (chunks 15 and 15b, built): move funds out of Seedelf into a one-time account, use a dApp with that account, and bring what comes back into Seedelf. The first is a swap through Minswap's aggregator, which runs by itself after one approval.
-3. **A dApp browser in the wallet** (chunk 15b, built): Home's **dApps**, where dApps run in private sessions. Minswap is the first.
-4. **Private CIP-30** (chunk 15c, built): any site can connect to a private session instead of the public account, chosen in the connect window. Its session is managed under the dApps page's **Sites**.
+1. **The connector** (chunk 15): sites connect over CIP-30, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
+2. **Private sessions** (chunks 15 and 15b): move funds out of Seedelf into a one-time account, use a dApp with that account, and bring what comes back into Seedelf. The first is a swap through Minswap's aggregator, which runs by itself after one approval.
+3. **A dApp browser in the wallet** (chunk 15b): Home's **dApps**, where dApps run in private sessions. Minswap is the first.
+4. **Private CIP-30** (chunk 15c): any site can connect to a private session instead of the public account, chosen in the connect window. Its session is managed under the dApps page's **Sites**.
+
+**Also in v1: Lovejoin** ([plans/chunk-16-lovejoin.md](docs/plans/chunk-16-lovejoin.md)). The mixer in the wallet: the spare ADA a private session brings back goes through Lovejoin, 10 ₳ boxes on chain, so what comes back is harder to tie to the session. A Settings switch turns it off, any box can be brought back directly, and the Lovejoin tile mixes from either side. It has had no third-party audit, only its makers' own review, and the wallet says so wherever Lovejoin is chosen. On mainnet it mixes only once Lovejoin's pool holds 30 boxes that aren't yours.
 
 **Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. See [plans/chunk-14-style-flow-2.md](docs/plans/chunk-14-style-flow-2.md).
 
