@@ -1802,6 +1802,10 @@ export class LovejoinService {
       await this.chainEnded(network, id, sending.stopped, maybe ?? null).catch(() => undefined);
       if (maybe) await this.holdOnly(network, sending.txs, step!).catch(() => undefined);
       else await this.release(network, chainOwner()).catch(() => undefined);
+      // The runs look for it until it's settled (publicLook), with no page open too: the alarm goes on for that,
+      // even when this is the alarm's own run, which takes this throw for nothing left to do and would stop it
+      // (runs.ts never stops what was started while it went on) (final review F2).
+      if (maybe) await this.deps.alarm?.start().catch(() => undefined);
       await save().catch(() => undefined);
       throw unsure !== undefined ? new Error(sending.stopped) : e;
     }

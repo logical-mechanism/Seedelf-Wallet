@@ -13,7 +13,7 @@ import { runNetworks, type Runner } from "../src/background/runs";
 import { reservationOf, SESSION_RESERVED_PREFIX } from "../src/background/spent";
 import { TxSignError } from "../src/shared/dapp";
 import { busyFor, loadTestWasm, vectors } from "./fakes";
-import { CHAINS, publicFunded, type Tested } from "./chain-fixtures";
+import { CHAINS, lovejoinOf, publicFunded, type Tested } from "./chain-fixtures";
 
 const COLLATERAL = `${"e5".repeat(32)}#0`;
 const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
@@ -77,12 +77,12 @@ async function stoppedAtMix() {
   return { t, s, held: reservationOf([chain[1]!]).inputs };
 }
 
-function runner(t: Tested): Runner {
+function runner(t: Tested, lovejoin = t.lovejoin): Runner {
   return {
     networks: ["preprod"],
     wallet: t.wallet,
     sessions: { runAll: async () => false },
-    lovejoin: t.lovejoin,
+    lovejoin,
     pending: t.pending,
   } as unknown as Runner;
 }
@@ -141,5 +141,41 @@ describe("a mix from the public account stopped at a mix that may have gone thro
     if (t.dapp.approvals().length) await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await signing;
     expect(JSON.stringify(answer)).not.toContain("Lovejoin");
+  });
+
+  it("keeps the alarm going when it stops inside the alarm's own run, and settles it there with no page open", async () => {
+    const t = await publicFunded("60000000", ["60000000"]);
+    const ring = alarm();
+    const lovejoin = lovejoinOf(t, { alarm: ring });
+    const mix = await lovejoin.publicBuild("preprod", 1);
+    const { chain } = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txHash: string; txCbor: string }> }>(SESSION_LOVEJOIN_PUBLIC)))!;
+    expect(chain).toHaveLength(5);
+    // Send sends the first window, and starts the alarm for the rest.
+    await lovejoin.publicSubmit("preprod", mix.txHash);
+    expect(ring.on).toBe(true);
+    // A block takes the window. In the alarm's run, the last mix's first submit reaches the node, and Koios answers
+    // none of its tries: the mix stops there, as one that may have gone through.
+    const last = chain.at(-1)!;
+    t.koios.confirmations = 1;
+    t.koios.missing.add(last.txHash);
+    const net = unansweredFrom(t, 1);
+    await runNetworks(runner(t, lovejoin), ring);
+    net.down = false;
+    const record = async () =>
+      (await t.store.get<{ chains: Array<{ maybe?: { index: number }; sent: number }> }>("lovejoin.preprod"))!.chains.at(-1)!;
+    expect((await record()).maybe).toMatchObject({ index: 4 });
+    expect((await reservedPublic(t))?.inputs).toEqual(reservationOf([last]).inputs);
+    // The alarm stays on for it: the next runs look for it, at most every PUBLIC_LOOK_MS.
+    expect(ring.on).toBe(true);
+    await runNetworks(runner(t, lovejoin), ring);
+    expect(ring.on).toBe(true);
+    // It lands: the next look settles it with no page open, nothing is held for it, and the alarm stops.
+    t.koios.missing.delete(last.txHash);
+    await busyFor(t, PUBLIC_LOOK_MS);
+    await runNetworks(runner(t, lovejoin), ring);
+    expect((await record()).maybe).toBeUndefined();
+    expect((await record()).sent).toBe(5);
+    expect(await reservedPublic(t)).toBeUndefined();
+    expect(ring.on).toBe(false);
   });
 });
