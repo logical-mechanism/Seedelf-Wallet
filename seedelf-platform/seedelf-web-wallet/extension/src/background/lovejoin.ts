@@ -244,6 +244,12 @@ export interface ChainProgress {
    * (Chrome stops an idle worker during a long back-off).
    */
   sending?: number;
+  /**
+   * The next transaction, refused as spending what's spent, for which those
+   * in the mempool were sent again (pumpChain): refused once more, the chain
+   * stops.
+   */
+  resentFor?: number;
 }
 
 /**
@@ -261,7 +267,8 @@ export interface ChainProgress {
  * its tries, while those it builds on are still in the mempool as far as the
  * wallet knows, is no failure yet either: a node dropped them (the one before
  * them landed, or a block was rolled back), so they go again, in order, and
- * then it does, once more (independent review L25).
+ * it goes once more at the next call, which stays well short of Chrome's
+ * five minutes (independent review L25).
  */
 export async function pumpChain(
   chain: ChainProgress,
@@ -296,8 +303,6 @@ export async function pumpChain(
       await io.save();
     }
   };
-  // The one sent again once already after a refusal, in this call.
-  let retried: number | undefined;
   for (let polls = Math.ceil(budgetMs / CHAIN_POLL_MS); ; polls--) {
     if (chain.flying.length >= CHAIN_WINDOW) {
       const on = await io.onChain(chain.flying).catch((e: unknown) => {
@@ -316,10 +321,10 @@ export async function pumpChain(
       try {
         await send(chain.next, false);
       } catch (e) {
-        if (!(e instanceof SpentInputError) || !chain.flying.length || retried === chain.next) throw e;
-        retried = chain.next;
+        if (!(e instanceof SpentInputError) || !chain.flying.length || chain.resentFor === chain.next) throw e;
+        chain.resentFor = chain.next;
         await resend();
-        continue;
+        return false;
       }
       chain.flying.push(chain.txs[chain.next]!.txHash);
       sentAt().push(io.now());

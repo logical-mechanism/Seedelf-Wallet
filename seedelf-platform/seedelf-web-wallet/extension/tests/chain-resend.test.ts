@@ -75,16 +75,19 @@ describe("a chain a node dropped (independent review L25)", () => {
     // A block takes the first; the node drops the three after it (a rollback's revalidation, say).
     block(1);
     net.mempool.length = 0;
-    expect(await pumpChain(chain, io, 0)).toBe(false);
-    // The next is refused (its parent is gone); the three go again in order, then it does.
+    expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(false);
+    // The next is refused (its parent is gone): the three go again in order, and the call ends there, well short
+    // of Chrome's five minutes.
     expect(sent.slice(4)).toEqual([
       [4, false],
       [1, true],
       [2, true],
       [3, true],
-      [4, false],
     ]);
-    expect(net.mempool).toEqual(["t1", "t2", "t3", "t4"]);
+    expect(net.mempool).toEqual(["t1", "t2", "t3"]);
+    // The next call sends it.
+    expect(await pumpChain(chain, io, 0)).toBe(false);
+    expect(sent.at(-1)).toEqual([4, false]);
     expect(chain.flying).toEqual(["t1", "t2", "t3", "t4"]);
   });
 
@@ -92,6 +95,7 @@ describe("a chain a node dropped (independent review L25)", () => {
     const { chain, sent, io, block } = modelled(8, 4);
     await pumpChain(chain, io, 0);
     block(1);
+    expect(await pumpChain(chain, io, 0)).toBe(false);
     await expect(pumpChain(chain, io, 0)).rejects.toThrow(SpentInputError);
     // Tried twice, with the ones in the mempool sent again between (there already: the ledger has them once).
     expect(sent.slice(4).map(([i]) => i)).toEqual([4, 1, 2, 3, 4]);
@@ -132,7 +136,9 @@ describe("a chain a node dropped, sent for real", CHAINS, () => {
     net.block(1);
     net.drop();
     await sessions.runAll("preprod");
-    // The fifth was refused for want of its parent: the three went again, in order, then it did.
+    // The fifth was refused for want of its parent: the three went again, in order; the next run sends it.
+    expect(net.mempool).toEqual(order.slice(1, 4));
+    await sessions.runAll("preprod");
     expect(net.mempool).toEqual(order.slice(1, 5));
     for (let run = 0; run < 6; run++) {
       net.block();
