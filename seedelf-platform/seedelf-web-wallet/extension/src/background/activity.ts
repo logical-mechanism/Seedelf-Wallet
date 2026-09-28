@@ -34,6 +34,7 @@ import {
   receivedIn,
   sessionClass,
   UNKNOWN,
+  unknownIn,
   type HistoryClass,
 } from "../shared/histories";
 import type { ActivityEntry, ActivityStaking, PendingTx, TokenQuantity } from "../shared/rpc";
@@ -53,7 +54,7 @@ export const SESSION_ACCOUNT_ACTIVITY_PREFIX = "seedelf.accountActivity.";
 
 /** Transactions a page of the Cardano account's activity reads. */
 export const PAGE = 20;
-/** The most entries and noted UTxOs the Seedelf history keeps. */
+/** The most entries and noted UTxOs the Seedelf history keeps: entries whose money is still held are kept on top. */
 const KEEP_ENTRIES = 500;
 const KEEP_SEEN = 2_000;
 
@@ -218,12 +219,24 @@ export class ActivityService {
   /**
    * Where each of `utxos` came from, by outpoint (privacy review §2.3): read
    * from the sealed history alone, matched by the transaction that made it.
-   * A UTxO it has nothing on is Unknown.
+   * A UTxO it has nothing on is Unknown. While any of the others' history is
+   * known, each transaction's Unknown money is a class of its own, so two
+   * are kept apart, and merging them is said, as for payments received
+   * (independent review L40). With none known, all of it is one Unknown, and
+   * selection picks as the CLI does.
    */
   async classes(network: NetworkName, utxos: KoiosUtxo[]): Promise<Map<string, HistoryClass>> {
     const history = await this.deps.store.get<History>(`history.${network}`);
     const byTx = new Map((history?.entries ?? []).map((e) => [e.txHash, e]));
-    return new Map(utxos.map((u) => [outpoint(u), classOf(byTx.get(u.tx_hash), u)]));
+    const found = utxos.map((u) => [u, classOf(byTx.get(u.tx_hash), u)] as const);
+    const known = found.some(([, c]) => c.origin !== "unknown");
+    return new Map(
+      found.map(([u, c]): [string, HistoryClass] => {
+        if (c.origin !== "unknown") return [outpoint(u), c];
+        if (!known) return [outpoint(u), UNKNOWN];
+        return [outpoint(u), c.id === UNKNOWN.id ? unknownIn(u.tx_hash) : c];
+      }),
+    );
   }
 
   /**
@@ -262,8 +275,13 @@ export class ActivityService {
       }
       const known = new Set(h.entries.map((e) => e.txHash));
       const added = [...byTx.values()].filter((e) => !known.has(e.txHash));
+      // The newest, but never one whose transaction made money still in the private balance: its history is
+      // what keeps that money apart, a box's from another's (independent review L40).
+      const holding = new Set(owned.map((u) => u.tx_hash));
+      const all = [...h.entries, ...added].sort(newestFirst);
+      let room = KEEP_ENTRIES - all.filter((e) => holding.has(e.txHash)).length;
       return {
-        entries: [...h.entries, ...added].sort(newestFirst).slice(0, KEEP_ENTRIES),
+        entries: all.filter((e) => holding.has(e.txHash) || room-- > 0),
         seen: [...h.seen, ...fresh.map(outpoint)].slice(-KEEP_SEEN),
       };
     });

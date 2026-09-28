@@ -129,13 +129,14 @@ describe("Seedelf activity", () => {
       "03#0": { id: "session:2", origin: "session" },
       "04#0": { id: "session:2", origin: "session" },
       "05#0": mixed,
-      // A payment written down without it: its inputs aren't known.
-      "06#0": { id: "unknown", origin: "unknown" },
+      // A payment written down without it: its inputs aren't known. Kept apart by its transaction while
+      // others' histories are known (independent review L40).
+      "06#0": { id: `unknown:${"06".repeat(32)}`, origin: "unknown" },
       // Someone's payment is one history, whichever of its outputs.
       "07#0": { id: `received:${"07".repeat(32)}`, origin: "received" },
       "07#1": { id: `received:${"07".repeat(32)}`, origin: "received" },
       // Nothing on the device about it.
-      "08#0": { id: "unknown", origin: "unknown" },
+      "08#0": { id: `unknown:${"08".repeat(32)}`, origin: "unknown" },
     });
   });
 

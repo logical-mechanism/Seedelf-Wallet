@@ -1,10 +1,12 @@
 // Where each private UTxO's money came from, as the sealed history says
 // (independent review): what a restored wallet's history finds already there
-// is Unknown, not a payment received (L38).
+// is Unknown, not a payment received (L38); money still held never ages out
+// of the history, and Unknown money is kept apart by its transaction (L40).
 import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
-import { historyTags } from "../src/shared/histories";
+import { classesOf, spentHistories } from "../src/background/script-spend";
+import { historiesNote, historyTags, unknownIn } from "../src/shared/histories";
 import type { PendingTx } from "../src/shared/rpc";
 import { activityTitle } from "../src/ui/activity";
 import { ownedUtxos, testBalances, vectors } from "./fakes";
@@ -100,5 +102,89 @@ describe("a private history this device starts (independent review L38)", () => 
     expect((await t.activity.seedelf("preprod")).some((e) => e.txHash === sent.txHash && e.kind === "received")).toBe(true);
     const account = await t.activity.cardano("preprod");
     expect(account.entries.find((e) => e.txHash === sent.txHash)).toMatchObject({ kind: "sent", direction: sent.direction });
+  });
+});
+
+describe("money whose history the wallet keeps apart (independent review L40)", () => {
+  const withdraw = (hex: string): PendingTx => ({
+    kind: "lovejoin-withdraw",
+    network: "preprod",
+    txHash: hex.repeat(32),
+    submittedAt: 1,
+    confirmations: null,
+  });
+
+  it("never lets a box still held age out of the history, however much comes after", async () => {
+    const t = await unlocked({ owned: false });
+    await t.activity.arrived("preprod", []);
+    // Two boxes back from Lovejoin, the oldest entries.
+    await t.activity.sent("preprod", withdraw("0a"), { lovelace: "9710000" });
+    await t.activity.sent("preprod", withdraw("0b"), { lovelace: "9710000" });
+    const boxes = [at("0a"), at("0b")];
+    // Then 500 payments, since spent, and one more arriving now.
+    const hex = (i: number) => i.toString(16).padStart(4, "0").repeat(16);
+    const payments = Array.from({ length: 500 }, (_, i) => ({ ...at("00"), tx_hash: hex(i + 1), block_time: 1_800_000_000 + i }));
+    await t.activity.arrived("preprod", [...boxes, ...payments]);
+    await t.activity.arrived("preprod", [...boxes, { ...at("0c"), block_time: 1_900_000_000 }]);
+    // 500 kept: the two boxes, oldest of all, among them.
+    const entries = await t.activity.seedelf("preprod");
+    expect(entries).toHaveLength(500);
+    expect(entries.slice(-2).map((e) => e.kind)).toEqual(["lovejoin-withdraw", "lovejoin-withdraw"]);
+    const classes = await t.activity.classes("preprod", boxes);
+    expect([...classes.values()]).toEqual([
+      { id: `box:${"0a".repeat(32)}`, origin: "lovejoin" },
+      { id: `box:${"0b".repeat(32)}`, origin: "lovejoin" },
+    ]);
+    // Once spent, they're trimmed like the rest, the oldest first.
+    await t.activity.arrived("preprod", [
+      { ...at("0d"), block_time: 1_900_000_001 },
+      { ...at("0e"), block_time: 1_900_000_002 },
+    ]);
+    const left = await t.activity.seedelf("preprod");
+    expect(left).toHaveLength(500);
+    expect(left.some((e) => e.kind === "lovejoin-withdraw")).toBe(false);
+  });
+
+  it("gives Unknown money a class per transaction while anything else's is known, and one Unknown when nothing is", async () => {
+    const t = await unlocked({ owned: false });
+    await t.activity.arrived("preprod", []);
+    await t.activity.sent("preprod", withdraw("0a"), { lovelace: "9710000" });
+    const known = await t.activity.classes("preprod", [at("0a"), at("e1"), at("e1", 1), at("e2")]);
+    expect([...known.values()]).toEqual([
+      { id: `box:${"0a".repeat(32)}`, origin: "lovejoin" },
+      unknownIn("e1".repeat(32)),
+      unknownIn("e1".repeat(32)),
+      unknownIn("e2".repeat(32)),
+    ]);
+    // Nothing known: one Unknown, so selection picks as the CLI does.
+    const blind = await t.activity.classes("preprod", [at("e1"), at("e2")]);
+    expect([...blind.values()]).toEqual([
+      { id: "unknown", origin: "unknown" },
+      { id: "unknown", origin: "unknown" },
+    ]);
+
+    // WebAssembly is given the ones kept apart, and never a plain Unknown.
+    const deps = { activity: t.activity };
+    const given = await classesOf(deps, "preprod", [at("0a"), at("e1"), at("e2")]);
+    expect(Object.keys(given).sort()).toEqual([`${"0a".repeat(32)}#0`, `${"e1".repeat(32)}#0`, `${"e2".repeat(32)}#0`]);
+    expect(await classesOf(deps, "preprod", [at("e1"), at("e2")])).toEqual({});
+  });
+
+  it("says so when a spend merges Unknown money of two transactions", () => {
+    const a = unknownIn("e1".repeat(32));
+    const b = unknownIn("e2".repeat(32));
+    const classes = { [`${"e1".repeat(32)}#0`]: a, [`${"e2".repeat(32)}#0`]: b };
+    const inputs = [
+      { txHash: "e1".repeat(32), txIndex: 0 },
+      { txHash: "e2".repeat(32), txIndex: 0 },
+    ];
+    const spent = spentHistories(classes, inputs, [a.id, b.id]);
+    expect(spent).toEqual([a, b]);
+    expect(historiesNote(spent)).toBe(
+      "This spends money from 2 transactions the wallet has no history for together. Anyone can see they're one owner's, which ties them to each other.",
+    );
+    expect(historyTags(a)).toEqual(["Unknown"]);
+    // With nothing known, WebAssembly merges nothing it can name, and nothing is said.
+    expect(spentHistories({}, inputs, [])).toBeUndefined();
   });
 });

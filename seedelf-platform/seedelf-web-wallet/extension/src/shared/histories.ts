@@ -16,6 +16,8 @@
 //   session:<n>    what private session n's funding left, and its return
 //   box:<tx>       a box back from Lovejoin: one class each
 //   unknown        nothing on the device says (a restore, or older than it keeps)
+//   unknown:<tx>   the same, kept apart by the transaction that made it once
+//                  any other money's history is known (independent review L40)
 // Money whose histories were merged names each, sorted, joined by "+".
 
 /** Where a UTxO's money came from, as WebAssembly reads it. */
@@ -35,6 +37,8 @@ export const receivedIn = (txHash: string): HistoryClass => ({ id: `received:${t
 export const sessionClass = (index: number): HistoryClass => ({ id: `session:${index}`, origin: "session" });
 /** A box back from Lovejoin: each withdraw brings back one. */
 export const boxFrom = (txHash: string): HistoryClass => ({ id: `box:${txHash}`, origin: "lovejoin" });
+/** Money with no history, by the transaction that made it: kept apart from other such money while anything else's is known. */
+export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txHash}`, origin: "unknown" });
 
 const parts = (c: HistoryClass) => c.id.split("+");
 
@@ -112,6 +116,7 @@ export function historiesNote(
   const all = [...new Set(spent.flatMap(parts))];
   const boxes = all.filter((p) => p.startsWith("box:")).length;
   const received = all.filter((p) => p.startsWith("received:")).length;
+  const unknown = all.filter((p) => originOf(p) === "unknown").length;
   const sessions = [...new Set(spent.flatMap(sessionsIn))];
   const others = sessions.filter((i) => i !== session);
   const said: string[] = [];
@@ -120,7 +125,8 @@ export function historiesNote(
       ...(boxes ? [count(boxes, "a box back from Lovejoin", "boxes back from Lovejoin")] : []),
       ...(received ? [count(received, "a payment you received", "payments you received")] : []),
       ...(all.includes(MADE_PRIVATE.id) ? ["money you made private"] : []),
-      ...(all.includes(UNKNOWN.id) ? ["money the wallet has no history for"] : []),
+      ...(unknown === 1 ? ["money the wallet has no history for"] : []),
+      ...(unknown > 1 ? [`money from ${unknown} transactions the wallet has no history for`] : []),
       ...(sessions.length ? [`money from ${sessionNames(sessions)}`] : []),
     ];
     // What's spent together, as a fact: another choice might have paid, merging other histories (independent review L39).
