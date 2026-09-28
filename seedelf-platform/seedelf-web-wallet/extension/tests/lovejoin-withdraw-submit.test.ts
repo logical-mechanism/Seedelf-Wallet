@@ -3,8 +3,9 @@
 // review M1); a 429 or a refusal isn't a withdraw that may have gone through
 // (M11); and one that may have is sent again only under a new withdraw's
 // timing rules, each resend counting as the wallet's send (M11, L8), and a
-// fresh draw into an unlock. The real WebAssembly, a recorded preprod
-// pool, and fakes of Koios and giveme.my.
+// fresh draw into an unlock. None is sent when the wallet locked and
+// unlocked while it was built (L11). The real WebAssembly, a recorded
+// preprod pool, and fakes of Koios and giveme.my.
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -144,6 +145,34 @@ describe("a withdraw kept before it's sent (independent review M1)", SLOW, () =>
     expect(pending?.txHash).toBe(txIdOf(t.koios.submitted.at(-1)!));
     expect((await kept(t)).withdrawing).toBeUndefined();
     expect((await t.activity.seedelf("preprod")).some((e) => e.txHash === pending!.txHash)).toBe(true);
+  });
+});
+
+describe("a withdraw built across a lock and an unlock (independent review L11)", SLOW, () => {
+  it("isn't sent: its due time stays, and waits the new unlock's fresh draw", async () => {
+    const { t, lovejoin } = await due();
+    const before = (await kept(t)).due;
+    // The wallet locks, and is unlocked again, while giveme.my answers.
+    const witness = t.collateral.fetch;
+    t.collateral.fetch = async (url, init) => {
+      await t.wallet.lock();
+      t.clock.now += 20_000;
+      await t.wallet.unlock(PASSWORD);
+      return witness(url, init);
+    };
+    const submits = t.koios.submitted.length;
+    expect(await lovejoin.withdrawDue("preprod", false, t.clock.now)).toEqual([]);
+    t.collateral.fetch = witness;
+    expect(t.koios.submitted).toHaveLength(submits);
+    expect((await kept(t)).withdrawing).toBeUndefined();
+    expect((await kept(t)).due).toEqual(before);
+    // The next run draws it a fresh wait from the unlock.
+    const unlocked = t.clock.now;
+    await busyFor(t, 60_000);
+    await lovejoin.withdrawDue("preprod", false, t.clock.now);
+    expect(t.koios.submitted).toHaveLength(submits);
+    const [drawn] = (await kept(t)).due;
+    expect(drawn).toBeGreaterThanOrEqual(unlocked + UNLOCK_WAIT_MS[0]);
   });
 });
 

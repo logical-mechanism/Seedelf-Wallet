@@ -1694,7 +1694,7 @@ export class LovejoinService {
       });
     }
     try {
-      const pending = await this.withdrawOne(network, pool, box);
+      const pending = await this.withdrawOne(network, pool, box, unlocked);
       await this.update(network, (s) => {
         const at = s.due.indexOf(time);
         if (at >= 0) s.due.splice(at, 1);
@@ -1848,7 +1848,18 @@ export class LovejoinService {
     );
   }
 
-  private async withdrawOne(network: NetworkName, pool: KoiosUtxo[], box: { txHash: string; txIndex: number }): Promise<PendingTx> {
+  /**
+   * Builds, signs and sends box's withdraw. `unlocked`: the unlock a run
+   * checked it under (unlockDraws); the wallet locked and unlocked again
+   * since, while Koios and giveme.my answered, it isn't sent, and waits the
+   * new unlock's draw (independent review L11).
+   */
+  private async withdrawOne(
+    network: NetworkName,
+    pool: KoiosUtxo[],
+    box: { txHash: string; txIndex: number },
+    unlocked?: number,
+  ): Promise<PendingTx> {
     const { wasm, wallet, session, now } = this.deps;
     const koios = this.deps.koios(network);
     const params = await koios.epochParams();
@@ -1867,6 +1878,9 @@ export class LovejoinService {
       txHash: string;
     };
     if (finished.txHash !== built.txHash) throw new Error("Signing changed the withdraw, so it wasn't sent.");
+    if (unlocked !== undefined && (await wallet.unlockedAt()) !== unlocked) {
+      throw new Error("The wallet locked while the withdraw was built, so it wasn't sent.");
+    }
     const bytes = hexBytes(finished.txCbor);
     // Kept, sealed, and its box counted as spent, before it's sent: a lock, a
     // closed browser or a stopped worker while Koios is asked leaves it to be
