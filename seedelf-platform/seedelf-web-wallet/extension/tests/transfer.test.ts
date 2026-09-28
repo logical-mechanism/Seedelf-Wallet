@@ -110,6 +110,8 @@ describe("transfer", () => {
 
   it("says when it spends money with different histories together, and keeps what its change's is (privacy review §2.3)", async () => {
     const t = await unlocked();
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
     // The tUSDM UTxO is money the wallet made private; the 25 ₳ one arrived from someone.
     const [ada, token] = [ownedUtxos[0]!, ownedUtxos[1]!];
     await t.activity.sent(

@@ -149,6 +149,8 @@ function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
 describe("a session's funding", () => {
   it("takes received money before what another session left (privacy review §2.3)", async () => {
     const t = await unlocked();
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
     // Session 5's funding left 40 ₳, the largest: written down when it was sent.
     const theirs = { ...ownedUtxos[0]!, tx_hash: "05".repeat(32), value: "40000000", block_height: 9_000_005 };
     t.koios.added.push(theirs);

@@ -61,6 +61,14 @@ interface History {
   entries: ActivityEntry[];
   /** Outpoints already noted as arrived. */
   seen: string[];
+  /**
+   * Set when this device starts the history, until the first balance reading
+   * notes what's already there (independent review L38). That came before
+   * the history (a restore, the same phrase in another profile): who paid
+   * for it isn't known, so it's noted with origin Unknown, never as a
+   * payment received. A brand-new wallet's first reading finds nothing.
+   */
+  first?: true;
 }
 
 export interface AccountAddresses {
@@ -221,7 +229,8 @@ export class ActivityService {
   /**
    * Notes this wallet's contract UTxOs it hasn't seen before as arrivals, one
    * entry per transaction. Its own transactions' change isn't an arrival, and
-   * a UTxO holding a seedelf is a name, not a payment.
+   * a UTxO holding a seedelf is a name, not a payment. What the history's
+   * first reading finds was there before it: its origin is Unknown.
    */
   arrived(network: NetworkName, owned: KoiosUtxo[]): Promise<void> {
     const { contract = CONTRACT_V1 } = this.deps;
@@ -229,7 +238,8 @@ export class ActivityService {
       const seen = new Set(h.seen);
       const ours = new Set(h.entries.filter((e) => e.kind !== "received").map((e) => e.txHash));
       const fresh = owned.filter((u) => !seen.has(outpoint(u)));
-      if (!fresh.length) return undefined;
+      // The first reading is written even when it finds nothing: what comes after it arrived.
+      if (!fresh.length && !h.first) return undefined;
       const byTx = new Map<string, ActivityEntry>();
       for (const u of fresh) {
         if (ours.has(u.tx_hash) || seedelfTokenOf(u, contract.seedelfPolicyId)) continue;
@@ -240,6 +250,7 @@ export class ActivityService {
           direction: "in" as const,
           lovelace: "0",
           tokens: 0,
+          ...(h.first ? { origin: UNKNOWN } : {}),
         };
         entry.lovelace = (BigInt(entry.lovelace) + BigInt(u.value)).toString();
         const came = (u.asset_list ?? []).map((a) => ({ policyId: a.policy_id, assetName: a.asset_name, quantity: a.quantity }));
@@ -273,7 +284,9 @@ export class ActivityService {
     const { stake } = account;
     const koios = this.deps.koios(network);
     const ours = accountMatcher(account);
-    const own = new Map((await this.seedelf(network)).map((e) => [e.txHash, e]));
+    // What the private side noted as received says nothing of what the account did in it: after a restore,
+    // that's also the account's own move-ins from before (independent review L38).
+    const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
     const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake));
 
     let pages: AccountPages;
@@ -319,7 +332,8 @@ export class ActivityService {
   private update(network: NetworkName, change: (h: History) => History | undefined): Promise<void> {
     const run = this.queue.then(async () => {
       const name = `history.${network}` as const;
-      const history = (await this.deps.store.get<History>(name)) ?? { entries: [], seen: [] };
+      // One this device starts now: its first reading notes what was there before it.
+      const history = (await this.deps.store.get<History>(name)) ?? { entries: [], seen: [], first: true };
       const next = change(history);
       if (next) await this.deps.store.set(name, next);
     });

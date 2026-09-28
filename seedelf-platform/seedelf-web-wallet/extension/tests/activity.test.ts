@@ -105,6 +105,8 @@ describe("Seedelf activity", () => {
 
   it("says where each private UTxO came from, by the transaction that made it (privacy review §2.3)", async () => {
     const t = await unlocked();
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
     const at = (hex: string, index = 0) => ({ ...ownedUtxos[0]!, tx_hash: hex.repeat(32), tx_index: index });
     const sent = (kind: PendingTx["kind"], hex: string, summary: object) =>
       t.activity.sent("preprod", { kind, network: "preprod", txHash: hex.repeat(32), submittedAt: 1, confirmations: null }, summary);
