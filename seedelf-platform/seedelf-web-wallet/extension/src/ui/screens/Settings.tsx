@@ -1018,7 +1018,7 @@ export function atStakeLines(stake: AtStake[]): string[] {
     const open = s.sessions.filter((x) => !x.leftBehind);
     if (open.length) {
       lines.push(
-        `${on}: ${plural(open.length, "private session")} still open: ${open.map(sessionName).join(", ")}. What ${open.length === 1 ? "its one-time account holds" : "their one-time accounts hold"} doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page.`,
+        `${on}: ${plural(open.length, "private session")} still open: ${open.map(sessionName).join(", ")}. What ${open.length === 1 ? "its one-time account holds" : "their one-time accounts hold"} doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.`,
       );
     }
     const left = s.sessions.filter((x) => x.leftBehind);

@@ -212,7 +212,7 @@ describe("Remove wallet's screen", () => {
     ]);
     expect(lines).toEqual([
       "Mainnet: a payment Koios didn't answer may still go through. Nothing watches it until the same recovery phrase is restored in this browser, and a payment made meanwhile, here or elsewhere, could pay twice.",
-      "Mainnet: 2 private sessions still open: private session 1 (app.example), private session 3 (a swap). What their one-time accounts hold doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page.",
+      "Mainnet: 2 private sessions still open: private session 1 (app.example), private session 3 (a swap). What their one-time accounts hold doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.",
       "Mainnet: something no return takes is left at the account of private session 4 (a mix), and it doesn't show after a restore yet.",
       "Mainnet: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.",
       "Preprod: Seedelf Wallet couldn't read what's still open there.",
