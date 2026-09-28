@@ -157,9 +157,48 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
  */
 const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SundaeSwapV3"];
 
-/** What routing leaves out on `network`. */
+/**
+ * Every DEX Minswap's aggregator routes through, as its API's `Protocol`
+ * schema names them (checked 2026-09-27). Its `exclude_protocols` takes
+ * these names only: any other, and it refuses the whole request.
+ */
+export const MINSWAP_PROTOCOLS: readonly string[] = [
+  "MinswapV2",
+  "Minswap",
+  "MinswapStable",
+  "MuesliSwap",
+  "Splash",
+  "SundaeSwapV3",
+  "SundaeSwap",
+  "SundaeSwapStable",
+  "VyFinance",
+  "CswapV1",
+  "WingRidersV2",
+  "WingRiders",
+  "WingRidersStableV2",
+  "Spectrum",
+  "SplashStable",
+  "ChakraBondingCurve",
+  "OpenDjedV1",
+  "DanogoCLMMV1",
+];
+
+/**
+ * What routing leaves out on `network`. On mainnet, every DEX Minswap
+ * offers that isn't on MAINNET_PROTOCOLS (independent review M17): its
+ * `exclude_protocols` is a list to leave out, and its `include_protocols`
+ * isn't kept to (asked for MinswapV2 alone, it routed through Minswap V1
+ * too), so the list the wallet checks is turned into one Minswap keeps.
+ * build-tx routes again on Minswap's side with this list, so the order it
+ * builds goes through the same DEXes as the estimate the runner checked
+ * (uncheckedProtocols), except one Minswap adds after this list was
+ * written: which DEX an order goes to is still Minswap's to build, as its
+ * receivers and its minimum are (sessions.ts checkOrder).
+ */
 export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
-  return network === "preprod" ? [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN] : [...DIRECT_PROTOCOLS, ...MAINNET_REFUSED];
+  if (network === "preprod") return [...DIRECT_PROTOCOLS, ...PREPROD_BROKEN];
+  const unchecked = MINSWAP_PROTOCOLS.filter((p) => !MAINNET_PROTOCOLS.includes(p));
+  return [...new Set([...DIRECT_PROTOCOLS, ...MAINNET_REFUSED, ...unchecked])];
 }
 
 /**

@@ -1125,6 +1125,13 @@ export class SessionService {
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
     const est = await minswap.estimate(ask);
+    // Its route now, as the runner's order checks it (independent review M17).
+    const unchecked = uncheckedProtocols(network, est);
+    if (unchecked.length) {
+      throw new Error(
+        `Minswap now routes this swap through ${unchecked.join(" and ")}, whose orders the wallet can't check yet, so it won't swap this way. Try again later, or Stop to bring it back.`,
+      );
+    }
     const txCbor = await minswap.buildTx(address, est.min_amount_out, ask);
     return this.review(network, s, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
   }
@@ -1608,6 +1615,10 @@ export class SessionService {
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
     const est = await minswap.estimate(ask);
+    // Routed afresh: never through a DEX whose orders the wallet can't check, whatever the quote went
+    // through. It pauses, as the quote would have refused it (independent review M17).
+    const unchecked = uncheckedProtocols(network, est);
+    if (unchecked.length) throw new Refused(`Minswap now routes it through ${unchecked.join(" and ")}, whose orders the wallet can't check yet.`);
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
     // At least what the user approved, or more when the price has moved their way.
@@ -2547,7 +2558,10 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
  *   and no more than `aggregatorFee` quoted (none on preprod).
  * Anything else is refused. Which script an order goes to isn't checked:
  * no DEX's order contract is pinned, so that's Minswap's to build, as the
- * order's receivers are. Nor is its minimum read back: it's what the wallet
+ * order's receivers are; on mainnet, Minswap is asked to leave out every
+ * DEX the wallet doesn't check, and the estimate the order is built from is
+ * checked (excludedProtocols, uncheckedProtocols, independent review M17).
+ * Nor is its minimum read back: it's what the wallet
  * asks Minswap for, and Minswap builds the order. Returns the orders' output
  * indexes.
  */
