@@ -19,7 +19,10 @@
 // it's settled. The Seedelf history is written once it's seen. One that
 // never shows is let go, its UTxOs freed: from the public account when the
 // chain passes its slot, and a private one, which has no slot yet, after 20
-// minutes unseen.
+// minutes unseen, unless a resend found it waiting in a mempool (independent
+// review L1). Every submit is watched as maybe sent before it goes to Koios
+// (`writeAhead`, independent review M1), so one is maybe sent from the start
+// until Koios answers, and a second waits for it.
 //
 // Every write of the watch goes through `take`: nothing replaces a
 // transaction that may still go through with another, not a Send checked
@@ -31,7 +34,7 @@
 // each is sealed on the device too (private-store.ts, `maybeSent.<network>`),
 // and put back, its UTxOs held back again, before the watch is next read: at
 // unlock, and before any build. Only its settling removes it (final review
-// money-submit-4).
+// money-submit-4), not even Remove wallet (independent review M2).
 
 import type { NetworkName } from "../networks";
 import type { PendingTx } from "../shared/rpc";
