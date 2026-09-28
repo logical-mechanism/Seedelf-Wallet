@@ -657,12 +657,14 @@ export class PendingService {
   /**
    * Keeps a maybe-sent transaction on `network` going while the wallet shows
    * another network, or no page at all (the worker's runs): looked for, and
-   * sent again now and then. Returns whether it's still maybe sent. One Koios
-   * took is left for Home, which asks when it opens.
+   * sent again now and then. Returns whether it's still maybe sent: Koios
+   * not answering says nothing of that, so it still is, and the runs keep
+   * the alarm for it (independent review L3). One Koios took is left for
+   * Home, which asks when it opens.
    */
   async watch(network: NetworkName): Promise<boolean> {
     const watched = await watchedOn(this.deps, network);
     if (!watched?.maybeSent) return false;
-    return unsettled(await settle(this.deps, watched));
+    return settle(this.deps, watched).then(unsettled, () => true);
   }
 }
