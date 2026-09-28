@@ -581,6 +581,9 @@ async function settleNow(deps: PendingDeps, w: Watched): Promise<Watched | undef
   if (w.maybeSent && w.txCbor && now() - (w.resentAt ?? w.submittedAt) >= RESEND_MS) {
     let current: Watched = { ...w, resentAt: now() };
     let taken = false;
+    // Each time it goes again is the wallet's send, when that may be the one the network takes: Lovejoin's
+    // withdraws keep away from it (lastSpentAt) as from any other, never in the same run (independent review L8).
+    await wallet.withKeys(() => rememberSpent(session, w.network, hexBytes(w.txCbor!), now()));
     try {
       if ((await koios.submitTx(hexBytes(w.txCbor))) === w.txHash) {
         // Taken: an ordinary sent transaction from here on.
