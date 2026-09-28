@@ -80,6 +80,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
+import { txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
@@ -112,6 +113,9 @@ const BUILT_TTL_MS = 10 * 60_000;
 const PUBLIC_STILL_SENDING = "Your last mix from the public account is still being sent. Wait for it to finish.";
 /** The mix kept for Send isn't the one asked for, or something took its place since. */
 const NOT_READY = "That mix isn't ready to send. Review it again.";
+/** A mix from the public account is built while a transaction of the last one may have gone through, unseen yet. */
+const PUBLIC_MAYBE_WAIT =
+  "Your last mix from the public account may have gone through: Koios didn't answer when one of its transactions was sent, and the network hasn't shown it yet. The wallet looks for it first. Try again in a few minutes.";
 
 /** A chained transaction Koios didn't answer, or asked to slow down for: tried again this many times, waiting CHAIN_BUSY_MS longer each time. */
 export const CHAIN_RETRIES = 4;
@@ -494,6 +498,13 @@ interface ChainRecord {
    * never come back by themselves (unschedule). Counted so none goes twice.
    */
   unscheduled?: number;
+  /**
+   * A mix from the public account that stopped at a transaction that may
+   * have gone through: Koios didn't answer when it was sent (independent
+   * review L5). Its index, hash, what it spends, and when (ms). Until it's
+   * settled (publicUnsettled), no other mix from the account is built.
+   */
+  maybe?: { index: number; txHash: string; inputs: string[]; at: number };
 }
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
@@ -523,7 +534,13 @@ interface SendingPublic extends ChainProgress {
   network: NetworkName;
   boxes: number;
   stopped?: string;
+  /** It stopped at this transaction, which may have gone through (ChainRecord `maybe`). */
+  maybe?: number;
 }
+
+/** What a chain's transaction `i` is called, where a stop says which went and which may have. */
+const stepName = (txs: LovejoinChain["txs"], i: number) =>
+  txs[i]?.kind === "deposit" ? "its deposit" : `its transaction ${i + 1} of ${txs.length}`;
 
 export interface LovejoinDeps extends ScriptSpendDeps {
   store: PrivateStore;
@@ -773,15 +790,29 @@ export class LovejoinService {
    * far, of all, and why it stopped, if it did. `advance`: send more of it
    * first, if there's room (the Lovejoin page, while it's open).
    */
-  async progress(network: NetworkName, advance = false): Promise<{ total: number; sent: number; stopped?: string } | null> {
+  async progress(
+    network: NetworkName,
+    advance = false,
+  ): Promise<{ total: number; sent: number; stopped?: string; maybeSent?: true } | null> {
     if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
-    const s = await this.sendingOf(network);
-    if (s) return { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}) };
+    let s = await this.sendingOf(network);
+    // Stopped at a transaction that may have gone through: looked for first, and said as it now stands.
+    if (s?.maybe !== undefined) {
+      await this.publicUnsettled(network).catch(() => true);
+      s = await this.sendingOf(network);
+    }
+    const maybe = (m: unknown) => (m !== undefined ? { maybeSent: true as const } : {});
+    if (s) return { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}), ...maybe(s.maybe) };
     // Its progress is gone: a lock, a closed browser or an update cut it, and its record says how far it got.
     if (!this.available(network)) return null;
     await this.cuts(network);
-    const last = (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
-    return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped } : null;
+    const lastOf = async () => (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
+    let last = await lastOf();
+    if (last?.maybe) {
+      await this.publicUnsettled(network).catch(() => true);
+      last = await lastOf();
+    }
+    return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped, ...maybe(last.maybe) } : null;
   }
 
   /** Whether Lovejoin is deployed on `network` (networks.ts: the UI's gate is the same). */
@@ -1174,6 +1205,8 @@ export class LovejoinService {
     checkBoxes(boxes);
     const sending = await this.sendingOf(network);
     if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
+    // Nor while the last may have gone through, unseen yet: the account would pay for a mix twice.
+    if (await this.publicUnsettled(network)) throw new Error(PUBLIC_MAYBE_WAIT);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
@@ -1249,6 +1282,8 @@ export class LovejoinService {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
     const sending = await this.sendingOf(network);
     if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
+    // Nor while the last may have gone through, unseen yet (independent review L5).
+    if (await this.publicUnsettled(network)) throw new Error(PUBLIC_MAYBE_WAIT);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
@@ -1329,6 +1364,7 @@ export class LovejoinService {
     await settleMaybeSent(this.deps, network);
     const before = await this.sendingOf(network);
     if (before && !before.stopped) throw new Error(PUBLIC_STILL_SENDING);
+    if (await this.publicUnsettledNow(network)) throw new Error(PUBLIC_MAYBE_WAIT);
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
     // Recorded, sealed, before its progress is where anything can send it from (independent review L28). Its own
     // boxes mixed again: they wait afresh once its first mix is in (chainSent).
@@ -1385,6 +1421,9 @@ export class LovejoinService {
         await ours();
         await session.set(key, sending);
       });
+    // The next transaction, when a send of it gave up while it may have gone in all the same: a try Koios
+    // didn't answer, and none that says it's in (independent review L5). Cleared once a send of it goes.
+    let unsure: number | undefined;
     try {
       const done = await pumpChain(
         sending,
@@ -1393,6 +1432,8 @@ export class LovejoinService {
             const step = sending.txs[i]!;
             const bytes = hexBytes(step.txCbor);
             const tries = { busy: 0, spent: 0, maybeSent };
+            // Whether a try may have put it in: sent before, or one Koios didn't answer.
+            let reached = maybeSent;
             for (;;) {
               try {
                 try {
@@ -1406,13 +1447,18 @@ export class LovejoinService {
               } catch (e) {
                 // Refused while Koios couldn't say whether it's on chain, and it may be: looked for again (final review lovejoin-6).
                 if (mayBeIn(tries, e)) break;
+                if (e instanceof KoiosBusyError && e.maybeSent) reached = true;
                 const wait = chainRetryMs(i, tries, e);
-                if (wait === undefined) throw e;
+                if (wait === undefined) {
+                  if (reached && i === sending.next && (e instanceof KoiosBusyError || e instanceof SpentInputError)) unsure = i;
+                  throw e;
+                }
                 await sleep(wait);
                 // Never after a lock: the wallet may have locked while it waited, and locking stops the chain.
                 await wallet.withKeys(ours);
               }
             }
+            if (unsure === i) unsure = undefined;
             await wallet.withKeys(() => rememberSpent(session, network, bytes, this.deps.now()));
             await this.chainSent(network, id, i);
           },
@@ -1443,13 +1489,25 @@ export class LovejoinService {
         await this.chainEnded(network, id, CHAIN_CUT).catch(() => undefined);
         throw e;
       }
-      sending.stopped = e instanceof Error ? e.message : String(e);
+      // Stopped at a transaction that may have gone through: what it spends counts as spent, and stays reserved,
+      // and it's looked for before another mix from the account is built (independent review L5).
+      const step = unsure === undefined ? undefined : sending.txs[unsure]!;
+      const maybe = step && { index: unsure!, txHash: step.txHash, inputs: txInputs(hexBytes(step.txCbor)), at: this.deps.now() };
+      sending.stopped = maybe
+        ? `Koios didn't answer when ${stepName(sending.txs, maybe.index)} was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.`
+        : e instanceof Error
+          ? e.message
+          : String(e);
+      if (maybe) {
+        sending.maybe = maybe.index;
+        await wallet.withKeys(() => rememberSpent(session, network, hexBytes(step!.txCbor), maybe.at)).catch(() => undefined);
+      }
       // Recorded as stopped, and what it held let go, before its progress says so: nothing takes its place until
       // all of that is done (independent review L30).
-      await this.chainEnded(network, id, sending.stopped).catch(() => undefined);
-      await this.release(network, chainOwner()).catch(() => undefined);
+      await this.chainEnded(network, id, sending.stopped, maybe).catch(() => undefined);
+      if (!maybe) await this.release(network, chainOwner()).catch(() => undefined);
       await save().catch(() => undefined);
-      throw e;
+      throw maybe ? new Error(sending.stopped) : e;
     }
   }
 
@@ -1545,7 +1603,7 @@ export class LovejoinService {
    * Chain `id` is all sent, or `stopped` partway, and why. Stopped, the due
    * times of the boxes it hadn't mixed all the way go (unschedule).
    */
-  async chainEnded(network: NetworkName, id: string, stopped?: string): Promise<void> {
+  async chainEnded(network: NetworkName, id: string, stopped?: string, maybe?: ChainRecord["maybe"]): Promise<void> {
     const now = this.deps.now();
     await this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
@@ -1554,9 +1612,72 @@ export class LovejoinService {
       if (stopped === undefined) c.done = true;
       else {
         c.stopped = stopped;
+        if (maybe) c.maybe = maybe;
         unschedule(s, c, unfinished(c));
       }
     });
+  }
+
+  /**
+   * Looks for the transaction a mix from the public account stopped at
+   * while it may have gone through (ChainRecord `maybe`): on chain, it went;
+   * not, and a UTxO it spends is spent now, it can't go anymore, whether it
+   * did or not; unseen as long as the wallet holds what it spends
+   * (SPENT_KEEP_MS), it never went. Then the mix's record and progress say
+   * so, and what it reserved goes. Returns whether it's still unsettled: no
+   * other mix from the account is built meanwhile, or the account could pay
+   * for one twice (independent review L5). It's only looked for, never sent
+   * again: its mix stopped.
+   */
+  private publicUnsettled(network: NetworkName): Promise<boolean> {
+    return this.inTurn(`public.${network}`, () => this.publicUnsettledNow(network));
+  }
+
+  /** publicUnsettled, in the account's turn. */
+  private async publicUnsettledNow(network: NetworkName): Promise<boolean> {
+    const c = (await this.read(network)).chains.find((r) => r.session === undefined && r.maybe);
+    const m = c?.maybe;
+    if (!c || !m) return false;
+    const koios = this.deps.koios(network);
+    const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
+    // Koios didn't answer: looked for again next time.
+    if (seen === undefined) return true;
+    let how: "in" | "spent" | "never" = "in";
+    if (seen === null) {
+      const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
+      if (!rows) return true;
+      if (rows.some((r) => r.is_spent)) how = "spent";
+      else if (this.deps.now() - m.at >= SPENT_KEEP_MS) how = "never";
+      else return true;
+    }
+    const what = c.deposit === m.txHash ? "its deposit" : `its transaction ${m.index + 1} of ${c.total}`;
+    const why = {
+      in: `Koios didn't answer when ${what} was sent. It went through, and the mix stopped there.`,
+      spent: `Koios didn't answer when ${what} was sent, and what it spends is spent now: if that was it, the boxes it made wait in the pool, not mixed yet.`,
+      never: `Koios didn't answer when ${what} was sent, and it never went through.`,
+    }[how];
+    await this.update(network, (s) => {
+      const r = s.chains.find((x) => x.id === c.id);
+      if (r?.maybe?.txHash !== m.txHash) return;
+      delete r.maybe;
+      r.stopped = why;
+      if (how === "in") r.sent = Math.max(r.sent, m.index + 1);
+    });
+    const { wallet, session } = this.deps;
+    const key = SESSION_LOVEJOIN_SENDING + network;
+    await wallet.withKeys(async () => {
+      const p = await session.get<SendingPublic>(key);
+      if (p?.txs?.at(-1)?.txHash !== c.id || p.maybe === undefined) return;
+      delete p.maybe;
+      p.stopped = why;
+      if (how === "in") p.next = Math.max(p.next, m.index + 1);
+      await session.set(key, p);
+    });
+    // Nothing of it can land later: what it held goes, as a stopped mix's does.
+    await this.reserving(network, (kept) => {
+      if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
+    });
+    return false;
   }
 
   /**
@@ -1668,6 +1789,7 @@ export class LovejoinService {
           sent: c.sent,
           at: c.at,
           ...(c.stopped ? { stopped: c.stopped } : {}),
+          ...(c.maybe ? { maybeSent: true as const } : {}),
         })),
     };
   }

@@ -152,8 +152,11 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
               {chainName(c)}, {amounts.count(c.boxes, "box", "boxes")}
             </span>
             <SwapTag {...(c.stopped ? { tone: "off" as const, label: "Stopped" } : { tone: "live" as const, label: "Sending" })} />
+            {/* One stopped at a transaction that may have gone through says so (independent review L5). */}
             <span className="token-row__sub">
-              {c.stopped ? `Stopped after ${c.sent} of ${c.total} transactions` : `${c.sent} of ${c.total} transactions sent`}
+              {c.stopped
+                ? `Stopped after ${c.sent} of ${c.total} transactions${c.maybeSent ? ", and the next may have gone through" : ""}`
+                : `${c.sent} of ${c.total} transactions sent`}
             </span>
             <p className="token-row__detail" data-testid="lovejoin-chain-detail">
               {c.stopped
@@ -279,7 +282,7 @@ export function Lovejoin({
 
   // The public mix being sent: how many of its transactions are in so far. Its Send sends the first few;
   // while the page is open, it sends the rest as blocks make room (the alarm does too, once a minute).
-  const [sending, setSending] = useState<{ total: number; sent: number; stopped?: string } | null>(null);
+  const [sending, setSending] = useState<{ total: number; sent: number; stopped?: string; maybeSent?: true } | null>(null);
   const sendingPublic = busy && review?.source === "public";
   const publicRunning = !!sending && !sending.stopped;
   useEffect(() => {
@@ -493,7 +496,7 @@ export function Lovejoin({
           <p className="note">
             Your mix from the public account:{" "}
             {sending.stopped
-              ? `stopped after ${sending.sent} of ${sending.total} transactions.`
+              ? `stopped after ${sending.sent} of ${sending.total} transactions${sending.maybeSent ? ", and the next may have gone through" : ""}.`
               : `${sending.sent} of ${sending.total} transactions sent. The rest go as blocks make room.`}
           </p>
           {sending.stopped && <p className="token-row__detail">Why it stopped: {sending.stopped}</p>}

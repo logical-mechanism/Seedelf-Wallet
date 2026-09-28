@@ -83,8 +83,12 @@ export async function withSession(lovelace: string) {
   return { t, sessions: sessionsOf(t) };
 }
 
-/** An unlocked wallet with collateral and `lovelace` in its public account, and Lovejoin's pool. */
-export async function publicFunded(lovelace = "60000000") {
+/**
+ * An unlocked wallet with collateral and `lovelace` in its public account
+ * (`e6…#0`), and Lovejoin's pool. `more`: another UTxO of ADA alone in it
+ * for each, `e7…#0` on.
+ */
+export async function publicFunded(lovelace = "60000000", more: string[] = []) {
   const t = testBalances();
   await t.wallet.create(account(12).phrase, PASSWORD);
   t.koios.evaluation = AGREES;
@@ -92,7 +96,7 @@ export async function publicFunded(lovelace = "60000000") {
   const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
   const keyHash = await t.wallet.withKeys((keys) => keys.cardano.paymentKeyHash(0, 0));
   const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, payment_cred: keyHash, asset_list: [] });
-  t.koios.addedToAccounts.push(at("e5", "5000000"), at("e6", lovelace));
+  t.koios.addedToAccounts.push(at("e5", "5000000"), at("e6", lovelace), ...more.map((value, k) => at((0xe7 + k).toString(16), value)));
   return t;
 }
 

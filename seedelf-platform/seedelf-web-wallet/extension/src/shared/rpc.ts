@@ -1031,6 +1031,8 @@ export interface LovejoinChainView {
   at: number;
   /** Why it stopped partway; none while it's being sent. */
   stopped?: string;
+  /** It stopped at a transaction that may have gone through, not seen yet: none from the account is built meanwhile. */
+  maybeSent?: true;
 }
 
 /**
@@ -1271,7 +1273,8 @@ export interface Requests {
    */
   "lovejoin-mix-public-progress": {
     payload: { advance?: boolean };
-    result: { total: number; sent: number; stopped?: string } | null;
+    /** `maybeSent`: it stopped at a transaction that may have gone through, not seen yet (independent review L5). */
+    result: { total: number; sent: number; stopped?: string; maybeSent?: true } | null;
   };
   /**
    * Withdraws one of the wallet's boxes now, whatever its wait (`box`, or the
