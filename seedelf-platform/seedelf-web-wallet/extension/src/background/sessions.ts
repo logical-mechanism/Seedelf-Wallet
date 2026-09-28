@@ -1003,6 +1003,17 @@ export class SessionService {
   }
 
   /**
+   * Every private session index this wallet has used on `network`, as far as
+   * its book knows: every one up to the next, and each it holds. The
+   * connector says so in a site's prompt when its transaction pays one of
+   * them (dapp.ts, independent review M12).
+   */
+  async indices(network: NetworkName): Promise<number[]> {
+    const book = await this.book(network);
+    return [...new Set([...Array.from({ length: book.next }, (_, i) => i), ...book.sessions.map((s) => s.index)])];
+  }
+
+  /**
    * What a session's account holds now, fresh from Koios, less what this
    * wallet has spent, and less what a return's chain being sent will spend
    * (its change to come, its collateral): a site connected to it never

@@ -26,7 +26,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
-import { certificateLine, paidTo, stakingComesBack, withdrawalLine } from "../dapp";
+import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
 import { formatAda, formatQuantity, plural, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
@@ -191,6 +191,7 @@ export function DappApprovals() {
             partial={current.partial}
             session={current.session !== undefined}
             collateralSpent={!!current.collateralSpent}
+            ties={current.ties}
           />
         )}
         {current.kind === "sign-data" && (
@@ -549,11 +550,14 @@ export function SignTx({
   partial,
   session,
   collateralSpent,
+  ties,
 }: {
   summary: DappTxSummary;
   partial: boolean;
   session: boolean;
   collateralSpent: boolean;
+  /** The wallet's other accounts it moves money with (independent review M12); undefined when unchecked. */
+  ties?: Array<"account" | number>;
 }) {
   const network = useNetwork();
   const net = BigInt(s.netLovelace);
@@ -657,7 +661,13 @@ export function SignTx({
       )}
       {s.paid.some((p) => p.seedelf === "register") && (
         <Callout tone="privacy" testId="dapp-seedelf-payment">
-          It pays a Seedelf. Nothing on chain says whose, but it comes from your public account in the open.
+          It pays a Seedelf. Nothing on chain says whose, but it comes from{" "}
+          {session ? "this private session's one-time account" : "your public account"} in the open.
+        </Callout>
+      )}
+      {ties && ties.length > 0 && (
+        <Callout tone="warn" testId="dapp-ties">
+          {tiesLine(ties, session)}
         </Callout>
       )}
 
@@ -733,9 +743,7 @@ export function SignTx({
       )}
 
       <Callout tone="privacy" testId="dapp-tx-privacy">
-        {session
-          ? "Signing ties this transaction to the session's one-time account. Your public account and your private balance aren't in it."
-          : "Signing ties this transaction to your public account, as any payment from it. Your private balance isn't in it."}
+        {signingTies(ties, session)}
       </Callout>
     </>
   );

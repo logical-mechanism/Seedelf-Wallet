@@ -101,7 +101,9 @@ import {
 } from "../shared/dapp";
 import type { DappApproval, DappAsk, DappSite, DappTxSummary, SessionOutSummary, TokenQuantity } from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
+import { GAP_LIMIT } from "./chain";
 import type { CoinControlService } from "./coin-control";
 import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { chainOwner } from "./lovejoin";
@@ -233,6 +235,9 @@ interface SessionAccount {
 
 /** Who a connected site talks to: the public account (none), or its private session. */
 type Holder = SessionAccount | undefined;
+
+/** Another of the wallet's accounts a site's transaction touches: the public account, or a private session by index. */
+type Tie = "account" | number;
 
 /** A connected site, as the sealed record keeps it. */
 type Connected = DappSite & { network: NetworkName };
@@ -1293,7 +1298,7 @@ export class DappService {
     inputs: string[],
     collateral: string[],
     partialSign: boolean,
-  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View }> {
+  ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View; rows: KoiosUtxo[] }> {
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
       throw refused("This site asks too often for signatures Seedelf Wallet can't give. Try again in a minute.");
@@ -1350,7 +1355,7 @@ export class DappService {
         info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
       });
     }
-    return { request, summary, collateralSpent, view };
+    return { request, summary, collateralSpent, view, rows };
   }
 
   private async signTx(
@@ -1371,17 +1376,24 @@ export class DappService {
       throw invalid("The wallet can't read this transaction.");
     }
     await this.heldForLovejoin(network, holder, inputs, collateral);
-    const { request, summary, collateralSpent, view } = await this.readInTurn(session.origin, () =>
+    const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
     );
     const { wasm, wallet } = this.deps;
+    // For the prompt alone: never refused for it, which would tell the site.
+    // Unchecked, the prompt promises nothing (independent review M12).
+    const ties = await this.ties(network, holder, summary, rows).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+      return undefined;
+    });
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,
-      summary,
+      summary: ties ? { ...summary, paid: summary.paid.map((p, i) => (ties.paid[i] === undefined ? p : { ...p, yours: ties.paid[i] })) } : summary,
       password,
       ...sessionOf(holder),
       ...(collateralSpent ? { collateralSpent } : {}),
+      ...(ties ? { ties: ties.all } : {}),
     };
     return this.ask(session, network, ask, TxSignError.UserDeclined, async () => {
       // Checked again as it's approved (independent review L33): while it
@@ -1398,6 +1410,52 @@ export class DappService {
       await this.remember(network, holder, signed.summary, (tx as string).trim());
       return signed.witnessSet;
     });
+  }
+
+  /**
+   * Which of the wallet's other accounts a site's transaction pays, or
+   * spends from (the inputs the wallet found), which signing ties on chain
+   * to the account the site sees: for a site on a private session, the
+   * public account (its stake key, and its payment keys in range, as Make
+   * public counts them: destination.ts) and the other sessions; for a site
+   * on the public account, the sessions. By each paid output, and all
+   * together, the public account first. Nothing is asked of anyone for it
+   * (independent review M12).
+   */
+  private async ties(
+    network: NetworkName,
+    holder: Holder,
+    summary: DappTxSummary,
+    rows: KoiosUtxo[],
+  ): Promise<{ paid: Array<Tie | undefined>; all: Tie[] }> {
+    const { wasm, wallet, session, sessions } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const indices = (await sessions.indices(network)).filter((i) => i !== holder?.index);
+    const known = await wallet.withKeys(({ cardano, oneTime }) => ({
+      account: holder
+        ? {
+            payment: new Set(Array.from({ length: GAP_LIMIT }, (_, i) => [cardano.paymentKeyHash(0, i), cardano.paymentKeyHash(1, i)]).flat()),
+            stake: keysOf(wasm, cardano.stakeAddress(net)).stake,
+          }
+        : undefined,
+      sessions: indices.map((index) => ({ index, payment: oneTime.keyHash(index), stake: keysOf(wasm, oneTime.rewardAddress(net, index)).stake })),
+    }));
+    if (known.account) {
+      // And those the last balance reading found past the first 20 (destination.ts).
+      const found = await wallet.withKeys(() => session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network));
+      for (const k of found?.keys ?? []) known.account.payment.add(k);
+    }
+    const whose = (address: string): Tie | undefined => {
+      const { payment, stake } = keysOf(wasm, address);
+      const { account } = known;
+      if (account && ((payment !== undefined && account.payment.has(payment)) || (stake !== undefined && stake === account.stake))) {
+        return "account";
+      }
+      return known.sessions.find((s) => (payment !== undefined && payment === s.payment) || (stake !== undefined && stake === s.stake))?.index;
+    };
+    const paid = summary.paid.map((p) => whose(p.address));
+    const all = [...new Set([...paid, ...rows.map((r) => whose(r.address))].filter((t): t is Tie => t !== undefined))];
+    return { paid, all: all.sort((a, b) => (a === "account" ? -1 : b === "account" ? 1 : a - b)) };
   }
 
   /**

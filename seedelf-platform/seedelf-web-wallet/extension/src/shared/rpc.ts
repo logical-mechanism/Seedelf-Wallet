@@ -595,6 +595,12 @@ export interface DappTxSummary {
      * so it's paid, not change.
      */
     ownPaymentKey: boolean;
+    /**
+     * Another of the wallet's accounts, as the worker found it for a site's
+     * prompt (independent review M12): the public account ("account"), or a
+     * private session, by index. Paying it ties the two on chain.
+     */
+    yours?: "account" | number;
   }>;
   ownOutputs: Array<{
     txIndex: number;
@@ -656,6 +662,14 @@ export type DappAsk =
       password: boolean;
       session?: number;
       collateralSpent?: boolean;
+      /**
+       * The wallet's other accounts it pays or spends from, which signing
+       * ties on chain to the one the site sees: the public account
+       * ("account", for a session's), and private sessions by index. Empty
+       * when none; missing when they couldn't be checked (independent
+       * review M12).
+       */
+      ties?: Array<"account" | number>;
     }
   | {
       kind: "sign-data";

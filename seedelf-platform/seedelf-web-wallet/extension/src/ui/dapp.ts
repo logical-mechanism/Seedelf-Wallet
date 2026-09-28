@@ -20,16 +20,47 @@ export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "st
   return BigInt(s.returnedLovelace) + BigInt(s.fee) >= BigInt(s.stakingLovelace);
 }
 
-/** What an output pays, under its address. */
+/** What an output pays, under its address: another of the wallet's own accounts by its name (independent review M12). */
 export function paidTo(p: Paid): string {
-  const what = p.ownPaymentKey
-    ? "Your payment key, with a stake part that isn't yours"
-    : p.seedelf
-      ? "Seedelf Wallet's contract"
-      : p.script
-        ? "A contract"
-        : "An address";
+  const what =
+    p.yours === "account"
+      ? "Your public account"
+      : p.yours !== undefined
+        ? `Your private session ${p.yours + 1}`
+        : p.ownPaymentKey
+          ? "Your payment key, with a stake part that isn't yours"
+          : p.seedelf
+            ? "Seedelf Wallet's contract"
+            : p.script
+              ? "A contract"
+              : "An address";
   return p.datum ? `${what}, with data` : what;
+}
+
+/**
+ * What of the wallet's other accounts a site's transaction moves money with,
+ * which signing ties together on chain for anyone to see (independent review
+ * M12): `ties` as the worker found them; `session`, the site is on a private
+ * session, not the public account.
+ */
+export function tiesLine(ties: Array<"account" | number>, session: boolean): string {
+  const names = ties.map((t) => (t === "account" ? "your public account" : `your private session ${t + 1}`));
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+  return `It moves money between ${session ? "this private session" : "your public account"} and ${list}. Signing ties them together on chain, where anyone can see it.`;
+}
+
+/**
+ * The prompt's words on what signing ties the transaction to (privacy
+ * review §2.12). That the wallet's other side isn't in it is said only when
+ * the worker checked (`ties`, empty): otherwise it may not be true
+ * (independent review M12).
+ */
+export function signingTies(ties: Array<"account" | number> | undefined, session: boolean): string {
+  const checked = ties !== undefined && ties.length === 0;
+  if (session) {
+    return `Signing ties this transaction to the session's one-time account.${checked ? " Your public account and your private balance aren't in it." : ""}`;
+  }
+  return `Signing ties this transaction to your public account, as any payment from it.${checked ? " Your private balance isn't in it." : ""}`;
 }
 
 /**
