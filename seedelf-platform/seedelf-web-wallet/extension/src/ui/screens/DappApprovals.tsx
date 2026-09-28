@@ -742,7 +742,11 @@ export function SignTx({
       )}
 
       <Callout tone="privacy" testId="dapp-tx-privacy">
-        {signingTies(ties, session)}
+        {signingTies(
+          ties,
+          session,
+          s.paid.some((p) => p.seedelf === "register"),
+        )}
       </Callout>
     </>
   );

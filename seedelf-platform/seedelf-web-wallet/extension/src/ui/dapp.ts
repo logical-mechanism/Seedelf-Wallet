@@ -53,14 +53,17 @@ export function tiesLine(ties: Array<"account" | number>, session: boolean): str
  * The prompt's words on what signing ties the transaction to (privacy
  * review §2.12). That the wallet's other side isn't in it is said only when
  * the worker checked (`ties`, empty): otherwise it may not be true
- * (independent review M12).
+ * (independent review M12). Nor is the private balance said to be out of
+ * it when it pays a Seedelf (`seedelf`): nothing says whose, so it may be
+ * the user's own.
  */
-export function signingTies(ties: Array<"account" | number> | undefined, session: boolean): string {
+export function signingTies(ties: Array<"account" | number> | undefined, session: boolean, seedelf = false): string {
   const checked = ties !== undefined && ties.length === 0;
   if (session) {
-    return `Signing ties this transaction to the session's one-time account.${checked ? " Your public account and your private balance aren't in it." : ""}`;
+    const out = !checked ? "" : seedelf ? " Your public account isn't in it." : " Your public account and your private balance aren't in it.";
+    return `Signing ties this transaction to the session's one-time account.${out}`;
   }
-  return `Signing ties this transaction to your public account, as any payment from it.${checked ? " Your private balance isn't in it." : ""}`;
+  return `Signing ties this transaction to your public account, as any payment from it.${checked && !seedelf ? " Your private balance isn't in it." : ""}`;
 }
 
 /**

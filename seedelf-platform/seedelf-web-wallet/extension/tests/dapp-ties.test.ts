@@ -284,5 +284,9 @@ describe("the prompt's words", () => {
     expect(signingTies([1], false)).toBe("Signing ties this transaction to your public account, as any payment from it.");
     const page = text({ summary: summary([{ ...out, address: THEIRS }], true), partial: false, session: true, collateralSpent: false, ties: [] });
     expect(page).toContain("It pays a Seedelf. Nothing on chain says whose, but it comes from this private session's one-time account in the open.");
+    // Whose Seedelf it is isn't known: the private balance isn't said to be out of it.
+    expect(page).toContain("Signing ties this transaction to the session's one-time account. Your public account isn't in it.");
+    expect(page).not.toContain("private balance aren't");
+    expect(signingTies([], false, true)).toBe("Signing ties this transaction to your public account, as any payment from it.");
   });
 });
