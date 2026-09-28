@@ -1583,20 +1583,29 @@ export class LovejoinService {
     // Only a network with something of the wallet's open in Lovejoin reads its pool at unlock (privacy review §2.18).
     const open = before.due.length > 0 || before.chains.length > 0 || (before.notMixed ?? 0) > 0;
     if (!(unlock && open) && !before.due.some((t) => t <= now)) return [];
+    const scheduled = new Set(before.chains.filter((c) => c.scheduled).map((c) => c.id));
     const { pool, owned, listed } = await this.ours(network);
     // A box a chain of the wallet's made and hadn't finished mixing never
     // comes back by itself: it waits, not mixed yet, for Mix my boxes again.
     const { free: back } = await this.sortOut(network, owned, listed);
     // A box with no due time (a restore) gets one; a due time with no box
-    // (withdrawn by hand, or a chain that didn't go through) goes.
+    // (withdrawn by hand, or a chain that didn't go through) goes, counted
+    // from the schedule as it is then, not as it was read. A chain recorded
+    // since the pool read, or whose deposit set its boxes' times since, has
+    // boxes the read can't have found: nothing is dropped then, and no box
+    // goes back while it's sent (independent review L29).
     const known = (await this.read(network)).due.length;
     if (back.length > known) await this.schedule(network, back.length - known);
-    const schedule = await this.read(network);
-    const kept = [...schedule.due].sort((a, b) => a - b).slice(0, back.length);
-    await this.update(network, (s) => (s.due = kept));
+    let sending = false;
+    await this.update(network, (s) => {
+      sending = s.chains.some((c) => !c.ended || (c.scheduled && !scheduled.has(c.id)));
+      if (!sending) s.due = [...s.due].sort((a, b) => a - b).slice(0, back.length);
+    });
     const random = this.deps.random ?? secureRandom;
     // The unlock's run sends nothing (unlockDraws drew each box due's wait): it reads the pool, so due times follow it.
-    if (unlock) return [];
+    if (unlock || sending) return [];
+    const schedule = await this.read(network);
+    const kept = [...schedule.due].sort((a, b) => a - b);
 
     // One box a run. Boxes due together (the wallet stayed locked through
     // their delays) would otherwise go back to back, and a burst of withdraws
