@@ -113,9 +113,21 @@ const BUILT_TTL_MS = 10 * 60_000;
 const PUBLIC_STILL_SENDING = "Your last mix from the public account is still being sent. Wait for it to finish.";
 /** The mix kept for Send isn't the one asked for, or something took its place since. */
 const NOT_READY = "That mix isn't ready to send. Review it again.";
-/** A mix from the public account is built while a transaction of the last one may have gone through, unseen yet. */
-const PUBLIC_MAYBE_WAIT =
-  "Your last mix from the public account may have gone through: Koios didn't answer when one of its transactions was sent, and the network hasn't shown it yet. The wallet looks for it first. Try again in a few minutes.";
+/**
+ * A mix from the public account is built while a transaction of the last one
+ * may have gone through, unseen yet, and the wallet is sure of it `left` ms
+ * from now at the latest: one that never reached a node shows nothing, so
+ * it's only known never to have gone once the wallet stops holding what it
+ * spends (SPENT_KEEP_MS, two hours), and the copy says so (independent
+ * review L5).
+ */
+const publicMaybeWait = (left: number) => {
+  const minutes = Math.max(1, Math.ceil(left / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const unit = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const about = hours ? `${unit(hours, "hour")}${minutes % 60 ? ` ${unit(minutes % 60, "minute")}` : ""}` : unit(minutes, "minute");
+  return `Your last mix from the public account stopped at a transaction that may have gone through, and the network hasn't shown it yet. No other mix from the account is built until the wallet knows: once the network shows it, or what it spends, that takes a few minutes. If it never went through, the wallet can only be sure two hours after it was sent, in about ${about}.`;
+};
 
 /** A chained transaction Koios didn't answer, or asked to slow down for: tried again this many times, waiting CHAIN_BUSY_MS longer each time. */
 export const CHAIN_RETRIES = 4;
@@ -803,7 +815,7 @@ export class LovejoinService {
     let s = await this.sendingOf(network);
     // Stopped at a transaction that may have gone through: looked for first, and said as it now stands.
     if (s?.maybe !== undefined) {
-      await this.publicUnsettled(network).catch(() => true);
+      await this.publicUnsettled(network).catch(() => undefined);
       s = await this.sendingOf(network);
     }
     const maybe = (m: unknown) => (m !== undefined ? { maybeSent: true as const } : {});
@@ -814,7 +826,7 @@ export class LovejoinService {
     const lastOf = async () => (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
     let last = await lastOf();
     if (last?.maybe) {
-      await this.publicUnsettled(network).catch(() => true);
+      await this.publicUnsettled(network).catch(() => undefined);
       last = await lastOf();
     }
     return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped, ...maybe(last.maybe) } : null;
@@ -1158,6 +1170,24 @@ export class LovejoinService {
     });
   }
 
+  /**
+   * The mix from the public account being sent (`txs`) stopped at `step`,
+   * which may have gone through: in place of what the whole chain reserved,
+   * only what `step` spends, and its collateral if it has one, stays held,
+   * still as being sent, until it's settled (publicUnsettled). The mixes
+   * after it never go, so their pool boxes are free for another chain's
+   * draw, and the collateral for a site's transaction when `step` is the
+   * deposit (independent review L5). Only while the reservation there is
+   * still that chain's.
+   */
+  private holdOnly(network: NetworkName, txs: LovejoinChain["txs"], step: LovejoinChain["txs"][number]): Promise<void> {
+    const whole = reservationOf(txs);
+    return this.reserving(network, (kept) => {
+      const r = kept[chainOwner()];
+      if (r && r.until === undefined && sameInputs(r, whole)) kept[chainOwner()] = reservationOf([step]);
+    });
+  }
+
   /** Changes the reservations, one change at a time, dropping those kept for Send past their time. */
   private reserving(network: NetworkName, change: (kept: Record<string, Reservation>) => void): Promise<void> {
     const { wallet, session, now } = this.deps;
@@ -1256,7 +1286,8 @@ export class LovejoinService {
     return this.inTurn(`public.${network}`, async () => {
       const sending = await this.sendingOf(network);
       if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
-      if (await this.publicUnsettledNow(network)) throw new Error(PUBLIC_MAYBE_WAIT);
+      const until = await this.publicUnsettledNow(network);
+      if (until !== undefined) throw new Error(publicMaybeWait(until - this.deps.now()));
       await this.reserving(network, (kept) => {
         if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
       });
@@ -1383,7 +1414,8 @@ export class LovejoinService {
     await settleMaybeSent(this.deps, network);
     const before = await this.sendingOf(network);
     if (before && !before.stopped) throw new Error(PUBLIC_STILL_SENDING);
-    if (await this.publicUnsettledNow(network)) throw new Error(PUBLIC_MAYBE_WAIT);
+    const until = await this.publicUnsettledNow(network);
+    if (until !== undefined) throw new Error(publicMaybeWait(until - now()));
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
     // Recorded, sealed, before its progress is where anything can send it from (independent review L28). Its own
     // boxes mixed again: they wait afresh once its first mix is in (chainSent).
@@ -1509,7 +1541,8 @@ export class LovejoinService {
         throw e;
       }
       // Stopped at a transaction that may have gone through: what it spends counts as spent, and stays reserved,
-      // and it's looked for before another mix from the account is built (independent review L5).
+      // and it's looked for before another mix from the account is built (independent review L5). Nothing after
+      // it is sent, so what the rest of the chain would have spent is free for other chains and sites.
       const step = unsure === undefined ? undefined : sending.txs[unsure]!;
       const maybe = step && { index: unsure!, txHash: step.txHash, inputs: txInputs(hexBytes(step.txCbor)), at: this.deps.now() };
       sending.stopped = maybe
@@ -1524,7 +1557,8 @@ export class LovejoinService {
       // Recorded as stopped, and what it held let go, before its progress says so: nothing takes its place until
       // all of that is done (independent review L30).
       await this.chainEnded(network, id, sending.stopped, maybe).catch(() => undefined);
-      if (!maybe) await this.release(network, chainOwner()).catch(() => undefined);
+      if (maybe) await this.holdOnly(network, sending.txs, step!).catch(() => undefined);
+      else await this.release(network, chainOwner()).catch(() => undefined);
       await save().catch(() => undefined);
       throw maybe ? new Error(sending.stopped) : e;
     }
@@ -1643,31 +1677,33 @@ export class LovejoinService {
    * not, and a UTxO it spends is spent now, it can't go anymore, whether it
    * did or not; unseen as long as the wallet holds what it spends
    * (SPENT_KEEP_MS), it never went. Then the mix's record and progress say
-   * so, and what it reserved goes. Returns whether it's still unsettled: no
-   * other mix from the account is built meanwhile, or the account could pay
-   * for one twice (independent review L5). It's only looked for, never sent
-   * again: its mix stopped.
+   * so, and what it reserved goes. Returns, while it's still unsettled, when
+   * it will be at the latest, as long as Koios answers (ms): no other mix
+   * from the account is built meanwhile, or the account could pay for one
+   * twice (independent review L5). It's only looked for, never sent again:
+   * its mix stopped.
    */
-  private publicUnsettled(network: NetworkName): Promise<boolean> {
+  private publicUnsettled(network: NetworkName): Promise<number | undefined> {
     return this.inTurn(`public.${network}`, () => this.publicUnsettledNow(network));
   }
 
   /** publicUnsettled, in the account's turn. */
-  private async publicUnsettledNow(network: NetworkName): Promise<boolean> {
+  private async publicUnsettledNow(network: NetworkName): Promise<number | undefined> {
     const c = (await this.read(network)).chains.find((r) => r.session === undefined && r.maybe);
     const m = c?.maybe;
-    if (!c || !m) return false;
+    if (!c || !m) return undefined;
+    const by = m.at + SPENT_KEEP_MS;
     const koios = this.deps.koios(network);
     const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
     // Koios didn't answer: looked for again next time.
-    if (seen === undefined) return true;
+    if (seen === undefined) return by;
     let how: "in" | "spent" | "never" = "in";
     if (seen === null) {
       const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
-      if (!rows) return true;
+      if (!rows) return by;
       if (rows.some((r) => r.is_spent)) how = "spent";
-      else if (this.deps.now() - m.at >= SPENT_KEEP_MS) how = "never";
-      else return true;
+      else if (this.deps.now() >= by) how = "never";
+      else return by;
     }
     const what = c.deposit === m.txHash ? "its deposit" : `its transaction ${m.index + 1} of ${c.total}`;
     const why = {
@@ -1696,7 +1732,7 @@ export class LovejoinService {
     await this.reserving(network, (kept) => {
       if (kept[chainOwner()] && kept[chainOwner()]!.until === undefined) delete kept[chainOwner()];
     });
-    return false;
+    return undefined;
   }
 
   /**
