@@ -141,6 +141,11 @@ export interface PendingDeps {
   now: () => number;
   /** Writes a maybe-sent Seedelf spend into the history once it's seen. */
   activity?: ActivityService;
+  /**
+   * The worker's sessions alarm (sw.ts), whose runs keep a maybe-sent one
+   * going (`watch`): PendingService's, which it keeps for the whole worker.
+   */
+  alarm?: { start(): Promise<void> };
 }
 
 /** A kept, signed transaction on its way: what Send hands `submitWatched`. */
@@ -185,6 +190,20 @@ function inTurn<T>(deps: PendingDeps, network: NetworkName, task: () => Promise<
   return run;
 }
 
+/**
+ * The sessions alarm, by the worker's session storage: PendingService keeps
+ * it here, since Send's services reach the watch through deps of their own.
+ * It's started whenever the watch takes a maybe-sent payment, or puts one
+ * back, so the worker's runs keep it going on a network the wallet doesn't
+ * show, or with no page open: the unlock's run may have stopped it
+ * (independent review L4).
+ */
+const alarms = new WeakMap<Area, { start(): Promise<void> }>();
+
+async function wake(deps: PendingDeps): Promise<void> {
+  await (deps.alarm ?? alarms.get(deps.session))?.start().catch(() => undefined);
+}
+
 const sealedName = (network: NetworkName) => `maybeSent.${network}` as const;
 
 /** The sealed copy of the maybe-sent transaction on `network`, if there's one. Throws if locked. */
@@ -227,6 +246,7 @@ async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watc
   });
   // What the kept view has of the contract is behind whatever happened meanwhile.
   if (w.contract) await forgetContractView(deps, network);
+  await wake(deps);
   return w;
 }
 
@@ -405,6 +425,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
       await undoAhead(deps, s, ahead).catch(() => undefined);
       throw e;
     }
+    await wake(deps);
     return ahead;
   });
 }
@@ -460,6 +481,7 @@ async function stillMaybeSent(deps: PendingDeps, s: Sending, ahead: Ahead): Prom
   // What the kept view has of the contract is behind whatever happened.
   if (s.contract) await forgetContractView(deps, s.network).catch(() => undefined);
   const { record } = ahead;
+  await wake(deps);
   // Locked meanwhile, it's sealed all the same, and put back at the unlock.
   const cur = await inTurn(deps, s.network, async () => {
     const found = await wallet.withKeys(async () => {
@@ -645,7 +667,9 @@ export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): 
 }
 
 export class PendingService {
-  constructor(private readonly deps: PendingDeps) {}
+  constructor(private readonly deps: PendingDeps) {
+    if (deps.alarm) alarms.set(deps.session, deps.alarm);
+  }
 
   /** The watched transaction on `network` as it now stands, or null. Clears it once it's settled. */
   async pending(network: NetworkName): Promise<PendingTx | null> {
