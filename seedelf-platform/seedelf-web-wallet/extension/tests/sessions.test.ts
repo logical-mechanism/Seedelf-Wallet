@@ -1647,8 +1647,12 @@ describe("disconnecting a site's session", () => {
     await busy(t, 60_000);
     await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("hasn't reached the chain yet");
 
-    // Twenty minutes after that, still not on chain: it never went, and the empty session ends, its record gone.
+    // Twenty minutes after that, still not on chain, and Koios knows nothing of it: it may still land, or a
+    // backend behind it may be the one answering, until two hours after it was sent (final review F13).
     await busy(t, FAILED_AFTER);
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The chain hasn't shown this session's funding");
+    // Then it never went, and the empty session ends, its record gone.
+    await busy(t, 2 * 60 * 60_000);
     await sessions.disconnect("preprod", 0);
     expect(await t.store.get("sessions.preprod")).toEqual({ next: 1, sessions: [] });
   });

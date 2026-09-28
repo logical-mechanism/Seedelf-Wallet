@@ -190,9 +190,14 @@ describe("disconnecting a site's session", () => {
     await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
     expect(await record(t)).toBeDefined();
 
-    // Unknown to Koios: it never landed, and the empty session ends.
+    // Unknown to Koios: it may still land, or a backend behind it may be the one answering, until two hours
+    // after it was sent (final review F13).
     t.koios.fetch = real;
     t.koios.addedToAccounts.length = 0;
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The chain hasn't shown this session's funding");
+    expect(await record(t)).toBeDefined();
+    // Two hours on, still unknown: it never landed, and the empty session ends.
+    await busy(t, 2 * 60 * 60_000);
     await sessions.disconnect("preprod", 0);
     expect(await record(t)).toBeUndefined();
   });
