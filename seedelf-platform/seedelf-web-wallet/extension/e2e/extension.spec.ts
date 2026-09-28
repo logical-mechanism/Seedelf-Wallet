@@ -562,7 +562,8 @@ test("activity: the private history from the device, the public account's from K
   expect(koios.calls).toHaveLength(reads);
   await snap(page, "activity-seedelf");
   await list.getByRole("button").first().click();
-  const details = page.getByRole("dialog", { name: "Received" });
+  // Found by a restored wallet's first reading: who paid isn't known (independent review L38).
+  const details = page.getByRole("dialog", { name: "Already in your private balance" });
   await expect(details.getByRole("link", { name: "View on Cardanoscan" })).toHaveAttribute(
     "href",
     /^https:\/\/preprod\.cardanoscan\.io\/transaction\/[0-9a-f]{64}$/,

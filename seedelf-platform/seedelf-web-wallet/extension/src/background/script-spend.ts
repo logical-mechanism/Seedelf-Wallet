@@ -102,12 +102,14 @@ export function changeHistory(classes: Classes, inputs: OutRef[]): HistoryClass 
 /**
  * The histories a spend's `inputs` have, each once, for its review: the
  * classes WebAssembly says it spent together (`mixed`), or the one they
- * share. None when the wallet knows nothing of them.
+ * share. None when the wallet knows nothing of them. Money with no history
+ * merged from two transactions is said too: it's two classes only while
+ * something else's is known (activity.ts `classes`, independent review L40).
  */
 export function spentHistories(classes: Classes, inputs: OutRef[], mixed: string[] = []): HistoryClass[] | undefined {
   const all = inputs.map((i) => classOf(classes, i));
   const spent = mixed.length ? mixed.map((id) => all.find((c) => c.id === id) ?? UNKNOWN) : all.slice(0, 1);
-  return spent.some((c) => c.origin !== "unknown") ? spent : undefined;
+  return spent.length > 1 || spent.some((c) => c.origin !== "unknown") ? spent : undefined;
 }
 
 /**
@@ -143,14 +145,17 @@ export async function readContract(
   return { view, utxos, params, returning, classes: await classesOf(deps, network, utxos) };
 }
 
-/** `readContract`'s `classes`. A history that won't open costs only the keeping apart: selection then picks as the CLI does. */
+/**
+ * `readContract`'s `classes`. A history that won't open costs only the keeping apart: selection then picks as the CLI does.
+ * Unknown money is left out, but for one kept apart by its transaction (independent review L40).
+ */
 export async function classesOf(
   deps: Pick<ScriptSpendDeps, "activity">,
   network: NetworkName,
   utxos: KoiosUtxo[],
 ): Promise<Classes> {
   const found = (await deps.activity?.classes(network, utxos).catch(() => undefined)) ?? new Map<string, HistoryClass>();
-  return Object.fromEntries([...found].filter(([, c]) => c.origin !== "unknown"));
+  return Object.fromEntries([...found].filter(([, c]) => c.id !== UNKNOWN.id));
 }
 
 /**

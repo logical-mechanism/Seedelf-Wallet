@@ -159,6 +159,8 @@ describe("locked UTxOs", () => {
 
   it("say where each private UTxO's money came from, read from the sealed history alone (privacy review §2.3)", async () => {
     const t = await unlocked(12);
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
     // Money the wallet made private itself; the reading notes the rest as received.
     const moved = ownedUtxos[0]!;
     await t.activity.sent(

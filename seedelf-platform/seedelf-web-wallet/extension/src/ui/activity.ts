@@ -13,7 +13,9 @@ import { tokenDecimals, tokenMark, tokenText } from "./tokens";
 export function activityTitle(e: ActivityEntry): string {
   switch (e.kind) {
     case "received":
-      return "Received";
+      // Found by the private history's first reading (a restore, another profile): who paid isn't known
+      // (independent review L38).
+      return e.origin?.origin === "unknown" ? "Already in your private balance" : "Received";
     case "sent":
       return "Sent";
     case "move-in":

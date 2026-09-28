@@ -2064,9 +2064,16 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 /// 1. one UTxO that pays on its own (a token-bearing one counts), by the
 ///    purpose's order, the smallest first;
 /// 2. UTxOs of one class, by the purpose's order, the largest first;
-/// 3. merging classes: the purpose's last resorts after the rest, and boxes
-///    back from Lovejoin last of all, one at a time, so two are spent together
-///    only when nothing else pays.
+/// 3. merging classes: with tokens sent, their UTxOs and one of another
+///    class first; then by the purpose's order, its last resorts after the
+///    rest, and boxes back from Lovejoin last of all, one at a time, so two
+///    are spent together only when nothing else pays. When that runs into
+///    what a transaction can spend (too many inputs), the same without the
+///    purpose's order; then as few boxes as pay, none first, then one more
+///    at a time, each with the fewest other inputs (the largest first,
+///    tokens or not), or with UTxOs holding tokens last, for when their
+///    tokens make it too large; and at the last the CLI's own order, so
+///    nothing the CLI pays is refused.
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
@@ -2131,6 +2138,65 @@ enum Tried<T> {
     Skipped,
 }
 
+/// [`apart`] with one more UTxO: each of `candidates` in turn, by `rank`,
+/// the smallest first. One of ADA alone that was short says no smaller one
+/// of ADA alone will do, and only [`MAX_TOKEN_SINGLES`] holding tokens are
+/// tried.
+fn one_more<'a, T>(
+    mut candidates: Vec<&'a UtxoResponse>,
+    rank: impl Fn(&UtxoResponse) -> u8,
+    try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
+) -> Option<T> {
+    candidates.sort_by_key(|u| (rank(u), lovelace_of(u)));
+    let mut short_at: Option<u64> = None;
+    let mut token_tries = 0;
+    for u in candidates {
+        let ada_only = !holds_tokens(u);
+        if ada_only && short_at.is_some_and(|at| lovelace_of(u) <= at) {
+            continue;
+        }
+        if !ada_only {
+            if token_tries == MAX_TOKEN_SINGLES {
+                continue;
+            }
+            token_tries += 1;
+        }
+        match try_with(&[u]) {
+            Tried::Built(built) => return Some(built),
+            Tried::Short if ada_only => short_at = short_at.max(Some(lovelace_of(u))),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// How growing one of [`apart`]'s merging orders ended.
+enum Grown<T> {
+    Built(T),
+    /// Everything in it together is short.
+    Short,
+    /// The choice of its first `.0` failed otherwise (too much computation,
+    /// say): more inputs won't mend it.
+    Failed(usize),
+}
+
+/// `order[..k]` for k = `from`, `from` + 1, … until one builds or fails
+/// otherwise.
+fn grow<'a, T>(
+    order: &[&'a UtxoResponse],
+    from: usize,
+    try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
+) -> Grown<T> {
+    for k in from.max(1)..=order.len() {
+        match try_with(&order[..k]) {
+            Tried::Built(built) => return Grown::Built(built),
+            Tried::Failed => return Grown::Failed(k),
+            _ => {}
+        }
+    }
+    Grown::Short
+}
+
 /// [`select_script_inputs`] with histories known: `base` are the UTxOs
 /// holding the tokens sent, which every choice spends, and `rest` the others.
 fn apart<T>(
@@ -2177,28 +2243,10 @@ fn apart<T>(
         return Ok(built);
     }
 
-    // 1. One more UTxO: by the purpose's order, the smallest first. One of
-    // ADA alone that was short says no smaller one of ADA alone will do.
-    let mut singles: Vec<&UtxoResponse> = rest.iter().filter(|u| joins_base(u)).collect();
-    singles.sort_by_key(|u| (purpose.rank(&class(u)), lovelace_of(u)));
-    let mut short_at: Option<u64> = None;
-    let mut token_tries = 0;
-    for u in singles {
-        let ada_only = !holds_tokens(u);
-        if ada_only && short_at.is_some_and(|at| lovelace_of(u) <= at) {
-            continue;
-        }
-        if !ada_only {
-            if token_tries == MAX_TOKEN_SINGLES {
-                continue;
-            }
-            token_tries += 1;
-        }
-        match try_with(&[u]) {
-            Tried::Built(built) => return Ok(built),
-            Tried::Short if ada_only => short_at = short_at.max(Some(lovelace_of(u))),
-            _ => {}
-        }
+    // 1. One more UTxO: by the purpose's order, the smallest first.
+    let singles: Vec<&UtxoResponse> = rest.iter().filter(|u| joins_base(u)).collect();
+    if let Some(built) = one_more(singles, |u| purpose.rank(&class(u)), &mut try_with) {
+        return Ok(built);
     }
 
     // 2. UTxOs of one class: the classes by the purpose's order (the most
@@ -2228,27 +2276,121 @@ fn apart<T>(
         }
     }
 
-    // 3. Merging, as the CLI would, but the purpose's last resorts after the
-    // rest, and boxes after everything, one at a time.
-    let mut order: Vec<&UtxoResponse> = rest.iter().collect();
-    order.sort_by_key(|u| {
+    // 3. Merging. With tokens sent, first their UTxOs and one UTxO of another
+    // class, as in 1: two histories before more (independent review L39).
+    // Boxes and the purpose's last resorts wait for the merging below.
+    if !base.is_empty() {
+        let others: Vec<&UtxoResponse> = rest
+            .iter()
+            .filter(|u| !joins_base(u) && purpose.tier(&class(u)) == 0)
+            .collect();
+        if let Some(built) = one_more(others, |u| purpose.rank(&class(u)), &mut try_with) {
+            return Ok(built);
+        }
+    }
+
+    // Then orders tried in turn, each grown one UTxO at a time. One that runs
+    // into what more inputs can't mend (too much computation, too large) is
+    // left for the next; short with everything is short in any order
+    // (independent review M6).
+    //
+    // a. As the CLI would, but the purpose's last resorts after the rest,
+    //    and boxes after everything, one at a time; within each, by the
+    //    purpose's order, the largest first (independent review L39).
+    // b. The same without the purpose's order, pure ADA before tokens within
+    //    each: what merging paid before a did is paid the same way.
+    // c. As few boxes as pay: the largest j of them, then the rest without
+    //    the other boxes (the last resorts after the others), for j = 0, 1,
+    //    2, …, so no more boxes are spent together than pay. For each j, the
+    //    rest the largest first, tokens or not, for the fewest inputs; then
+    //    pure ADA before tokens, for when a UTxO's tokens make it too large.
+    //    Boxes that fail alone fail with more.
+    // d. The CLI's own order, boxes among the rest by size: never refused
+    //    what the CLI would pay.
+    let tier = |u: &UtxoResponse| purpose.tier(&class(u));
+    let mut by_history: Vec<&UtxoResponse> = rest.iter().collect();
+    by_history.sort_by_key(|u| {
         (
-            purpose.tier(&class(u)),
+            tier(u),
+            !joins_base(u),
+            purpose.rank(&class(u)),
+            holds_tokens(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let mut by_tier: Vec<&UtxoResponse> = rest.iter().collect();
+    by_tier.sort_by_key(|u| {
+        (
+            tier(u),
             !joins_base(u),
             holds_tokens(u),
             std::cmp::Reverse(lovelace_of(u)),
         )
     });
+    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
+    let mut boxes: Vec<&UtxoResponse> = rest.iter().filter(|u| is_box(u)).collect();
+    boxes.sort_by_key(|u| (!joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut largest: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
+    largest.sort_by_key(|u| (tier(u), !joins_base(u), std::cmp::Reverse(lovelace_of(u))));
+    let mut tokens_last: Vec<&UtxoResponse> = rest.iter().filter(|u| !is_box(u)).collect();
+    tokens_last.sort_by_key(|u| {
+        (
+            holds_tokens(u),
+            tier(u),
+            !joins_base(u),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    let same = |a: &[&UtxoResponse], b: &[&UtxoResponse]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::ptr::eq(*x, *y))
+    };
+    let mut rests = vec![&largest];
+    if !same(&largest, &tokens_last) {
+        rests.push(&tokens_last);
+    }
+    let (boxes, rests) = (&boxes, &rests);
+    // With nothing but boxes, a grew these already.
+    let fewest_boxes = (0..=boxes.len())
+        .filter(|_| !largest.is_empty())
+        .flat_map(|j| {
+            rests
+                .iter()
+                .map(move |others| (boxes[..j].iter().chain(others.iter()).copied().collect(), j))
+        });
+    let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
+    blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
     let mut failed = false;
-    for k in 1..=order.len() {
-        match try_with(&order[..k]) {
-            Tried::Built(built) => return Ok(built),
-            // More inputs won't mend what isn't "not enough".
-            Tried::Failed => {
-                failed = true;
+    let mut boxes_fail = false;
+    let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
+    // Each order, and how many boxes it brings forward (none for a, b, d).
+    let orders = [(by_history, 0), (by_tier, 0)]
+        .into_iter()
+        .chain(fewest_boxes)
+        .chain([(blind, 0)]);
+    for (order, j) in orders {
+        // The same order again, or the start of one grown whole before (c's
+        // without boxes, often), would fail the same way.
+        let grown_before =
+            |g: &Vec<&UtxoResponse>| g.len() >= order.len() && same(&g[..order.len()], &order);
+        if (j > 0 && boxes_fail) || grown.iter().any(grown_before) {
+            continue;
+        }
+        let whole = order.len() == rest.len();
+        match grow(&order, j, &mut try_with) {
+            Grown::Built(built) => return Ok(built),
+            Grown::Short if whole => {
+                failed = false;
                 break;
             }
-            _ => {}
+            // Short without the other boxes: one more may pay.
+            Grown::Short => {}
+            Grown::Failed(at) => {
+                failed = true;
+                boxes_fail |= j > 0 && at == j;
+            }
+        }
+        if whole {
+            grown.push(order);
         }
     }
     Err(match (failed, other, not_enough) {

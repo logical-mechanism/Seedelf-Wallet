@@ -105,6 +105,8 @@ describe("Seedelf activity", () => {
 
   it("says where each private UTxO came from, by the transaction that made it (privacy review §2.3)", async () => {
     const t = await unlocked();
+    // The private history started before this money arrived: its first reading found none (independent review L38).
+    await t.activity.arrived("preprod", []);
     const at = (hex: string, index = 0) => ({ ...ownedUtxos[0]!, tx_hash: hex.repeat(32), tx_index: index });
     const sent = (kind: PendingTx["kind"], hex: string, summary: object) =>
       t.activity.sent("preprod", { kind, network: "preprod", txHash: hex.repeat(32), submittedAt: 1, confirmations: null }, summary);
@@ -127,13 +129,14 @@ describe("Seedelf activity", () => {
       "03#0": { id: "session:2", origin: "session" },
       "04#0": { id: "session:2", origin: "session" },
       "05#0": mixed,
-      // A payment written down without it: its inputs aren't known.
-      "06#0": { id: "unknown", origin: "unknown" },
+      // A payment written down without it: its inputs aren't known. Kept apart by its transaction while
+      // others' histories are known (independent review L40).
+      "06#0": { id: `unknown:${"06".repeat(32)}`, origin: "unknown" },
       // Someone's payment is one history, whichever of its outputs.
       "07#0": { id: `received:${"07".repeat(32)}`, origin: "received" },
       "07#1": { id: `received:${"07".repeat(32)}`, origin: "received" },
       // Nothing on the device about it.
-      "08#0": { id: "unknown", origin: "unknown" },
+      "08#0": { id: `unknown:${"08".repeat(32)}`, origin: "unknown" },
     });
   });
 

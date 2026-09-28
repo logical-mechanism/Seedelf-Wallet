@@ -71,7 +71,7 @@ import type {
   SwapTokenInfo,
   TokenQuantity,
 } from "../shared/rpc";
-import { sessionClass } from "../shared/histories";
+import { merged, sessionClass, type HistoryClass } from "../shared/histories";
 import { DEFAULT_PREFERENCES } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
@@ -100,6 +100,7 @@ import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
 import {
+  changeHistory,
   keep,
   measureLocally,
   nothingToSpend,
@@ -1044,7 +1045,7 @@ export class SessionService {
     address: string,
     payments: Array<{ to: string; lovelace: string; tokens: TokenQuantity[] }>,
     empty: string,
-  ): Promise<{ summary: SessionOutSummary; txCbor: string; seed: string }> {
+  ): Promise<{ summary: SessionOutSummary & { origin: HistoryClass }; txCbor: string; seed: string }> {
     const { wasm } = this.deps;
     const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
     if (!utxos.length) throw nothingToSpend(this.deps, view, empty, returning);
@@ -1059,7 +1060,6 @@ export class SessionService {
     const finished = await measureLocally<Finished>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
     const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
     const histories = spentHistories(classes, inputs, classesMixed);
-    // Its change is this session's from now on (activity.ts), whatever paid for it.
     const summary: SessionOutSummary = {
       ...rest,
       network,
@@ -1069,7 +1069,10 @@ export class SessionService {
       inputs: inputs.length,
       ...(histories ? { histories } : {}),
     };
-    return { summary, txCbor, seed };
+    // Its change carries what paid for it, and is this session's from now on (activity.ts): selection still takes
+    // it as the session's, and a later review counts the boxes in it (independent review L41).
+    const origin = merged([changeHistory(classes, inputs), sessionClass(index)]);
+    return { summary: { ...summary, origin }, txCbor, seed };
   }
 
   /**
