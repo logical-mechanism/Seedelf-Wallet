@@ -150,6 +150,10 @@ fn token(name: &str, amount: u64) -> Assets {
         .unwrap()
 }
 
+fn same(a: &UtxoResponse, b: &UtxoResponse) -> bool {
+    a.tx_hash == b.tx_hash && a.tx_index == b.tx_index
+}
+
 fn outpoints(utxos: &[UtxoResponse]) -> Vec<String> {
     let mut v: Vec<String> = utxos
         .iter()
@@ -178,7 +182,9 @@ fn both(
 
 /// 30 received payments of 1.5 ₳ and 5 boxes: the small ones come first in
 /// the history's order, and 27 of them are more computation than a
-/// transaction may use (independent review M6).
+/// transaction may use (independent review M6). What pays then spends as few
+/// boxes as it can, one more at a time, where the CLI's order spends them
+/// all.
 #[test]
 fn many_small_utxos_ahead_of_the_boxes_never_block_what_the_cli_order_pays() {
     let w = world();
@@ -189,17 +195,36 @@ fn many_small_utxos_ahead_of_the_boxes_never_block_what_the_cli_order_pays() {
     let available: Vec<UtxoResponse> = small.iter().chain(&boxes).cloned().collect();
     let mut known: Vec<(&UtxoResponse, Class)> = small.iter().map(|u| (u, received(u))).collect();
     known.extend(boxes.iter().map(|u| (u, a_box(u))));
+    let boxes_in = |spent: &[UtxoResponse]| {
+        spent
+            .iter()
+            .filter(|u| boxes.iter().any(|b| same(b, u)))
+            .count()
+    };
 
     for purpose in [Purpose::Pay, Purpose::Mint, Purpose::Fund { session: None }] {
         let h = histories(purpose.clone(), &known);
+        // 40 ₳: the CLI's order pays with the 5 boxes, the largest.
         let (apart, blind) = both(&w, &available, &h, &pay(40 * ADA));
-        let blind = blind.unwrap();
-        let apart = apart.unwrap_or_else(|e| panic!("{purpose:?}: {e}"));
-        // What the CLI's order pays with: the boxes, the largest.
-        assert_eq!(outpoints(&blind.inputs()), outpoints(&boxes));
-        assert_eq!(outpoints(&apart.inputs()), outpoints(&boxes), "{purpose:?}");
-        // And it says what it merged.
-        assert_eq!(h.merged(&apart.inputs()).len(), 5);
+        assert_eq!(outpoints(&blind.unwrap().inputs()), outpoints(&boxes));
+        let spent = apart
+            .unwrap_or_else(|e| panic!("{purpose:?}: {e}"))
+            .inputs();
+        // One box and the most small ones a transaction takes are short:
+        // two boxes, and the small ones that make up the rest.
+        assert_eq!(boxes_in(&spent), 2, "{purpose:?}");
+        assert!(spent.len() <= 22, "{purpose:?}: {} inputs", spent.len());
+        // And it says what it merged: each is a history of its own.
+        assert_eq!(h.merged(&spent).len(), spent.len());
+
+        // 35 ₳: one box pays with the small ones, where the CLI's order
+        // spends four.
+        let (apart, blind) = both(&w, &available, &h, &pay(35 * ADA));
+        assert_eq!(boxes_in(&blind.unwrap().inputs()), 4);
+        let spent = apart
+            .unwrap_or_else(|e| panic!("{purpose:?}: {e}"))
+            .inputs();
+        assert_eq!(boxes_in(&spent), 1, "{purpose:?}");
     }
 }
 

@@ -2069,8 +2069,9 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    rest, and boxes back from Lovejoin last of all, one at a time, so two
 ///    are spent together only when nothing else pays. When that runs into
 ///    what a transaction can spend (too many inputs), fewer inputs: the
-///    largest pure ADA first, boxes after it, and at the last the CLI's own
-///    order, so nothing the CLI pays is refused.
+///    largest pure ADA first, boxes after it; then the boxes one more at a
+///    time ahead of the rest, so as few are spent as pay; and at the last
+///    the CLI's own order, so nothing the CLI pays is refused.
 fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
@@ -2172,20 +2173,22 @@ enum Grown<T> {
     Built(T),
     /// Everything in it together is short.
     Short,
-    /// A choice failed otherwise (too much computation, say): more inputs
-    /// won't mend it.
-    Failed,
+    /// The choice of its first `.0` failed otherwise (too much computation,
+    /// say): more inputs won't mend it.
+    Failed(usize),
 }
 
-/// `order[..k]` for k = 1, 2, … until one builds or fails otherwise.
+/// `order[..k]` for k = `from`, `from` + 1, … until one builds or fails
+/// otherwise.
 fn grow<'a, T>(
     order: &[&'a UtxoResponse],
+    from: usize,
     try_with: &mut impl FnMut(&[&'a UtxoResponse]) -> Tried<T>,
 ) -> Grown<T> {
-    for k in 1..=order.len() {
+    for k in from.max(1)..=order.len() {
         match try_with(&order[..k]) {
             Tried::Built(built) => return Grown::Built(built),
-            Tried::Failed => return Grown::Failed,
+            Tried::Failed => return Grown::Failed(k),
             _ => {}
         }
     }
@@ -2295,7 +2298,10 @@ fn apart<T>(
     // b. Fewer inputs: pure ADA, the largest first, the last resorts after
     //    the rest, then the boxes one at a time, and UTxOs holding tokens the
     //    spend doesn't send after the boxes.
-    // c. The CLI's own order, boxes among the rest by size: never refused
+    // c. The boxes one more at a time: the largest j of them, then b's order
+    //    without the other boxes, for j = 1, 2, …, so no more boxes are spent
+    //    together than pay. Boxes that fail alone fail with more.
+    // d. The CLI's own order, boxes among the rest by size: never refused
     //    what the CLI would pay.
     let tier = |u: &UtxoResponse| purpose.tier(&class(u));
     let mut by_history: Vec<&UtxoResponse> = rest.iter().collect();
@@ -2317,26 +2323,48 @@ fn apart<T>(
             std::cmp::Reverse(lovelace_of(u)),
         )
     });
+    let is_box = |u: &UtxoResponse| tier(u) == 2 && !holds_tokens(u);
+    let (boxes, others): (Vec<&UtxoResponse>, Vec<&UtxoResponse>) =
+        fewer.iter().partition(|u| is_box(u));
+    // With nothing but boxes, a and b grew these already.
+    let boxes_first = (1..=boxes.len())
+        .filter(|_| !others.is_empty())
+        .map(|j| (boxes[..j].iter().chain(&others).copied().collect(), j));
     let mut blind: Vec<&UtxoResponse> = rest.iter().collect();
     blind.sort_by_key(|u| (holds_tokens(u), std::cmp::Reverse(lovelace_of(u))));
+    let same = |a: &[&UtxoResponse], b: &[&UtxoResponse]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::ptr::eq(*x, *y))
+    };
     let mut failed = false;
-    let mut last: Option<Vec<&UtxoResponse>> = None;
-    for order in [by_history, fewer, blind] {
+    let mut boxes_fail = false;
+    let mut grown: Vec<Vec<&UtxoResponse>> = Vec::new();
+    // Each order, and how many boxes it brings forward (none for a, b, d).
+    let orders = [(by_history, 0), (fewer, 0)]
+        .into_iter()
+        .chain(boxes_first)
+        .chain([(blind, 0)]);
+    for (order, j) in orders {
         // The same order again would fail the same way.
-        let same = last.as_ref().is_some_and(|l| {
-            l.len() == order.len() && l.iter().zip(&order).all(|(a, b)| std::ptr::eq(*a, *b))
-        });
-        if !same {
-            match grow(&order, &mut try_with) {
-                Grown::Built(built) => return Ok(built),
-                Grown::Short => {
-                    failed = false;
-                    break;
-                }
-                Grown::Failed => failed = true,
+        if (j > 0 && boxes_fail) || grown.iter().any(|g| same(g, &order)) {
+            continue;
+        }
+        let whole = order.len() == rest.len();
+        match grow(&order, j, &mut try_with) {
+            Grown::Built(built) => return Ok(built),
+            Grown::Short if whole => {
+                failed = false;
+                break;
+            }
+            // Short without the other boxes: one more may pay.
+            Grown::Short => {}
+            Grown::Failed(at) => {
+                failed = true;
+                boxes_fail |= j > 0 && at == j;
             }
         }
-        last = Some(order);
+        if whole {
+            grown.push(order);
+        }
     }
     Err(match (failed, other, not_enough) {
         (true, Some(e), _) => e,
