@@ -413,7 +413,9 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     const direct = dialog(null);
     expect(direct).toContain("Stop the swap");
     expect(direct).not.toContain("bring it back directly");
-    expect(direct).toContain("No order is placed. Everything comes back into your private balance, less the return's network fee.");
+    expect(direct).toContain(
+      "If no order has gone out yet, none is placed, and everything comes back into your private balance, less the return's network fee.",
+    );
     const short = dialog({ ...through, boxes: 0, skipped: "Right now Lovejoin's pool holds 3 boxes that aren't yours, under the 30 it needs" }, true);
     expect(short).toContain("Stop the swap");
     expect(short).toContain("under the 30 it needs, so it would come back directly");

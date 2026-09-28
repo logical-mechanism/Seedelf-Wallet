@@ -1309,11 +1309,14 @@ export class SessionService {
   /**
    * Stop, the user's alone: an order that waits is cancelled, then
    * everything comes back. `direct`: not through Lovejoin, whatever was
-   * approved (privacy review §4.1).
+   * approved (privacy review §4.1). `ordered`: an order had gone out (or
+   * may have) when it took effect. Stop waits for a step already under way,
+   * so an order the runner was placing as the user pressed it goes first,
+   * whatever the page showed (independent review L22).
    */
-  stop(network: NetworkName, index: number, direct = false): Promise<SessionView> {
+  stop(network: NetworkName, index: number, direct = false): Promise<SessionView & { ordered?: boolean }> {
     return this.serial(async () => {
-      await this.automatic(network, index);
+      const ordered = (await this.automatic(network, index)).txs.some((t) => t.kind === "swap" && !t.unsent);
       await this.update(network, index, (s) => {
         s.auto!.stopping ??= this.deps.now();
         if (direct) s.auto!.direct = true;
@@ -1322,7 +1325,7 @@ export class SessionService {
       });
       await this.deps.alarm?.start();
       await this.step(network, index, "asked");
-      return this.one(network, index);
+      return { ...(await this.one(network, index)), ordered };
     });
   }
 

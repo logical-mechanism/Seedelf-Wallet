@@ -1541,6 +1541,11 @@ export function Session({
   const [stopping, setStopping] = useState(false);
   // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
   const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
+  // Whether an order has gone out, as the record says as Stop's dialog opens: the page's last reading may be
+  // behind the runner. And one went out before Stop took effect, though the dialog said none had (independent
+  // review L22).
+  const [placedNow, setPlacedNow] = useState(false);
+  const [stoppedLate, setStoppedLate] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -1774,7 +1779,13 @@ export function Session({
     const placed = s.txs.some((t) => t.kind === "swap");
     const openStop = () => {
       setStopCost(undefined);
+      setPlacedNow(false);
       setStopping(true);
+      // The record as it is now (no Koios read), not the page's last reading: the runner may have placed the order since.
+      call("sessions", {}).then(
+        (all) => setPlacedNow(!!all.find((x) => x.index === index)?.txs.some((t) => t.kind === "swap")),
+        () => undefined,
+      );
       // A pool read the worker keeps five minutes; without it, Stop says only what it always did.
       call("session-stop-cost", { index: s.index }).then(setStopCost, () => setStopCost(null));
     };
@@ -1838,6 +1849,12 @@ export function Session({
             </div>
           </Callout>
         )}
+        {stoppedLate && (
+          <Callout tone="warn" testId="session-stop-ordered">
+            An order had gone out before Stop took effect. The wallet cancels it, unless a batcher fills it first, and then
+            everything comes back into your private balance.
+          </Callout>
+        )}
         <Timeline
           s={s}
           busy={busy}
@@ -1849,13 +1866,16 @@ export function Session({
         {forgetModal}
         {stopping && (
           <StopDialog
-            placed={placed}
+            placed={placed || placedNow}
             cost={stopCost}
             busy={busy}
             onClose={() => setStopping(false)}
             onStop={(direct) =>
               void act(async () => {
-                setS(await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) }));
+                const { ordered, ...stopped } = await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) });
+                setS(stopped);
+                // The runner was placing it as the dialog said none was: Stop says what it does now.
+                setStoppedLate(!!ordered && !placed && !placedNow);
                 setStopping(false);
               })
             }
@@ -1897,6 +1917,9 @@ export function Session({
   );
 }
 
+/** Stop's words for an order the runner may be placing as the dialog shows (independent review L22). */
+const IF_ORDERED = "If the wallet is placing one right now, it's cancelled, unless a batcher fills it first.";
+
 /**
  * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
  * comes back through Lovejoin, what that takes as the worker works it out
@@ -1935,10 +1958,10 @@ export function StopDialog({
     >
       <p className="note" data-testid="session-stop-what">
         {mixes
-          ? `${placed ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance." : "No order is placed. Everything comes back into your private balance."} Its ADA goes through Lovejoin first: ${boxesText(cost)}, mixed in ${plural(cost.mixes, "mix", "mixes")} for about ${formatAda(cost.mixFees)} ₳ in fees, which the session pays, and about ${formatAda(cost.withdrawFees)} ₳ to bring them back, each on its own after ${delayText(cost.delay)}.${placed ? " The cancel costs a network fee too." : ""}`
+          ? `${placed ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance." : `If no order has gone out yet, none is placed, and everything comes back into your private balance. ${IF_ORDERED}`} Its ADA goes through Lovejoin first: ${boxesText(cost)}, mixed in ${plural(cost.mixes, "mix", "mixes")} for about ${formatAda(cost.mixFees)} ₳ in fees, which the session pays, and about ${formatAda(cost.withdrawFees)} ₳ to bring them back, each on its own after ${delayText(cost.delay)}.${placed ? " The cancel costs a network fee too." : ""}`
           : placed
             ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance. The cancel and the return each cost a network fee."
-            : "No order is placed. Everything comes back into your private balance, less the return's network fee."}
+            : `If no order has gone out yet, none is placed, and everything comes back into your private balance, less the return's network fee. ${IF_ORDERED}`}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">

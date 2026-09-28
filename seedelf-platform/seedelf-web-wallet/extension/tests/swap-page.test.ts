@@ -6,9 +6,9 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { SessionView } from "../src/shared/rpc";
+import type { SessionView, SwapLovejoin } from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
-import { Session, SwapRow } from "../src/ui/screens/Swaps";
+import { Session, StopDialog, SwapRow } from "../src/ui/screens/Swaps";
 
 /** A page's text, as a person reads it. */
 function text(element: ReactElement): string {
@@ -93,5 +93,25 @@ describe("a swap whose order was refunded (independent review M18)", () => {
     expect(text(createElement(SwapRow, { session: partly, onOpen: () => undefined }))).toContain("Partly filled");
     // A whole fill reads as before.
     expect(page(over({ filled: true }))).toContain("Done: the swap is in your private balance.");
+  });
+});
+
+describe("Stop's dialog (independent review L22)", () => {
+  const dialog = (placed: boolean, cost: SwapLovejoin | null) =>
+    text(createElement(StopDialog, { placed, cost, busy: false, onStop: () => undefined, onClose: () => undefined }));
+  const through: SwapLovejoin = { boxes: 1, depth: 2, mixes: 4, mixFees: "3800000", withdrawFees: "300000", delay: "1-6", on: true };
+
+  it("never promises no order is placed: the runner may be placing it as the dialog shows", () => {
+    for (const cost of [null, through]) {
+      const line = dialog(false, cost);
+      expect(line).toContain("If no order has gone out yet, none is placed, and everything comes back into your private balance");
+      expect(line).toContain("If the wallet is placing one right now, it's cancelled, unless a batcher fills it first.");
+      expect(line).not.toContain("No order is placed.");
+    }
+    expect(dialog(true, null)).toContain("The order is cancelled, unless a batcher fills it first");
+  });
+
+  it("isn't followed by a note about an order that went first until Stop says one did", () => {
+    expect(page(swapSession())).not.toContain("An order had gone out before Stop took effect");
   });
 });

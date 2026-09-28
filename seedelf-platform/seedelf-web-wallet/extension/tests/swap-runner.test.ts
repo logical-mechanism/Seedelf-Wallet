@@ -322,3 +322,27 @@ describe("a swap's order found spent (independent review M18)", () => {
     expect(view.auto).toMatchObject({ filled: true, partly: true });
   });
 });
+
+describe("Stop while the runner places the order (independent review L22)", () => {
+  it("says an order went out first when the runner's step was placing it as Stop was pressed", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    // The alarm's step is placing the order; Stop, pressed meanwhile, waits for it.
+    const placing = sessions.advance("preprod", 0, true);
+    const stopped = await sessions.stop("preprod", 0);
+    await placing;
+    expect(stopped.ordered).toBe(true);
+    expect(stopped.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+    expect(stopped.auto).toMatchObject({ stopping: true });
+  });
+
+  it("says none went out when Stop came first", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    const stopped = await sessions.stop("preprod", 0);
+    expect(stopped.ordered).toBe(false);
+  });
+});
