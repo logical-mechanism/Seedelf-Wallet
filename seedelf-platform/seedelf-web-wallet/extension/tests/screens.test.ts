@@ -302,7 +302,9 @@ describe("a swap's approval (launch review #21, #26)", () => {
     expect(line).toContain("Bringing them back, about 1.2 ₳");
     expect(line).toContain("the proceeds and ADA to spare go through Lovejoin first: about 4 boxes of 10 ₳ (at most: the pool may take fewer, or none)");
     expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep)");
-    expect(line).toContain("Settings, Lovejoin sets how deep and how long, or turns it off.");
+    expect(line).toContain(
+      "This swap keeps this depth and this wait: Settings, Lovejoin changes the swaps you start after it, and turning Lovejoin off there doesn't change this one. Stop can bring it back directly.",
+    );
     expect(line).toContain("Lovejoin hasn't had a third-party audit");
     // As many as the pool has room for at Review (privacy review §2.7).
     const capped = text(createElement(LovejoinCost, { lovejoin: { ...lovejoin, boxes: 2, of: 4 }, adaOut: true }));

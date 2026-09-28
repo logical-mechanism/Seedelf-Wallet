@@ -1213,8 +1213,9 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
         {boxesText(l)}, mixed with other people's in {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳ in
         fees, which the session pays. {lovejoinHides(l.depth)} Each box comes back on its own after {delayText(l.delay)}, a
         few minutes into the first time the wallet is unlocked after that, for about {formatAda(l.withdrawFees)} ₳ in fees
-        all together. Less than a box's worth, and any tokens, come back at once. Settings, Lovejoin sets how deep and how
-        long, or turns it off.
+        all together. Less than a box's worth, and any tokens, come back at once. This swap keeps this depth and this wait:
+        Settings, Lovejoin changes the swaps you start after it, and turning Lovejoin off there doesn't change this one.
+        Stop can bring it back directly.
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}

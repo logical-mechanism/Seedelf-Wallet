@@ -72,7 +72,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { sessionClass } from "../shared/histories";
-import { DEFAULT_PREFERENCES } from "../shared/preferences";
+import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
@@ -222,6 +222,12 @@ interface AutoRecord {
    * direct. None on a swap from before: as Settings has it.
    */
   direct?: boolean;
+  /**
+   * Through Lovejoin, how deep and how long, as its approval showed them:
+   * Settings changes swaps started later (independent review L21). None on
+   * a swap from before, or one that comes back directly: as Settings has it.
+   */
+  lovejoin?: { depth: LovejoinDepth; delay: LovejoinDelay };
 }
 
 interface SessionRecord {
@@ -284,6 +290,8 @@ interface KeptOut {
   index: number;
   swap: SessionView["swap"];
   approved: AutoRecord["approved"];
+  /** How deep and how long its return through Lovejoin goes, as the approval showed them. */
+  lovejoin?: AutoRecord["lovejoin"];
   builtAt: number;
 }
 
@@ -657,12 +665,16 @@ export class SessionService {
    * (WebAssembly's MIX_FEE_ESTIMATE each) and about what bringing them back
    * takes. `pool`: also as Lovejoin's pool has room for now (room, a read
    * kept five minutes), `of` the boxes the ADA pays for when that's fewer,
-   * and `skipped`, why it has none.
+   * and `skipped`, why it has none. `fixed`: a swap's approved depth and
+   * wait, rather than Settings' now.
    */
-  private async priced(network: NetworkName, pool: boolean) {
+  private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"]) {
     const lovejoin = this.deps.lovejoin!;
     // What each box more takes, and what the chain takes besides: the deposit and its change.
-    const [one, two] = await Promise.all([lovejoin.funding(network, 1), lovejoin.funding(network, 2)]);
+    const [one, two] = await Promise.all([
+      lovejoin.funding(network, 1, false, fixed?.depth),
+      lovejoin.funding(network, 2, false, fixed?.depth),
+    ]);
     const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
     const besides = BigInt(one.lovelace) - perBox;
     const room = pool ? await lovejoin.room(network) : undefined;
@@ -680,7 +692,7 @@ export class SessionService {
         ...(boxes < pays ? { of: pays } : {}),
       };
     };
-    return { price, skipped, depth: one.depth, delay: one.delay };
+    return { price, skipped, depth: one.depth, delay: fixed?.delay ?? one.delay };
   }
 
   /**
@@ -721,10 +733,12 @@ export class SessionService {
     const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
     // Sending this is the approval: the swap runs itself within it.
     const approved = { minAmountOut: quote.minAmountOut, fund: quote.fund, aggregatorFee: quote.aggregatorFee };
-    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved };
-    await keep(this.deps, SESSION_OUT, kept);
     // Once, at Review, never as the user types: whether Lovejoin's pool takes the boxes now (privacy review §2.7).
     const lovejoin = await this.lovejoinCost(network, quote, true);
+    // Its depth and wait, as this review shows them, are the ones its return takes (independent review L21).
+    const way = lovejoin ? { lovejoin: { depth: lovejoin.depth as LovejoinDepth, delay: lovejoin.delay as LovejoinDelay } } : {};
+    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved, ...way };
+    await keep(this.deps, SESSION_OUT, kept);
     return { ...summary, ...(lovejoin ? { lovejoin } : {}) };
   }
 
@@ -1095,8 +1109,12 @@ export class SessionService {
       }
       const book = await this.book(network);
       if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
-      // Where Lovejoin is, how it comes back is kept with it.
-      const back = this.deps.lovejoin?.available(network) ? { direct: direct ?? !(await this.throughLovejoin()) } : {};
+      // Where Lovejoin is, how it comes back is kept with it: through it, as deep and as long as approved.
+      const back: Pick<AutoRecord, "direct" | "lovejoin"> = {};
+      if (this.deps.lovejoin?.available(network)) {
+        back.direct = direct ?? !(await this.throughLovejoin());
+        if (!back.direct && built.lovejoin) back.lovejoin = built.lovejoin;
+      }
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
         index: built.index,
@@ -1343,7 +1361,8 @@ export class SessionService {
     const rows = this.seen.get(`${network}:${index}`);
     const held = rows ? spareOf(returnable(s, rows)) : 0n;
     const funded = s.swap?.tokenIn === "lovelace" && !s.auto!.filled ? BigInt(s.auto!.approved.fund.lovelace) : 0n;
-    const { price, skipped, depth, delay } = await this.priced(network, true);
+    // As deep and as long as the swap was approved (independent review L21).
+    const { price, skipped, depth, delay } = await this.priced(network, true, s.auto!.lovejoin);
     return { ...price(held > funded ? held : funded), depth, delay, on: true, ...(skipped ? { skipped } : {}) };
   }
 
@@ -1883,6 +1902,8 @@ export class SessionService {
             record?.mix?.again,
             own,
             record?.mix?.publicToo,
+            // A swap's, as deep as it was approved (independent review L21).
+            record?.auto?.lovejoin?.depth,
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -1897,7 +1918,7 @@ export class SessionService {
       }
       if (chain) {
         const back = chain.txs[chain.txs.length - 1]!;
-        const { delay } = await lovejoin.settings();
+        const delay = record?.auto?.lovejoin?.delay ?? (await lovejoin.settings()).delay;
         return {
           network,
           index,
@@ -2051,6 +2072,8 @@ export class SessionService {
       leaves: leaves ?? [],
       boxes: summary.lovejoin?.boxes ?? 0,
       again: !!summary.lovejoin?.again,
+      // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
+      ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
     });
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
