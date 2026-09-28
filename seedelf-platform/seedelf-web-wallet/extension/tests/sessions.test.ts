@@ -389,11 +389,12 @@ describe("a private session", () => {
     // Signed: the witness set gained the session key's signature.
     expect(sent.length).toBeGreaterThan(SWAP.length / 2 + 96);
 
-    // Filled: the proceeds and the change are at the account; the funding UTxO was spent.
-    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
+    // Filled: the proceeds and the change are at the account; the funding UTxO was spent, and so was the order.
+    t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`).add(`${review.txHash}#0`);
     t.koios.addedToAccounts.push(
       atSession(review.txHash, 1, "131585414"),
       atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]),
+      { ...atSession(review.txHash, 0, "14000000"), address: bech32("addr_test", bytes(ORDER_ADDRESS)), payment_cred: "a6".repeat(28) },
     );
     expect(await sessions.orders("preprod", 0)).toEqual([]);
 
