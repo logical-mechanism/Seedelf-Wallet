@@ -123,7 +123,8 @@ export function historiesNote(
       ...(all.includes(UNKNOWN.id) ? ["money the wallet has no history for"] : []),
       ...(sessions.length ? [`money from ${sessionNames(sessions)}`] : []),
     ];
-    const lead = max ? "Sending everything spends" : "Nothing else could pay, so this spends";
+    // What's spent together, as a fact: another choice might have paid, merging other histories (independent review L39).
+    const lead = max ? "Sending everything spends" : "This spends";
     const lovejoin = boxes ? `, and undoes some of what Lovejoin did for ${boxes === 1 ? "the box" : "the boxes"}` : "";
     said.push(`${lead} ${listed(kinds)} together. Anyone can see they're one owner's, which ties them to each other${lovejoin}.`);
   }

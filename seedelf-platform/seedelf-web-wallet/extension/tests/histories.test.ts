@@ -74,7 +74,7 @@ describe("a review's note", () => {
 
   it("says what spending boxes back from Lovejoin together ties", () => {
     expect(historiesNote([box(1), box(2), box(3)])).toBe(
-      "Nothing else could pay, so this spends 3 boxes back from Lovejoin together. Anyone can see they're one owner's, which ties them to each other, and undoes some of what Lovejoin did for the boxes.",
+      "This spends 3 boxes back from Lovejoin together. Anyone can see they're one owner's, which ties them to each other, and undoes some of what Lovejoin did for the boxes.",
     );
   });
 
@@ -93,7 +93,7 @@ describe("a review's note", () => {
 
   it("is a plain note, with nothing to press", () => {
     const html = renderToStaticMarkup(createElement(HistoriesNote, { histories: [box(1), box(2)] }));
-    expect(html).toMatch(/^<p class="note" data-testid="histories-note">Nothing else could pay/);
+    expect(html).toMatch(/^<p class="note" data-testid="histories-note">This spends/);
     expect(html).not.toContain("<button");
     expect(renderToStaticMarkup(createElement(HistoriesNote, { histories: [box(1)] }))).toBe("");
   });
