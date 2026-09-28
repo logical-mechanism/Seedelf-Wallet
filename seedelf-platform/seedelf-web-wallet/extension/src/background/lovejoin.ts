@@ -729,8 +729,12 @@ export function checkBoxes(boxes: number): void {
 }
 
 export class LovejoinService {
-  /** A public mix is being sent right now: the Send, the page and the alarm never send it twice at once. */
-  private pumping = false;
+  /**
+   * The networks whose public mix is being sent right now: the Send, the
+   * page and the alarm never send one twice at once. Claimed before anything
+   * is awaited (independent review L26).
+   */
+  private pumping = new Set<NetworkName>();
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
   /** The pool as a swap's review last read it, by network (room). */
@@ -1270,10 +1274,18 @@ export class LovejoinService {
    * transaction that can't be sent stops it, and says why (progress).
    */
   async pumpPublic(network: NetworkName, budgetMs = CHAIN_PUMP_MS): Promise<boolean> {
-    if (this.pumping) return true;
+    if (this.pumping.has(network)) return true;
+    this.pumping.add(network);
+    try {
+      return await this.pumpPublicNow(network, budgetMs);
+    } finally {
+      this.pumping.delete(network);
+    }
+  }
+
+  private async pumpPublicNow(network: NetworkName, budgetMs: number): Promise<boolean> {
     const sending = await this.sendingOf(network);
     if (!sending || sending.stopped) return false;
-    this.pumping = true;
     const { wallet, session } = this.deps;
     const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -1330,8 +1342,6 @@ export class LovejoinService {
       await this.chainEnded(network, id, sending.stopped).catch(() => undefined);
       await this.release(network, chainOwner()).catch(() => undefined);
       throw e;
-    } finally {
-      this.pumping = false;
     }
   }
 
