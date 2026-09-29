@@ -18,7 +18,7 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 ## Before you upload
 
 1. **Run the release checklist** in [development.md](../development.md#releasing-to-the-web-store). It ends with `npm run package`, which writes `extension/release/seedelf-wallet-<version>-mainnet.zip`, and refuses a build without mainnet's hosts.
-2. **Make sure the privacy policy's URL resolves.** It points at the `seedelf-web-wallet` branch, so the PR that added it must be merged first.
+2. **Make sure the privacy policy's URL resolves.** It points at `main`, so `seedelf-web-wallet` must be merged into `main` before the listing is submitted — open the URL and check it renders. The wallet's own Settings link points at `main` too, and is built into the package, so the merge comes before `npm run package`, not after.
 
 ## Package
 
@@ -97,7 +97,7 @@ The screenshots show the wallet on **mainnet**, as the listing's build opens, wi
 
 **Additional fields:**
 
-- **Homepage URL:** `https://github.com/logical-mechanism/Seedelf-Wallet/tree/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet`
+- **Homepage URL:** `https://github.com/logical-mechanism/Seedelf-Wallet/tree/main/seedelf-platform/seedelf-web-wallet`
 - **Support URL:** `https://github.com/logical-mechanism/Seedelf-Wallet/issues`
 - **Mature content:** no
 
@@ -148,7 +148,7 @@ Then certify all three statements: no selling or transferring data outside the a
 **Privacy policy URL:**
 
 ```text
-https://github.com/logical-mechanism/Seedelf-Wallet/blob/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md
+https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md
 ```
 
 When `seedelf-web-wallet` merges into `main`, change `seedelf-web-wallet` in this URL to `main` in the dashboard.

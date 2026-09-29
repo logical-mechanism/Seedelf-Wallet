@@ -58,7 +58,7 @@ import { disconnectWait } from "./SiteSessions";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
-  "https://github.com/logical-mechanism/Seedelf-Wallet/blob/seedelf-web-wallet/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
+  "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
 type Page = "menu" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
 
