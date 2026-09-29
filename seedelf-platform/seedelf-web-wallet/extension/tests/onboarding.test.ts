@@ -70,9 +70,14 @@ describe("the welcome screen's network", () => {
 });
 
 describe("the welcome screen's promise (privacy review §2.4)", () => {
-  it("says what can't be linked is on chain, not to every service the wallet uses", () => {
-    const shown = text(welcome(status("mainnet", ["mainnet", "preprod"])));
-    expect(shown).toContain("On chain, payments to your Seedelfs can't be linked to you, and spending them doesn't reveal who you are.");
+  it("makes no privacy claim at all, so none can be read as covering the services the wallet uses", () => {
+    const shown = text(welcome(status("mainnet", ["mainnet", "preprod"]))).toLowerCase();
+    expect(shown).toContain("a private wallet for cardano.");
+    // §2.4 refused an unqualified claim here: before a wallet exists there's no
+    // room to say what Seedelf hides and from whom, so the screen says none of it.
+    for (const claim of ["can't be linked", "doesn't reveal", "nobody", "anonymous", "untraceable", "no one can"]) {
+      expect(shown).not.toContain(claim);
+    }
   });
 });
 

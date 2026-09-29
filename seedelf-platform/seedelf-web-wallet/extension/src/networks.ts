@@ -68,6 +68,13 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
   },
 };
 
+/**
+ * Ends the refusal when Lovejoin's pool is under its floor and the public
+ * account could seed it instead. The Lovejoin page matches on it to offer
+ * that, so the worker and the page keep one wording between them.
+ */
+export const POOL_SEEDABLE = "You can seed it instead: put boxes in with no mixes, for other people to mix with.";
+
 /** Whether Lovejoin is deployed on `network`: the worker's gate and the UI's, one source. */
 export function lovejoinOn(network: NetworkName): boolean {
   return NETWORKS[network].lovejoin !== undefined;

@@ -28,6 +28,8 @@ export function App() {
   const [resetting, setResetting] = useState(false);
   const [start, setStart] = useState(startFromHash);
   const [settings, setSettings] = useState(false);
+  // Counts presses of the top bar's mark: Home leaves whatever flow it's in.
+  const [goHome, setGoHome] = useState(0);
   const reachable = useServiceAccess();
 
   const refresh = useCallback(() => {
@@ -117,14 +119,37 @@ export function App() {
       />
     );
   } else {
-    screen = <Home />;
+    screen = <Home goHome={goHome} />;
   }
+
+  const brand = (
+    <>
+      <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
+      <span className="wordmark">Seedelf</span>
+    </>
+  );
 
   return (
     <div className={`app app--${view}`}>
       <header className="topbar">
-        <img className="topbar__mark" src="/icons/icon-48.png" alt="" width={28} height={28} />
-        <span className="wordmark">Seedelf</span>
+        {/* Unlocked, the mark is the way back to Home from any depth; locked, or in
+            the connector's window, there's nowhere to go, so it's just the mark. */}
+        {unlocked && !connectorWindow ? (
+          <button
+            type="button"
+            className="topbar__brand"
+            onClick={() => {
+              setSettings(false);
+              setGoHome((n) => n + 1);
+            }}
+            aria-label="Home"
+            title="Home"
+          >
+            {brand}
+          </button>
+        ) : (
+          brand
+        )}
         {network && <NetworkBadge network={network.name} />}
         <span className="topbar__spacer" />
         {unlocked && !connectorWindow && (

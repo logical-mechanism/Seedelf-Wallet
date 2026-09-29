@@ -17,6 +17,7 @@ import {
   type KoiosFake,
   launch,
   lovejoinPool,
+  chooseNetwork,
   madeByMix,
   ownedLovejoinBox,
   openApp,
@@ -640,10 +641,12 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(page.getByTestId("move-in-too-much")).toContainText("That's more than the 10,408.014036 ₳");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
 
-  // A non-round amount gets the privacy nudge; a round one doesn't.
+  // An amount within 6 decimals is taken as typed, with nothing said about it:
+  // the nudge towards round amounts was dropped (the owner, 2026-09-28) since
+  // it was advice on hiding, which belongs in the docs, not in the form.
   await page.getByLabel("Amount", { exact: true }).fill("25.5");
   await expect(page.getByTestId("move-in-amount-note")).toHaveCount(0);
-  await expect(page.getByTestId("round-warning")).toContainText("Round amounts");
+  await expect(page.getByTestId("round-warning")).toHaveCount(0);
   await page.getByLabel("Amount", { exact: true }).fill("25");
   await expect(page.getByTestId("round-warning")).toHaveCount(0);
   // Tokens come from a picker: search, select what's found, and take one off again.
@@ -1761,6 +1764,46 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
 // the box never comes back by itself, and its time went with the stop
 // (lovejoin.ts unschedule): Home's row counts the box, not mixed yet, and
 // no next one back.
+test("Lovejoin: a pool under its floor offers to seed it, and says the seed hides nothing", async ({ context, koios }) => {
+  // No pool at all, and mainnet's floor of 30: nothing can be mixed, and a mix
+  // is what puts boxes in, so the page has to offer the way to start one.
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  const at = (tx: string, value: string) => ({ ...rich!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] }) as never;
+  koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "30000000"));
+
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await chooseNetwork(context, "mainnet");
+  await page.reload();
+  await expect(page.getByTestId("network")).toHaveText("MAINNET");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+
+  // It's there on opening the page, with no mix attempted first.
+  const offer = page.getByTestId("lovejoin-seed-offer");
+  await expect(offer).toContainText("holds 0 boxes that aren't yours");
+  await expect(offer).toContainText("the wallet mixes only once it holds 30");
+  await expect(offer).toContainText("Seeding hides nothing of yours");
+  await expect(offer).toContainText("seeding from this wallet won't let this wallet mix");
+  // The count is typed, and starts at what the pool still needs: the whole
+  // floor goes in one transaction, not thirty presses of a stepper.
+  await expect(page.getByTestId("lovejoin-seed-boxes")).toHaveValue("30");
+  await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 30 boxes");
+  // It seeds from whichever side is chosen, as a mix does, and says which pays.
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your private balance");
+  await expect(offer).toContainText("It's paid from your private balance, through a one-time account");
+  await page.getByRole("tab", { name: "Public account" }).click();
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your public account");
+  await expect(offer).toContainText("It's paid from your public account, in one transaction that spends no script");
+  // The count is typed, so the whole floor isn't thirty presses of a stepper.
+  await page.getByTestId("lovejoin-seed-boxes").fill("12");
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("12 boxes, 120 ₳");
+  await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 12 boxes");
+});
+
 test("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {
   const page = await stoppedPublicMix(context, koios);
   await page.getByRole("button", { name: "Back", exact: true }).click();

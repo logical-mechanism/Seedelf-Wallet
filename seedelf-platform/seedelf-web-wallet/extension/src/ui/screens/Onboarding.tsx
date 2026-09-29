@@ -48,9 +48,6 @@ export function Onboarding({
     <section className="welcome">
       <img className="welcome__logo" src="/brand/wordmark-on-dark.png" alt="Seedelf Wallet" width={360} height={118} />
       <p className="welcome__lead">A private wallet for Cardano.</p>
-      <p className="note welcome__text">
-        On chain, payments to your Seedelfs can't be linked to you, and spending them doesn't reveal who you are.
-      </p>
       <div className="stack welcome__actions">
         <button className="primary" onClick={() => go("create")}>
           Create new wallet

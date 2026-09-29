@@ -11,7 +11,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Balances, PendingTx, SeedelfLookup, TransferSummary } from "../../shared/rpc";
 import { SEEDELF_NAME_RULE, seedelfName } from "../../shared/seedelf-name";
 import { call } from "../background";
-import { AdaInput, MinimumHint, MinimumNote, RoundNote } from "../components/AdaInput";
+import { BuildStage } from "../components/BuildStage";
+import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
 import {
@@ -169,17 +170,18 @@ export function Transfer({
       }
       error={error}
       foot={
-        <button type="submit" className="primary" disabled={!ready || busy}>
-          {busy ? "Building…" : "Review"}
-        </button>
+        <>
+          <button type="submit" className="primary" disabled={!ready || busy}>
+            {busy ? "Building…" : "Review"}
+          </button>
+          <BuildStage busy={busy} />
+        </>
       }
     >
       {list.drafts.map((d, i) => {
         const f = foundOf(d.id);
         const e = amounts.each[i];
         const withTokens = (e?.tokens.sent.length ?? 0) > 0;
-        const lovelace = e?.lovelace;
-        const round = typeof lovelace === "string" && BigInt(lovelace) % 1_000_000n === 0n;
         return (
           <RecipientCard
             key={d.id}
@@ -218,9 +220,6 @@ export function Transfer({
               )}
             </div>
             {withTokens && <MinimumHint />}
-            <RoundNote warn={!!lovelace && lovelace !== "0" && !round}>
-              Round amounts, like 100 ₳, are harder to match to the payment that made them private.
-            </RoundNote>
 
             <TokenAmounts
               held={heldFor(network, seedelf.tokens, list.drafts, d)}

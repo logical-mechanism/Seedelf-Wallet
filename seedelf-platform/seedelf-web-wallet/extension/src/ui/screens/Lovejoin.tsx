@@ -65,6 +65,12 @@ import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
 const MAX_BOXES = 10;
+/**
+ * The most boxes one seed puts in (the worker's MAX_DEPOSIT_BOXES): a seed is
+ * a single deposit with no mixes, so the transaction's size is the only limit,
+ * not the handful of boxes a chain of mixes can send.
+ */
+const MAX_SEED_BOXES = 96;
 /** A running mix's page asks the worker to move it on this often. */
 const ADVANCE_EVERY_MS = 20_000;
 
@@ -302,6 +308,8 @@ export function Lovejoin({
   const [error, setError] = useState<string>();
   const [source, setSource] = useState<Source>("private");
   const [boxes, setBoxes] = useState(1);
+  /** How many a seed puts in, its own count: typed, so 30 isn't 30 presses. */
+  const [seedBoxes, setSeedBoxes] = useState<number>();
   const [funding, setFunding] = useState<LovejoinFunding>();
   const [review, setReview] = useState<Review>();
 
@@ -434,12 +442,39 @@ export function Lovejoin({
       setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
     });
 
+  const reviewTitle = (r: Review) => {
+    if (r.source === "public" && r.summary.seed) return "Review the seed";
+    return (r.source === "private" ? r.summary.mix.again : r.summary.again) ? "Review mixing again" : "Review the mix";
+  };
+
   const build = () =>
     act(async () => {
       setReview(
         source === "private"
           ? { source, summary: await call("lovejoin-mix-private-build", { boxes }) }
           : { source, summary: await call("lovejoin-mix-public-build", { boxes }) },
+      );
+    });
+
+  /**
+   * Puts boxes in with no mixes, from the public account. A mix needs two
+   * other people's boxes for each of its own, and the wallet's own never
+   * count towards the floor, so an empty pool can only be started by someone
+   * depositing into it for nothing.
+   */
+  /**
+   * Seeds from whichever side is chosen, as a mix does. From the public
+   * account it's one deposit, which spends no script and so needs no
+   * collateral; from the private balance it's a one-time account funded by a
+   * Seedelf spend, which puts up giveme.my's collateral as every Seedelf
+   * spend does, and deposits from there.
+   */
+  const seed = () =>
+    act(async () => {
+      setReview(
+        source === "private"
+          ? { source, summary: await call("lovejoin-mix-private-build", { boxes: seeding, seed: true }) }
+          : { source, summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) },
       );
     });
 
@@ -460,7 +495,7 @@ export function Lovejoin({
   if (review) {
     return (
       <Screen
-        title={(review.source === "private" ? review.summary.mix.again : review.summary.again) ? "Review mixing again" : "Review the mix"}
+        title={reviewTitle(review)}
         titleId="lovejoin-review-title"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
@@ -496,6 +531,12 @@ export function Lovejoin({
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   // The public mix being sent shows its own progress below: the list takes the others.
   const chains = (status?.chains ?? []).filter((c) => !(sending && c.session === undefined));
+  // The pool can't be mixed in yet: seeding is the only thing that starts one.
+  const short = !!status?.available && status.others < status.floor;
+  // What it still needs, which is what a seed defaults to: one transaction's
+  // worth at most, and the user can type any of it.
+  const needed = short ? Math.min(status!.floor - status!.others, MAX_SEED_BOXES) : 0;
+  const seeding = Math.min(Math.max(seedBoxes ?? needed, 1), MAX_SEED_BOXES);
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
       {banner}
@@ -511,6 +552,49 @@ export function Lovejoin({
             <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
           )}
         </ReviewRows>
+      )}
+      {short && (
+        <div className="stack" data-testid="lovejoin-seed-offer">
+          <Callout tone="warn">
+            Lovejoin's pool holds {plural(status!.others, "box", "boxes")} that aren't yours, and the wallet mixes only
+            once it holds {status!.floor}, so there's enough to mix with. Nothing can be mixed until then, and a mix is
+            what puts boxes in — so the pool has to be started by someone putting boxes in for nothing.
+          </Callout>
+          <Callout tone="privacy">
+            Seeding hides nothing of yours: the boxes go in and come back unmixed, and anyone reading the chain can
+            follow both. It gives other people boxes to mix with. Yours stay in the pool, with no wait set, until you
+            bring one back. Your own boxes never count towards the floor, so seeding from this wallet won't let this
+            wallet mix.{" "}
+            {source === "private"
+              ? "It's paid from your private balance, through a one-time account: that spends private UTxOs and links them to the boxes, for nothing you gain. The public account is the cheaper side to seed from."
+              : "It's paid from your public account, in one transaction that spends no script."}
+          </Callout>
+          <div className="field">
+            <label htmlFor="lovejoin-seed-boxes">Boxes of 10 ₳ to put in</label>
+            <input
+              id="lovejoin-seed-boxes"
+              type="number"
+              min={1}
+              max={MAX_SEED_BOXES}
+              step={1}
+              inputMode="numeric"
+              value={seedBoxes ?? needed}
+              disabled={busy}
+              onChange={(e) => setSeedBoxes(e.target.value === "" ? undefined : Math.floor(Number(e.target.value)))}
+              data-testid="lovejoin-seed-boxes"
+            />
+            <p className="note" data-testid="lovejoin-seed-cost">
+              {plural(seeding, "box", "boxes")}, {formatAda((BigInt(seeding) * 10_000_000n).toString())} ₳ from your{" "}
+              {source === "private" ? "private balance" : "public account"}. It comes back when you bring the boxes back.
+              The pool needs{" "}
+              {plural(needed, "more box", "more boxes")} before this wallet's own mixes run, and they have to come from
+              somewhere else. At most {MAX_SEED_BOXES} fit in one.
+            </p>
+          </div>
+          <button type="button" className="secondary" disabled={busy} onClick={() => void seed()} data-testid="lovejoin-seed">
+            Seed the pool with {plural(seeding, "box", "boxes")}
+          </button>
+        </div>
       )}
       <NotMixed
         count={notMixed}
@@ -864,6 +948,7 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
 /** A mix from the public account: the deposit and every mix, sent now. */
 export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
   if (summary.again) return <PublicAgainReview summary={summary} />;
+  if (summary.seed) return <PublicSeedReview summary={summary} />;
   return (
     <>
       <ReviewRows testId="lovejoin-public-review">
@@ -882,6 +967,34 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
       <Callout tone="privacy">
         The deposit comes from your public account, so the boxes going in are tied to it, and anyone can see your account
         paid for these mixes. {PUBLIC_MIX_WAY_BACK}
+      </Callout>
+    </>
+  );
+}
+
+/**
+ * Seed the pool: the deposit alone, no mixes. It buys the seeder nothing, so
+ * the review says that plainly rather than borrowing the mix's words.
+ */
+function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
+  return (
+    <>
+      <ReviewRows testId="lovejoin-seed-review">
+        <Row label="Into Lovejoin" value={`${plural(summary.boxes, "box", "boxes")} of 10 ₳`} strong />
+        <Row label="Mixed" value="Not at all: this is a seed" />
+        <Row label="Network fees" value={`${formatAda(summary.fees)} ₳`} />
+        <Row label="Transactions" value={String(summary.txs)} />
+        <Row label="Stays in your public account" value={`${formatAda(summary.change)} ₳`} />
+        <Row label="Back later" value="Only when you bring one back" />
+      </ReviewRows>
+      <p className="note">
+        Send sends the deposit. Your public account pays it, and the boxes wait in the pool with no time set: bring one
+        back whenever you want it.
+      </p>
+      <Callout tone="warn" testId="lovejoin-seed-warning">
+        This hides nothing of yours. The boxes go in from your public account and come back to it unmixed, and anyone
+        reading the chain can follow both. It gives other people boxes to mix with, which is the only way a pool can
+        start, and the wallet mixes for you only once the pool holds enough boxes that aren't yours.
       </Callout>
     </>
   );

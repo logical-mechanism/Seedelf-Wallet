@@ -271,8 +271,8 @@ describe("the swap form's privacy note (privacy review §2.13)", () => {
     const form = createElement(NewSwap, { seedelf, onCancel: () => undefined, onStarted: () => undefined });
     const html = renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, form));
     const line = text(form);
-    expect(line).toContain("it sees the pair, the amount and your IP address, never your public account");
-    expect(line).toContain("Half and Max are worked out from what your private balance holds, so they tell Minswap roughly how much that is");
+    expect(line).toContain("Minswap sees the pair, the amount and your IP address as you type, never your public account");
+    expect(line).toContain("Half and Max round down to a whole unit, but still tell it roughly what your private balance holds");
     expect(line).not.toContain("never your private balance");
     expect(html).toContain("title=\"All but what&#x27;s under 1 ₳, less the swap&#x27;s costs and the collateral\"");
   });
@@ -302,9 +302,7 @@ describe("a swap's approval (launch review #21, #26)", () => {
     expect(line).toContain("Bringing them back, about 1.2 ₳");
     expect(line).toContain("the proceeds and ADA to spare go through Lovejoin first: about 4 boxes of 10 ₳ (at most: the pool may take fewer, or none)");
     expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep)");
-    expect(line).toContain(
-      "This swap keeps this depth and this wait: Settings, Lovejoin changes the swaps you start after it, and turning Lovejoin off there doesn't change this one. Stop can bring it back directly.",
-    );
+    expect(line).toContain("Settings changes later swaps, not this one. Stop brings it back directly.");
     expect(line).toContain("Lovejoin hasn't had a third-party audit");
     // As many as the pool has room for at Review (privacy review §2.7).
     const capped = text(createElement(LovejoinCost, { lovejoin: { ...lovejoin, boxes: 2, of: 4 }, adaOut: true }));
@@ -514,7 +512,7 @@ describe("what the swap and session screens say sites and chain watchers see (pr
 
   it("never says the public account never appears, and says where the money leads", () => {
     const swaps = text(createElement(Swaps, { seedelf, onBack: () => undefined, onPending: () => undefined }));
-    expect(swaps).toContain("Your public account isn't in its transactions, but anyone can follow the money through the one-time account");
+    expect(swaps).toContain("your public account isn't in its transactions. Anyone can follow the money through the one-time account");
     expect(swaps).toContain("money you made private yourself leads on to your public account");
     expect(swaps).not.toContain("never appears");
     const dapps = text(createElement(Dapps, { seedelf, onBack: () => undefined, onPending: () => undefined }));

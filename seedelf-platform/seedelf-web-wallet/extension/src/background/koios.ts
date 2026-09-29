@@ -210,7 +210,21 @@ const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,li
 /** CIP-119's name only: a DRep's image would be fetched from anywhere its author chose. */
 const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
 const RETRY_DELAYS_MS = [1000, 3000];
-const TIMEOUT_MS = 20_000;
+
+/**
+ * How long a read waits for Koios. Mainnet's chain is far bigger than
+ * preprod's, where this was first tuned at 20 s: one `credential_utxos` over
+ * an account with real history can take tens of seconds on the public tier,
+ * and the wallet was calling that offline (found on mainnet, 2026-09-28).
+ */
+const TIMEOUT_MS = 45_000;
+
+/**
+ * A submit's own wait. Shorter than a read's: past it the wallet has to treat
+ * the transaction as maybe sent, which holds later payments back, so waiting
+ * longer for a real answer is worth more than failing fast.
+ */
+const SUBMIT_TIMEOUT_MS = 30_000;
 
 /**
  * Payment credentials in one `credential_utxos` request. Koios's public tier
@@ -226,27 +240,65 @@ export const TXS_PER_REQUEST = 20;
 
 export class KoiosError extends Error {}
 
+/** How long everything waits after a 429 that named no Retry-After. */
+export const BACK_OFF_MS = 10_000;
+
+/** The longest a Retry-After is honoured, so a bad header can't park the wallet for hours. */
+export const MAX_BACK_OFF_MS = 60_000;
+
+/**
+ * What a 429's `Retry-After` asks for (ms): seconds, or an HTTP date. A
+ * missing or unreadable one is BACK_OFF_MS, and anything longer than
+ * MAX_BACK_OFF_MS is capped by `hold`.
+ */
+export function retryAfterMs(response: Response | undefined, now: number = Date.now()): number {
+  const header = response?.headers.get("retry-after");
+  if (!header) return BACK_OFF_MS;
+  const seconds = Number(header.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? BACK_OFF_MS : Math.max(0, at - now);
+}
+
 /**
  * Koios's public tier takes 100 requests every 10 seconds from an IP address
  * (and 5,000 a day). Every request the worker makes waits its turn here, so a
  * burst (a long Lovejoin chain, several screens reading at once) stays well
  * under it, with room left for anything else on the same connection. Each
  * attempt counts, retries too.
+ *
+ * The window is 40, not half the tier's 100, because Chrome stops the worker
+ * after about 30 seconds idle and a fresh one starts with an empty window: two
+ * workers either side of a stop can each spend theirs inside the same 10
+ * seconds, so the pair must still fit. `hold` is what a 429 sets, and it does
+ * carry across a restart (`store`): once Koios has asked the wallet to slow
+ * down, every request waits, not just the one that was refused.
  */
 export class RateLimit {
   private starts: number[] = [];
+  /** Nothing starts before this (ms, `now`'s clock): what a 429 sets. */
+  private until = 0;
+  private restored?: Promise<void>;
 
   constructor(
-    readonly max = 60,
+    readonly max = 40,
     readonly windowMs = 10_000,
     private readonly now: () => number = () => Date.now(),
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+    /** Where a cooldown outlives the worker; tests leave it out and keep it in memory. */
+    private readonly store?: HoldStore,
   ) {}
 
   /** Waits until a request may start, and counts it. */
   async take(): Promise<void> {
+    await this.restore();
     for (;;) {
       const at = this.now();
+      // A cooldown holds everything back, however empty the window is.
+      if (at < this.until) {
+        await this.sleep(this.until - at);
+        continue;
+      }
       this.starts = this.starts.filter((s) => at - s < this.windowMs);
       if (this.starts.length < this.max) {
         this.starts.push(at);
@@ -255,10 +307,61 @@ export class RateLimit {
       await this.sleep(this.starts[0]! + this.windowMs - at);
     }
   }
+
+  /**
+   * Koios asked the wallet to slow down: hold every request back for `ms`,
+   * and keep it where a worker started later will read it.
+   */
+  hold(ms: number): void {
+    this.until = Math.max(this.until, this.now() + Math.min(ms, MAX_BACK_OFF_MS));
+    void this.store?.save(this.until);
+  }
+
+  /** What a cooldown still has to run (ms): 0 when nothing is held back. */
+  holding(): number {
+    return Math.max(0, this.until - this.now());
+  }
+
+  private restore(): Promise<void> {
+    this.restored ??= (async () => {
+      const kept = await this.store?.load();
+      if (kept) this.until = Math.max(this.until, kept);
+    })();
+    return this.restored;
+  }
 }
 
+/** Where a cooldown is kept so a worker Chrome restarted still honours it. */
+export interface HoldStore {
+  load(): Promise<number | undefined>;
+  save(until: number): Promise<void>;
+}
+
+/** chrome.storage.session, which is memory-only and goes when the browser closes. */
+export const sessionHoldStore: HoldStore = {
+  async load() {
+    try {
+      const got = (await chrome.storage.session.get(SESSION_HOLD_KEY)) as Record<string, unknown>;
+      const until = got[SESSION_HOLD_KEY];
+      return typeof until === "number" ? until : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  async save(until) {
+    try {
+      await chrome.storage.session.set({ [SESSION_HOLD_KEY]: until });
+    } catch {
+      // A cooldown that can't be kept still holds this worker back.
+    }
+  },
+};
+
+/** chrome.storage.session: when Koios's limit lets the wallet ask again. */
+export const SESSION_HOLD_KEY = "seedelf.koios.until";
+
 /** The worker's one limit, shared by every Koios it makes, whatever the network. */
-export const KOIOS_LIMIT = new RateLimit();
+export const KOIOS_LIMIT = new RateLimit(undefined, undefined, undefined, undefined, sessionHoldStore);
 
 /** The network refused a transaction because an input it spends is already spent. */
 export class SpentInputError extends KoiosError {}
@@ -297,9 +400,20 @@ const chromeAllows: HostCheck = async (url) => {
 export const KOIOS_NOT_ALLOWED =
   "Chrome isn't letting Seedelf Wallet reach Koios, where it reads Cardano. Press Ask Chrome again, at the top of the wallet, and allow it.";
 
-/** A request that never got an answer: offline, or blocked on the way. */
+/**
+ * A request that never got an answer. A timeout is Koios being slow, not the
+ * connection being broken, so it says so: sending the user to look at their
+ * ad blocker for a slow mainnet read wastes their time (found on mainnet,
+ * 2026-09-28).
+ */
 function unreachable(e: unknown): string {
   const cause = e instanceof Error ? e.message : String(e);
+  if (e instanceof DOMException && e.name === "TimeoutError") {
+    return (
+      "Koios, the service the wallet reads Cardano from, didn't answer in time. " +
+      "It reads more on mainnet than on preprod, and its public tier is shared, so it can be slow. Press Refresh to try again."
+    );
+  }
   return (
     `Couldn't reach Koios, the service the wallet reads Cardano from (${cause}). ` +
     "Check your internet connection, and any VPN or ad blocker that might block koios.rest."
@@ -308,7 +422,11 @@ function unreachable(e: unknown): string {
 
 /** An answer that isn't data. */
 function koiosTrouble(status: number, path: string): string {
-  if (status === 429) return "Koios is limiting requests from your connection. Wait a minute and try again.";
+  if (status === 429) {
+    // The public tier caps both a burst (100 every 10 seconds) and a day (5,000),
+    // and answers 429 for either, so the words have to cover both.
+    return "Koios is limiting requests from your connection. The wallet has slowed down: wait a minute and try again. If it keeps happening, the public tier's daily limit may be used up, which clears the next day.";
+  }
   if (status >= 500) return `Koios is having trouble right now (${status} for ${path}). Try again in a minute.`;
   return `Koios refused the request (${status} for ${path}).`;
 }
@@ -534,14 +652,17 @@ export class Koios {
           method: "POST",
           headers: { "content-type": "application/cbor" },
           body: txCbor,
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
         });
       } catch (e) {
         if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED);
         throw new KoiosBusyError(unreachable(e));
       }
       // Koios's gateway answers a 429 before passing anything on, whatever its body.
-      if (response.status === 429) throw new KoiosBusyError(koiosTrouble(429, "submittx"), false);
+      if (response.status === 429) {
+        this.limit?.hold(retryAfterMs(response, Date.now()));
+        throw new KoiosBusyError(koiosTrouble(429, "submittx"), false);
+      }
       if (response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
       try {
         text = await response.text();
@@ -668,6 +789,7 @@ export class Koios {
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined;
       let failure: string;
+      let slow = false;
       await this.limit?.take();
       try {
         response = await this.fetchFn(url, {
@@ -684,12 +806,25 @@ export class Koios {
         failure = koiosTrouble(response.status, path);
       } catch (e) {
         if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED);
+        slow = e instanceof DOMException && e.name === "TimeoutError";
         failure = unreachable(e);
       }
+      // A 429 is the tier's limit, not this request's bad luck: hold every
+      // request back, so retrying doesn't keep the limit tripped.
+      let cooling = false;
+      if (response?.status === 429 && this.limit) {
+        this.limit.hold(retryAfterMs(response, Date.now()));
+        cooling = true;
+      }
       const retryable = !response || response.status === 429 || response.status >= 500;
-      const delay = RETRY_DELAYS_MS[attempt];
+      // A read that ran out of time already waited TIMEOUT_MS: two more of
+      // those is over two minutes of a spinner, so it gets one retry, not two.
+      const delays = slow ? RETRY_DELAYS_MS.slice(0, 1) : RETRY_DELAYS_MS;
+      const delay = delays[attempt];
       if (!retryable || delay === undefined) throw new KoiosError(failure);
-      await this.sleep(delay);
+      // `take` waits the cooldown out at the top of the next attempt; sleeping
+      // here too would only add to it. Without a limiter, the fixed delay stands.
+      if (!cooling) await this.sleep(delay);
     }
   }
 }

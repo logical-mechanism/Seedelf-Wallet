@@ -342,7 +342,8 @@ impl Coin {
 #[derive(Debug, Clone)]
 pub struct Payer {
     pub fee: Coin,
-    pub collateral: Coin,
+    /// None only where nothing is mixed: [`mix`] refuses without it.
+    pub collateral: Option<Coin>,
     pub address: Address,
     pub signers: usize,
 }
@@ -596,6 +597,12 @@ pub fn mix(
     all_inputs.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
 
     let least = least_change(params, &payer.address)?;
+    // A mix spends the pool's scripts, so it always puts collateral up; only a
+    // seed, which makes no mixes, ever goes without, and never reaches here.
+    let collateral = payer
+        .collateral
+        .as_ref()
+        .context("A mix needs collateral")?;
     let stage = |fee: u64, budgets: Option<&Budgets>| -> Result<BuiltTransaction> {
         let change = payer
             .fee
@@ -603,8 +610,7 @@ pub fn mix(
             .checked_sub(fee)
             .filter(|c| *c >= least)
             .context("There isn't enough ADA left to pay this mix's fee and keep the change")?;
-        let collateral_back = payer
-            .collateral
+        let collateral_back = collateral
             .lovelace
             .checked_sub(fee * 3 / 2 + 1)
             .context("The collateral can't cover this mix")?;
@@ -635,7 +641,7 @@ pub fn mix(
             tx = tx.reference_input(reference);
         }
         tx = tx
-            .collateral_input(payer.collateral.input())
+            .collateral_input(collateral.input())
             .collateral_output(Output::new(payer.address.clone(), collateral_back))
             .fee(fee)
             .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone());
@@ -646,7 +652,7 @@ pub fn mix(
 
     let mut known: Vec<Resolved> = sorted.iter().map(|b| b.utxo.clone()).collect();
     known.push(payer.fee.utxo.clone());
-    known.push(payer.collateral.utxo.clone());
+    known.push(collateral.utxo.clone());
     known.extend(protocol.references.iter().cloned());
     let measure = |tx: &BuiltTransaction| -> Result<(Budgets, Vec<Budget>)> {
         let answer = eval::evaluate(
@@ -965,7 +971,9 @@ pub fn again_funding(boxes: usize, depth: u32) -> u64 {
 #[derive(Debug, Clone)]
 pub struct Funding {
     pub coins: Vec<Coin>,
-    pub collateral: Coin,
+    /// What every mix puts up. None only for a seed (depth 0), which makes no
+    /// mixes and so spends no script: [`fan_out`] never runs, so never reads it.
+    pub collateral: Option<Coin>,
     pub address: Address,
     pub deposit_signers: usize,
     pub mix_signers: usize,
@@ -1012,6 +1020,10 @@ pub fn chain(
     } = funding;
     let fresh = fresh_for(owners.len(), depth, pool, &[])?;
     let deposit = deposit(params, protocol, coins, owners, address, *deposit_signers)?;
+    // A mix needs collateral; a seed makes none, so it may go without.
+    if depth > 0 && collateral.is_none() {
+        bail!("A chain that mixes needs collateral");
+    }
     let payer = Payer {
         fee: deposit.change.clone(),
         collateral: collateral.clone(),
@@ -1076,8 +1088,12 @@ impl std::error::Error for PoolShort {}
 /// random order, `ours` left out: two for every mix, never one twice. Too
 /// few is a [`PoolShort`].
 fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Result<Vec<PoolBox>> {
-    if !(1..=3).contains(&depth) {
-        bail!("The fan-out is 1 to 3 waves deep");
+    // Depth 0 is a seed: the deposit alone, with no mixes, so it needs no
+    // other boxes and works on an empty pool. It hides nothing of its own;
+    // it puts boxes in for other people to mix with, which is the only way a
+    // pool can start (the wallet's own boxes never count towards its floor).
+    if !(0..=3).contains(&depth) {
+        bail!("The fan-out is 0 to 3 waves deep");
     }
     let mut fresh: Vec<PoolBox> = pool
         .iter()

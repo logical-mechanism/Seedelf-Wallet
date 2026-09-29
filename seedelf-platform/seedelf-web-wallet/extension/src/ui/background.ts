@@ -1,7 +1,16 @@
 // The UI's side of the RPC: ask the service worker to do something, and hear
 // when the wallet's state changes (for example on auto-lock).
 
-import { isDappChanged, isStateChanged, UI_PORT, type Reply, type RequestName, type Requests } from "../shared/rpc";
+import {
+  isBuildProgress,
+  isDappChanged,
+  isStateChanged,
+  UI_PORT,
+  type BuildStage,
+  type Reply,
+  type RequestName,
+  type Requests,
+} from "../shared/rpc";
 
 const NO_ANSWER = "The wallet's background service didn't answer.";
 
@@ -14,16 +23,32 @@ export function call<K extends RequestName>(type: K, payload: Requests[K]["paylo
   return new Promise((resolve, reject) => {
     const port = chrome.runtime.connect({ name: UI_PORT });
     let answered = false;
+    // Only a request that reported a stage clears it when it ends: a balance
+    // read finishing alongside a build mustn't wipe the build's line.
+    let reported = false;
+    const done = () => {
+      if (reported) setStage(undefined);
+    };
     port.onMessage.addListener((reply: Reply<K> | undefined) => {
+      // A build says what it's doing on this same port before it answers.
+      if (isBuildProgress(reply)) {
+        reported = true;
+        setStage(reply.stage);
+        return;
+      }
       answered = true;
       port.disconnect();
+      done();
       if (reply?.ok) resolve(reply.value);
       else reject(new Error(reply?.error ?? NO_ANSWER));
     });
     port.onDisconnect.addListener(() => {
       // Read, so Chrome doesn't log it as unchecked: the worker couldn't be reached.
       void chrome.runtime.lastError;
-      if (!answered) reject(new Error(NO_ANSWER));
+      if (!answered) {
+        done();
+        reject(new Error(NO_ANSWER));
+      }
     });
     port.postMessage({ type, ...payload });
   });
@@ -74,4 +99,27 @@ export function reportActivity(): void {
 export async function stayUnlocked(): Promise<void> {
   lastActivity = Date.now();
   await call("activity", {});
+}
+
+// What the build running in this page is doing. One build runs at a time per
+// page (its screen's button is disabled while it does), so one value is
+// enough, and every screen reads it through useBuildStage.
+let stage: BuildStage | undefined;
+const stageListeners = new Set<(s: BuildStage | undefined) => void>();
+
+function setStage(next: BuildStage | undefined): void {
+  if (stage === next) return;
+  stage = next;
+  for (const listener of stageListeners) listener(next);
+}
+
+/** The stage now, for a screen mounting mid-build. */
+export function buildStage(): BuildStage | undefined {
+  return stage;
+}
+
+/** Calls `listener` whenever the running build's stage changes. Returns an unsubscribe. */
+export function onBuildStage(listener: (stage: BuildStage | undefined) => void): () => void {
+  stageListeners.add(listener);
+  return () => stageListeners.delete(listener);
 }

@@ -6,14 +6,48 @@
 // - the 440×280 small promo tile;
 // - the 128×128 store icon: 96×96 of artwork in 16 px of transparent padding.
 //
+// The listing is for mainnet, so the wallet is on mainnet, as the store's
+// build opens: the fake Koios gives the recordings with mainnet's addresses
+// (support.ts), and each test token on screen stands in for one on the
+// wallet's mainnet list (MAINNET_TOKENS).
+//
 // npm run store:images (after a build) writes them to docs/store/images/.
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { blake2b } from "@noble/hashes/blake2.js";
 import { chromium, type Page } from "@playwright/test";
 
-import { cardanoTab, expect, openApp, restore, test, transferPreprod, vector } from "./support";
+import { bech32 } from "../tests/fixtures/bech32";
+import { cardanoTab, expect, openApp, restore, test, vector } from "./support";
+
+/** A token's CIP-14 fingerprint, as Koios lists it. */
+const fingerprint = (policy: string, name: string) =>
+  bech32("asset", blake2b(Buffer.from(policy + name, "hex"), { dkLen: 20 }));
+
+/** Mainnet's USDM and DJED (src/tokens/list.json), each with 6 decimals. */
+const USDM = { policy_id: "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad", asset_name: "0014df105553444d" };
+const DJED = { policy_id: "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61", asset_name: "446a65644d6963726f555344" };
+const standIn = (token: { policy_id: string; asset_name: string }) => ({
+  ...token,
+  fingerprint: fingerprint(token.policy_id, token.asset_name),
+  decimals: 6,
+});
+
+/**
+ * The recordings' test tokens on screen, by preprod unit, and the mainnet
+ * tokens they stand in for: the private balance's tUSDM (owned-utxos.json),
+ * and the public account's tUSDM and LINK (koios-preprod.json).
+ */
+const MAINNET_TOKENS: Array<[string, ReturnType<typeof standIn>]> = [
+  ["c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0.745553444d", standIn(USDM)],
+  ["e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9.0014df10745553444d", standIn(USDM)],
+  ["9c6cd01df2299fcb46293880da5a07d9d77089ec2fcbfefd737c0c9d.0014df104c494e4b", standIn(DJED)],
+];
+
+/** A Seedelf in the recordings (koios-preprod.json) to pay, named "Ancient Kraken". */
+const PAY_TO = "5eed0e1f416e6369656e74204b72616b656e0250963e8b37a282536e8e0d6369";
 
 const out = fileURLToPath(new URL("../../docs/store/images/", import.meta.url));
 const dataUri = (type: string, bytes: Buffer) => `data:${type};base64,${bytes.toString("base64")}`;
@@ -88,12 +122,14 @@ async function render(compose: Page, html: string, width: number, height: number
   await compose.screenshot({ path: `${out}${name}`, omitBackground: transparent });
 }
 
-test.use({ scale: 2 });
+test.use({ scale: 2, network: "mainnet" });
 
-test("the Web Store listing's images", async ({ context }) => {
+test("the Web Store listing's images", async ({ context, koios }) => {
   mkdirSync(out, { recursive: true });
+  for (const [unit, token] of MAINNET_TOKENS) koios.mainnetTokens.set(unit, token);
   const tab = await openApp(context);
   await restore(tab, vector(12).phrase);
+  await expect(tab.getByTestId("network")).toHaveText("MAINNET");
   await expect(tab.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await tab.close();
 
@@ -104,7 +140,8 @@ test("the Web Store listing's images", async ({ context }) => {
   const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();
   const shots: Array<[Buffer, string, string]> = [];
 
-  await expect(popup.getByTestId("seedelf-tokens")).toContainText("tUSDM");
+  await expect(popup.getByTestId("seedelf-tokens")).toContainText("USDM");
+  await expect(popup.getByTestId("test-network")).toHaveCount(0);
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
   shots.push([
     await shoot(),
@@ -113,8 +150,8 @@ test("the Web Store listing's images", async ({ context }) => {
   ]);
 
   await popup.getByRole("button", { name: "Send privately" }).click();
-  await popup.getByLabel("Seedelf name").fill(transferPreprod.to);
-  await expect(popup.getByTestId("transfer-to-note")).toContainText("Found: This is a test.");
+  await popup.getByLabel("Seedelf name").fill(PAY_TO);
+  await expect(popup.getByTestId("transfer-to-note")).toContainText("Found: Ancient Kraken");
   await popup.getByLabel("Amount", { exact: true }).fill("5");
   shots.push([
     await shoot(),
@@ -134,7 +171,7 @@ test("the Web Store listing's images", async ({ context }) => {
   await back();
 
   await popup.getByRole("button", { name: "Make public" }).click();
-  await popup.getByLabel("To", { exact: true }).fill(vector(12).preprod.receive_0);
+  await popup.getByLabel("To", { exact: true }).fill(vector(12).mainnet.receive_0);
   await expect(popup.getByTestId("withdraw-own")).toContainText("This is your own public account");
   await popup.getByLabel("Amount", { exact: true }).fill("10");
   shots.push([
@@ -147,6 +184,8 @@ test("the Web Store listing's images", async ({ context }) => {
   await cardanoTab(popup);
   await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await expect(popup.getByTestId("staking-row")).toContainText("Staking with LOGIC");
+  await expect(popup.getByTestId("cardano-meta")).toHaveText("4 addresses used");
+  await expect(popup.getByTestId("cardano-tokens")).toContainText("DJED");
   shots.push([
     await shoot(),
     "A full Cardano wallet",

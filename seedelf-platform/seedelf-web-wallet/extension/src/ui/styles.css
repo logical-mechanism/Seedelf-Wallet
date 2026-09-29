@@ -488,6 +488,30 @@ main {
   display: block;
 }
 
+/* The mark and wordmark as one button back to Home: it must look exactly as they did. */
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+
+.topbar__brand:hover .wordmark {
+  color: var(--accent);
+}
+
+.topbar__brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .topbar__spacer {
   flex: 1;
 }
@@ -637,11 +661,22 @@ main {
   font-size: var(--text-sm);
 }
 
+/*
+ * A refusal, in the sticky foot. It was 13px of bare tinted text, which read
+ * as a footnote under a full page and was missed (the owner, on mainnet,
+ * 2026-09-28): it's a bordered block now, at the body's size.
+ */
 .error {
   margin: 0;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--danger-text);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+  background: rgb(224 30 90 / 0.12);
   color: var(--danger-text);
   font-weight: 500;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .field-note {
@@ -3013,4 +3048,10 @@ button.dapp-tile:hover {
   font-size: 12px;
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+/* What a build is doing, under the button that started it (components/BuildStage.tsx). */
+.build-stage {
+  margin-top: var(--s2);
+  margin-bottom: 0;
 }

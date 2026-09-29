@@ -134,11 +134,10 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
     <>
       <Callout tone="privacy">
         The spare ADA goes through Lovejoin first, so what comes back is harder to tie to this session on chain:{" "}
-        {plural(l.boxes, "box", "boxes")} of 10 ₳, each mixed with other people's boxes, {l.depth}{" "}
+        {plural(l.boxes, "box", "boxes")} of 10 ₳, each mixed with other people's, {l.depth}{" "}
         {l.depth === 1 ? "wave" : "waves"} deep. {lovejoinHides(l.depth)} This session pays every mix ({formatAda(l.fees)} ₳
-        in fees, all {l.txs} transactions together). Each box comes back into your private balance on its own, after a
-        random {delayText(l.delay)}, some minutes into the first time the wallet is unlocked after that. The rest comes
-        back now.
+        over {l.txs} transactions). Each box comes back on its own after a random {delayText(l.delay)}, at the first unlock
+        after that. The rest comes back now.
       </Callout>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED}

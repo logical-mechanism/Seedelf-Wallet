@@ -13,6 +13,7 @@ import { useState, type FormEvent } from "react";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
 import { call } from "../background";
+import { BuildStage } from "../components/BuildStage";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
@@ -170,9 +171,12 @@ export function CardanoSend({
       aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
-        <button type="submit" className="primary" disabled={!ready || busy}>
-          {busy ? "Building…" : "Review"}
-        </button>
+        <>
+          <button type="submit" className="primary" disabled={!ready || busy}>
+            {busy ? "Building…" : "Review"}
+          </button>
+          <BuildStage busy={busy} />
+        </>
       }
     >
       {list.drafts.map((d, i) => {

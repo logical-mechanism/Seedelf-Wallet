@@ -37,7 +37,7 @@ import { nothingToSpend, readContract } from "../src/background/script-spend";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
 import { SESSION_WITHDRAW } from "../src/background/withdraw";
 import { Minswap } from "../src/background/minswap";
-import { lovejoinOn, NETWORKS } from "../src/networks";
+import { lovejoinOn, NETWORKS, POOL_SEEDABLE } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";
@@ -707,8 +707,9 @@ describe("the pool the chains draw from", CHAINS, () => {
     // The recorded pool's 20 boxes, as if they sat at mainnet's mix_box.
     const mainnetBox = NETWORKS.mainnet.lovejoin!.mixBox;
     t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
+    // The tile's own mix says the public account could seed the pool instead.
     await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow(
-      "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. Try again later.",
+      `Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. ${POOL_SEEDABLE}`,
     );
     expect(t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials[0])).toContain(mainnetBox);
     // Preprod's pool of the same size has no floor.
@@ -1760,6 +1761,64 @@ describe("mixing from the tile", CHAINS, () => {
     return t;
   }
 
+  /**
+   * The case the owner hit on mainnet: an empty pool under a floor. A seed has
+   * to go through anyway, since a mix is what fills the pool and a mix can't
+   * run on an empty one. Preprod's floor is 0, so only a floor set here proves
+   * it: without one this passed while mainnet funded a session and returned it
+   * unspent, the deposit never built (`fanOut` gated it).
+   */
+  it("seeds from the private balance on an empty pool under a floor: the deposit really goes in", async () => {
+    const t = await wallet();
+    // No pool at all, and mainnet's floor, on preprod's fixtures.
+    t.koios.addedToAccounts.length = 0;
+    const floor = NETWORKS.preprod.lovejoin!.poolFloor;
+    NETWORKS.preprod.lovejoin!.poolFloor = 30;
+    try {
+      const wasm = loadTestWasm();
+      t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+      const alarm = { on: false, start: async () => void (alarm.on = true), stop: async () => void (alarm.on = false) };
+      const sessions = new SessionService({
+        ...t.deps,
+        wasm: {
+          ...wasm,
+          signScriptSpend: (_key: unknown, request: string) => {
+            const { txCbor } = JSON.parse(request) as { txCbor: string };
+            return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+          },
+        } as typeof wasm,
+        collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+        store: t.store,
+        minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+        lovejoin: t.lovejoin,
+        alarm,
+        sleep: async () => undefined,
+      });
+
+      // A mix is refused on this pool; a seed isn't.
+      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("mixes only once it holds 30");
+      const out = await sessions.mixOutBuild("preprod", 1, true);
+      expect(out.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
+      await sessions.mixOutSubmit("preprod", out.txHash);
+
+      // The funding lands: the runner must build the deposit, not skip Lovejoin.
+      t.koios.addedToAccounts.push(atSession(out.txHash, 0, "11500000"), atSession(out.txHash, 1, "5000000"));
+      t.koios.confirmations = 1;
+      await sessions.advance("preprod", 0, true);
+      const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }>; mix?: { skipped?: string } }> }>("sessions.preprod"))!;
+      expect(book.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "deposit", "back"]);
+      expect(book.sessions[0]!.mix?.skipped).toBeUndefined();
+      // And the deposit really pays Lovejoin: an output of 10 ₳ at mix_box.
+      const deposit = t.koios.submitted.at(-2)!;
+      const mixBox = NETWORKS.preprod.lovejoin!.mixBox;
+      expect(Buffer.from(deposit).toString("hex")).toContain(mixBox);
+      // A seed's box waits in the pool: no due time until it's brought back.
+      expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due ?? []).toHaveLength(0);
+    } finally {
+      NETWORKS.preprod.lovejoin!.poolFloor = floor;
+    }
+  });
+
   it("mixes from the private balance through a one-time account that runs itself once funded", async () => {
     const t = await wallet();
     const wasm = loadTestWasm();
@@ -1782,6 +1841,18 @@ describe("mixing from the tile", CHAINS, () => {
       alarm,
       sleep: async () => undefined,
     });
+
+    // A seed from the private balance: no mixes, so it pays for the boxes
+    // alone and draws nothing from the pool. Its funding is a Seedelf spend
+    // like any other, so giveme.my puts the collateral up for it.
+    const asked = t.koios.calls.length;
+    const seeded = await sessions.mixOutBuild("preprod", 1, true);
+    expect(seeded.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
+    // One box of 10 ₳ and the deposit's reserve, and no mix fees at all: a
+    // mix of one box at depth 2 asks 15.3 ₳ for the same box.
+    expect(BigInt(seeded.mix.lovelace)).toBe(11_500_000n);
+    expect(seeded.payments.map((p) => p.lovelace)).toEqual(["11500000", "5000000"]);
+    expect(t.koios.calls.length).toBeGreaterThan(asked);
 
     // One box at depth 2: the box, four mixes and the deposit's change, and 5 ₳ of collateral.
     const out = await sessions.mixOutBuild("preprod", 1);
@@ -2149,6 +2220,57 @@ describe("mixing from the tile", CHAINS, () => {
     expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(1);
     // Sent once.
     await expect(t.lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
+  });
+
+  it("says how many boxes in the pool aren't the wallet's, and the floor, so the page can offer to seed it", async () => {
+    const t = await wallet();
+    // The recorded pool's 20 boxes are other people's; preprod has no floor.
+    const listed = await t.lovejoin.status("preprod");
+    expect(listed).toMatchObject({ available: true, others: 20, floor: 0 });
+    expect(listed.boxes).toHaveLength(0);
+    // Mainnet's floor is what the page compares against: nothing of the pool sits there.
+    const onMainnet = await t.lovejoin.status("mainnet");
+    expect(onMainnet).toMatchObject({ available: true, others: 0, floor: 30 });
+  });
+
+  it("seeds an empty pool: the deposit alone, no mixes, and its boxes wait for Bring one back", async () => {
+    const t = await wallet();
+    const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
+    const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] });
+    // Only 30 ₳ and no 5 ₳ collateral set aside: a seed spends no script, so
+    // it needs none, while a mix still asks for it.
+    t.koios.addedToAccounts.push(at("e6", "30000000"));
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("Set it aside in Settings, Collateral");
+    await expect(t.lovejoin.publicBuild("preprod", 1, true)).resolves.toMatchObject({ seed: true, txs: 1 });
+    t.koios.addedToAccounts.push(at("e5", "5000000"));
+    // Mainnet's floor is 30; preprod's is 0, so the refusal is forced by raising it here.
+    const floor = NETWORKS.preprod.lovejoin!.poolFloor;
+    NETWORKS.preprod.lovejoin!.poolFloor = 30;
+    try {
+      // Nothing in the pool: a mix is refused, and says the pool can be seeded instead.
+      await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(POOL_SEEDABLE);
+      // A seed needs no other boxes at all.
+      const summary = await t.lovejoin.publicBuild("preprod", 1, true);
+      expect(summary).toMatchObject({ seed: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
+      // It makes no mixes, so it isn't held to a mix chain's handful: the
+      // whole pool floor goes in one transaction.
+      await expect(t.lovejoin.publicBuild("preprod", 30)).rejects.toThrow("Mix 1 to 10 boxes at a time.");
+      await expect(t.lovejoin.publicBuild("preprod", 97, true)).rejects.toThrow("Seed 1 to 96 boxes at a time.");
+      const before = t.koios.submitted.length;
+      await t.lovejoin.publicSubmit("preprod", summary.txHash);
+      t.koios.confirmations = 1;
+      await t.lovejoin.pumpPublic("preprod");
+      expect(t.koios.submitted.length - before).toBe(1);
+      // No due time: a seed's boxes stay in the pool until the user brings one back.
+      expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(0);
+
+      // The whole floor in one go: 30 boxes, one transaction, no mixes.
+      t.koios.addedToAccounts.push(at("e7", "400000000"));
+      const whole = await t.lovejoin.publicBuild("preprod", 30, true);
+      expect(whole).toMatchObject({ seed: true, boxes: 30, depth: 0, mixes: 0, txs: 1 });
+    } finally {
+      NETWORKS.preprod.lovejoin!.poolFloor = floor;
+    }
   });
 });
 

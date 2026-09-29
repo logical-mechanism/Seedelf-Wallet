@@ -8,7 +8,6 @@ import { useState, type ReactNode } from "react";
 
 import { formatAda, parseAda, sanitizeAda } from "../format";
 import { AmountField } from "./AmountField";
-import { Callout } from "./Callout";
 
 /**
  * The lovelace to ask for: what's typed, or "0" (only the minimum) when
@@ -106,16 +105,5 @@ export function MinimumNote({
     <p className="note" data-testid="minimum-note">
       {who ? `${who}: ${note}` : note}
     </p>
-  );
-}
-
-/** The nudge towards round amounts: a quiet note, or a warning once the amount isn't round. */
-export function RoundNote({ warn, children }: { warn: boolean; children: ReactNode }) {
-  return warn ? (
-    <Callout tone="warn" testId="round-warning">
-      {children}
-    </Callout>
-  ) : (
-    <p className="note">{children}</p>
   );
 }

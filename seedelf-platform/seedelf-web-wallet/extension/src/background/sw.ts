@@ -4,7 +4,7 @@
 import { enabledNetworks, NETWORKS } from "../networks";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
-import { DAPP_CHANGED, STATE_CHANGED, type Message } from "../shared/rpc";
+import { DAPP_CHANGED, STATE_CHANGED, type BuildStage, type Message } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
 import { CoinControlService } from "./coin-control";
@@ -272,10 +272,10 @@ function dappSession(sender: chrome.runtime.MessageSender | undefined): DappSess
  * A request from one of the wallet's pages. WebAssembly that traps under it
  * outside the wallet's queue locks the wallet, as a trap inside does.
  */
-async function answerUi(message: Message): Promise<unknown> {
+async function answerUi(message: Message, report: (stage: BuildStage) => void): Promise<unknown> {
   const worker = await getContext();
   // On the network the user has chosen as it comes in: a switch needs no restart.
-  const ctx: Context = { ...worker, network: await worker.networkChoice.get() };
+  const ctx: Context = { ...worker, network: await worker.networkChoice.get(), progress: report };
   try {
     return await handle(message, ctx);
   } catch (e) {

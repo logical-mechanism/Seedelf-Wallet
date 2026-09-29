@@ -19,7 +19,7 @@
 
 import type { NetworkName } from "../networks";
 import { MADE_PRIVATE, type HistoryClass } from "../shared/histories";
-import type { MintSource, MintSummary, PendingTx } from "../shared/rpc";
+import type { MintSource, MintSummary, PendingTx, BuildStage } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { rememberMint } from "./minted-by";
 import { settleMaybeSent } from "./pending";
@@ -53,13 +53,24 @@ export type MintDeps = ScriptSpendDeps;
 export class MintService {
   constructor(private readonly deps: MintDeps) {}
 
-  async build(network: NetworkName, label: string, from: MintSource): Promise<MintSummary> {
+  async build(
+    network: NetworkName,
+    label: string,
+    from: MintSource,
+    progress?: (stage: BuildStage) => void,
+  ): Promise<MintSummary> {
+    progress?.("checking");
     await settleMaybeSent(this.deps, network);
-    return from === "account" ? this.buildFromAccount(network, label) : this.buildStealth(network, label);
+    return from === "account" ? this.buildFromAccount(network, label, progress) : this.buildStealth(network, label, progress);
   }
 
-  private async buildFromAccount(network: NetworkName, label: string): Promise<MintSummary> {
+  private async buildFromAccount(
+    network: NetworkName,
+    label: string,
+    progress?: (stage: BuildStage) => void,
+  ): Promise<MintSummary> {
     const { wasm } = this.deps;
+    progress?.("reading");
     const [{ params, utxos, collateral, held, withdrawal }, invalidHereafter] = await Promise.all([
       readAccount(this.deps, network),
       validUntil(this.deps.koios(network)),
@@ -70,6 +81,8 @@ export class MintService {
       throw nothingInAccount(held, "Your public account is empty. Fund it first; the Seedelf is paid from there.");
     }
 
+    // Ogmios measures this draft, so it's a request out, not a local measure.
+    progress?.("measuring");
     const finished = await measure<MintResult>(
       this.deps,
       network,
@@ -81,8 +94,13 @@ export class MintService {
     return this.keep(network, label, "account", finished, MADE_PRIVATE, undefined, request.invalidHereafter);
   }
 
-  private async buildStealth(network: NetworkName, label: string): Promise<MintSummary> {
+  private async buildStealth(
+    network: NetworkName,
+    label: string,
+    progress?: (stage: BuildStage) => void,
+  ): Promise<MintSummary> {
     const { wasm } = this.deps;
+    progress?.("reading");
     const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
     const request = { network, params, label, utxos, classes };
     if (request.utxos.length === 0) {
@@ -94,6 +112,7 @@ export class MintService {
       );
     }
 
+    progress?.("measuring");
     const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r));
     const histories = spentHistories(classes, finished.inputs, finished.classesMixed);
     return this.keep(network, label, "seedelf", finished, changeHistory(classes, finished.inputs), histories);

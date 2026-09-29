@@ -14,6 +14,7 @@ import { useState, type FormEvent } from "react";
 import { LABEL_MAX, labelProblem, tokenNamePrefix } from "../../shared/label";
 import type { Balances, MintSource, MintSummary, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
+import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -113,9 +114,12 @@ export function CreateSeedelf({
       aside={`${formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace)} ₳ in your ${SOURCES[from].toLowerCase()}`}
       error={error}
       foot={
-        <button type="submit" className="primary" disabled={!!problem || busy}>
-          {busy ? "Building…" : "Review"}
-        </button>
+        <>
+          <button type="submit" className="primary" disabled={!!problem || busy}>
+            {busy ? "Building…" : "Review"}
+          </button>
+          <BuildStage busy={busy} />
+        </>
       }
     >
       <p className="note">
