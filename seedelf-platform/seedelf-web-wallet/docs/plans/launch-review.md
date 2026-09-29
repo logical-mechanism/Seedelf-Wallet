@@ -57,22 +57,22 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
   - The advisories for `bytes`, `slab`, `anyhow` and `keccak` are cleared.
 
 **Still open:**
-1. **By hand, on a mainnet build, with small amounts:**
+1. **By hand, on a mainnet build, with small amounts.** The owner ran this on 2026-09-28 and reports the basic functionality working; what the chain shows is marked done, and the rest still stands.
    - **Minswap:**
-     - that `agg-api.minswap.org` answers the extension's origin with CORS (checked only on preprod's aggregator);
-     - that `aggregator_fee` is a lovelace string;
+     - ~~that `agg-api.minswap.org` answers the extension's origin with CORS~~ **done:** a live swap quoted, ordered, filled and paid out from the extension;
+     - ~~that `aggregator_fee` is a lovelace string~~ **done:** the same swap was funded on it and settled;
      - that `exclude_protocols` accepts VyFinance and MuesliSwap;
-     - one swap through each protocol in `MAINNET_PROTOCOLS`, so `checkOrder` is known to pass real orders;
-     - Stop.
-   - **Lovejoin:** seed the pool from identities unrelated to any Seedelf key, then run one box at depth 1.
-   - **Seedelf:** every flow.
+     - one swap through each protocol in `MAINNET_PROTOCOLS`: **one route so far**, so `checkOrder` is known to pass that one's orders and no other's;
+     - Stop: not exercised, the order filled first.
+   - **Lovejoin:** ~~seed the pool from identities unrelated to any Seedelf key, then run one box at depth 1~~ **done, deeper:** the pool was seeded from a second wallet (39 boxes of 10 ₳, over the floor of 30) and a swap's return ran three boxes two waves deep — a deposit, twelve mixes and the return, all confirmed. **The mainnet `mix_box` hash is confirmed against real transactions for the first time**, and a mix measured 0.8225 ₳, matching `networks.ts`'s `mixCost`.
+   - **Seedelf:** a Seedelf funded from the private balance, and a return merged back into it, are done; the owner reports the other flows working, which the chain hasn't been read for here.
 2. **A validity interval on private spends:** they still have no expiry, until a live check shows giveme.my accepts one.
 3. **The store** (`web-wallet/release-prep`):
    - a new listing, or an update of the unlisted preprod item: the owner's call, with the trade-off written out in [store/README.md](../store/README.md);
    - ~~screenshots from mainnet-shaped fixtures~~ **done:** the five show mainnet, with no test-network strip;
    - the *Location* and *Web history* data-usage answers: both recommended checked, reasoning in [store/README.md](../store/README.md);
    - no version bump (1.0.0 is unreleased), then the zip's SHA-256 in the roadmap once the owner packages it.
-4. **Upstream:** Lovejoin's config and SDK swap Seedelf's preprod and mainnet reference UTxOs.
+4. **Upstream:** Lovejoin's config and SDK swap Seedelf's preprod and mainnet reference UTxOs. Its `config/network.mainnet.json` also still has `mix_script_hash: null`, though the hash the wallet uses is now confirmed on chain.
 5. **Smaller items, left for later:**
    - A certificate carries no network, so a site can still ask for a stake-key-only signature over the other network's transaction.
    - #21: the order's minimum and receiver fields aren't decoded, so Minswap is trusted for them.
@@ -84,6 +84,9 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
    - A resend's "not on chain" count isn't kept across pump calls.
    - The CLI-only advisories for `h2` and `spin`.
    - The restore scan (known).
+   - A swap's return records no reason when its spare ADA pays for no box: `chain` returns nothing, and the reason is only kept for a mix (`record?.mix`), so the session screen says nothing and the return looks as though Lovejoin was skipped. Found on the owner's mainnet run, 2026-09-28; the approval does say it, so nothing is hidden before the fact.
+   - A swap's review says "less than a box's worth ... comes back at once" without the amount, so the user can't see what will not be mixed until it lands.
+   - `MIX_FEE_ESTIMATE` is 0.95 ₳ and a mainnet mix measured 0.8225 ₳, so a chain over-reserves about 0.13 ₳ a mix. It only ever leaves a box unbought when the spare lands in that band.
 6. **A privacy-by-default analysis,** at the owner's ask: done. See [privacy-review.md](privacy-review.md) and its *Status*, which lists what's fixed, what the owner declined, and what's still open.
 
 ## Mainnet
