@@ -1117,10 +1117,15 @@ const empty = (s: Schedule) =>
 /** How long a swap's review uses a reading of the pool again (room): reviews in a row ask Koios once. */
 export const POOL_ROOM_MS = 5 * 60_000;
 
-/** A whole number of boxes, one to MAX_MIX_BOXES, or why not. */
-export function checkBoxes(boxes: number): void {
-  if (!Number.isInteger(boxes) || boxes < 1 || boxes > MAX_MIX_BOXES) {
-    throw new Error(`Mix 1 to ${MAX_MIX_BOXES} boxes at a time.`);
+/**
+ * A whole number of boxes, one to `most`, or why not. A mix is capped at
+ * MAX_MIX_BOXES because each box costs a wave of mix transactions and the
+ * chain has to be sent one after another. A seed makes no mixes at all: it's
+ * one deposit, so only the transaction's size caps it (MAX_DEPOSIT_BOXES).
+ */
+export function checkBoxes(boxes: number, most: number = MAX_MIX_BOXES): void {
+  if (!Number.isInteger(boxes) || boxes < 1 || boxes > most) {
+    throw new Error(`${most === MAX_MIX_BOXES ? "Mix" : "Seed"} 1 to ${most} boxes at a time.`);
   }
 }
 
@@ -1660,7 +1665,9 @@ export class LovejoinService {
    */
   async publicBuild(network: NetworkName, boxes: number, seed = false): Promise<LovejoinPublicSummary> {
     if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
-    checkBoxes(boxes);
+    // A seed is one deposit with no mixes, so it takes as many boxes as the
+    // transaction holds, not the handful a mix chain can send.
+    checkBoxes(boxes, seed ? MAX_DEPOSIT_BOXES : MAX_MIX_BOXES);
     await this.publicReady(network);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);

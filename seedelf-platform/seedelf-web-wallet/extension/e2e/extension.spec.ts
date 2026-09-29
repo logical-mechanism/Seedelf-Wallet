@@ -1788,7 +1788,14 @@ test("Lovejoin: a pool under its floor offers to seed it, and says the seed hide
   await expect(offer).toContainText("the wallet mixes only once it holds 30");
   await expect(offer).toContainText("Seeding hides nothing of yours");
   await expect(offer).toContainText("seeding from this wallet won't let this wallet mix");
-  await expect(page.getByTestId("lovejoin-seed")).toBeVisible();
+  // The count is typed, and starts at what the pool still needs: the whole
+  // floor goes in one transaction, not thirty presses of a stepper.
+  await expect(page.getByTestId("lovejoin-seed-boxes")).toHaveValue("30");
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your public account, in one transaction");
+  await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 30 boxes");
+  await page.getByTestId("lovejoin-seed-boxes").fill("12");
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("12 boxes, 120 ₳");
+  await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 12 boxes");
 });
 
 test("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {

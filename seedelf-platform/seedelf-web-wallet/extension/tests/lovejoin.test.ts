@@ -2177,6 +2177,10 @@ describe("mixing from the tile", CHAINS, () => {
       // A seed needs no other boxes at all.
       const summary = await t.lovejoin.publicBuild("preprod", 1, true);
       expect(summary).toMatchObject({ seed: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
+      // It makes no mixes, so it isn't held to a mix chain's handful: the
+      // whole pool floor goes in one transaction.
+      await expect(t.lovejoin.publicBuild("preprod", 30)).rejects.toThrow("Mix 1 to 10 boxes at a time.");
+      await expect(t.lovejoin.publicBuild("preprod", 97, true)).rejects.toThrow("Seed 1 to 96 boxes at a time.");
       const before = t.koios.submitted.length;
       await t.lovejoin.publicSubmit("preprod", summary.txHash);
       t.koios.confirmations = 1;
@@ -2184,6 +2188,11 @@ describe("mixing from the tile", CHAINS, () => {
       expect(t.koios.submitted.length - before).toBe(1);
       // No due time: a seed's boxes stay in the pool until the user brings one back.
       expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due).toHaveLength(0);
+
+      // The whole floor in one go: 30 boxes, one transaction, no mixes.
+      t.koios.addedToAccounts.push(at("e7", "400000000"));
+      const whole = await t.lovejoin.publicBuild("preprod", 30, true);
+      expect(whole).toMatchObject({ seed: true, boxes: 30, depth: 0, mixes: 0, txs: 1 });
     } finally {
       NETWORKS.preprod.lovejoin!.poolFloor = floor;
     }

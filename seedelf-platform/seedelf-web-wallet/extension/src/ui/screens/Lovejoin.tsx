@@ -65,6 +65,12 @@ import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
 const MAX_BOXES = 10;
+/**
+ * The most boxes one seed puts in (the worker's MAX_DEPOSIT_BOXES): a seed is
+ * a single deposit with no mixes, so the transaction's size is the only limit,
+ * not the handful of boxes a chain of mixes can send.
+ */
+const MAX_SEED_BOXES = 96;
 /** A running mix's page asks the worker to move it on this often. */
 const ADVANCE_EVERY_MS = 20_000;
 
@@ -302,6 +308,8 @@ export function Lovejoin({
   const [error, setError] = useState<string>();
   const [source, setSource] = useState<Source>("private");
   const [boxes, setBoxes] = useState(1);
+  /** How many a seed puts in, its own count: typed, so 30 isn't 30 presses. */
+  const [seedBoxes, setSeedBoxes] = useState<number>();
   const [funding, setFunding] = useState<LovejoinFunding>();
   const [review, setReview] = useState<Review>();
 
@@ -456,7 +464,7 @@ export function Lovejoin({
    */
   const seed = () =>
     act(async () => {
-      setReview({ source: "public", summary: await call("lovejoin-mix-public-build", { boxes, seed: true }) });
+      setReview({ source: "public", summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) });
     });
 
   const send = () =>
@@ -514,6 +522,10 @@ export function Lovejoin({
   const chains = (status?.chains ?? []).filter((c) => !(sending && c.session === undefined));
   // The pool can't be mixed in yet: seeding is the only thing that starts one.
   const short = !!status?.available && status.others < status.floor;
+  // What it still needs, which is what a seed defaults to: one transaction's
+  // worth at most, and the user can type any of it.
+  const needed = short ? Math.min(status!.floor - status!.others, MAX_SEED_BOXES) : 0;
+  const seeding = Math.min(Math.max(seedBoxes ?? needed, 1), MAX_SEED_BOXES);
   return (
     <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
       {banner}
@@ -543,8 +555,29 @@ export function Lovejoin({
             wait set, until you bring one back. Your own boxes never count towards the floor, so seeding from this wallet
             won't let this wallet mix.
           </Callout>
+          <div className="field">
+            <label htmlFor="lovejoin-seed-boxes">Boxes of 10 ₳ to put in</label>
+            <input
+              id="lovejoin-seed-boxes"
+              type="number"
+              min={1}
+              max={MAX_SEED_BOXES}
+              step={1}
+              inputMode="numeric"
+              value={seedBoxes ?? needed}
+              disabled={busy}
+              onChange={(e) => setSeedBoxes(e.target.value === "" ? undefined : Math.floor(Number(e.target.value)))}
+              data-testid="lovejoin-seed-boxes"
+            />
+            <p className="note" data-testid="lovejoin-seed-cost">
+              {plural(seeding, "box", "boxes")}, {formatAda((BigInt(seeding) * 10_000_000n).toString())} ₳ from your public
+              account, in one transaction. It comes back when you bring the boxes back. The pool needs{" "}
+              {plural(needed, "more box", "more boxes")} before this wallet's own mixes run, and they have to come from
+              somewhere else. At most {MAX_SEED_BOXES} fit in one.
+            </p>
+          </div>
           <button type="button" className="secondary" disabled={busy} onClick={() => void seed()} data-testid="lovejoin-seed">
-            Seed the pool with {plural(boxes, "box", "boxes")}
+            Seed the pool with {plural(seeding, "box", "boxes")}
           </button>
         </div>
       )}
