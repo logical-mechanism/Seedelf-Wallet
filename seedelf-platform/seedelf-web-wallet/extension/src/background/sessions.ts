@@ -2602,6 +2602,9 @@ export class SessionService {
       leaves: leaves ?? [],
       boxes: summary.lovejoin?.boxes ?? 0,
       again: !!summary.lovejoin?.again,
+      // A seed (depth 0) makes no mixes: its boxes stay in the pool for other
+      // people, with no due time, until the user brings one back.
+      ...(summary.lovejoin?.depth === 0 ? { seed: true } : {}),
       // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
       ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
     };

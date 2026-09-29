@@ -1451,7 +1451,10 @@ export class LovejoinService {
   ): Promise<LovejoinChain> {
     const { owner, index, rows, collateral, params, merge, depth, again, own, publicToo } = c;
     let { count } = c;
-    const short = this.floorShort(network, split.others.length);
+    // A seed (depth 0) makes no mixes, so it draws nothing from the pool and
+    // the floor doesn't apply: this is where a chain is really built, and
+    // gating it here is what made a seed fund a session and return it unspent.
+    const short = depth === 0 ? undefined : this.floorShort(network, split.others.length);
     if (short) throw new LovejoinSkipped(short);
     // Mixing again from the private balance never takes a box a mix from the public account put in, unless asked
     // (againBoxes), nor one whose making no record accounts for and Koios hasn't said: each it may take is asked of

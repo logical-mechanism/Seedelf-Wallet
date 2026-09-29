@@ -1761,6 +1761,64 @@ describe("mixing from the tile", CHAINS, () => {
     return t;
   }
 
+  /**
+   * The case the owner hit on mainnet: an empty pool under a floor. A seed has
+   * to go through anyway, since a mix is what fills the pool and a mix can't
+   * run on an empty one. Preprod's floor is 0, so only a floor set here proves
+   * it: without one this passed while mainnet funded a session and returned it
+   * unspent, the deposit never built (`fanOut` gated it).
+   */
+  it("seeds from the private balance on an empty pool under a floor: the deposit really goes in", async () => {
+    const t = await wallet();
+    // No pool at all, and mainnet's floor, on preprod's fixtures.
+    t.koios.addedToAccounts.length = 0;
+    const floor = NETWORKS.preprod.lovejoin!.poolFloor;
+    NETWORKS.preprod.lovejoin!.poolFloor = 30;
+    try {
+      const wasm = loadTestWasm();
+      t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+      const alarm = { on: false, start: async () => void (alarm.on = true), stop: async () => void (alarm.on = false) };
+      const sessions = new SessionService({
+        ...t.deps,
+        wasm: {
+          ...wasm,
+          signScriptSpend: (_key: unknown, request: string) => {
+            const { txCbor } = JSON.parse(request) as { txCbor: string };
+            return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+          },
+        } as typeof wasm,
+        collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+        store: t.store,
+        minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+        lovejoin: t.lovejoin,
+        alarm,
+        sleep: async () => undefined,
+      });
+
+      // A mix is refused on this pool; a seed isn't.
+      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("mixes only once it holds 30");
+      const out = await sessions.mixOutBuild("preprod", 1, true);
+      expect(out.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
+      await sessions.mixOutSubmit("preprod", out.txHash);
+
+      // The funding lands: the runner must build the deposit, not skip Lovejoin.
+      t.koios.addedToAccounts.push(atSession(out.txHash, 0, "11500000"), atSession(out.txHash, 1, "5000000"));
+      t.koios.confirmations = 1;
+      await sessions.advance("preprod", 0, true);
+      const book = (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }>; mix?: { skipped?: string } }> }>("sessions.preprod"))!;
+      expect(book.sessions[0]!.txs.map((x) => x.kind)).toEqual(["out", "deposit", "back"]);
+      expect(book.sessions[0]!.mix?.skipped).toBeUndefined();
+      // And the deposit really pays Lovejoin: an output of 10 ₳ at mix_box.
+      const deposit = t.koios.submitted.at(-2)!;
+      const mixBox = NETWORKS.preprod.lovejoin!.mixBox;
+      expect(Buffer.from(deposit).toString("hex")).toContain(mixBox);
+      // A seed's box waits in the pool: no due time until it's brought back.
+      expect((await t.store.get<{ due: number[] }>("lovejoin.preprod"))!.due ?? []).toHaveLength(0);
+    } finally {
+      NETWORKS.preprod.lovejoin!.poolFloor = floor;
+    }
+  });
+
   it("mixes from the private balance through a one-time account that runs itself once funded", async () => {
     const t = await wallet();
     const wasm = loadTestWasm();
