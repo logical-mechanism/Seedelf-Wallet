@@ -17,6 +17,7 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 
 ## Before you upload
 
+0. **Turn on 2-Step Verification for the developer account.** The Web Store refuses every upload without it, and says only "There was a problem uploading your file", which reads as a problem with the zip.
 1. **Run the release checklist** in [development.md](../development.md#releasing-to-the-web-store). It ends with `npm run package`, which writes `extension/release/seedelf-wallet-<version>-mainnet.zip`, and refuses a build without mainnet's hosts.
 2. **Make sure the privacy policy's URL resolves.** It points at `main`, so `seedelf-web-wallet` must be merged into `main` before the listing is submitted — open the URL and check it renders. The wallet's own Settings link points at `main` too, and is built into the package, so the merge comes before `npm run package`, not after.
 
@@ -123,6 +124,14 @@ Seedelf Wallet is a Cardano wallet with the Seedelf stealth wallet contract buil
 | Host `https://www.giveme.my/*` | `giveme.my, a collateral service run by the developer (Logical Mechanism), adds shared collateral to Seedelf script transactions, on mainnet (/mainnet/collateral/) and on preprod (/preprod/collateral/). The wallet sends it each such transaction to witness, so that the user's own address never appears as collateral. It sees the transaction and the user's IP address, as the privacy policy says.` |
 | Host `https://api.coingecko.com/*` | `CoinGecko's public API gives ADA's price in the currency the user chooses in Settings, on mainnet only: one request for ADA alone, when Home or the swap form opens, at most every five minutes. Choosing no currency stops it. It's never told what the wallet holds.` |
 
+**The dashboard has one host-permission box, not one per host** (submitting v1.0.0, 2026-09-28). The rows above come to 1,694 characters together, over its ~1,000 limit, so they go in merged. What was submitted, at 988 characters:
+
+```text
+api.koios.rest is the public Cardano API the wallet reads mainnet through (balances, UTxOs, staking, pools, DReps, Lovejoin's pool); it also evaluates scripts and submits the transactions the user approves. Koios's public tier sends no CORS headers, so a host permission is the only way to reach it. preprod.koios.rest is the same API for the preprod test network, which the user can switch to in Settings. www.giveme.my is a collateral service run by the developer; it adds shared collateral to Seedelf script transactions so the user's own address never appears as collateral, and sees each one and the user's IP, as the privacy policy says. api.coingecko.com is asked only for ADA's price in the currency chosen in Settings, and is told nothing about the wallet. The optional hosts (https://*/*, localhost, 127.0.0.1) are requested only if the user turns on "Let sites connect to Seedelf Wallet" in Settings, to add the standard CIP-30 entry to https pages; page content is never read.
+```
+
+The per-host rows above stay: they're the fuller answer if a reviewer asks about one. `https://*/*` is the one they question; the answer is that it's `optional_host_permissions`, never granted at install, asked for only when the user turns site connections on, and dropped when they turn them off.
+
 **Minswap's aggregators need no host permission.** They answer extension pages with CORS headers, so only the pages' CSP (`connect-src`) names them: `agg-api.minswap.org` for mainnet and `aggr.monorepo-testnet-preprod.minswap.org` for preprod. The wallet reaches them only when the user swaps. If a reviewer asks, the same words go in the description of data use below.
 
 **Remote code:** No, I am not using remote code.
@@ -151,7 +160,7 @@ Then certify all three statements: no selling or transferring data outside the a
 https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md
 ```
 
-When `seedelf-web-wallet` merges into `main`, change `seedelf-web-wallet` in this URL to `main` in the dashboard.
+It points at `main`, and was checked to render there (200) before the listing was submitted. The wallet's own Settings link is the same URL, so the two never drift. Use the rendered `blob` link, not `raw.githubusercontent.com`: the dashboard wants a page a person can read, and raw serves `text/plain` markdown source.
 
 ## Distribution
 
