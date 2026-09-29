@@ -1784,6 +1784,18 @@ describe("mixing from the tile", CHAINS, () => {
       sleep: async () => undefined,
     });
 
+    // A seed from the private balance: no mixes, so it pays for the boxes
+    // alone and draws nothing from the pool. Its funding is a Seedelf spend
+    // like any other, so giveme.my puts the collateral up for it.
+    const asked = t.koios.calls.length;
+    const seeded = await sessions.mixOutBuild("preprod", 1, true);
+    expect(seeded.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
+    // One box of 10 ₳ and the deposit's reserve, and no mix fees at all: a
+    // mix of one box at depth 2 asks 15.3 ₳ for the same box.
+    expect(BigInt(seeded.mix.lovelace)).toBe(11_500_000n);
+    expect(seeded.payments.map((p) => p.lovelace)).toEqual(["11500000", "5000000"]);
+    expect(t.koios.calls.length).toBeGreaterThan(asked);
+
     // One box at depth 2: the box, four mixes and the deposit's change, and 5 ₳ of collateral.
     const out = await sessions.mixOutBuild("preprod", 1);
     expect(out.mix).toMatchObject({ boxes: 1, depth: 2, mixes: 4, lovelace: "15300000" });
@@ -2167,7 +2179,12 @@ describe("mixing from the tile", CHAINS, () => {
     const t = await wallet();
     const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
     const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] });
-    t.koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "30000000"));
+    // Only 30 ₳ and no 5 ₳ collateral set aside: a seed spends no script, so
+    // it needs none, while a mix still asks for it.
+    t.koios.addedToAccounts.push(at("e6", "30000000"));
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("Set it aside in Settings, Collateral");
+    await expect(t.lovejoin.publicBuild("preprod", 1, true)).resolves.toMatchObject({ seed: true, txs: 1 });
+    t.koios.addedToAccounts.push(at("e5", "5000000"));
     // Mainnet's floor is 30; preprod's is 0, so the refusal is forced by raising it here.
     const floor = NETWORKS.preprod.lovejoin!.poolFloor;
     NETWORKS.preprod.lovejoin!.poolFloor = 30;

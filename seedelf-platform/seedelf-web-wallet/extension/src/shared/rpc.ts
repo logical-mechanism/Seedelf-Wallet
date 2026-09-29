@@ -1027,6 +1027,8 @@ export interface LeftOutUtxo {
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
 export interface LovejoinFunding {
   boxes: number;
+  /** A seed: the deposit alone, no mixes, so it draws nothing from the pool. */
+  seed?: boolean;
   /** The wallet's boxes in the pool, mixed again: no deposit, and no box to pay for. */
   again?: boolean;
   /** Mixing again: how many boxes the wallet has in the pool (`boxes` is how many go this time). */
@@ -1350,7 +1352,8 @@ export interface Requests {
   /** What mixing `boxes` boxes at the set depth takes. */
   "lovejoin-funding": { payload: { boxes: number }; result: LovejoinFunding };
   /** Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself once sent. */
-  "lovejoin-mix-private-build": { payload: { boxes: number }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  /** `seed`: boxes in with no mixes, which an empty pool takes (see the public build). */
+  "lovejoin-mix-private-build": { payload: { boxes: number; seed?: boolean }; result: SessionOutSummary & { mix: LovejoinFunding } };
   /**
    * Builds the funding of a new one-time account that mixes every box of the
    * wallet's in the pool again (as many as the pool has others for), with no

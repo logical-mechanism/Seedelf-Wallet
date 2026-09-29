@@ -97,7 +97,7 @@ fn coin(seed: u8, lovelace: u64) -> Coin {
 fn funding(coins: &[Coin]) -> lovejoin::Funding {
     lovejoin::Funding {
         coins: coins.to_vec(),
-        collateral: coin(0x22, 5_000_000),
+        collateral: Some(coin(0x22, 5_000_000)),
         address: key_address(0x33),
         deposit_signers: 1,
         mix_signers: 1,
@@ -107,7 +107,7 @@ fn funding(coins: &[Coin]) -> lovejoin::Funding {
 fn payer(fee: u64) -> Payer {
     Payer {
         fee: coin(0x11, fee),
-        collateral: coin(0x22, 5_000_000),
+        collateral: Some(coin(0x22, 5_000_000)),
         address: key_address(0x33),
         signers: 1,
     }
@@ -259,7 +259,7 @@ fn a_mix_never_pays_a_fee_over_the_limit() {
     // A public account's collateral can cover far more than a mix's fee.
     let rich = Payer {
         fee: coin(0x11, 30_000_000),
-        collateral: coin(0x22, 50_000_000),
+        collateral: Some(coin(0x22, 50_000_000)),
         address: key_address(0x33),
         signers: 2,
     };
@@ -321,7 +321,7 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
     boxes.push(deposit.boxes[0].clone());
     let payer = Payer {
         fee: deposit.change.clone(),
-        collateral: coin(0x22, 5_000_000),
+        collateral: Some(coin(0x22, 5_000_000)),
         address: key_address(0x33),
         signers: 1,
     };
@@ -524,6 +524,47 @@ fn a_chain_fans_each_box_out_and_keeps_track_of_ours() {
     assert_eq!(chain.txs.len(), 3);
     assert_eq!(chain.leaves.len(), 2);
     assert!(chain.leaves.iter().all(|b| b.is_owned(&sk)));
+}
+
+#[test]
+fn a_seed_is_the_deposit_alone_and_needs_no_pool_and_no_collateral() {
+    let protocol = Protocol::of(true).unwrap();
+    let params = params();
+    let sk = Scalar::from(9u64);
+    let base = Register::create(sk).unwrap();
+    let owners: Vec<_> = (0..3)
+        .map(|_| base.clone().rerandomize().unwrap())
+        .collect();
+    // Depth 0: no mixes, so it draws nothing from the pool and spends no
+    // script. An empty pool and no collateral are both fine.
+    let funding = lovejoin::Funding {
+        coins: vec![coin(0x44, 40_000_000)],
+        collateral: None,
+        address: key_address(0x55),
+        deposit_signers: 1,
+        mix_signers: 1,
+    };
+    let seed = lovejoin::chain(&params, &protocol, &funding, &owners, 0, &[]).unwrap();
+    assert_eq!(seed.txs.len(), 1, "the deposit alone");
+    assert_eq!(seed.txs[0].kind, "deposit");
+    assert_eq!(seed.leaves.len(), 3);
+    assert!(seed.leaves.iter().all(|b| b.is_owned(&sk)));
+    assert_eq!(
+        seed.change.lovelace,
+        40_000_000 - 30_000_000 - seed.txs[0].fee
+    );
+
+    // Anything that mixes still needs collateral, and says so.
+    let err = lovejoin::chain(
+        &params,
+        &protocol,
+        &funding,
+        &owners,
+        1,
+        &all_pool_boxes(&protocol),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("needs collateral"), "{err}");
 }
 
 #[test]

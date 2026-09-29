@@ -172,6 +172,31 @@ describe("Koios client", () => {
     await expect(granted.credentialUtxos(["x"])).rejects.toThrow("Couldn't reach Koios");
   });
 
+  it("says a slow Koios was slow, not that the connection is broken", async () => {
+    const timeout = () => {
+      throw new DOMException("signal timed out", "TimeoutError");
+    };
+    const koios = new Koios(BASE, timeout as unknown as FetchLike, async () => undefined, async () => true);
+    await expect(koios.credentialUtxos(["94bc"])).rejects.toThrow("didn't answer in time");
+    await expect(koios.credentialUtxos(["94bc"])).rejects.not.toThrow("ad blocker");
+    // A connection that really is broken still says so.
+    const offline = new Koios(BASE, (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as FetchLike, async () => undefined, async () => true);
+    await expect(offline.credentialUtxos(["94bc"])).rejects.toThrow("Check your internet connection");
+  });
+
+  it("gives a timed-out read one retry, not two: three waits of TIMEOUT_MS is minutes of a spinner", async () => {
+    let tries = 0;
+    const timeout = () => {
+      tries++;
+      throw new DOMException("signal timed out", "TimeoutError");
+    };
+    const koios = new Koios(BASE, timeout as unknown as FetchLike, async () => undefined, async () => true);
+    await expect(koios.credentialUtxos(["94bc"])).rejects.toThrow("didn't answer in time");
+    expect(tries).toBe(2);
+  });
+
   it("retries rate limits, server errors and network failures, then succeeds", async () => {
     const { koios, delays } = scripted([new Response("", { status: 429 }), new TypeError("Failed to fetch"), Response.json(rows(1))]);
     expect(await koios.credentialUtxos(["94bc"])).toHaveLength(1);

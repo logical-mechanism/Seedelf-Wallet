@@ -297,7 +297,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-funding":
       return ctx.lovejoin.funding(ctx.network, message.boxes);
     case "lovejoin-mix-private-build":
-      return ctx.sessions.mixOutBuild(ctx.network, message.boxes);
+      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, message.seed ?? false);
     case "lovejoin-again-build":
       return ctx.sessions.againBuild(ctx.network, message.anyway ?? false);
     case "lovejoin-again-public-build":

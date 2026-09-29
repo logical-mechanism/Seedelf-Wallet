@@ -88,6 +88,8 @@ import {
   chainOwner,
   chainRetryMs,
   checkBoxes,
+  MAX_DEPOSIT_BOXES,
+  MAX_MIX_BOXES,
   LovejoinSkipped,
   mayBeIn,
   mixesPerBox,
@@ -290,7 +292,7 @@ interface SessionRecord {
    * `publicToo`, those a mix from the public account put in too (the user
    * asked). `skipped`: why Lovejoin was left out, when it was.
    */
-  mix?: { boxes: number; again?: boolean; publicToo?: boolean; skipped?: string };
+  mix?: { boxes: number; again?: boolean; publicToo?: boolean; seed?: boolean; skipped?: string };
   /**
    * The latest return through Lovejoin: how many transactions its chain has,
    * the return last (`last`), and when it began to be sent (`at`), recorded
@@ -990,12 +992,19 @@ export class SessionService {
    * chain take, and the account's own collateral. Checked against the pool
    * first, so a mix that's sent can go through.
    */
-  async mixOutBuild(network: NetworkName, boxes: number): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+  async mixOutBuild(
+    network: NetworkName,
+    boxes: number,
+    seed = false,
+  ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
-    checkBoxes(boxes);
-    await lovejoin.fits(network, boxes);
-    return this.mixFunding(network, await lovejoin.funding(network, boxes));
+    // A seed makes no mixes, so it draws nothing from the pool: the floor
+    // doesn't apply, and it takes as many boxes as one deposit holds. Its
+    // funding is still a Seedelf spend, with giveme.my's collateral as any is.
+    checkBoxes(boxes, seed ? MAX_DEPOSIT_BOXES : MAX_MIX_BOXES);
+    if (!seed) await lovejoin.fits(network, boxes);
+    return this.mixFunding(network, await lovejoin.funding(network, boxes, false, seed ? 0 : undefined));
   }
 
   /**
@@ -1057,7 +1066,12 @@ export class SessionService {
         ownStake: true,
         createdAt: now(),
         txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
-        mix: { boxes: built.mix.boxes, ...(built.mix.again ? { again: true } : {}), ...(built.mix.publicToo ? { publicToo: true } : {}) },
+        mix: {
+          boxes: built.mix.boxes,
+          ...(built.mix.again ? { again: true } : {}),
+          ...(built.mix.publicToo ? { publicToo: true } : {}),
+          ...(built.mix.seed ? { seed: true } : {}),
+        },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
       await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
@@ -2312,8 +2326,9 @@ export class SessionService {
             record?.mix?.again,
             own,
             record?.mix?.publicToo,
-            // A swap's, as deep as it was approved (independent review L21).
-            record?.auto?.lovejoin?.depth,
+            // A swap's, as deep as it was approved (independent review L21);
+            // a seed's is 0, so its chain is the deposit alone.
+            record?.mix?.seed ? 0 : record?.auto?.lovejoin?.depth,
           );
         } catch (e) {
           skipped = leftOut(e);

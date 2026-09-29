@@ -76,7 +76,7 @@ fn coin(seed: u8, lovelace: u64) -> Coin {
 fn payer(fee: u64) -> Payer {
     Payer {
         fee: coin(0x11, fee),
-        collateral: coin(0x22, 5_000_000),
+        collateral: Some(coin(0x22, 5_000_000)),
         address: key_address(0x33),
         signers: 1,
     }
@@ -85,7 +85,7 @@ fn payer(fee: u64) -> Payer {
 fn funding(coins: &[Coin]) -> lovejoin::Funding {
     lovejoin::Funding {
         coins: coins.to_vec(),
-        collateral: coin(0x22, 5_000_000),
+        collateral: Some(coin(0x22, 5_000_000)),
         address: key_address(0x33),
         deposit_signers: 1,
         mix_signers: 1,

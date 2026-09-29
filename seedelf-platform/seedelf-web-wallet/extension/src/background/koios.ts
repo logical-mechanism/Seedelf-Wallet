@@ -210,7 +210,21 @@ const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,li
 /** CIP-119's name only: a DRep's image would be fetched from anywhere its author chose. */
 const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
 const RETRY_DELAYS_MS = [1000, 3000];
-const TIMEOUT_MS = 20_000;
+
+/**
+ * How long a read waits for Koios. Mainnet's chain is far bigger than
+ * preprod's, where this was first tuned at 20 s: one `credential_utxos` over
+ * an account with real history can take tens of seconds on the public tier,
+ * and the wallet was calling that offline (found on mainnet, 2026-09-28).
+ */
+const TIMEOUT_MS = 45_000;
+
+/**
+ * A submit's own wait. Shorter than a read's: past it the wallet has to treat
+ * the transaction as maybe sent, which holds later payments back, so waiting
+ * longer for a real answer is worth more than failing fast.
+ */
+const SUBMIT_TIMEOUT_MS = 30_000;
 
 /**
  * Payment credentials in one `credential_utxos` request. Koios's public tier
@@ -386,9 +400,20 @@ const chromeAllows: HostCheck = async (url) => {
 export const KOIOS_NOT_ALLOWED =
   "Chrome isn't letting Seedelf Wallet reach Koios, where it reads Cardano. Press Ask Chrome again, at the top of the wallet, and allow it.";
 
-/** A request that never got an answer: offline, or blocked on the way. */
+/**
+ * A request that never got an answer. A timeout is Koios being slow, not the
+ * connection being broken, so it says so: sending the user to look at their
+ * ad blocker for a slow mainnet read wastes their time (found on mainnet,
+ * 2026-09-28).
+ */
 function unreachable(e: unknown): string {
   const cause = e instanceof Error ? e.message : String(e);
+  if (e instanceof DOMException && e.name === "TimeoutError") {
+    return (
+      "Koios, the service the wallet reads Cardano from, didn't answer in time. " +
+      "It reads more on mainnet than on preprod, and its public tier is shared, so it can be slow. Press Refresh to try again."
+    );
+  }
   return (
     `Couldn't reach Koios, the service the wallet reads Cardano from (${cause}). ` +
     "Check your internet connection, and any VPN or ad blocker that might block koios.rest."
@@ -627,7 +652,7 @@ export class Koios {
           method: "POST",
           headers: { "content-type": "application/cbor" },
           body: txCbor,
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
         });
       } catch (e) {
         if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED);
@@ -764,6 +789,7 @@ export class Koios {
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined;
       let failure: string;
+      let slow = false;
       await this.limit?.take();
       try {
         response = await this.fetchFn(url, {
@@ -780,6 +806,7 @@ export class Koios {
         failure = koiosTrouble(response.status, path);
       } catch (e) {
         if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED);
+        slow = e instanceof DOMException && e.name === "TimeoutError";
         failure = unreachable(e);
       }
       // A 429 is the tier's limit, not this request's bad luck: hold every
@@ -790,7 +817,10 @@ export class Koios {
         cooling = true;
       }
       const retryable = !response || response.status === 429 || response.status >= 500;
-      const delay = RETRY_DELAYS_MS[attempt];
+      // A read that ran out of time already waited TIMEOUT_MS: two more of
+      // those is over two minutes of a spinner, so it gets one retry, not two.
+      const delays = slow ? RETRY_DELAYS_MS.slice(0, 1) : RETRY_DELAYS_MS;
+      const delay = delays[attempt];
       if (!retryable || delay === undefined) throw new KoiosError(failure);
       // `take` waits the cooldown out at the top of the next attempt; sleeping
       // here too would only add to it. Without a limiter, the fixed delay stands.

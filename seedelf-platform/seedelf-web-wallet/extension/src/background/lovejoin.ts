@@ -1260,7 +1260,7 @@ export class LovejoinService {
     rows: KoiosUtxo[],
     collateral: KoiosUtxo,
     again = false,
-    fixed?: LovejoinDepth,
+    fixed?: LovejoinDepth | 0,
   ): Promise<LovejoinPlan> {
     const depth = fixed ?? (await this.settings()).depth;
     const request = { network, index, utxos: rows, collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index }, depth, again };
@@ -1381,7 +1381,7 @@ export class LovejoinService {
    * What mixing `boxes` boxes at the set depth takes, before anything is built (`again`: the mixes alone), or
    * at `fixed`, the depth a swap was approved with (independent review L21).
    */
-  async funding(network: NetworkName, boxes: number, again = false, fixed?: LovejoinDepth): Promise<LovejoinFunding> {
+  async funding(network: NetworkName, boxes: number, again = false, fixed?: LovejoinDepth | 0): Promise<LovejoinFunding> {
     const set = await this.settings();
     const { delay } = set;
     const depth = fixed ?? set.depth;
@@ -1389,7 +1389,7 @@ export class LovejoinService {
       LovejoinFunding,
       "depth" | "delay" | "boxes" | "again"
     >;
-    return { ...found, boxes, depth, delay, ...(again ? { again } : {}) };
+    return { ...found, boxes, depth, delay, ...(again ? { again } : {}), ...(depth === 0 ? { seed: true } : {}) };
   }
 
   /**
@@ -1415,7 +1415,7 @@ export class LovejoinService {
     again = false,
     own: string[] = [],
     publicToo = false,
-    fixed?: LovejoinDepth,
+    fixed?: LovejoinDepth | 0,
   ): Promise<LovejoinChain | undefined> {
     if (!this.available(network) || !collateral) return undefined;
     const plan = await this.plan(network, index, rows, collateral, again, fixed);
@@ -1673,10 +1673,14 @@ export class LovejoinService {
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
-    if (!collateral) {
+    // Only a mix puts collateral up: it spends the pool's scripts. A seed is
+    // the deposit alone, which spends no script, so it asks for none.
+    if (!collateral && !seed) {
       throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
     }
-    if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to mix.");
+    if (!utxos.length) {
+      throw nothingInAccount(held, seed ? "Your public account is empty, so there's nothing to put in." : "Your public account is empty, so there's nothing to mix.");
+    }
     const { depth: chosen, delay } = await this.settings();
     // A seed makes no mixes, so it draws nothing from the pool and the floor
     // doesn't apply: that's the point of it.
@@ -1684,7 +1688,7 @@ export class LovejoinService {
     const chain = await this.unstale(async (avoid) => {
       const split = await this.split(network, chainOwner(), avoid);
       if (!seed) this.floor(network, split.others.length, true);
-      const request = { network, params, utxos, collateral, pool: this.real(split), depth, boxes };
+      const request = { network, params, utxos, collateral: collateral ?? null, pool: this.real(split), depth, boxes };
       const built = await wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
       );

@@ -1791,8 +1791,14 @@ test("Lovejoin: a pool under its floor offers to seed it, and says the seed hide
   // The count is typed, and starts at what the pool still needs: the whole
   // floor goes in one transaction, not thirty presses of a stepper.
   await expect(page.getByTestId("lovejoin-seed-boxes")).toHaveValue("30");
-  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your public account, in one transaction");
   await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 30 boxes");
+  // It seeds from whichever side is chosen, as a mix does, and says which pays.
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your private balance");
+  await expect(offer).toContainText("It's paid from your private balance, through a one-time account");
+  await page.getByRole("tab", { name: "Public account" }).click();
+  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your public account");
+  await expect(offer).toContainText("It's paid from your public account, in one transaction that spends no script");
+  // The count is typed, so the whole floor isn't thirty presses of a stepper.
   await page.getByTestId("lovejoin-seed-boxes").fill("12");
   await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("12 boxes, 120 ₳");
   await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 12 boxes");

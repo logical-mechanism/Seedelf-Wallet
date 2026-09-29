@@ -462,9 +462,20 @@ export function Lovejoin({
    * count towards the floor, so an empty pool can only be started by someone
    * depositing into it for nothing.
    */
+  /**
+   * Seeds from whichever side is chosen, as a mix does. From the public
+   * account it's one deposit, which spends no script and so needs no
+   * collateral; from the private balance it's a one-time account funded by a
+   * Seedelf spend, which puts up giveme.my's collateral as every Seedelf
+   * spend does, and deposits from there.
+   */
   const seed = () =>
     act(async () => {
-      setReview({ source: "public", summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) });
+      setReview(
+        source === "private"
+          ? { source, summary: await call("lovejoin-mix-private-build", { boxes: seeding, seed: true }) }
+          : { source, summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) },
+      );
     });
 
   const send = () =>
@@ -550,10 +561,13 @@ export function Lovejoin({
             what puts boxes in — so the pool has to be started by someone putting boxes in for nothing.
           </Callout>
           <Callout tone="privacy">
-            Seeding hides nothing of yours: your public account pays, the boxes come back to it unmixed, and anyone
-            reading the chain can follow both. It gives other people boxes to mix with. Yours stay in the pool, with no
-            wait set, until you bring one back. Your own boxes never count towards the floor, so seeding from this wallet
-            won't let this wallet mix.
+            Seeding hides nothing of yours: the boxes go in and come back unmixed, and anyone reading the chain can
+            follow both. It gives other people boxes to mix with. Yours stay in the pool, with no wait set, until you
+            bring one back. Your own boxes never count towards the floor, so seeding from this wallet won't let this
+            wallet mix.{" "}
+            {source === "private"
+              ? "It's paid from your private balance, through a one-time account: that spends private UTxOs and links them to the boxes, for nothing you gain. The public account is the cheaper side to seed from."
+              : "It's paid from your public account, in one transaction that spends no script."}
           </Callout>
           <div className="field">
             <label htmlFor="lovejoin-seed-boxes">Boxes of 10 ₳ to put in</label>
@@ -570,8 +584,9 @@ export function Lovejoin({
               data-testid="lovejoin-seed-boxes"
             />
             <p className="note" data-testid="lovejoin-seed-cost">
-              {plural(seeding, "box", "boxes")}, {formatAda((BigInt(seeding) * 10_000_000n).toString())} ₳ from your public
-              account, in one transaction. It comes back when you bring the boxes back. The pool needs{" "}
+              {plural(seeding, "box", "boxes")}, {formatAda((BigInt(seeding) * 10_000_000n).toString())} ₳ from your{" "}
+              {source === "private" ? "private balance" : "public account"}. It comes back when you bring the boxes back.
+              The pool needs{" "}
               {plural(needed, "more box", "more boxes")} before this wallet's own mixes run, and they have to come from
               somewhere else. At most {MAX_SEED_BOXES} fit in one.
             </p>

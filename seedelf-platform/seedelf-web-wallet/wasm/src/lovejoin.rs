@@ -304,7 +304,7 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
         }
         let payer = lovejoin::Payer {
             fee,
-            collateral,
+            collateral: Some(collateral),
             address,
             signers: 1,
         };
@@ -330,7 +330,7 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
             .collect::<Result<Vec<_>>>()?;
         let funding = lovejoin::Funding {
             coins: held.coins.iter().map(|(c, _)| c.clone()).collect(),
-            collateral,
+            collateral: Some(collateral),
             address,
             deposit_signers: 1,
             mix_signers: 1,
@@ -514,8 +514,9 @@ pub struct AccountChainRequest {
     pub params: serde_json::Value,
     /// The public account's spendable UTxOs, each with its key's path.
     pub utxos: Vec<api::PathedUtxo>,
-    /// Its collateral, with its path: every mix puts it up.
-    pub collateral: api::PathedUtxo,
+    /// Its collateral, with its path: every mix puts it up. A seed (depth 0)
+    /// makes no mixes, so it spends no script and needs none.
+    pub collateral: Option<api::PathedUtxo>,
     /// The boxes at `mix_box`, less any a sent transaction of ours spends.
     pub pool: Vec<UtxoResponse>,
     pub depth: u32,
@@ -538,14 +539,20 @@ pub fn chain_from_account(
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = Protocol::of(network_flag)?;
     check_deposit(request.boxes, request.depth)?;
+    // Only a mix puts collateral up. A seed is the deposit alone, which spends
+    // no script, so it asks for none and spends the account as it is.
+    if request.depth > 0 && request.collateral.is_none() {
+        bail!("Lovejoin's mixes need the public account's collateral");
+    }
     let mut every = request.utxos.clone();
-    every.push(request.collateral.clone());
+    if let Some(c) = &request.collateral {
+        every.push(c.clone());
+    }
     let paths = api::check_paths(account, network_flag, &every)?;
-    let collateral_ref = (
-        request.collateral.utxo.tx_hash.clone(),
-        request.collateral.utxo.tx_index,
-    );
-    let collateral = Coin::from_row(&request.collateral.utxo)?;
+    let collateral_ref = request
+        .collateral
+        .as_ref()
+        .map(|c| (c.utxo.tx_hash.clone(), c.utxo.tx_index));
 
     // As few ADA-only UTxOs as pay for the boxes, the largest first.
     let needed = lovejoin::funding_for(request.boxes, request.depth, protocol.denom);
@@ -556,7 +563,7 @@ pub fn chain_from_account(
         .iter()
         .filter(|p| p.utxo.asset_list.as_ref().is_none_or(|a| a.is_empty()))
         .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
-        .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
+        .filter(|p| collateral_ref.as_ref() != Some(&(p.utxo.tx_hash.clone(), p.utxo.tx_index)))
         .collect();
     ada.sort_by_key(|p| std::cmp::Reverse(lovelace(p)));
     let mut picked: Vec<&UtxoResponse> = Vec::new();
@@ -588,10 +595,12 @@ pub fn chain_from_account(
     deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
     deposit_keys.dedup();
     let change_key = (Role::Receive, 0);
-    let collateral_key = path_of(&request.collateral.utxo);
     let mut mix_keys = vec![change_key];
-    if collateral_key != change_key {
-        mix_keys.push(collateral_key);
+    if let Some(c) = &request.collateral {
+        let collateral_key = path_of(&c.utxo);
+        if collateral_key != change_key {
+            mix_keys.push(collateral_key);
+        }
     }
 
     let base = Register::create(sk)?;
@@ -606,7 +615,12 @@ pub fn chain_from_account(
         .collect();
     let funding = lovejoin::Funding {
         coins,
-        collateral,
+        // None only at depth 0, where `chain` makes no mixes and so never
+        // reads it: `fan_out`'s loop doesn't run, and only `mix` puts it up.
+        collateral: match &request.collateral {
+            Some(c) => Some(Coin::from_row(&c.utxo)?),
+            None => None,
+        },
         address: account.base_address(network_flag, Role::Receive, 0)?,
         deposit_signers: deposit_keys.len(),
         mix_signers: mix_keys.len(),
@@ -675,14 +689,16 @@ pub fn again_from_account(
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = Protocol::of(network_flag)?;
     check_mix(request.boxes, request.depth)?;
+    // This one only ever mixes (no deposit), so it always needs collateral.
+    let put_up = request
+        .collateral
+        .as_ref()
+        .context("Lovejoin's mixes need the public account's collateral")?;
     let mut every = request.utxos.clone();
-    every.push(request.collateral.clone());
+    every.push(put_up.clone());
     let paths = api::check_paths(account, network_flag, &every)?;
-    let collateral_ref = (
-        request.collateral.utxo.tx_hash.clone(),
-        request.collateral.utxo.tx_index,
-    );
-    let collateral = Coin::from_row(&request.collateral.utxo)?;
+    let collateral_ref = (put_up.utxo.tx_hash.clone(), put_up.utxo.tx_index);
+    let collateral = Coin::from_row(&put_up.utxo)?;
     let (ours, pool): (Vec<PoolBox>, Vec<PoolBox>) = request
         .pool
         .iter()
@@ -715,7 +731,7 @@ pub fn again_from_account(
         );
     };
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
-    let collateral_key = path_of(&request.collateral.utxo);
+    let collateral_key = path_of(&put_up.utxo);
     let keys = |first: (Role, u32)| {
         let mut keys = vec![first];
         if collateral_key != first {
@@ -727,7 +743,7 @@ pub fn again_from_account(
     let mix_keys = keys((Role::Receive, 0));
     let payer = lovejoin::Payer {
         fee: Coin::from_row(&paying.utxo)?,
-        collateral,
+        collateral: Some(collateral),
         address: account.base_address(network_flag, Role::Receive, 0)?,
         signers: first_keys.len().max(mix_keys.len()),
     };
