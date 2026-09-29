@@ -1,0 +1,3057 @@
+/* The wallet's look: Lace's dark structure (a near-black page, surfaces of
+   white at low alpha, faint borders, pill buttons, a 4 px grid) in Seedelf's
+   colours, navy #011833 and teal #00c4bc (brand/README.md). Dark only.
+
+   Inter (OFL) ships in public/fonts, latin and latin-ext only; its licence
+   is public/licenses/inter-OFL-1.1.txt. */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/inter-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/inter-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF,
+    U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Tokens. Contrast (WCAG AA, 4.5:1) is checked against the most raised
+   surface, a row on a card: about #2d3239. Muted text there is 5.1:1, teal
+   5.9:1, the warning 8.5:1 and the error text 5.2:1; navy on teal is 8.2:1. */
+:root {
+  color-scheme: dark;
+
+  /* Seedelf's colours */
+  --navy: #011833;
+  --teal: #00c4bc;
+
+  /* The page and what sits on it */
+  --bg: #0f141d;
+  --surface: rgb(255 255 255 / 0.05);
+  --surface-2: rgb(255 255 255 / 0.08);
+  --surface-hover: rgb(255 255 255 / 0.12);
+  /* Opaque: menus the page shows over other content (suggestions, a select's options) */
+  --menu: #1c222d;
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.18);
+
+  /* Text */
+  --text: #ffffff;
+  --text-2: #e3e6eb;
+  --muted: #9ba3b1;
+
+  /* The accent: buttons, links, focus, selection */
+  --accent: var(--teal);
+  --accent-hover: #2bd8d0;
+  --accent-text: var(--navy);
+  --accent-soft: rgb(0 196 188 / 0.12);
+  --accent-line: rgb(0 196 188 / 0.3);
+
+  /* States */
+  --warn: #f2b84b;
+  --warn-soft: rgb(242 184 75 / 0.1);
+  --warn-line: rgb(242 184 75 / 0.3);
+  --danger: #e01e5a;
+  --danger-text: #ff7a9a;
+  --strength-weak: #ff7a9a;
+  --strength-fair: #f2b84b;
+  --strength-good: #5ac64c;
+  --strength-strong: var(--teal);
+
+  /* Shape: a 4 px grid; Lace's radii */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+  --shadow-card: 0 2px 14px rgb(153 153 153 / 0.08);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.55);
+
+  /* Type */
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-sm: 12.5px;
+  --text-md: 14px;
+  --text-lg: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-md) / 1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+a {
+  color: var(--accent);
+}
+
+::selection {
+  background: var(--accent-line);
+}
+
+/* Buttons. The base is a reset; each kind is a class. */
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+.primary,
+.secondary,
+.danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  min-height: 48px;
+  padding: 0 var(--s5);
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  transition:
+    background-color 120ms,
+    box-shadow 120ms;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.primary:not(:disabled):hover {
+  background: var(--accent-hover);
+  box-shadow: 0 0 16px rgb(0 196 188 / 0.35);
+}
+
+.secondary {
+  background: rgb(0 0 0 / 0.35);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.secondary:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+.primary:disabled,
+.danger:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.secondary:disabled {
+  opacity: 0.45;
+}
+
+.link {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.link:not(:disabled):hover {
+  text-decoration: underline;
+}
+
+.link:disabled {
+  opacity: 0.45;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-2);
+}
+
+.icon-button:not(:disabled):hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.icon-button:disabled {
+  opacity: 0.45;
+}
+
+.icon-button--small {
+  width: 30px;
+  height: 30px;
+}
+
+/* A small pill: Copy, Max. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--s3);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chip:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+/* A round action with its name below, like Lace's action buttons. */
+.action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  /* Four fit the side panel's hero: Receive, Send, Make public, Create. */
+  width: 64px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.action__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  transition: background-color 120ms;
+}
+
+.action--primary .action__icon {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+}
+
+.action:not(:disabled):hover .action__icon {
+  background: var(--surface-hover);
+}
+
+.action--primary:not(:disabled):hover .action__icon {
+  background: var(--accent-hover);
+  box-shadow: 0 0 16px rgb(0 196 188 / 0.35);
+}
+
+.action:disabled {
+  opacity: 0.4;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Fields */
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 11px 14px;
+  width: 100%;
+  transition:
+    border-color 120ms,
+    box-shadow 120ms;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The open list is drawn by the browser: it takes the select's background,
+   and a see-through one lands on white, under white text. The options get
+   the suggestion menu's opaque dark. */
+option,
+optgroup {
+  background: var(--menu);
+  color: var(--text);
+}
+
+input:disabled {
+  color: var(--muted);
+}
+
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--danger-text);
+}
+
+label,
+.label {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A count stepped one at a time: Lovejoin's boxes. */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.stepper .icon-button {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.stepper__value {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+/* Layout: the side panel's narrow column, as wide as Chrome makes it, or a
+   centered column in a full tab. */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+}
+
+.app--panel {
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
+
+.app--tab {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: var(--s5) var(--s4);
+  min-height: 100vh;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.stack-tight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.actions {
+  display: flex;
+  gap: var(--s2);
+}
+
+.actions > * {
+  flex: 1;
+}
+
+.center {
+  text-align: center;
+}
+
+.align-start {
+  align-self: flex-start;
+}
+
+.icon {
+  display: flex;
+}
+
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Top bar */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 40px;
+}
+
+.topbar__mark {
+  display: block;
+}
+
+/* The mark and wordmark as one button back to Home: it must look exactly as they did. */
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+
+.topbar__brand:hover .wordmark {
+  color: var(--accent);
+}
+
+.topbar__brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.topbar__spacer {
+  flex: 1;
+}
+
+.wordmark {
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+
+.badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+}
+
+.badge--preprod {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid var(--warn-line);
+}
+
+.badge--mainnet {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+}
+
+/* While preprod is on, under the top bar of every screen: test ADA is never
+   taken for real (components/NetworkBadge.tsx). */
+.network-strip {
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  color: var(--warn);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.footer {
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Sections and lists */
+
+.section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--s3) var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px var(--s3);
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.list__row:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.list__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list__value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.list__sub {
+  min-width: 0;
+  font: 11.5px var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* A second line across the whole row. */
+.list__full {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+}
+
+/* components/MiddleEllipsis.tsx: the head gives way, the tail never does. */
+.middle-ellipsis {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+  font: 11.5px/1.5 var(--mono);
+  color: var(--muted);
+}
+
+.middle-ellipsis__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.middle-ellipsis__tail {
+  flex: none;
+}
+
+/* Text */
+
+.note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/*
+ * A refusal, in the sticky foot. It was 13px of bare tinted text, which read
+ * as a footnote under a full page and was missed (the owner, on mainnet,
+ * 2026-09-28): it's a bordered block now, at the body's size.
+ */
+.error {
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--danger-text);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+  background: rgb(224 30 90 / 0.12);
+  color: var(--danger-text);
+  font-weight: 500;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.field-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--warn);
+}
+
+/* Callouts: a privacy note, a warning, or plain information. */
+
+.callout {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.callout__icon {
+  flex: none;
+  display: flex;
+  margin-top: 1px;
+  color: var(--muted);
+}
+
+.callout__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.callout--privacy,
+.callout--done {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.callout--privacy .callout__icon,
+.callout--done .callout__icon {
+  color: var(--accent);
+}
+
+.callout--warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+}
+
+.callout--warn .callout__icon {
+  color: var(--warn);
+}
+
+/* A flow's screen: a header with Back and the title, the body, and the
+   primary action at the foot, which stays in view while the body scrolls. */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.app--panel .screen {
+  flex: 1;
+}
+
+.screen__head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.screen__title {
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.screen__aside {
+  margin: -8px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.screen__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.app--panel .screen__body {
+  flex: 1;
+}
+
+.screen__foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4) 0 var(--s1);
+  margin-top: calc(-1 * var(--s2));
+  background: linear-gradient(to bottom, transparent, var(--bg) var(--s4));
+}
+
+.screen__foot > .primary,
+.screen__foot > .actions {
+  width: 100%;
+}
+
+/* Review: Lace's detail rows. */
+
+.review {
+  margin: 0;
+  padding: var(--s1) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.review__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.review__row:first-child {
+  border-top: 0;
+}
+
+.review__row dt {
+  color: var(--muted);
+}
+
+.review__row dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.review__row--strong dd {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+/* Segmented switches: Home's tabs, the word count, who pays. */
+
+.segmented {
+  display: flex;
+  padding: 4px;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.segmented__item {
+  flex: 1;
+  min-height: 36px;
+  padding: 0 var(--s2);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13px;
+  transition:
+    background-color 120ms,
+    color 120ms;
+}
+
+.segmented__item:not(:disabled):hover {
+  color: var(--text);
+}
+
+.segmented__item--on {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.segmented__item:disabled {
+  opacity: 0.4;
+}
+
+/* Welcome */
+
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--s3);
+  padding-top: var(--s6);
+}
+
+.welcome__logo {
+  width: 280px;
+  height: auto;
+  max-width: 100%;
+}
+
+.welcome__lead {
+  margin: var(--s4) 0 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.welcome__text {
+  max-width: 300px;
+  font-size: 13.5px;
+}
+
+.welcome__actions {
+  width: 100%;
+  max-width: 340px;
+  margin-top: var(--s5);
+}
+
+/* Which network a new wallet is on, chosen before its phrase (a build with both). */
+.network-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.network-picker select {
+  width: auto;
+  padding: 4px 8px;
+  font-size: var(--text-sm);
+}
+
+.network-picker .error {
+  flex-basis: 100%;
+}
+
+.onboarding-on-network {
+  margin: 0 0 var(--s3);
+}
+
+/* Unlock */
+
+.unlock {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s3);
+  padding-top: var(--s6);
+}
+
+.unlock__emblem {
+  filter: drop-shadow(0 0 24px rgb(0 196 188 / 0.25));
+}
+
+.unlock__form {
+  width: 100%;
+  max-width: 340px;
+  margin-top: var(--s2);
+}
+
+/* Recovery phrase grid: three columns in a tab, two in the side panel. */
+
+.phrase-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.app--tab .phrase-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.phrase-grid[data-count="3"] {
+  grid-template-columns: 1fr;
+}
+
+.word {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.word:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.word:has([aria-invalid="true"]) {
+  border-color: var(--danger-text);
+}
+
+.word__n {
+  width: 28px;
+  flex: none;
+  text-align: right;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.word__input {
+  border: none;
+  background: transparent;
+  padding: 9px 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.word__input:focus {
+  box-shadow: none;
+}
+
+.word--static {
+  padding: 9px 0;
+}
+
+.word__text {
+  padding-left: var(--s2);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.suggestions {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  background: var(--menu);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-pop);
+}
+
+.suggestion {
+  padding: 6px 8px;
+  border-radius: var(--r-xs);
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.suggestion strong {
+  color: var(--accent);
+}
+
+.suggestion--active {
+  background: var(--accent-soft);
+}
+
+.phrase-reveal {
+  position: relative;
+}
+
+.phrase-reveal--hidden .phrase-grid {
+  filter: blur(5px);
+  user-select: none;
+}
+
+.phrase-reveal__button {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: fit-content;
+  height: fit-content;
+  background: #1c222d;
+}
+
+/* Password strength */
+
+.strength {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.strength__bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.strength__bar span {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-hover);
+}
+
+.strength[data-strength="weak"] .strength__bar span:nth-child(-n + 1) {
+  background: var(--strength-weak);
+}
+
+.strength[data-strength="fair"] .strength__bar span:nth-child(-n + 2) {
+  background: var(--strength-fair);
+}
+
+.strength[data-strength="good"] .strength__bar span:nth-child(-n + 3) {
+  background: var(--strength-good);
+}
+
+.strength[data-strength="strong"] .strength__bar span {
+  background: var(--strength-strong);
+}
+
+/* Copyable values */
+
+.copy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copy-field__value {
+  display: block;
+  font: 12px/1.5 var(--mono);
+  word-break: break-all;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  color: var(--text-2);
+}
+
+/* Home */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--s5) var(--s4) var(--s4);
+  border-radius: var(--r-lg);
+  background: radial-gradient(120% 90% at 50% 0%, rgb(0 196 188 / 0.16), transparent 70%);
+}
+
+.hero__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* The label and the eye that hides the amounts: the eye sits beside the
+   label, which stays centred over the amount. */
+.hero__head {
+  display: grid;
+  grid-template-columns: 30px auto 30px;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.hero__head .hero__label {
+  grid-column: 2;
+  margin: 0;
+}
+
+.hero__head .icon-button {
+  grid-column: 3;
+  color: var(--muted);
+}
+
+/* The balance's value in the chosen currency, under it. */
+.hero__fiat {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.amount {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.amount__unit {
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.amount__placeholder {
+  color: var(--muted);
+}
+
+.hero__meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hero__actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--s3);
+  margin-top: var(--s4);
+}
+
+/* Tokens (components/TokenList.tsx, screens/Tokens.tsx): a row is the logo or
+   two letters, the ticker or name over a second line, and the amount. */
+
+.avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.avatar--large {
+  width: 56px;
+  height: 56px;
+  font-size: 18px;
+}
+
+.avatar--nft {
+  border-radius: var(--r-xs);
+}
+
+/* Logos can be dark or have holes: a light disc behind them. */
+.avatar--logo {
+  object-fit: contain;
+  background: #e9edf2;
+}
+
+/* Activity (screens/Activity.tsx): what came in, went out, or neither. */
+/* Someone's note on a transaction: their words, wrapped wherever they need. */
+.activity__note {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.activity__icon {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.activity__icon--in,
+.activity__amount--in {
+  color: var(--accent);
+}
+
+.avatar--contact {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.avatar--tint-0 {
+  background: #134e4a;
+}
+.avatar--tint-1 {
+  background: #1e3a5f;
+}
+.avatar--tint-2 {
+  background: #3b2f5e;
+}
+.avatar--tint-3 {
+  background: #4a3423;
+}
+.avatar--tint-4 {
+  background: #2f4a2a;
+}
+.avatar--tint-5 {
+  background: #4a2437;
+}
+
+.token-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: var(--s3);
+  row-gap: 1px;
+  align-items: center;
+  padding: 9px var(--s2);
+  margin: 0 calc(-1 * var(--s2));
+  width: calc(100% + 2 * var(--s2));
+  border-radius: var(--r-sm);
+  text-align: left;
+  transition: background-color 120ms;
+}
+
+.token-row:hover {
+  background: var(--surface-2);
+}
+
+/* Selected in the token picker. */
+.token-row--on,
+.token-row--on:hover {
+  background: var(--accent-soft);
+}
+
+.token-row--on .token-row__amount {
+  color: var(--accent);
+}
+
+.token-row .avatar {
+  grid-row: 1 / 3;
+}
+
+.token-row__label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-row__amount {
+  grid-row: 1 / 3;
+  grid-column: 3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.token-row__sub {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 36px;
+  border-radius: var(--r-pill);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.view-all:hover {
+  background: var(--surface-2);
+}
+
+.token-tools {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+}
+
+.search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.search svg {
+  position: absolute;
+  left: 12px;
+  pointer-events: none;
+}
+
+.search input {
+  padding-left: 36px;
+  border-radius: var(--r-pill);
+}
+
+.segmented--small {
+  flex: none;
+}
+
+.segmented--small .segmented__item {
+  min-height: 30px;
+  padding: 0 var(--s3);
+  font-size: 12px;
+}
+
+.empty {
+  padding: var(--s5) 0;
+}
+
+/* UTxOs (screens/Utxos.tsx): an Activity-style row, with what a UTxO is kept
+   for (locked, the collateral, a seedelf) as a tag. */
+.utxo__icon--kept {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.utxo-tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+}
+
+/* A UTxO's tokens, all of them: a box of their own that scrolls, so the
+   details keep their size however many there are. */
+.utxo-tokens--all {
+  max-height: 260px;
+  overflow-y: auto;
+  border-radius: var(--r-sm);
+}
+
+/* A row, then its lock: the row opens the details, the lock toggles at once. */
+.utxo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.utxo-row .token-row {
+  width: calc(100% + var(--s2));
+  margin-right: 0;
+}
+
+.utxo-row__lock {
+  width: 34px;
+  height: 34px;
+}
+
+.utxo-row .icon-button {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.utxo-row .icon-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* Settings (screens/Settings.tsx): rows that open a page, and outside links. */
+
+.menu-row {
+  width: calc(100% + 2 * var(--s2));
+  margin: 0 calc(-1 * var(--s2));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+  padding: 11px var(--s2);
+  border-radius: var(--r-sm);
+  text-align: left;
+  font-weight: 500;
+  color: var(--text);
+  transition: background-color 120ms;
+}
+
+.menu-row:hover {
+  background: var(--surface-2);
+}
+
+.menu-row__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.menu-row--danger,
+.menu-row--danger .menu-row__icon {
+  color: var(--danger-text);
+}
+
+.menu-row:disabled {
+  opacity: 0.5;
+}
+
+.menu-row:disabled:hover {
+  background: none;
+}
+
+/* A row with a second line: Home's staking row. */
+.menu-row__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.menu-row__sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An on/off setting (Settings' staking rewards). */
+.switch {
+  flex: none;
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: var(--r-pill);
+  background: var(--surface-hover);
+  transition: background-color 120ms;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: transform 120ms;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+  background: var(--accent-text);
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.menu-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.menu-link:hover {
+  text-decoration: underline;
+}
+
+/* A modal (components/Modal.tsx), centred over a dimmed page. It never grows
+   past the window: its body scrolls, so nothing is cut off in the side panel. */
+
+.modal {
+  width: calc(100% - 2 * var(--s4));
+  max-width: 440px;
+  max-height: calc(100dvh - 2 * var(--s4));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: #171c25;
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: modal-in 160ms ease-out;
+}
+
+.modal[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s4) var(--s4) var(--s2);
+}
+
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4) var(--s4);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.modal__foot {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--border);
+}
+
+.modal__foot > * {
+  flex: 1;
+}
+
+.modal__title {
+  font-size: var(--text-lg);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes modal-in {
+  from {
+    transform: scale(0.97);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal {
+    animation: none;
+  }
+}
+
+.token-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.token-details__top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  text-align: center;
+}
+
+.token-details__amount {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* In a token's details, the ids read as plain rows rather than boxes. */
+.token-details .copy-field__value {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.token-details__listed {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.refresh-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+}
+
+.refresh-row .icon-button {
+  width: 28px;
+  height: 28px;
+  background: none;
+  border-color: transparent;
+}
+
+.spin {
+  display: flex;
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* The loading splash (components/Splash.tsx): the emblem on navy, breathing,
+   with a teal arc circling it; it fades out into the wallet. Under reduced
+   motion only the fades stay. */
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 45%, #0a2a4a 0%, var(--navy) 42%, #000c2c 100%);
+  animation: splash-in 200ms ease-out both;
+}
+
+.splash--leave {
+  pointer-events: none;
+  animation: splash-out 320ms ease-in both;
+}
+
+.splash__mark {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  display: grid;
+  place-items: center;
+}
+
+.splash__ring {
+  position: absolute;
+  inset: 0;
+  animation: spin 1.6s linear infinite;
+}
+
+.splash__track,
+.splash__arc {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.splash__track {
+  stroke: rgb(0 196 188 / 0.12);
+}
+
+.splash__arc {
+  stroke: var(--teal);
+  stroke-linecap: round;
+  stroke-dasharray: 22 78;
+}
+
+.splash__emblem {
+  animation: splash-breathe 1.2s ease-in-out infinite alternate;
+}
+
+.splash--leave .splash__emblem {
+  animation: splash-grow 320ms ease-in both;
+}
+
+@keyframes splash-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes splash-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes splash-breathe {
+  from {
+    transform: scale(0.97);
+    filter: drop-shadow(0 0 8px rgb(0 196 188 / 0.2));
+  }
+  to {
+    transform: scale(1.03);
+    filter: drop-shadow(0 0 22px rgb(0 196 188 / 0.45));
+  }
+}
+
+@keyframes splash-grow {
+  to {
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash__ring,
+  .splash__emblem,
+  .splash--leave .splash__emblem {
+    animation: none;
+  }
+}
+
+/* Home stays hidden under the splash, so its empty balances never show. */
+.home--hidden {
+  visibility: hidden;
+}
+
+/* Getting started: fund the account, create the seedelf, move in. */
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.step:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.step__icon {
+  display: flex;
+  color: var(--muted);
+}
+
+.step__n {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.step--done .step__icon {
+  color: var(--accent);
+}
+
+.step__title {
+  font-weight: 600;
+}
+
+.step--done .step__title {
+  color: var(--muted);
+}
+
+.step__text {
+  grid-column: 2 / 4;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* Swaps (screens/Swaps.tsx): the list, each swap a row with its two tokens
+   and a tag for how it's doing, and the form in Minswap's shape: You pay over
+   You receive, each a card with a big amount beside its token, a round Switch
+   across the seam between them, and the quote under them. */
+
+/* A swap in a list (Minswap's page, Home's running ones): an Activity-style
+   row whose avatar is the pair, what's paid overlapping what's received. */
+.swap-pair {
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: center;
+}
+
+.swap-pair .avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 10px;
+}
+
+.swap-pair .avatar--ada {
+  font-size: 13px;
+}
+
+.swap-pair .avatar + .avatar {
+  margin-left: -9px;
+  box-shadow: 0 0 0 2px var(--menu);
+}
+
+.swap-row .swap-tag {
+  grid-row: 1 / 3;
+  grid-column: 3;
+}
+
+.swap-row__sub--wait {
+  color: var(--warn);
+}
+
+/* How a swap is doing, as a small pill: running (a live dot), waiting on
+   you, done, stopped, or failed. */
+.swap-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.swap-tag__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.swap-tag--live .swap-tag__dot {
+  background: var(--accent);
+  animation: swap-tag-live 1.6s ease-out infinite;
+}
+
+@keyframes swap-tag-live {
+  from {
+    box-shadow: 0 0 0 0 rgb(0 196 188 / 0.7);
+  }
+  to {
+    box-shadow: 0 0 0 5px rgb(0 196 188 / 0);
+  }
+}
+
+.swap-tag--wait {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+
+.swap-tag--done {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* Stopped: neutral, its dot a stop square. */
+.swap-tag--off {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.swap-tag--off .swap-tag__dot {
+  border-radius: 1px;
+}
+
+.swap-tag--bad {
+  background: rgb(224 30 90 / 0.12);
+  border-color: rgb(255 122 154 / 0.3);
+  color: var(--danger-text);
+}
+
+.swap-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.swap-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: border-color 120ms;
+}
+
+.swap-card:focus-within {
+  border-color: var(--border-strong);
+}
+
+.swap-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+}
+
+.swap-card__head label,
+.swap-card__head .label {
+  color: var(--muted);
+}
+
+.swap-card__quick {
+  display: flex;
+  gap: var(--s3);
+}
+
+.swap-card__main {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 44px;
+}
+
+.swap-card__amount {
+  flex: 1;
+  min-width: 0;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.swap-card__amount--long {
+  font-size: 22px;
+}
+
+input.swap-card__amount {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+input.swap-card__amount:focus {
+  box-shadow: none;
+}
+
+output.swap-card__amount {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swap-card__amount--empty {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* A new quote is on its way: the last one stays, fading in and out. */
+.swap-card__amount--waiting {
+  animation: swap-waiting 1s ease-in-out infinite alternate;
+}
+
+@keyframes swap-waiting {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 0.25;
+  }
+}
+
+.swap-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.swap-card__held {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.swap-card__held--short {
+  color: var(--danger-text);
+}
+
+/* A card's token: its logo, name and a chevron; Select token until one's chosen. */
+.swap-token {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  max-width: 55%;
+  height: 40px;
+  padding: 0 var(--s2) 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border-color: var(--border);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 120ms;
+}
+
+.swap-token:hover {
+  background: var(--surface-hover);
+}
+
+.swap-token > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.swap-token .avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 10.5px;
+}
+
+.swap-token__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swap-token--empty {
+  gap: 6px;
+  padding: 0 var(--s3);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.swap-token--empty:hover {
+  background: rgb(0 196 188 / 0.2);
+}
+
+.swap-token--empty > svg {
+  color: currentColor;
+}
+
+/* ADA's avatar: ₳ on Cardano's blue. */
+.avatar--ada,
+.swap-token .avatar--ada {
+  background: #0033ad;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Switch: a round button over the seam between the two cards. */
+.swap-flip {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin: -22px 0;
+  border-radius: 50%;
+  background: var(--bg);
+  border-color: var(--border-strong);
+  color: var(--text-2);
+  transition:
+    color 120ms,
+    transform 200ms;
+}
+
+.swap-flip:not(:disabled):hover {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+.swap-flip:disabled {
+  color: var(--muted);
+}
+
+/* The quote: the rate, and its details under a chevron. */
+.swap-details {
+  padding: 0 var(--s2) 0 var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: opacity 120ms;
+}
+
+.swap-details--stale {
+  opacity: 0.55;
+}
+
+.swap-rate {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  min-height: 44px;
+  font-size: 13px;
+}
+
+.swap-rate__text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.swap-rate__text:hover {
+  color: var(--text);
+}
+
+.swap-rate__impact {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.swap-rate .icon-button {
+  background: none;
+  border-color: transparent;
+}
+
+.swap-rate__icon,
+.swap-chevron {
+  display: flex;
+  transition: transform 150ms;
+}
+
+.swap-chevron--open {
+  transform: rotate(180deg);
+}
+
+.swap-details__rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin: 0;
+  padding: var(--s3) var(--s2) var(--s3) 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.swap-details__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.swap-details__row dt {
+  color: var(--muted);
+}
+
+.swap-details__row dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.swap-impact--warn {
+  color: var(--warn);
+}
+
+.swap-impact--high {
+  color: var(--danger-text);
+}
+
+.swap-asking {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* The review's swap: what's paid over what's received. */
+.swap-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.swap-summary__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.swap-summary__label {
+  color: var(--muted);
+}
+
+.swap-summary__amount {
+  font-size: 17px;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.swap-summary__foot {
+  margin: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* A swap that runs itself (Swaps.tsx Timeline): four steps down a line, and
+   what's happening now under them. Done, the whole card turns the success
+   colour, as the confirmed-transaction banner does. */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition:
+    background-color 300ms,
+    border-color 300ms;
+}
+
+.timeline--done {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.timeline__steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline__step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--s3);
+  row-gap: 1px;
+  padding: var(--s2) 0;
+}
+
+/* The line down to the next step. */
+.timeline__step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 36px;
+  bottom: -8px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+.timeline__step--done:not(:last-child)::after {
+  background: var(--accent-line);
+}
+
+.timeline__icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.timeline__step--done .timeline__icon {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.timeline__step--now .timeline__icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.timeline__step--paused .timeline__icon {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.timeline__step--failed .timeline__icon {
+  border-color: var(--danger-text);
+  color: var(--danger-text);
+}
+
+.timeline__title {
+  font-weight: 600;
+}
+
+.timeline__step--todo .timeline__title,
+.timeline__step--skipped .timeline__title {
+  color: var(--muted);
+}
+
+.timeline__step--skipped {
+  opacity: 0.6;
+}
+
+.timeline__sub {
+  grid-column: 2 / 4;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.timeline__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.timeline__link:hover {
+  text-decoration: underline;
+}
+
+.timeline__now {
+  margin: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* A step failed and is tried again: why, and when. */
+.timeline__now--retry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  color: var(--warn);
+}
+
+.timeline__now--retry p {
+  margin: 0;
+}
+
+.timeline__error {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.timeline--done .timeline__now {
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Links side by side, in a callout: Try again, Review it myself. */
+.row-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+}
+
+/* The dApp browser (screens/Dapps.tsx): a grid of tiles. */
+.dapp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--s3);
+}
+
+.dapp-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s1);
+  min-height: 132px;
+  padding: var(--s4);
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--r-md);
+  text-align: left;
+  transition:
+    background-color 120ms,
+    border-color 120ms;
+}
+
+button.dapp-tile:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.dapp-tile__logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--s2);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.dapp-tile__name {
+  font-weight: 600;
+}
+
+.dapp-tile__what {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* How many of its swaps run, or wait on you: a swap tag, at the tile's foot. */
+.dapp-tile__badge {
+  margin-top: auto;
+  padding-top: var(--s2);
+}
+
+/* Bring everything back (ClaimAll.tsx): what private sessions hold, and
+   each session's return as a row to keep or leave out. */
+.claim-card__amount {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.claim-check {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  color: var(--accent-text);
+}
+
+.claim-row--on .claim-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.claim-row:not(.claim-row--on) .token-row__label,
+.claim-row:not(.claim-row--on) .token-row__amount {
+  color: var(--muted);
+}
+
+/* Not a dApp yet: where the next ones go. */
+.dapp-tile--soon {
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  background: none;
+}
+
+/* The token picker's two lists: what's held, and what Minswap lists. */
+.swap-pick__heading {
+  margin: var(--s2) 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swap-card__amount--waiting {
+    animation: none;
+    opacity: 0.4;
+  }
+
+  .swap-flip,
+  .swap-rate__icon,
+  .swap-chevron,
+  .timeline {
+    transition: none;
+  }
+
+  .swap-tag--live .swap-tag__dot {
+    animation: none;
+  }
+}
+
+/* Chrome took the wallet's access to Koios away (App.tsx's ServiceAccess) */
+
+.service-access {
+  margin-bottom: var(--s4);
+}
+
+/* The sent transaction */
+
+.banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A sent transaction (components/TxBanner.tsx): centred, its Dismiss a
+   neutral pill so it stands out on the teal of a confirmed one. */
+.tx-banner {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.tx-banner__title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.tx-banner .callout__icon {
+  display: inline-flex;
+}
+
+/* What a banner's state means (maybe sent, or never landed): under the title, quieter. */
+.tx-banner__detail {
+  max-width: 34em;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.tx-banner__dismiss {
+  margin-top: 2px;
+  padding: 5px 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: rgb(255 255 255 / 0.1);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background-color 120ms;
+}
+
+.tx-banner__dismiss:hover {
+  background: rgb(255 255 255 / 0.18);
+}
+
+.banner__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font: 12px var(--mono);
+}
+
+/* What opening a private transaction on Cardanoscan tells (components/ExplorerLink.tsx):
+   under a banner's link, as quiet as its detail; under a swap's timeline, after the now line. */
+.tx-banner .explorer-note {
+  max-width: 34em;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.timeline .explorer-note {
+  font-size: 12px;
+}
+
+/* Receive */
+
+.qr-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+.qr {
+  display: block;
+  padding: 10px;
+  background: #ffffff;
+  border-radius: var(--r-md);
+  box-sizing: content-box;
+}
+
+/* Amounts: the ADA box with its unit and Max. */
+
+.amount-box {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding-right: var(--s3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition:
+    border-color 120ms,
+    box-shadow 120ms;
+}
+
+.amount-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.amount-box input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.amount-box input:focus {
+  box-shadow: none;
+}
+
+.amount-box__unit {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Tokens to bring along (move in) or send (transfer, withdraw) */
+
+.token-picker {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.token-picker legend {
+  padding: 0;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+
+.token-amount {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.token-amount__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-weight: 400;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+
+.token-amount__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.token-amount__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.token-amount__row input {
+  width: 9em;
+  padding: 7px 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Several recipients: a card each (Send, Send to a Seedelf, Withdraw), and on the review */
+
+.recipient {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4) var(--s4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+}
+
+.recipient__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.recipient__head h3,
+.review__caption {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.add-recipient {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.review-recipient {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Send to a seedelf, Withdraw */
+
+.seedelf-name {
+  font: 13px/1.5 var(--mono);
+  resize: none;
+  word-break: break-all;
+}
+
+/* Staking (screens/Staking.tsx, Pools.tsx, Voting.tsx). */
+.amount--small {
+  font-size: 22px;
+}
+
+.pool-name {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono-id {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.token-row__sub.wrap {
+  white-space: normal;
+}
+
+
+/* The dApp connector's window (screens/DappApprovals.tsx). */
+
+.dapp-site {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow-wrap: anywhere;
+}
+
+.dapp-site__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* A site connected to a private session says so, under its origin. */
+.dapp-site__session {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* A private session's funding, sent: the window waits for the network. */
+.dapp-waiting {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin: 0;
+  color: var(--text-2);
+}
+
+.dapp-waiting .spin {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.dapp-points {
+  margin: 0;
+  padding-left: 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  /* A stake pool's id, whole. */
+  overflow-wrap: anywhere;
+}
+
+.dapp-message {
+  margin: 0;
+  padding: var(--s3);
+  max-height: 180px;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A Pays row: the whole address on a line of its own, then what it is beside
+   what it gets. The amounts' column is capped and a token's name wraps, so
+   no name can squeeze the address, or push the ADA off the window. */
+.dapp-paid {
+  grid-template-columns: minmax(0, 1fr) fit-content(55%);
+  align-items: start;
+}
+
+.dapp-address {
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.dapp-amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The countdown before auto-lock (components/LockCountdown.tsx): at the top
+   of every screen, and kept in view as the screen scrolls, so it sits on the
+   page's own background. */
+
+.lock-countdown {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  align-items: center;
+  margin-bottom: var(--s3);
+  background:
+    linear-gradient(var(--warn-soft), var(--warn-soft)),
+    var(--bg);
+}
+
+.lock-countdown .callout__icon {
+  margin-top: 0;
+  color: var(--warn);
+}
+
+.lock-countdown__time {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.lock-countdown__stay {
+  flex: none;
+}
+
+/* A reason in full under a row (a Lovejoin mix that stopped, or that tries
+   again): it wraps, where the row's one line would cut it off. */
+
+.token-row__detail {
+  grid-column: 2 / -1;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--warn);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* A token that isn't on the wallet's list, under its amount in a review or a
+   site's prompt: its own line, plain weight, and the warning's colour when
+   its name passes for ADA or a listed token (tokenText). */
+
+.token-mark {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.token-mark--warn {
+  color: var(--warn);
+}
+
+/* Max's UTxOs left where they are (LeftOutNote): one to a line. */
+
+.left-out {
+  margin: 6px 0;
+}
+
+.left-out code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* A name another DRep, or a ticker another pool, uses too: flagged in the
+   warning's colour beside it (Voting, Pools). */
+
+.utxo-tag--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn-line);
+}
+
+/* A token's whole fingerprint, where a swap names one the wallet won't swap
+   into (Swaps.tsx Unverified): its own line, and it wraps. */
+
+.swap-token-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* What a build is doing, under the button that started it (components/BuildStage.tsx). */
+.build-stage {
+  margin-top: var(--s2);
+  margin-bottom: 0;
+}

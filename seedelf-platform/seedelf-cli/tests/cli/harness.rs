@@ -26,7 +26,7 @@ use seedelf_core::transaction::{
 };
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -211,6 +211,18 @@ pub fn empty_datum_utxo(n: u64, lovelace: u64, tokens: &[TokenAmount]) -> UtxoRe
     }
 }
 
+/// `utxo` holding a reference script of `size` bytes, as Koios lists one. The
+/// CLI only measures it, so its bytes needn't be a real script.
+pub fn with_reference_script(mut utxo: UtxoResponse, size: usize) -> UtxoResponse {
+    utxo.reference_script = Some(ReferenceScript {
+        hash: Some("ab".repeat(28)),
+        size: Some(size as u64),
+        kind: Some("plutusV3".to_string()),
+        bytes: Some("00".repeat(size)),
+    });
+    utxo
+}
+
 // ----------------------------------------------------------------------------
 // fixture ledger — resolves the values behind a transaction's inputs
 // ----------------------------------------------------------------------------
@@ -327,6 +339,20 @@ impl Scenario {
         }
     }
 
+    /// Serve `epoch_params` with the reference-script price set to `per_byte`
+    /// lovelace, over the recorded preprod value (15).
+    pub async fn mount_reference_script_price(&self, per_byte: u64) {
+        let mut params: Value = serde_json::from_str(EPOCH_PARAMS_FIXTURE).expect("epoch params");
+        params[0]["min_fee_ref_script_cost_per_byte"] = json!(per_byte);
+        Mock::given(method("GET"))
+            .and(path("/api/v1/epoch_params"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(params))
+            // Ahead of the recorded one `start` mounts.
+            .with_priority(1)
+            .mount(&self.server)
+            .await;
+    }
+
     /// Mount `credential_utxos` (the wallet-contract UTxO set) and record the
     /// UTxOs in the ledger.
     pub async fn mount_credential_utxos(&mut self, utxos: Vec<UtxoResponse>) {
@@ -369,6 +395,28 @@ impl Scenario {
                 })
             })
             .collect();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/ogmios"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": budgets})))
+            .mount(&self.server)
+            .await;
+    }
+
+    /// Mount Ogmios `evaluateTransaction` for a mint: one budget per spent
+    /// input, plus the seedelf policy's, as Ogmios labels them.
+    pub async fn mount_evaluate_mint(&self, spends: usize) {
+        let mut budgets: Vec<Value> = (0..spends)
+            .map(|i| {
+                json!({
+                    "validator": {"index": i, "purpose": "spend"},
+                    "budget": {"cpu": 250_000_000u64, "memory": 800_000u64}
+                })
+            })
+            .collect();
+        budgets.push(json!({
+            "validator": {"index": 0, "purpose": "mint"},
+            "budget": {"cpu": 90_000_000u64, "memory": 300_000u64}
+        }));
         Mock::given(method("POST"))
             .and(path("/api/v1/ogmios"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": budgets})))

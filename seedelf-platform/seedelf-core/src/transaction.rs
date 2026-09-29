@@ -2,12 +2,14 @@ use crate::address;
 use crate::assets::Assets;
 use crate::constants::{MAINNET_COLLATERAL_UTXO, OVERHEAD_COST, PREPROD_COLLATERAL_UTXO};
 use anyhow::{Context, Result, anyhow};
+use blstrs::Scalar;
+use ff::Field;
 use hex_literal::hex;
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_primitives::Fragment;
 use pallas_txbuilder::{Input, Output};
-use seedelf_crypto::{register::Register, schnorr};
+use seedelf_crypto::register::Register;
 use seedelf_koios::koios::ProtocolParameters;
 use serde_json::Value;
 
@@ -123,6 +125,14 @@ pub fn seedelf_token_name(label: String, inputs: Option<&Vec<Input>>) -> Result<
             })
         })
         .context("Smallest Input Not Found")?;
+    // The policy prepends the index as a single byte, so it can't name a token
+    // after an output past #255; anything longer here would misalign the hex.
+    if smallest_input.txo_index > 255 {
+        anyhow::bail!(
+            "A Seedelf can't be named after output #{} of a transaction (the contract takes a one-byte index)",
+            smallest_input.txo_index
+        );
+    }
     // format the tx index
     let formatted_index: String = format!("{:02x}", smallest_input.txo_index);
     let tx_hash_hex: String = hex::encode(smallest_input.tx_hash.0);
@@ -183,6 +193,16 @@ pub fn total_computation_fee(params: &ProtocolParameters, budgets: Vec<(u64, u64
         .sum()
 }
 
+/// A register datum for sizing an output that doesn't exist yet: the
+/// generator twice. Every register's datum is the same size (two compressed
+/// points), so a fixed one prices exactly as a real one, and no randomness or
+/// curve arithmetic is spent on a datum nobody sees.
+fn sizing_datum() -> Result<Vec<u8>> {
+    Register::create(Scalar::ONE)
+        .context("Failed To Construct Points")?
+        .to_vec()
+}
+
 /// Minimum lovelace for a seedelf-style output (datum + seedelf token).
 pub fn seedelf_minimum_lovelace(params: &ProtocolParameters) -> Result<u64> {
     // a very long token name
@@ -193,13 +213,7 @@ pub fn seedelf_minimum_lovelace(params: &ProtocolParameters) -> Result<u64> {
     .to_vec();
     let policy_id: [u8; 28] = hex!("84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255");
     let staging_output: Output = Output::new(address::dummy_base_address(), 5_000_000)
-        .set_inline_datum(
-            Register::create(schnorr::random_scalar())
-                .context("Failed To Construct Points")?
-                .rerandomize()
-                .context("Failed To Randomize Points")?
-                .to_vec()?,
-        )
+        .set_inline_datum(sizing_datum()?)
         .add_asset(Hash::new(policy_id), token_name, 1)
         .context("Staging Output Failed")?;
 
@@ -211,14 +225,8 @@ pub fn wallet_minimum_lovelace_with_assets(
     params: &ProtocolParameters,
     tokens: Assets,
 ) -> Result<u64> {
-    let mut staging_output: Output = Output::new(address::dummy_base_address(), 5_000_000)
-        .set_inline_datum(
-            Register::create(schnorr::random_scalar())
-                .context("Failed To Construct Points")?
-                .rerandomize()
-                .context("Failed To Randomize Points")?
-                .to_vec()?,
-        );
+    let mut staging_output: Output =
+        Output::new(address::dummy_base_address(), 5_000_000).set_inline_datum(sizing_datum()?);
 
     for asset in tokens.items {
         staging_output = staging_output

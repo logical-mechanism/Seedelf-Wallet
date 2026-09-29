@@ -1,0 +1,108 @@
+{
+ "owner": "the 12-word cardano_account.json vector, Seedelf account 0",
+ "owned_utxos": [
+  {
+   "tx_hash": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+   "tx_index": 0,
+   "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+   "value": "25000000",
+   "stake_address": null,
+   "payment_cred": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+   "epoch_no": 315,
+   "block_height": 5212000,
+   "block_time": 1790200000,
+   "datum_hash": null,
+   "inline_datum": {
+    "bytes": "d8799f583084df40106a717da97484b48718aac228d5c580c6b1b3dac6815d476a5382a0d0205ab18166208b00d75a16a31bbe39e55830a19749515c0559833d1b6fa1e370b75629987982e1b217a58a971c411a71e3c9e081351cd5ffcb636d6c53f9b65711adff",
+    "value": {
+     "fields": [
+      {
+       "bytes": "84df40106a717da97484b48718aac228d5c580c6b1b3dac6815d476a5382a0d0205ab18166208b00d75a16a31bbe39e5"
+      },
+      {
+       "bytes": "a19749515c0559833d1b6fa1e370b75629987982e1b217a58a971c411a71e3c9e081351cd5ffcb636d6c53f9b65711ad"
+      }
+     ],
+     "constructor": 0
+    }
+   },
+   "reference_script": null,
+   "asset_list": [],
+   "is_spent": false
+  },
+  {
+   "tx_hash": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+   "tx_index": 0,
+   "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+   "value": "3000000",
+   "stake_address": null,
+   "payment_cred": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+   "epoch_no": 315,
+   "block_height": 5212000,
+   "block_time": 1790200000,
+   "datum_hash": null,
+   "inline_datum": {
+    "bytes": "d8799f5830a22b11af29a2c0b477525c2a99541f9138fdbbce39e9b7bd7eea8f9e33cf366c10b16b2058f7b3b79255fcec779876295830845617ae0d62bc319daf1654b00f2fd1e4561b74e7427c9d6b1e660be498eb00d487816a6a144863e8019d8339feb324ff",
+    "value": {
+     "fields": [
+      {
+       "bytes": "a22b11af29a2c0b477525c2a99541f9138fdbbce39e9b7bd7eea8f9e33cf366c10b16b2058f7b3b79255fcec77987629"
+      },
+      {
+       "bytes": "845617ae0d62bc319daf1654b00f2fd1e4561b74e7427c9d6b1e660be498eb00d487816a6a144863e8019d8339feb324"
+      }
+     ],
+     "constructor": 0
+    }
+   },
+   "reference_script": null,
+   "asset_list": [
+    {
+     "decimals": 6,
+     "quantity": "1234560000",
+     "policy_id": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+     "asset_name": "745553444d",
+     "fingerprint": "asset1synthetictusdm"
+    }
+   ],
+   "is_spent": false
+  },
+  {
+   "tx_hash": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+   "tx_index": 0,
+   "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+   "value": "1500000",
+   "stake_address": null,
+   "payment_cred": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+   "epoch_no": 315,
+   "block_height": 5212000,
+   "block_time": 1790200000,
+   "datum_hash": null,
+   "inline_datum": {
+    "bytes": "d8799f583081d0ec034d1155fe9d5d1a14b119ad39e69524f4035d3ddfa6dbd6d1022a57cd3b766706ccfeedcac2c8c9adb1e19ed15830b70507d884705d89a6e0917ba7136f8556693012f1542f64d8962f55961390b5fafccffea916b8b95aa4564ef21b9d4fff",
+    "value": {
+     "fields": [
+      {
+       "bytes": "81d0ec034d1155fe9d5d1a14b119ad39e69524f4035d3ddfa6dbd6d1022a57cd3b766706ccfeedcac2c8c9adb1e19ed1"
+      },
+      {
+       "bytes": "b70507d884705d89a6e0917ba7136f8556693012f1542f64d8962f55961390b5fafccffea916b8b95aa4564ef21b9d4f"
+      }
+     ],
+     "constructor": 0
+    }
+   },
+   "reference_script": null,
+   "asset_list": [
+    {
+     "decimals": 0,
+     "quantity": "1",
+     "policy_id": "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255",
+     "asset_name": "5eed0e1f7765622d77616c6c657400ababababababababababababababababab",
+     "fingerprint": "asset1syntheticseedelf"
+    }
+   ],
+   "is_spent": false
+  }
+ ]
+}

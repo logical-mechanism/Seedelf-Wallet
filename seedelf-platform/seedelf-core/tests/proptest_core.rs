@@ -8,16 +8,20 @@ use proptest::prelude::*;
 use seedelf_core::assets::{Asset, Assets};
 use seedelf_core::transaction::checked_lovelace;
 use seedelf_core::utxos;
-use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{ProtocolParameters, Ratio, UtxoResponse};
 
 const PID: &str = "11111111111111111111111111111111111111111111111111111111";
 
 fn fixture_params() -> ProtocolParameters {
     ProtocolParameters {
+        min_fee_a: 44,
+        min_fee_b: 155_381,
         coins_per_utxo_size: 4_310,
+        key_deposit: 2_000_000,
         price_mem: 0.0577,
         price_step: 0.0000721,
         cost_model_v3: Vec::new(),
+        min_fee_ref_script_cost_per_byte: Ratio::whole(15),
     }
 }
 

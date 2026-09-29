@@ -66,3 +66,49 @@ async fn fund_sends_lovelace_to_seedelf() {
     );
     assert!(tx.mint.is_empty(), "fund mints nothing");
 }
+
+/// A UTxO holding a reference script is never spent: it would cost Conway's
+/// reference-script fee, and the script may be deployed there on purpose.
+#[tokio::test]
+#[serial]
+async fn fund_never_spends_a_utxo_holding_a_reference_script() {
+    let mut scenario = Scenario::start().await;
+
+    scenario
+        .mount_credential_utxos(vec![seedelf_utxo(
+            scenario.scalar,
+            1,
+            1_500_000,
+            SAMPLE_SEEDELF,
+        )])
+        .await;
+    scenario
+        .mount_address_utxos(vec![
+            address_utxo(&external_address_bech32(), 2, 10_000_000, &[]),
+            // The most ADA, which selection would take first.
+            with_reference_script(
+                address_utxo(&external_address_bech32(), 3, 50_000_000, &[]),
+                519,
+            ),
+        ])
+        .await;
+    scenario.arm_web_capture();
+
+    run(
+        FundArgs {
+            address: external_address_bech32(),
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            lovelace: Some(3_000_000),
+            assets: vec![],
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect("fund should succeed");
+
+    let params = protocol_params().await;
+    let tx = decode_tx(&scenario.captured_cbor());
+    assert_sound_transaction(&tx, &scenario, &params);
+    assert_eq!(tx.inputs, vec![(tx_hash(2), 0)]);
+}

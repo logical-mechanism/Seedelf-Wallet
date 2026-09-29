@@ -155,7 +155,7 @@ Privacy is preserved if $d$ is large and destroyed after use, and the collateral
 
 #### De-Anonymizing Via IP Tracking
 
-Seedelf communicates with third-party APIs such as `koios.rest` and `giveme.my`. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. `koios.rest` does not support Tor access. `giveme.my` does support Tor access but is not implemented at the CLI level. Your public IP directly connects to your Koios API and GiveMeMy requests. Consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an identifiable IP for maximum privacy when engaging in sensitive activity. 
+Seedelf communicates with `koios.rest`, a third-party API, and `giveme.my`, the collateral service Logical Mechanism runs. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. Every transaction is submitted through Koios, and every Seedelf spend goes to `giveme.my` for its collateral, each from your IP address, so either service can group your private spends as one person's, and tie them to whatever else that address asks for, though the chain can't. `koios.rest` does not support Tor access. `giveme.my` does support Tor access but is not implemented at the CLI level. Your public IP directly connects to your Koios API and GiveMeMy requests. Consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an identifiable IP for maximum privacy when engaging in sensitive activity. 
 
 We're actively and continuously exploring options for Tor access to all services Seedelf depends on to function.
 

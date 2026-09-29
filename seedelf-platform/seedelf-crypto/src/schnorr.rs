@@ -1,11 +1,19 @@
+use crate::derivation::scalar_from_okm;
 use crate::hashing::blake2b_224;
 use crate::register::Register;
 use blstrs::{G1Affine, G1Projective, Scalar};
 
 use anyhow::{Context, Result, anyhow};
+use cryptoxide::hmac::Hmac;
+use cryptoxide::mac::Mac;
+use cryptoxide::sha2::Sha512;
 use ff::Field;
 use hex;
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
+use zeroize::Zeroize;
+
+/// Domain tag of a proof's nonce derivation ([`proof_nonce`]).
+const NONCE_TAG: &[u8] = b"seedelf/schnorr/nonce/v1";
 
 /// Applies the Fiat-Shamir heuristic using the BLAKE2b-224 hash function.
 ///
@@ -42,12 +50,39 @@ pub fn random_scalar() -> Scalar {
     Scalar::random(&mut OsRng)
 }
 
+/// The nonce `r` of a proof: HMAC-SHA-512 keyed by `sk`, over the statement
+/// the proof is about (the register's points and `vkh`, all fixed-length) and
+/// 32 fresh random bytes, reduced mod the group order.
+///
+/// Hedged, as RFC 6979 with extra randomness and BIP-340's synthetic nonces
+/// are: it's as random as the source when the source is good, and a source
+/// that fails or repeats can still never give one nonce to two different
+/// statements, which would reveal `sk`. The same statement with the same
+/// random bytes gives the same proof, which reveals nothing.
+fn proof_nonce(sk: &Scalar, generator: &[u8], public_value: &[u8], vkh: &[u8]) -> Result<Scalar> {
+    let mut aux = [0u8; 32];
+    OsRng.fill_bytes(&mut aux);
+    let mut key = sk.to_bytes_be();
+    let mut mac = Hmac::new(Sha512::new(), &key);
+    for part in [NONCE_TAG, generator, public_value, vkh, &aux] {
+        mac.input(part);
+    }
+    let mut wide = [0u8; 64];
+    mac.raw_result(&mut wide);
+    let r = scalar_from_okm(&wide);
+    key.zeroize();
+    aux.zeroize();
+    wide.zeroize();
+    r
+}
+
 /// Creates a non-interactive Schnorr proof using the Fiat-Shamir heuristic.
 ///
 /// This function generates a proof of knowledge for a secret scalar `sk` associated
-/// with a `Register`. A fresh random nonce `r` is drawn internally — each call
-/// must use a unique `r`, so it is generated here rather than passed in to make
-/// nonce reuse (which would leak `sk`) impossible by construction.
+/// with a `Register`. The nonce `r` is drawn internally ([`proof_nonce`]: fresh
+/// randomness, hedged with `sk` and the statement) rather than passed in, so
+/// reusing a nonce across two statements (which would leak `sk`) is impossible
+/// by construction, even if the random source fails.
 ///
 /// # Arguments
 ///
@@ -75,22 +110,26 @@ pub fn create_proof(datum: Register, sk: Scalar, vkh: String) -> Result<(String,
     // The Fiat-Shamir challenge MUST commit to the one-time signing key hash.
     // Omitting it — or letting a caller pass arbitrary transcript bytes here —
     // reintroduces the rollback-replay vector, so enforce the vkh shape.
-    let vkh_len: usize = hex::decode(&vkh).context("vkh is not valid hex")?.len();
-    if vkh_len != 28 {
-        anyhow::bail!("vkh must be a 28-byte blake2b-224 key hash, got {vkh_len} bytes");
+    let vkh_bytes: Vec<u8> = hex::decode(&vkh).context("vkh is not valid hex")?;
+    if vkh_bytes.len() != 28 {
+        anyhow::bail!(
+            "vkh must be a 28-byte blake2b-224 key hash, got {} bytes",
+            vkh_bytes.len()
+        );
     }
 
-    // Fresh per-proof nonce — never reuse across proofs.
-    let r: Scalar = random_scalar();
+    let generator: [u8; 48] = hex::decode(&datum.generator)
+        .context("Failed to decode generator hex")?
+        .try_into()
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let public_value: Vec<u8> =
+        hex::decode(&datum.public_value).context("Failed to decode public value hex")?;
+    let g1: G1Affine = G1Affine::from_compressed(&generator)
+        .into_option()
+        .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
 
-    let g1: G1Affine = G1Affine::from_compressed(
-        &hex::decode(&datum.generator)
-            .context("Failed to decode generator hex")?
-            .try_into()
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?,
-    )
-    .into_option()
-    .ok_or_else(|| anyhow!("Failed to decompress generator"))?;
+    // A new nonce for every proof, never reused across statements.
+    let r: Scalar = proof_nonce(&sk, &generator, &public_value, &vkh_bytes)?;
 
     let g_r: G1Projective = G1Projective::from(g1) * r;
 

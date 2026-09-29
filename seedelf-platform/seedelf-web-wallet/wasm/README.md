@@ -1,0 +1,105 @@
+# seedelf-wasm
+
+The WebAssembly bindings the web wallet uses for Seedelf cryptography. It is a thin layer over [seedelf-crypto](../../seedelf-crypto/): every protocol rule is enforced there, and this crate only adapts it for JavaScript.
+
+## API
+
+| Export | What it does |
+|---|---|
+| `SeedelfKey` | Holds the secret scalar inside WebAssembly memory. |
+| `SeedelfKey.fromPhrase(phrase, account)` | The wallet's key from a 12-, 15- or 24-word phrase, using the frozen v1 derivation (`seedelf-crypto::derivation`). Throws with a reason on an invalid phrase. |
+| `SeedelfKey.fromEntropy(entropy, account)` | The same key from the phrase's BIP39 entropy, as the vault stores it. The key comes straight from the entropy: the phrase isn't written out, in WebAssembly or in JavaScript. |
+| `SeedelfKey.random()`, `SeedelfKey.fromHex()` | Dev/test constructors only. |
+| `key.baseRegister()` | Returns the base register `(G1, G1^x)`. |
+| `key.isOwned(register)` | Whether this key can spend a UTxO with this register. |
+| `key.createProof(register, vkh)` | Returns a Schnorr proof `{ z, gR }` bound to the one-time key hash `vkh` (28 bytes, hex). |
+| `key.free()` | Drops the key and overwrites the scalar. |
+| `generatePhrase()` | A new 24-word recovery phrase from the secure random source. |
+| `validatePhrase(phrase)` | Accepts 12, 15 or 24 words, the lengths Lace accepts. Throws with a user-facing reason (word count, unknown word N, checksum). Case and extra whitespace are ignored. |
+| `phraseToEntropy(phrase)`, `entropyToPhrase(entropy)` | Phrase ↔ BIP39 entropy (16, 20 or 32 bytes), with the same rules as `validatePhrase`. The vault stores entropy, not words. These, `validatePhrase` and the `fromPhrase` and `fromEntropy` constructors wipe WebAssembly's copies of what they're given and return. |
+| `bip39Wordlist()` | The 2048 BIP39 English words, for autocomplete. |
+| `CardanoAccount.fromPhrase(phrase, account)` | The wallet's Cardano account: standard CIP-1852 keys, the same as Lace, Eternl and Yoroi. v1 uses account 0. The private keys stay in WebAssembly memory. |
+| `CardanoAccount.fromEntropy(entropy, account)` | The same account from vault entropy. |
+| `account.receiveAddress(network, index)`, `account.changeAddress(network, index)` | Base addresses `0/index` and `1/index`, delegated to the staking key `2/0`. |
+| `account.stakeAddress(network)`, `account.accountPublicKey()` | The reward address, and the account xpub (hex). |
+| `Network.Preprod`, `Network.Mainnet` | The network for addresses. |
+| `Register` | `{ generator, publicValue }`: compressed G1 points in hex. |
+| `rerandomize(register)` | Returns `(g^d, u^d)` with a fresh `d` that is thrown away. |
+| `isValidRegister(register)` | On-curve and torsion-free check. |
+| `registerToDatum(register)` | Inline-datum bytes (PlutusData CBOR). |
+| `verifyProof(register, z, gR, vkh)` | Off-chain mirror of the validator's check. |
+| `buildMoveIn(account, key, requestJson)` | Builds and signs a move-in with `seedelf-core`'s `build::move_in`. The request carries Koios's `epoch_params` row and the account's UTxOs, each with its `role/index`, which is checked against the derived address. Returns JSON with the signed CBOR, its hash and a summary. `lovelace` below what the deposit needs is raised to it (so `"0"` with tokens moves only that), and the summary's `minimum` says what that is (`null` for Max). Keys never reach JavaScript. |
+| `buildAccountSend(account, requestJson)` | Builds and signs a payment from the Cardano account with `build::account_send`. The request is a move-in's, plus `to` (a bech32 key address on this network). The amount rules and `minimum` are a move-in's. Returns JSON with the signed CBOR, its hash and `{ to, max, lovelace, minimum, tokens, fee, withdrawal, changeLovelace, changeTokens, inputs }`. |
+| `withdrawal` in a move-in's, a send's or an account mint's request | Optional: the stake key's whole reward balance (lovelace, a decimal string), withdrawn along with the payment, with the stake key `2/0` signing too. The extension passes it only when the user spends rewards and the vote is delegated. The result's `withdrawal` says what was withdrawn (`"0"` for none). |
+| `invalidHereafter` in a move-in's, a send's, a staking transaction's or an account mint's request | Optional: the slot the transaction stops being valid at (`slotAt`). Past it, one that never landed can't land any more, so paying again can't pay twice. An account mint's draft holds it too, so its finish must be given the same slot. Without it, the transaction stays valid for as long as its inputs are unspent, byte for byte as before. |
+| `slotAt(network, unixMs)` | The slot a time (milliseconds since 1970, as `Date.now()` gives) falls in on a network, from its Shelley start: what `invalidHereafter` is counted in. Throws for a time that isn't one. |
+| `buildStaking(account, requestJson)` | Builds and signs a staking transaction with `build::account_staking` (chunk 13). The request carries `network`, the `epoch_params` row, the account's UTxOs (as for a move-in), `action` (`{ kind: "delegate", pool }`, `{ kind: "vote", drep }`, `{ kind: "withdraw" }` or `{ kind: "stop" }`) and `state`, the stake key's standing from Koios's `account_info`: `{ registered, deposit, rewards, drep }`. Signed with the spent UTxOs' payment keys and the stake key. Returns `{ txCbor, txHash, action, pool, drep, fee, deposit, refund, withdrawal, changeLovelace, changeTokens, inputs }`. |
+| `poolId(id)`, `drepId(id)` | A pool ID (bech32 or hex) as `pool1…`; a vote delegation as Koios names it (a DRep's CIP-129 ID, from CIP-129 or CIP-105, or `drep_always_abstain` / `drep_always_no_confidence`). Each throws the reason to show the user. |
+| `draftMint(key, requestJson)` | Creating a Seedelf, step 1 (`build::mint`). The request carries `network`, the `epoch_params` row, the wallet's spendable contract UTxOs (each checked: owned, no Seedelf) and the `label` (printable ASCII, 15 at most). Picks the UTxOs, proves them under a new one-time key, and returns `{ seed, draftCbor, inputs }` for Ogmios. |
+| `finishMint(key, requestJson)` | Step 2: the same request plus `seed` and Ogmios's `evaluation`. Returns the unsigned transaction with the measured budgets and fee: `{ txCbor, txHash, seed, tokenName, lovelace, fee: { size, compute, scriptReference, total }, changeLovelace, changeTokens, changeOutputs, inputs }`. An Ogmios error becomes a plain-words exception. |
+| `draftAccountMint(account, key, requestJson)` | Creating a Seedelf paid by the Cardano account (`build::account_mint`), step 1. The request carries `network`, the `epoch_params` row, the account's UTxOs (each with its `role/index`, checked as for a move-in) and the `label`. Picks the inputs and the collateral, and returns `{ draftCbor, inputs, collateral }` for Ogmios. |
+| `finishAccountMint(account, key, requestJson)` | Step 2: the same request plus Ogmios's `evaluation`. Returns the transaction **signed** with every input's key and the collateral's, ready to submit, and a summary like `finishMint`'s plus `collateral`. |
+| `draftTransfer(key, requestJson)` | Paying a Seedelf, step 1 (`build::transfer`). The request carries `network`, the `epoch_params` row, the wallet's spendable contract UTxOs (checked as for a mint), `to` (the Seedelf's full name), `recipient` (the contract UTxO holding it, as Koios returns it), `lovelace` (raised to what the payment needs, if less) and `tokens` (`[{ policyId, assetName, quantity }]`). Checks the recipient's UTxO and register, picks the UTxOs (those holding the tokens first), proves them under a new one-time key, and returns `{ seed, draftCbor, inputs }` for Ogmios. |
+| `finishTransfer(key, requestJson)` | Step 2: the same request plus `seed` and Ogmios's `evaluation`. Returns the unsigned transaction and `{ to, toSelf, lovelace, minimum, tokens, fee, changeLovelace, changeTokens, changeOutputs, inputs }`. `toSelf` says the Seedelf is this wallet's own; paying it is allowed. |
+| `draftWithdraw(key, requestJson)` | A withdrawal, step 1 (`build::sweep` or `sweep_all`). The request carries `network`, the `epoch_params` row, the spendable contract UTxOs (checked as for a mint), `to` (a bech32 key address on this network), `lovelace` (`null` for Max; raised to what the payment needs, if less) and `tokens`. Max takes the 20 largest UTxOs. Returns `{ seed, draftCbor, inputs }`. |
+| `finishWithdraw(key, requestJson)` | Step 2: plus `seed` and `evaluation`. Returns the unsigned transaction and `{ to, max, lovelace, minimum, tokens, fee, changeLovelace, changeTokens, changeOutputs, inputs, left }`: what the address receives, what comes back, and how many UTxOs Max left. |
+| `draftRemove(key, requestJson)` | Removing a Seedelf, step 1 (`build::remove`). The request carries `network`, the `epoch_params` row, the Seedelf's `utxo` (checked: this wallet's, holding exactly one Seedelf) and `to` (a key address, or `null` for the Seedelf balance). Returns `{ seed, draftCbor, inputs }`. |
+| `finishRemove(key, requestJson)` | Step 2: plus `seed` and `evaluation`. Returns the unsigned transaction and `{ name, to, lovelace, fee, inputs }`, where `lovelace` is what comes back. |
+| `checkPayableAddress(address, network)` | Throws the reason a withdrawal or a send can't pay an address: not an address, a script, a stake address, the other network. |
+| `account.isOwnAddress(address)` | Whether an address carries the account's staking key, as every address a normal wallet shows for it does. |
+| `signScriptSpend(key, requestJson)` | At Send: `{ txCbor, seed, collateral }`, where `collateral` is giveme.my's answer. Checks giveme.my's signature against its public key over the transaction id, then adds it and the one-time key's. Returns `{ txCbor, txHash }`. |
+| `cip30Utxos(rowsJson)` | The dApp connector (chunk 15, `src/cip30.rs`): Koios UTxO rows as CIP-30's `TransactionUnspentOutput`s, hex each. The output is the legacy array unless it holds an inline datum. |
+| `cip30Value(lovelace, tokensJson)`, `cip30ReadValue(hex)` | A balance as CIP-30's `Value` (canonical order), and a `Value` a dApp asks for read back as `{ lovelace, tokens }`. |
+| `cip30Address(bech32)` | An address as CIP-30 hands it over: its bytes, hex. |
+| `inspectDappTx(account, requestJson)` | What a dApp's transaction does to the public account, for the signing prompt. The request: `{ network, txCbor, keys: [{ role, index }], inputs, partialSign }`, where `inputs` are the UTxOs it spends as far as the extension found them (Koios rows). Returns the net change, who's paid, the fee, the collateral at risk, minting, certificates, withdrawals, a CIP-20 note, which keys sign, unknown inputs, and whether the account's signatures complete it. Throws for the other network, a collateral return to someone else, or a transaction marked to fail. |
+| `signDappTx(account, requestJson)` | The same request, signed with every key of the account's it needs: `{ witnessSet, summary }`, the vkey witnesses only, in the transaction's set encoding. Refuses without `partialSign` when anyone else must sign too. |
+| `dataSigner(account, requestJson)`, `signDappData(account, requestJson)` | CIP-8 for CIP-30's `signData`: `{ network, keys, address, payload }` (the address in hex or bech32). `dataSigner` says which key signs (`payment` with its path, or `stake`), or `null` for an address that isn't the account's; `signDappData` returns `{ signature, key }`, a COSE_Sign1 with the address in its protected header and the COSE_Key, hex. |
+
+The one-time key of a script spend is HKDF-SHA-256 of the Seedelf scalar (salt `seedelf-one-time-key-v1`, info the 32-byte `seed`). The seed can wait in JavaScript between review and Send; the key is re-derived inside WebAssembly each time and never leaves it.
+
+## Build
+
+```bash
+./build.sh    # → pkg/seedelf_wasm.js, pkg/seedelf_wasm_bg.wasm, .d.ts
+```
+
+**Requirements:**
+
+- the `wasm32-unknown-unknown` Rust target
+- `clang` with a wasm32 backend, because `blst` is C code
+- `llvm-ar` (Ubuntu names it `llvm-ar-18` and similar; the script finds it)
+- `wasm-bindgen-cli` at the exact version of the `wasm-bindgen` crate in `Cargo.lock`. The script checks the version and prints the install command.
+
+The output is an ES module (`--target web`). Load it with `init()` or `initSync()`.
+
+**It's built for size** with the workspace's `wasm-release` profile (`opt-level = "z"`, LTO, one codegen unit, stripped). The CLI keeps the plain release profile. `node bench.mjs [pkg-dir]` prints a build's size (raw, gzip, brotli) and the median time of a proof, the ownership check, a transfer draft and a move-in.
+
+| Build | Raw | gzip | Proof | Transfer draft |
+|---|---|---|---|---|
+| `release` | 2,330 KB | 582 KB | 1.8 ms | 54 ms |
+| `wasm-release` | 1,223 KB | 424 KB | 1.7 ms | 52 ms |
+| `wasm-release` + `wasm-opt -Oz` (not used) | 1,113 KB | 448 KB | 1.8 ms | 54 ms |
+
+Measured 2026-09-24 in Node 24's V8, the engine Chrome runs the worker in.
+
+## Test
+
+From `seedelf-platform/`:
+
+```bash
+cargo test -p seedelf-wasm                                        # native, the plain-Rust layer
+./seedelf-web-wallet/wasm/build.sh
+node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"            # the built package, from JS
+```
+
+Both suites check the same pinned vectors as `seedelf-crypto`, so the WebAssembly build is known to match native Rust byte for byte:
+
+- `seedelf-crypto`'s `random_register` vector
+- the frozen key-derivation vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`
+- the Cardano account vectors in `seedelf-crypto/tests/vectors/cardano_account.json`, verified against `@cardano-sdk` (Lace's library)
+- entropy round trips on every one of those phrases (`tests/entropy.test.mjs`)
+- a move-in and a send on the 12-word phrase's recorded preprod UTxOs (`tests/move-in.test.mjs`), with and without a slot they stop being valid at. The native tests also check that every witness verifies against the tx hash, that the signers are exactly the inputs' payment keys, that a send pays exactly the address, and that a short amount goes up to its minimum (for transfers and withdrawals too).
+- an account-paid mint on the 12-word phrase's recorded preprod UTxOs, with a real preprod evaluation (`tests/mint.test.mjs`). The native tests also check that every witness verifies, and that the signers are exactly the inputs' and the collateral's keys.
+- a transfer of 5 ADA and 1 tUSDM from the 12-word phrase's synthetic Seedelf UTxOs to a live preprod Seedelf, with a real preprod evaluation (`tests/transfer.test.mjs`, from the extension's `tests/fixtures/transfer-preprod.json`). The native tests also check that the payment is a fresh copy of the recipient's register, that paying your own Seedelf is flagged, and every refusal: a name that isn't whole, a UTxO without that Seedelf or outside the contract, no register, and invalid, torsion or identity points.
+- withdrawals of an amount and of everything, and a Seedelf's removal, from the same synthetic UTxOs to the 15-word phrase's address, with real preprod evaluations (`tests/withdraw.test.mjs`, from the extension's `tests/fixtures/withdraw-preprod.json`). The native tests also check Max's cap of 20, a removal back into the contract, `isOwnAddress`, and every refusal.
+- a mint of the 12-word phrase's synthetic Seedelf UTxOs with a real preprod Ogmios evaluation (`tests/mint.test.mjs`, from the extension's `tests/fixtures/mint-preprod.json`). The native tests also sign one with a stand-in collateral key and check every witness, and check that giveme.my's real key refuses anything else.

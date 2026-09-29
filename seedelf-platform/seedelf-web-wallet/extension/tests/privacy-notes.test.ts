@@ -1,0 +1,134 @@
+// What the screens say where a click or a file tells someone what's the
+// user's: the private Activity's CSV (privacy review §2.21), and a link to
+// Cardanoscan on the private side (§3.4), which opens in the browser's own
+// profile and lands in its history.
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import type { PendingTx, SessionView } from "../src/shared/rpc";
+import { ExplorerLink } from "../src/ui/components/ExplorerLink";
+import { PendingBanner, PRIVATE_KINDS } from "../src/ui/components/PendingBanner";
+import { NetworkContext } from "../src/ui/network";
+import { ExportNote } from "../src/ui/screens/Activity";
+import { SiteSession } from "../src/ui/screens/SiteSessions";
+
+/** What a person reads. */
+const text = (html: string) =>
+  html
+    .replace(/<[^>]+>/g, " ")
+    .replaceAll("&#x27;", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+const markup = (element: ReactElement) =>
+  renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, element));
+
+const WARNING = "Opening this on Cardanoscan tells that site, and your browser history, that this transaction is yours.";
+const HASH = "ab".repeat(32);
+
+describe("the Activity CSV's note", () => {
+  it("says, on the private side, what the file ties together for whoever has it", () => {
+    const shown = text(markup(createElement(ExportNote, { of: "seedelf", listed: 3, more: false })));
+    expect(shown).toContain("The file isn't encrypted.");
+    expect(shown).toContain("Each row has its transaction's ID, so whoever has it can find every one on the chain.");
+    expect(shown).toContain(
+      "It ties your private payments, your private sessions and your Lovejoin boxes to each other and to your public account",
+    );
+    expect(shown).toContain("shows which Seedelf each payment went to");
+    expect(shown).toContain("Give it only to someone you'd show all of that.");
+  });
+
+  it("says the public side's is on the chain anyway, and what Load more adds", () => {
+    const shown = text(markup(createElement(ExportNote, { of: "cardano", listed: 20, more: true })));
+    expect(shown).toContain("It has the 20 transactions read so far: Load more first to include older ones.");
+    expect(shown).toContain("The file isn't encrypted, though everything in it is on the chain anyway.");
+    expect(shown).not.toContain("Lovejoin");
+  });
+});
+
+describe("a link to Cardanoscan", () => {
+  const link = (props: Partial<Parameters<typeof ExplorerLink>[0]>) =>
+    markup(createElement(ExplorerLink, { network: "preprod", tx: HASH, children: "View on Cardanoscan", ...props }));
+
+  it("says, on the private side, what opening it tells, and describes the link with it", () => {
+    const html = link({ private: true });
+    expect(html).toContain(`href="https://preprod.cardanoscan.io/transaction/${HASH}"`);
+    expect(html).toContain('rel="noreferrer"');
+    expect(text(html)).toContain(WARNING);
+    const described = html.match(/aria-describedby="([^"]+)"/)![1];
+    expect(html).toContain(`id="${described}"`);
+  });
+
+  it("stays plain on the public side", () => {
+    const html = link({});
+    expect(text(html)).toBe("View on Cardanoscan");
+    expect(html).not.toContain("aria-describedby");
+  });
+
+  it("for a whole account, says so", () => {
+    const html = link({ private: true, tx: undefined, address: "addr_test1xyz" });
+    expect(html).toContain('href="https://preprod.cardanoscan.io/address/addr_test1xyz"');
+    expect(text(html)).toContain("that this account is yours");
+  });
+
+  it("in a group, leaves the note to the group, and keeps it as the link's title", () => {
+    const html = link({ private: true, note: false });
+    expect(html).not.toContain("explorer-note");
+    expect(html).toContain(`title="${WARNING.replaceAll("'", "&#x27;")}"`);
+  });
+});
+
+describe("Home's banner for a sent transaction", () => {
+  const sent = (kind: PendingTx["kind"]): PendingTx => ({
+    kind,
+    network: "preprod",
+    txHash: HASH,
+    submittedAt: 0,
+    confirmations: 1,
+  });
+  const banner = (kind: PendingTx["kind"]) =>
+    text(markup(createElement(PendingBanner, { pending: sent(kind), watching: false, onDismiss: () => undefined })));
+
+  it("warns on a private payment, a session's step and a Lovejoin box", () => {
+    for (const kind of ["transfer", "withdraw", "remove", "session-out", "session-back", "lovejoin-withdraw", "lovejoin-mix"] as const) {
+      expect(banner(kind), kind).toContain(WARNING);
+    }
+  });
+
+  it("stays plain for what the public account signs in the open", () => {
+    for (const kind of ["move-in", "mint", "send", "collateral", "stake", "vote"] as const) {
+      expect(PRIVATE_KINDS.has(kind)).toBe(false);
+      expect(banner(kind), kind).not.toContain("Cardanoscan tells");
+    }
+  });
+});
+
+describe("a site's private session", () => {
+  it("says what opening its account on Cardanoscan tells", () => {
+    const session: SessionView = {
+      index: 4,
+      network: "preprod",
+      address: "addr_test1" + "s".repeat(50),
+      createdAt: 0,
+      stage: "open",
+      txs: [{ kind: "out", txHash: "ef".repeat(32), at: 0, confirmed: true }],
+      holding: { lovelace: "0", tokens: [], utxos: 0 },
+      site: { origin: "https://app.example" },
+    };
+    const seedelf = { lovelace: "0", tokens: [], utxos: 0, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
+    const html = markup(
+      createElement(SiteSession, {
+        session,
+        attached: true,
+        seedelf,
+        reading: false,
+        onRefresh: () => undefined,
+        onBack: () => undefined,
+        onPending: () => undefined,
+        onDisconnected: () => undefined,
+      }),
+    );
+    expect(html).toContain(`href="https://preprod.cardanoscan.io/address/${session.address}"`);
+    expect(text(html)).toContain("that this account is yours");
+  });
+});

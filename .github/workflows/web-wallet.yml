@@ -1,0 +1,98 @@
+name: Web Wallet
+
+on:
+  pull_request:
+    paths:
+      - "seedelf-platform/**"
+      - ".github/workflows/web-wallet.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: seedelf-platform
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain seedelf-platform/rust-toolchain.toml pins: keep the two
+      # in step, so CI builds and tests what ships (launch review #61).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: seedelf-platform
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: seedelf-platform/seedelf-web-wallet/extension/package-lock.json
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      # --locked everywhere: the crates are the ones Cargo.lock records, the
+      # same graph the shipped WebAssembly is built from, or the step fails.
+      - name: Clippy (web wallet crates)
+        run: cargo clippy --locked -p seedelf-crypto -p seedelf-wasm --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      # Cargo.lock is tracked: the CLI must be the wasm-bindgen it pins.
+      - name: Install wasm-bindgen-cli
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+
+      - name: Build WebAssembly
+        run: ./seedelf-web-wallet/wasm/build.sh
+
+      - name: WebAssembly tests
+        run: node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"
+
+      - name: Extension dependencies
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm ci
+
+      - name: Extension typecheck
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm run typecheck
+
+      - name: Extension unit tests
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm test
+
+      # Some of what's bundled depends on the build (mainnet's token list and
+      # DReps): every build has both networks, so the tests again as a
+      # preprod-only build (VITE_ENABLE_MAINNET=false) sees it.
+      - name: Extension unit tests (preprod-only build)
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: VITE_ENABLE_MAINNET=false npm test
+
+      - name: Extension build
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: npm run build:ext
+
+      - name: Extension end-to-end (Chromium)
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e
+
+      # The Web Store package, as `npm run package` makes it: the mainnet
+      # build, with no dev key, the third-party notices (which fail on a crate
+      # with no licence) and the zip, refused without mainnet's hosts. Then the
+      # same tests on that build, with preprod chosen (e2e/support.ts sets the
+      # network before the wallet starts), and the network switch's own test.
+      - name: Store package and its end-to-end
+        working-directory: seedelf-platform/seedelf-web-wallet/extension
+        run: |
+          VITE_ENABLE_MAINNET=true VITE_STORE_BUILD=true npm run build:ext
+          node scripts/package.mjs mainnet
+          npm run e2e

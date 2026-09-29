@@ -1,0 +1,61 @@
+{
+  "about": "Recorded 2026-09-25: POST https://aggr.monorepo-testnet-preprod.minswap.org/aggregator/estimate, 10 ADA to MIN at 0.5% slippage.",
+  "ask": {
+    "amount": "10000000",
+    "tokenIn": "lovelace",
+    "tokenOut": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e",
+    "slippage": 0.5
+  },
+  "estimate": {
+    "token_in": "lovelace",
+    "token_out": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e",
+    "amount_in": "10000000",
+    "amount_out": "906594100",
+    "min_amount_out": "902083681",
+    "total_lp_fee": "30000",
+    "total_dex_fee": "2000000",
+    "deposits": "2000000",
+    "avg_price_impact": 0.343817654852935,
+    "paths": [
+      [
+        {
+          "lp_token": "e4214b7cce62ac6fbba385d164df48e157eae5863521b4b67ca71d863bb0079303c57812462dec9de8fb867cef8fd3768de7f12c77f6f0dd80381d0d",
+          "token_in": "lovelace",
+          "token_out": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e",
+          "amount_in": "10000000",
+          "amount_out": "906594100",
+          "min_amount_out": "902083681",
+          "lp_fee": "30000",
+          "dex_fee": "2000000",
+          "deposits": "2000000",
+          "price_impact": 0.343817654852935,
+          "pool_id": "e4214b7cce62ac6fbba385d164df48e157eae5863521b4b67ca71d86.3bb0079303c57812462dec9de8fb867cef8fd3768de7f12c77f6f0dd80381d0d",
+          "protocol": "Minswap",
+          "pool_out_ref": "78f49e2d91e534216ce721ffcd1685ad6af7c03446e7373138f7111c13f07ff3#0"
+        }
+      ]
+    ],
+    "tokens": {
+      "lovelace": {
+        "token_id": "lovelace",
+        "logo": "https://asset-logos.minswap.org/lovelace",
+        "ticker": "ADA",
+        "is_verified": true,
+        "project_name": "Cardano",
+        "price_by_ada": 1,
+        "decimals": 6
+      },
+      "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e": {
+        "token_id": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e",
+        "logo": "https://asset-logos.minswap.org/e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed724d494e",
+        "ticker": "MIN",
+        "is_verified": true,
+        "price_by_ada": 0.018087906925233682,
+        "price_by_usd": 0.004491227289535524,
+        "project_name": "Minswap",
+        "decimals": 6
+      }
+    },
+    "amount_in_decimal": false
+  }
+}

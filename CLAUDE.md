@@ -9,7 +9,7 @@ This is a multi-language monorepo for **Seedelf**, a Cardano stealth wallet. Two
 - [seedelf-contracts/](seedelf-contracts/) — on-chain validators written in **Aiken**.
 - [seedelf-platform/](seedelf-platform/) — a Cargo workspace of Rust crates implementing the CLI and supporting libraries.
 
-The on-chain contract and the off-chain Rust code must stay in sync: the Rust code hardcodes the compiled script hashes produced by `compile.sh` (see [seedelf-contracts/README.md](seedelf-contracts/README.md) for current version-1 hashes). Changing validator code or the `acabcafe` random seed changes the hashes, which must then be updated in the Rust constants.
+The Rust code hardcodes the deployed contracts' script hashes, reference UTxOs and reference outputs, per variant (`seedelf-core`'s `constants.rs` and `references.rs`). Variant 1 is what's on chain and it's frozen: commit `5b82530`, built with Aiken v1.1.9 (see [seedelf-contracts/README.md](seedelf-contracts/README.md)). The contracts' current source, `contracts/` and `hashes/` are a later revision that was never deployed, so never copy `hashes/` into the Rust constants. Changing validator code, the toolchain or the `acabcafe` random seed changes the hashes: putting that on chain is a new variant with its own reference UTxOs, added beside variant 1, never an edit to it.
 
 ## Common Commands
 
@@ -59,7 +59,7 @@ Dependency direction: `cli` → `core` → `crypto` + `koios` + `display`. Crypt
 These constraints are load-bearing for correctness *and* safety — a mistake here can create permanently locked UTxOs (see [README.md](README.md) §Wallet Limitations):
 
 - A re-randomized register must apply the *same* scalar `d` to both `generator` and `public_value`. `(g^d, u^d)` spendable; `(g^d, u^d')` is a dead UTxO.
-- Points pushed into a `Register` must be torsion-free (in the BLS12-381 prime-order subgroup). The validator rejects non-prime-order points, which also yields a dead UTxO. The CLI enforces this; callers constructing registers directly must call `is_torsion_free()` or multiply by the cofactor first.
+- Points pushed into a `Register` must be torsion-free (in the BLS12-381 prime-order subgroup). The validator rejects non-prime-order points, which also yields a dead UTxO. The CLI enforces this; callers constructing registers directly must call `is_torsion_free()` or multiply by the cofactor first. Neither point may be the identity either: an identity public value lets anyone spend the UTxO. `seedelf_core::build::is_payable` checks all of this.
 - Proof `z = r + c·x`; `c` comes from Fiat-Shamir including the one-time signing key hash `vkh` — omitting `vkh` reintroduces the rollback-replay vector.
 
 ## Release & versioning

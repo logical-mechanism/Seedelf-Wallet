@@ -66,8 +66,12 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
     let tmp_fee: u64 = 205_000;
     let lovelace_goal: u64 = transaction::seedelf_minimum_lovelace(&params)? + tmp_fee;
 
-    let (mut draft_tx, all_utxos) =
+    let (mut draft_tx, mut all_utxos) =
         assign_collateral_and_get_utxos(args.address, network_flag, draft_tx).await?;
+    // Spending a UTxO that holds a reference script costs Conway's
+    // reference-script fee, and the script may be deployed there on purpose:
+    // never spend one here.
+    all_utxos.retain(|utxo| utxo.reference_script.is_none());
 
     // lovelace goal here should account for the estimated fee
     let selected_utxos: Vec<UtxoResponse> =
@@ -81,7 +85,7 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
         ));
     }
 
-    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos)?;
+    let (total_lovelace, tokens) = utxos::assets_of(selected_utxos.clone())?;
 
     if total_lovelace < lovelace_goal {
         bail!("Not Enough Lovelace");
@@ -210,9 +214,14 @@ pub async fn run(args: CreateArgs, network_flag: bool, variant: u64) -> Result<(
         .try_into()
         .unwrap();
 
-    let tx_fee: u64 = fee::linear_fee(tx_size);
+    let tx_fee: u64 = fee::linear_fee(&params, tx_size);
     let compute_fee: u64 = transaction::computation_fee(&params, mem_units, cpu_units);
-    let script_reference_fee: u64 = config.contract.seedelf_contract_size * 15;
+    // The policy, by reference, and any reference script on a spent input,
+    // at the network's price and Conway's tiers.
+    let script_reference_fee: u64 = fee::reference_script_fee(
+        &params,
+        config.contract.seedelf_contract_size + utxos::reference_script_bytes(&selected_utxos)?,
+    )?;
 
     let total_fee: u64 = fee::total_with_even_rounding(tx_fee, compute_fee, script_reference_fee);
 

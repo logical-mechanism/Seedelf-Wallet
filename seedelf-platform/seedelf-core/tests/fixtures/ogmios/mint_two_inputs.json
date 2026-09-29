@@ -1,0 +1,37 @@
+{
+    "jsonrpc": "2.0",
+    "method": "evaluateTransaction",
+    "result": [
+        {
+            "validator": {
+                "index": 0,
+                "purpose": "spend"
+            },
+            "budget": {
+                "memory": 76043,
+                "cpu": 337845799
+            }
+        },
+        {
+            "validator": {
+                "index": 1,
+                "purpose": "spend"
+            },
+            "budget": {
+                "memory": 76043,
+                "cpu": 337845799
+            }
+        },
+        {
+            "validator": {
+                "index": 0,
+                "purpose": "mint"
+            },
+            "budget": {
+                "memory": 72836,
+                "cpu": 21396182
+            }
+        }
+    ],
+    "id": null
+}

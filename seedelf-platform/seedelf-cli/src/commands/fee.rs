@@ -1,22 +1,10 @@
-use anyhow::{Context, Result, bail};
-use pallas_addresses::Address;
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_traverse::fees;
-use pallas_txbuilder::Output;
-use pallas_wallet::PrivateKey;
-use rand_core::OsRng;
+use anyhow::{Result, bail};
 use serde_json::Value;
 
-/// Throwaway ed25519 key used to sign a draft transaction so its serialized
-/// size includes a realistic witness blob for tx-size fee estimation. The
-/// signature itself is discarded.
-pub(crate) fn fake_signer() -> PrivateKey {
-    PrivateKey::from(SecretKey::new(OsRng))
-}
-
-pub(crate) fn linear_fee(tx_size: u64) -> u64 {
-    fees::compute_linear_fee_policy(tx_size, &fees::PolicyParams::default())
-}
+// Shared with the web wallet through seedelf-core's network-free builders.
+pub(crate) use seedelf_core::build::{
+    collateral_output, fake_signer, linear_fee, reference_script_fee,
+};
 
 /// Sum the fee components and bump to an even lovelace count. The collateral
 /// output uses `3/2 * total_fee`; keeping `total_fee` even keeps that integer.
@@ -25,25 +13,7 @@ pub(crate) fn total_with_even_rounding(
     compute_fee: u64,
     script_reference_fee: u64,
 ) -> u64 {
-    let total = tx_fee + compute_fee + script_reference_fee;
-    if total.is_multiple_of(2) {
-        total
-    } else {
-        total + 1
-    }
-}
-
-/// Build the collateral return Output: returns `5 ADA - 3/2 * total_fee` to
-/// the supplied address. Caller is responsible for ensuring `total_fee` is
-/// even (via [`total_with_even_rounding`]) so the integer division is exact.
-///
-/// Errors if the fee is large enough that `3/2 * total_fee` exceeds the fixed
-/// 5 ADA collateral — at that point the collateral cannot cover the tx anyway.
-pub(crate) fn collateral_output(addr: Address, total_fee: u64) -> Result<Output> {
-    let collateral_return: u64 = 5_000_000u64
-        .checked_sub(total_fee * 3 / 2)
-        .context("transaction fee is too large for the 5 ADA collateral to cover")?;
-    Ok(Output::new(addr, collateral_return))
+    seedelf_core::build::even(tx_fee + compute_fee + script_reference_fee)
 }
 
 /// Interpret a Koios `submit_tx` JSON response. Returns the tx hash on
