@@ -8,7 +8,7 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 - **Lovejoin is on,** on both networks, for private sessions' returns (a Settings switch turns it off), and says where it's chosen that it has had no third-party audit.
 - **The privacy policy** is [privacy-policy.md](privacy-policy.md) on the `seedelf-web-wallet` branch.
 - **The Privacy practices form** declares *Authentication information* and *Financial and payment information*, and, on this review's reading, *Location* and *Web history* too (see *Data usage* below).
-- **Still the owner's call:** a new listing, or an update of the unlisted preprod item (chunk 11c). **An update, if that item was ever submitted**, otherwise a new listing by default:
+- **Decided (the owner, 2026-09-28): a new listing.** The unlisted preprod item from chunk 11c is not updated. Unpublish it once the new one is live, so two items with the same name don't sit side by side, and tell the preprod testers to reinstall and restore — an install of the old item gets no update to the new one. The trade-off that was weighed:
   - An update keeps one install link and the testers on it. Their wallets stay on preprod: a wallet made before the switch, with no network chosen, is a preprod wallet (`NetworkChoice`), so an update never moves a test wallet to mainnet.
   - Chrome disables the extension for each tester until they accept the new permissions (mainnet's Koios, CoinGecko, `sidePanel`, `scripting`). They keep their wallet; they just have to click through.
   - A new listing leaves two items with the same name unless the old one is unpublished, and every tester has to reinstall and restore.

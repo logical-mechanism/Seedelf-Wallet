@@ -68,7 +68,7 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
    - **Seedelf:** a Seedelf funded from the private balance, and a return merged back into it, are done; the owner reports the other flows working, which the chain hasn't been read for here.
 2. **A validity interval on private spends:** they still have no expiry, until a live check shows giveme.my accepts one.
 3. **The store** (`web-wallet/release-prep`):
-   - a new listing, or an update of the unlisted preprod item: the owner's call, with the trade-off written out in [store/README.md](../store/README.md);
+   - ~~a new listing, or an update of the unlisted preprod item~~ **decided (the owner, 2026-09-28): a new listing**, with the old unlisted item unpublished once it's live (see [store/README.md](../store/README.md));
    - ~~screenshots from mainnet-shaped fixtures~~ **done:** the five show mainnet, with no test-network strip;
    - the *Location* and *Web history* data-usage answers: both recommended checked, reasoning in [store/README.md](../store/README.md);
    - no version bump (1.0.0 is unreleased), then the zip's SHA-256 in the roadmap once the owner packages it.
