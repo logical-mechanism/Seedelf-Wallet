@@ -64,5 +64,13 @@ These constraints are load-bearing for correctness *and* safety — a mistake he
 
 ## Release & versioning
 
+**Two version lines, deliberately apart** (the owner, 2026-09-29). Don't align them.
+
+- **The web wallet is its own line, from `1.0.0`** (`seedelf-web-wallet/extension/package.json`), because the Chrome Web Store demands a strictly higher version on every upload. A listing hotfix must be free to bump it alone.
+- **The Rust workspace and the contracts stay on `0.x.y`** (0.4.10 today). `seedelf-core`'s API is still moving — the builder extraction is unfinished — and on `0.x` Cargo reads a minor bump as breaking, which is the right regime for it. Go to `1.0.0` deliberately when that API settles, as a statement that it has.
+- A unified "Seedelf 1.0" is an announcement, never a package version.
+
+**Tagging: a web wallet tag must contain a `/`.** [.github/workflows/release.yml](.github/workflows/release.yml) fires on tags matching `*.*.*` and builds, GPG-signs and publishes **CLI** binaries. A tag glob's `*` matches anything but `/`, so `v1.0.0` and `seedelf-wallet-1.0.0` both match it and would ship a false CLI release. Use `web-wallet/<version>`, on the commit the uploaded zip was built from.
+
 - Rust workspace version is pinned in `[workspace.package]` of [seedelf-platform/Cargo.toml](seedelf-platform/Cargo.toml); the inter-crate deps in `[workspace.dependencies]` must match. Bump them together.
-- Contract versioning is exposed via the CLI's `--variant` flag (defaults to `1`); the core crate selects script hashes per variant.
+- Contract versioning is exposed via the CLI's `--variant` flag (defaults to `1`); the core crate selects script hashes per variant. Variant 1 is frozen on chain, so `aiken.toml`'s version says nothing about what's deployed.

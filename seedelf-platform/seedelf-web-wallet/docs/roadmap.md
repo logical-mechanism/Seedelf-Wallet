@@ -4,13 +4,15 @@ The wallet is built in **chunks**, each about one working session.
 
 **Each chunk:**
 
-1. Starts on a branch `web-wallet/<topic>` taken from `seedelf-web-wallet`. See [development.md](development.md#branching).
-2. Ends with a PR back into `seedelf-web-wallet`.
+1. Starts on a branch `web-wallet/<topic>` taken from `main` (from `seedelf-web-wallet` before v1.0.0). See [development.md](development.md#branching).
+2. Ends with a PR back into `main`.
 3. At its end, updates this file: tick the chunk, and write what the next session needs to know under [Handoff notes](#handoff-notes).
 
 **Status:** ✅ done · 🚧 in progress · ⬜ not started
 
 ## v1
+
+**Shipped.** Every chunk below is done, and v1.0.0 went to the Chrome Web Store on 2026-09-28 (see the newest handoff note). Work from here is *After v1*.
 
 | # | Chunk | Status | Scope |
 |---|---|---|---|
@@ -39,7 +41,7 @@ The wallet is built in **chunks**, each about one working session.
 - **A detailed transaction view, on its own branch** (the owner, 2026-09-28, from the mainnet test). Today a site's transaction is shown as what it does to the account, and the wallet's own as a review's rows, but there's nowhere to open the transaction itself: its inputs, outputs, datums, scripts, certificates and metadata, decoded from the CBOR that is about to be signed. Until then someone who wants to check the bytes themselves can't. It wants its own chunk: a decoder in WebAssembly, a screen, and a way in from every review and from the connector's window.
 - Contract round trip: one-time accounts, CIP-30, auto-return ([flows.md](flows.md#contract-round-trip)). Started in chunk 15: its plan has the steps, the user's two designs, and what Minswap allows.
 - ~~Turn on the mainnet build flag~~ **done (2026-09-26):** one build carries both networks, mainnet by default, with preprod in Settings ([architecture.md](architecture.md#networks)). Not a launch blocker.
-- **Merge `seedelf-web-wallet` into `main`** — at launch (the owner, 2026-09-28). `main` holds nothing the branch doesn't, so it is a fast-forward. The store listing's homepage and privacy-policy URLs, and the wallet's own Settings link, point at `main`, so the merge lands **before** `npm run package`.
+- ~~Merge `seedelf-web-wallet` into `main`~~ **done (2026-09-29, PR #266).** Web wallet work now branches from `main` and PRs into `main` ([development.md](development.md#branching)). The old branch is finished but stays until the unlisted preprod listing is unpublished, in case that listing still points its privacy policy at it.
 
 ## Handoff notes
 

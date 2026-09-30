@@ -4,21 +4,19 @@ This is how we run and test the extension before it's in the Chrome Web Store. T
 
 ## Branching
 
-`seedelf-web-wallet` is the long-lived dev branch for the web wallet.
-
-- **It merges into `main` only once the wallet works and looks the way we want.** Until then, `main` carries no web-wallet code, so shelving the effort never leaves dead code on `main`.
+**Since v1.0.0 (2026-09-29), the web wallet lives on `main`.** `seedelf-web-wallet`, the long-lived dev branch it was built on, was merged into `main` (PR #266) and is finished. It held the wallet off `main` until it worked, so shelving the effort would have left no dead code there; that job is done.
 
 **Feature branches and PRs:**
 
-- **Start every feature branch from `seedelf-web-wallet`** and name it `web-wallet/<topic>`. Git can't create `seedelf-web-wallet/<topic>` next to an existing branch with that name.
-- **Open PRs into `seedelf-web-wallet`, never into `main`.**
+- **Start every feature branch from `main`** and name it `web-wallet/<topic>`. Keep the prefix: it reads well in the log, and it's what tags use.
+- **Open PRs into `main`.**
   - CI runs on pull requests into any branch.
-  - Direct pushes to the dev branch don't trigger CI.
+  - Direct pushes don't trigger CI, so go through a PR even for a docs change.
+- **Never name a branch `web-wallet/<x>.<y>.<z>`** — that's the tag namespace (`web-wallet/1.0.0`), and a branch and tag sharing a name makes `git checkout` ambiguous.
 
-**Keeping up with `main`:**
+**The old branch:**
 
-- **Merge `main` into `seedelf-web-wallet` regularly.** Merge rather than rebase, because the branch is shared.
-- **Always merge `main` in right before the builder extraction** in `seedelf-core` / `seedelf-cli`. That refactor touches the same files `main` changes.
+- **Don't start new work on `seedelf-web-wallet`,** and don't delete it yet: the unlisted preprod Web Store listing from chunk 11c may still declare a privacy policy URL on that branch. Delete it only once that listing is unpublished.
 
 **Shared Rust code:**
 
@@ -118,7 +116,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
 
 ## Web Store release: copy/paste procedure
 
-This is the repeatable release path for a new Web Store version. Run it from the release commit on the `seedelf-web-wallet` branch. Change `release_version` to the new, higher version for each later release.
+This is the repeatable release path for a new Web Store version. Run it from the release commit on `main`. Change `release_version` to the new, higher version for each later release.
 
 ### 1. Set the version and run the checks
 
@@ -195,7 +193,7 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 9. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
 10. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
 
-## Sharing with testers before launch
+## Sharing with testers before launch (history)
 
 **Decided (chunk 11c): an unlisted, preprod-only Web Store listing.** Superseded at launch (2026-09-26): the store's build is mainnet, with preprod in Settings for testing. See [store/README.md](store/README.md).
 
