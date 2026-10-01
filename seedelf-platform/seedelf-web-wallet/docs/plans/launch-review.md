@@ -68,10 +68,10 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
    - **Seedelf:** a Seedelf funded from the private balance, and a return merged back into it, are done; the owner reports the other flows working, which the chain hasn't been read for here.
 2. **A validity interval on private spends:** they still have no expiry, until a live check shows giveme.my accepts one.
 3. **The store** (`web-wallet/release-prep`):
-   - ~~a new listing, or an update of the unlisted preprod item~~ **decided (the owner, 2026-09-28): a new listing**, with the old unlisted item unpublished once it's live (see [store/README.md](../store/README.md));
+   - ~~a new listing, or an update of the unlisted preprod item~~ **a new listing;**
    - ~~screenshots from mainnet-shaped fixtures~~ **done:** the five show mainnet, with no test-network strip;
    - ~~the *Location* and *Web history* data-usage answers~~ **done:** both checked at submission, reasoning in [store/README.md](../store/README.md);
-   - ~~no version bump, then the zip's SHA-256 in the roadmap~~ **done:** submitted as 1.0.0 on 2026-09-28, SHA-256 `85c0fb09…714b`, recorded in the roadmap's handoff notes. **Published 2026-10-01**, and tagged `web-wallet/1.0.0`.
+   - ~~no version bump, then the zip's SHA-256 in the roadmap~~ **done:** submitted as 1.0.0 on 2026-09-28, SHA-256 `85c0fb09…714b`, recorded in the roadmap's handoff notes. Tagged `web-wallet/1.0.0`.
 4. **Upstream:** Lovejoin's config and SDK swap Seedelf's preprod and mainnet reference UTxOs. Its `config/network.mainnet.json` also still has `mix_script_hash: null`, though the hash the wallet uses is now confirmed on chain.
 5. **Smaller items, left for later:**
    - A certificate carries no network, so a site can still ask for a stake-key-only signature over the other network's transaction.
@@ -298,7 +298,7 @@ These are all confirmed by two independent checks. Each has one fix, and several
 2. **A token→ADA swap's proceeds through Lovejoin** (#26): keep chunk 16's choice with honest copy, or leave the proceeds out.
 3. **The swap runner's order check** (#21): add a structural check, or accept the risk with reworded copy.
 4. **Mainnet-only builds** (M3, recommended), or build the network switch.
-5. **The store listing:** a new listing, or an update of the unlisted preprod item. An update moves testers' installs, and their test phrases, to mainnet.
+5. **The store listing:** a new listing.
 6. **freshIndex's probe** (#22): the privacy gain against one extra request when an index is used.
 
 ## Launch-prep order

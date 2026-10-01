@@ -8,11 +8,6 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 - **Lovejoin is on,** on both networks, for private sessions' returns (a Settings switch turns it off), and says where it's chosen that it has had no third-party audit.
 - **The privacy policy** is [privacy-policy.md](privacy-policy.md) on the `seedelf-web-wallet` branch.
 - **The Privacy practices form** declares *Authentication information* and *Financial and payment information*, and, on this review's reading, *Location* and *Web history* too (see *Data usage* below).
-- **Decided (the owner, 2026-09-28): a new listing.** The unlisted preprod item from chunk 11c is not updated. Unpublish it once the new one is live, so two items with the same name don't sit side by side, and tell the preprod testers to reinstall and restore — an install of the old item gets no update to the new one. The trade-off that was weighed:
-  - An update keeps one install link and the testers on it. Their wallets stay on preprod: a wallet made before the switch, with no network chosen, is a preprod wallet (`NetworkChoice`), so an update never moves a test wallet to mainnet.
-  - Chrome disables the extension for each tester until they accept the new permissions (mainnet's Koios, CoinGecko, `sidePanel`, `scripting`). They keep their wallet; they just have to click through.
-  - A new listing leaves two items with the same name unless the old one is unpublished, and every tester has to reinstall and restore.
-  - Either way it's a full review: the listing goes from an unlisted preprod test to a public mainnet wallet, with new hosts. While it's in review the already-published version stays installable, so an update risks nothing the testers have.
 - **Privacy review (2026-09-27):** the description, the justifications and the policy say that giveme.my is ours, and what Koios and giveme.my, sites and Minswap can still see ([plans/privacy-review.md](../plans/privacy-review.md), §2.4, §2.5, §2.12). Recheck the data usage answers below before submitting.
 
 ## Before you upload
@@ -189,16 +184,10 @@ To see an empty wallet instead, choose "Create new wallet": reveal and write dow
 The wallet contacts only Koios (api.koios.rest on mainnet, preprod.koios.rest on preprod), www.giveme.my, CoinGecko (api.coingecko.com, on mainnet, for ADA's price), and for a swap, Minswap's aggregator (agg-api.minswap.org on mainnet, aggr.monorepo-testnet-preprod.minswap.org on preprod).
 ```
 
-## After approval
+## Submitting again
 
-**v1.0.0 was published on 2026-10-01**, first time through, with nothing asked of us. What's due now:
-
-- **Unpublish the unlisted preprod item from chunk 11c.** Two items with the same name would otherwise sit side by side, and an install of the old one never updates to the new. Its testers reinstall from the new link and restore their phrase.
-- **Then `seedelf-web-wallet` can be deleted.** It's kept only because that old listing may still declare a privacy policy URL on it ([development.md](../development.md#branching)).
-- **Record the listing's URL here** once it's to hand, and in the roadmap's handoff note.
-
-- **The listing's URL is the install link.** Share it with the testers.
-- **Updating:** bump the version, run the release checklist, then upload the new zip on the Package tab. Chrome updates installed copies on its own.
+- **Each upload needs a version strictly higher than the last.** Bump it at submission time, in `extension/package.json`; the manifest takes its version from there.
+- **Uploading:** run the release checklist, then upload the zip on the Package tab.
 - **When the UI changes,** regenerate the images: `npm run build && npm run store:images` in `extension/`.
   - `e2e/store-images.spec.ts` makes them from the test fixtures and the public test phrase, so no real wallet appears.
   - Upload the new ones.
