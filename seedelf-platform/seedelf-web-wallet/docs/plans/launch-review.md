@@ -71,7 +71,7 @@ A second adversarial review, of the fixes themselves, found 30 more issues, all 
    - ~~a new listing, or an update of the unlisted preprod item~~ **decided (the owner, 2026-09-28): a new listing**, with the old unlisted item unpublished once it's live (see [store/README.md](../store/README.md));
    - ~~screenshots from mainnet-shaped fixtures~~ **done:** the five show mainnet, with no test-network strip;
    - ~~the *Location* and *Web history* data-usage answers~~ **done:** both checked at submission, reasoning in [store/README.md](../store/README.md);
-   - ~~no version bump, then the zip's SHA-256 in the roadmap~~ **done:** submitted as 1.0.0 on 2026-09-28, SHA-256 `85c0fb09…714b`, recorded in the roadmap's handoff notes. **Awaiting Google's review.**
+   - ~~no version bump, then the zip's SHA-256 in the roadmap~~ **done:** submitted as 1.0.0 on 2026-09-28, SHA-256 `85c0fb09…714b`, recorded in the roadmap's handoff notes. **Published 2026-10-01**, and tagged `web-wallet/1.0.0`.
 4. **Upstream:** Lovejoin's config and SDK swap Seedelf's preprod and mainnet reference UTxOs. Its `config/network.mainnet.json` also still has `mix_script_hash: null`, though the hash the wallet uses is now confirmed on chain.
 5. **Smaller items, left for later:**
    - A certificate carries no network, so a site can still ask for a stake-key-only signature over the other network's transaction.

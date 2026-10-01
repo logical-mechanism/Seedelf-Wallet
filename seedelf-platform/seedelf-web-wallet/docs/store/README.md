@@ -191,6 +191,12 @@ The wallet contacts only Koios (api.koios.rest on mainnet, preprod.koios.rest on
 
 ## After approval
 
+**v1.0.0 was published on 2026-10-01**, first time through, with nothing asked of us. What's due now:
+
+- **Unpublish the unlisted preprod item from chunk 11c.** Two items with the same name would otherwise sit side by side, and an install of the old one never updates to the new. Its testers reinstall from the new link and restore their phrase.
+- **Then `seedelf-web-wallet` can be deleted.** It's kept only because that old listing may still declare a privacy policy URL on it ([development.md](../development.md#branching)).
+- **Record the listing's URL here** once it's to hand, and in the roadmap's handoff note.
+
 - **The listing's URL is the install link.** Share it with the testers.
 - **Updating:** bump the version, run the release checklist, then upload the new zip on the Package tab. Chrome updates installed copies on its own.
 - **When the UI changes,** regenerate the images: `npm run build && npm run store:images` in `extension/`.
