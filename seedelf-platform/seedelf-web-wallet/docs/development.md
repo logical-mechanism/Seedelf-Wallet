@@ -16,7 +16,7 @@ This is how we run and test the extension before it's in the Chrome Web Store. T
 
 **The old branch:**
 
-- **Don't start new work on `seedelf-web-wallet`,** and don't delete it yet: the unlisted preprod Web Store listing from chunk 11c may still declare a privacy policy URL on that branch. Delete it only once that listing is unpublished.
+- **Don't start new work on `seedelf-web-wallet`;** it's finished and far behind `main`, and can be deleted whenever.
 
 **Shared Rust code:**
 
