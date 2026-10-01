@@ -15,6 +15,27 @@ trip still waits on a batcher test — and it is testable on one machine against
 checked-in fixtures, with no listing, no testers and no mainnet money. That
 matters while the Chrome Web Store listing is down.
 
+## Found before building (2026-10-01)
+
+**Every wallet-built transaction already keeps its CBOR before the review.**
+Each flow parks the built transaction in session storage under its own key —
+`seedelf.send.built`, `.transfer.built`, `.mint.built`, `.stake.built`,
+`.withdraw.built`, `.remove.built`, `.collateral.built`, and the session ones in
+`sessions.ts` — all through `keep()` in
+[`background/script-spend.ts:241`](../../extension/src/background/script-spend.ts),
+and all of them hold `txCbor` (`transfer.ts:117`, `send.ts:144`,
+`withdraw.ts:115`, `mint.ts:133`, `staking.ts:270`). So "available any time the
+wallet is building a transaction" needs **no new plumbing**: the view reads the
+same `txCbor` the review is already about.
+
+**And the modal cannot lose a signed transaction.** Submit reads the built
+transaction back out of its session key — `send(this.deps, network, txHash,
+SESSION_SEND, ...)` — not out of the review screen's state. Opening or closing a
+modal therefore cannot strand a signed transaction, because the signed bytes
+never lived in the component. That is the guarantee the owner asked for, and it
+already holds; the chunk only has to not break it. A test pins it: open the view
+on a signed transaction, close it, submit, and the submit still goes.
+
 ## Start here
 
 - **`inspect_tx` already does the walk.** [`wasm/src/cip30.rs:1490`](../../wasm/src/cip30.rs)
@@ -35,6 +56,21 @@ matters while the Chrome Web Store listing is down.
   TypeScript.
 - **The render target exists.** `DappApprovals.tsx` lays `DappTxSummary` out
   through `ReviewRows`/`Row` (label-and-value `<dl>` rows, 21 lines).
+
+## Decided (the owner, 2026-10-01)
+
+1. **No input resolution.** What an input holds is not in the transaction, and
+   fetching it would cost a Koios lookup per input on a transaction you are only
+   reading. Inputs show as `txhash#index`.
+2. **No Cardanoscan link either — a copy button instead.** This is my call
+   against the owner's "if anything, a link ... but even that may be too much",
+   and their instinct is right. A click-through tells Cardanoscan, from the
+   user's own IP, exactly which transaction they are examining — a third party
+   that is not otherwise in the wallet's trust set at all, which makes it a worse
+   leak than the Koios one and an odd thing to put in a privacy wallet. Copying
+   the hash costs nothing, goes nowhere, and lets the user paste it into whatever
+   they like. Overrule me if you want the link.
+3. **A modal, on every transaction the wallet builds** — see *UI* below.
 
 ## The shape that makes it local-testable
 
@@ -85,10 +121,25 @@ write, no session state. It is the cheapest handler in the worker.
 
 ### 3. UI (`extension/src/ui/`)
 
-A `TxView` — decoded sections through `ReviewRows`, and a **Raw CBOR** tab with
-the hex and a copy button, so the bytes can be taken to another decoder. Ways in:
-the connector's sign window, the wallet's own reviews, and Activity rows (see
-*Open* below).
+**A modal, Eternl's way:** its own thing, for that one transaction, closed easily
+so a transaction that is already signed can still be submitted. Reached from an
+**expand / more info** control on the review, on **every** screen that builds a
+transaction — so it is one shared component taking a `txCbor`, not an
+integration per screen.
+
+**What it leads with is where the value goes.** The owner's framing: "a lot of
+the tx viewer is about seeing what is going where." So inputs and outputs come
+first and get the room — each output's address, its ADA and its tokens — and
+fee, validity, certificates, redeemers, scripts and metadata follow under it.
+This is not a flat dump of body fields in CBOR order.
+
+**A Raw CBOR tab** with the hex and a copy button, so the bytes can be taken to
+any other decoder.
+
+**The connector's sign window gets it too.** The owner's "any time the wallet is
+building a transaction" is read as including it: a site's bytes are the ones the
+wallet did *not* build, which is where reading them matters most, and
+`TxRequest` already carries `tx_cbor`. Say if that is wrong.
 
 ### 4. Tests
 
@@ -108,24 +159,13 @@ the connector's sign window, the wallet's own reviews, and Activity rows (see
 `flows.md` (how it is reached), `architecture.md` (why the decoder is in WASM and
 `cbor.ts` is not it), the roadmap's table and a handoff note.
 
-## Open — your call before I build
-
-1. **Do inputs get resolved?** Decode-only can show `txhash#index`, because what
-   an input *holds* is not in the transaction. Showing it needs a Koios lookup
-   per input — a privacy cost on a transaction you are merely reading. Three
-   options: never; only on the connector path, where the extension already
-   fetched those rows and it is free; or behind a button that says it will cost a
-   lookup. Private-by-default argues for the last.
-2. **Which ways in**, and is Activity in scope this chunk? Activity means
-   fetching a transaction's CBOR by hash, which is a Koios call and a different
-   privacy question from inspecting what you are about to sign.
-3. **What of Eternl's you want matched** — its grouping, what it puts behind a
-   tab, how it shows the raw bytes. Take the idea, not its brand or assets, as
-   chunk 11a did with Lace.
-
 ## Not this chunk
 
 - Disassembling Plutus scripts to UPLC. A hash, kind and size, not a decompiler.
 - Guessing a datum's schema. Inline datums show as hex (and as the `Register` it
   is when the address is the wallet contract).
 - Changing `inspect_tx`, `sign_tx` or the approval decision in any way.
+- **Activity.** The owner scoped this to transactions the wallet is building, so
+  a past transaction is out: it would mean fetching CBOR by hash from Koios,
+  which is the privacy question decision 1 just declined. The decoder would work
+  on it unchanged if that is ever wanted.
