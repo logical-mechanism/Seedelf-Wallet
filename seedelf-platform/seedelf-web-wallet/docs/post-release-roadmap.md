@@ -18,11 +18,12 @@
 
 1. **[Owed](#owed)** — promises the repo has already made.
 2. **[Feature parity: what's left](#feature-parity-whats-left)** — several accounts, language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
-3. **[The data layer](#the-data-layer)** — its own question, and the thing several other items are waiting on.
-4. **[Then the UX and UI pass](#then-the-ux-and-ui-pass)** — round three, after parity.
-5. **[dApp additions](#dapp-additions)** run alongside all of it, and are not counted in parity.
+3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
+4. **[The data layer](#the-data-layer)** — its own track, decided in shape, and the thing the notification centre waits on.
+5. **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, once 2 and 3 have landed.
+6. **[The documentation review](#the-documentation-review)** — last, because everything above rewrites parts of it.
 
-**[Public-side completeness](#public-side-completeness)** is a pool of candidates rather than a step: the governance items the owner has reopened for the public account, pickable whenever one is wanted.
+**[dApp additions](#dapp-additions)** run alongside all of it and are not counted in parity.
 
 ## Where Cardano parity stands
 
@@ -94,7 +95,7 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 
 ### P2 · Language
 
-**Copy what Lace does** (the owner's call), which is a good fit for our rules because **every locale is bundled — nothing is fetched, so no new host and nothing phones home**:
+**Copy what Lace does, including its languages** (the owner, 2026-10-02): **English, Spanish and Japanese** — "probably a very large chunk of the Cardano user base". It's a good fit for our rules because **every locale is bundled — nothing is fetched, so no new host and nothing phones home**:
 
 - **i18next**, with one flat JSON per locale in `contract/i18n/src/translations/` — Lace ships `en`, `es`, `ja`.
 - **The picker derives its own list from the bundled files.** Each locale file carries `translation.language.name` and `translation.language.code`, so the languages are a single source of truth and adding one is: write the JSON mirroring `en.json`'s keys, register it, and i18next and the picker pick it up (their `translations/index.ts` says exactly this at the top).
@@ -105,7 +106,7 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 - **No strings are externalised today.** This is the bulk of the work, and it touches every screen.
 - **`tests/words.test.ts` has to move with them.** It parses source files for a lowercase "seedelf" in anything a person reads; once the text is in JSON it must check the locale files' values instead — and **Seedelf stays Seedelf in every language**, so it can check them all, not just English.
 - **A missing translation must fall back to English, never vanish** — i18next's `fallbackLng` does this, and it matters most for the privacy notes, which the rules say may never be dropped.
-- **Who translates.** A machine translation of a privacy warning is a correctness problem, not a cosmetic one. ❓
+- **The privacy notes need a human who reads the language.** A machine translation is fine for a button and not for a warning that decides whether someone understands what they're about to publish. Translate the bulk however is practical; have the privacy and warning strings read by someone fluent before they ship, and treat a missing one as untranslated (English) rather than guessed.
 
 ### P3 · NFT images
 
@@ -117,7 +118,7 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 
 ## Public-side completeness
 
-**The owner, 2026-10-02:** some of what sat under *Not planned* is worth doing **for the public side**, because it's what makes this a full wallet rather than a private balance with a wallet attached. Under consideration, not scheduled:
+**The owner, 2026-10-02: do this before the UX pass.** Some of what sat under *Not planned* is worth doing **for the public side**, because it's what makes this a full wallet rather than a private balance with a wallet attached. So the pass gets a finished wallet to look at, not one with governance still arriving:
 
 - **Voting on proposals.** The wallet delegates voting power today — Always abstain, No confidence, or a DRep — but can't vote on a governance action itself. For the public account that's an ordinary Cardano wallet feature, and it has no private-side meaning: a Seedelf address has no staking part, so the private balance has no voice to cast.
 - **Registering as a DRep.** The same shape: a public-account action, and the one that turns a user from someone who delegates into someone others delegate to.
@@ -127,27 +128,51 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 
 ## The data layer
 
-**The owner is weighing a purpose-built data layer in Rust** (2026-10-02): a service on a cloud server querying a db-sync, with queries written for this wallet rather than general-purpose like Koios. ❓
+**Decided in shape (the owner, 2026-10-02): a db-sync wrapper in Rust, for the web wallet.** Not a general API — queries written for this wallet. **The CLI stays on Koios**, which already works for it, so this is one client, not two. **giveme.my needs no fork**: the owner runs it, so it can be adjusted directly if the collateral side ever wants the same treatment.
 
-**Why it keeps coming up.** Koios is the sole data layer today, on the public tier, and it's the ceiling under several things at once:
+**Clearnet, and the owner is leaning yes** — because Koios is slow and its rate limit bites. **Tor is out of scope here, and that's a consequence, not a compromise:** the one client is a Chrome extension, Chrome doesn't resolve `.onion` (RFC 7686 special-use, deliberately unsupported), and the CLI — the thing Tor could have served — isn't a client. The root [README](../../../README.md#de-anonymizing-via-ip-tracking)'s Tor exploration stays a CLI and general-infrastructure aspiration. A user who routes their whole machine through Tor still reaches a clearnet endpoint over Tor, so what the wallet owes them is a **configurable endpoint** and nothing leaking around it.
 
-- **The contract scan pages.** Preprod's shared contract has already grown past one page of 1,000 rows, so a reading takes two requests — and that grows with the contract, for every user.
-- **The budget is tight and shared:** 5,000 requests a day, 40 every 10 seconds, a 30 s timeout. Chunk 14's rules make every feature state its cost because of this.
-- **It's what the notification centre is waiting on.** Word of an incoming payment without opening the wallet means reading the chain in the background, which the budget above forbids. That's the thing that "does not exist at the moment".
-- **IP linkage.** Every transaction goes through Koios and every private spend through giveme.my, both from the user's IP, so either can group one person's private spends — the root [README](../../../README.md#de-anonymizing-via-ip-tracking) says so, and says Tor access is being explored. `koios.rest` doesn't offer Tor. **A service we run could.**
+### What it fixes
 
-**The constraint that has to hold whatever gets built: the ownership check stays in the wallet.** Matching a contract UTxO to a Seedelf needs the secret scalar, so the server must never be asked "which of these are mine" — it serves contract UTxOs, and the wallet matches them locally, as it does now. A data layer that answered that question would be a service that knows every user's private balance.
+- **The contract scan pages, and grows.** Preprod's shared contract is already past one page of 1,000 rows, so a reading takes two requests — and that grows with the contract, for every user, forever.
+- **The budget is tight and shared:** 5,000 requests a day, 40 every 10 seconds. Chunk 14's rules make every feature state its request cost because of this.
+- **It's slow where it hurts.** `TIMEOUT_MS` is 45 s because one `credential_utxos` over an account with real history "can take tens of seconds on the public tier" (found on mainnet, 2026-09-28).
+- **It's what the notification centre waits on.** Background reading of the chain is impossible under the budget above.
 
-**The owner's direction (2026-10-02): Tor, open source, and tracking nothing** — the posture giveme.my already takes, and giveme.my does support Tor already, though the CLI doesn't use it. Running the infrastructure ourselves is what makes "doesn't track anything" a thing we can actually assert rather than hope for. Two problems come with it:
+### The constraint that has to hold
 
-- **Abuse protection without IPs.** Rate limiting normally keys on the caller's IP, and removing that IP *is the point* of Tor. So the protection has to come from somewhere else — per-circuit limits, a proof of work, issued tokens, or a cost attached to the request — and that's a design question before it's a deployment one. The same question applies harder to a giveme.my fork, since a collateral service gives something away by definition.
-- **Chrome can't reach an `.onion`, so Tor doesn't help the extension.** `.onion` is a special-use name under RFC 7686 that must not be resolved through public DNS, and Chrome doesn't resolve it; that's deliberate, not a gap waiting to close. So a Tor-only data layer serves **the CLI** and other Tor-capable clients, not the web wallet. For the extension it means a clearnet endpoint as well, and there the privacy win is the no-logging policy and the open source, not Tor. A user who routes their whole machine through Tor reaches a clearnet endpoint over Tor anyway — which is the realistic path, and what the wallet owes them is a **configurable endpoint** and nothing that leaks around it.
+**The ownership check stays in the wallet.** Matching a contract UTxO to a Seedelf needs the secret scalar, so the server must never be asked "which of these are mine" — it serves contract UTxOs and the wallet matches locally, as it does now. A service that answered that question would be a service that knows every user's private balance.
 
-**Open, if it goes ahead:** what it costs to run; whether it's the default or a choice, with Koios as the fallback; whether a user can point the wallet at their own instance; and the host-permission problem in Chrome (a new origin at install, or an optional grant when it's set). **It replaces nothing about the wallet's own privacy rules** — being ours makes it answerable, not blind.
+### DoS protection on clearnet — the owner's question
 
-## Then the UX and UI pass
+The wallet makes **two** `credential_utxos` queries, and they are opposite in every way that matters here. That split is the whole design.
 
-**Round three, after parity** (the owner's call). Chunks [12](plans/chunk-12-style-flow.md) and [14](plans/chunk-14-style-flow-2.md) were rounds one and two; 11a was only half-Lace. It runs the way both of those did: **the owner tests the built wallet and sends findings; each goes in a table with what was decided**, and batches land with tab and side-panel screenshots to check before the next rebuild.
+| | The contract scan | Account UTxOs |
+|---|---|---|
+| Whose data | The contract's whole UTxO set — **byte-identical for every user** | The user's own payment credentials (batched 75 a request) |
+| Cacheable | **Completely** | Not at all |
+| Cost per request | Near zero once cached | A real query, and the slow one today |
+| What it reveals to us | "This IP uses Seedelf", and when | **Which credentials a user is asking about** |
+
+**In order of leverage:**
+
+1. **Not being general is the main defence.** Koios is PostgREST: any filter, any order, any depth — which is exactly why it can neither cache your query nor bound its cost. A small fixed set of endpoints with fixed query shapes means no caller can *compose* an expensive request. The worst available is a cheap question asked often, which is a rate-limiting problem rather than a database one.
+2. **The expensive query is shared, so cache it.** One db-sync read per block (~20 s) serves every user the contract set from memory, with its block height and an ETag. Someone hammering that endpoint gets cached bytes: the cost is bandwidth, not db-sync. **The query that hurts most under Koios is the one that caches perfectly** — that's the single biggest win available, and it's also the cheapest thing to defend.
+3. **Deltas, which the wallet already asks for.** After a first read it sends only `block_height=gt.<last>`, so steady state is small responses, cached the same way.
+4. **The per-user endpoint takes the bounds instead:** an index on the payment credential, a cap on credentials per request (the wallet already batches 75), a concurrency cap per connection, and a per-IP token bucket — **a counter in memory, not a log**: never written to disk, never joined to what was asked. Rate limiting needs the IP for a few seconds; it doesn't need a record.
+5. **A hard budget with a circuit breaker, and Koios as the fallback.** A monthly egress and compute ceiling that degrades to "ask Koios" rather than failing. Neither a surprise bill nor an outage should brick a wallet, and keeping Koios in the picture means the service is never a single point of failure.
+
+**What not to do: a third-party edge.** Cloudflare or a managed WAF in front is the obvious answer and it undoes the point — it terminates TLS, so a third party sees every request and every IP. That's the Koios linkage with extra steps and a worse story, because we'd have chosen it. Volumetric protection, if it's ever needed, wants to be something we run, or an upstream that sees only encrypted bytes.
+
+**What the service still learns, said plainly.** The contract endpoint learns that an IP uses Seedelf. The account endpoint learns which payment credentials that IP asks about — the same thing Koios learns today, moved to us. The local ownership check is what keeps the *private balance* out of it entirely. So the no-log promise and the open source carry the account endpoint, and those are a policy and an audit trail, not a proof — which is worth saying in the privacy docs in exactly those words.
+
+### Still open
+
+What it costs to run; whether it's the default with Koios as fallback or a choice; whether a user can point the wallet at their own instance; and the host-permission problem in Chrome (a new origin at install, or an optional grant when it's set).
+
+## The UX and UI pass
+
+**Round three, after parity and the public-side work** (the owner's call). Chunks [12](plans/chunk-12-style-flow.md) and [14](plans/chunk-14-style-flow-2.md) were rounds one and two; 11a was only half-Lace. It runs the way both of those did: **the owner tests the built wallet and sends findings; each goes in a table with what was decided**, and batches land with tab and side-panel screenshots to check before the next rebuild.
 
 The list is the owner's to write when parity lands. Carried candidates:
 
@@ -158,6 +183,19 @@ The list is the owner's to write when parity lands. Carried candidates:
 ## dApp additions
 
 **Not counted in parity, and ongoing.** The dApps page's catalogue is the one part of the wallet that grows after feature-complete: each entry is a claim that the dApp works *privately*, through a one-time account with the money coming back, so each needs its own test run before it ships. Minswap is the first, Lovejoin is in, and A2 ([O4](#owed)) is the next shape of it.
+
+## The documentation review
+
+**The owner, 2026-10-02: a major review once these additions land**, because everything above changes part of what the docs say. It's listed last on purpose — doing it earlier means doing it twice.
+
+**The two audiences are different documents, and the review should treat them that way:**
+
+- **Human-facing.** The root [README](../../../README.md), the web wallet's [README](../README.md), and the design docs ([architecture.md](architecture.md), [flows.md](flows.md), [privacy.md](privacy.md), [keys-and-accounts.md](keys-and-accounts.md), [development.md](development.md)) plus [store/](store/README.md). These are read by users, by people judging whether to trust the wallet, and by the Web Store reviewer. The forward-looking lines are the ones that rot: the web wallet README's *Later, maybe* and *Not planned* already lag every decision on this page.
+- **Agent-facing.** [plans/](plans/) is, in the owner's words, "just prompts for you basically" — specs a session is handed to build something, with the decisions that were made along the way. They're written to be read once, by whoever picks the chunk up. A finished plan is a record, not a page to maintain; what a *later* session needs out of it belongs in the design docs or a handoff note, and the review is the moment to move anything that's quietly become load-bearing.
+
+**Worth settling as part of it:** whether [plans/](plans/) should say at the top of each file which it is — a live spec or a finished record — since a stale plan read as current is the one failure mode that costs real work. The two [CLAUDE.md](../../../CLAUDE.md) files are agent-facing too, and are the one place where being out of date actively misleads.
+
+**The privacy docs get the data layer's paragraph**, in the words [The data layer](#the-data-layer) uses: what the service learns, and that the no-log promise is a policy and an audit trail rather than a proof.
 
 ## Kept in mind
 
@@ -196,9 +234,10 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 
 ## Open questions for the owner
 
-Settled on 2026-10-02 and no longer open: [P1](#p1-several-accounts)'s key (account 0, one private balance), [P3](#p3-nft-images)'s design (click to show), dark only, one phrase, and no analytics, AML/KYC or on-ramp.
+**Settled on 2026-10-02:** [P1](#p1-several-accounts)'s key (account 0, one private balance), [P2](#p2-language)'s languages (English, Spanish, Japanese), [P3](#p3-nft-images)'s design (click to show), [the data layer](#the-data-layer)'s shape (a db-sync wrapper for the web wallet, clearnet, CLI stays on Koios), [public-side completeness](#public-side-completeness) going before the UX pass, a [documentation review](#the-documentation-review) after it all, dark only, one phrase, and no analytics, AML/KYC or on-ramp.
 
-1. **[The data layer](#the-data-layer) — go ahead?** And if so, two shapes to pick between: **CLI-first over Tor** (where Tor actually works) with the extension on a clearnet endpoint of the same service, or **one clearnet service** for both with Tor as a later addition. The abuse-protection question wants an answer before either, since it can't be IP-based.
-2. **[P2](#p2-language) — which languages, and who translates?** Lace ships English, Spanish and Japanese. A machine-translated privacy warning is a correctness problem, not a cosmetic one.
-3. **[Public-side completeness](#public-side-completeness) — which of the three, and when?** Staking per account comes free with P1. Proposal voting and DRep registration are each their own chunk, and could go before or after the UX pass.
-4. **The web wallet [README](../README.md)'s public *Later, maybe* and *Not planned* lines now lag all of this.** Updating them publishes a commitment ("several accounts next"), so they're untouched until you say.
+What's left:
+
+1. **The data layer's go-ahead, and what it costs to run.** The shape is settled and the DoS answer is written; what isn't decided is whether it's the default with Koios as the fallback or an opt-in, and whether a user can point at their own instance.
+2. **Which public-side item first** — proposal voting or DRep registration. Staking per account comes free with [P1](#p1-several-accounts) and needs no slot of its own.
+3. **Whether the web wallet [README](../README.md)'s two forward-looking lines get a one-line correction now** or wait for the [documentation review](#the-documentation-review). They currently say several accounts and NFT images are *later, maybe* and that governance is *not planned*, which is no longer true.
