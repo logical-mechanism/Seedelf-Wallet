@@ -22,6 +22,8 @@
 4. **[Then the UX and UI pass](#then-the-ux-and-ui-pass)** — round three, after parity.
 5. **[dApp additions](#dapp-additions)** run alongside all of it, and are not counted in parity.
 
+**[Public-side completeness](#public-side-completeness)** is a pool of candidates rather than a step: the governance items the owner has reopened for the public account, pickable whenever one is wanted.
+
 ## Where Cardano parity stands
 
 Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-02), the reference since chunk 11a. For what a Cardano wallet does with one account, parity holds already; three things are left, and the rest is a deliberate no.
@@ -33,7 +35,7 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | Receive, QR, your ADA Handles | All three, plus the handle-in-Seedelf warning | matched |
 | Activity, detail per transaction | Activity on both sides, with CSV (after Eternl's) | matched |
 | Staking: one pool, pool browser, rewards, stop | All four; Stop staking returns the 2 ₳ deposit | matched |
-| Governance: DRep delegation, DRep browser | Both, from a DRep list that ships with the wallet | matched |
+| Governance: DRep delegation, DRep browser | Both, from a DRep list that ships with the wallet | matched — voting on proposals and DRep registration are [reopened for the public side](#public-side-completeness) |
 | dApp connector (CIP-30), authorized dApps, sign tx, sign data | All, **off until turned on**, nothing injected before that | matched — and it has **private CIP-30** too |
 | dApp explorer | The dApps page; a small catalogue | matched in kind; see [dApp additions](#dapp-additions) |
 | Swap center | Minswap's aggregator | matched — and swaps can run **privately**, through a one-time account |
@@ -74,12 +76,19 @@ Three items. At the end of them the wallet is feature-complete for Cardano, bar 
 
 The groundwork is in: every function already takes the account index, and a picker would discover accounts in order the way BIP44 does, stopping at the first never used ([keys-and-accounts.md](keys-and-accounts.md#the-cardano-account)).
 
-**The decision the plan has to make, and it's a privacy one.** The Seedelf key derivation already takes an account index — `info = "seedelf-key" || u32_be(account)` in [derivation.rs](../../seedelf-crypto/src/derivation.rs) — but the wallet pins it to 0, so one private balance sits behind whichever Cardano account is in use. With several accounts that's a fork:
+**Decided (the owner, 2026-10-02): the Seedelf key stays on account 0 — one private balance for the whole phrase.** The derivation would allow one key per account (`info = "seedelf-key" || u32_be(account)` in [derivation.rs](../../seedelf-crypto/src/derivation.rs)), and it isn't needed: **the stealth addressing already unlinks the move-ins.** Two public accounts paying the same Seedelf create re-randomized registers `(g^d1, u^d1)` and `(g^d2, u^d2)`, which can't be tied to each other or back to `(g, u)` without `d`, so nothing on chain links the accounts. Account 0 is, in effect, the nonce.
 
-- **One private balance for the whole phrase** (pin stays at 0): simpler, and money from any account lands in one place. But a user keeping accounts apart for privacy now has them meeting in the private balance.
-- **One Seedelf key per account index** (the derivation already allows it): keeps the separation the user came with, at the cost of several private balances to scan, show and explain — and the scan cost is per balance, against the Koios budget.
+**What stealth addressing does *not* cover, and this is P1's real work: co-spending.** A contract UTxO's creating transaction is public. The registers hid *who* the money went to, not where an input came from — so one later private spend that takes a UTxO originating from account 0 together with one from account 1 ties those two accounts to one owner, in the open.
 
-❓ **The owner's call.** It can't be changed later without moving funds: a Seedelf key is where money lives.
+The machinery for this already exists (privacy review §2.3): each private UTxO gets a `HistoryClass`, `seedelf-core`'s `build::Histories` keeps different classes apart where a choice that doesn't merge them pays, and the UTxOs screen tags each UTxO's origin.
+
+**But today every move-in shares one class.** `MADE_PRIVATE` is a single constant — `{ id: "public", origin: "own" }` in [shared/histories.ts](../extension/src/shared/histories.ts) — so money made private from account 0 and from account 1 would be the *same* history, and selection would co-spend them freely. P1 has to make it per-account (`public:<n>`), which means:
+
+- `originOf` reading the prefixed form; it compares `part === "public"` exactly today.
+- **Sealed history on existing devices still parsing the bare `public`** — those records are already written, so the old form has to keep working.
+- The review's wording and the UTxOs tag naming *which* account money came from (histories.ts' "money you made private").
+
+Treat that as a correctness-of-privacy item, not a nicety: without it, several accounts would quietly undo the separation the feature exists to respect.
 
 Also to settle: discovery cost against the Koios budget, and what the dApp connector offers a site when there are several accounts (chunk 15's connect window chooses nothing by design — Lace's default-account setting was declined in the privacy review).
 
@@ -106,6 +115,16 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 - **The residual leak, stated where it's chosen:** the click tells whoever serves that image (an IPFS gateway, usually) that this IP wants that asset. That's the trade-off being accepted — user-initiated, one image at a time, instead of a page that quietly fetches everything a wallet holds.
 - Deferred in chunk 14 pending "a better way to fetch them first"; this is it.
 
+## Public-side completeness
+
+**The owner, 2026-10-02:** some of what sat under *Not planned* is worth doing **for the public side**, because it's what makes this a full wallet rather than a private balance with a wallet attached. Under consideration, not scheduled:
+
+- **Voting on proposals.** The wallet delegates voting power today — Always abstain, No confidence, or a DRep — but can't vote on a governance action itself. For the public account that's an ordinary Cardano wallet feature, and it has no private-side meaning: a Seedelf address has no staking part, so the private balance has no voice to cast.
+- **Registering as a DRep.** The same shape: a public-account action, and the one that turns a user from someone who delegates into someone others delegate to.
+- **Staking per account.** This falls out of [P1](#p1-several-accounts) for free, and is worth naming so it isn't mistaken for multi-delegation: each account has its own stake key (`2/0` under its own account index), so several accounts means stake spread across several pools. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching the one-pool-per-account rule.
+
+**What doesn't change:** a vote or a registration is a public act by a public key. None of it reaches the private side, and none of it weakens the rule that money made private has no stake key behind it.
+
 ## The data layer
 
 **The owner is weighing a purpose-built data layer in Rust** (2026-10-02): a service on a cloud server querying a db-sync, with queries written for this wallet rather than general-purpose like Koios. ❓
@@ -118,6 +137,11 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 - **IP linkage.** Every transaction goes through Koios and every private spend through giveme.my, both from the user's IP, so either can group one person's private spends — the root [README](../../../README.md#de-anonymizing-via-ip-tracking) says so, and says Tor access is being explored. `koios.rest` doesn't offer Tor. **A service we run could.**
 
 **The constraint that has to hold whatever gets built: the ownership check stays in the wallet.** Matching a contract UTxO to a Seedelf needs the secret scalar, so the server must never be asked "which of these are mine" — it serves contract UTxOs, and the wallet matches them locally, as it does now. A data layer that answered that question would be a service that knows every user's private balance.
+
+**The owner's direction (2026-10-02): Tor, open source, and tracking nothing** — the posture giveme.my already takes, and giveme.my does support Tor already, though the CLI doesn't use it. Running the infrastructure ourselves is what makes "doesn't track anything" a thing we can actually assert rather than hope for. Two problems come with it:
+
+- **Abuse protection without IPs.** Rate limiting normally keys on the caller's IP, and removing that IP *is the point* of Tor. So the protection has to come from somewhere else — per-circuit limits, a proof of work, issued tokens, or a cost attached to the request — and that's a design question before it's a deployment one. The same question applies harder to a giveme.my fork, since a collateral service gives something away by definition.
+- **Chrome can't reach an `.onion`, so Tor doesn't help the extension.** `.onion` is a special-use name under RFC 7686 that must not be resolved through public DNS, and Chrome doesn't resolve it; that's deliberate, not a gap waiting to close. So a Tor-only data layer serves **the CLI** and other Tor-capable clients, not the web wallet. For the extension it means a clearnet endpoint as well, and there the privacy win is the no-logging policy and the open source, not Tor. A user who routes their whole machine through Tor reaches a clearnet endpoint over Tor anyway — which is the realistic path, and what the wallet owes them is a **configurable endpoint** and nothing that leaks around it.
 
 **Open, if it goes ahead:** what it costs to run; whether it's the default or a choice, with Koios as the fallback; whether a user can point the wallet at their own instance; and the host-permission problem in Chrome (a new origin at install, or an optional grant when it's set). **It replaces nothing about the wallet's own privacy rules** — being ours makes it answerable, not blind.
 
@@ -142,12 +166,13 @@ The list is the owner's to write when parity lands. Carried candidates:
 
 ## Not planned
 
-From the web wallet's [README](../README.md): **voting on proposals, registering as a DRep, several pools per account, hardware wallets, other chains, mobile**. With the reasons worth keeping:
+Shorter than it was: the owner has reopened the governance items for the public side (see [above](#public-side-completeness)). What stays out:
 
-- **One pool per account** is the model, not a limitation — and Lace is migrating from multi-delegation to single at tip.
+- **Several pools per account.** One pool per account is the model, not a limitation — and [public-side completeness](#public-side-completeness) reaches the same outcome without it.
+- **Hardware wallets** — see [the proof](#why-hardware-wallets-cant-cover-seedelf).
 - **Earn / RealFi USDr staking, and CIP-99 claims:** likely AML/KYC, which doesn't align with Seedelf.
 - **Cardano only for now.** Other chains, and mobile, maybe much later; nothing is designed for them.
-- **Nothing that reports on the user or ties them to an identity** — analytics, KYC, an on-ramp. Lace ships all three; they're the opposite of what this wallet is for.
+- **Nothing that reports on the user or ties them to an identity** — analytics, AML/KYC, an on-ramp. Confirmed by the owner, 2026-10-02. Lace ships all three; they're the opposite of what this wallet is for.
 
 ### Why hardware wallets can't cover Seedelf
 
@@ -171,7 +196,9 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 
 ## Open questions for the owner
 
-1. **[P1](#p1-several-accounts) — one private balance for the whole phrase, or one per Cardano account?** The derivation already allows either, and it can't be changed later without moving funds. The privacy reason given for several accounts argues for per-account; simplicity and one balance to scan argue against.
-2. **[The data layer](#the-data-layer)** — go ahead? If so: default or a choice with Koios as the fallback, and can a user point at their own instance?
-3. **[P2](#p2-language) — which languages, and who translates?** Lace ships English, Spanish and Japanese. A machine-translated privacy warning is a correctness problem.
-4. **Anything in [Not planned](#not-planned) you'd rather not have written down at all** — analytics, KYC and the on-ramp are kept there as one line, so a future session doesn't propose them afresh.
+Settled on 2026-10-02 and no longer open: [P1](#p1-several-accounts)'s key (account 0, one private balance), [P3](#p3-nft-images)'s design (click to show), dark only, one phrase, and no analytics, AML/KYC or on-ramp.
+
+1. **[The data layer](#the-data-layer) — go ahead?** And if so, two shapes to pick between: **CLI-first over Tor** (where Tor actually works) with the extension on a clearnet endpoint of the same service, or **one clearnet service** for both with Tor as a later addition. The abuse-protection question wants an answer before either, since it can't be IP-based.
+2. **[P2](#p2-language) — which languages, and who translates?** Lace ships English, Spanish and Japanese. A machine-translated privacy warning is a correctness problem, not a cosmetic one.
+3. **[Public-side completeness](#public-side-completeness) — which of the three, and when?** Staking per account comes free with P1. Proposal voting and DRep registration are each their own chunk, and could go before or after the UX pass.
+4. **The web wallet [README](../README.md)'s public *Later, maybe* and *Not planned* lines now lag all of this.** Updating them publishes a commitment ("several accounts next"), so they're untouched until you say.
