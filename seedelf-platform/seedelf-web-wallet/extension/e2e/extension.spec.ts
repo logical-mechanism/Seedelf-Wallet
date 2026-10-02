@@ -448,6 +448,13 @@ test("tokens: Home shows five, View all has tokens and NFTs, a search, a sort an
   await expect(page.getByTestId("cardano-tokens")).toBeVisible();
 });
 
+/**
+ * The version the build under test carries, from the same `package.json` the
+ * manifest takes it from. Written out here, it broke this test at every release
+ * instead of the release's own checks (found bumping to 1.1.0, 2026-10-01).
+ */
+const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+
 test("settings: the phrase behind the password, a new password, and removing the wallet", async ({ context, koios }) => {
   const v = vector(24);
   const page = await openApp(context);
@@ -456,7 +463,7 @@ test("settings: the phrase behind the password, a new password, and removing the
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(page.getByTestId("about")).toContainText("Version1.0.0");
+  await expect(page.getByTestId("about")).toContainText(`Version${VERSION}`);
   await expect(page.getByTestId("about")).toContainText("NetworkPreprod");
   await snap(page, "settings");
 

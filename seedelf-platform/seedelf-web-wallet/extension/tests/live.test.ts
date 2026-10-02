@@ -49,8 +49,13 @@ describe.skipIf(!process.env.LIVE_KOIOS)("live preprod Koios", () => {
     // The next reading asks only for UTxOs newer than the last block seen, and agrees.
     const again = await balances.get("preprod", true);
     const scans = urls.filter((u) => u.includes("/credential_utxos"));
-    expect(scans).toHaveLength(2);
-    expect(scans[1]).toMatch(/block_height=gt\.\d+/);
+    // Not how many requests a reading takes: that follows how much the shared
+    // preprod contract holds, which anyone can add to, and it grew past one
+    // page of 1,000 (found at the 1.1.0 release, 2026-10-01, when this said
+    // two). What matters is that exactly one scan asked for what's new, which
+    // is the second reading's, and that it agreed with the first.
+    expect(scans.length).toBeGreaterThanOrEqual(2);
+    expect(scans.filter((u) => /block_height=gt\.\d+/.test(u))).toHaveLength(1);
     expect(again.seedelf).toEqual(b.seedelf);
   }, 60_000);
 
