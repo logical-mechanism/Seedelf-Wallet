@@ -684,24 +684,29 @@ export interface DappTxSummary {
 /** An input, as the body names it: nothing in the transaction says what it holds. */
 export interface TxOutpoint {
   txHash: string;
-  index: number;
+  /** A decimal string, as every number from the bytes is: see `TxDetail`. */
+  index: string;
 }
 
 /** A token in a transaction's bytes. `quantity` is signed in a mint. */
 export interface TxAsset {
   policyId: string;
   assetName: string;
-  /** The name's bytes as text, when they read as printable UTF-8. */
+  /**
+   * The name's bytes as text, when they read as UTF-8, with anything invisible
+   * escaped. The screens show a token by `ui/tokens.ts`'s name, not by this.
+   */
   nameText: string | null;
   quantity: string;
 }
 
 /** An address as an output's bytes have it. */
 export interface TxAddress {
-  /** Bech32, or hex for a Byron address. */
+  /** Bech32 (base58 for a Byron address), or the bytes in hex when they're no address. */
   bech32: string;
   hex: string;
-  kind: "base" | "enterprise" | "pointer" | "reward" | "byron";
+  /** "unreadable": the bytes are no address — the CDDL allows any bytes there. */
+  kind: "base" | "enterprise" | "pointer" | "reward" | "byron" | "unreadable";
   payment: "key" | "script" | null;
   stake: "key" | "script" | "pointer" | null;
   network: "mainnet" | "testnet" | "other" | null;
@@ -736,7 +741,7 @@ export interface TxOutput {
   datumHash: string | null;
   register: TxRegister | null;
   scriptRef: TxScript | null;
-  /** How it's written: Shelley's list, or Babbage's map. */
+  /** How it's written: the CDDL's `alonzo_transaction_output` list, or Babbage's map. */
   form: "legacy" | "postAlonzo";
 }
 
@@ -764,7 +769,7 @@ export type TxCert = { kind: string } & Partial<{
   drep: string;
   deposit: string;
   refund: string;
-  epoch: number;
+  epoch: string;
   vrfKeyHash: string;
   pledge: string;
   cost: string;
@@ -779,7 +784,7 @@ export type TxCert = { kind: string } & Partial<{
 }>;
 
 export interface TxWithdrawal {
-  /** The reward address, bech32. */
+  /** The reward address in bech32, or its bytes in hex when they're no address. */
   address: string;
   lovelace: string;
 }
@@ -811,11 +816,13 @@ export interface TxProposal {
 export interface TxRedeemer {
   /** "spend", "mint", "cert", "reward", "vote", "propose", or a number the wallet doesn't know. */
   tag: string;
-  index: number;
+  /** Which input, policy, certificate, withdrawal, vote or proposal. */
+  index: string;
   /** The argument, as written (hex). */
   data: string;
-  mem: number;
-  steps: number;
+  /** The budget claimed, each `0 .. 2^63-1` in the CDDL, so decimal strings. */
+  mem: string;
+  steps: string;
 }
 
 /** A datum in the witness set, named by an output's `datumHash`. */
@@ -835,6 +842,7 @@ export interface TxSignature {
 export type TxMetadatum =
   | { type: "int"; value: string }
   | { type: "bytes"; hex: string; text: string | null }
+  /** Whatever was written, with anything invisible escaped as `\u{...}`. */
   | { type: "text"; text: string }
   | { type: "list"; items: TxMetadatum[] }
   | { type: "map"; entries: Array<{ key: TxMetadatum; value: TxMetadatum }> };
@@ -852,7 +860,19 @@ export interface TxUnknown {
   hex: string;
 }
 
-/** Everything in a transaction's bytes, field by field. Lovelace amounts are decimal strings. */
+/**
+ * Everything in a transaction's bytes, field by field (WebAssembly's
+ * `decodeTx`, wasm/src/decode.rs, which has the reasons).
+ *
+ * **Every number the bytes decide is a decimal string**, not only the lovelace
+ * ones: Conway's CDDL makes `coin`, `slot`, `epoch` and `ex_units` `uint` up to
+ * 2^64-1, and `JSON.parse` rounds past 2^53, so a ttl of 2^60 would show as a
+ * different number. Only counts the decoder works out itself — the size, an
+ * output's position, how many witnesses — are numbers.
+ *
+ * **Text is whatever was written, with anything invisible escaped** as
+ * `\u{...}`: a right-to-left override would otherwise rewrite the line it's on.
+ */
 export interface TxDetail {
   txHash: string;
   /** The whole transaction in bytes, and its body alone. */
@@ -861,7 +881,7 @@ export interface TxDetail {
   networkId: number | null;
   /** False means it's meant to fail its scripts, and the collateral is taken. */
   valid: boolean;
-  /** Whether the witness set holds anything at all. */
+  /** Whether the witness set holds anything at all; `signatures` says if anything signed it. */
   witnessed: boolean;
   inputs: TxOutpoint[];
   referenceInputs: TxOutpoint[];
@@ -870,8 +890,9 @@ export interface TxDetail {
   collateralReturn: TxOutput | null;
   totalCollateral: string | null;
   fee: string;
-  validFrom: number | null;
-  validUntil: number | null;
+  /** The slots it's valid between, as decimal strings. */
+  validFrom: string | null;
+  validUntil: string | null;
   /** Minted (positive) or burned. */
   mint: TxAsset[];
   certificates: TxCert[];
@@ -881,6 +902,12 @@ export interface TxDetail {
   requiredSigners: string[];
   scriptDataHash: string | null;
   auxiliaryDataHash: string | null;
+  /**
+   * Whether the body's metadata hash is the hash of the metadata here; null
+   * when it carries neither. False means the network would refuse it, and that
+   * the metadata shown isn't what this transaction commits to.
+   */
+  metadataHashMatches: boolean | null;
   treasuryValue: string | null;
   donation: string | null;
   redeemers: TxRedeemer[];

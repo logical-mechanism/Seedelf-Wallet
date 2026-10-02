@@ -21,7 +21,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import type { NetworkName } from "../../networks";
-import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutput, TxView } from "../../shared/rpc";
+import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
@@ -83,11 +83,20 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
   return (
     <Modal title="The transaction" titleId={`${testId}-title`} onClose={onClose}>
       <div className="stack" data-testid={testId}>
+        {/* The id of the bytes shown, worked out from them, once they're here:
+            the hash the view was asked for until then. They are the same for
+            anything the wallet holds, and this way the id can't be one thing
+            while the bytes under it are another. */}
         <div className="tx-detail__hash">
-          <code className="tx-detail__hash-value" data-testid={`${testId}-hash`} data-value={txHash} title={txHash}>
-            {shortHex(txHash, 16, 8)}
+          <code
+            className="tx-detail__hash-value"
+            data-testid={`${testId}-hash`}
+            data-value={view?.detail.txHash ?? txHash}
+            title={view?.detail.txHash ?? txHash}
+          >
+            {shortHex(view?.detail.txHash ?? txHash, 16, 8)}
           </code>
-          <CopyButton value={txHash} label="Copy the transaction's id" />
+          <CopyButton value={view?.detail.txHash ?? txHash} label="Copy the transaction's id" />
         </div>
         {error && (
           <p className="error" role="alert" data-testid={`${testId}-error`}>
@@ -156,12 +165,16 @@ function Section({ title, id, children }: { title: string; id: string; children:
   );
 }
 
-/** An outpoint, as the transaction names it. */
-function Outpoints({ list, testId }: { list: Array<{ txHash: string; index: number }>; testId: string }) {
+/**
+ * The outpoints of a list, as the transaction names them. Keyed by position:
+ * nothing stops a transaction naming the same UTxO twice, and two rows sharing
+ * a key would render as one.
+ */
+function Outpoints({ list, testId }: { list: TxOutpoint[]; testId: string }) {
   return (
     <ul className="list" data-testid={testId}>
-      {list.map((o) => (
-        <li key={`${o.txHash}#${o.index}`} className="list__row">
+      {list.map((o, i) => (
+        <li key={i} className="list__row">
           <code className="tx-detail__ref" data-value={`${o.txHash}#${o.index}`} title={`${o.txHash}#${o.index}`}>
             {shortHex(o.txHash, 12, 6)}#{o.index}
           </code>
@@ -187,6 +200,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           where they are.
         </Callout>
       )}
+      {d.metadataHashMatches === false && (
+        <Callout tone="warn" testId={`${testId}-metadata-hash`}>
+          The metadata hash in its body isn't the hash of the metadata it carries, so the network would refuse this
+          transaction — and the metadata below isn't what it commits to.
+        </Callout>
+      )}
       {d.unknown.length > 0 && (
         <Callout tone="warn" testId={`${testId}-unknown`}>
           It carries {plural(d.unknown.length, "field")} this version of the wallet has no name for, shown below as
@@ -204,8 +223,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       <Section title={`Pays ${plural(d.outputs.length, "output")}`} id={`${testId}-outputs`}>
         <ul className="list" data-testid={`${testId}-output-list`}>
-          {d.outputs.map((o) => (
-            <Output key={o.index} output={o} amount={amount} name={name} />
+          {d.outputs.map((o, i) => (
+            <Output key={i} output={o} amount={amount} name={name} />
           ))}
         </ul>
       </Section>
@@ -217,9 +236,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         </Section>
       )}
 
-      {d.collateral.length > 0 && (
-        <Section title={`Collateral: ${plural(d.collateral.length, "UTxO")}`} id={`${testId}-collateral`}>
-          <Outpoints list={d.collateral} testId={`${testId}-collateral-list`} />
+      {(d.collateral.length > 0 || d.collateralReturn || d.totalCollateral) && (
+        <Section
+          title={d.collateral.length ? `Collateral: ${plural(d.collateral.length, "UTxO")}` : "Collateral"}
+          id={`${testId}-collateral`}
+        >
+          {d.collateral.length > 0 && <Outpoints list={d.collateral} testId={`${testId}-collateral-list`} />}
           <ReviewRows testId={`${testId}-collateral-rows`}>
             {d.totalCollateral && <Row label="The most taken" value={`${formatAda(d.totalCollateral)} ₳`} />}
             {d.collateralReturn && (
@@ -232,8 +254,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       {d.mint.length > 0 && (
         <Section title="Mints and burns" id={`${testId}-mint`}>
           <ul className="list" data-testid={`${testId}-mint-list`}>
-            {d.mint.map((t) => (
-              <li key={`${t.policyId}.${t.assetName}`} className="list__row">
+            {d.mint.map((t, i) => (
+              <li key={i} className="list__row">
                 <span className="tx-detail__name">
                   {name(t)}
                   <code className="tx-detail__ref" data-value={t.policyId} title={t.policyId}>
@@ -253,8 +275,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       <Section title="The transaction" id={`${testId}-body`}>
         <ReviewRows testId={`${testId}-rows`}>
           <Row label="Network fee" value={`${formatAda(d.fee)} ₳`} strong />
-          {d.validFrom !== null && <Row label="Valid from slot" value={String(d.validFrom)} />}
-          {d.validUntil !== null && <Row label="Valid until slot" value={String(d.validUntil)} />}
+          {d.validFrom !== null && <Row label="Valid from slot" value={d.validFrom} />}
+          {d.validUntil !== null && <Row label="Valid until slot" value={d.validUntil} />}
           {d.networkId !== null && <Row label="Network" value={d.networkId === 1 ? "Mainnet" : "A test network"} />}
           <Row label="Size" value={`${d.size} bytes (${d.bodySize} of body)`} />
           {/* What matters is whether anything has signed it, not what else the
@@ -264,6 +286,9 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
             label="Signed"
             value={d.signatures.length ? `${plural(d.signatures.length, "signature")} so far` : "Not yet"}
           />
+          {d.bootstrapWitnesses > 0 && (
+            <Row label="Byron witnesses" value={plural(d.bootstrapWitnesses, "witness", "witnesses")} />
+          )}
           {d.scriptDataHash && (
             <Row label="Script data hash" value={shortHex(d.scriptDataHash, 10, 6)} title={d.scriptDataHash} />
           )}
@@ -285,11 +310,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   {c.deposit && `${formatAda(c.deposit)} ₳ deposit`}
                   {c.refund && `${formatAda(c.refund)} ₳ back`}
                 </span>
-                {(c.pool || c.drep || c.credential || c.cold) && (
-                  <span className="dapp-address">
-                    {[c.pool, c.drep, c.credential?.hash, c.cold?.hash].filter(Boolean).join(" · ")}
-                  </span>
+                {(c.pool || c.drep) && (
+                  <span className="dapp-address">{[c.pool, c.drep].filter(Boolean).join(" · ")}</span>
                 )}
+                <div className="tx-detail__tree">
+                  <Fields of={c} skip={["kind", "pool", "drep", "deposit", "refund"]} labels={CERT_FIELDS} />
+                </div>
               </li>
             ))}
           </ul>
@@ -299,8 +325,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       {d.withdrawals.length > 0 && (
         <Section title="Withdraws rewards" id={`${testId}-withdrawals`}>
           <ul className="list" data-testid={`${testId}-withdrawal-list`}>
-            {d.withdrawals.map((w) => (
-              <li key={w.address} className="list__row dapp-paid">
+            {d.withdrawals.map((w, i) => (
+              <li key={i} className="list__row dapp-paid">
                 <span className="dapp-address" data-value={w.address}>
                   {w.address}
                 </span>
@@ -328,13 +354,13 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               <li key={`p${i}`} className="list__row tx-detail__wrap">
                 <span className="tx-detail__name">Proposes {proposalWords(p.action)}</span>
                 <span className="dapp-amount">{formatAda(p.deposit)} ₳ deposit</span>
-                <span className="dapp-address">{p.anchor.url}</span>
-                {p.parameters.length > 0 && (
-                  <span className="note">
-                    {plural(p.parameters.length, "protocol parameter")}:{" "}
-                    {p.parameters.map((u) => u.field).join(", ")}
-                  </span>
-                )}
+                <div className="tx-detail__tree">
+                  <Fields
+                    of={{ ...p, parameters: p.parameters.length ? p.parameters : null, withdrawals: p.withdrawals.length ? p.withdrawals : null }}
+                    skip={["action", "deposit"]}
+                    labels={PROPOSAL_FIELDS}
+                  />
+                </div>
               </li>
             ))}
           </ul>
@@ -351,7 +377,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                     Runs a {redeemerWords(r.tag)} script, number {r.index}
                   </span>
                   <span className="dapp-amount">
-                    {r.mem.toLocaleString()} mem · {r.steps.toLocaleString()} steps
+                    {/* Grouped through bigint: a budget can be bigger than a JavaScript number holds. */}
+                    {formatQuantity(r.mem, 0)} mem · {formatQuantity(r.steps, 0)} steps
                   </span>
                   <span className="dapp-address" data-value={r.data}>
                     {shortHex(r.data, 24, 12)}
@@ -377,9 +404,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           )}
           {d.datums.length > 0 && (
             <ul className="list" data-testid={`${testId}-datum-list`}>
-              {d.datums.map((datum) => (
-                <li key={datum.hash} className="list__row tx-detail__wrap">
-                  <span className="tx-detail__name">A datum, {datum.hex.length / 2} bytes</span>
+              {d.datums.map((datum, i) => (
+                <li key={i} className="list__row tx-detail__wrap">
+                  <span className="tx-detail__name">
+                    A datum, {datum.hex.length / 2} bytes
+                    {datum.register && (datum.register.payable ? " · a register" : " · a register nobody could spend")}
+                  </span>
                   <CopyButton value={datum.hex} label="Copy the datum" />
                   <code className="dapp-address" data-value={datum.hash}>
                     {datum.hash}
@@ -390,8 +420,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           )}
           {d.requiredSigners.length > 0 && (
             <ReviewRows testId={`${testId}-signers`}>
-              {d.requiredSigners.map((hash) => (
-                <Row key={hash} label="Must be signed by" value={shortHex(hash, 10, 6)} title={hash} />
+              {d.requiredSigners.map((hash, i) => (
+                <Row key={i} label="Must be signed by" value={shortHex(hash, 10, 6)} title={hash} />
               ))}
             </ReviewRows>
           )}
@@ -414,8 +444,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       {d.metadata.length > 0 && (
         <Section title="Metadata" id={`${testId}-metadata`}>
           <ul className="list" data-testid={`${testId}-metadata-list`}>
-            {d.metadata.map((m) => (
-              <li key={m.label} className="list__row tx-detail__wrap">
+            {d.metadata.map((m, i) => (
+              <li key={i} className="list__row tx-detail__wrap">
                 <span className="tx-detail__name">Label {m.label}</span>
                 <div className="tx-detail__tree">
                   <Metadatum value={m.value} />
@@ -466,6 +496,11 @@ function Output({
       </span>
       <span className="note">
         {`#${o.index} · ${addressWords(o.address.kind, o.address.payment)}`}
+        {/* `form` isn't shown: the CDDL calls the list and the map forms "equally
+            valid and interchangeable", cardano-cli writes a list for any output
+            that needs neither an inline datum nor a script, and the two mean
+            exactly the same to the ledger. Saying it on every row would read as
+            a warning about nothing. The Raw CBOR tab has the bytes. */}
         {o.address.seedelf && " · Seedelf Wallet's contract"}
         {o.register && (o.register.payable ? " · under a register" : " · a register nobody could spend")}
         {o.inlineDatum && !o.register && " · with a datum"}
@@ -474,10 +509,10 @@ function Output({
       </span>
       <span className="dapp-amount">
         {formatAda(o.lovelace)} ₳
-        {o.assets.map((t) => (
+        {o.assets.map((t, i) => (
           // The name can be anyone's choice, so the policy and the name in hex
           // stay within reach of it.
-          <span key={`${t.policyId}.${t.assetName}`} className="note" title={`${t.policyId}.${t.assetName}`}>
+          <span key={i} className="note" title={`${t.policyId}.${t.assetName}`}>
             {amount(t)} {name(t)}
           </span>
         ))}
@@ -485,6 +520,70 @@ function Output({
     </li>
   );
 }
+
+/**
+ * Every field of a certificate or a proposal beyond the ones the row says in
+ * words, each under its own name. It walks the object rather than naming the
+ * fields it knows, so a field the decoder gains is never silently left out —
+ * which is the same rule the decoder follows for the bytes.
+ */
+function Fields({ of, skip, labels }: { of: object; skip: string[]; labels: Record<string, string> }) {
+  const rows = Object.entries(of).filter(([key, value]) => !skip.includes(key) && value !== null && value !== undefined);
+  if (!rows.length) return null;
+  return (
+    <ul className="tx-detail__branch">
+      {rows.map(([key, value]) => (
+        <li key={key}>
+          <span className="tx-detail__key">{labels[key] ?? key}</span>
+          <span className="tx-detail__leaf">{fieldText(value)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** One of those fields as text: an amount, a list, an anchor, a nested thing. */
+function fieldText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(fieldText).join(", ");
+  if (value && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    // An anchor, a credential, an action id: the shapes the decoder makes.
+    if (typeof o.url === "string") return `${o.url} (${String(o.contentHash)})`;
+    if (typeof o.hash === "string") return `${String(o.kind)} ${String(o.hash)}`;
+    if (typeof o.txHash === "string") return `${String(o.txHash)}#${String(o.index)}`;
+    if (typeof o.field === "string") return `field ${String(o.field)}: ${String(o.hex)}`;
+    if (typeof o.address === "string") return `${String(o.address)} ${formatAda(String(o.lovelace))} ₳`;
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/** The names the view gives a certificate's and a proposal's own fields. */
+const CERT_FIELDS: Record<string, string> = {
+  credential: "Credential",
+  cold: "Cold credential",
+  hot: "Hot credential",
+  vrfKeyHash: "VRF key hash",
+  pledge: "Pledge (lovelace)",
+  cost: "Cost (lovelace)",
+  margin: "Margin",
+  rewardAccount: "Rewards to",
+  owners: "Owners",
+  relays: "Relays",
+  metadata: "Pool metadata",
+  anchor: "Anchor",
+  epoch: "Epoch",
+};
+
+const PROPOSAL_FIELDS: Record<string, string> = {
+  rewardAccount: "Deposit back to",
+  follows: "Follows",
+  parameters: "Parameters",
+  withdrawals: "Withdraws",
+  script: "Script",
+  version: "Protocol version",
+  anchor: "Anchor",
+};
 
 /** A metadatum, as the tree it is. */
 function Metadatum({ value }: { value: TxMetadatum }) {
@@ -586,6 +685,7 @@ function scriptWhere(source: string): string {
 
 /** What an address is, from its own bytes. */
 export function addressWords(kind: string, payment: string | null): string {
+  if (kind === "unreadable") return "bytes that aren't an address";
   if (kind === "byron") return "a Byron address";
   if (kind === "reward") return "a reward address";
   const who = payment === "script" ? "a contract" : "a key";

@@ -16,8 +16,8 @@
 //   - ones cardano-cli builds here (`transaction build-raw`, no node needed),
 //     for what no recording covers: a plain payment with a reference input,
 //     collateral and a reference script, certificates with a withdrawal and
-//     metadata, a mint and a burn under a native script, and a governance
-//     proposal with a vote.
+//     metadata, a mint and a burn under a native script, a stake pool's own
+//     registration and retirement, and a governance proposal with a vote.
 //
 // Needs `cardano-cli` on PATH (any node-less build; 11.0.0.0 recorded this).
 // Run from this folder:  node record-decode.mjs
@@ -133,6 +133,35 @@ try {
     "--fee", "180000",
   );
 
+  // A stake pool's own certificates, which carry more than any other: its
+  // pledge, cost, margin, rewards account, owners, relays and metadata.
+  cli("conway", "node", "key-gen", "--cold-verification-key-file", at("cold.vkey"), "--cold-signing-key-file", at("cold.skey"), "--operational-certificate-issue-counter-file", at("counter"));
+  cli("conway", "node", "key-gen-VRF", "--verification-key-file", at("vrf.vkey"), "--signing-key-file", at("vrf.skey"));
+  cli(
+    "conway", "stake-pool", "registration-certificate",
+    "--cold-verification-key-file", at("cold.vkey"),
+    "--vrf-verification-key-file", at("vrf.vkey"),
+    "--pool-pledge", "1000000000",
+    "--pool-cost", "340000000",
+    "--pool-margin", "0.03",
+    "--pool-reward-account-verification-key-file", at("stake.vkey"),
+    "--pool-owner-stake-verification-key-file", at("stake.vkey"),
+    ...PREPROD,
+    "--single-host-pool-relay", "relay.example.com",
+    "--pool-relay-port", "3001",
+    "--metadata-url", "https://example.com/pool.json",
+    "--metadata-hash", "0".repeat(64),
+    "--out-file", at("pool.cert"),
+  );
+  cli("conway", "stake-pool", "deregistration-certificate", "--cold-verification-key-file", at("cold.vkey"), "--epoch", "500", "--out-file", at("retire.cert"));
+  const pool = build(
+    "--tx-in", "8888888888888888888888888888888888888888888888888888888888888888#0",
+    "--tx-out", `${base}+1000000`,
+    "--fee", "300000",
+    "--certificate-file", at("pool.cert"),
+    "--certificate-file", at("retire.cert"),
+  );
+
   // Governance: a proposal, a vote on another action, and the treasury fields.
   cli(
     "conway", "governance", "action", "create-info", "--testnet",
@@ -193,6 +222,7 @@ try {
     { name: "payment", what: "built here: a plain payment with a reference input, collateral, a datum hash and a reference script", from: "cardano-cli transaction build-raw", cbor: payment },
     { name: "certificates", what: "built here: stake and vote certificates, a withdrawal, a validity range and metadata", from: "cardano-cli transaction build-raw", cbor: certificates },
     { name: "mint", what: "built here: a mint and a burn under a native script", from: "cardano-cli transaction build-raw", cbor: mint },
+    { name: "pool", what: "built here: a stake pool's own registration, with every parameter, and its retirement", from: "cardano-cli transaction build-raw", cbor: pool },
     { name: "governance", what: "built here: a proposal, a vote, and the treasury fields", from: "cardano-cli transaction build-raw", cbor: governance },
   ];
 

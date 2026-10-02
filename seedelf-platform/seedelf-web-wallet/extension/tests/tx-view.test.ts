@@ -120,7 +120,10 @@ describe("the transaction view", () => {
     await t.session.set(SESSION_SEND, { ...kept, sentCbor: transferPreprod.final.txCbor });
     const view = await txView(deps(t), "preprod", summary.txHash);
     expect(view.cbor).toBe(transferPreprod.final.txCbor);
+    // The id is of the bytes shown, worked out from them, so the two can never
+    // disagree: the screen shows this one, not the hash it asked with.
     expect(view.detail.txHash).toBe(transferPreprod.final.txHash);
+    expect(view.detail.txHash).not.toBe(summary.txHash);
   });
 
   it("reads a site's transaction while it waits for a signature, and only while it does", async () => {

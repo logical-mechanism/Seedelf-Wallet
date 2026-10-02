@@ -213,3 +213,44 @@ Two things the plan assumed that turned out otherwise, neither load-bearing:
   each redeemer its own index, rather than renumbering them.
 - **Minswap's swap carries CIP-20's `msg` beside its own `extraData` under label
   674**, so the note is read from it and the metadata still shows both keys.
+
+## The CBOR review (2026-10-01, after the push)
+
+A second pass over the decoder against
+[Conway's CDDL](https://github.com/IntersectMBO/cardano-ledger/blob/master/eras/conway/impl/cddl/data/conway.cddl),
+asking only one question: can it show the bytes wrongly? Four ways it could,
+all fixed, each with a test built from what the CDDL allows:
+
+1. **A number too big for JavaScript.** `coin`, `slot`, `epoch` and
+   `metadatum_label` are `uint` up to 2^64-1 and `ex_units` is `0 .. 2^63-1`,
+   while `JSON.parse` rounds past 2^53. A ttl of 2^60+1 showed as
+   1152921504606846800 — wrong by 177. Every number the bytes decide is a
+   decimal string now; only counts the decoder works out itself are numbers.
+2. **Bytes that are no address hid the whole transaction.** The CDDL types an
+   output's `address` and a withdrawal's `reward_account` as plain `bytes`, so
+   three stray bytes there were a hard error over everything else in the
+   transaction. They show as hex, said to be unreadable, and the rest reads.
+3. **Text that reads as something else.** A right-to-left override in a note or
+   a token name turns "drowssap" into "password" on the screen; a zero-width
+   joiner hides a word break. Each is written out as `\u{...}`, and
+   `unicode-bidi: isolate` keeps a right-to-left script inside its own element.
+4. **Metadata the body doesn't commit to.** Nothing checked the
+   `auxiliary_data_hash` against the metadata, so the view could show a note
+   that could never reach the chain. It's checked, warned about, and still
+   shown.
+
+And three things the decoder found that the page left out: a collateral return
+or total with no collateral inputs (hidden entirely), a stake pool
+certificate's parameters and a proposal's own fields (shown as words only), and
+Byron witnesses (counted, never said). The page now walks a certificate's and a
+proposal's own fields rather than naming the ones it knows, so a field the
+decoder gains can't be dropped here either.
+
+**Deliberately not shown:** which of the two output forms was written. The CDDL
+calls them "equally valid and interchangeable", cardano-cli writes the list form
+for any output needing neither an inline datum nor a script (two of three in the
+recorded payment), and they mean the same to the ledger — a label on each row
+would read as a warning about nothing. The Raw CBOR tab has the bytes.
+
+A tenth fixture went in with it: a stake pool's own registration, with every
+parameter, and its retirement, cross-checked against cardano-cli's reading.

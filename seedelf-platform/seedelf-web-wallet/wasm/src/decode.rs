@@ -17,6 +17,26 @@
 //! re-encoding. A field this module doesn't know is reported by its number and
 //! its raw hex rather than dropped: a view that silently omits what it doesn't
 //! understand reads as "there is nothing else here".
+//!
+//! Three more rules keep what it shows from being wrong, each from reading
+//! Conway's CDDL (`eras/conway/impl/cddl/data/conway.cddl`) against what
+//! JavaScript and a screen can hold:
+//!
+//! 1. **Every number the bytes can make bigger than JavaScript holds exactly
+//!    is a decimal string.** `coin`, `slot`, `epoch` and `ex_units` are `uint`
+//!    up to 2^64-1 or 2^63-1 there, and `JSON.parse` rounds past 2^53: a ttl of
+//!    2^60 would show as a different number. Only counts this module works out
+//!    itself are numbers.
+//! 2. **Bytes that aren't the thing they should be are shown as themselves,
+//!    not refused.** The CDDL types an output's address and a withdrawal's
+//!    `reward_account` as plain `bytes`, so a transaction can carry bytes that
+//!    are no address at all; one of those would otherwise hide the whole
+//!    transaction behind an error. They show as hex, said to be unreadable.
+//! 3. **Text from the chain is escaped where it would show as something
+//!    else.** A metadatum, a token name, an anchor's URL and a relay's host are
+//!    whatever was written, including right-to-left overrides and zero-width
+//!    characters that rewrite a line without appearing in it. Each of those is
+//!    shown as `\u{...}` ([`shown`]).
 
 use anyhow::{Result, anyhow, bail};
 use pallas_addresses::{Address, ShelleyDelegationPart, ShelleyPaymentPart, StakePayload};
@@ -37,7 +57,9 @@ use crate::cip30::{MAX_TX_BYTES, check_nesting, network_flag, register_datum};
 #[serde(rename_all = "camelCase")]
 pub struct Outpoint {
     pub tx_hash: String,
-    pub index: u64,
+    /// The CDDL bounds it to two bytes, but nothing stops a transaction
+    /// carrying more, so it's a decimal string like the rest.
+    pub index: String,
 }
 
 /// A token and a quantity: the names in hex, the name as text where its bytes
@@ -59,7 +81,9 @@ pub struct DetailAddress {
     /// Bech32, or hex for a Byron address (which has no bech32 form).
     pub bech32: String,
     pub hex: String,
-    /// "base", "enterprise", "pointer", "reward" or "byron".
+    /// "base", "enterprise", "pointer", "reward", "byron", or "unreadable"
+    /// when the bytes are no address at all: the CDDL types the field as plain
+    /// `bytes`, so a transaction can carry anything there.
     pub kind: String,
     /// What may spend it: "key" or "script". None for a reward or Byron address.
     pub payment: Option<String>,
@@ -173,7 +197,7 @@ pub enum DetailCert {
     },
     PoolRetirement {
         pool: String,
-        epoch: u64,
+        epoch: String,
     },
     /// Conway's registration, with the deposit it pays.
     Registration {
@@ -240,7 +264,8 @@ pub enum DetailCert {
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailWithdrawal {
-    /// The reward address, bech32.
+    /// The reward address in bech32, or its bytes in hex when they're no
+    /// address: `reward_account` is plain `bytes` in the CDDL.
     pub address: String,
     pub lovelace: String,
 }
@@ -292,11 +317,12 @@ pub struct DetailRedeemer {
     pub tag: String,
     /// Which input, policy, certificate, withdrawal, vote or proposal, in the
     /// ledger's order for that tag.
-    pub index: u64,
+    pub index: String,
     /// The argument, as written (hex).
     pub data: String,
-    pub mem: u64,
-    pub steps: u64,
+    /// The budget claimed, each `0 .. 2^63-1` in the CDDL.
+    pub mem: String,
+    pub steps: String,
 }
 
 /// A datum carried in the witness set, named by an output's `datumHash`.
@@ -387,8 +413,8 @@ pub struct TxDetail {
     pub total_collateral: Option<String>,
     pub fee: String,
     /// The slots it is valid between: `validFrom` from, `validUntil` until.
-    pub valid_from: Option<u64>,
-    pub valid_until: Option<u64>,
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
     /// Tokens minted (positive) or burned (negative).
     pub mint: Vec<DetailAsset>,
     pub certificates: Vec<DetailCert>,
@@ -399,6 +425,12 @@ pub struct TxDetail {
     pub required_signers: Vec<String>,
     pub script_data_hash: Option<String>,
     pub auxiliary_data_hash: Option<String>,
+    /// Whether the body's `auxiliary_data_hash` is the hash of the metadata
+    /// that's here: `None` when it carries neither. False means the network
+    /// would refuse the transaction, and that the metadata shown isn't what
+    /// this transaction commits to — which is worth saying, since the view
+    /// would otherwise show a note that could never reach the chain.
+    pub metadata_hash_matches: Option<bool>,
     pub treasury_value: Option<String>,
     pub donation: Option<String>,
     pub redeemers: Vec<DetailRedeemer>,
@@ -448,7 +480,7 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
     let mut scripts = Vec::new();
     let mut outputs = Vec::new();
     for (i, out) in body.outputs.iter().enumerate() {
-        let output = output_detail(Where::Output(i as u64), out, flag, &contract)?;
+        let output = output_detail(i as u64, out, flag, &contract)?;
         if let Some(script) = &output.script_ref {
             scripts.push(script.clone());
         }
@@ -459,7 +491,7 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
     let collateral_return = body
         .collateral_return
         .as_ref()
-        .map(|out| output_detail(Where::CollateralReturn, out, flag, &contract))
+        .map(|out| output_detail(0, out, flag, &contract))
         .transpose()?;
 
     let mut mint = Vec::new();
@@ -477,7 +509,7 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
     let mut withdrawals = Vec::new();
     for (account, amount) in body.withdrawals.iter().flat_map(|w| w.iter()) {
         withdrawals.push(DetailWithdrawal {
-            address: reward_address(account)?,
+            address: reward_address(account),
             lovelace: amount.to_string(),
         });
     }
@@ -558,8 +590,8 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
         collateral_return,
         total_collateral: body.total_collateral.map(|c| c.to_string()),
         fee: body.fee.to_string(),
-        valid_from: body.validity_interval_start,
-        valid_until: body.ttl,
+        valid_from: body.validity_interval_start.map(|s| s.to_string()),
+        valid_until: body.ttl.map(|s| s.to_string()),
         mint,
         certificates,
         withdrawals,
@@ -571,6 +603,10 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
             .flat_map(|s| s.iter())
             .map(|h| hex::encode(h.as_ref()))
             .collect(),
+        metadata_hash_matches: metadata_hash_matches(
+            body.auxiliary_data_hash.as_ref(),
+            &tx.auxiliary_data,
+        ),
         script_data_hash: body.script_data_hash.map(|h| hex::encode(h.as_ref())),
         auxiliary_data_hash: body
             .auxiliary_data_hash
@@ -601,6 +637,24 @@ const WITNESS_FIELDS: [u64; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 /// The auxiliary data's, in Alonzo's tagged form (`PostAlonzoAuxiliaryData`).
 const AUX_FIELDS: [u64; 5] = [0, 1, 2, 3, 4];
 
+/// Whether the body's hash of the auxiliary data is the hash of the auxiliary
+/// data the transaction carries. `None` when it carries neither; false when only
+/// one of the two is there, since each is nothing without the other.
+fn metadata_hash_matches(
+    hash: Option<&pallas_codec::utils::Bytes>,
+    aux: &Nullable<KeepRaw<'_, conway::AuxiliaryData>>,
+) -> Option<bool> {
+    let data = match aux {
+        Nullable::Some(aux) => Some(aux.raw_cbor()),
+        _ => None,
+    };
+    match (hash, data) {
+        (None, None) => None,
+        (Some(hash), Some(data)) => Some(hash.as_slice() == Hasher::<256>::hash(data).as_ref()),
+        _ => Some(false),
+    }
+}
+
 /// Seedelf Wallet's contract address on this network, and its script hash.
 fn seedelf_contract(flag: bool) -> Result<Hash<28>> {
     let hash = get_config(VARIANT, flag)?.contract.wallet_contract_hash;
@@ -614,7 +668,7 @@ fn outpoints<'a>(inputs: impl Iterator<Item = &'a conway::TransactionInput>) -> 
     inputs
         .map(|i| Outpoint {
             tx_hash: hex::encode(i.transaction_id.as_ref()),
-            index: i.index,
+            index: i.index.to_string(),
         })
         .collect()
 }
@@ -628,19 +682,72 @@ fn asset(policy: &conway::PolicyId, name: &[u8], quantity: String) -> DetailAsse
     }
 }
 
-/// Bytes as text, when they read as printable UTF-8: a token name or a
-/// metadatum's bytes often are, and the hex is shown either way.
+/// Bytes as text, when they read as UTF-8: a token name or a metadatum's bytes
+/// often do, and the hex is shown either way. What it gives back is [`shown`]'s
+/// form, so nothing invisible rides along.
 fn readable(bytes: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(bytes).ok()?;
-    (!text.is_empty() && !text.chars().any(|c| c.is_control())).then(|| text.to_string())
+    (!text.is_empty()).then(|| shown(text))
 }
 
-/// A reward address's bech32 form, from the bytes a withdrawal or a
-/// certificate names it by.
-fn reward_address(bytes: &[u8]) -> Result<String> {
-    let address =
-        Address::from_bytes(bytes).map_err(|e| anyhow!("a reward address is unreadable: {e}"))?;
-    Ok(address.to_bech32().unwrap_or_else(|_| address.to_hex()))
+/// Text from the chain, as it can be shown without lying about itself: every
+/// character that changes how the text reads without appearing in it is written
+/// out as `\u{...}`.
+///
+/// A right-to-left override turns "drowssap" into "password" on the screen; a
+/// zero-width joiner hides a word break; a soft hyphen or a variation selector
+/// is invisible by design. None of them is wrong to put in a transaction, and
+/// the view's job is to say they are there — so they're made visible rather
+/// than dropped, and the text stays exactly as long as the bytes say.
+///
+/// The ranges are the dangerous part of Unicode's `Cf` and
+/// `Default_Ignorable_Code_Point`, which is the same set the wallet's token
+/// names already refuse (`ui/tokens.ts` `HIDDEN`). Ordinary text in any script
+/// passes through untouched: a right-to-left *script* is not a control, and
+/// `unicode-bidi: isolate` in the stylesheet keeps its direction inside its own
+/// element.
+pub fn shown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if hidden(c) {
+            out.push_str(&format!("\\u{{{:04X}}}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether a character changes how text shows without showing itself.
+///
+/// It is Unicode's `Cf` and `Default_Ignorable_Code_Point` together — the same
+/// set `ui/tokens.ts`'s `HIDDEN` refuses in a token's name, checked against it
+/// character by character — plus the C0 and C1 controls and the line and
+/// paragraph separators, which that regex leaves out and a one-line value can't
+/// take. The ranges are written out because they must be the same in Rust and in
+/// the browser; a later Unicode would add to the browser's first, which is why
+/// `unicode-bidi: isolate` in the stylesheet stands behind this rather than on
+/// it.
+fn hidden(c: char) -> bool {
+    let n = c as u32;
+    c.is_control()
+        || matches!(n,
+            0x00AD | 0x034F | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 |
+            0x08E2 | 0x115F..=0x1160 | 0x17B4..=0x17B5 | 0x180B..=0x180F | 0x200B..=0x200F |
+            0x2028..=0x202E | 0x2060..=0x206F | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF | 0xFFA0 |
+            0xFFF0..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 |
+            0x1D173..=0x1D17A | 0xE0000..=0xE0FFF)
+}
+
+/// A reward address's bech32 form, from the bytes a withdrawal, a proposal or
+/// a pool's certificate names it by. `reward_account` is plain `bytes` in the
+/// CDDL, so bytes that are no address show as hex rather than hiding the whole
+/// transaction behind an error.
+fn reward_address(bytes: &[u8]) -> String {
+    match Address::from_bytes(bytes) {
+        Ok(address) => address.to_bech32().unwrap_or_else(|_| address.to_hex()),
+        Err(_) => hex::encode(bytes),
+    }
 }
 
 fn credential(cred: &StakeCredential) -> DetailCredential {
@@ -657,7 +764,7 @@ fn credential(cred: &StakeCredential) -> DetailCredential {
 fn anchor_of(anchor: &Nullable<conway::Anchor>) -> Option<DetailAnchor> {
     match anchor {
         Nullable::Some(a) => Some(DetailAnchor {
-            url: a.url.clone(),
+            url: shown(&a.url),
             content_hash: hex::encode(a.content_hash.as_ref()),
         }),
         _ => None,
@@ -708,8 +815,8 @@ fn relay_text(relay: &Relay) -> String {
             };
             format!("{host}{}", port(p))
         }
-        Relay::SingleHostName(p, name) => format!("{name}{}", port(p)),
-        Relay::MultiHostName(name) => name.clone(),
+        Relay::SingleHostName(p, name) => format!("{}{}", shown(name), port(p)),
+        Relay::MultiHostName(name) => shown(name),
     }
 }
 
@@ -742,7 +849,7 @@ fn certificate(cert: &conway::Certificate) -> Result<DetailCert> {
             pledge: pledge.to_string(),
             cost: cost.to_string(),
             margin: format!("{}/{}", margin.numerator, margin.denominator),
-            reward_account: reward_address(reward_account)?,
+            reward_account: reward_address(reward_account),
             owners: pool_owners
                 .iter()
                 .map(|o| hex::encode(o.as_ref()))
@@ -750,7 +857,7 @@ fn certificate(cert: &conway::Certificate) -> Result<DetailCert> {
             relays: relays.iter().map(relay_text).collect(),
             metadata: match pool_metadata {
                 Nullable::Some(m) => Some(DetailAnchor {
-                    url: m.url.clone(),
+                    url: shown(&m.url),
                     content_hash: hex::encode(m.hash.as_ref()),
                 }),
                 _ => None,
@@ -758,7 +865,7 @@ fn certificate(cert: &conway::Certificate) -> Result<DetailCert> {
         },
         C::PoolRetirement(pool, epoch) => DetailCert::PoolRetirement {
             pool: pool_id(pool),
-            epoch: *epoch,
+            epoch: epoch.to_string(),
         },
         C::Reg(cred, deposit) => DetailCert::Registration {
             credential: credential(cred),
@@ -837,7 +944,7 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
     };
     let mut detail = DetailProposal {
         deposit: proposal.deposit.to_string(),
-        reward_account: reward_address(&proposal.reward_account)?,
+        reward_account: reward_address(&proposal.reward_account),
         action: String::new(),
         follows: None,
         parameters: Vec::new(),
@@ -845,7 +952,7 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
         script: None,
         version: None,
         anchor: DetailAnchor {
-            url: proposal.anchor.url.clone(),
+            url: shown(&proposal.anchor.url),
             content_hash: hex::encode(proposal.anchor.content_hash.as_ref()),
         },
     };
@@ -877,7 +984,7 @@ fn proposal_detail(proposal: &conway::ProposalProcedure) -> Result<DetailProposa
             detail.script = script(guardrail);
             for (account, amount) in payments.iter() {
                 detail.withdrawals.push(DetailWithdrawal {
-                    address: reward_address(account)?,
+                    address: reward_address(account),
                     lovelace: amount.to_string(),
                 });
             }
@@ -949,31 +1056,10 @@ fn register_detail(datum_hex: &str) -> Option<DetailRegister> {
     })
 }
 
-/// Which output of the body this is, for its number and for an error that
-/// names it.
-enum Where {
-    Output(u64),
-    CollateralReturn,
-}
-
-impl Where {
-    fn index(&self) -> u64 {
-        match self {
-            Where::Output(i) => *i,
-            Where::CollateralReturn => 0,
-        }
-    }
-
-    fn name(&self) -> String {
-        match self {
-            Where::Output(i) => format!("Output {i}"),
-            Where::CollateralReturn => "The collateral return".to_string(),
-        }
-    }
-}
-
+/// One output, read as itself. `index` is which output of the body it is; a
+/// collateral return is 0, since the body holds it on its own.
 fn output_detail(
-    at: Where,
+    index: u64,
     out: &conway::MintedTransactionOutput,
     flag: bool,
     contract: &Hash<28>,
@@ -1018,9 +1104,8 @@ fn output_detail(
         }
     };
     Ok(DetailOutput {
-        index: at.index(),
-        address: address_detail(&address_bytes, flag, contract)
-            .map_err(|e| anyhow!("{} has an unreadable address: {e}", at.name()))?,
+        index,
+        address: address_detail(&address_bytes, flag, contract),
         lovelace,
         assets,
         register: inline.as_deref().and_then(register_detail),
@@ -1065,8 +1150,21 @@ fn legacy_value(value: &pallas_primitives::alonzo::Value) -> (String, Vec<Detail
     (lovelace.to_string(), assets)
 }
 
-fn address_detail(bytes: &[u8], flag: bool, contract: &Hash<28>) -> Result<DetailAddress> {
-    let address = Address::from_bytes(bytes).map_err(|e| anyhow!("{e}"))?;
+/// What an output's address bytes are. Bytes that aren't an address are shown
+/// as themselves: refusing them would hide every other field of the
+/// transaction, and the whole point of the view is to show what is there.
+fn address_detail(bytes: &[u8], flag: bool, contract: &Hash<28>) -> DetailAddress {
+    let Ok(address) = Address::from_bytes(bytes) else {
+        return DetailAddress {
+            bech32: hex::encode(bytes),
+            hex: hex::encode(bytes),
+            kind: "unreadable".to_string(),
+            payment: None,
+            stake: None,
+            network: None,
+            seedelf: false,
+        };
+    };
     let network = |n: pallas_addresses::Network| {
         match n {
             pallas_addresses::Network::Testnet => "testnet",
@@ -1111,7 +1209,9 @@ fn address_detail(bytes: &[u8], flag: bool, contract: &Hash<28>) -> Result<Detai
         }
         Address::Byron(_) => ("byron", None, None, None, false),
     };
-    Ok(DetailAddress {
+    DetailAddress {
+        // A Byron address has no bech32 form; Pallas writes its base58 for
+        // `to_bech32`, which is what every explorer shows.
         bech32: address.to_bech32().unwrap_or_else(|_| address.to_hex()),
         hex: address.to_hex(),
         kind: kind.to_string(),
@@ -1119,7 +1219,7 @@ fn address_detail(bytes: &[u8], flag: bool, contract: &Hash<28>) -> Result<Detai
         stake: stake.map(str::to_string),
         network: net,
         seedelf,
-    })
+    }
 }
 
 fn address_network(flag: bool) -> pallas_addresses::Network {
@@ -1166,10 +1266,10 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
                 let (mem, steps) = ex_units(&mut d)?;
                 out.push(DetailRedeemer {
                     tag: redeemer_tag(tag),
-                    index,
+                    index: index.to_string(),
                     data: hex::encode(data),
-                    mem,
-                    steps,
+                    mem: mem.to_string(),
+                    steps: steps.to_string(),
                 });
                 i += 1;
             }
@@ -1191,10 +1291,10 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
                 let (mem, steps) = ex_units(&mut d)?;
                 out.push(DetailRedeemer {
                     tag: redeemer_tag(tag),
-                    index,
+                    index: index.to_string(),
                     data: hex::encode(data),
-                    mem,
-                    steps,
+                    mem: mem.to_string(),
+                    steps: steps.to_string(),
                 });
                 i += 1;
             }
@@ -1353,7 +1453,7 @@ fn metadatum(value: &Metadatum) -> DetailMetadatum {
             hex: hex::encode(b.as_slice()),
             text: readable(b.as_slice()),
         },
-        Metadatum::Text(t) => DetailMetadatum::Text { text: t.clone() },
+        Metadatum::Text(t) => DetailMetadatum::Text { text: shown(t) },
         Metadatum::Array(items) => DetailMetadatum::List {
             items: items.iter().map(metadatum).collect(),
         },
@@ -1384,12 +1484,12 @@ fn note_of(labels: &pallas_primitives::Metadata) -> Option<Vec<String>> {
             lines
                 .iter()
                 .filter_map(|l| match l {
-                    Metadatum::Text(t) => Some(t.clone()),
+                    Metadatum::Text(t) => Some(shown(t)),
                     _ => None,
                 })
                 .collect(),
         ),
-        (Metadatum::Text(k), Metadatum::Text(line)) if k == "msg" => Some(vec![line.clone()]),
+        (Metadatum::Text(k), Metadatum::Text(line)) if k == "msg" => Some(vec![shown(line)]),
         _ => None,
     })
 }

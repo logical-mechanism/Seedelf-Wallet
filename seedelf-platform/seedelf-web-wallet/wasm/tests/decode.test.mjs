@@ -19,8 +19,12 @@ test("answers the whole transaction as JSON, in camelCase for the extension", ()
   assert.equal(detail.txHash, transfer.txId);
   assert.equal(detail.size, transfer.cbor.length / 2);
   assert.equal(detail.inputs.length, 2);
+  assert.equal(detail.inputs[0].index, "0", "an index is a decimal string, not a number");
   assert.equal(detail.outputs.length, 2);
   assert.equal(detail.redeemers.length, 2);
+  // A budget is `0 .. 2^63-1` in the CDDL, so a string too.
+  assert.match(detail.redeemers[0].mem, /^\d+$/);
+  assert.match(detail.redeemers[0].steps, /^\d+$/);
   assert.equal(detail.referenceInputs.length, 1);
   assert.equal(detail.collateral.length, 1);
   assert.ok(detail.collateralReturn.lovelace > "0");
@@ -63,8 +67,10 @@ test("reads a certificate transaction's certificates, note and metadata", () => 
     detail.metadata.map((m) => m.label).sort(),
     ["1", "674"],
   );
-  assert.equal(detail.validFrom, 100);
-  assert.equal(detail.validUntil, 99_999_999);
+  // Every number the bytes decide is a decimal string: the CDDL lets a slot go
+  // past what JSON.parse holds exactly (see rpc.ts's TxDetail).
+  assert.equal(detail.validFrom, "100");
+  assert.equal(detail.validUntil, "99999999");
   assert.equal(detail.withdrawals.length, 1);
 });
 

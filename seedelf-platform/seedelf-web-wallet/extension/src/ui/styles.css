@@ -2918,8 +2918,12 @@ button.dapp-tile:hover {
   overflow-wrap: anywhere;
 }
 
+/* A block of text or hex from the chain, or from a site: a note, data to sign,
+   a transaction's CBOR. Isolated, so text that runs right to left can't reorder
+   what is around it. */
 .dapp-message {
   margin: 0;
+  unicode-bidi: isolate;
   padding: var(--s3);
   max-height: 180px;
   overflow: auto;
@@ -3113,11 +3117,16 @@ button.dapp-tile:hover {
   overflow-wrap: anywhere;
 }
 
-/* A metadatum's tree: each level indented, keys before their values. */
+/* A metadatum's tree: each level indented, keys before their values.
+
+   `unicode-bidi: isolate` is the second line of defence behind the decoder's
+   escaping of bidi controls: a right-to-left *script* is nobody's trick, but
+   its direction must not reorder the row around it. */
 .tx-detail__tree {
   grid-column: 1 / -1;
   min-width: 0;
   font-size: var(--text-sm);
+  unicode-bidi: isolate;
 }
 
 .tx-detail__branch {
@@ -3148,4 +3157,5 @@ button.dapp-tile:hover {
   font-size: 12px;
   user-select: text;
   overflow-wrap: anywhere;
+  unicode-bidi: isolate;
 }

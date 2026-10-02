@@ -16,7 +16,7 @@ use pallas_codec::minicbor;
 use pallas_codec::utils::{Bytes, Nullable, Set};
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::{Fragment, TransactionInput, alonzo, conway};
-use seedelf_wasm::decode::{DetailMetadatum, TxDetail, decode_tx};
+use seedelf_wasm::decode::{DetailCert, DetailMetadatum, TxDetail, decode_tx, shown};
 use serde_json::Value;
 
 /// Every transaction recorded, with what cardano-cli made of it.
@@ -53,6 +53,14 @@ fn one(name: &str) -> (TxDetail, Value) {
 /// "273922 Lovelace" as the number.
 fn lovelace(text: &str) -> u64 {
     text.split_whitespace().next().unwrap().parse().unwrap()
+}
+
+/// A decimal string the decoder answers with, as the number it says. Every
+/// number the bytes decide is one of these, so the cross-check parses it —
+/// which also pins that it is a string and not a JSON number.
+fn number(text: &str) -> u64 {
+    text.parse()
+        .unwrap_or_else(|_| panic!("{text:?} isn't a whole number"))
 }
 
 fn strings(value: &Value) -> Vec<String> {
@@ -297,13 +305,13 @@ fn cardano_cli_reads_every_fixture_the_same_way() {
 
         // The validity range, both ends.
         assert_eq!(
-            detail.valid_from,
+            detail.valid_from.as_deref().map(number),
             view["validity range"]["lower bound"].as_u64(),
             "{}",
             at("the lower validity bound")
         );
         assert_eq!(
-            detail.valid_until,
+            detail.valid_until.as_deref().map(number),
             view["validity range"]["upper bound"].as_u64(),
             "{}",
             at("the upper validity bound")
@@ -430,14 +438,17 @@ fn a_redeemers_argument_is_the_bytes_as_written() {
         detail
             .redeemers
             .iter()
-            .map(|r| r.index)
+            .map(|r| number(&r.index))
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([0, 1]),
         "one for each input"
     );
     for redeemer in &detail.redeemers {
         assert_eq!(redeemer.tag, "spend");
-        assert!(redeemer.mem > 0 && redeemer.steps > 0, "a measured budget");
+        assert!(
+            number(&redeemer.mem) > 0 && number(&redeemer.steps) > 0,
+            "a measured budget"
+        );
         assert!(
             tx.cbor.contains(&redeemer.data),
             "the argument is a slice of the transaction"
@@ -455,8 +466,8 @@ fn the_budgets_match_cardano_clis() {
         .zip(view["redeemers"].as_array().unwrap())
     {
         let units = &theirs["redeemer"]["execution units"];
-        assert_eq!(ours.mem, units["memory"].as_u64().unwrap());
-        assert_eq!(ours.steps, units["steps"].as_u64().unwrap());
+        assert_eq!(number(&ours.mem), units["memory"].as_u64().unwrap());
+        assert_eq!(number(&ours.steps), units["steps"].as_u64().unwrap());
     }
 }
 
@@ -612,6 +623,142 @@ fn certificates_are_read_in_full() {
     assert_eq!(json[0]["credential"]["kind"], "key");
 }
 
+/// A stake pool's own registration carries more than any other certificate:
+/// every parameter is checked against cardano-cli's reading of the same bytes.
+#[test]
+fn a_pools_own_certificate_is_read_in_full() {
+    let (detail, view) = one("pool");
+    let params = &view["certificates"][0]["Pool registration"]["pool params"];
+    let serde_json::Value::Object(_) = params else {
+        panic!("no pool params in the view");
+    };
+    let DetailCert::PoolRegistration {
+        pool,
+        vrf_key_hash,
+        pledge,
+        cost,
+        margin,
+        reward_account,
+        owners,
+        relays,
+        metadata,
+    } = &detail.certificates[0]
+    else {
+        panic!("the first certificate registers a pool");
+    };
+    // The pool id is bech32 here and a key hash in the view: both of one hash.
+    assert!(pool.starts_with("pool1"), "{pool}");
+    assert_eq!(vrf_key_hash, params["vrf"].as_str().unwrap());
+    assert_eq!(pledge, "1000000000");
+    assert_eq!(cost, "340000000");
+    assert_eq!(
+        margin, "3/100",
+        "the margin as the bytes have it, not rounded"
+    );
+    assert_eq!((3.0 / 100.0), params["margin"].as_f64().unwrap());
+    assert!(
+        reward_account.starts_with("stake_test1"),
+        "{reward_account}"
+    );
+    assert_eq!(
+        owners.iter().collect::<Vec<_>>(),
+        params["owners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(relays, &["relay.example.com:3001".to_string()]);
+    let anchor = metadata.as_ref().expect("the pool's metadata");
+    assert_eq!(anchor.url, params["metadata"]["url"].as_str().unwrap());
+    assert_eq!(
+        anchor.content_hash,
+        params["metadata"]["hash"].as_str().unwrap()
+    );
+
+    // And its retirement, with the epoch as a string: `epoch = uint .size 8`.
+    let DetailCert::PoolRetirement {
+        pool: retiring,
+        epoch,
+    } = &detail.certificates[1]
+    else {
+        panic!("the second certificate retires it");
+    };
+    assert_eq!(retiring, pool, "the same pool");
+    assert_eq!(epoch, "500");
+    assert_eq!(
+        number(epoch),
+        view["certificates"][1]["Pool retirement"]["epoch"]
+            .as_u64()
+            .unwrap()
+    );
+}
+
+/// The body's metadata hash against the metadata it carries. A transaction
+/// whose two disagree would be refused by the network, and the metadata shown
+/// isn't what it commits to, so the view says so.
+#[test]
+fn the_metadata_hash_is_checked_against_the_metadata() {
+    // The recorded transactions are built properly, so each one agrees.
+    for tx in recorded() {
+        let detail = decode_tx("preprod", &tx.cbor).unwrap();
+        let expected = match (
+            detail.auxiliary_data_hash.is_some(),
+            tx.view["metadata"].is_null(),
+        ) {
+            (false, true) => None,
+            _ => Some(true),
+        };
+        assert_eq!(detail.metadata_hash_matches, expected, "{}", tx.name);
+    }
+    // The metadata swapped for other metadata the hash doesn't cover.
+    let tx = recorded()
+        .into_iter()
+        .find(|tx| tx.name == "certificates")
+        .unwrap()
+        .cbor;
+    let bytes = hex::decode(&tx).unwrap();
+    let parts = items(&bytes);
+    let mut other = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut other);
+    e.map(1).unwrap();
+    e.u64(674).unwrap();
+    e.map(1).unwrap();
+    e.str("msg").unwrap();
+    e.str("not what the body commits to").unwrap();
+    let mut out = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut out);
+    e.array(4).unwrap();
+    for part in &parts[..3] {
+        e.writer_mut().extend_from_slice(part);
+    }
+    e.writer_mut().extend_from_slice(&other);
+    let detail = decode_tx("preprod", &hex::encode(out)).unwrap();
+    assert_eq!(detail.metadata_hash_matches, Some(false));
+    // It still shows what is there, note and all.
+    assert_eq!(
+        detail.note.as_deref(),
+        Some(["not what the body commits to".to_string()].as_slice())
+    );
+
+    // A hash in the body with no metadata under it: each is nothing without the
+    // other, so that doesn't agree either.
+    let hash_only = plain_body(&[(7, &format!("5820{}", "11".repeat(32)))]);
+    assert_eq!(
+        decode_tx("preprod", &hash_only)
+            .unwrap()
+            .metadata_hash_matches,
+        Some(false)
+    );
+    assert_eq!(
+        decode_tx("preprod", &plain_body(&[]))
+            .unwrap()
+            .metadata_hash_matches,
+        None
+    );
+}
+
 /// A governance proposal and a vote, with what they point at.
 #[test]
 fn governance_is_read_in_full() {
@@ -704,6 +851,248 @@ fn the_witness_set_says_what_it_holds() {
         "and nothing signs it until Send"
     );
     assert_eq!(transfer.redeemers.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// What Conway's CDDL allows that a screen or JavaScript can't take at face
+// value (eras/conway/impl/cddl/data/conway.cddl)
+// ---------------------------------------------------------------------------
+
+/// A transaction whose body is exactly these map entries, each value raw hex:
+/// the shortest way to put in what no builder here writes.
+fn body_of(entries: &[(u64, &str)]) -> String {
+    let mut out = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut out);
+    e.array(4).unwrap();
+    e.map(entries.len() as u64).unwrap();
+    for (key, value) in entries {
+        e.u64(*key).unwrap();
+        e.writer_mut()
+            .extend_from_slice(&hex::decode(value).unwrap());
+    }
+    e.map(0).unwrap();
+    e.bool(true).unwrap();
+    e.null().unwrap();
+    hex::encode(out)
+}
+
+/// One input and a fee, with `outputs` as the body's key 1: the smallest body
+/// the tests below add a field to.
+fn plain_body(extra: &[(u64, &str)]) -> String {
+    let input = "81825820111111111111111111111111111111111111111111111111111111111111111100";
+    // One 2 ₳ output to an enterprise key address.
+    let output = "8182581d60a3d6d926176be50d7d03ecaf007932b670592111602201ae9c20d4381a001e8480";
+    let mut entries = vec![(0, input), (1, output), (2, "1a00030d40")];
+    entries.extend_from_slice(extra);
+    body_of(&entries)
+}
+
+/// `slot`, `coin`, `epoch` and `ex_units` are all `uint` in the CDDL, up to
+/// 2^64-1 or 2^63-1, and `JSON.parse` rounds anything past 2^53. So every number
+/// the bytes decide is a decimal string: this ttl would have shown as
+/// 1152921504606846800.
+#[test]
+fn a_number_too_big_for_javascript_is_shown_exactly() {
+    // ttl = 2^60 + 1.
+    let detail = decode_tx("preprod", &plain_body(&[(3, "1b1000000000000001")])).unwrap();
+    assert_eq!(detail.valid_until.as_deref(), Some("1152921504606846977"));
+    let json = serde_json::to_value(&detail).unwrap();
+    assert!(
+        json["validUntil"].is_string(),
+        "a string, not a JSON number"
+    );
+    assert!(json["fee"].is_string(), "coin is uint in the CDDL");
+    assert!(
+        json["inputs"][0]["index"].is_string(),
+        "and an input's index"
+    );
+    let transfer = recorded()
+        .into_iter()
+        .find(|tx| tx.name == "transfer")
+        .unwrap();
+    let spend = serde_json::to_value(decode_tx("preprod", &transfer.cbor).unwrap()).unwrap();
+    for key in ["mem", "steps", "index"] {
+        assert!(
+            spend["redeemers"][0][key].is_string(),
+            "a redeemer's {key} is a string"
+        );
+    }
+}
+
+/// The CDDL types an output's address as plain `bytes`, so a transaction can
+/// carry bytes that are no address. One of those would otherwise hide every
+/// other field behind an error; it shows as itself.
+#[test]
+fn bytes_that_arent_an_address_are_shown_as_themselves() {
+    let input = "81825820111111111111111111111111111111111111111111111111111111111111111100";
+    // One output of 2 ₳ to the three bytes aa bb cc.
+    let tx = body_of(&[(0, input), (1, "818243aabbcc1a001e8480"), (2, "1a00030d40")]);
+    let detail = decode_tx("preprod", &tx).unwrap();
+    let address = &detail.outputs[0].address;
+    assert_eq!(address.kind, "unreadable");
+    assert_eq!(address.hex, "aabbcc");
+    assert_eq!(address.bech32, "aabbcc", "nothing pretends to be bech32");
+    assert!(address.payment.is_none() && address.stake.is_none());
+    assert!(address.network.is_none() && !address.seedelf);
+    // And the rest of the transaction still reads.
+    assert_eq!(detail.outputs[0].lovelace, "2000000");
+    assert_eq!(detail.fee, "200000");
+}
+
+/// `reward_account = bytes` in the CDDL too, with no length to it: a withdrawal
+/// from bytes that are no address shows them, rather than refusing the view.
+#[test]
+fn a_withdrawal_from_bytes_that_arent_an_address_still_shows() {
+    // {5: {h'E0AABBCCDD': 0}} — five bytes where an address belongs.
+    let detail = decode_tx("preprod", &plain_body(&[(5, "a145e0aabbccdd00")])).unwrap();
+    assert_eq!(detail.withdrawals.len(), 1);
+    assert_eq!(detail.withdrawals[0].address, "e0aabbccdd");
+    assert_eq!(detail.withdrawals[0].lovelace, "0");
+}
+
+/// Text from the chain is whatever was written. A right-to-left override turns
+/// "drowssap" into "password" on the screen, and a zero-width joiner hides a
+/// word break: each is written out instead, so the text can't read as something
+/// it isn't and nothing is dropped.
+#[test]
+fn text_that_would_show_as_something_else_is_escaped() {
+    // #6.259({0: {674: {"msg": [...]}, 1: h'61C2AD62'}})
+    let mut aux = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut aux);
+    e.tag(minicbor::data::Tag::new(259)).unwrap();
+    e.map(1).unwrap();
+    e.u8(0).unwrap();
+    e.map(2).unwrap();
+    e.u64(674).unwrap();
+    e.map(1).unwrap();
+    e.str("msg").unwrap();
+    e.array(3).unwrap();
+    e.str("\u{202E}drowssap").unwrap();
+    e.str("a\u{200B}b").unwrap();
+    e.str("ok").unwrap();
+    e.u64(1).unwrap();
+    e.bytes("a\u{00AD}b".as_bytes()).unwrap();
+
+    let base = hex::decode(plain_body(&[])).unwrap();
+    let parts = items(&base);
+    let mut out = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut out);
+    e.array(4).unwrap();
+    for part in &parts[..3] {
+        e.writer_mut().extend_from_slice(part);
+    }
+    e.writer_mut().extend_from_slice(&aux);
+
+    let detail = decode_tx("preprod", &hex::encode(out)).unwrap();
+    // The note: made visible, and plain text untouched.
+    assert_eq!(
+        detail.note.as_deref(),
+        Some(
+            [
+                r"\u{202E}drowssap".to_string(),
+                r"a\u{200B}b".to_string(),
+                "ok".to_string(),
+            ]
+            .as_slice()
+        )
+    );
+    // The metadata tree says the same.
+    let json = serde_json::to_value(&detail).unwrap();
+    let label = |want: &str| {
+        json["metadata"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["label"] == want)
+            .unwrap_or_else(|| panic!("no label {want}"))
+            .clone()
+    };
+    let lines = label("674")["value"]["entries"][0]["value"]["items"].clone();
+    assert_eq!(lines[0]["text"], r"\u{202E}drowssap");
+    assert_eq!(lines[2]["text"], "ok");
+    // Bytes read as text get the same treatment, with their hex beside them.
+    let bytes = label("1")["value"].clone();
+    assert_eq!(bytes["hex"], "61c2ad62");
+    assert_eq!(bytes["text"], r"a\u{00AD}b");
+}
+
+/// A certificate from before Conway, which Conway dropped: a genesis key
+/// delegation (5) or a move of instantaneous rewards (6). No node accepts one
+/// today, so the view says in words that it can't read the transaction rather
+/// than showing it with the certificate missing — which would be worse.
+#[test]
+fn a_certificate_conway_dropped_is_said_not_read_around() {
+    // [[6, h'…32', h'…32', h'…32']] — a genesis key delegation.
+    let hash32 = "5820".to_string() + &"11".repeat(32);
+    let certificate = format!("8184 06 {hash32} {hash32} {hash32}").replace(' ', "");
+    let error = decode_tx("preprod", &plain_body(&[(4, &certificate)]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("The wallet can't read this transaction"),
+        "{error}"
+    );
+    assert!(error.contains("certificate"), "{error}");
+    // Shelley's own body field 6, the update proposal, is only a field: the rest
+    // of the transaction still reads, and the field is reported as it is.
+    let detail = decode_tx("preprod", &plain_body(&[(6, "820102")])).unwrap();
+    assert_eq!(detail.unknown.len(), 1);
+    assert_eq!(detail.unknown[0].field, "6");
+    assert_eq!(detail.outputs.len(), 1);
+}
+
+/// The set it escapes is the one the wallet's own token names refuse: Unicode's
+/// `Cf` and `Default_Ignorable_Code_Point` (`ui/tokens.ts` `HIDDEN`), plus the
+/// controls and the line and paragraph separators that regex leaves out. Each
+/// one here is a character that regex catches and a hand-written list would be
+/// easy to miss.
+#[test]
+fn every_invisible_character_is_escaped() {
+    for (what, c) in [
+        ("a combining grapheme joiner", '\u{034F}'),
+        ("a Hangul choseong filler", '\u{115F}'),
+        ("a Hangul filler", '\u{3164}'),
+        ("a halfwidth Hangul filler", '\u{FFA0}'),
+        ("a Mongolian free variation selector", '\u{180B}'),
+        ("a Khmer inherent vowel", '\u{17B4}'),
+        ("an Arabic pound mark", '\u{0890}'),
+        ("an interlinear annotation anchor", '\u{FFF9}'),
+        ("a tag character", '\u{E0041}'),
+        ("a variation selector supplement", '\u{E0100}'),
+        ("a left-to-right mark", '\u{200E}'),
+        ("a right-to-left override", '\u{202E}'),
+        ("a first strong isolate", '\u{2068}'),
+        ("a line separator", '\u{2028}'),
+        ("a paragraph separator", '\u{2029}'),
+        ("a zero width no-break space", '\u{FEFF}'),
+        ("a shorthand format letter overlap", '\u{1BCA0}'),
+        ("an Egyptian hieroglyph format control", '\u{13430}'),
+        ("a musical beam", '\u{1D173}'),
+    ] {
+        let escaped = shown(&format!("a{c}b"));
+        assert_eq!(escaped, format!("a\\u{{{:04X}}}b", c as u32), "{what}");
+    }
+}
+
+/// Ordinary text in any script passes through: a right-to-left *script* is
+/// nobody's trick, and the stylesheet isolates its direction instead.
+#[test]
+fn ordinary_text_is_left_alone() {
+    for text in [
+        "hello",
+        "Seedelf Wallet",
+        "שלום",
+        "日本語",
+        "émoji 🙂",
+        "1,000 ₳",
+    ] {
+        assert_eq!(shown(text), text, "{text}");
+    }
+    assert_eq!(shown("a\u{202E}b"), r"a\u{202E}b", "a bidi override");
+    assert_eq!(shown("a\u{0000}b"), r"a\u{0000}b", "a control");
+    assert_eq!(shown("a\u{FEFF}b"), r"a\u{FEFF}b", "the byte order mark");
+    assert_eq!(shown("a\u{E0041}b"), r"a\u{E0041}b", "a tag character");
+    assert_eq!(shown("a\u{FE0F}b"), r"a\u{FE0F}b", "a variation selector");
 }
 
 // ---------------------------------------------------------------------------

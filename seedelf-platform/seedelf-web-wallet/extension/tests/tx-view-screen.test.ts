@@ -151,3 +151,134 @@ describe("the transaction view's page", () => {
     expect(addressWords("byron", null)).toBe("a Byron address");
   });
 });
+
+describe("what the page can't take at face value", () => {
+  // The same hand-built bodies the Rust tests use (wasm/tests/decode_test.rs):
+  // a four-item transaction whose body is exactly these entries.
+  const INPUT = `81825820${"11".repeat(32)}00`;
+  const OUTPUT = "8182581d60a3d6d926176be50d7d03ecaf007932b670592111602201ae9c20d4381a001e8480";
+  const body = (entries: Array<[string, string]>) =>
+    `84a${entries.length.toString(16)}${entries.map(([k, v]) => k + v).join("")}a0f5f6`;
+  const plain = (extra: Array<[string, string]> = []) =>
+    body([["00", INPUT], ["01", OUTPUT], ["02", "1a00030d40"], ...extra]);
+
+  it("shows a slot too big for a JavaScript number exactly", () => {
+    // ttl = 2^60 + 1, which `JSON.parse` would round to …800 if it were a number.
+    const page = shown(plain([["03", "1b1000000000000001"]]));
+    expect(page).toContain("Valid until slot 1152921504606846977");
+    expect(page).not.toContain("1152921504606846800");
+  });
+
+  it("says when an output's bytes aren't an address, and still shows the rest", () => {
+    // The CDDL types the field as plain `bytes`: these three aren't an address.
+    const page = shown(body([["00", INPUT], ["01", "818243aabbcc1a001e8480"], ["02", "1a00030d40"]]));
+    expect(page).toContain("bytes that aren't an address");
+    expect(page).toContain("aabbcc");
+    expect(page).toContain("2 ₳");
+    expect(page).toContain("Network fee 0.2 ₳");
+  });
+
+  it("writes out a right-to-left override in a note rather than letting it reorder the line", () => {
+    const detail: TxDetail = {
+      ...read(cborOf("payment")),
+      note: [String.raw`\u{202E}drowssap`],
+      metadata: [{ label: "674", value: { type: "text", text: String.raw`a\u{200B}b` } }],
+    };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain(String.raw`\u{202E}drowssap`);
+    expect(page).toContain(String.raw`a\u{200B}b`);
+    // And the text it is isolated, so a right-to-left script can't reorder its row.
+    const html = renderToStaticMarkup(
+      createElement(NetworkContext.Provider, { value: "preprod" }, createElement(TxDetailBody, { detail, network: "preprod", testId: "tx" })),
+    );
+    expect(html).toContain('class="tx-detail__tree"');
+  });
+
+  it("groups a redeemer's budget through bigint, so a huge one isn't rounded", () => {
+    const detail: TxDetail = {
+      ...read(transferPreprod.final.txCbor),
+      redeemers: [{ tag: "spend", index: "0", data: "d87980", mem: "9007199254740993", steps: "1" }],
+    };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("9,007,199,254,740,993 mem");
+  });
+});
+
+describe("nothing the decoder found is left off the page", () => {
+  it("shows every field a stake pool's certificate carries", () => {
+    const page = shown(cborOf("pool"));
+    expect(page).toContain("Registers a stake pool");
+    expect(page).toContain("Pledge (lovelace) 1000000000");
+    expect(page).toContain("Cost (lovelace) 340000000");
+    expect(page).toContain("Margin 3/100");
+    expect(page).toContain("Rewards to stake_test1");
+    expect(page).toContain("Relays relay.example.com:3001");
+    expect(page).toContain("https://example.com/pool.json");
+    expect(page).toContain("VRF key hash");
+    expect(page).toContain("Retires a stake pool");
+    expect(page).toContain("Epoch 500");
+  });
+
+  it("shows a proposal's own fields, treasury withdrawals and all", () => {
+    const detail: TxDetail = {
+      ...read(cborOf("governance")),
+      proposals: [
+        {
+          deposit: "100000000000",
+          rewardAccount: "stake_test1uzf20srl7uvcknahpn4wq7q4xs8e0xdcgyf28a6mwv7jcrqq987ua",
+          action: "treasuryWithdrawals",
+          follows: { txHash: "ab".repeat(32), index: 2 },
+          parameters: [],
+          withdrawals: [{ address: "stake_test1uzf20srl7uvcknahpn4wq7q4xs8e0xdcgyf28a6mwv7jcrqq987ua", lovelace: "5000000" }],
+          script: "cd".repeat(28),
+          version: null,
+          anchor: { url: "https://example.com/withdraw", contentHash: "00".repeat(32) },
+        },
+      ],
+    };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("Proposes withdrawals from the treasury");
+    expect(page).toContain("Withdraws stake_test1uzf20srl7uvcknahpn4wq7q4xs8e0xdcgyf28a6mwv7jcrqq987ua 5 ₳");
+    expect(page).toContain("Follows abababab");
+    expect(page).toContain("Script cdcdcd");
+    expect(page).toContain("https://example.com/withdraw");
+  });
+
+  it("shows a collateral return and a total even with no collateral inputs", () => {
+    const detail: TxDetail = {
+      ...read(cborOf("payment")),
+      collateral: [],
+      totalCollateral: "5000000",
+    };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("Collateral");
+    expect(page).toContain("The most taken 5 ₳");
+    expect(page).toContain("Comes back");
+  });
+
+  it("says when metadata isn't what the body commits to", () => {
+    const detail: TxDetail = { ...read(cborOf("certificates")), metadataHashMatches: false };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("isn't the hash of the metadata it carries");
+    // And it still shows the metadata, as it shows everything else.
+    expect(page).toContain("Label 674");
+  });
+
+  it("counts Byron witnesses rather than dropping them", () => {
+    const detail: TxDetail = { ...read(cborOf("payment")), bootstrapWitnesses: 2 };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("Byron witnesses 2 witnesses");
+  });
+
+  it("doesn't label which of the two output forms was written", () => {
+    // The CDDL calls them "equally valid and interchangeable", and cardano-cli
+    // writes a list for any output needing neither an inline datum nor a script:
+    // two of this payment's three are lists. Saying so on each row would read as
+    // a warning about nothing, and the Raw CBOR tab has the bytes.
+    const detail = read(cborOf("payment"));
+    expect(detail.outputs.map((o) => o.form)).toEqual(["legacy", "legacy", "postAlonzo"]);
+    const page = shown(cborOf("payment"));
+    expect(page).not.toContain("older");
+    expect(page).not.toContain("legacy");
+  });
+});
