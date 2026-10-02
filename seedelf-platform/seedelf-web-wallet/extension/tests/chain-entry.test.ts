@@ -1,4 +1,4 @@
-// Which transaction of a chain a review shows (the owner, 2026-10-02).
+// Which transaction of a chain a review shows (the owner, 2026-10-01).
 //
 // A chain is built and signed before any of it is sent, so a review holds a
 // dozen transactions and offers one. The one it offers is the first — the

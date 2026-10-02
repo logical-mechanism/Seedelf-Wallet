@@ -1361,7 +1361,7 @@ export interface LovejoinPublicSummary {
    * The chain's first transaction: the deposit, or, mixing its own boxes again,
    * the first mix. The one the review shows — it's where the account's money
    * goes in, and the rest of the chain only moves what it put there (the owner,
-   * 2026-10-02).
+   * 2026-10-01).
    */
   entry: string;
   boxes: number;

@@ -512,7 +512,7 @@ export function Lovejoin({
         {/* The chain's first transaction, not the one Send names: the account's
             money goes in there, and every mix after it only moves what that put
             in the pool, under rules nothing here could change (the owner,
-            2026-10-02). A mix from the private balance is this one transaction —
+            2026-10-01). A mix from the private balance is this one transaction —
             its chain is built later, when the session runs, against the pool as
             it is then. */}
         {review.source === "private" ? (
