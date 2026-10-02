@@ -537,10 +537,11 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   koios.usedStakes.add(second.preprod.stake);
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Public accounts" }).click();
-  await expect(page.getByTestId("accounts-cost-note")).toContainText("asks Koios about one account");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("each ask Koios about one account");
   await expect(page.getByTestId("accounts-cost-note")).toContainText("would tell Koios those twenty accounts are one wallet's");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("Add it");
   const asked = koios.stakesAsked.length;
-  await page.getByRole("button", { name: "Check for another account" }).click();
+  await page.getByRole("button", { name: "Look for the next account" }).click();
   await expect(page.getByTestId("accounts-found")).toContainText("Found Account 2");
   expect(koios.stakesAsked.length).toBe(asked + 1);
   await snap(page, "settings-accounts");
@@ -572,6 +573,26 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   await expect(page.locator("#cardano-account")).toHaveText("Account 1");
   await page.getByRole("button", { name: "Receive" }).click();
   await expect(page.getByTestId("receive-address")).toContainText(v.preprod.receive_0.slice(0, 20));
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // A custom number the sequential look can never reach (the owner,
+  // 2026-10-02): checked by number, then added even though it has never been
+  // used, which is how a user starts one.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Public accounts" }).click();
+  await page.getByLabel("Account number").fill("1338");
+  const before = koios.stakesAsked.length;
+  await page.getByRole("button", { name: "Check it" }).click();
+  await expect(page.getByTestId("accounts-found")).toContainText("Account 1338 has never been used");
+  expect(koios.stakesAsked.length).toBe(before + 1);
+  // Adding it asks nobody anything at all.
+  await page.getByRole("button", { name: "Add Account 1338 anyway" }).click();
+  await expect(page.getByTestId("accounts-found")).toContainText("Account 1338 is in the list now");
+  expect(koios.stakesAsked.length).toBe(before + 1);
+  await expect(page.getByTestId("accounts-list")).toContainText("Account 1338");
+  // And it is in the picker like any other, never having been on chain.
+  // (A select's option text isn't its own text content, so the options are read.)
+  await expect(page.getByLabel("Public account").locator("option")).toHaveText(["Account 1", "Account 2", "Account 1338"]);
 });
 
 test("contacts: save a Seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {

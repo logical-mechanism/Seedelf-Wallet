@@ -274,35 +274,28 @@ describe("paying your own public account from Seedelf", () => {
 });
 
 describe("the public Send and the wallet's own accounts", () => {
-  it("refuses another of your own accounts, however the address arrived", async () => {
+  it("pays another of your own accounts, and names which one it is", async () => {
     const t = await unlocked();
     t.koios.usedStakes.add(phrase(1).preprod.stake as string);
     await t.accounts.discover("preprod");
 
-    // A public Send is an ordinary Cardano payment: anyone can see account A's
-    // address paying account B's and tell they are one wallet's. No warning
-    // undoes that once it is on chain, so it is refused (the owner, 2026-10-02).
-    const theirs = phrase(1).preprod.receive_0 as string;
-    await expect(t.send.build("preprod", [{ to: theirs, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
-      "That address is your own Account 2",
-    );
-    // Said with the way out, not just the refusal.
-    await expect(t.send.build("preprod", [{ to: theirs, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
-      "make this money private first",
-    );
-    // Among several recipients too, wherever it sits.
-    await expect(
-      t.send.build("preprod", [
-        { to: phrase(0).preprod.receive_1 as string, lovelace: "2000000", tokens: [] },
-        { to: theirs, lovelace: "2000000", tokens: [] },
-      ]),
-    ).rejects.toThrow("your own Account 2");
+    // Allowed, not refused (the owner, 2026-10-02): moving money between your
+    // own accounts is a thing people want to do, and accounts aren't
+    // necessarily unlinked — some of what the wallet already does links them.
+    // So the destination names the account and the form says what it reveals.
+    const other = phrase(1).preprod.receive_0 as string;
+    const summary = await t.send.build("preprod", [{ to: other, lovelace: "2000000", tokens: [] }]);
+    expect(summary.payments[0]).toMatchObject({ own: true, ownAccount: 1 });
+
+    // However the address arrived: it is read off the resolved address, not
+    // off how it was typed, so Contacts and ADA Handles say the same.
+    expect(await t.withdraw.resolve("preprod", other)).toMatchObject({ own: true, ownAccount: 1 });
   });
 
-  it("still pays this account, which is what the collateral payment is", async () => {
+  it("pays this account too, which is what the collateral payment is", async () => {
     const t = await unlocked();
-    // The money comes straight back less the fee: it links nothing new, and
-    // Settings' collateral is exactly a payment to this account's own 0/0.
+    // The money comes straight back less the fee, so this links nothing new,
+    // and Settings' collateral is exactly a payment to this account's own 0/0.
     const summary = await t.send.build("preprod", [{ to: phrase(0).preprod.receive_0 as string, lovelace: "2000000", tokens: [] }]);
     expect(summary.payments[0]).toMatchObject({ own: true, ownAccount: 0 });
   });

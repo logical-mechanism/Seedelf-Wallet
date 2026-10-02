@@ -9,6 +9,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
@@ -268,12 +269,17 @@ export function Withdraw({
   );
 }
 
-/** `account`: which of the user's public accounts it is, when the wallet knows (chunk 18). */
+/**
+ * `account`: which of the user's public accounts it is, when the wallet knows
+ * (chunk 18). It is named only where there is more than one to tell apart; a
+ * wallet with one account reads exactly as it did.
+ */
 function OwnWarning({ account }: { account?: number }) {
+  const { several } = useAccounts();
+  const whose = several && account !== undefined ? `Account ${account + 1}` : "public account";
   return (
     <Callout tone="warn" testId="withdraw-own">
-      This is your own {account === undefined ? "public account" : `Account ${account + 1}`}. Making money public here links
-      it back to it, and to whoever made it private.
+      This is your own {whose}. Making money public here links it back to it, and to whoever made it private.
     </Callout>
   );
 }

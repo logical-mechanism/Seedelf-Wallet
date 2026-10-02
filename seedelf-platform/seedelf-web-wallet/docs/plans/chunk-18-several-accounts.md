@@ -368,16 +368,25 @@ So Settings → Public accounts gets an account-number entry:
 
 **And a bug in the sequential look, found writing this:** it probed from `highest + 1`, so adding account 1337 would have stopped it ever reaching account 2. It carries on from the **first gap in the run up from 0** now.
 
-### The public Send must refuse another of your own accounts
+### Sending between your own accounts: said, not refused
 
-**The owner:** *"we do not allow the public send to be able to send to another account nor someone from our contact list that is public."*
+**The owner, first:** *"we do not allow the public send to be able to send to another account nor someone from our contact list that is public."*
 
-A public Send is an ordinary Cardano payment: anyone can see account A's address paying account B's and tell they are one wallet's. That is the one thing several accounts exist to prevent, and **no warning undoes an irreversible on-chain link** — so it is a refusal.
+I read that as a prohibition and built one: `send.ts` refused a recipient belonging to another account, and the form kept Review shut.
 
-- `WithdrawDestination` carries `ownAccount`, so a destination says *which* of the wallet's accounts it is rather than just that it is one.
-- `send.ts` refuses a recipient whose account isn't the active one, and the Send form says so under the row and keeps Review shut, so it is never a surprise at build time.
-- **It reads the resolved address, so it holds however the address arrived** — typed, pasted, an ADA Handle, or picked from Contacts.
-- **Paying *this* account is still allowed** and only noted: the money comes straight back less the fee, and Settings' collateral payment is exactly that.
-- **Make public to another account stays a warned choice**, not a refusal: what it links is the private UTxOs spent, which Make public always names.
+**The owner, correcting it:** *"I mean, in the contacts there could be base addresses that are public or seedelfs. And a user may want to use the wallet to send between accounts too. We are making a lot of assumptions about accounts not being linked when they in fact can and in some cases that was encouraged."*
 
-**This also fixed something my own earlier change had broken.** Making `own` true for every known account left the public Send's note saying *"the payment comes back to it, less the fee"* for an address belonging to a different account — which is false. The note now distinguishes this account from another, and Make public's warning names the account too.
+That is the better frame, and the refusal was wrong. **Accounts are not necessarily unlinked**, several things the wallet already does link them — a move-in, Make public back to an account, a Seedelf the account paid for — and in some cases that is the point. And people do want to move money between their own accounts.
+
+So it works the way every other entry in [privacy.md](../privacy.md#known-links)'s *Known links* works, which is what that section says it is for: **the wallet cannot prevent the link, so it makes it visible.**
+
+- `WithdrawDestination` carries `ownAccount`, so a destination says *which* of the wallet's accounts it is rather than only that it is one.
+- The Send form names the account and says what the payment reveals — *"anyone can see your two accounts paying each other and tell they're one wallet's"* — and the payment goes through.
+- **It reads the resolved address, so it reads the same however the address arrived** — typed, pasted, an ADA Handle, or picked from Contacts. No contact is hidden or filtered: a contact may hold a public address or a seedelf, and either is the user's to pay.
+- **Paying *this* account** says what it always said (the money comes straight back less the fee); the collateral payment is exactly that.
+
+**It did fix something my earlier change had broken.** Making `own` true for every known account left the public Send's note saying *"the payment comes back to it, less the fee"* for an address belonging to a *different* account — which is false. The note distinguishes this account from another now, and Make public's warning names the account too.
+
+**The lesson, for the rest of the chunk.** Privacy-by-default means the most private option is the *default*, with a control to turn it down — not that the wallet forbids what a user may legitimately want. Selection *preferring* to keep accounts apart and *saying* when it can't is the right shape; a refusal is not. The prose in `privacy.md` and `keys-and-accounts.md` was rewritten for the same reason: it had started claiming accounts were unlinked rather than that the wallet avoids linking them on its own.
+
+**Still a hard refusal, and worth the owner's call:** the dApp connector refuses a site bound to another account instead of serving it. That one is a different case — a third party silently learning two accounts are one wallet's, which the user never asked for, rather than a link the user chose — so it was left as it is. If it should ask instead of refuse, that is the `dapp.ts` threading noted under *Where it differs from the plan*.
