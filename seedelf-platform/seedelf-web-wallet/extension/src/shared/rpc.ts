@@ -1653,6 +1653,12 @@ export interface Requests {
    * way to start a custom-numbered account. Asks nobody anything.
    */
   "account-add": { payload: { index: number }; result: AccountList };
+  /**
+   * Each known account with its receive address `0/0`, so Send can offer
+   * them as recipients (chunk 18). Derived on the device; asks nobody
+   * anything.
+   */
+  "account-addresses": { payload: None; result: Array<KnownAccount & { address: string }> };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /**
@@ -1863,6 +1869,7 @@ const REQUEST_LIST = [
   "account-discover",
   "account-check",
   "account-add",
+  "account-addresses",
   "price",
   "tx-detail",
   "dapp-approvals",

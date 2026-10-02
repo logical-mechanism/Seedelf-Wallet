@@ -14,6 +14,8 @@ import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NAME_RULE, SEEDELF_PREFIX, seedelfNam
 import { call } from "../background";
 import { shortHex } from "../format";
 import { useNetwork } from "../network";
+import { useAccounts } from "../accounts";
+import { AccountRecipients } from "./AccountRecipients";
 import { ContactEditor, ContactPicker, useContacts } from "./Contacts";
 
 export type DestinationRead =
@@ -89,6 +91,7 @@ export function DestinationInput({
   known,
   onRead,
   seedelfs = false,
+  ownAccounts = false,
 }: {
   id: string;
   value: string;
@@ -97,13 +100,17 @@ export function DestinationInput({
   known?: KnownRead;
   onRead: (read: KnownRead) => void;
   seedelfs?: boolean;
+  /** Offer the wallet's own other public accounts as recipients (chunk 18). */
+  ownAccounts?: boolean;
 }) {
   const read = useDestination(value, { seedelfs, known });
   const report = useRef(onRead);
   report.current = onRead;
   const to = value.trim();
   useEffect(() => report.current({ to, read }), [to, read]);
-  return <DestinationField id={id} value={value} onChange={onChange} read={read} seedelfs={seedelfs} />;
+  return (
+    <DestinationField id={id} value={value} onChange={onChange} read={read} seedelfs={seedelfs} ownAccounts={ownAccounts} />
+  );
 }
 
 export function DestinationField({
@@ -112,6 +119,7 @@ export function DestinationField({
   onChange,
   read,
   seedelfs = false,
+  ownAccounts = false,
 }: {
   id: string;
   value: string;
@@ -119,9 +127,17 @@ export function DestinationField({
   read: DestinationRead;
   /** A seedelf's name is a destination too (Send from the Cardano account). */
   seedelfs?: boolean;
+  /**
+   * Offer the wallet's own other public accounts as recipients (chunk 18).
+   * The public Send does; Make public doesn't, where the destination is
+   * already about leaving the private balance.
+   */
+  ownAccounts?: boolean;
 }) {
   const [contacts, reloadContacts] = useContacts();
   const [contactModal, setContactModal] = useState<"pick" | "save">();
+  const [accountModal, setAccountModal] = useState(false);
+  const { several } = useAccounts();
   const address = addressHint(useNetwork());
   const kind = seedelfs ? undefined : "address";
   const hasContacts = !!contacts?.some((c) => !kind || c.kind === kind);
@@ -155,6 +171,12 @@ export function DestinationField({
         {hasContacts && (
           <button type="button" className="link" onClick={() => setContactModal("pick")}>
             Contacts
+          </button>
+        )}
+        {/* Only with another account to offer: with one, there is nothing to pick. */}
+        {ownAccounts && several && (
+          <button type="button" className="link" onClick={() => setAccountModal(true)}>
+            Your accounts
           </button>
         )}
       </div>
@@ -206,6 +228,17 @@ export function DestinationField({
           onPick={(picked) => {
             onChange(picked);
             setContactModal(undefined);
+          }}
+        />
+      )}
+      {/* Picking one only fills the field: it is then read, and said, like any
+          other address — including the note naming the account (chunk 18). */}
+      {accountModal && (
+        <AccountRecipients
+          onClose={() => setAccountModal(false)}
+          onPick={(address) => {
+            onChange(address);
+            setAccountModal(false);
           }}
         />
       )}

@@ -138,6 +138,24 @@ export class AccountsService {
     return activeAccount(this.deps.local);
   }
 
+  /**
+   * Each known account with its receive address `0/0` — the address Receive
+   * shows, and so the one to pay. Derived on the device, **asking nobody
+   * anything**: the Send form offers them as recipients (chunk 18), and a
+   * picker that made a Koios request per account to fill a dropdown would be
+   * both slow and a thing the user never asked for.
+   */
+  async addresses(network: NetworkName): Promise<Array<KnownAccount & { address: string }>> {
+    const { wasm, wallet } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const known = await this.known();
+    const found: Array<KnownAccount & { address: string }> = [];
+    for (const a of known) {
+      found.push({ ...a, address: await wallet.withAccount(a.index, ({ cardano }) => cardano.receiveAddress(net, 0)) });
+    }
+    return found;
+  }
+
   /** The accounts and the active one, for the picker. Throws if locked. */
   async list(): Promise<{ accounts: KnownAccount[]; active: number }> {
     const [accounts, active] = await Promise.all([this.known(), this.active()]);

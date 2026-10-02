@@ -261,6 +261,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     }
     case "account-add":
       return { accounts: await ctx.accounts.add(message.index), active: await ctx.accounts.active() };
+    case "account-addresses":
+      return ctx.accounts.addresses(ctx.network);
     case "network-set": {
       // What's kept for Send stays tied to the network it was built on
       // (every submit checks it), so nothing built here goes out there.

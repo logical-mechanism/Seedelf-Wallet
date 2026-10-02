@@ -214,6 +214,7 @@ export function CardanoSend({
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
               seedelfs
+              ownAccounts
             />
             {read.state === "read" &&
               read.destination.own &&

@@ -575,6 +575,26 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   await expect(page.getByTestId("receive-address")).toContainText(v.preprod.receive_0.slice(0, 20));
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
+  // The public Send offers the wallet's other accounts, and picking one says
+  // what the payment reveals rather than refusing it (the owner, 2026-10-02).
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Send publicly" }).click();
+  // Only the other account is offered: paying the one you're on sends the
+  // money straight back, which is the collateral payment's job.
+  await page.getByRole("button", { name: "Your accounts" }).click();
+  await expect(page.getByTestId("account-recipients").getByRole("button")).toHaveCount(1);
+  await snap(page, "send-account-picker");
+  await page.getByTestId("account-recipients").getByRole("button", { name: "Account 2" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue(second.preprod.receive_0);
+  // Read like any other address, and said: named, not refused, and Review opens.
+  await expect(page.getByTestId("send-other-account")).toContainText("This is your own Account 2");
+  await expect(page.getByTestId("send-other-account")).toContainText("tell they're one wallet's");
+  await snap(page, "send-to-own-account");
+  await expect(page.getByTestId("send-own")).toHaveCount(0);
+  await page.getByLabel("Amount").fill("2");
+  await expect(page.getByRole("button", { name: "Review" })).toBeEnabled();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
   // A custom number the sequential look can never reach (the owner,
   // 2026-10-02): checked by number, then added even though it has never been
   // used, which is how a user starts one.
