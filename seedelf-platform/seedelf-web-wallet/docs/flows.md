@@ -45,7 +45,7 @@ Onboarding runs in a full tab. From the side panel, **Create** and **Restore** o
      - **Continue** asks the worker to validate the phrase, and shows the Rust core's reason if it's wrong, for example a bad checksum.
   2. Set a password.
   3. *(Chunk 6)* Scan the wallet contract for owned registers.
-  4. *(Chunk 6)* Scan the Cardano account (account `0'`, receive and change addresses, gap limit 20).
+  4. *(Chunk 6)* Scan the Cardano account (the account the wallet is on, `0'` on a fresh restore; receive and change addresses, gap limit 20). *(Chunk 18)* Then look for accounts past it, in the background: one `account_addresses` request each, stopping at the first never used. A restored phrase may hold funds past account 0.
   5. *(Later)* Scan one-time accounts up to a gap limit.
 - **Password:** at least 12 characters, no composition rules, with a strength hint.
 - **Phrase warnings, shown during create:**
@@ -107,7 +107,7 @@ Onboarding runs in a full tab. From the side panel, **Create** and **Restore** o
 - **On the Seedelf side each UTxO says where its money came from** (privacy review §2.3): Back from Lovejoin, Received, Made private, Private session N, or Unknown, from the sealed Seedelf history, asking no one. Spending different ones together ties them, so a lock is an informed choice.
 - The Seedelf side's privacy note: only this wallet can tell these are yours, and looking one up on an explorer tells that site. The choices are encrypted on the device, like Contacts.
 
-**Collateral** (Settings, chunk 12, after Lace's) is 5 ₳ of the Cardano account set aside for transactions that run a script: today, creating a Seedelf from the account. It's only taken if the script fails, which the wallet checks before sending (Ogmios), and it's kept out of every payment.
+**Collateral** (Settings, chunk 12, after Lace's) is 5 ₳ of the Cardano account set aside for transactions that run a script: today, creating a Seedelf from the account. **Each public account has its own** (chunk 18): the one shown is the account the wallet is on. It's only taken if the script fails, which the wallet checks before sending (Ogmios), and it's kept out of every payment.
 
 - **Set by the wallet:** with none chosen, the wallet takes the oldest UTxO of exactly 5 ₳ and nothing else that the account holds, with no transaction. The page says so.
 - **Set collateral:** from such a UTxO, nothing is sent. With none, it pays 5 ₳ from the account to its own `0/0` (a review, then Send; only the fee leaves the account). A banner follows it to "Collateral set", and the page says it's waiting until then.

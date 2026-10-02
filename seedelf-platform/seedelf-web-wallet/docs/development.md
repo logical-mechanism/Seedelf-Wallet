@@ -81,18 +81,19 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 On the built extension (`npm run build`, then load `dist/` unpacked), in the side panel and in a tab.
 
 1. **The automated layers:** `cargo test --workspace --locked`, the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=true npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
-2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account.
-3. **Locking:**
+2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account. **Restore a phrase that has used more than one account** (make one in Lace, or fund account 1's address): the picker appears on its own, and both accounts are there.
+3. **Public accounts** (chunk 18): switch from the top bar and from Settings → Public accounts, and check the balance, Activity, Receive, the UTxOs screen, Staking and the collateral are all the account you chose. Name one and check the name shows in the picker and on Home. *Check for another account* with nothing there says so and costs one request. Connect a site on one account, switch, and check the site is refused by name rather than served the other account's addresses; switch back and it works again. **Make private from two accounts, then send privately from the balance**: the review names both accounts and says the spend ties them together.
+4. **Locking:**
    - the lock button;
    - auto-lock after 15 minutes, and after 1 minute once Settings says so;
    - a wrong password's back-off;
    - Forgot password, then delete, then restore;
    - a browser restart comes back locked.
-4. **Home:**
+5. **Home:**
    - both tabs, and *Get started* on a new wallet;
    - Receive: scan the QR code from a phone wallet;
    - Refresh, and a sent transaction's banner through to confirmed, then Dismiss.
-5. **Each flow once by hand:**
+6. **Each flow once by hand:**
    - create a Seedelf, paid by the account;
    - move in;
    - send to a Seedelf, pasting a name someone else gave you;
@@ -102,12 +103,12 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - send with *Use staking rewards when spending* on, then off.
 
    Read every review and every privacy note as you go.
-6. **Mistakes and failures:**
+7. **Mistakes and failures:**
    - Koios blocked (offline, or an ad blocker) says why, and recovers on Refresh;
    - amounts: more than the balance, seven decimals, letters;
    - a mistyped Seedelf name, and a `$handle` that doesn't exist.
-7. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my` (and Minswap's preprod aggregator from the page, for a swap).
-8. **The store's build, both networks** (`npm run package`, `dist/` loaded unpacked in a fresh profile):
+8. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my` (and Minswap's preprod aggregator from the page, for a swap).
+9. **The store's build, both networks** (`npm run package`, `dist/` loaded unpacked in a fresh profile):
    - it opens on **MAINNET**, with no preprod strip;
    - Settings, Network: moving to preprod says first that its ADA has no value; then every screen, and the connector's window, shows the **PREPROD** badge and strip, and Home the preprod balances;
    - a payment reviewed on one network and sent after a switch is refused ("isn't ready to send");
@@ -160,7 +161,7 @@ seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_ve
 
 For the current release, that file is `extension/release/seedelf-wallet-1.1.0-mainnet.zip`.
 
-`npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 8 by hand on it. Keep the SHA-256 output for the release record.
+`npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it. Keep the SHA-256 output for the release record.
 
 `npm run package:preprod` makes a preprod-only store build (`-preprod.zip`) for tests. Never upload it.
 
@@ -189,7 +190,7 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
    - The WebAssembly is built from the tracked `Cargo.lock` (`--locked`) with the pinned Rust (`rust-toolchain.toml`), and carries no local path.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
    - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints its SHA-256. The zip is reproducible: the same commit and toolchain give the same bytes.
-6. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 8](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
+6. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
 7. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([plans/launch-review.md](plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
 8. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
 9. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.

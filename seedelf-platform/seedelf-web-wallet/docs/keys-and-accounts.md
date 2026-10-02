@@ -55,7 +55,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 | Account | What it is | Address | Lifetime |
 |---|---|---|---|
 | **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each Seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
-| **Cardano** | CIP-1852 account `0'` in v1: receive keys `0/i`, change keys `1/i`, staking key `2/0` | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
+| **Cardano** | CIP-1852 account `n'`, one at a time (chunk 18; `0'` until then): receive keys `0/i`, change keys `1/i`, staking key `2/0` | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
 | **One-time** (private sessions, chunk 15) | Reserved CIP-1852 account `24301'` (`0x5EED`, `ONE_TIME_ACCOUNT`), payment `0/i` and staking `2/i`: session `i`, counting from 0 in order | Base address with the session's own stake key `2/i`, never registered (since chunk 15b; sessions from before keep the shared Seedelf staking part). See [privacy.md](privacy.md#known-links). | One session, then retired |
 
 - **The Cardano account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
@@ -83,10 +83,15 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 
 **Rules:**
 
-1. **Account `0'` only in v1, but all of it.**
+1. **One account at a time, and all of it. Several accounts since chunk 18.**
    - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance. Built in chunk 6; see [architecture.md](architecture.md#chain-data).
    - Everything under the account's payment keys is the account's, whatever the address's staking part: enterprise addresses, and our key with someone else's stake key, are found and spent too (chunk 12).
-   - Every function takes the account index, so more accounts can come later. A picker would discover accounts in order (0, 1, 2, … stopping at the first one never used), the way BIP44 does.
+   - **Which account the wallet works on** is one integer in `chrome.storage.local` (`seedelf.account`, unsealed, beside the network and for the same reason: `Wallet` reads it while deriving the keys, before anything is unlocked). `Wallet` reads it at **every** key use, so a switch writes the choice and nothing else — the next use re-derives, and no request can sign with the account the user just left. **Which accounts the phrase has used, and what they are called, are sealed** with the other private records (`accounts`): how many accounts someone runs is about them.
+   - **Discovery looks for accounts in order, stopping at the first never used** (BIP44's rule), **one `account_addresses` request at a time**. `Koios.usedStakeAddresses` would answer for twenty in one request, and that request would tell Koios those twenty stake addresses are one wallet's — which works against the habit several accounts serve. It runs on a **restore** (in the background: a restored phrase may hold funds past account 0) and on demand from Settings → Public accounts, which probes exactly one. Never on unlock.
+   - **The Seedelf key stays on account 0.** One private balance for the whole phrase, whichever public account is active. See [Several accounts and the private balance](#several-accounts-and-the-private-balance).
+   - Each account has **its own staking** (its own `2/0`), **its own collateral** and **its own locked UTxOs**; contacts, the Seedelf history and the private sessions are the wallet's, not an account's.
+   - **A connected site stays bound to the account it connected to** and is refused, not served from the active one, when the wallet moves off it. Following the active account would hand a site that had seen Account 1's addresses Account 2's as well, and teach it the two are one wallet's.
+   - A switch is **refused while something of the account's is on its way** — a payment Koios didn't answer, or a public mix still being sent — since a watch must not lose its account halfway through.
 2. **One collateral, set aside, as in Lace (chunk 12).**
    - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so. The web wallet does the same, in Settings → Collateral.
    - With none chosen, the wallet takes the oldest pure 5 ADA UTxO the account holds (no transaction), so another wallet's collateral on the same phrase stays put. Reclaiming it stops that; setting one with none to take pays 5 ADA to `0/0`.
@@ -101,6 +106,17 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 6. **It is not private.** For a restored wallet, this account is the user's public identity, and the UI never suggests otherwise.
 
 **The Seedelf key is separate.** It stays on its own account 0 whichever Cardano account is used.
+
+## Several accounts and the private balance
+
+**Decided by the owner, 2026-10-02: the Seedelf key stays on account 0** — one private balance for the whole phrase. The derivation would allow one key per account (`info = "seedelf-key" || u32_be(account)`), and it isn't needed: **stealth addressing already unlinks the move-ins.** Two public accounts paying the same Seedelf create re-randomized registers `(g^d1, u^d1)` and `(g^d2, u^d2)`, which can't be tied to each other or back to `(g, u)` without `d`. Account 0 is, in effect, the nonce.
+
+**What stealth addressing does not cover is co-spending.** A contract UTxO's creating transaction is public. The registers hid *who* the money went to, not where an input came from — so one later private spend that takes a UTxO originating from account 0 together with one from account 1 **ties those two accounts to one owner, in the open**.
+
+So each account's money made private is **its own history class**: `public:<n>` in [`shared/histories.ts`](../extension/src/shared/histories.ts). Coin selection keeps different classes apart where a choice that doesn't merge them pays (`seedelf-core`'s `build::Histories`), the review says what a merge ties together and names the accounts, and the UTxOs screen tags each private UTxO with the account its money came from. See [privacy.md](privacy.md#several-public-accounts).
+
+- **The bare `public` of a wallet from before chunk 18 reads as `public:0`**, canonicalized on the way in. Two classes there would have the wallet claim a spend ties two accounts together when both are account 0 — a privacy note that is simply false.
+- **Paying your own public account from Seedelf is flagged for every account the wallet knows**, not only the active one: the money is re-linked to that account either way.
 
 ## Password and vault
 
