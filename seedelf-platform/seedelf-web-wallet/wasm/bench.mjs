@@ -54,10 +54,9 @@ const pay = JSON.stringify({
   network: "preprod",
   params,
   utxos: owned.slice(0, 2),
-  to: transfer.to,
-  recipient: transfer.recipient,
-  lovelace: transfer.lovelace,
-  tokens: transfer.tokens,
+  payments: [
+    { to: transfer.to, recipient: transfer.recipient, lovelace: transfer.lovelace, tokens: transfer.tokens },
+  ],
 });
 
 let compile = [];
@@ -77,7 +76,7 @@ const result = {
   isOwned: median(200, () => key.isOwned(register)),
   rerandomize: median(200, () => wasm.rerandomize(register).free()),
   createProof: median(200, () => key.createProof(register, vkh).free()),
-  draftTransfer: median(20, () => wasm.draftTransfer(key, pay)),
+  buildTransfer: median(20, () => wasm.buildTransfer(key, pay)),
   buildMoveIn: median(20, () => wasm.buildMoveIn(account, key, moveIn)),
 };
 
