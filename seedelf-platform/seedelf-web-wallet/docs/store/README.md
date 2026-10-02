@@ -18,7 +18,7 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 
 ## Package
 
-Upload `extension/release/seedelf-wallet-1.0.0-mainnet.zip`.
+Upload `extension/release/seedelf-wallet-1.1.0-mainnet.zip`.
 
 - The store reads the name, version, summary and permissions from its manifest.
 - Every later upload needs a higher `version` in `extension/package.json`.
@@ -55,6 +55,7 @@ What you can do:
 • Connect Cardano sites (dApps) to the public account, as with any Cardano wallet, or to a private session: a one-time account funded from your private balance, so the wallet gives the site only that account, not your public account. Its funding is public, though, and money you made private yourself leads back to your public account. It's off until you turn it on in Settings, and sites are never given the private balance.
 • Swap privately through Minswap: each swap runs from a new one-time account, funded from your private balance, and everything comes back into it afterwards. Your public account isn't in the swap's transactions, though anyone can follow the money back through its funding. The wallet asks Minswap for an order with the least you'll accept, checks where the transaction Minswap builds pays, and shows what the swap will cost before you approve it.
 • Mix through Lovejoin: the spare ADA a private session brings back goes through Lovejoin, a mixer of 10 ADA boxes on Cardano, so what comes back is harder to tie to the session on chain. You can turn that off in Settings, or bring any one back directly. You can also mix from the Lovejoin tile. Lovejoin has had no third-party audit, only its makers' own review, and the wallet says so where you choose it. On mainnet the wallet mixes only once Lovejoin's pool holds 30 boxes that aren't yours, so there are enough other boxes to mix with; until then a return comes back directly and says why.
+• Read any transaction before it is signed, on every review and when a site asks for a signature: where the money goes, what contracts run and with what data, the certificates, the note and the metadata, and the raw bytes if you want to take them elsewhere. Nothing is looked up to show it, so reading a transaction tells nobody that you read it.
 
 What it doesn't hide:
 • Amounts, tokens, timing and which transactions spend which outputs are public, as with any Cardano wallet.

@@ -118,6 +118,8 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
 
 This is the repeatable release path for a new Web Store version. Run it from the release commit on `main`. Change `release_version` to the new, higher version for each later release.
 
+**Which number.** The store only demands one strictly higher than the last, so the semantics are for the wallet's own users: a **minor** bump for a release that adds something a user can do (1.1.0, the transaction view), a **patch** for a fix or a listing hotfix on its own (1.0.1). The web wallet's line runs from 1.0.0 and is deliberately apart from the Rust workspace's 0.x.y — see the root [CLAUDE.md](../../../CLAUDE.md).
+
 ### 1. Set the version and run the checks
 
 From the repository root:
@@ -127,7 +129,7 @@ cd seedelf-platform
 cargo test --workspace --locked
 cd seedelf-web-wallet/extension
 npm install
-release_version=1.0.0
+release_version=1.1.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -156,7 +158,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-For the current release, that file is `extension/release/seedelf-wallet-1.0.0-mainnet.zip`.
+For the current release, that file is `extension/release/seedelf-wallet-1.1.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 8 by hand on it. Keep the SHA-256 output for the release record.
 
