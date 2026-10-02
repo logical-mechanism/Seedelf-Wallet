@@ -18,7 +18,7 @@
 // one-time key's seed for a stealth mint, which giveme.my witnesses at Send.
 
 import type { NetworkName } from "../networks";
-import { MADE_PRIVATE, type HistoryClass } from "../shared/histories";
+import { madePrivate, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx, BuildStage } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { rememberMint } from "./minted-by";
@@ -69,7 +69,7 @@ export class MintService {
     label: string,
     progress?: (stage: BuildStage) => void,
   ): Promise<MintSummary> {
-    const { wasm } = this.deps;
+    const { wasm, wallet } = this.deps;
     progress?.("reading");
     const [{ params, utxos, collateral, held, withdrawal }, invalidHereafter] = await Promise.all([
       readAccount(this.deps, network),
@@ -90,8 +90,11 @@ export class MintService {
       (keys, r) => wasm.draftAccountMint(keys.cardano, keys.seedelf, r),
       (keys, r) => wasm.finishAccountMint(keys.cardano, keys.seedelf, r),
     );
-    // Its Seedelf's ADA comes back into the private balance, when it's removed there, as money the account paid.
-    return this.keep(network, label, "account", finished, MADE_PRIVATE, undefined, request.invalidHereafter);
+    // Its Seedelf's ADA comes back into the private balance, when it's
+    // removed there, as money the account paid: the account that paid it, so
+    // a later spend doesn't co-spend it with another account's (chunk 18).
+    const origin = madePrivate(await wallet.withKeys((keys) => keys.account));
+    return this.keep(network, label, "account", finished, origin, undefined, request.invalidHereafter);
   }
 
   private async buildStealth(

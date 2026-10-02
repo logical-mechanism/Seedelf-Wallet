@@ -124,11 +124,11 @@ describe("transfer", () => {
     const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
     const received = { id: `received:${ada.tx_hash}`, origin: "received" };
     expect(summary.inputs).toBe(2);
-    expect(summary.histories).toEqual(expect.arrayContaining([{ id: "public", origin: "own" }, received]));
+    expect(summary.histories).toEqual(expect.arrayContaining([{ id: "public:0", origin: "own" }, received]));
     expect(summary.histories).toHaveLength(2);
     // Its change has both histories from now on.
     const built = (await t.session.get<Stored & { origin: unknown }>(SESSION_TRANSFER))!;
-    expect(built.origin).toEqual({ id: `public+received:${ada.tx_hash}`, origin: "own" });
+    expect(built.origin).toEqual({ id: `public:0+received:${ada.tx_hash}`, origin: "own" });
 
     // With one history, there's nothing to say.
     const own = await t.transfer.build("preprod", [{ to: MINE, lovelace: "2000000", tokens: [] }]);

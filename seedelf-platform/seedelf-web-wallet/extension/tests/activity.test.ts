@@ -115,7 +115,7 @@ describe("Seedelf activity", () => {
     await sent("session-out", "03", { index: 2, payments: [{ lovelace: "6000000" }] });
     await sent("session-back", "04", { index: 2, lovelace: "4000000" });
     // A payment's change has the history its review worked out from its inputs.
-    const mixed = { id: "box:02+public", origin: "own" };
+    const mixed = { id: "box:02+public:0", origin: "own" };
     await sent("transfer", "05", { payments: [{ to: "5eed0e1f", lovelace: "2000000" }], origin: mixed });
     await sent("withdraw", "06", { payments: [{ address: "addr_test1", lovelace: "2000000" }] });
     await t.activity.arrived("preprod", [at("07"), at("07", 1)]);
@@ -124,7 +124,7 @@ describe("Seedelf activity", () => {
     const classes = await t.activity.classes("preprod", ["01", "02", "03", "04", "05", "06", "07", "08"].map((h) => at(h)).concat(at("07", 1)));
     expect(t.koios.calls).toHaveLength(asked);
     expect(Object.fromEntries([...classes].map(([k, c]) => [k.slice(0, 2) + k.slice(-2), c]))).toEqual({
-      "01#0": { id: "public", origin: "own" },
+      "01#0": { id: "public:0", origin: "own" },
       "02#0": { id: `box:${"02".repeat(32)}`, origin: "lovejoin" },
       "03#0": { id: "session:2", origin: "session" },
       "04#0": { id: "session:2", origin: "session" },

@@ -30,7 +30,8 @@ import type { NetworkName } from "../networks";
 import {
   boxFrom,
   isHistoryClass,
-  MADE_PRIVATE,
+  madePrivate,
+  readClass,
   merged,
   receivedIn,
   sessionClass,
@@ -201,11 +202,11 @@ export class ActivityService {
     const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
     // What it leaves in the private balance: the history its review worked out (the inputs' own; a session's
     // funding's, with the session's), or a session's funding change and return, which are that session's.
-    const origin: HistoryClass | undefined = isHistoryClass(s.origin)
-      ? { id: s.origin.id, origin: s.origin.origin }
-      : (pending.kind === "session-out" || pending.kind === "session-back") && typeof s.index === "number"
+    const origin: HistoryClass | undefined =
+      readClass(s.origin) ??
+      ((pending.kind === "session-out" || pending.kind === "session-back") && typeof s.index === "number"
         ? sessionClass(s.index)
-        : undefined;
+        : undefined);
     const entry: ActivityEntry =
       pending.kind === "move-in"
         ? { ...shared, kind: "move-in", direction: "in" }
@@ -423,10 +424,14 @@ function sessionOf(entry: ActivityEntry): number | undefined {
 /** The history of what the transaction `entry` records made, if any. */
 function classOf(entry: ActivityEntry | undefined): HistoryClass {
   if (!entry) return UNKNOWN;
-  if (entry.origin && isHistoryClass(entry.origin)) return entry.origin;
+  const stored = readClass(entry.origin);
+  if (stored) return stored;
   switch (entry.kind) {
+    // A move-in records which account it came from (move-in.ts, mint.ts), so
+    // this is only ever reached for one written before several accounts —
+    // when there was one public account, and it was account 0.
     case "move-in":
-      return MADE_PRIVATE;
+      return madePrivate(0);
     case "received":
       return receivedIn(entry.txHash);
     case "lovejoin-withdraw":

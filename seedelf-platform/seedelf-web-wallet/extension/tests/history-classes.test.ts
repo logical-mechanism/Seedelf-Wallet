@@ -76,7 +76,7 @@ describe("a private history this device starts (independent review L38)", () => 
     await t.activity.sent("preprod", moved, { lovelace: a2.value });
     await t.balances.get("preprod");
     const classes = await t.activity.classes("preprod", [a1, a2]);
-    expect(classes.get(`${a2.tx_hash}#0`)).toEqual({ id: "public", origin: "own" });
+    expect(classes.get(`${a2.tx_hash}#0`)).toEqual({ id: "public:0", origin: "own" });
     expect(classes.get(`${a1.tx_hash}#0`)?.origin).toBe("unknown");
   });
 
@@ -291,7 +291,7 @@ describe("a session's funding change and return (independent review L41)", () =>
     let classes = await t.activity.classes("preprod", [c1, c2, own]);
     expect(classes.get(`${fundTx}#1`)).toEqual(session);
     expect(classes.get(`${topUpTx}#1`)).toEqual(session);
-    expect(classes.get(`${ownTx}#0`)).toEqual({ id: "public", origin: "own" });
+    expect(classes.get(`${ownTx}#0`)).toEqual({ id: "public:0", origin: "own" });
     // So spending the two together is noted as nothing, and never counted as a merge.
     const byOutpoint = () => Object.fromEntries(classes);
     const changes = [
