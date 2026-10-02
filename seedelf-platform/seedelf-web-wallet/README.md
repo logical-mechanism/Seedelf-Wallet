@@ -71,6 +71,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
 | [roadmap.md](docs/roadmap.md) | Build chunks, their status, and handoff notes between sessions |
+| [post-release-roadmap.md](docs/post-release-roadmap.md) | What comes after v1: where Cardano parity stands against Lace, and what's owed, wanted and declined |
 
 ## Reference: Lace
 

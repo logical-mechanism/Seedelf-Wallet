@@ -38,6 +38,8 @@ The wallet is built in **chunks**, each about one working session.
 
 ## After v1
 
+**This section is closed, and so is this file.** Chunk 17 was the last thing chosen from it. Everything after v1.1.0 is tracked in [post-release-roadmap.md](post-release-roadmap.md) — what's owed, what the owner wants, and what we've decided against — and a chunk picked up from there still lands its handoff note in this file.
+
 | # | Chunk | Status | Scope |
 |---|---|---|---|
 | 17 | The transaction view | ✅ | Open the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers, metadata — decoded from the CBOR about to be signed, plus the raw bytes, from every review and from the connector's sign window. A decoder in WebAssembly that takes CBOR and nothing else (`wasm/src/decode.rs`), the cheapest handler in the worker (`background/tx-view.ts`), one shared modal (`ui/components/TxDetail.tsx`), and a cross-check against `cardano-cli debug transaction view` for every fixture. **Plan: [plans/chunk-17-transaction-view.md](plans/chunk-17-transaction-view.md).** |
