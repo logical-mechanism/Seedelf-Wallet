@@ -19,6 +19,10 @@ use pallas_primitives::{Fragment, PlutusData, TransactionInput, alonzo, conway};
 use seedelf_wasm::decode::{DetailCert, DetailMetadatum, DetailPlutus, TxDetail, decode_tx, shown};
 use serde_json::Value;
 
+/// A register datum: constructor 0 with the G1 generator and a test vector's
+/// public value, as `cip30_test.rs` has it.
+const REGISTER_DATUM: &str = "d8799f583097f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb583082dcf46570656ca0d6fb143b8e7c2816b20cb1a6434ca4c8c95c624443c22c9e1d40ad0df5de088b19a4b44b685b8475ff";
+
 /// Every transaction recorded, with what cardano-cli made of it.
 struct Recorded {
     name: String,
@@ -1209,13 +1213,61 @@ fn a_redeemers_argument_is_read_as_a_tree() {
     }
 }
 
+/// **Nothing is read as a register unless the address says whose contract it
+/// is.** Anyone's datum can be constructor 0 with two 48-byte fields, so the
+/// shape proves nothing: what makes one a register is the contract that will read
+/// it, and an output's address is the only thing that says which contract that
+/// is. The same bytes at someone else's address are shape and nothing more.
+#[test]
+fn only_our_own_contracts_output_is_read_as_a_register() {
+    let tx = recorded()
+        .into_iter()
+        .find(|tx| tx.name == "transfer")
+        .unwrap()
+        .cbor;
+    // At Seedelf Wallet's contract, on its own network: a register, and whether a
+    // payment under it could be spent, which the shape can't say.
+    let ours = decode_tx("preprod", &tx).unwrap();
+    assert!(ours.outputs.iter().all(|o| o.address.seedelf));
+    assert!(ours.outputs.iter().all(|o| o.register.is_some()));
+
+    // The very same outputs read as mainnet's: the contract isn't this one's, so
+    // nothing is claimed about the datum beyond its shape.
+    let theirs = decode_tx("mainnet", &tx).unwrap();
+    assert!(theirs.outputs.iter().all(|o| !o.address.seedelf));
+    assert!(
+        theirs.outputs.iter().all(|o| o.register.is_none()),
+        "someone else's contract's datum is not a register"
+    );
+    // And the datum itself still reads, the same either way.
+    assert_eq!(
+        theirs.outputs[0].datum, ours.outputs[0].datum,
+        "the shape doesn't depend on whose contract it is"
+    );
+
+    // A datum in the witness set has no address at all: it belongs to whichever
+    // output names its hash, so nothing of one contract's is read into it. The
+    // type has no register field to put a claim in.
+    let register = hex::decode(REGISTER_DATUM).unwrap();
+    let detail = decode_tx(
+        "preprod",
+        &tx_with_datums(vec![PlutusData::decode_fragment(&register).unwrap()]),
+    )
+    .unwrap();
+    let json = serde_json::to_value(&detail.datums[0]).unwrap();
+    assert_eq!(
+        json.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["data", "hash", "hex"],
+        "a witness datum says what it is and nothing about whose it is"
+    );
+}
+
 /// Another contract's datum, nested as it comes: Minswap's order, which the
 /// wallet knows nothing about.
 #[test]
 fn another_contracts_datum_reads_without_the_wallet_knowing_it() {
     let (detail, _) = one("minswap-swap");
     let datum = &detail.datums[0];
-    assert!(datum.register.is_none(), "it isn't a register");
     let DetailPlutus::Constr { fields, .. } = &datum.data else {
         panic!("an order is a constructor");
     };
@@ -1339,25 +1391,61 @@ fn a_constructor_tag_no_era_defines_is_refused() {
     assert!(error.contains("plutus data"), "{error}");
 }
 
-/// A datum big enough to fill a screen stops at a count, and says how many items
-/// are left: a site could otherwise hand the wallet a datum that takes minutes
-/// to draw.
+/// A datum of thousands of nodes comes through whole: nothing is counted off,
+/// because a reader may need every node of it. What keeps it readable is the
+/// screen, which draws only the branches that have been opened.
 #[test]
-fn a_huge_datum_stops_and_says_how_much_is_left() {
+fn a_huge_datum_comes_through_whole() {
     let wide = PlutusData::Array(pallas_codec::utils::MaybeIndefArray::Def(
-        (0..2_000).map(int).collect(),
+        (0..5_000).map(int).collect(),
     ));
     let detail = decode_tx("preprod", &tx_with_datums(vec![wide])).unwrap();
     let DetailPlutus::List { items } = &detail.datums[0].data else {
         panic!("a list")
     };
-    assert_eq!(items.len(), seedelf_wasm::decode::MAX_DATUM_NODES);
-    let DetailPlutus::More { items: left } = items.last().unwrap() else {
-        panic!("the last one says how many are left: {:?}", items.last());
-    };
-    assert_eq!(*left, 2_000 - (seedelf_wasm::decode::MAX_DATUM_NODES - 1));
-    // The bytes are all there whatever the tree left out.
-    assert!(detail.datums[0].hex.len() > 4_000);
+    assert_eq!(items.len(), 5_000, "every item, not a page of them");
+    assert!(matches!(&items[4_999], DetailPlutus::Int { value } if value == "4999"));
+}
+
+/// How many constructors deep a datum can nest and still be read. The guard is
+/// on CBOR levels (`MAX_NESTING`, 128) and a constructor is two of them — a tag
+/// around an array — with the witness set's own levels on top, so a datum goes
+/// about sixty deep. `a_datum_nested_past_the_cbor_guard_is_refused` holds the
+/// other side of the line.
+const DEEPEST: usize = 60;
+
+/// And a deeply nested one: a datum inside a datum inside a datum, as deep as
+/// the wallet reads CBOR at all.
+#[test]
+fn a_deeply_nested_datum_comes_through_whole() {
+    let mut data = int(1);
+    for _ in 0..DEEPEST {
+        data = constr(121, None, vec![data]);
+    }
+    let detail = decode_tx("preprod", &tx_with_datums(vec![data])).unwrap();
+    let mut node = &detail.datums[0].data;
+    for level in 0..DEEPEST {
+        let DetailPlutus::Constr { fields, .. } = node else {
+            panic!("level {level} should be a constructor");
+        };
+        node = &fields[0];
+    }
+    assert!(matches!(node, DetailPlutus::Int { value } if value == "1"));
+}
+
+/// Past that, the whole transaction is refused before anything decodes it, as it
+/// is for a site's: Pallas reads plutus data by recursion, and a few thousand
+/// levels end the WebAssembly instance for good.
+#[test]
+fn a_datum_nested_past_the_cbor_guard_is_refused() {
+    let mut data = int(1);
+    for _ in 0..300 {
+        data = constr(121, None, vec![data]);
+    }
+    let error = decode_tx("preprod", &tx_with_datums(vec![data]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("nested more than"), "{error}");
 }
 
 // ---------------------------------------------------------------------------

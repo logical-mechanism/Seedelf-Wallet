@@ -727,19 +727,21 @@ export interface TxRegister {
  * no schema to read it against: a contract's datum means whatever that contract
  * says it means, so what the view can honestly show is its shape.
  *
+ * It is the whole datum: nothing is counted off, however big or deep it is. The
+ * screen collapses it and draws only what has been opened, which is what lets all
+ * of it through (components/PlutusTree.tsx).
+ *
  * `constructorIndex` is the constructor's number (the CBOR tag carries it). It
  * isn't called `constructor`: every object in JavaScript has one of those
  * already, so the field gone missing would read as a function rather than as
- * nothing. `more` is where the view stopped — that many items of the thing above
- * it are left, and the raw bytes have them.
+ * nothing.
  */
 export type TxPlutus =
   | { type: "constr"; constructorIndex: string; fields: TxPlutus[] }
   | { type: "int"; value: string }
   | { type: "bytes"; hex: string; text: string | null }
   | { type: "list"; items: TxPlutus[] }
-  | { type: "map"; entries: Array<{ key: TxPlutus; value: TxPlutus }> }
-  | { type: "more"; items: number };
+  | { type: "map"; entries: Array<{ key: TxPlutus; value: TxPlutus }> };
 
 /** A script the transaction carries. */
 export interface TxScript {
@@ -760,6 +762,11 @@ export interface TxOutput {
   /** That datum as the tree it is, whatever contract it is for. */
   datum: TxPlutus | null;
   datumHash: string | null;
+  /**
+   * The register the datum holds, and only where `address.seedelf`: anyone's
+   * datum can be constructor 0 with two 48-byte fields, and what makes one a
+   * register is the contract that will read it.
+   */
   register: TxRegister | null;
   scriptRef: TxScript | null;
   /** How it's written: the CDDL's `alonzo_transaction_output` list, or Babbage's map. */
@@ -852,9 +859,13 @@ export interface TxRedeemer {
 export interface TxDatum {
   hash: string;
   hex: string;
-  /** The data as the tree it is. */
+  /**
+   * The data as the tree it is, and nothing more: a datum in the witness set
+   * belongs to whichever output names its hash, which could be any contract at
+   * all, so nothing here is read as a register or as anything else of one
+   * contract's.
+   */
   data: TxPlutus;
-  register: TxRegister | null;
 }
 
 /** A signature already in the witness set. */

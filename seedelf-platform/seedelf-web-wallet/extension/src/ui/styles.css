@@ -3195,8 +3195,88 @@ button.dapp-tile:hover {
   margin: 0;
 }
 
-/* A Plutus map's entry: its key, then its value. */
-.tx-detail__arrow {
+/* A datum, or a redeemer's argument, as a tree that opens
+   (components/PlutusTree.tsx). A collapsed branch isn't drawn at all, so the
+   size of the data costs nothing until someone opens that part of it. */
+
+.plutus {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+  /* Text from the chain can run right to left: it stays inside its own row. */
+  unicode-bidi: isolate;
+}
+
+.plutus__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.plutus__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* Which field, item or pair this is, in the order the bytes have them. */
+.plutus__name {
+  flex: none;
+  min-width: 1.2em;
   color: var(--muted);
-  padding: 0 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plutus__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+.plutus__toggle:not(:disabled):hover {
+  color: var(--accent);
+}
+
+/* Each level in from the one above, with a line to follow back up. */
+.plutus__children {
+  margin-left: 7px;
+  padding-left: var(--s3);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* A map's two halves stay together. */
+.plutus__pair {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plutus__leaf {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.plutus__size {
+  color: var(--muted);
+  font-size: 11px;
 }

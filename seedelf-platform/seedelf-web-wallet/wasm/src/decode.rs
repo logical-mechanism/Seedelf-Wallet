@@ -133,7 +133,10 @@ pub struct DetailOutput {
     pub datum: Option<DetailPlutus>,
     /// A datum named by its hash instead; the datum itself may be in the witness set.
     pub datum_hash: Option<String>,
-    /// The register the inline datum holds, when it is one.
+    /// The register the datum holds, **only** where the address is Seedelf
+    /// Wallet's own contract. Anyone's datum can be constructor 0 with two
+    /// 48-byte fields; what makes one a register is the contract that will read
+    /// it, and the address is the only thing that says which contract that is.
     pub register: Option<DetailRegister>,
     /// A script the output carries for others to read.
     pub script_ref: Option<DetailScript>,
@@ -338,9 +341,12 @@ pub struct DetailDatum {
     pub hash: String,
     pub hex: String,
     /// The data as the tree it is.
+    ///
+    /// Nothing here is read as a register, or as anything else of a particular
+    /// contract's: a datum in the witness set belongs to whichever output names
+    /// its hash, and that could be any contract at all. Its shape is all that
+    /// can be said of it.
     pub data: DetailPlutus,
-    /// The register it holds, when it is one.
-    pub register: Option<DetailRegister>,
 }
 
 /// A signature already in the witness set.
@@ -387,11 +393,6 @@ pub enum DetailPlutus {
     Map {
         entries: Vec<DetailPlutusEntry>,
     },
-    /// Where the view stopped: this many items of the thing above it are left,
-    /// and the raw bytes have them.
-    More {
-        items: usize,
-    },
 }
 
 /// One entry of a Plutus map, whose keys are data too.
@@ -402,57 +403,38 @@ pub struct DetailPlutusEntry {
     pub value: DetailPlutus,
 }
 
-/// The most nodes one datum's tree holds. A transaction may carry tens of
-/// kilobytes of nested data and every node is a row on the screen, so past this
-/// the tree says how many items it left and the hex has them. Real datums are a
-/// few dozen nodes; Minswap's order is 30.
-pub const MAX_DATUM_NODES: usize = 512;
-
-/// Plutus data as its tree, within [`MAX_DATUM_NODES`].
+/// Plutus data as its tree: the whole thing, however big or deep.
+///
+/// **Nothing is left out and nothing is counted off.** A reader may need every
+/// node of it, and a datum that stopped partway would be a worse answer than no
+/// datum at all. The screen is what keeps a huge one readable: it collapses the
+/// tree and draws only what has been opened
+/// (`extension/src/ui/components/TxDetail.tsx`), so the size of the data costs
+/// nothing until someone asks for it.
+///
+/// How deep it can go is the one thing not decided here. The whole transaction's
+/// CBOR is refused past `MAX_NESTING` (128) levels before any of it is decoded,
+/// because Pallas decodes plutus data by recursion and a few thousand levels end
+/// the WebAssembly instance for good. That guard is the connector's too, so a
+/// datum this can't reach is one no part of the wallet can read.
 fn plutus_tree(data: &PlutusData) -> DetailPlutus {
-    let mut left = MAX_DATUM_NODES;
-    plutus(data, &mut left)
-}
-
-/// The data under `bytes`, when they are Plutus data. The redeemers are read
-/// from the bytes as written, so their arguments come back here.
-fn plutus_of(bytes: &[u8]) -> Option<DetailPlutus> {
-    PlutusData::decode_fragment(bytes)
-        .ok()
-        .map(|data| plutus_tree(&data))
-}
-
-fn plutus(data: &PlutusData, left: &mut usize) -> DetailPlutus {
-    *left = left.saturating_sub(1);
     match data {
         PlutusData::Constr(c) => DetailPlutus::Constr {
             constructor_index: constructor_of(c),
-            fields: plutus_items(&c.fields, left),
+            fields: c.fields.iter().map(plutus_tree).collect(),
         },
         PlutusData::Array(items) => DetailPlutus::List {
-            items: plutus_items(items, left),
+            items: items.iter().map(plutus_tree).collect(),
         },
-        PlutusData::Map(pairs) => {
-            let mut entries = Vec::new();
-            for (i, (key, value)) in pairs.iter().enumerate() {
-                if *left == 0 {
-                    entries.push(DetailPlutusEntry {
-                        key: DetailPlutus::More {
-                            items: pairs.len() - i,
-                        },
-                        value: DetailPlutus::More {
-                            items: pairs.len() - i,
-                        },
-                    });
-                    break;
-                }
-                entries.push(DetailPlutusEntry {
-                    key: plutus(key, left),
-                    value: plutus(value, left),
-                });
-            }
-            DetailPlutus::Map { entries }
-        }
+        PlutusData::Map(pairs) => DetailPlutus::Map {
+            entries: pairs
+                .iter()
+                .map(|(key, value)| DetailPlutusEntry {
+                    key: plutus_tree(key),
+                    value: plutus_tree(value),
+                })
+                .collect(),
+        },
         PlutusData::BigInt(number) => DetailPlutus::Int {
             value: big_int_text(number),
         },
@@ -463,19 +445,12 @@ fn plutus(data: &PlutusData, left: &mut usize) -> DetailPlutus {
     }
 }
 
-/// As many of a list's items as the budget allows, then how many are left.
-fn plutus_items(items: &[PlutusData], left: &mut usize) -> Vec<DetailPlutus> {
-    let mut out = Vec::new();
-    for (i, item) in items.iter().enumerate() {
-        if *left == 0 {
-            out.push(DetailPlutus::More {
-                items: items.len() - i,
-            });
-            break;
-        }
-        out.push(plutus(item, left));
-    }
-    out
+/// The data under `bytes`, when they are Plutus data. The redeemers are read
+/// from the bytes as written, so their arguments come back here.
+fn plutus_of(bytes: &[u8]) -> Option<DetailPlutus> {
+    PlutusData::decode_fragment(bytes)
+        .ok()
+        .map(|data| plutus_tree(&data))
 }
 
 /// A constructor's number, from the tag that carries it: 121-127 are 0-6,
@@ -752,7 +727,6 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
             DetailDatum {
                 hash: hex::encode(Hasher::<256>::hash(datum.raw_cbor()).as_ref()),
                 data: plutus_tree(datum),
-                register: register_detail(&hex),
                 hex,
             }
         })
@@ -1299,12 +1273,18 @@ fn output_detail(
         Some((hex, tree)) => (Some(hex), Some(tree)),
         None => (None, None),
     };
+    let address = address_detail(&address_bytes, flag, contract);
+    // Only our own contract's datum is read as a register: see the field.
+    let register = address
+        .seedelf
+        .then(|| inline_datum.as_deref().and_then(register_detail))
+        .flatten();
     Ok(DetailOutput {
         index,
-        address: address_detail(&address_bytes, flag, contract),
+        address,
         lovelace,
         assets,
-        register: inline_datum.as_deref().and_then(register_detail),
+        register,
         inline_datum,
         datum,
         datum_hash,

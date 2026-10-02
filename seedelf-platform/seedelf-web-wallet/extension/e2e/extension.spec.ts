@@ -1049,9 +1049,27 @@ test("the transaction view on a Seedelf payment: the contract, the register, and
   // It pays Seedelf Wallet's own contract, under a register only its owner can spend.
   await expect(view).toContainText("Seedelf Wallet's contract");
   await expect(view).toContainText("under a register");
-  // And the datum itself, as the tree it is: a constructor and its two points.
-  await expect(view).toContainText("Its datum, 104 bytes");
-  await expect(view).toContainText("Constructor 0");
+  // And the datum itself, as a tree that opens: its two points are under a
+  // constructor, and the first couple of levels start open, so a small datum
+  // reads without a click.
+  await expect(view).toContainText("Its datum, 104 bytes · 3 nodes");
+  const datum = view.locator(".plutus").first();
+  await expect(datum.getByRole("button", { name: /Constructor 0/ })).toHaveAttribute("aria-expanded", "true");
+  await expect(datum).toContainText("48 bytes");
+
+  // It closes, and what's closed isn't on the page at all: that's what lets a
+  // datum of any size through.
+  await datum.getByRole("button", { name: /Constructor 0/ }).click();
+  await expect(datum.getByRole("button", { name: /Constructor 0/ })).toHaveAttribute("aria-expanded", "false");
+  await expect(datum).not.toContainText("48 bytes");
+  // Expand all brings back the lot, and says it can put it away again.
+  await datum.getByRole("button", { name: "Expand all" }).click();
+  await expect(datum).toContainText("48 bytes");
+  await expect(datum.getByRole("button", { name: "Collapse all" })).toBeVisible();
+  // The bytes and the JSON can both be taken away.
+  await expect(datum.getByRole("button", { name: /as CBOR/ })).toBeVisible();
+  await expect(datum.getByRole("button", { name: /as JSON/ })).toBeVisible();
+  await snap(page, "tx-detail-datum");
   // And the icon beside Spends says why it holds nothing about what they hold.
   await expect(view.getByTestId("move-in-tx-inputs-hint")).toHaveAttribute(
     "title",

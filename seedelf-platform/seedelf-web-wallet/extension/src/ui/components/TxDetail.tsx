@@ -21,11 +21,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import type { NetworkName } from "../../networks";
-import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxPlutus, TxView } from "../../shared/rpc";
+import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
 import { HintButton, HintText, useHint } from "./Hint";
+import { PlutusTree } from "./PlutusTree";
 import { ExpandIcon, SpinnerIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
@@ -410,7 +411,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                     {formatQuantity(r.mem, 0)} mem · {formatQuantity(r.steps, 0)} steps
                   </span>
                   {r.argument ? (
-                    <Data label="Its argument" hex={r.data} value={r.argument} testId={`${testId}-redeemer-${i}`} />
+                    <PlutusTree
+                      label="Its argument"
+                      hex={r.data}
+                      value={r.argument}
+                      testId={`${testId}-redeemer-${i}`}
+                    />
                   ) : (
                     <span className="dapp-address" data-value={r.data}>
                       {shortHex(r.data, 24, 12)}
@@ -439,14 +445,14 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
             <ul className="list" data-testid={`${testId}-datum-list`}>
               {d.datums.map((datum, i) => (
                 <li key={i} className="list__row tx-detail__wrap">
-                  <span className="tx-detail__name">
-                    A datum
-                    {datum.register && (datum.register.payable ? " · a register" : " · a register nobody could spend")}
-                  </span>
+                  {/* Nothing here says whose datum it is: one in the witness set
+                      belongs to whichever output names its hash, which could be
+                      any contract at all. */}
+                  <span className="tx-detail__name">A datum</span>
                   <code className="dapp-address" data-value={datum.hash} title={`Its hash: ${datum.hash}`}>
                     {datum.hash}
                   </code>
-                  <Data label="The datum" hex={datum.hex} value={datum.data} testId={`${testId}-datum-${i}`} />
+                  <PlutusTree label="The datum" hex={datum.hex} value={datum.data} testId={`${testId}-datum-${i}`} />
                 </li>
               ))}
             </ul>
@@ -552,8 +558,8 @@ function Output({
           </span>
         ))}
       </span>
-      {/* Whatever contract it is for: the shape is what can be shown of it. */}
-      {o.datum && o.inlineDatum && <Data label="Its datum" hex={o.inlineDatum} value={o.datum} />}
+      {/* Whatever contract it is for: the shape is all that can be shown of it. */}
+      {o.datum && o.inlineDatum && <PlutusTree label="Its datum" hex={o.inlineDatum} value={o.datum} />}
     </li>
   );
 }
@@ -621,88 +627,6 @@ const PROPOSAL_FIELDS: Record<string, string> = {
   version: "Protocol version",
   anchor: "Anchor",
 };
-
-/**
- * Plutus data as the tree it is: a datum, or a redeemer's argument. There is no
- * schema to read it against — a contract's datum means whatever that contract
- * says it means — so the shape is what can honestly be shown, and that is what
- * this shows, for any contract and not only Seedelf's own.
- */
-function Plutus({ value }: { value: TxPlutus }) {
-  switch (value.type) {
-    case "constr":
-      return (
-        <>
-          <span className="tx-detail__key">Constructor {value.constructorIndex}</span>
-          {value.fields.length > 0 && <Branch of={value.fields} />}
-        </>
-      );
-    case "list":
-      return (
-        <>
-          <span className="tx-detail__key">{plural(value.items.length, "item")}</span>
-          {value.items.length > 0 && <Branch of={value.items} />}
-        </>
-      );
-    case "map":
-      return (
-        <>
-          <span className="tx-detail__key">{plural(value.entries.length, "pair")}</span>
-          <ul className="tx-detail__branch">
-            {value.entries.map((entry, i) => (
-              <li key={i}>
-                <Plutus value={entry.key} />
-                <span className="tx-detail__arrow">→</span>
-                <Plutus value={entry.value} />
-              </li>
-            ))}
-          </ul>
-        </>
-      );
-    case "int":
-      return <code className="tx-detail__leaf">{value.value}</code>;
-    case "bytes":
-      return (
-        <code
-          className="tx-detail__leaf"
-          data-value={value.hex}
-          title={`${value.hex} (${value.hex.length / 2} bytes)`}
-        >
-          {value.text ?? shortHex(value.hex, 16, 8)}
-        </code>
-      );
-    case "more":
-      return <span className="note">…{plural(value.items, "item")} more, in the bytes</span>;
-  }
-}
-
-/** One level of a Plutus tree. */
-function Branch({ of }: { of: TxPlutus[] }) {
-  return (
-    <ul className="tx-detail__branch">
-      {of.map((item, i) => (
-        <li key={i}>
-          <Plutus value={item} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** A datum or a redeemer's argument: what it is, its bytes to copy, and its tree. */
-function Data({ label, hex, value, testId }: { label: string; hex: string; value: TxPlutus; testId?: string }) {
-  return (
-    <div className="tx-detail__tree" data-testid={testId}>
-      <div className="field-row">
-        <span className="note">
-          {label}, {hex.length / 2} bytes
-        </span>
-        <CopyButton value={hex} label={`Copy the ${label.toLowerCase()}`} />
-      </div>
-      <Plutus value={value} />
-    </div>
-  );
-}
 
 /** A metadatum, as the tree it is. */
 function Metadatum({ value }: { value: TxMetadatum }) {

@@ -9,7 +9,8 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { TxDetail } from "../src/shared/rpc";
+import type { TxDetail, TxPlutus } from "../src/shared/rpc";
+import { plutusJson } from "../src/ui/components/PlutusTree";
 import { TxDetailBody, addressWords, certificateWords, proposalWords, redeemerWords } from "../src/ui/components/TxDetail";
 import { NetworkContext } from "../src/ui/network";
 import { loadTestWasm, transferPreprod } from "./fakes";
@@ -372,14 +373,13 @@ describe("a datum, whatever contract it is for", () => {
     expect(page).not.toContain("register");
   });
 
-  it("names every shape data can take, and says where it stopped", () => {
+  it("names every shape data can take", () => {
     const detail: TxDetail = {
       ...read(cborOf("payment")),
       datums: [
         {
           hash: "ab".repeat(32),
           hex: "d87980",
-          register: null,
           data: {
             type: "constr",
             constructorIndex: "7",
@@ -391,18 +391,142 @@ describe("a datum, whatever contract it is for", () => {
                 type: "map",
                 entries: [{ key: { type: "bytes", hex: "6b", text: "k" }, value: { type: "int", value: "2" } }],
               },
-              { type: "more", items: 40 },
             ],
           },
         },
       ],
     };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("Constructor 7");
+    expect(page).toContain("Constructor 7 · 4 fields");
     expect(page).toContain("-18446744073709551617");
     expect(page).toContain("Seedelf");
     expect(page).toContain("1 item");
     expect(page).toContain("1 pair");
-    expect(page).toContain("…40 items more, in the bytes");
+  });
+});
+
+describe("a datum's tree opens, and holds all of it", () => {
+  /** A datum of `fields` byte strings under one constructor. */
+  const wide = (fields: number): TxPlutus => ({
+    type: "constr",
+    constructorIndex: "0",
+    fields: Array.from({ length: fields }, (_, i) => ({
+      type: "bytes" as const,
+      hex: i.toString(16).padStart(2, "0").repeat(4),
+      text: null,
+    })),
+  });
+  /** A number no other part of the page shows, to find the bottom of a tree by. */
+  const BOTTOM = "987654321";
+  /** A datum `levels` constructors deep, with that number at the bottom. */
+  const deep = (levels: number): TxPlutus =>
+    levels === 0
+      ? { type: "int", value: BOTTOM }
+      : { type: "constr", constructorIndex: "0", fields: [deep(levels - 1)] };
+
+  const withDatum = (data: TxPlutus): TxDetail => ({
+    ...read(cborOf("payment")),
+    datums: [{ hash: "ab".repeat(32), hex: "d87980", data }],
+  });
+  const page = (data: TxPlutus) =>
+    text(createElement(TxDetailBody, { detail: withDatum(data), network: "preprod" as const, testId: "tx" }));
+
+  it("says how big a datum is, whatever it shows of it", () => {
+    expect(page(wide(2_000))).toContain("2,001 nodes");
+    expect(page(deep(100))).toContain("101 nodes");
+  });
+
+  it("leaves a big branch closed, and doesn't draw what's closed", () => {
+    const shown = page(wide(2_000));
+    expect(shown).toContain("Constructor 0 · 2,000 fields");
+    // Closed: none of the two thousand is on the page, which is what lets a
+    // datum of any size through.
+    expect(shown).not.toContain("00000000");
+    expect(shown.length).toBeLessThan(3_000);
+  });
+
+  it("opens the first couple of levels of a small one, so it reads at a glance", () => {
+    const shown = page(deep(4));
+    // Two levels open, so three of the four constructors have a row: the two
+    // open ones and the closed one they reach. The number at the bottom doesn't.
+    expect(shown.match(/Constructor 0 · 1 field/g)!.length).toBe(3);
+    expect(shown).not.toContain(BOTTOM);
+    // The rest is a click away, or all of it at once.
+    expect(shown).toContain("Expand all");
+  });
+
+  it("offers the bytes and the JSON, and nothing is counted off", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(TxDetailBody, { detail: withDatum(wide(2_000)), network: "preprod", testId: "tx" }),
+      ),
+    );
+    expect(html).toContain(">CBOR<");
+    expect(html).toContain(">JSON<");
+    // The JSON a reader copies holds every one of the two thousand.
+    const json = plutusJson(wide(2_000)) as { fields: unknown[] };
+    expect(json.fields).toHaveLength(2_000);
+  });
+
+  it("writes the JSON in Plutus data's detailed schema, as cardano-cli does", () => {
+    expect(
+      plutusJson({
+        type: "constr",
+        constructorIndex: "7",
+        fields: [
+          { type: "int", value: "-18446744073709551617" },
+          { type: "bytes", hex: "53656564656c66", text: "Seedelf" },
+          { type: "list", items: [{ type: "int", value: "1" }] },
+          { type: "map", entries: [{ key: { type: "bytes", hex: "6b", text: "k" }, value: { type: "int", value: "2" } }] },
+        ],
+      }),
+    ).toEqual({
+      constructor: 7,
+      fields: [
+        { int: "-18446744073709551617" },
+        { bytes: "53656564656c66" },
+        { list: [{ int: "1" }] },
+        { map: [{ k: { bytes: "6b" }, v: { int: "2" } }] },
+      ],
+    });
+  });
+
+  it("counts a map's pairs and a list's items, and names which is which", () => {
+    const shown = page({
+      type: "map",
+      entries: [
+        { key: { type: "bytes", hex: "6b", text: "k" }, value: { type: "list", items: [{ type: "int", value: "1" }] } },
+      ],
+    });
+    expect(shown).toContain("1 pair");
+    expect(shown).toContain("0 key");
+    expect(shown).toContain("0 value");
+  });
+});
+
+describe("whose datum it is", () => {
+  it("reads a register only where the address says the contract is ours", () => {
+    // The same transaction read as preprod's and as mainnet's: the datum is the
+    // same shape either way, and only the one at our own contract is a register.
+    const ours = read(transferPreprod.final.txCbor, "preprod");
+    const theirs = read(transferPreprod.final.txCbor, "mainnet");
+    expect(ours.outputs.every((o) => o.register !== null)).toBe(true);
+    expect(theirs.outputs.every((o) => o.register === null)).toBe(true);
+    expect(theirs.outputs[0]!.datum).toEqual(ours.outputs[0]!.datum);
+
+    expect(shown(transferPreprod.final.txCbor, "preprod")).toContain("under a register");
+    const elsewhere = shown(transferPreprod.final.txCbor, "mainnet");
+    expect(elsewhere).not.toContain("register");
+    // And the datum is still there, as the shape it is.
+    expect(elsewhere).toContain("Constructor 0 · 2 fields");
+  });
+
+  it("says nothing about whose a witness-set datum is", () => {
+    // It belongs to whichever output names its hash, which could be any contract.
+    const page = shown(cborOf("minswap-swap"));
+    expect(page).toContain("A datum");
+    expect(page).not.toContain("register");
   });
 });

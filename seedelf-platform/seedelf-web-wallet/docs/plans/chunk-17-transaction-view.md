@@ -318,3 +318,50 @@ are left, and the hex beside it has them all.
 `constructor`. Every object in JavaScript has a `constructor` already
 (`Object.prototype.constructor`), so had the field been called that and ever gone
 missing, the page would have shown `function Object() { … }` instead of failing.
+
+## All of a datum, and nothing assumed (the owner, 2026-10-01)
+
+> yeah that is not going to work. What if someone needs to read out the whole
+> thing. We should follow what etrnl does … its like collaspable json. So you
+> expand it out to show everything but also infinity deep without making any
+> assumptions.
+
+> also, why does it make assumptions about what contract it came from at all
+
+Both right, and the second one was a plain bug.
+
+**The 512-node cap is gone.** A datum that stopped partway is a worse answer than
+no datum: a reader may need every node. The whole tree comes through — five
+thousand items come through as five thousand — and the screen is what keeps a big
+one readable (`components/PlutusTree.tsx`):
+
+- a branch is a control that opens, and **a closed branch isn't drawn at all**, so
+  the size of the data costs nothing until someone opens that part of it. That is
+  what makes "no cap" safe;
+- the first two levels start open where the branch is small (≤ 24 children), so a
+  small datum reads at a glance and a wide one doesn't flood the page;
+- **Expand all** opens everything at once, and closes it again;
+- **CBOR** and **JSON** take the datum away — the JSON in Plutus data's detailed
+  schema (`{"constructor": n, "fields": […]}`, `{"bytes": …}`, `{"int": …}`,
+  `{"list": […]}`, `{"map": [{"k": …, "v": …}]}`), the form cardano-cli, Blockfrost
+  and Koios all speak;
+- each child carries its position, so a field can be matched against a contract's
+  schema by eye.
+
+**Depth isn't the view's to limit**, and it doesn't: the only limit is the CBOR
+guard that was already there for a site's transaction — `MAX_NESTING`, 128 levels,
+because Pallas reads plutus data by recursion and a few thousand levels end the
+WebAssembly instance for good. A constructor is two of those levels, so a datum
+nests about sixty constructors deep; tests hold both sides of that line. A datum
+the view can't reach is one no part of the wallet can read, the connector
+included.
+
+**And the assumption, which was a bug.** `register_detail` ran on every datum, so
+another contract's `constructor 0` with two 48-byte fields was labelled "a
+register" — a false claim about someone else's data. It now runs only for an
+output at Seedelf Wallet's own contract, because the address is the only thing
+that says which contract will read the datum, and **not at all for a datum in the
+witness set**, which belongs to whichever output names its hash and could be any
+contract's. A test reads the same transaction as preprod's and as mainnet's: the
+datum is the same shape either way, and only the one at our own contract is a
+register.
