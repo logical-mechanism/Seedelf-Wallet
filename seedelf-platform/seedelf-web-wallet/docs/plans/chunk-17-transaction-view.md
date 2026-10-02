@@ -6,7 +6,9 @@ The owner's ask from the 2026-09-28 mainnet test, listed under *After v1* in
 [roadmap.md](../roadmap.md#after-v1). Eternl is the model: a detail view with a
 way to read the CBOR.
 
-**Status: planned, not built.** Branch `web-wallet/transaction-view`, from `main`.
+**Status: built (2026-10-01).** Branch `web-wallet/transaction-view`, from `main`. What
+landed, and where it differs from this plan, is at the end under
+[*What was built*](#what-was-built).
 
 ## Why this one first
 
@@ -169,3 +171,45 @@ wallet did *not* build, which is where reading them matters most, and
   a past transaction is out: it would mean fetching CBOR by hash from Koios,
   which is the privacy question decision 1 just declined. The decoder would work
   on it unchanged if that is ever wanted.
+
+## What was built
+
+Everything above, with the shape as planned: `decode_tx(network, tx_cbor)` in a new
+`wasm/src/decode.rs`, one worker handler in `background/tx-view.ts`, one shared
+modal in `ui/components/TxDetail.tsx`, and the control on every review plus the
+connector's sign window. `inspect_tx`, `sign_tx` and `background/cbor.ts` are
+untouched. The owner's three decisions stand as written.
+
+Where it went further than the plan said, and why:
+
+- **The bytes as written, not re-encoded.** The decoder reads with Pallas's
+  `MintedTx`, which keeps each item's original CBOR, so a datum's hash is the hash
+  of the bytes as written, an inline datum's hex is what sits in the output, and a
+  redeemer's argument is a verbatim slice of the transaction (a test asserts that
+  slice). Re-encoding would have been simpler and could have shown a hash nothing
+  on chain has.
+- **The unknown-field scan catches what Pallas drops, too.** Pallas hands a
+  *Conway* transaction *alonzo's* auxiliary data, whose typed form knows only keys
+  0–2 and reads key 2 as Plutus V1. A V2 or V3 script in the metadata would have
+  vanished without a word — exactly what this chunk's rule forbids — so every
+  auxiliary script is read from the raw bytes instead of the typed value.
+- **Trailing bytes are refused.** One transaction and nothing after it, so the hex
+  the Raw CBOR tab shows is the transaction.
+- **The cross-check is the whole fixture set, not a sample.**
+  `wasm/tests/fixtures/record-decode.mjs` records nine transactions with
+  `cardano-cli debug transaction view`'s reading of each, and
+  `wasm/tests/decode_test.rs` compares field by field in one loop, so another
+  transaction in the fixture is checked without touching the test.
+  `cardano-cli transaction build-raw` needs no node, so the certificate, metadata,
+  mint-and-burn and governance cases are built offline by cardano-cli itself
+  rather than by us.
+- **A proposal's parameter change is listed by parameter number and raw CBOR**
+  rather than in words: the ledger numbers them, and names here would go stale.
+
+Two things the plan assumed that turned out otherwise, neither load-bearing:
+
+- **Redeemers aren't in index order.** The wallet's own recorded preprod transfer
+  writes its redeemer map 1 then 0. The view reports the bytes' order and gives
+  each redeemer its own index, rather than renumbering them.
+- **Minswap's swap carries CIP-20's `msg` beside its own `extraData` under label
+  674**, so the note is read from it and the metadata still shows both keys.

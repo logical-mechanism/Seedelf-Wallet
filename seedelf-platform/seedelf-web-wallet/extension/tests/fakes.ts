@@ -132,7 +132,7 @@ export const transferPreprod = fixture("transfer-preprod.json") as {
   tokens: Array<{ policyId: string; assetName: string; quantity: string }>;
   evaluation: unknown;
   draft: { draftCbor: string; inputs: Array<{ txHash: string; txIndex: number }> };
-  final: { fee: { total: string } };
+  final: { fee: { total: string }; txCbor: string; txHash: string };
 };
 /** Real withdrawals on preprod: an amount, Max and a removal (tests/fixtures/record-withdraw.mjs). */
 export const withdrawPreprod = fixture("withdraw-preprod.json") as Record<

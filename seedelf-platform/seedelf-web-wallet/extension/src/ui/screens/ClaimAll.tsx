@@ -23,6 +23,7 @@ import { HandleWarning } from "../components/HandleWarning";
 import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda, plural } from "../format";
@@ -304,6 +305,15 @@ export function ClaimReview({
         <Row label="Network fees" value={`${formatAda(fees.toString())} ₳`} />
         <Row label="Transactions" value={String(txs)} />
       </ReviewRows>
+      {/* Each session comes back in its own transaction, so each is its own view. */}
+      {picked.map((r) => (
+        <TxDetailButton
+          key={r.index}
+          txHash={r.txHash}
+          label={picked.length > 1 ? `Private session ${r.index + 1}'s transaction` : "Transaction details"}
+          testId={`claim-tx-${r.index}`}
+        />
+      ))}
       <Callout tone="privacy">
         Each session comes back in its own transaction, so nothing in them ties the sessions together. They're sent one
         after another, though, and returns that land together hint that they're one person's.

@@ -1,0 +1,1001 @@
+{
+ "recorded": "2026-10-01T22:32:48.477Z",
+ "recorder": "wasm/tests/fixtures/record-decode.mjs",
+ "tool": "cardano-cli 11.0.0.0 - linux-x86_64 - ghc-9.6",
+ "network": "preprod",
+ "txs": [
+  {
+   "name": "transfer",
+   "what": "the wallet's own Seedelf transfer on preprod: a script spend with redeemers, collateral and register datums",
+   "from": "extension/tests/fixtures/transfer-preprod.json final.txCbor",
+   "cbor": "84a800d9010282825820a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a100825820a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2000182a300581d7094bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a46901821a004c4b40a1581cc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0a145745553444d1a000f4240028201d8185868d8799f58308c93bd6a8503365019b06fabf9323b1e64b746ea092ea6cfd2fcfed8241f7c8d632af9f8a737800a8233c45fd112a81b5830b619f87a47aebbaf926151d7bea21d0b6b5db034f004c7bf506474bde87c3c6571bf93319c3db916449b353d4a7491dbffa300581d7094bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a46901821a015ac5bea1581cc0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0a145745553444d1a4986a1c0028201d8185868d8799f5830aafe22e3e893080a0c0f1cfce249f4d83244e228c393ce27f275f15a965d20676d4cd8bd55de23053462458f5e6694fc5830907c09505a345c9f0640d1492fb80169d75a584b74b3fd2b30351606374d2af223d23502258ad65d79439c4d5aff2181ff021a00042e020b5820a76c1faeda9a085b3610da4ba752c847e968f82ea7beffadbf317112d0ad78fa0dd9010281825820ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1000ed9010282581c5b0fbd30de0af5a0fcee5497679263205cfed9165d695891abbf2bd0581c1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec810a200581d601108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8011a0046063d12d901028182582096fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d601a10582840001d8799f582046e5f29ca81ef91b56ef4f4ba9f111ec79a62aad55d3568d18a431c3b8967b325830a6cd3f50dff2883dcff9160305bd5b5d2a22c48e1a82d16058da4ef97ad89a6b4e1322c69660edfd76ce72dd56aa5252581c5b0fbd30de0af5a0fcee5497679263205cfed9165d695891abbf2bd0ff821a0001290b1a14231e27840000d8799f58201e201fa30d67d3995df29c191c55e79d71e6feba06857a0e4d07eb5a409e17125830b081d8ddf95b98b3e4a6833974c0804096eb2c14fe569e50df26a388dbef3434b9fccd06e670ed47440e760de3961102581c5b0fbd30de0af5a0fcee5497679263205cfed9165d695891abbf2bd0ff821a0001290b1a14231e27f5f6",
+   "txId": "2c5505077c312cf1522a10dda245496f033edc27c4bb0cca53aeba92af91c332",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [
+     "ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1#0"
+    ],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "273922 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1#0",
+     "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2#0"
+    ],
+    "metadata": null,
+    "mint": null,
+    "outputs": [
+     {
+      "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 5000000,
+       "policy c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0": {
+        "asset 745553444d (tUSDM)": 1000000
+       }
+      },
+      "datum": {
+       "constructor": 0,
+       "fields": [
+        {
+         "bytes": "8c93bd6a8503365019b06fabf9323b1e64b746ea092ea6cfd2fcfed8241f7c8d632af9f8a737800a8233c45fd112a81b"
+        },
+        {
+         "bytes": "b619f87a47aebbaf926151d7bea21d0b6b5db034f004c7bf506474bde87c3c6571bf93319c3db916449b353d4a7491db"
+        }
+       ]
+      },
+      "network": "Testnet",
+      "payment credential script hash": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+      "reference script": null,
+      "stake reference": null
+     },
+     {
+      "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 22726078,
+       "policy c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0": {
+        "asset 745553444d (tUSDM)": 1233560000
+       }
+      },
+      "datum": {
+       "constructor": 0,
+       "fields": [
+        {
+         "bytes": "aafe22e3e893080a0c0f1cfce249f4d83244e228c393ce27f275f15a965d20676d4cd8bd55de23053462458f5e6694fc"
+        },
+        {
+         "bytes": "907c09505a345c9f0640d1492fb80169d75a584b74b3fd2b30351606374d2af223d23502258ad65d79439c4d5aff2181"
+        }
+       ]
+      },
+      "network": "Testnet",
+      "payment credential script hash": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+      "reference script": null,
+      "stake reference": null
+     }
+    ],
+    "redeemers": [
+     {
+      "purpose": {
+       "spending script witnessed input": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1#0"
+      },
+      "redeemer": {
+       "data": "Constr 0 [B \"\\RS \\US\\163\\rg\\211\\153]\\242\\156\\EM\\FSU\\231\\157q\\230\\254\\186\\ACK\\133z\\SOM\\a\\235Z@\\158\\ETB\\DC2\",B \"\\176\\129\\216\\221\\249[\\152\\179\\228\\166\\131\\&9t\\192\\128@\\150\\235,\\DC4\\254V\\158P\\223&\\163\\136\\219\\239\\&44\\185\\252\\205\\ACK\\230p\\237GD\\SOv\\r\\227\\150\\DC1\\STX\",B \"[\\SI\\189\\&0\\222\\n\\245\\160\\252\\238T\\151g\\146c \\\\\\254\\217\\SYN]iX\\145\\171\\191+\\208\"]",
+       "execution units": {
+        "memory": 76043,
+        "steps": 337845799
+       }
+      }
+     },
+     {
+      "purpose": {
+       "spending script witnessed input": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2#0"
+      },
+      "redeemer": {
+       "data": "Constr 0 [B \"F\\229\\242\\156\\168\\RS\\249\\ESCV\\239OK\\169\\241\\DC1\\236y\\166*\\173U\\211V\\141\\CAN\\164\\&1\\195\\184\\150{2\",B \"\\166\\205?P\\223\\242\\136=\\207\\249\\SYN\\ETX\\ENQ\\189[]*\\\"\\196\\142\\SUB\\130\\209`X\\218N\\249z\\216\\154kN\\DC3\\\"\\198\\150`\\237\\253v\\206r\\221V\\170RR\",B \"[\\SI\\189\\&0\\222\\n\\245\\160\\252\\238T\\151g\\146c \\\\\\254\\217\\SYN]iX\\145\\171\\191+\\208\"]",
+       "execution units": {
+        "memory": 76043,
+        "steps": 337845799
+       }
+      }
+     }
+    ],
+    "reference inputs": [
+     "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6#1"
+    ],
+    "required signers (payment key hashes needed for scripts)": [
+     "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8",
+     "5b0fbd30de0af5a0fcee5497679263205cfed9165d695891abbf2bd0"
+    ],
+    "return collateral": {
+     "address": "addr_test1vqgs3wtl9cve6k9qcp5h6f2p958mznf4fhxnje2tn6cdajqte3tcn",
+     "address era": "Shelley",
+     "amount": {
+      "lovelace": 4589117
+     },
+     "network": "Testnet",
+     "payment credential key hash": "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8",
+     "reference script": null,
+     "stake reference": null
+    },
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": null
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "stealth-mint",
+   "what": "the wallet's own stealth mint on preprod: a script spend that also mints a seedelf",
+   "from": "extension/tests/fixtures/mint-preprod.json final.txCbor",
+   "cbor": "84a900d9010281825820a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1000182a300581d7094bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a46901821a001ab364a1581c84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255a158205eed0e1f7765622d77616c6c657400a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a101028201d8185868d8799f5830b0d677863f08dce6bc0577818f78e7f4ab14c2aec68e4649dafca8a775b86f7ed012661d202aa1795cc345e8f95b97925830a43bca5177b06f4c7c741fd08b2f5ff5bcb0f06e58746eb3c2bc06a5b467df15fb7992676eecf83fd7181db877144aeaffa300581d7094bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469011a015edcaa028201d8185868d8799f583095ee6aa447449d03e4289fffd43ff7133b1cdc4350f6030407fcfedaa850d05c78caf8981bdd0a3921054973dd529b6958308ab2c0e0410b9bad57591f8a3638f9fa73c439da79caca1b8cd9bf7a969ed8046f87513169b8ef807bbe7733bd8e9369ff021a0003e83209a1581c84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255a158205eed0e1f7765622d77616c6c657400a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1010b58206f694dffa40db3d6bf7f1f1cc841ba9adee0f9dd1a8975a9c59b914d75fa35250dd9010281825820ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1000ed9010282581cd8e076baa76238a3ebb6b4d87bdbb0e0fbe415e378d77edf6faca3f4581c1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec810a200581d601108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8011a00466ef512d901028282582096fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d601825820f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db401a10582840000d8799f58203d55d7ee6cc58f5f880f251d47f8cf1dc65f080d3bfb2a1e4bb26ed721a314b558309599d069ab8f8c48b01178ef083e7446ba001a5e21bf233ea53c1077c815f41b4e5863567fce6171a80cb60e435bb5b4581cd8e076baa76238a3ebb6b4d87bdbb0e0fbe415e378d77edf6faca3f4ff821a0001290b1a14231e278401004a7765622d77616c6c6574821a00011c841a01467ad6f5f6",
+   "txId": "81d85d56c52353d606bafb3e40b52083fdfe6d5f143032d648a9c5687420b096",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [
+     "ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1#0"
+    ],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "256050 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1#0"
+    ],
+    "metadata": null,
+    "mint": {
+     "policy 84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255": {
+      "asset 5eed0e1f7765622d77616c6c657400a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": 1
+     }
+    },
+    "outputs": [
+     {
+      "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 1749860,
+       "policy 84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255": {
+        "asset 5eed0e1f7765622d77616c6c657400a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": 1
+       }
+      },
+      "datum": {
+       "constructor": 0,
+       "fields": [
+        {
+         "bytes": "b0d677863f08dce6bc0577818f78e7f4ab14c2aec68e4649dafca8a775b86f7ed012661d202aa1795cc345e8f95b9792"
+        },
+        {
+         "bytes": "a43bca5177b06f4c7c741fd08b2f5ff5bcb0f06e58746eb3c2bc06a5b467df15fb7992676eecf83fd7181db877144aea"
+        }
+       ]
+      },
+      "network": "Testnet",
+      "payment credential script hash": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+      "reference script": null,
+      "stake reference": null
+     },
+     {
+      "address": "addr_test1wz2te2wqn85yllvs69grz6a5fsc60pczywg8dg9gp6j2g6g7mzn9f",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 22994090
+      },
+      "datum": {
+       "constructor": 0,
+       "fields": [
+        {
+         "bytes": "95ee6aa447449d03e4289fffd43ff7133b1cdc4350f6030407fcfedaa850d05c78caf8981bdd0a3921054973dd529b69"
+        },
+        {
+         "bytes": "8ab2c0e0410b9bad57591f8a3638f9fa73c439da79caca1b8cd9bf7a969ed8046f87513169b8ef807bbe7733bd8e9369"
+        }
+       ]
+      },
+      "network": "Testnet",
+      "payment credential script hash": "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469",
+      "reference script": null,
+      "stake reference": null
+     }
+    ],
+    "redeemers": [
+     {
+      "purpose": {
+       "spending script witnessed input": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1#0"
+      },
+      "redeemer": {
+       "data": "Constr 0 [B \"=U\\215\\238l\\197\\143_\\136\\SI%\\GSG\\248\\207\\GS\\198_\\b\\r;\\251*\\RSK\\178n\\215!\\163\\DC4\\181\",B \"\\149\\153\\208i\\171\\143\\140H\\176\\DC1x\\239\\b>tF\\186\\NUL\\SUB^!\\191#>\\165<\\DLEw\\200\\NAK\\244\\ESCNXcV\\DEL\\206aq\\168\\f\\182\\SOC[\\181\\180\",B \"\\216\\224v\\186\\167b8\\163\\235\\182\\180\\216{\\219\\176\\224\\251\\228\\NAK\\227x\\215~\\223o\\172\\163\\244\"]",
+       "execution units": {
+        "memory": 76043,
+        "steps": 337845799
+       }
+      }
+     },
+     {
+      "purpose": {
+       "minting currency with policy id": "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255"
+      },
+      "redeemer": {
+       "data": "B \"web-wallet\"",
+       "execution units": {
+        "memory": 72836,
+        "steps": 21396182
+       }
+      }
+     }
+    ],
+    "reference inputs": [
+     "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6#1",
+     "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4#1"
+    ],
+    "required signers (payment key hashes needed for scripts)": [
+     "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8",
+     "d8e076baa76238a3ebb6b4d87bdbb0e0fbe415e378d77edf6faca3f4"
+    ],
+    "return collateral": {
+     "address": "addr_test1vqgs3wtl9cve6k9qcp5h6f2p958mznf4fhxnje2tn6cdajqte3tcn",
+     "address era": "Shelley",
+     "amount": {
+      "lovelace": 4615925
+     },
+     "network": "Testnet",
+     "payment credential key hash": "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8",
+     "reference script": null,
+     "stake reference": null
+    },
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": null
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "remove",
+   "what": "the wallet's own remove on preprod: a script spend that burns a seedelf",
+   "from": "extension/tests/fixtures/withdraw-preprod.json remove.final.txCbor",
+   "cbor": "84a900d9010281825820a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3000181a200583900b90919c13e539a5c6e657d937482d16ffd5f78c81e7dd404f0a17af07099d7cce2839fa378042795c22f78e31030a7bad049d1cb444a8f60011a00133086021a0003b2da09a1581c84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255a158205eed0e1f7765622d77616c6c657400ababababababababababababababababab200b582024e1d1b6a4d610a00a3cb3c08cb22a6000604629a434edad383e9a7873c1eef70dd9010281825820ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1000ed9010282581c72f239b5daf1cbb356bab8b47a7b9082b6b197ac774f616fe5811a9f581c1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec810a200581d601108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8011a0046bef912d901028282582096fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d601825820f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db401a10582840000d8799f582030570c8add81edd015fea0d4b007eee8d5a9eababf961ec222b95b899339b4c85830ac94d49f405e4eaccbf4e2015f2128d1897b29f3d611d4c6b209ab0d7f0df7d7acc7e230f965ec0b7704606ab09b9618581c72f239b5daf1cbb356bab8b47a7b9082b6b197ac774f616fe5811a9fff821a0001290b1a14231e2784010040821a00011af11a0144b30df5f6",
+   "txId": "bdd7ca45f74a49339ccfad91c691803661ff82187417e7e736d746ac7120d066",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [
+     "ef18e00c412c06b74606c5e68901693c3974b2073dbec1dfd8b74f01af3102a1#0"
+    ],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "242394 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3#0"
+    ],
+    "metadata": null,
+    "mint": {
+     "policy 84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255": {
+      "asset 5eed0e1f7765622d77616c6c657400ababababababababababababababababab": -1
+     }
+    },
+    "outputs": [
+     {
+      "address": "addr_test1qzusjxwp8efe5hrwv47exayz69hl6hmceq08m4qy7zsh4ursn8tuec5rn73hspp8jhpz778rzqc20wksf8guk3z23asqwgfs5k",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 1257606
+      },
+      "network": "Testnet",
+      "payment credential key hash": "b90919c13e539a5c6e657d937482d16ffd5f78c81e7dd404f0a17af0",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "7099d7cce2839fa378042795c22f78e31030a7bad049d1cb444a8f60"
+      }
+     }
+    ],
+    "redeemers": [
+     {
+      "purpose": {
+       "spending script witnessed input": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3#0"
+      },
+      "redeemer": {
+       "data": "Constr 0 [B \"0W\\f\\138\\221\\129\\237\\208\\NAK\\254\\160\\212\\176\\a\\238\\232\\213\\169\\234\\186\\191\\150\\RS\\194\\\"\\185[\\137\\147\\&9\\180\\200\",B \"\\172\\148\\212\\159@^N\\172\\203\\244\\226\\SOH_!(\\209\\137{)\\243\\214\\DC1\\212\\198\\178\\t\\171\\r\\DEL\\r\\247\\215\\172\\199\\226\\&0\\249e\\236\\vw\\EOT`j\\176\\155\\150\\CAN\",B \"r\\242\\&9\\181\\218\\241\\203\\179V\\186\\184\\180z{\\144\\130\\182\\177\\151\\172wOao\\229\\129\\SUB\\159\"]",
+       "execution units": {
+        "memory": 76043,
+        "steps": 337845799
+       }
+      }
+     },
+     {
+      "purpose": {
+       "minting currency with policy id": "84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255"
+      },
+      "redeemer": {
+       "data": "B \"\"",
+       "execution units": {
+        "memory": 72433,
+        "steps": 21279501
+       }
+      }
+     }
+    ],
+    "reference inputs": [
+     "96fbddac63c55284fbbaa3c216ef1c0f460019e8643a889a189d5b5f7ddd71d6#1",
+     "f620a4e949bfbefbf2892d39d0777439f3acfbf850eae9b007c6558ba8ef4db4#1"
+    ],
+    "required signers (payment key hashes needed for scripts)": [
+     "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8",
+     "72f239b5daf1cbb356bab8b47a7b9082b6b197ac774f616fe5811a9f"
+    ],
+    "return collateral": {
+     "address": "addr_test1vqgs3wtl9cve6k9qcp5h6f2p958mznf4fhxnje2tn6cdajqte3tcn",
+     "address era": "Shelley",
+     "amount": {
+      "lovelace": 4636409
+     },
+     "network": "Testnet",
+     "payment credential key hash": "1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8",
+     "reference script": null,
+     "stake reference": null
+    },
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": null
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "minswap-swap",
+   "what": "Minswap's aggregator's real preprod swap, which this wallet did not build",
+   "from": "wasm/tests/fixtures/minswap-swap-preprod.json cbor",
+   "cbor": "84a600d9010281825820a8e16ca5ab04e3478b0515d2af5b29ea23efd336d3269d38e632f10471e8f33e01018283583910a65ca58a4e9c755fa830173d2a5caed458ac0c73f97db7faae2e7e3be557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d1761a00d59f805820b42bce90c84c5de89ccca7262abc131d37d35b7b180d2e24cd094736227a4e2b825839000fdc780023d8be7c9ff3a6bdc0d8d3b263bd0cc12448c40948efbf42e557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d1761a07d7d586021a00032185031a080670f90758200bc5106b1d82091bda820b6c8f99c14b8066e7009e464d6f5060877a2f2e3a810b58200f7947417c13b27dc505dc24360d8fea71f6579558f024ff9a543e8df5d590faa104d901029fd8799fd8799fd8799f581c0fdc780023d8be7c9ff3a6bdc0d8d3b263bd0cc12448c40948efbf42ffd8799fd8799fd8799f581ce557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d176ffffffffd8799fd8799f581c0fdc780023d8be7c9ff3a6bdc0d8d3b263bd0cc12448c40948efbf42ffd8799fd8799fd8799f581ce557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d176ffffffffd87a80d8799fd8799f581ce16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72434d494eff1a35c4b461ff1a001e84801a001e8480fffff5a11902a2a2696578747261446174618778407b226e6574776f726b456e76223a312c2273656e646572223a7b222461646472657373223a22616464725f7465737431717138616337717179307674756c796c784037776e746d737863367765783830677663796a79333371666672686d37736839323779737835736674757730646c66743035647a3363377265767066376a78307840786e6c636a7a336736396d716b7435646d6e227d2c226f726465724f7074696f6e73223a5b7b22736f75726365223a224d696e73776170222c2276657273696f78406e223a224445585f5631222c2274797065223a302c226173736574496e223a7b22246173736574223a226c6f76656c616365227d2c2261737365744f7574223a78407b22246173736574223a22653136633264633861653933376538643337393063376664373136386437623939343632316261313463613131343135663339666578406437322e346434393465227d2c22616d6f756e74496e223a7b2224626967696e74223a223130303030303030227d2c226d696e696d756d416d6f756e744f75747831223a7b2224626967696e74223a22393032303833363831227d2c2269734c696d69744f72646572223a66616c73657d5d7d636d73678178204d696e737761703a2041676772656761746f72204d61726b6574204f72646572",
+   "txId": "6a930a737896a85eb56e4ac45660f6163377f3d76c20bfdeddac8ab1334939db",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [],
+    "currentTreasuryValue": null,
+    "datums": [
+     {
+      "datum": "Constr 0 [Constr 0 [Constr 0 [B \"\\SI\\220x\\NUL#\\216\\190|\\159\\243\\166\\189\\192\\216\\211\\178c\\189\\f\\193$H\\196\\tH\\239\\191B\"],Constr 0 [Constr 0 [Constr 0 [B \"\\229W\\137\\ETXR\\t_\\FS\\246\\253+}\\SUB(\\227\\195\\203\\STX\\159H\\207\\&4\\255\\137\\n(\\209v\"]]]],Constr 0 [Constr 0 [B \"\\SI\\220x\\NUL#\\216\\190|\\159\\243\\166\\189\\192\\216\\211\\178c\\189\\f\\193$H\\196\\tH\\239\\191B\"],Constr 0 [Constr 0 [Constr 0 [B \"\\229W\\137\\ETXR\\t_\\FS\\246\\253+}\\SUB(\\227\\195\\203\\STX\\159H\\207\\&4\\255\\137\\n(\\209v\"]]]],Constr 1 [],Constr 0 [Constr 0 [B \"\\225l-\\200\\174\\147~\\141\\&7\\144\\199\\253qh\\215\\185\\148b\\ESC\\161L\\161\\DC4\\NAK\\243\\159\\237r\",B \"MIN\"],I 902083681],I 2000000,I 2000000]",
+      "datum hash": "b42bce90c84c5de89ccca7262abc131d37d35b7b180d2e24cd094736227a4e2b"
+     }
+    ],
+    "era": "Conway",
+    "fee": "205189 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "a8e16ca5ab04e3478b0515d2af5b29ea23efd336d3269d38e632f10471e8f33e#1"
+    ],
+    "metadata": {
+     "674": [
+      [
+       "extraData",
+       [
+        "{\"networkEnv\":1,\"sender\":{\"$address\":\"addr_test1qq8ac7qqy0vtulyl",
+        "7wntmsxc6wex80gvcyjy33qffrhm7sh927ysx5sftuw0dlft05dz3c7revpf7jx0",
+        "xnlcjz3g69mqkt5dmn\"},\"orderOptions\":[{\"source\":\"Minswap\",\"versio",
+        "n\":\"DEX_V1\",\"type\":0,\"assetIn\":{\"$asset\":\"lovelace\"},\"assetOut\":",
+        "{\"$asset\":\"e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fe",
+        "d72.4d494e\"},\"amountIn\":{\"$bigint\":\"10000000\"},\"minimumAmountOut",
+        "\":{\"$bigint\":\"902083681\"},\"isLimitOrder\":false}]}"
+       ]
+      ],
+      [
+       "msg",
+       [
+        "Minswap: Aggregator Market Order"
+       ]
+      ]
+     ]
+    },
+    "mint": null,
+    "outputs": [
+     {
+      "address": "addr_test1zzn9efv2f6w82hagxqtn62ju4m293tqvw0uhmdl64ch8uwl927ysx5sftuw0dlft05dz3c7revpf7jx0xnlcjz3g69mqdsxjhj",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 14000000
+      },
+      "datum": {
+       "constructor": 0,
+       "fields": [
+        {
+         "constructor": 0,
+         "fields": [
+          {
+           "constructor": 0,
+           "fields": [
+            {
+             "bytes": "0fdc780023d8be7c9ff3a6bdc0d8d3b263bd0cc12448c40948efbf42"
+            }
+           ]
+          },
+          {
+           "constructor": 0,
+           "fields": [
+            {
+             "constructor": 0,
+             "fields": [
+              {
+               "constructor": 0,
+               "fields": [
+                {
+                 "bytes": "e557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d176"
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "constructor": 0,
+         "fields": [
+          {
+           "constructor": 0,
+           "fields": [
+            {
+             "bytes": "0fdc780023d8be7c9ff3a6bdc0d8d3b263bd0cc12448c40948efbf42"
+            }
+           ]
+          },
+          {
+           "constructor": 0,
+           "fields": [
+            {
+             "constructor": 0,
+             "fields": [
+              {
+               "constructor": 0,
+               "fields": [
+                {
+                 "bytes": "e557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d176"
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "constructor": 1,
+         "fields": []
+        },
+        {
+         "constructor": 0,
+         "fields": [
+          {
+           "constructor": 0,
+           "fields": [
+            {
+             "bytes": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72"
+            },
+            {
+             "bytes": "4d494e"
+            }
+           ]
+          },
+          {
+           "int": 902083681
+          }
+         ]
+        },
+        {
+         "int": 2000000
+        },
+        {
+         "int": 2000000
+        }
+       ]
+      },
+      "network": "Testnet",
+      "payment credential script hash": "a65ca58a4e9c755fa830173d2a5caed458ac0c73f97db7faae2e7e3b",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "e557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d176"
+      }
+     },
+     {
+      "address": "addr_test1qq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7sh927ysx5sftuw0dlft05dz3c7revpf7jx0xnlcjz3g69mqkt5dmn",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 131585414
+      },
+      "network": "Testnet",
+      "payment credential key hash": "0fdc780023d8be7c9ff3a6bdc0d8d3b263bd0cc12448c40948efbf42",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "e557890352095f1cf6fd2b7d1a28e3c3cb029f48cf34ff890a28d176"
+      }
+     }
+    ],
+    "redeemers": [],
+    "reference inputs": [],
+    "required signers (payment key hashes needed for scripts)": null,
+    "return collateral": null,
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": 134639865
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "session-swap",
+   "what": "a private session's swap, as the extension's fixture recorded it",
+   "from": "extension/tests/fixtures/session-swap.json swapCbor",
+   "cbor": "84a400d90102818258200707070707070707070707070707070707070707070707070707070707070707010182a300583910a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6ce52b85545dec10d782ae312a7d64a8f0b018f6e097d6c808135bff1011a00d59f800282005820b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4a200583900e264f7d08781fc73dfd84d1b32b074c6a24291ebab8035841a0b5984ce52b85545dec10d782ae312a7d64a8f0b018f6e097d6c808135bff1011a07d7d586021a00032185031a080670f9a0f5f6",
+   "txId": "8303df5bbae91298fcbaa7c7eb92fd6e58ad5ee4b6a820010492dc6456b7858a",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "205189 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "0707070707070707070707070707070707070707070707070707070707070707#1"
+    ],
+    "metadata": null,
+    "mint": null,
+    "outputs": [
+     {
+      "address": "addr_test1zzn2df4x56n2df4x56n2df4x56n2df4x56n2df4x56n2dfkw22u923w7cyxhs2hrz2navj50pvqc7msf04kgpqf4hlcszk3e2r",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 14000000
+      },
+      "datum": "b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4",
+      "network": "Testnet",
+      "payment credential script hash": "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "ce52b85545dec10d782ae312a7d64a8f0b018f6e097d6c808135bff1"
+      }
+     },
+     {
+      "address": "addr_test1qr3xfa7ss7qlcu7lmpx3kv4swnr2ys53aw4cqdvyrg94npxw22u923w7cyxhs2hrz2navj50pvqc7msf04kgpqf4hlcs00h9ax",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 131585414
+      },
+      "network": "Testnet",
+      "payment credential key hash": "e264f7d08781fc73dfd84d1b32b074c6a24291ebab8035841a0b5984",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "ce52b85545dec10d782ae312a7d64a8f0b018f6e097d6c808135bff1"
+      }
+     }
+    ],
+    "redeemers": [],
+    "reference inputs": [],
+    "required signers (payment key hashes needed for scripts)": null,
+    "return collateral": null,
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": 134639865
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "payment",
+   "what": "built here: a plain payment with a reference input, collateral, a datum hash and a reference script",
+   "from": "cardano-cli transaction build-raw",
+   "cbor": "84a800d90102818258205555555555555555555555555555555555555555555555555555555555555555000dd901028182582077777777777777777777777777777777777777777777777777777777777777770312d9010281825820666666666666666666666666666666666666666666666666666666666666666602018382583900c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff821a002dc6c0a1581c1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815fa14300ff100783581d60c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a71a00124f8058201111111111111111111111111111111111111111111111111111111111111111a300583900c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff011a0089544003d818582c82008201828200581cc6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a782051a05f5e0ff1082581d60c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a71a0044aa20111a004c4b40021a000334500ed9010281581cc6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7a0f5f6",
+   "txId": "dff290a45affa13042c8ede1c31cb1d146798a2e777c008f253b24b2556ff122",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [
+     "7777777777777777777777777777777777777777777777777777777777777777#3"
+    ],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "210000 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "5555555555555555555555555555555555555555555555555555555555555555#0"
+    ],
+    "metadata": null,
+    "mint": null,
+    "outputs": [
+     {
+      "address": "addr_test1qrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fae85w8skdhcp822gx2vf20dvdhm56y2j2jnka4rw0kutlsh62fqf",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 3000000,
+       "policy 1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815f": {
+        "asset 00ff10": 7
+       }
+      },
+      "network": "Testnet",
+      "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+      }
+     },
+     {
+      "address": "addr_test1vrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fcal88za",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 1200000
+      },
+      "datum": "1111111111111111111111111111111111111111111111111111111111111111",
+      "network": "Testnet",
+      "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+      "reference script": null,
+      "stake reference": null
+     },
+     {
+      "address": "addr_test1qrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fae85w8skdhcp822gx2vf20dvdhm56y2j2jnka4rw0kutlsh62fqf",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 9000000
+      },
+      "network": "Testnet",
+      "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+      "reference script": {
+       "referenceScript": {
+        "script": {
+         "cborHex": "8201828200581cc6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a782051a05f5e0ff",
+         "description": "",
+         "type": "SimpleScript"
+        },
+        "scriptLanguage": "SimpleScriptLanguage"
+       }
+      },
+      "stake reference": {
+       "stake credential key hash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+      }
+     }
+    ],
+    "redeemers": [],
+    "reference inputs": [
+     "6666666666666666666666666666666666666666666666666666666666666666#2"
+    ],
+    "required signers (payment key hashes needed for scripts)": [
+     "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7"
+    ],
+    "return collateral": {
+     "address": "addr_test1vrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fcal88za",
+     "address era": "Shelley",
+     "amount": {
+      "lovelace": 4500000
+     },
+     "network": "Testnet",
+     "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+     "reference script": null,
+     "stake reference": null
+    },
+    "scripts": [],
+    "total collateral": 5000000,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": null
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "certificates",
+   "what": "built here: stake and vote certificates, a withdrawal, a validity range and metadata",
+   "from": "cardano-cli transaction build-raw",
+   "cbor": "84a800d9010281825820111111111111111111111111111111111111111111111111111111111111111100018182583900c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff1a004c4b40021a00030d40031a05f5e0ff04d901028383078200581cb93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff1a001e848083028200581cb93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff581c0f292fcaa02b8b2f9b3c8f9fd8e0bb21abedb692a6d5058df3ef273583098200581cb93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff810205a1581de0b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff000818640758205d8f6ac7863a195d975c25e2de26bf95ceb7844b53574fd95d59cf20ddeb7523a0f5d90103a100a201a4616244deadbeef616e182a636d6170a1616b6176646c697374830102031902a2a1636d7367826e53656564656c662057616c6c65747661206e6f746520616e796f6e652063616e2072656164",
+   "txId": "5437a86fabba0a84904e2bbee0b6ba3393fe496726c8d216fcab33a425dcc886",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": [
+     {
+      "Stake address registration": {
+       "deposit": 2000000,
+       "stake credential": {
+        "keyHash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+       }
+      }
+     },
+     {
+      "Stake address delegation": {
+       "delegatee": {
+        "delegatee type": "stake",
+        "key hash": "0f292fcaa02b8b2f9b3c8f9fd8e0bb21abedb692a6d5058df3ef2735"
+       },
+       "stake credential": {
+        "keyHash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+       }
+      }
+     },
+     {
+      "Stake address delegation": {
+       "delegatee": {
+        "DRep": "drep-alwaysAbstain",
+        "delegatee type": "vote"
+       },
+       "stake credential": {
+        "keyHash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+       }
+      }
+     }
+    ],
+    "collateral inputs": [],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "200000 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "1111111111111111111111111111111111111111111111111111111111111111#0"
+    ],
+    "metadata": {
+     "1": [
+      [
+       "b",
+       "\"\\222\\173\\190\\239\""
+      ],
+      [
+       "n",
+       42
+      ],
+      [
+       "map",
+       [
+        [
+         "k",
+         "v"
+        ]
+       ]
+      ],
+      [
+       "list",
+       [
+        1,
+        2,
+        3
+       ]
+      ]
+     ],
+     "674": [
+      [
+       "msg",
+       [
+        "Seedelf Wallet",
+        "a note anyone can read"
+       ]
+      ]
+     ]
+    },
+    "mint": null,
+    "outputs": [
+     {
+      "address": "addr_test1qrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fae85w8skdhcp822gx2vf20dvdhm56y2j2jnka4rw0kutlsh62fqf",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 5000000
+      },
+      "network": "Testnet",
+      "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+      }
+     }
+    ],
+    "redeemers": [],
+    "reference inputs": [],
+    "required signers (payment key hashes needed for scripts)": null,
+    "return collateral": null,
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": 100,
+     "upper bound": 99999999
+    },
+    "voters": {},
+    "withdrawals": [
+     {
+      "address": "stake_test1uzun68rctxmuqn49yr9xy48kkxma6dz9f9ffmw63h8mw9lcvgvxhf",
+      "amount": "0 Lovelace",
+      "network": "Testnet",
+      "stake credential key hash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+     }
+    ],
+    "witnesses": []
+   }
+  },
+  {
+   "name": "mint",
+   "what": "built here: a mint and a burn under a native script",
+   "from": "cardano-cli transaction build-raw",
+   "cbor": "84a400d9010281825820222222222222222222222222222222222222222222222222222222222222222201018182583900c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff821a001e8480a1581c1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815fa14753656564656c6605021a0002bf2009a1581c1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815fa24753656564656c6605436f6c6422a101d90102818201828200581cc6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a782051a05f5e0fff5f6",
+   "txId": "09fd52c838107c567e52882380d3e8ecd402ff56fab233939b3e4c5a8a619487",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [],
+    "currentTreasuryValue": null,
+    "datums": [],
+    "era": "Conway",
+    "fee": "180000 Lovelace",
+    "governance actions": [],
+    "inputs": [
+     "2222222222222222222222222222222222222222222222222222222222222222#1"
+    ],
+    "metadata": null,
+    "mint": {
+     "policy 1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815f": {
+      "asset 53656564656c66 (Seedelf)": 5,
+      "asset 6f6c64 (old)": -3
+     }
+    },
+    "outputs": [
+     {
+      "address": "addr_test1qrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fae85w8skdhcp822gx2vf20dvdhm56y2j2jnka4rw0kutlsh62fqf",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 2000000,
+       "policy 1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815f": {
+        "asset 53656564656c66 (Seedelf)": 5
+       }
+      },
+      "network": "Testnet",
+      "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+      }
+     }
+    ],
+    "redeemers": [],
+    "reference inputs": [],
+    "required signers (payment key hashes needed for scripts)": null,
+    "return collateral": null,
+    "scripts": [
+     {
+      "script data": {
+       "script": "(AllOf (Expire < 99999999) (Signature KeyHash {unKeyHash = \"c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7\"}) )",
+       "type": "native"
+      },
+      "script hash": "1406e8f84a903b8af5197d7153cb24fcbc8a62753426376c6797815f"
+     }
+    ],
+    "total collateral": null,
+    "treasuryDonation": 0,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": null
+    },
+    "voters": {},
+    "withdrawals": null,
+    "witnesses": []
+   }
+  },
+  {
+   "name": "governance",
+   "what": "built here: a proposal, a vote, and the treasury fields",
+   "from": "cardano-cli transaction build-raw",
+   "cbor": "84a700d9010281825820444444444444444444444444444444444444444444444444444444444444444400018182583900c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff1a0016e360021a0003d09013a18202581c99b1fc9ee53be912c14ff951125e4a469d0d8af64fb71fc03cc7278ba18258203333333333333333333333333333333333333333333333333333333333333333008201f614d9010281841b000000174876e800581de0b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff810682781868747470733a2f2f6578616d706c652e636f6d2f696e666f58200000000000000000000000000000000000000000000000000000000000000000151a1dcd6500161a000f4240a0f5f6",
+   "txId": "53f1c21278e9e58d01903603e87795f3437a17893630979a3ddb79ff9d056abe",
+   "view": {
+    "auxiliary scripts": null,
+    "certificates": null,
+    "collateral inputs": [],
+    "currentTreasuryValue": 500000000,
+    "datums": [],
+    "era": "Conway",
+    "fee": "250000 Lovelace",
+    "governance actions": [
+     {
+      "anchor": {
+       "dataHash": "0000000000000000000000000000000000000000000000000000000000000000",
+       "url": "https://example.com/info"
+      },
+      "deposit": 100000000000,
+      "governance action": {
+       "tag": "InfoAction"
+      },
+      "return address": {
+       "credential": {
+        "keyHash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+       },
+       "network": "Testnet"
+      }
+     }
+    ],
+    "inputs": [
+     "4444444444444444444444444444444444444444444444444444444444444444#0"
+    ],
+    "metadata": null,
+    "mint": null,
+    "outputs": [
+     {
+      "address": "addr_test1qrr0x4yzuj3syspsc3n0p86afpqcf8q98r9xygrwjq0g8fae85w8skdhcp822gx2vf20dvdhm56y2j2jnka4rw0kutlsh62fqf",
+      "address era": "Shelley",
+      "amount": {
+       "lovelace": 1500000
+      },
+      "network": "Testnet",
+      "payment credential key hash": "c6f35482e4a3024030c466f09f5d4841849c0538ca62206e901e83a7",
+      "reference script": null,
+      "stake reference": {
+       "stake credential key hash": "b93d1c7859b7c04ea520ca6254f6b1b7dd344549529dbb51b9f6e2ff"
+      }
+     }
+    ],
+    "redeemers": [],
+    "reference inputs": [],
+    "required signers (payment key hashes needed for scripts)": null,
+    "return collateral": null,
+    "scripts": [],
+    "total collateral": null,
+    "treasuryDonation": 1000000,
+    "update proposal": null,
+    "validity range": {
+     "lower bound": null,
+     "upper bound": null
+    },
+    "voters": {
+     "drep-keyHash-99b1fc9ee53be912c14ff951125e4a469d0d8af64fb71fc03cc7278b": {
+      "3333333333333333333333333333333333333333333333333333333333333333#0": {
+       "anchor": null,
+       "decision": "VoteYes"
+      }
+     }
+    },
+    "withdrawals": null,
+    "witnesses": []
+   }
+  }
+ ]
+}

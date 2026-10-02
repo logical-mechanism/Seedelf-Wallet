@@ -92,7 +92,7 @@ flowchart LR
 **Status (chunk 13):** every v1 transaction is built on it: move-in, creating a Seedelf, transfer, withdraw, removing a Seedelf, a send from the Cardano account, and staking (delegate, vote, withdraw rewards, stop).
 
 - **`seedelf-core` compiles to WebAssembly.** The one blocker was `seedelf-koios` setting `connect_timeout` (and `timeout`) on its HTTP client; `reqwest`'s browser build has neither, so both are gated with `#[cfg(not(target_arch = "wasm32"))]`.
-- **The WebAssembly module is about 1.3 MB** (439 KB gzipped since chunk 13's staking; it was 424 KB). It's loaded from the extension itself, so this only costs a moment on the worker's first start.
+- **The WebAssembly module is 2.6 MB** (774 KB gzipped, measured on 2026-10-01). It was 1.3 MB (439 KB) at chunk 13; chunk 16's script evaluator (Aiken's `uplc`) is most of the growth, and chunk 17's transaction decoder is 15 KB of it. It's loaded from the extension itself, so this only costs a moment on the worker's first start.
   - `build.sh` uses the workspace's `wasm-release` profile: `opt-level = "z"`, LTO, one codegen unit, stripped. It halved the module (it was 2.3 MB, 582 KB gzipped) at the same speed. The BLS arithmetic is blst's C, and a proof takes about 1.8 ms either way.
   - `wasm-opt` was measured on top and left out: it made the file 9 % smaller but its gzipped size 6 % larger, and the Web Store's download is a zip.
   - `wasm/bench.mjs` measures the size and the speed of a build.
@@ -160,6 +160,27 @@ flowchart LR
 **In the CLI,** every script spend ends in `seedelf-cli/src/commands/spend.rs`: prove, evaluate, finish, giveme.my, sign, submit. Only `create` and `fund` still build inside their `run()`s; the web wallet doesn't need them.
 
 **Tests guard it.** The CLI's offline integration tests (`seedelf-cli/tests/cli/`) check value conservation, min-UTxO and valid change registers for each command, and `seedelf-core/tests/build_test.rs` checks the builders directly.
+
+## Reading a transaction
+
+**Decided: in WebAssembly, with Pallas, as a function of its bytes alone** ([`wasm/src/decode.rs`](../wasm/src/decode.rs), chunk 17). `decodeTx(network, txCbor)` answers a `TxDetail`: CBOR in, structure out. It takes no account, no keys and no UTxOs, so it makes no network call, a fixture file is a whole test of it, and it cannot be wrong about the account because it never sees one. The `network` only names Seedelf Wallet's own contract; every address is read from its own bytes.
+
+**Three readers, three jobs. None of them is the others.**
+
+- **`cip30::inspect_tx`** answers *what does this do to my account*, which is what the approval decision turns on, and it reduces most of the body to tallies (`reference_inputs: usize`, `votes: usize`, `metadata: bool`). It is load-bearing for a signature, and chunk 17 changed nothing in it.
+- **`decode::decode_tx`** answers *what is in these bytes*. It emits structure where the summary emits counts, and nothing it says is load-bearing for anything: it is a view.
+- **`background/cbor.ts`** is the hardened pre-check, not a decoder. Its own header sets the boundary: just enough CBOR to find an item's end, list the inputs and compute the id, with bounds and depth checks because a dApp hands the worker bytes of its choosing. Conway's types live in Pallas, and reimplementing them in TypeScript would be a second ledger model to keep right.
+
+**What the decoder does that matters:**
+
+- **It reads the bytes as written.** Pallas's `MintedTx` keeps each item's original CBOR (`KeepRaw`), so a datum's hash is the hash of the bytes as written rather than of a re-encoding, an inline datum's hex is what is in the output, and a redeemer's argument is a verbatim slice of the transaction (the redeemers are walked raw for exactly that). The body's own bytes give the size and the id.
+- **It reports what it has no name for.** The body's, the witness set's and the auxiliary data's map keys are scanned raw beside the typed read, and any key the module doesn't know is reported as a field number and raw hex. That also covers what Pallas itself drops: Conway's transactions carry *alonzo's* auxiliary data in Pallas, whose typed form knows only keys 0–2, so every script in the metadata is read from the raw bytes instead of the typed value.
+- **It refuses before it reads.** The same guards as the connector's: `MAX_TX_BYTES` (64 KiB, four times the ledger's limit), the non-recursive nesting walk (`MAX_NESTING`, 128 levels — Pallas decodes plutus data recursively, and a few thousand levels kill the WebAssembly instance), and exactly one transaction with nothing after it, so the hex the view shows is the transaction.
+- **It knows one schema: a Seedelf register.** `register_datum` reads constructor 0 with two 48-byte points, and `build::is_payable` says whether a payment under it could be spent. Nothing else is guessed at.
+
+**In the worker, [`tx-view.ts`](../extension/src/background/tx-view.ts) is the cheapest handler there is:** no Koios request, no storage write, nothing kept. Every flow parks its built transaction in session storage under its own key and `script-spend.ts` strips the CBOR out of the summary the screen gets, so the view is asked by transaction hash — which every review already has — and the worker looks the bytes up where they live, walking the kept record rather than knowing each key's shape (a session's return keeps its chain inside it; Bring everything back keeps a list). A site's are in the connector's own queue (`Waiting.txCbor`), held only while the request waits. It shows `sentCbor` where there is one, so a payment Koios didn't answer shows the bytes that will be sent again.
+
+**The bytes never reach the screen until it asks.** That is what makes opening or closing the view safe: Send reads the transaction back out of its session key, not out of a component, so the signed bytes were never in the view's hands. A test pins it, and so does an end-to-end one in the browser.
 
 ## Networks
 

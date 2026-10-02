@@ -17,6 +17,7 @@ import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { formatAda, shortHex } from "../format";
 
@@ -135,6 +136,7 @@ export function RemoveSeedelf({
           <Row label={`Back to your ${DESTINATIONS[summary.to].toLowerCase()}`} value={`${formatAda(summary.lovelace)} ₳`} strong />
           <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
         </ReviewRows>
+        <TxDetailButton txHash={summary.txHash} testId="remove-tx" />
         <p className="note">
           The token is burned. Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the
           network to confirm.

@@ -286,6 +286,12 @@ interface Waiting {
   /** Its page went away before the user answered (`gone`). */
   gone?: boolean;
   /**
+   * A signature's transaction, hex: what the transaction view reads while the
+   * user decides (tx-view.ts). Only here, never kept: closing the window drops
+   * it with the request.
+   */
+  txCbor?: string;
+  /**
    * How it ended, for another page of the same site asking to connect
    * meanwhile (`enable`): answered (undefined), what the site heard, or
    * "gone", when its page went away first.
@@ -925,7 +931,15 @@ export class DappService {
   }
 
   /** Puts a request in front of the user; `approve` runs if they say yes. */
-  private ask<T>(session: DappSession, network: NetworkName, request: DappAsk, declined: number, approve: () => Promise<T>): Promise<T> {
+  private ask<T>(
+    session: DappSession,
+    network: NetworkName,
+    request: DappAsk,
+    declined: number,
+    approve: () => Promise<T>,
+    /** A signature's transaction, hex, for the transaction view. */
+    txCbor?: string,
+  ): Promise<T> {
     // Its page went away while it was read: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY);
@@ -943,6 +957,7 @@ export class DappService {
         resolve: resolve as (value: unknown) => void,
         reject,
         declined: failure,
+        ...(txCbor === undefined ? {} : { txCbor }),
       };
       this.waiting.push(entry);
     });
@@ -1465,23 +1480,44 @@ export class DappService {
       ...(collateralSpent ? { collateralSpent } : {}),
       ...(ties ? { ties: ties.all } : {}),
     };
-    return this.ask(session, network, ask, TxSignError.UserDeclined, async () => {
-      // Checked again as it's approved (independent review L33): while it
-      // waited, the site may have been disconnected or moved to another
-      // account, a Lovejoin chain started that needs what it uses, or the
-      // user locked a UTxO it spends.
-      await this.stillConnected(network, session.origin, holder);
-      await this.heldForLovejoin(network, holder, inputs, collateral);
-      await this.keptApart(network, holder, view, inputs, collateral);
-      const signed = await wallet.withKeys(
-        ({ cardano, oneTime }) =>
-          JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
-      );
-      // What it pays the session's account, recorded before the site has the signature (independent review M4).
-      if (holder) await this.deps.sessions.siteSigned(network, holder.index, (tx as string).trim(), signed.summary);
-      await this.remember(network, holder, signed.summary, (tx as string).trim());
-      return signed.witnessSet;
-    });
+    return this.ask(
+      session,
+      network,
+      ask,
+      TxSignError.UserDeclined,
+      async () => {
+        // Checked again as it's approved (independent review L33): while it
+        // waited, the site may have been disconnected or moved to another
+        // account, a Lovejoin chain started that needs what it uses, or the
+        // user locked a UTxO it spends.
+        await this.stillConnected(network, session.origin, holder);
+        await this.heldForLovejoin(network, holder, inputs, collateral);
+        await this.keptApart(network, holder, view, inputs, collateral);
+        const signed = await wallet.withKeys(
+          ({ cardano, oneTime }) =>
+            JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
+        );
+        // What it pays the session's account, recorded before the site has the signature (independent review M4).
+        if (holder) await this.deps.sessions.siteSigned(network, holder.index, (tx as string).trim(), signed.summary);
+        await this.remember(network, holder, signed.summary, (tx as string).trim());
+        return signed.witnessSet;
+      },
+      (tx as string).trim(),
+    );
+  }
+
+  /**
+   * The bytes of a signature a site is waiting for, by the transaction's hash,
+   * for the transaction view (tx-view.ts): the site's own transaction, which
+   * the wallet did not build, read while the user decides. Nothing else of a
+   * waiting request is handed out, and a hash no request is waiting on has no
+   * answer.
+   */
+  waitingCbor(txHash: string): string | undefined {
+    const wanted = txHash.trim().toLowerCase();
+    return this.waiting.find(
+      (w) => w.txCbor !== undefined && w.approval.kind === "sign-tx" && w.approval.summary.txHash.toLowerCase() === wanted,
+    )?.txCbor;
   }
 
   /**

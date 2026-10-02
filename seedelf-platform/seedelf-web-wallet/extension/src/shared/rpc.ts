@@ -677,6 +677,230 @@ export interface DappTxSummary {
   complete: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// The transaction itself (WebAssembly's `decodeTx`, wasm/src/decode.rs)
+// ---------------------------------------------------------------------------
+
+/** An input, as the body names it: nothing in the transaction says what it holds. */
+export interface TxOutpoint {
+  txHash: string;
+  index: number;
+}
+
+/** A token in a transaction's bytes. `quantity` is signed in a mint. */
+export interface TxAsset {
+  policyId: string;
+  assetName: string;
+  /** The name's bytes as text, when they read as printable UTF-8. */
+  nameText: string | null;
+  quantity: string;
+}
+
+/** An address as an output's bytes have it. */
+export interface TxAddress {
+  /** Bech32, or hex for a Byron address. */
+  bech32: string;
+  hex: string;
+  kind: "base" | "enterprise" | "pointer" | "reward" | "byron";
+  payment: "key" | "script" | null;
+  stake: "key" | "script" | "pointer" | null;
+  network: "mainnet" | "testnet" | "other" | null;
+  /** Seedelf Wallet's own contract, on the network the wallet is on. */
+  seedelf: boolean;
+}
+
+/** The register a Seedelf UTxO's datum holds. */
+export interface TxRegister {
+  generator: string;
+  publicValue: string;
+  /** Whether a payment under it could be spent: an identity point fails. */
+  payable: boolean;
+}
+
+/** A script the transaction carries. */
+export interface TxScript {
+  kind: "native" | "plutusV1" | "plutusV2" | "plutusV3";
+  hash: string;
+  size: number;
+  source: "output" | "witnesses" | "metadata";
+}
+
+/** One output, in body order. */
+export interface TxOutput {
+  index: number;
+  address: TxAddress;
+  lovelace: string;
+  assets: TxAsset[];
+  /** The datum written into the output, as it was written (hex). */
+  inlineDatum: string | null;
+  datumHash: string | null;
+  register: TxRegister | null;
+  scriptRef: TxScript | null;
+  /** How it's written: Shelley's list, or Babbage's map. */
+  form: "legacy" | "postAlonzo";
+}
+
+export interface TxCredential {
+  kind: "key" | "script";
+  hash: string;
+}
+
+/** A link to off-chain text, with the hash that pins it. */
+export interface TxAnchor {
+  url: string;
+  contentHash: string;
+}
+
+/** A governance action, by the transaction that made it. */
+export interface TxActionId {
+  txHash: string;
+  index: number;
+}
+
+/** A certificate: `kind` says which, and each kind carries its own fields. */
+export type TxCert = { kind: string } & Partial<{
+  credential: TxCredential;
+  pool: string;
+  drep: string;
+  deposit: string;
+  refund: string;
+  epoch: number;
+  vrfKeyHash: string;
+  pledge: string;
+  cost: string;
+  margin: string;
+  rewardAccount: string;
+  owners: string[];
+  relays: string[];
+  metadata: TxAnchor | null;
+  cold: TxCredential;
+  hot: TxCredential;
+  anchor: TxAnchor | null;
+}>;
+
+export interface TxWithdrawal {
+  /** The reward address, bech32. */
+  address: string;
+  lovelace: string;
+}
+
+/** One vote on one governance action. */
+export interface TxVote {
+  voter: "committee" | "drep" | "pool";
+  credential: TxCredential;
+  action: TxActionId;
+  vote: "yes" | "no" | "abstain";
+  anchor: TxAnchor | null;
+}
+
+/** A governance proposal. */
+export interface TxProposal {
+  deposit: string;
+  rewardAccount: string;
+  action: string;
+  follows: TxActionId | null;
+  /** A parameter change's parameters, by the ledger's numbering, each as raw CBOR. */
+  parameters: TxUnknown[];
+  withdrawals: TxWithdrawal[];
+  script: string | null;
+  version: string | null;
+  anchor: TxAnchor;
+}
+
+/** A redeemer: which script run, its argument, and the budget claimed. */
+export interface TxRedeemer {
+  /** "spend", "mint", "cert", "reward", "vote", "propose", or a number the wallet doesn't know. */
+  tag: string;
+  index: number;
+  /** The argument, as written (hex). */
+  data: string;
+  mem: number;
+  steps: number;
+}
+
+/** A datum in the witness set, named by an output's `datumHash`. */
+export interface TxDatum {
+  hash: string;
+  hex: string;
+  register: TxRegister | null;
+}
+
+/** A signature already in the witness set. */
+export interface TxSignature {
+  publicKey: string;
+  keyHash: string;
+}
+
+/** A metadatum, as the tree it is. */
+export type TxMetadatum =
+  | { type: "int"; value: string }
+  | { type: "bytes"; hex: string; text: string | null }
+  | { type: "text"; text: string }
+  | { type: "list"; items: TxMetadatum[] }
+  | { type: "map"; entries: Array<{ key: TxMetadatum; value: TxMetadatum }> };
+
+/** One label of the metadata. The label is a decimal string: labels go past what JSON holds exactly. */
+export interface TxMetadata {
+  label: string;
+  value: TxMetadatum;
+}
+
+/** Something in the bytes the wallet has no name for, rather than dropped. */
+export interface TxUnknown {
+  at: string;
+  field: string;
+  hex: string;
+}
+
+/** Everything in a transaction's bytes, field by field. Lovelace amounts are decimal strings. */
+export interface TxDetail {
+  txHash: string;
+  /** The whole transaction in bytes, and its body alone. */
+  size: number;
+  bodySize: number;
+  networkId: number | null;
+  /** False means it's meant to fail its scripts, and the collateral is taken. */
+  valid: boolean;
+  /** Whether the witness set holds anything at all. */
+  witnessed: boolean;
+  inputs: TxOutpoint[];
+  referenceInputs: TxOutpoint[];
+  collateral: TxOutpoint[];
+  outputs: TxOutput[];
+  collateralReturn: TxOutput | null;
+  totalCollateral: string | null;
+  fee: string;
+  validFrom: number | null;
+  validUntil: number | null;
+  /** Minted (positive) or burned. */
+  mint: TxAsset[];
+  certificates: TxCert[];
+  withdrawals: TxWithdrawal[];
+  votes: TxVote[];
+  proposals: TxProposal[];
+  requiredSigners: string[];
+  scriptDataHash: string | null;
+  auxiliaryDataHash: string | null;
+  treasuryValue: string | null;
+  donation: string | null;
+  redeemers: TxRedeemer[];
+  scripts: TxScript[];
+  datums: TxDatum[];
+  signatures: TxSignature[];
+  bootstrapWitnesses: number;
+  metadata: TxMetadata[];
+  /** CIP-20's message (label 674), when there is one. */
+  note: string[] | null;
+  unknown: TxUnknown[];
+}
+
+/** A transaction the view can open, and the raw bytes it was read from. */
+export interface TxView {
+  detail: TxDetail;
+  /** The transaction's CBOR, hex: the Raw CBOR tab, and a copy button. */
+  cbor: string;
+}
+
 /**
  * What a site asks the user for. A signature's `password`: Sign needs the
  * password typed too (the `dappPassword` setting). Its `session`: the site is
@@ -1270,6 +1494,13 @@ export interface Requests {
   "network-set": { payload: { network: NetworkName }; result: Status };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
+  /**
+   * The transaction with this hash, decoded, for the transaction view: one the
+   * wallet built and is holding for Send, or one a site is waiting for a
+   * signature on. It reads nothing but those bytes — no Koios request, no
+   * storage write — and refuses a hash it isn't holding.
+   */
+  "tx-detail": { payload: { txHash: string }; result: TxView };
   /** What sites are waiting for the user to answer, oldest first. */
   "dapp-approvals": { payload: None; result: DappApproval[] };
   /** The sites waiting for the wallet to be unlocked, by origin: the connector's window names them on its Unlock screen. */
@@ -1466,6 +1697,7 @@ const REQUEST_LIST = [
   "preferences-set",
   "network-set",
   "price",
+  "tx-detail",
   "dapp-approvals",
   "dapp-unlocking",
   "dapp-close",

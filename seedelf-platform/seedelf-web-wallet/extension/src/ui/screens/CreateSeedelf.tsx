@@ -19,6 +19,7 @@ import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { adaWithTokens, formatAda, shortHex } from "../format";
 import { WithdrawalRow } from "./CardanoSend";
@@ -93,6 +94,7 @@ export function CreateSeedelf({
           <WithdrawalRow withdrawal={summary.withdrawal} />
           <Row label={`Back to your ${SOURCES[summary.from].toLowerCase()}`} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
         </ReviewRows>
+        <TxDetailButton txHash={summary.txHash} testId="mint-tx" />
         <HistoriesNote histories={summary.histories} testId="mint-histories" />
         <p className="note">
           {summary.from === "seedelf"

@@ -28,6 +28,7 @@ import {
   useRecipients,
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
@@ -134,6 +135,7 @@ export function Withdraw({
           )}
           <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <TxDetailButton txHash={summary.txHash} testId="withdraw-tx" />
         <HistoriesNote histories={summary.histories} max={summary.max} testId="withdraw-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote

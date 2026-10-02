@@ -25,6 +25,7 @@ import { GlobeIcon, SpinnerIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
@@ -408,6 +409,7 @@ export function ConnectRequest({
             <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
             <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
           </ReviewRows>
+          <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
           <p className="note">
             The site sees this account as an ordinary wallet, and it's yours to top up or bring back from the dApps page.
             The collateral comes back with it.
@@ -748,6 +750,9 @@ export function SignTx({
           s.paid.some((p) => p.seedelf === "register"),
         )}
       </Callout>
+      {/* The site built these bytes, not the wallet: this is where reading them
+          matters most. It asks the worker for them while the request waits. */}
+      <TxDetailButton txHash={s.txHash} testId="dapp-tx" />
     </>
   );
 }

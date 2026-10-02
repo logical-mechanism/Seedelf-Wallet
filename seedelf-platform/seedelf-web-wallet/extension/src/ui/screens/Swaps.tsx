@@ -78,6 +78,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
   ADA_RULES,
@@ -712,6 +713,7 @@ export function NewSwap({
         }
       >
         <SwapApproval {...out} pay={pay} get={get} through={through} onThrough={setThrough} busy={busy} />
+        <TxDetailButton txHash={out.summary.txHash} testId="swap-out-tx" />
       </Screen>
     );
   }
@@ -1660,6 +1662,7 @@ export function Session({
           <Row label="Back to the session" value={`${formatAda(review.summary.returnedLovelace)} ₳`} />
           {review.summary.collateral && <Row label="Collateral at risk" value={`${formatAda(review.summary.collateral.atRisk)} ₳`} />}
         </ReviewRows>
+        <TxDetailButton txHash={review.txHash} testId="session-tx-detail" />
         {review.summary.note && (
           <p className="note">Minswap's note on it, which anyone can read: “{review.summary.note.join("")}”.</p>
         )}
@@ -1709,6 +1712,7 @@ export function Session({
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
           <IntoRow back={back} />
         </ReviewRows>
+        <TxDetailButton txHash={back.txHash} testId="session-back-tx" />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote

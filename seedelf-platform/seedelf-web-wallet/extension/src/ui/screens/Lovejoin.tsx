@@ -58,6 +58,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { Tabs } from "../components/Tabs";
 import { formatAda, plural, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
@@ -508,6 +509,8 @@ export function Lovejoin({
         }
       >
         {review.source === "private" ? <PrivateReview summary={review.summary} /> : <PublicReview summary={review.summary} />}
+        {/* The first transaction, the one Send puts out: a mix's own chain is built as it lands. */}
+        <TxDetailButton txHash={review.summary.txHash} testId="lovejoin-tx" />
         <p className="note" data-testid="lovejoin-unaudited">
           {LOVEJOIN_UNAUDITED}
         </p>

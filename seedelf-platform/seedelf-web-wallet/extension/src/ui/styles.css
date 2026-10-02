@@ -3055,3 +3055,97 @@ button.dapp-tile:hover {
   margin-top: var(--s2);
   margin-bottom: 0;
 }
+
+/* The transaction view (components/TxDetail.tsx): the transaction itself, in
+   a modal over any review. Dense, so its own sizes are a notch smaller than a
+   review's, and every id wraps rather than pushing the page sideways. */
+
+.tx-detail__open {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tx-detail__hash {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.tx-detail__hash-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.tx-detail__heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* A UTxO or a hash shown short, with the whole value on the element for
+   copying and for the title. */
+.tx-detail__ref {
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* A row whose parts stack: what it is, then its ids under it. */
+.tx-detail__wrap {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.tx-detail__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A metadatum's tree: each level indented, keys before their values. */
+.tx-detail__tree {
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.tx-detail__branch {
+  list-style: none;
+  margin: 0;
+  padding-left: var(--s3);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tx-detail__branch li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tx-detail__key {
+  color: var(--muted);
+}
+
+.tx-detail__key::after {
+  content: ": ";
+}
+
+.tx-detail__leaf {
+  font-family: var(--mono);
+  font-size: 12px;
+  user-select: text;
+  overflow-wrap: anywhere;
+}

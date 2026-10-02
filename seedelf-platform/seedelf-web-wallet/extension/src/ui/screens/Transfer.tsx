@@ -26,6 +26,7 @@ import {
   useRecipients,
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -131,6 +132,7 @@ export function Transfer({
           <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="Private UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <TxDetailButton txHash={summary.txHash} testId="transfer-tx" />
         <HistoriesNote histories={summary.histories} testId="transfer-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote

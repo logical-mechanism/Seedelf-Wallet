@@ -963,6 +963,82 @@ test("send from the public account: a token with only the ADA it needs, review, 
   await expect(panel.getByTestId("pending-tx")).toContainText("Payment confirmed");
 });
 
+test("the transaction view: the bytes under a review, their CBOR, and the payment still sends after it's closed", async ({
+  context,
+  koios,
+}) => {
+  const theirs = vector(15).preprod.receive_0;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Send publicly" }).click();
+  await page.getByLabel("To", { exact: true }).fill(theirs);
+  await page.getByLabel("Amount", { exact: true }).fill("4");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("send-review")).toContainText("Amount4 ₳");
+
+  // The way in is on the review itself, and nothing has been asked of Koios for it.
+  const reads = koios.calls.length;
+  await page.getByTestId("send-tx-open").click();
+  const view = page.getByTestId("send-tx");
+  await expect(view).toContainText("Pays");
+  await expect(view).toContainText("Spends");
+  // Where the value goes, with the recipient's whole address.
+  await expect(view.locator(`[data-value="${theirs}"]`)).toBeVisible();
+  await expect(view).toContainText("Network fee");
+  await expect(view).toContainText("signature");
+  expect(koios.calls.length).toBe(reads);
+  await snap(page, "tx-detail");
+
+  // The raw bytes, as hex, with nothing asked of anyone to show them.
+  await view.getByRole("tab", { name: "Raw CBOR" }).click();
+  const cbor = view.getByTestId("send-tx-cbor");
+  await expect(cbor).toBeVisible();
+  const hex = (await cbor.getAttribute("data-value"))!;
+  expect(hex).toMatch(/^84[0-9a-f]+$/);
+  await expect(view).toContainText(`${hex.length / 2} bytes of CBOR`);
+  await snap(page, "tx-detail-cbor");
+
+  // Closed with Escape, as a dialog closes; the review is where it was.
+  await page.keyboard.press("Escape");
+  await expect(view).toHaveCount(0);
+  await expect(page.getByTestId("send-review")).toContainText("Amount4 ₳");
+
+  // The guarantee: the signed transaction was never in the view's hands, so
+  // opening and closing it can't strand it. Send still sends those very bytes.
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Payment sent. Waiting for the network");
+  expect(koios.submitted).toEqual([expect.any(String)]);
+  expect(koios.collateralAsked).toBe(0);
+});
+
+test("the transaction view on a Seedelf payment: the contract, the register, and why the inputs say nothing", async ({
+  context,
+  koios,
+}) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  // Make private is on the public side: it moves the account's ADA into Seedelf.
+  await cardanoTab(page);
+  await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await page.getByRole("button", { name: "Make private" }).click();
+  await page.getByLabel("Amount", { exact: true }).fill("6");
+  await page.getByRole("button", { name: "Review" }).click();
+  await expect(page.getByTestId("move-in-review")).toContainText("6 ₳");
+
+  await page.getByTestId("move-in-tx-open").click();
+  const view = page.getByTestId("move-in-tx");
+  // It pays Seedelf Wallet's own contract, under a register only its owner can spend.
+  await expect(view).toContainText("Seedelf Wallet's contract");
+  await expect(view).toContainText("under a register");
+  // And the view says why it holds nothing about what the inputs hold.
+  await expect(view).toContainText("looking them up would tell whoever was asked");
+  expect(koios.submitted).toHaveLength(0);
+  await page.keyboard.press("Escape");
+  await expect(view).toHaveCount(0);
+});
+
 test("a payment Koios didn't answer may have gone through: Home waits for it, with no Dismiss, and new payments wait too", async ({
   context,
   koios,
@@ -2885,6 +2961,51 @@ test.describe("the dApp connector", () => {
     expect(await sign.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(sign.getByTestId("dapp-own-key")).toContainText("your payment key with a stake part that isn't yours");
     await snap(sign, "dapp-sign-tx-long-token");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect((await signing).error?.code).toBe(2);
+  });
+
+  test("the transaction view opens a site's own transaction while it waits for a signature", async ({ context }) => {
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await page.getByRole("button", { name: "Settings" }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const dapp = await openDapp(context);
+    let opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Your public account" }).click();
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+
+    // Bytes the wallet didn't build: its own Send's, handed back by the site.
+    await askWorker(page, { type: "send-build", payments: [{ to: vector(15).preprod.receive_0, lovelace: "3000000", tokens: [] }] });
+    const tx = await page.evaluate(async () => {
+      const kept = await chrome.storage.session.get("seedelf.send.built");
+      return (kept["seedelf.send.built"] as { txCbor: string }).txCbor;
+    });
+
+    opened = connectorWindow(context);
+    const signing = cip30(dapp, "signTx", tx, false);
+    const sign = await opened;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    await sign.getByTestId("dapp-tx-open").click();
+    const view = sign.getByTestId("dapp-tx");
+    await expect(view).toContainText("Spends");
+    await expect(view).toContainText("Pays");
+    await expect(view.locator(`[data-value="${vector(15).preprod.receive_0}"]`)).toBeVisible();
+    await view.getByRole("tab", { name: "Raw CBOR" }).click();
+    await expect(view.getByTestId("dapp-tx-cbor")).toHaveAttribute("data-value", tx);
+    await snap(sign, "dapp-tx-detail");
+
+    // Closed, the request is still waiting, and declining it still answers the site.
+    await sign.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
     await sign.getByRole("button", { name: "Decline" }).click();
     expect((await signing).error?.code).toBe(2);
   });
