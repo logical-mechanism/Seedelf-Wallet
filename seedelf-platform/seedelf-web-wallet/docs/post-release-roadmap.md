@@ -16,7 +16,7 @@
 
 **The owner's call (2026-10-02): feature parity first, the look and feel after it.** The wallet can be feature-complete bar the dApp additions, and it's a better thing to put a style pass in front of once it is.
 
-0. **[A clean dependabot report](#step-0--a-clean-dependabot-report)** — the owner keeps these green, and it's cheap. Before chunk 18.
+0. ✅ **[A clean dependabot report](#step-0--a-clean-dependabot-report)** — done 2026-10-02, all 25 cleared in `Cargo.lock` and the happy-path `requirements.txt`, no source change.
 1. **[Owed](#owed)** — promises the repo has already made.
 2. **[Feature parity: what's left](#feature-parity-whats-left)** — several accounts, language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
 3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
@@ -62,28 +62,36 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 
 **The owner, 2026-10-02: a pre-step, before chunk 18** — "I do like to maintain good dependabot reports."
 
-**Triaged on 2026-10-02: 25 open alerts, and none of the 14 high-severity ones reach the extension.**
+**Done, 2026-10-02: all 25 alerts cleared, in two files and no source change.** `Cargo.lock` and the happy-path scripts' `requirements.txt`. What was triaged, and what each one turned out to be:
 
-| What | Alerts | Where | What actually ships it |
-|---|---|---|---|
-| `urllib3` ×6, `cbor2` ×3, `idna`, `requests` | **11** | `seedelf-contracts/happy-path-scripts/seedelf/backend/requirements.txt` | **Nothing.** By-hand contract test scripts, pinned at 2024 versions. |
-| `openssl` | **8** | `Cargo.lock`, via `reqwest` → `hyper-tls` → `native-tls`, from `seedelf-koios` and `seedelf-display` | **The CLI binaries only.** 0.10.73 today; every one of the eight is patched by **0.10.80**. Absent from the WebAssembly — `cargo tree -p seedelf-wasm --target wasm32-unknown-unknown -i openssl` finds nothing. |
-| `rustls-webpki` 0.103.3 | **4** | `Cargo.lock` | **Nothing at all.** `cargo tree --target all -i rustls-webpki` finds no path to it on any target — a stale lock entry. A `cargo update` should drop it rather than upgrade it. |
-| `rpassword` (low) | **1** | `Cargo.lock`, a direct dependency of `seedelf-cli` | **The CLI only** — its password prompt. Patched 7.5.0. |
-| `rand` 0.8.5 (low) | **1** | `Cargo.lock`, via `group` ← `blstrs` | **The extension's WebAssembly** — the only flagged crate that reaches what users install. Patched 0.8.6. |
+| What | Alerts | Where | What actually ships it | Now |
+|---|---|---|---|---|
+| `urllib3` ×6, `cbor2` ×3, `idna`, `requests` | **11** | `seedelf-contracts/happy-path-scripts/seedelf/backend/requirements.txt` | **Nothing.** By-hand contract test scripts, pinned at 2024 versions. | `urllib3` 2.8.0, `cbor2` 5.9.0, `idna` 3.20, `requests` 2.34.2 |
+| `openssl` | **8** | `Cargo.lock`, via `reqwest` → `hyper-tls` → `native-tls`, from `seedelf-koios` and `seedelf-display` | **The CLI binaries only.** Absent from the WebAssembly — `cargo tree -p seedelf-wasm --target wasm32-unknown-unknown -i openssl` finds nothing. | 0.10.73 → **0.10.80** (and `openssl-sys` 0.9.109 → 0.9.117) |
+| `rustls-webpki` | **4** | `Cargo.lock` | **Nothing at all** — but not for the reason first recorded; see below. | 0.103.3 → **0.103.15** |
+| `rpassword` (low) | **1** | `Cargo.lock`, a direct dependency of `seedelf-cli` | **The CLI only** — its password prompt. | 7.4.0 → **7.5.0** |
+| `rand` (low) | **1** | `Cargo.lock`, via `group` ← `blstrs` | **The extension's WebAssembly** — the only flagged crate that reaches what users install. | 0.8.5 → **0.8.6** |
 
 **npm has no alerts at all:** the extension's own JavaScript dependencies are clean.
 
-**The order to do it in, and it's all cheap:**
+**`rustls-webpki` was not a stale lock entry**, as the triage first read it. It arrives as an *unactivated optional* dependency of `reqwest` (`reqwest` → `hyper-rustls` → `rustls` → `rustls-webpki`), and `Cargo.lock` records a package's optional dependencies whether or not a feature turns them on. `cargo tree` is feature-aware, which is why it finds no path — the code genuinely never builds, so the four alerts never reached anything. But `cargo update` **bumps** it rather than dropping it, and it cannot be dropped while `reqwest` is a dependency. It was bumped.
 
-1. **Rust, in the lockfile only.** `openssl` → 0.10.80, `rand` → 0.8.6, `rpassword` → 7.5.0, and let `cargo update` drop `rustls-webpki` if nothing holds it. That's **all 14** Rust alerts with no source change and no version bump of our own crates.
-2. **The pip pins** in `happy-path-scripts/seedelf/backend/requirements.txt`. **11** alerts, and nothing shipped depends on any of them. Note `compile.sh` needs the `cbor2` package too (root [CLAUDE.md](../../../CLAUDE.md)), which is a separate install from this file — bumping the pin here doesn't touch it.
+**What proves the bump safe ran, and passed.** `cargo test --workspace --locked`: **494 tests across 51 binaries, 0 failures** (8 ignored, the live-network ones), including the two that a dependency change must not move — `frozen_v1_vectors` (the derivation vectors in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`: a phrase still derives the same Seedelf key) and `spec_constants_are_frozen` (`constants_test.rs`'s pinned script hashes still match what's deployed). `cargo fmt --all -- --check` and `cargo clippy --locked -p seedelf-crypto -p seedelf-wasm --all-targets -- -D warnings` are clean, the CLI release-builds and reports its version against the new `openssl`, and the WebAssembly builds and passes all 41 of its JS tests.
 
-**What proves the bump safe is already written.** `cargo test --workspace --locked` runs the **frozen derivation vectors** (`seedelf-crypto/tests/vectors/seedelf_key_v1.json`) and `constants_test.rs`'s pinned script hashes — exactly the two things a dependency change must not move: a phrase must still derive the same Seedelf key, and the contract hashes must still match what's deployed. Re-measure the module afterwards (`wasm/bench.mjs`), since its size is tracked and the store zip's size matters. Rust is pinned to 1.98.1 and `Cargo.lock` is tracked on purpose, so the whole thing is a reviewable diff.
+**The module did not grow meaningfully.** Measured A/B — the same source built from the pre-bump lock and the bumped one, `rand` being the only flagged crate that reaches `wasm32`: **2,638,180 → 2,638,557 bytes raw, +377 bytes (0.014%)**, with gzip (781 KB) and brotli (566 KB) unchanged and the timings inside the noise. The rebuild is byte-identical to the measured module, so `build.sh`'s reproducibility (launch review #61) still holds.
 
-**The one worth fixing on merit rather than for a green badge:** `rpassword`'s advisory is *partial password reveal when input is interrupted*, and `rpassword` is what the CLI prompts for a wallet password with. Low severity, and precisely on-point for this project.
+**Two things the re-measure turned up, neither caused by the bump:**
 
-**Worth a decision while in there:** `openssl` arrives only through `reqwest`'s default `native-tls` feature. On `rustls` instead, those eight alerts stop recurring rather than being patched each release, and the CLI loses its OpenSSL build dependency. That's a feature-flag change across `seedelf-koios` and `seedelf-display` with the live Koios tests as the check — bigger than a pre-step, so it's its own call. ❓
+- **`wasm/bench.mjs` was broken** and had to be fixed to measure anything. It called `wasm.draftTransfer`, which chunk 14's several-recipients change renamed to `buildTransfer` and reshaped to take a `payments` list. It is not in CI's test glob (`wasm/tests/*.test.mjs`), which is why it rotted unnoticed. Fixed as part of this step; **the same rename is still stale in three other places** — [wasm/README.md](../wasm/README.md)'s API table, [architecture.md](architecture.md)'s builder list, and `extension/tests/fixtures/record-transfer.mjs`, which is broken in the same way. For [the documentation review](#the-documentation-review).
+- **[wasm/README.md](../wasm/README.md)'s size table is stale by more than double** — it records `wasm-release` at 1,223 KB raw / 424 KB gzip, measured 2026-09-24; the module is **2,577 KB raw / 781 KB gzip** today. Chunks 15–17 (CIP-30, Lovejoin, the transaction view) grew it, not this change. Re-recording it means measuring all three of its rows, which is more than a pre-step — for [the documentation review](#the-documentation-review), and the store zip's size is worth a look at the same time.
+
+**`compile.sh`'s `cbor2` is a separate install** from the pinned file (root [CLAUDE.md](../../../CLAUDE.md)) and was left alone — but the bump was checked against it anyway, because its one call bakes the seed into the validators and a change there would move the script hashes. `cbor2.dumps(bytes.fromhex("acabcafe")).hex()` is `44acabcafe` on 5.9.0 — the one valid CBOR encoding of those four bytes, so neither the seed nor the hashes built from it can move with a `cbor2` version. The machine's system `cbor2` is already 5.9.0.
+
+**The pinned Python set was installed and exercised, not just edited.** A fresh venv resolves it with `pip check` clean, and on it the backend's own crypto still agrees with itself: a register verifies, a re-randomized `(g^d, u^d)` verifies under the same `x`, a Schnorr proof through `fiat_shamir_heuristic` verifies, and the datum round-trips through `cbor2`.
+
+**The one fixed on merit rather than for a green badge:** `rpassword`'s advisory is *partial password reveal when input is interrupted*, and `rpassword` is what the CLI prompts for a wallet password with. Low severity, and precisely on-point for this project.
+
+**Still a decision, and deliberately not taken here:** `openssl` arrives only through `reqwest`'s default `native-tls` feature. On `rustls` instead, those eight alerts stop recurring rather than being patched each release, and the CLI loses its OpenSSL build dependency. That's a feature-flag change across `seedelf-koios` and `seedelf-display` with the live Koios tests as the check — bigger than a pre-step, so it stays [an open question](#open-questions-for-the-owner). ❓
 
 ## Owed
 
@@ -242,6 +250,11 @@ The list is the owner's to write when parity lands. Carried candidates:
 - **Agent-facing.** [plans/](plans/) is, in the owner's words, "just prompts for you basically" — specs a session is handed to build something, with the decisions that were made along the way. They're written to be read once, by whoever picks the chunk up. A finished plan is a record, not a page to maintain; what a *later* session needs out of it belongs in the design docs or a handoff note, and the review is the moment to move anything that's quietly become load-bearing.
 
 **Worth settling as part of it:** whether [plans/](plans/) should say at the top of each file which it is — a live spec or a finished record — since a stale plan read as current is the one failure mode that costs real work. The two [CLAUDE.md](../../../CLAUDE.md) files are agent-facing too, and are the one place where being out of date actively misleads.
+
+**Two concrete drifts are already waiting for it**, both found by [step 0](#step-0--a-clean-dependabot-report) and neither urgent:
+
+- **`draftTransfer` no longer exists.** Chunk 14's several-recipients change renamed it `buildTransfer` and reshaped the request to a `payments` list, and three places still name the old one: [wasm/README.md](../wasm/README.md)'s API table, [architecture.md](architecture.md)'s builder list, and `extension/tests/fixtures/record-transfer.mjs` — which is *broken*, not merely stale, the same way `bench.mjs` was. Anything not in CI's globs can rot this way, and these did.
+- **[wasm/README.md](../wasm/README.md)'s size table is out by more than double**, measured 2026-09-24 and never since.
 
 **The privacy docs get the data layer's paragraph**, in the words [The data layer](#the-data-layer) uses: what the service learns, and that the no-log promise is a policy and an audit trail rather than a proof.
 
