@@ -165,7 +165,21 @@ function getContext(): Promise<Worker> {
     const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
     const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences, store };
+    const spends = {
+      wasm,
+      wallet,
+      session,
+      koios,
+      collateral,
+      now: Date.now,
+      activity,
+      coins,
+      preferences,
+      store,
+      // So paying your own public account from Seedelf is flagged whichever
+      // account it is, not only the active one (destination.ts).
+      knownAccounts: () => accounts.known().then((all) => all.map((a) => a.index)),
+    };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);

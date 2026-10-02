@@ -451,7 +451,9 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coins,
     preferences,
     store,
+    knownAccounts: () => accounts.known().then((all) => all.map((a) => a.index)),
   };
+  const accounts = new AccountsService(deps);
   const sessions = new SessionService({
     ...deps,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
@@ -504,7 +506,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coingecko,
     prices: new PriceService({ session: t.session, local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
-    accounts: new AccountsService(deps),
+    accounts,
     dappWindow,
     dappChanged: () => dappChanged,
     networkChoice,

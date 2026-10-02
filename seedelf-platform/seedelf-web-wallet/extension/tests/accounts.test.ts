@@ -189,6 +189,32 @@ describe("what each account keeps of its own", () => {
   });
 });
 
+describe("paying your own public account from Seedelf", () => {
+  it("is flagged for every account the wallet knows, not only the one it is on", async () => {
+    const t = await unlocked();
+    const { resolveDestination } = await import("../src/background/destination");
+    const deps = { wasm: t.deps.wasm, wallet: t.wallet, koios: t.deps.koios, session: t.session, knownAccounts: t.deps.knownAccounts };
+
+    // The account the wallet is on: flagged, as it always was.
+    expect(await resolveDestination(deps, "preprod", phrase(0).preprod.receive_0 as string)).toMatchObject({ own: true });
+    // Another account's address, before the wallet knows that account exists:
+    // nothing on the device says it is ours.
+    expect(await resolveDestination(deps, "preprod", phrase(1).preprod.receive_0 as string)).toMatchObject({ own: false });
+
+    t.koios.usedStakes.add(phrase(1).preprod.stake as string);
+    await t.accounts.discover("preprod");
+    // Known now, and still flagged while the wallet is on account 0: paying
+    // your own public account from Seedelf re-links the money to it, and that
+    // is as true of Account 2 as of the one you are looking at.
+    expect(await resolveDestination(deps, "preprod", phrase(1).preprod.receive_0 as string)).toMatchObject({ own: true });
+    expect(await t.wallet.withKeys(({ account }) => account)).toBe(0);
+
+    // Someone else's address is still someone else's.
+    const theirs = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!;
+    expect(await resolveDestination(deps, "preprod", theirs.preprod.receive_0 as string)).toMatchObject({ own: false });
+  });
+});
+
 /** Account `index`'s preprod stake address, as discovery derives it. */
 async function stakeOf(t: Awaited<ReturnType<typeof unlocked>>, index: number): Promise<string> {
   return t.wallet.withAccount(index, ({ cardano }) => cardano.stakeAddress(t.deps.wasm.Network.Preprod));
