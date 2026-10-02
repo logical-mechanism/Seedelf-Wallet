@@ -154,6 +154,13 @@ export interface SeedelfInfo {
    * Remove sends its ADA back to that side by default, and asks otherwise.
    */
   paidBy?: MintSource;
+  /**
+   * Which public account paid, when `paidBy` is "account" and the wallet
+   * knows which (chunk 18). Removing to a *different* account links that one
+   * to the Seedelf's name as well, and the mint already links the paying
+   * one — so anyone can join them by the name. Remove warns.
+   */
+  paidByAccount?: number;
 }
 
 /** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */

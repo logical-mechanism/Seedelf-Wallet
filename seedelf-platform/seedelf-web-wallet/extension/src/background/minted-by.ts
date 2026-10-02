@@ -17,14 +17,47 @@
 // - one of the account's UTxOs from it, or the account's Activity listing
 //   it, is an account-paid mint's (its change goes to the account);
 // - otherwise it isn't known, and Remove asks.
+//
+// **Which account paid, not only which side** (chunk 18). The mint is public,
+// so it already links the Seedelf to the account that paid. Sending the freed
+// ADA to a *different* account links that one to the Seedelf's name too — and
+// anyone can join the two by the name, tying the accounts together. So the
+// record names the account, and Remove warns when the wallet is on another
+// one. A bare "account", written before this chunk, is account 0's: there was
+// only one.
 
 import type { NetworkName } from "../networks";
 import type { MintSource } from "../shared/rpc";
 import type { KoiosUtxo } from "./koios";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 
+/**
+ * What the record holds for a Seedelf: the private balance, or which public
+ * account paid. `"account"` with no index is what wallets wrote before chunk
+ * 18, and is account 0's.
+ */
+export type PaidBy = MintSource | `account:${number}`;
+
 /** A Seedelf's full token name (hex) to who paid for it. */
-export type MintedBy = Record<string, MintSource>;
+export type MintedBy = Record<string, PaidBy>;
+
+/** Who paid for a Seedelf, and which public account if one did. */
+export interface PaidByInfo {
+  side: MintSource;
+  /** The public account that paid, when it is known. */
+  account?: number;
+}
+
+/** A kept value as the wallet reads it; undefined when it isn't one. */
+export function readPaidBy(kept: unknown): PaidByInfo | undefined {
+  if (kept === "seedelf") return { side: "seedelf" };
+  if (kept === "account") return { side: "account", account: 0 };
+  if (typeof kept === "string" && kept.startsWith("account:")) {
+    const account = Number(kept.slice("account:".length));
+    return Number.isInteger(account) && account >= 0 ? { side: "account", account } : undefined;
+  }
+  return undefined;
+}
 
 const record = (network: NetworkName) => `mintedBy.${network}` as const;
 
@@ -39,15 +72,23 @@ export async function mintedBy(store: PrivateStore, network: NetworkName): Promi
 }
 
 /**
- * Keeps who paid for the Seedelf `tokenName`. A record that won't open is
- * left as it is (private-store.ts), and so is one that can't be written:
- * Remove then asks, and the mint goes on either way.
+ * Keeps who paid for the Seedelf `tokenName`, naming the public account when
+ * one did. A record that won't open is left as it is (private-store.ts), and
+ * so is one that can't be written: Remove then asks, and the mint goes on
+ * either way.
  */
-export async function rememberMint(store: PrivateStore, network: NetworkName, tokenName: string, from: MintSource): Promise<void> {
+export async function rememberMint(
+  store: PrivateStore,
+  network: NetworkName,
+  tokenName: string,
+  from: MintSource,
+  account: number,
+): Promise<void> {
   try {
+    const value: PaidBy = from === "account" ? `account:${account}` : "seedelf";
     const kept = (await store.get<MintedBy>(record(network))) ?? {};
-    if (kept[tokenName] === from) return;
-    await store.set(record(network), { ...kept, [tokenName]: from });
+    if (kept[tokenName] === value) return;
+    await store.set(record(network), { ...kept, [tokenName]: value });
   } catch {
     // Unreadable, or locked meanwhile: Remove asks instead.
   }
@@ -56,6 +97,10 @@ export async function rememberMint(store: PrivateStore, network: NetworkName, to
 /**
  * Who paid for the Seedelf in `utxo`: from the record, or else from what the
  * wallet already holds. Undefined when neither says.
+ *
+ * What the wallet holds is the account it is working on, so an answer worked
+ * out that way is **that** account's (`activeAccount`): the mint's change is
+ * in its UTxOs or its Activity, which no other account's would be.
  */
 export function paidByOf(
   utxo: Pick<KoiosUtxo, "tx_hash" | "tx_index">,
@@ -68,12 +113,16 @@ export function paidByOf(
     account: Array<Pick<KoiosUtxo, "tx_hash">>;
     /** The account's transactions, as far as its Activity has read them. */
     accountTxs: ReadonlySet<string>;
+    /** Which public account those UTxOs and transactions are. */
+    activeAccount?: number;
   },
-): MintSource | undefined {
-  const recorded = held.recorded[tokenName];
-  if (recorded === "account" || recorded === "seedelf") return recorded;
+): PaidByInfo | undefined {
+  const recorded = readPaidBy(held.recorded[tokenName]);
+  if (recorded) return recorded;
   const mint = utxo.tx_hash;
-  if (held.owned.some((u) => u.tx_hash === mint && u.tx_index !== utxo.tx_index)) return "seedelf";
-  if (held.account.some((u) => u.tx_hash === mint) || held.accountTxs.has(mint)) return "account";
+  if (held.owned.some((u) => u.tx_hash === mint && u.tx_index !== utxo.tx_index)) return { side: "seedelf" };
+  if (held.account.some((u) => u.tx_hash === mint) || held.accountTxs.has(mint)) {
+    return { side: "account", account: held.activeAccount ?? 0 };
+  }
   return undefined;
 }

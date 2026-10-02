@@ -140,12 +140,18 @@ export class MintService {
   /**
    * For a stealth mint, giveme.my first witnesses the collateral; an
    * account-paid one was signed at review. Who paid is kept first, sealed,
-   * so removing the Seedelf defaults to that side (minted-by.ts).
+   * naming the public account when one did, so removing the Seedelf defaults
+   * to that side and warns if the wallet has since moved to another account
+   * (minted-by.ts).
    */
   async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
     const { wallet, session, store } = this.deps;
-    const built = await wallet.withKeys(() => session.get<MintSummary>(SESSION_MINT));
-    if (built?.txHash === txHash && built.network === network) await rememberMint(store, network, built.tokenName, built.from);
+    const [built, account] = await wallet.withKeys(
+      async (keys) => [await session.get<MintSummary>(SESSION_MINT), keys.account] as const,
+    );
+    if (built?.txHash === txHash && built.network === network) {
+      await rememberMint(store, network, built.tokenName, built.from, account);
+    }
     return send(this.deps, network, txHash, SESSION_MINT, "mint", "Seedelf");
   }
 }

@@ -280,7 +280,7 @@ untouched.
    context and never rendered. The e2e found it; no unit test could, because
    the picker's own test supplies the context directly.
 
-### Two things found and fixed beyond the plan
+### Three things found and fixed beyond the plan
 
 - **`destination.ts`'s own-account warning covered only the active account.**
   It flags paying your own public account from Seedelf, because that re-links
@@ -289,6 +289,17 @@ untouched.
   have gone missing in exactly the case several accounts create. `ownAccount`
   checks the active account first, then every other the wallet knows, deriving
   their keys on the device. A one-account wallet does no extra work.
+- **Removing a Seedelf could tie two accounts together, and the default would
+  have done it quietly.** `MintSource` recorded only which *side* paid, so
+  "the public account paid for it" became "the account you happen to be on".
+  The mint is public and already links the Seedelf's name to the account that
+  paid; sending the freed ADA to a different account links that one to the
+  same name, and anyone can join the two through it. The record now keeps
+  `account:<n>` (a bare `account` reads as account 0's, as the history classes
+  do), and Remove warns with both account numbers and a way out. One snag
+  along the way: `held()` runs **inside** `withKeys`, so reading the active
+  account there with another `withKeys` deadlocked the whole balance
+  reading — it is passed in from the enclosing callback instead.
 - **A create or restore has to put the account choice back to 0 *before* the
   keys are derived.** The choice is unsealed and outlives a Remove wallet, as
   the network does, so a new phrase would otherwise derive whatever account
