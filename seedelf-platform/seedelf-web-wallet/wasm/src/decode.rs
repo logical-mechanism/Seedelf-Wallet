@@ -43,7 +43,7 @@ use pallas_addresses::{Address, ShelleyDelegationPart, ShelleyPaymentPart, Stake
 use pallas_codec::minicbor;
 use pallas_codec::utils::{KeepRaw, Nullable};
 use pallas_crypto::hash::{Hash, Hasher};
-use pallas_primitives::{Fragment, Metadatum, Relay, StakeCredential, conway};
+use pallas_primitives::{Fragment, Metadatum, PlutusData, Relay, StakeCredential, conway};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::staking::{drep_id, pool_id};
@@ -129,6 +129,8 @@ pub struct DetailOutput {
     pub assets: Vec<DetailAsset>,
     /// The datum written into the output, as it was written (hex).
     pub inline_datum: Option<String>,
+    /// That datum as the tree it is, whatever contract it is for.
+    pub datum: Option<DetailPlutus>,
     /// A datum named by its hash instead; the datum itself may be in the witness set.
     pub datum_hash: Option<String>,
     /// The register the inline datum holds, when it is one.
@@ -320,6 +322,9 @@ pub struct DetailRedeemer {
     pub index: String,
     /// The argument, as written (hex).
     pub data: String,
+    /// That argument as the tree it is; `None` only if it isn't Plutus data,
+    /// which a transaction Pallas read this far can't hold.
+    pub argument: Option<DetailPlutus>,
     /// The budget claimed, each `0 .. 2^63-1` in the CDDL.
     pub mem: String,
     pub steps: String,
@@ -332,6 +337,8 @@ pub struct DetailDatum {
     /// The hash of the bytes as written: the one an output names.
     pub hash: String,
     pub hex: String,
+    /// The data as the tree it is.
+    pub data: DetailPlutus,
     /// The register it holds, when it is one.
     pub register: Option<DetailRegister>,
 }
@@ -343,6 +350,190 @@ pub struct DetailSignature {
     pub public_key: String,
     /// The key's hash, as an address or `requiredSigners` names it.
     pub key_hash: String,
+}
+
+/// Plutus data — a datum, or a redeemer's argument — as the tree it is. `type`
+/// says which. There is no schema to read it against: a contract's datum means
+/// whatever that contract says it means, so what the view can honestly show is
+/// its shape, which is this.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DetailPlutus {
+    /// A constructor and its fields. `constructor_index` is its number: tags
+    /// 121-127 are 0-6, tags 1280-1400 are 7-127, and tag 102 carries any
+    /// number. It isn't called `constructor`, because in JavaScript every object
+    /// has one of those already (`Object.prototype.constructor`), so a field of
+    /// that name gone missing would read as a function rather than as nothing.
+    Constr {
+        constructor_index: String,
+        fields: Vec<DetailPlutus>,
+    },
+    /// A whole number, however it was written: a CBOR integer, or a big one in
+    /// tag 2 or tag 3 (where the bytes hold `-1 - n`).
+    Int {
+        value: String,
+    },
+    Bytes {
+        hex: String,
+        text: Option<String>,
+    },
+    List {
+        items: Vec<DetailPlutus>,
+    },
+    Map {
+        entries: Vec<DetailPlutusEntry>,
+    },
+    /// Where the view stopped: this many items of the thing above it are left,
+    /// and the raw bytes have them.
+    More {
+        items: usize,
+    },
+}
+
+/// One entry of a Plutus map, whose keys are data too.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailPlutusEntry {
+    pub key: DetailPlutus,
+    pub value: DetailPlutus,
+}
+
+/// The most nodes one datum's tree holds. A transaction may carry tens of
+/// kilobytes of nested data and every node is a row on the screen, so past this
+/// the tree says how many items it left and the hex has them. Real datums are a
+/// few dozen nodes; Minswap's order is 30.
+pub const MAX_DATUM_NODES: usize = 512;
+
+/// Plutus data as its tree, within [`MAX_DATUM_NODES`].
+fn plutus_tree(data: &PlutusData) -> DetailPlutus {
+    let mut left = MAX_DATUM_NODES;
+    plutus(data, &mut left)
+}
+
+/// The data under `bytes`, when they are Plutus data. The redeemers are read
+/// from the bytes as written, so their arguments come back here.
+fn plutus_of(bytes: &[u8]) -> Option<DetailPlutus> {
+    PlutusData::decode_fragment(bytes)
+        .ok()
+        .map(|data| plutus_tree(&data))
+}
+
+fn plutus(data: &PlutusData, left: &mut usize) -> DetailPlutus {
+    *left = left.saturating_sub(1);
+    match data {
+        PlutusData::Constr(c) => DetailPlutus::Constr {
+            constructor_index: constructor_of(c),
+            fields: plutus_items(&c.fields, left),
+        },
+        PlutusData::Array(items) => DetailPlutus::List {
+            items: plutus_items(items, left),
+        },
+        PlutusData::Map(pairs) => {
+            let mut entries = Vec::new();
+            for (i, (key, value)) in pairs.iter().enumerate() {
+                if *left == 0 {
+                    entries.push(DetailPlutusEntry {
+                        key: DetailPlutus::More {
+                            items: pairs.len() - i,
+                        },
+                        value: DetailPlutus::More {
+                            items: pairs.len() - i,
+                        },
+                    });
+                    break;
+                }
+                entries.push(DetailPlutusEntry {
+                    key: plutus(key, left),
+                    value: plutus(value, left),
+                });
+            }
+            DetailPlutus::Map { entries }
+        }
+        PlutusData::BigInt(number) => DetailPlutus::Int {
+            value: big_int_text(number),
+        },
+        PlutusData::BoundedBytes(bytes) => DetailPlutus::Bytes {
+            hex: hex::encode(bytes.as_slice()),
+            text: readable(bytes.as_slice()),
+        },
+    }
+}
+
+/// As many of a list's items as the budget allows, then how many are left.
+fn plutus_items(items: &[PlutusData], left: &mut usize) -> Vec<DetailPlutus> {
+    let mut out = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        if *left == 0 {
+            out.push(DetailPlutus::More {
+                items: items.len() - i,
+            });
+            break;
+        }
+        out.push(plutus(item, left));
+    }
+    out
+}
+
+/// A constructor's number, from the tag that carries it: 121-127 are 0-6,
+/// 1280-1400 are 7-127, and tag 102 holds the number beside its fields. A tag
+/// outside those is shown as itself, since guessing at it would be a lie.
+fn constructor_of(c: &conway::Constr<PlutusData>) -> String {
+    match (c.tag, c.any_constructor) {
+        (102, Some(n)) => n.to_string(),
+        (tag @ 121..=127, _) => (tag - 121).to_string(),
+        (tag @ 1280..=1400, _) => (tag - 1280 + 7).to_string(),
+        (tag, _) => format!("tag {tag}"),
+    }
+}
+
+/// A Plutus integer as a decimal string, whichever way it was written. Tag 2
+/// holds a big number's bytes; tag 3 holds `-1 - n`, as CBOR says.
+fn big_int_text(number: &conway::BigInt) -> String {
+    match number {
+        conway::BigInt::Int(i) => i128::from(*i).to_string(),
+        conway::BigInt::BigUInt(bytes) => decimal(bytes.as_slice(), false),
+        conway::BigInt::BigNInt(bytes) => decimal(bytes.as_slice(), true),
+    }
+}
+
+/// Big-endian bytes as a decimal string. `less_one`: the bytes are CBOR's tag 3,
+/// which holds `-1 - n`, so the number is `-(n + 1)`.
+fn decimal(bytes: &[u8], less_one: bool) -> String {
+    let mut n = bytes.to_vec();
+    if less_one {
+        // n + 1, carried from the last byte up.
+        let mut carry = true;
+        for byte in n.iter_mut().rev() {
+            if !carry {
+                break;
+            }
+            (*byte, carry) = byte.overflowing_add(1);
+        }
+        if carry {
+            n.insert(0, 1);
+        }
+    }
+    // Long division by ten, taking a digit each time round.
+    let mut digits = Vec::new();
+    while n.iter().any(|b| *b != 0) {
+        let mut rest = 0u16;
+        for byte in n.iter_mut() {
+            let now = rest * 256 + u16::from(*byte);
+            *byte = (now / 10) as u8;
+            rest = now % 10;
+        }
+        digits.push(b'0' + rest as u8);
+    }
+    if digits.is_empty() {
+        digits.push(b'0');
+    }
+    digits.reverse();
+    let text = String::from_utf8(digits).expect("digits are ASCII");
+    if less_one { format!("-{text}") } else { text }
 }
 
 /// A metadatum, as the tree it is. `type` says which.
@@ -560,6 +751,7 @@ pub fn decode_tx(network: &str, tx_cbor: &str) -> Result<TxDetail> {
             let hex = hex::encode(datum.raw_cbor());
             DetailDatum {
                 hash: hex::encode(Hasher::<256>::hash(datum.raw_cbor()).as_ref()),
+                data: plutus_tree(datum),
                 register: register_detail(&hex),
                 hex,
             }
@@ -1081,7 +1273,7 @@ fn output_detail(
             let (lovelace, assets) = value(&o.value);
             let (inline, datum_hash) = match &o.datum_option {
                 Some(conway::PseudoDatumOption::Data(d)) => {
-                    (Some(hex::encode(d.0.raw_cbor())), None)
+                    (Some((hex::encode(d.0.raw_cbor()), plutus_tree(&d.0))), None)
                 }
                 Some(conway::PseudoDatumOption::Hash(h)) => (None, Some(hex::encode(h.as_ref()))),
                 None => (None, None),
@@ -1103,13 +1295,18 @@ fn output_detail(
             )
         }
     };
+    let (inline_datum, datum) = match inline {
+        Some((hex, tree)) => (Some(hex), Some(tree)),
+        None => (None, None),
+    };
     Ok(DetailOutput {
         index,
         address: address_detail(&address_bytes, flag, contract),
         lovelace,
         assets,
-        register: inline.as_deref().and_then(register_detail),
-        inline_datum: inline,
+        register: inline_datum.as_deref().and_then(register_detail),
+        inline_datum,
+        datum,
         datum_hash,
         script_ref,
         form: form.to_string(),
@@ -1267,6 +1464,7 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
                 out.push(DetailRedeemer {
                     tag: redeemer_tag(tag),
                     index: index.to_string(),
+                    argument: plutus_of(data),
                     data: hex::encode(data),
                     mem: mem.to_string(),
                     steps: steps.to_string(),
@@ -1292,6 +1490,7 @@ fn redeemers(raw: Option<&KeepRaw<'_, conway::Redeemers>>) -> Result<Vec<DetailR
                 out.push(DetailRedeemer {
                     tag: redeemer_tag(tag),
                     index: index.to_string(),
+                    argument: plutus_of(data),
                     data: hex::encode(data),
                     mem: mem.to_string(),
                     steps: steps.to_string(),

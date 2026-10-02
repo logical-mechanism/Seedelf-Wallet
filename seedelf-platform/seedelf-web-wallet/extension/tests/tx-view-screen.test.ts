@@ -211,7 +211,9 @@ describe("what the page can't take at face value", () => {
   it("groups a redeemer's budget through bigint, so a huge one isn't rounded", () => {
     const detail: TxDetail = {
       ...read(transferPreprod.final.txCbor),
-      redeemers: [{ tag: "spend", index: "0", data: "d87980", mem: "9007199254740993", steps: "1" }],
+      redeemers: [
+        { tag: "spend", index: "0", data: "d87980", argument: { type: "constr", constructorIndex: "0", fields: [] }, mem: "9007199254740993", steps: "1" },
+      ],
     };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
     expect(page).toContain("9,007,199,254,740,993 mem");
@@ -336,5 +338,71 @@ describe("the explanations behind their icons", () => {
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
     expect(page).toContain("marked to fail its contracts");
     expect(page).toContain("has no name for");
+  });
+});
+
+describe("a datum, whatever contract it is for", () => {
+  it("shows an output's datum as its tree, with the bytes to copy", () => {
+    const page = shown(transferPreprod.final.txCbor);
+    expect(page).toContain("Its datum, 104 bytes");
+    expect(page).toContain("Constructor 0");
+    // Each field is there, shortened, with the whole value on the element.
+    const detail = read(transferPreprod.final.txCbor);
+    const register = detail.outputs[0]!.register!;
+    const html = markup(transferPreprod.final.txCbor);
+    expect(html).toContain(`data-value="${register.generator}"`);
+    expect(html).toContain(`data-value="${register.publicValue}"`);
+    // And the register note stays: it says the payment can be spent, which the
+    // shape alone doesn't.
+    expect(page).toContain("under a register");
+  });
+
+  it("shows a redeemer's argument as its tree", () => {
+    const page = shown(transferPreprod.final.txCbor);
+    expect(page).toContain("Its argument, 118 bytes");
+    // The wallet's proof is a constructor of three byte strings.
+    expect(page.match(/Constructor 0/g)!.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("shows another contract's datum nested, knowing nothing about it", () => {
+    // Minswap's order: the wallet has no schema for it, so the shape is shown.
+    const page = shown(cborOf("minswap-swap"));
+    expect(page).toContain("The datum, 224 bytes");
+    expect(page.match(/Constructor \d/g)!.length).toBeGreaterThan(5);
+    expect(page).not.toContain("register");
+  });
+
+  it("names every shape data can take, and says where it stopped", () => {
+    const detail: TxDetail = {
+      ...read(cborOf("payment")),
+      datums: [
+        {
+          hash: "ab".repeat(32),
+          hex: "d87980",
+          register: null,
+          data: {
+            type: "constr",
+            constructorIndex: "7",
+            fields: [
+              { type: "int", value: "-18446744073709551617" },
+              { type: "bytes", hex: "53656564656c66", text: "Seedelf" },
+              { type: "list", items: [{ type: "int", value: "1" }] },
+              {
+                type: "map",
+                entries: [{ key: { type: "bytes", hex: "6b", text: "k" }, value: { type: "int", value: "2" } }],
+              },
+              { type: "more", items: 40 },
+            ],
+          },
+        },
+      ],
+    };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("Constructor 7");
+    expect(page).toContain("-18446744073709551617");
+    expect(page).toContain("Seedelf");
+    expect(page).toContain("1 item");
+    expect(page).toContain("1 pair");
+    expect(page).toContain("…40 items more, in the bytes");
   });
 });

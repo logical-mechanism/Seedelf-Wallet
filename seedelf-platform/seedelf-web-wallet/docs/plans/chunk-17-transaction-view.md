@@ -280,3 +280,41 @@ Lovejoin 17, the connector's window 13, Staking 11 — and each was argued over 
 chunks 12 and 14 or in the privacy review, so sweeping them without the owner
 would undo decisions rather than tidy them. The component is there for whichever
 they name.
+
+## Datums, for any contract (the owner, 2026-10-01)
+
+> so smart contract transactions do not have any datum representation. Its
+> literally just says seedelf which is not a solution in general for arbitrary
+> datum
+
+Right, and it was the view's biggest hole: a datum was hex, with one special
+case for Seedelf's own register. Plutus data is read as the tree it is now
+(`DetailPlutus`), in all three places data appears — a datum written into an
+output, a datum in the witness set, and **a redeemer's argument**, which was
+hex too:
+
+- **constructors by their number**, from whichever tag carries it: 121–127 are
+  0–6, 1280–1400 are 7–127, and tag 102 holds any number beside its fields. A
+  tag no era defines isn't Plutus data at all, and Pallas refuses it before the
+  view sees it, so the view says it can't read the transaction rather than making
+  a number up.
+- **lists and maps**, each item and each pair;
+- **byte strings**, shortened with the whole value on the element, and as text
+  where they read as text (escaped, as all text from the chain is);
+- **integers however they were written**: a CBOR integer, or the big forms under
+  tag 2 and tag 3, where tag 3 holds `-1 - n`. `-18446744073709551617` is read
+  exactly, from bytes no `i64` holds.
+
+There is no schema to read a datum against — a contract's datum means whatever
+that contract says it means — so the shape is what can honestly be shown. The
+Seedelf register stays as the one thing added on top, because it says something
+the shape can't: whether a payment under it could be spent.
+
+**`MAX_DATUM_NODES` (512)** bounds one tree: a site could otherwise hand the
+wallet a datum that takes minutes to draw. Past it the tree says how many items
+are left, and the hex beside it has them all.
+
+**One name worth knowing:** the constructor's number is `constructorIndex`, not
+`constructor`. Every object in JavaScript has a `constructor` already
+(`Object.prototype.constructor`), so had the field been called that and ever gone
+missing, the page would have shown `function Object() { … }` instead of failing.

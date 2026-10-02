@@ -3194,3 +3194,9 @@ button.dapp-tile:hover {
 .hint__text {
   margin: 0;
 }
+
+/* A Plutus map's entry: its key, then its value. */
+.tx-detail__arrow {
+  color: var(--muted);
+  padding: 0 4px;
+}

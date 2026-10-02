@@ -722,6 +722,25 @@ export interface TxRegister {
   payable: boolean;
 }
 
+/**
+ * Plutus data — a datum, or a redeemer's argument — as the tree it is. There is
+ * no schema to read it against: a contract's datum means whatever that contract
+ * says it means, so what the view can honestly show is its shape.
+ *
+ * `constructorIndex` is the constructor's number (the CBOR tag carries it). It
+ * isn't called `constructor`: every object in JavaScript has one of those
+ * already, so the field gone missing would read as a function rather than as
+ * nothing. `more` is where the view stopped — that many items of the thing above
+ * it are left, and the raw bytes have them.
+ */
+export type TxPlutus =
+  | { type: "constr"; constructorIndex: string; fields: TxPlutus[] }
+  | { type: "int"; value: string }
+  | { type: "bytes"; hex: string; text: string | null }
+  | { type: "list"; items: TxPlutus[] }
+  | { type: "map"; entries: Array<{ key: TxPlutus; value: TxPlutus }> }
+  | { type: "more"; items: number };
+
 /** A script the transaction carries. */
 export interface TxScript {
   kind: "native" | "plutusV1" | "plutusV2" | "plutusV3";
@@ -738,6 +757,8 @@ export interface TxOutput {
   assets: TxAsset[];
   /** The datum written into the output, as it was written (hex). */
   inlineDatum: string | null;
+  /** That datum as the tree it is, whatever contract it is for. */
+  datum: TxPlutus | null;
   datumHash: string | null;
   register: TxRegister | null;
   scriptRef: TxScript | null;
@@ -820,6 +841,8 @@ export interface TxRedeemer {
   index: string;
   /** The argument, as written (hex). */
   data: string;
+  /** That argument as the tree it is. */
+  argument: TxPlutus | null;
   /** The budget claimed, each `0 .. 2^63-1` in the CDDL, so decimal strings. */
   mem: string;
   steps: string;
@@ -829,6 +852,8 @@ export interface TxRedeemer {
 export interface TxDatum {
   hash: string;
   hex: string;
+  /** The data as the tree it is. */
+  data: TxPlutus;
   register: TxRegister | null;
 }
 

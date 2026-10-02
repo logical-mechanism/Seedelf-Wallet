@@ -1049,6 +1049,9 @@ test("the transaction view on a Seedelf payment: the contract, the register, and
   // It pays Seedelf Wallet's own contract, under a register only its owner can spend.
   await expect(view).toContainText("Seedelf Wallet's contract");
   await expect(view).toContainText("under a register");
+  // And the datum itself, as the tree it is: a constructor and its two points.
+  await expect(view).toContainText("Its datum, 104 bytes");
+  await expect(view).toContainText("Constructor 0");
   // And the icon beside Spends says why it holds nothing about what they hold.
   await expect(view.getByTestId("move-in-tx-inputs-hint")).toHaveAttribute(
     "title",

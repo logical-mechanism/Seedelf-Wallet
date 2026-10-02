@@ -25,6 +25,17 @@ test("answers the whole transaction as JSON, in camelCase for the extension", ()
   // A budget is `0 .. 2^63-1` in the CDDL, so a string too.
   assert.match(detail.redeemers[0].mem, /^\d+$/);
   assert.match(detail.redeemers[0].steps, /^\d+$/);
+  // A datum and a redeemer's argument come as the trees they are, for any
+  // contract: here a register, and a Schnorr proof's three byte strings.
+  assert.equal(detail.outputs[0].datum.type, "constr");
+  // Not `.constructor`: every JavaScript object has one of those already, which
+  // is why the field is named this way (see rpc.ts's TxPlutus).
+  assert.equal(detail.outputs[0].datum.constructorIndex, "0");
+  assert.deepEqual(
+    detail.outputs[0].datum.fields.map((f) => f.type),
+    ["bytes", "bytes"],
+  );
+  assert.equal(detail.redeemers[0].argument.fields.length, 3);
   assert.equal(detail.referenceInputs.length, 1);
   assert.equal(detail.collateral.length, 1);
   assert.ok(detail.collateralReturn.lovelace > "0");

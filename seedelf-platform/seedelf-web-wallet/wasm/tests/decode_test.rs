@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 use pallas_codec::minicbor;
 use pallas_codec::utils::{Bytes, Nullable, Set};
 use pallas_crypto::hash::{Hash, Hasher};
-use pallas_primitives::{Fragment, TransactionInput, alonzo, conway};
-use seedelf_wasm::decode::{DetailCert, DetailMetadatum, TxDetail, decode_tx, shown};
+use pallas_primitives::{Fragment, PlutusData, TransactionInput, alonzo, conway};
+use seedelf_wasm::decode::{DetailCert, DetailMetadatum, DetailPlutus, TxDetail, decode_tx, shown};
 use serde_json::Value;
 
 /// Every transaction recorded, with what cardano-cli made of it.
@@ -1093,6 +1093,271 @@ fn ordinary_text_is_left_alone() {
     assert_eq!(shown("a\u{FEFF}b"), r"a\u{FEFF}b", "the byte order mark");
     assert_eq!(shown("a\u{E0041}b"), r"a\u{E0041}b", "a tag character");
     assert_eq!(shown("a\u{FE0F}b"), r"a\u{FE0F}b", "a variation selector");
+}
+
+// ---------------------------------------------------------------------------
+// Plutus data: a datum or a redeemer's argument, whatever contract it is for
+// ---------------------------------------------------------------------------
+
+/// A transaction whose witness set carries these datums (its key 4), so a datum
+/// of any shape can be read without a contract to build one.
+fn tx_with_datums(datums: Vec<PlutusData>) -> String {
+    let base = hex::decode(plain_body(&[])).unwrap();
+    let parts = items(&base);
+    let mut witnesses = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut witnesses);
+    e.map(1).unwrap();
+    e.u8(4).unwrap();
+    e.array(datums.len() as u64).unwrap();
+    for datum in &datums {
+        e.writer_mut()
+            .extend_from_slice(&datum.encode_fragment().unwrap());
+    }
+    let mut out = Vec::new();
+    let mut e = minicbor::Encoder::new(&mut out);
+    e.array(4).unwrap();
+    e.writer_mut().extend_from_slice(parts[0]);
+    e.writer_mut().extend_from_slice(&witnesses);
+    e.writer_mut().extend_from_slice(parts[2]);
+    e.writer_mut().extend_from_slice(parts[3]);
+    hex::encode(out)
+}
+
+fn constr(tag: u64, any: Option<u64>, fields: Vec<PlutusData>) -> PlutusData {
+    PlutusData::Constr(pallas_primitives::Constr {
+        tag,
+        any_constructor: any,
+        fields: pallas_codec::utils::MaybeIndefArray::Def(fields),
+    })
+}
+
+fn bytes(hex: &str) -> PlutusData {
+    PlutusData::BoundedBytes(hex::decode(hex).unwrap().into())
+}
+
+fn int(n: i64) -> PlutusData {
+    PlutusData::BigInt(pallas_primitives::BigInt::Int(n.into()))
+}
+
+/// The one datum the tree has for the whole wallet: a register, which is also an
+/// ordinary constructor with two byte strings. Nothing about the shape is
+/// Seedelf's.
+#[test]
+fn a_datum_is_read_as_the_tree_it_is() {
+    let (detail, _) = one("transfer");
+    let out = &detail.outputs[0];
+    let DetailPlutus::Constr {
+        constructor_index,
+        fields,
+    } = out.datum.as_ref().expect("the output's datum")
+    else {
+        panic!("a register is a constructor");
+    };
+    assert_eq!(constructor_index, "0");
+    assert_eq!(fields.len(), 2);
+    for (field, point) in fields.iter().zip([
+        &out.register.as_ref().unwrap().generator,
+        &out.register.as_ref().unwrap().public_value,
+    ]) {
+        let DetailPlutus::Bytes { hex, text } = field else {
+            panic!("a point is a byte string");
+        };
+        assert_eq!(hex, point, "the tree's bytes are the register's points");
+        assert!(text.is_none(), "48 bytes of a curve point aren't text");
+    }
+    // The tree came out of the bytes the output holds, which are still there.
+    assert!(
+        out.inline_datum
+            .as_ref()
+            .unwrap()
+            .contains(&fields_hex(fields))
+    );
+}
+
+/// The hex of a constructor's byte-string fields, run together.
+fn fields_hex(fields: &[DetailPlutus]) -> String {
+    fields
+        .iter()
+        .filter_map(|f| match f {
+            DetailPlutus::Bytes { hex, .. } => Some(hex.clone()),
+            _ => None,
+        })
+        .next()
+        .unwrap_or_default()
+}
+
+/// A redeemer's argument is data too: the wallet's own is a Schnorr proof, three
+/// byte strings under a constructor, and the view shows it as such.
+#[test]
+fn a_redeemers_argument_is_read_as_a_tree() {
+    let (detail, _) = one("transfer");
+    for redeemer in &detail.redeemers {
+        let DetailPlutus::Constr {
+            constructor_index,
+            fields,
+        } = redeemer.argument.as_ref().expect("the argument")
+        else {
+            panic!("the proof is a constructor");
+        };
+        assert_eq!(constructor_index, "0");
+        assert_eq!(fields.len(), 3, "g^r, the response, and the key hash");
+        assert!(
+            fields
+                .iter()
+                .all(|f| matches!(f, DetailPlutus::Bytes { .. }))
+        );
+    }
+}
+
+/// Another contract's datum, nested as it comes: Minswap's order, which the
+/// wallet knows nothing about.
+#[test]
+fn another_contracts_datum_reads_without_the_wallet_knowing_it() {
+    let (detail, _) = one("minswap-swap");
+    let datum = &detail.datums[0];
+    assert!(datum.register.is_none(), "it isn't a register");
+    let DetailPlutus::Constr { fields, .. } = &datum.data else {
+        panic!("an order is a constructor");
+    };
+    // Its first field is a constructor of a constructor of a key hash: shown as
+    // that, with nothing guessed about what it means.
+    let DetailPlutus::Constr { fields: inner, .. } = &fields[0] else {
+        panic!("a nested constructor");
+    };
+    assert!(matches!(inner[0], DetailPlutus::Constr { .. }));
+    let depth = tree_depth(&datum.data);
+    assert!(depth >= 4, "nested {depth} deep");
+}
+
+fn tree_depth(data: &DetailPlutus) -> usize {
+    1 + match data {
+        DetailPlutus::Constr { fields, .. } => fields.iter().map(tree_depth).max().unwrap_or(0),
+        DetailPlutus::List { items } => items.iter().map(tree_depth).max().unwrap_or(0),
+        DetailPlutus::Map { entries } => entries
+            .iter()
+            .map(|e| tree_depth(&e.key).max(tree_depth(&e.value)))
+            .max()
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Every shape Conway's `plutus_data` allows: a constructor by each of its three
+/// tag forms, a list, a map, bytes, and an integer written each of the three ways
+/// CBOR allows.
+#[test]
+fn every_shape_plutus_data_can_take_is_read() {
+    let datums = vec![
+        // Constructors: tag 121 is 0, tag 127 is 6, tag 1280 is 7, and tag 102
+        // carries any number beside its fields.
+        constr(121, None, vec![]),
+        constr(127, None, vec![]),
+        constr(1280, None, vec![]),
+        constr(1400, None, vec![]),
+        constr(102, Some(9_999), vec![int(1)]),
+        // A list, a map, bytes that read as text, and bytes that don't.
+        PlutusData::Array(pallas_codec::utils::MaybeIndefArray::Def(vec![
+            int(1),
+            int(2),
+        ])),
+        PlutusData::Map(pallas_codec::utils::KeyValuePairs::from(vec![(
+            bytes("6b"),
+            int(-3),
+        )])),
+        bytes(&hex::encode("Seedelf")),
+        bytes("00ff10"),
+        // An integer at the edges of what CBOR writes plainly, then the two big
+        // forms: tag 2 holds n, tag 3 holds -1 - n.
+        int(0),
+        int(i64::MAX),
+        int(i64::MIN),
+        PlutusData::BigInt(pallas_primitives::BigInt::BigUInt(
+            hex::decode("010000000000000000").unwrap().into(),
+        )),
+        PlutusData::BigInt(pallas_primitives::BigInt::BigNInt(
+            hex::decode("010000000000000000").unwrap().into(),
+        )),
+        PlutusData::BigInt(pallas_primitives::BigInt::BigNInt(vec![0].into())),
+    ];
+    let detail = decode_tx("preprod", &tx_with_datums(datums)).unwrap();
+    let trees: Vec<&DetailPlutus> = detail.datums.iter().map(|d| &d.data).collect();
+    let constructor = |i: usize| match trees[i] {
+        DetailPlutus::Constr {
+            constructor_index, ..
+        } => constructor_index.clone(),
+        other => panic!("{other:?} isn't a constructor"),
+    };
+    assert_eq!(constructor(0), "0");
+    assert_eq!(constructor(1), "6");
+    assert_eq!(constructor(2), "7");
+    assert_eq!(constructor(3), "127");
+    assert_eq!(constructor(4), "9999", "tag 102 carries the number");
+
+    assert!(matches!(trees[5], DetailPlutus::List { items } if items.len() == 2));
+    let DetailPlutus::Map { entries } = trees[6] else {
+        panic!("a map")
+    };
+    assert_eq!(entries.len(), 1);
+    assert!(
+        matches!(&entries[0].key, DetailPlutus::Bytes { text, .. } if text.as_deref() == Some("k"))
+    );
+    assert!(matches!(&entries[0].value, DetailPlutus::Int { value } if value == "-3"));
+
+    assert!(
+        matches!(trees[7], DetailPlutus::Bytes { text, .. } if text.as_deref() == Some("Seedelf"))
+    );
+    assert!(
+        matches!(trees[8], DetailPlutus::Bytes { hex, text } if hex == "00ff10" && text.is_none())
+    );
+
+    let number = |i: usize| match trees[i] {
+        DetailPlutus::Int { value } => value.clone(),
+        other => panic!("{other:?} isn't a number"),
+    };
+    assert_eq!(number(9), "0");
+    assert_eq!(number(10), "9223372036854775807");
+    assert_eq!(number(11), "-9223372036854775808");
+    // 2^64, which no i64 or u64 holds: the big forms are read as themselves.
+    assert_eq!(number(12), "18446744073709551616");
+    assert_eq!(number(13), "-18446744073709551617", "tag 3 holds -1 - n");
+    assert_eq!(number(14), "-1", "and -1 - 0 is -1");
+}
+
+/// A constructor tag no era defines isn't Plutus data: the CDDL has 102,
+/// 121-127 and 1280-1400 and nothing else, and Pallas refuses one before the
+/// view sees it. So the view says it can't read the transaction rather than
+/// showing a constructor it made up a number for.
+#[test]
+fn a_constructor_tag_no_era_defines_is_refused() {
+    let error = decode_tx("preprod", &tx_with_datums(vec![constr(500, None, vec![])]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("The wallet can't read this transaction"),
+        "{error}"
+    );
+    assert!(error.contains("plutus data"), "{error}");
+}
+
+/// A datum big enough to fill a screen stops at a count, and says how many items
+/// are left: a site could otherwise hand the wallet a datum that takes minutes
+/// to draw.
+#[test]
+fn a_huge_datum_stops_and_says_how_much_is_left() {
+    let wide = PlutusData::Array(pallas_codec::utils::MaybeIndefArray::Def(
+        (0..2_000).map(int).collect(),
+    ));
+    let detail = decode_tx("preprod", &tx_with_datums(vec![wide])).unwrap();
+    let DetailPlutus::List { items } = &detail.datums[0].data else {
+        panic!("a list")
+    };
+    assert_eq!(items.len(), seedelf_wasm::decode::MAX_DATUM_NODES);
+    let DetailPlutus::More { items: left } = items.last().unwrap() else {
+        panic!("the last one says how many are left: {:?}", items.last());
+    };
+    assert_eq!(*left, 2_000 - (seedelf_wasm::decode::MAX_DATUM_NODES - 1));
+    // The bytes are all there whatever the tree left out.
+    assert!(detail.datums[0].hex.len() > 4_000);
 }
 
 // ---------------------------------------------------------------------------
