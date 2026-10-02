@@ -210,10 +210,10 @@ export class AccountsService {
    * **One `account_addresses` request per account probed, never a batch.**
    * `Koios.usedStakeAddresses` would answer for twenty accounts at once, and
    * that one request would tell Koios those twenty stake addresses are one
-   * wallet's — which works directly against the habit several accounts exist
-   * to serve. The requests go separately instead. Koios still sees them from
-   * one IP seconds apart, which the privacy docs say in those words rather
-   * than claiming more.
+   * wallet's — which the wallet shouldn't volunteer on the user's behalf,
+   * whether or not they keep their accounts apart. The requests go separately
+   * instead. Koios still sees them from one IP seconds apart, which the
+   * privacy docs say in those words rather than claiming more.
    *
    * `limit` bounds one run (`MAX_PROBE`): the picker's "check for another
    * account" passes 1, so it costs exactly one request.

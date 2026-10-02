@@ -840,9 +840,11 @@ export class DappService {
    * A site bound to a public account the wallet isn't on is **refused, not
    * served from the active one**. Following the active account would hand a
    * site that had already seen Account 1's addresses Account 2's as well,
-   * and teach it the two are one wallet's — the exact leak several accounts
-   * exist to prevent. The connect window chooses nothing by design (chunk
-   * 15), and this keeps that true across a switch.
+   * and teach it the two are one wallet's **without the user choosing that**.
+   * A link the user makes themselves is their business — a payment between
+   * their own accounts is allowed, and only said — but one a site is handed
+   * behind their back is not. The connect window chooses nothing by design
+   * (chunk 15), and this keeps that true across a switch.
    */
   private async holder(network: NetworkName, site: DappSite): Promise<Holder> {
     if (site.session === undefined) {

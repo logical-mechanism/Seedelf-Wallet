@@ -79,8 +79,9 @@ window says which account it is connecting to.
 
 `usedStakeAddresses` would discover twenty accounts in **one** request. It is
 not used, because that one request tells Koios that those twenty stake
-addresses are one wallet's — which works directly against the habit this
-feature exists to respect. `sessions.ts` already reasons this way about
+addresses are one wallet's — which the wallet shouldn't volunteer on the
+user's behalf, whether or not they keep their accounts apart.
+`sessions.ts` already reasons this way about
 one-time accounts ("Asking about 20 at once tells Koios they're one wallet's,
 so it's done only when a restore or another browser used the next one").
 
@@ -147,7 +148,10 @@ selection would co-spend them freely.
 money went to, not where an input came from. A contract UTxO's creating
 transaction is public, so one later private spend that takes a UTxO originating
 from account 0 together with one from account 1 ties those two accounts to one
-owner, in the open — undoing the separation the feature exists to respect. The
+owner, in the open — **and the user never chose that**, which is the part that
+matters. A link they make themselves is their business (see
+[*Sending between your own accounts*](#sending-between-your-own-accounts-said-not-refused));
+one coin selection makes for them, silently, is not. The
 machinery to prevent it already exists (privacy review §2.3): each private UTxO
 gets a `HistoryClass`, `seedelf-core`'s `build::Histories` keeps classes apart
 where a choice that doesn't merge them pays, and the UTxOs screen tags each

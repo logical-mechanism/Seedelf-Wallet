@@ -458,8 +458,11 @@ export class Wallet {
    * Runs `task` with the keys of public account `index`, whichever one is
    * active: how a connected site keeps talking to the account it connected
    * to (dapp.ts). A site that followed the active account would be handed a
-   * second account's addresses and learn the two are one wallet's, which is
-   * the leak several accounts exist to prevent.
+   * second account's addresses and learn the two are one wallet's **without
+   * the user choosing that** — which is the part that matters. A link the
+   * user makes on purpose is their business (a payment between their own
+   * accounts is allowed and merely said); one a site is handed behind their
+   * back is not.
    *
    * `keys.seedelf` and `keys.oneTime` are the wallet's own either way — the
    * Seedelf key is on account 0 whichever public account is used. Derived

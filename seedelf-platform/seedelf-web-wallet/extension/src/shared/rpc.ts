@@ -467,12 +467,14 @@ export interface WithdrawDestination {
   /** It carries one of this wallet's Cardano accounts' keys: paying it re-links the money. */
   own: boolean;
   /**
-   * Which of this wallet's public accounts it is, when `own` (chunk 18).
-   * The **public Send refuses another account**: paying account B from
-   * account A is an ordinary Cardano payment between two addresses anyone
-   * can see, so it ties the two accounts together in the open, which is the
-   * one thing several accounts exist to prevent. Making money *public* to
-   * another account is allowed and warned about instead.
+   * Which of this wallet's public accounts it is, when `own` (chunk 18), so
+   * a screen can name it rather than only say it is one of yours.
+   *
+   * Paying it is **allowed either way** — people do move money between their
+   * own accounts, and accounts are not necessarily unlinked to begin with.
+   * It is an ordinary Cardano payment, so anyone can see the two accounts
+   * paying each other; the forms say that and the user decides, as every
+   * known link is handled (docs/privacy.md).
    */
   ownAccount?: number;
 }
