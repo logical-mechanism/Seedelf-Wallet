@@ -37,7 +37,7 @@ describe("a destination under the account's own payment key", () => {
       [1, 19],
     ] as const) {
       const address = preprodAddress(keyHash(role, index));
-      expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: true });
+      expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: true, ownAccount: 0 });
     }
     expect(t.koios.calls).toHaveLength(0);
   });
@@ -48,7 +48,7 @@ describe("a destination under the account's own payment key", () => {
     const address = preprodAddress(far);
     expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: false });
     await t.session.set(SESSION_ACCOUNT_ADDRESSES_PREFIX + "preprod", { stake: "stake_test1", addresses: [], keys: [far] });
-    expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: true });
+    expect(await t.withdraw.resolve("preprod", address)).toEqual({ address, own: true, ownAccount: 0 });
   });
 
   it("isn't when the key is someone else's", async () => {

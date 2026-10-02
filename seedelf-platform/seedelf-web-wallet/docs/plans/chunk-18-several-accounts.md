@@ -349,3 +349,35 @@ untouched.
 | Unlock, or anything else | **0.** Discovery never runs on unlock. |
 
 Nothing here is paged, and nothing grows with the contract.
+
+## The owner's two corrections (2026-10-02, after the first push)
+
+### Custom and non-sequential accounts were unreachable
+
+**The owner:** *"so I cant tell the wallet what account to use it will just find it, hiding any custom number accounts like 1337 from being checked … this will allow a user to use another account even if it never was used and can be used to find high or custom accounts that are non sequential."*
+
+Right, and it was two gaps, not one:
+
+1. **`MAX_ACCOUNTS = 25` capped the index, not the count.** CIP-1852's account component is hardened, so `seedelf-crypto`'s `check_account` allows 0 … 2^31 - 1. The cap was mine and arbitrary, and it made 1337 impossible to name at all. It is now `MAX_INDEX` (the derivation's own bound) and `MAX_KEPT` (100, a list length).
+2. **Even uncapped, nothing could reach a custom account.** Sequential discovery stops at the first unused account — BIP44's rule, and the right default — so 1337 is unreachable by it even when it *has* been used. And `use()` refused an account discovery hadn't seen, so a never-used account could not be *started* either.
+
+So Settings → Public accounts gets an account-number entry:
+
+- **Check it** — one `account_addresses` request about that one account, whatever its index. Adds it if it has been used; reports it if not.
+- **Add it** — **no request at all**, and it adds the account whether or not it has ever been used. This is the one that lets a user *start* a custom-numbered account: it exists in the phrase either way and holds nothing until something is put there. It is also the more private of the two, since checking tells Koios that this IP is interested in that account.
+
+**And a bug in the sequential look, found writing this:** it probed from `highest + 1`, so adding account 1337 would have stopped it ever reaching account 2. It carries on from the **first gap in the run up from 0** now.
+
+### The public Send must refuse another of your own accounts
+
+**The owner:** *"we do not allow the public send to be able to send to another account nor someone from our contact list that is public."*
+
+A public Send is an ordinary Cardano payment: anyone can see account A's address paying account B's and tell they are one wallet's. That is the one thing several accounts exist to prevent, and **no warning undoes an irreversible on-chain link** — so it is a refusal.
+
+- `WithdrawDestination` carries `ownAccount`, so a destination says *which* of the wallet's accounts it is rather than just that it is one.
+- `send.ts` refuses a recipient whose account isn't the active one, and the Send form says so under the row and keeps Review shut, so it is never a surprise at build time.
+- **It reads the resolved address, so it holds however the address arrived** — typed, pasted, an ADA Handle, or picked from Contacts.
+- **Paying *this* account is still allowed** and only noted: the money comes straight back less the fee, and Settings' collateral payment is exactly that.
+- **Make public to another account stays a warned choice**, not a refusal: what it links is the private UTxOs spent, which Make public always names.
+
+**This also fixed something my own earlier change had broken.** Making `own` true for every known account left the public Send's note saying *"the payment comes back to it, less the fee"* for an address belonging to a different account — which is false. The note now distinguishes this account from another, and Make public's warning names the account too.

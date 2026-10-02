@@ -71,7 +71,35 @@ export class SendService {
       const name = names[i];
       destinations.push(name ? seedelf(view!, network, name) : await resolve(p.to));
     }
+    await this.refuseOtherAccounts(destinations);
     return this.pay(network, destinations, payments, SESSION_SEND, note, progress);
+  }
+
+  /**
+   * Refuses a payment to **another of this wallet's own public accounts**
+   * (the owner, 2026-10-02). A public Send is an ordinary Cardano payment:
+   * anyone can see account A's address paying account B's, so it ties the two
+   * accounts to one owner in the open — the one thing several accounts exist
+   * to prevent, and no warning makes an irreversible on-chain link safe.
+   *
+   * It applies however the address arrived — typed, pasted, an ADA Handle, or
+   * picked from Contacts — because the check is on the address the recipient
+   * resolves to, not on how it was entered.
+   *
+   * Paying **this** account is still allowed: the money comes straight back
+   * less the fee, it links nothing new, and the collateral payment is exactly
+   * that (`buildCollateral`).
+   */
+  private async refuseOtherAccounts(destinations: Destination[]): Promise<void> {
+    const active = await this.deps.wallet.withKeys((keys) => keys.account);
+    const other = destinations.find((d) => "ownAccount" in d && d.ownAccount !== undefined && d.ownAccount !== active);
+    if (!other) return;
+    const index = (other as { ownAccount: number }).ownAccount;
+    throw new Error(
+      `That address is your own Account ${index + 1}. Seedelf Wallet won't send to another of your accounts from here: ` +
+        "anyone could see the two paying each other and tell they're one wallet's. Switch to that account to use its money, " +
+        "or make this money private first and send it from your private balance.",
+    );
   }
 
   /** Signed at review: Send only submits it. */

@@ -60,8 +60,9 @@ export async function resolveDestination(
   }
   // Throws the reason: not an address, a script, a stake address, the other network.
   wasm.checkPayableAddress(address, net);
-  const { own } = await ownAccount(deps, network, address);
-  return handle ? { address, handle, own } : { address, own };
+  const { own, account } = await ownAccount(deps, network, address);
+  const mine = { own, ...(account !== undefined ? { ownAccount: account } : {}) };
+  return handle ? { address, handle, ...mine } : { address, ...mine };
 }
 
 /**

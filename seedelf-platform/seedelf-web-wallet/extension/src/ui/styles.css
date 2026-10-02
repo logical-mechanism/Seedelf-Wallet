@@ -936,6 +936,23 @@ main {
   align-items: center;
   gap: var(--s2);
 }
+/* Settings → Public accounts: the number entry for a custom account. */
+.account-number {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.account-number label {
+  flex: 0 0 auto;
+}
+.account-number input {
+  flex: 1 1 6rem;
+  width: auto;
+  min-width: 0;
+}
+
 .account-row__active {
   color: var(--muted);
   font-size: var(--text-sm);

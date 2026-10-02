@@ -464,8 +464,17 @@ export interface WithdrawDestination {
   address: string;
   /** The ADA Handle it was found by, without the "$". */
   handle?: string;
-  /** It carries this wallet's Cardano account's staking key: paying it re-links the money. */
+  /** It carries one of this wallet's Cardano accounts' keys: paying it re-links the money. */
   own: boolean;
+  /**
+   * Which of this wallet's public accounts it is, when `own` (chunk 18).
+   * The **public Send refuses another account**: paying account B from
+   * account A is an ordinary Cardano payment between two addresses anyone
+   * can see, so it ties the two accounts together in the open, which is the
+   * one thing several accounts exist to prevent. Making money *public* to
+   * another account is allowed and warned about instead.
+   */
+  ownAccount?: number;
 }
 
 /** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */
@@ -1629,6 +1638,19 @@ export interface Requests {
    * picker's own button passes 1, so it costs one request.
    */
   "account-discover": { payload: { limit?: number }; result: AccountList & { found: number[] } };
+  /**
+   * Looks up **one** account by number, whatever its index: the way to reach
+   * a custom or non-sequential account (1337, say), which the sequential look
+   * can never find because it stops at the first unused one. One Koios
+   * `account_addresses` request. It is added to the list if it has been used;
+   * if it hasn't, `used` is false and adding it is the user's call.
+   */
+  "account-check": { payload: { index: number }; result: AccountList & { index: number; used: boolean } };
+  /**
+   * Adds an account by number, **whether or not it has ever been used**: the
+   * way to start a custom-numbered account. Asks nobody anything.
+   */
+  "account-add": { payload: { index: number }; result: AccountList };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /**
@@ -1837,6 +1859,8 @@ const REQUEST_LIST = [
   "account-use",
   "account-rename",
   "account-discover",
+  "account-check",
+  "account-add",
   "price",
   "tx-detail",
   "dapp-approvals",

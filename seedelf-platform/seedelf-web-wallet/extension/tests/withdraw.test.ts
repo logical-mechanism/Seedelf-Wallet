@@ -52,7 +52,9 @@ describe("reading a destination", () => {
   it("takes a normal address, and flags this wallet's own account", async () => {
     const t = await unlocked();
     expect(await t.withdraw.resolve("preprod", ` ${THEIRS} `)).toEqual({ address: THEIRS, own: false });
-    expect(await t.withdraw.resolve("preprod", OWN)).toEqual({ address: OWN, own: true });
+    // An own address names which account it is, so Make public can say so and
+    // the public Send can refuse another one (chunk 18).
+    expect(await t.withdraw.resolve("preprod", OWN)).toEqual({ address: OWN, own: true, ownAccount: 0 });
     expect(t.koios.calls).toHaveLength(0);
   });
 
@@ -61,7 +63,7 @@ describe("reading a destination", () => {
     t.koios.nfts.set(`${ADA_HANDLE_POLICY}.${hex("bob")}`, THEIRS);
     t.koios.nfts.set(`${ADA_HANDLE_POLICY}.000de140${hex("me")}`, OWN);
     expect(await t.withdraw.resolve("preprod", "$Bob")).toEqual({ address: THEIRS, handle: "bob", own: false });
-    expect(await t.withdraw.resolve("preprod", "$me")).toEqual({ address: OWN, handle: "me", own: true });
+    expect(await t.withdraw.resolve("preprod", "$me")).toEqual({ address: OWN, handle: "me", own: true, ownAccount: 0 });
     await expect(t.withdraw.resolve("preprod", "$nobody")).rejects.toThrow("No ADA Handle $nobody on preprod.");
     expect(new Set(t.koios.calls.map((c) => c.path))).toEqual(new Set(["asset_nft_address"]));
   });

@@ -12,6 +12,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
@@ -68,12 +69,21 @@ export function CardanoSend({
   const maxed = max && !list.several;
   const amounts = recipientAmounts(network, cardano.tokens, list.drafts, maxed);
   // A field's read counts only for the text it read.
+  const { active } = useAccounts();
   const readOf = (d: Draft): DestinationRead =>
     reads[d.id]?.to === d.to.trim() ? reads[d.id]!.read : { state: "idle" };
   const found = list.drafts.every((d) => ["read", "seedelf"].includes(readOf(d).state));
+  // Another of the user's own public accounts: the worker refuses it, so
+  // Review stays shut and the row says why rather than failing at the build
+  // (chunk 18). Paying *this* account is fine, and still only noted.
+  const otherAccount = (r: DestinationRead) =>
+    r.state === "read" && r.destination.ownAccount !== undefined && r.destination.ownAccount !== active
+      ? r.destination.ownAccount
+      : undefined;
+  const toOwnAccount = list.drafts.some((d) => otherAccount(readOf(d)) !== undefined);
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = !maxed && amounts.total > BigInt(cardano.lovelace);
-  const ready = found && amounts.ok && !tooMuch;
+  const ready = found && amounts.ok && !tooMuch && !toOwnAccount;
   const toSeedelf = list.drafts.some((d) => readOf(d).state === "seedelf");
 
   async function review(e: FormEvent) {
@@ -202,7 +212,9 @@ export function CardanoSend({
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
               seedelfs
             />
-            {read.state === "read" && read.destination.own && <OwnNote />}
+            {read.state === "read" &&
+              read.destination.own &&
+              (otherAccount(read) !== undefined ? <OtherAccountNote index={otherAccount(read)!} /> : <OwnNote />)}
 
             <div className="field">
               <label htmlFor={fieldId("send-amount", d, i)}>Amount</label>
@@ -323,6 +335,23 @@ function OwnNote() {
   return (
     <Callout tone="warn" testId="send-own">
       This is your own public account: the payment comes back to it, less the fee.
+    </Callout>
+  );
+}
+
+/**
+ * Another of the user's own public accounts. Refused, not warned about: a
+ * public Send is an ordinary Cardano payment, so anyone can see account A's
+ * address paying account B's and tell they're one wallet's — the one thing
+ * several accounts exist to prevent, and nothing undoes it once it's on
+ * chain. It reads the same however the address arrived, Contacts included.
+ */
+function OtherAccountNote({ index }: { index: number }) {
+  return (
+    <Callout tone="warn" testId="send-other-account">
+      This is your own Account {index + 1}. Seedelf Wallet won't send to another of your accounts from here: anyone could see
+      the two paying each other and tell they're one wallet's. Switch to that account to use its money, or make this money
+      private first and send it from your private balance.
     </Callout>
   );
 }

@@ -2,7 +2,7 @@
 // what each account keeps of its own.
 import { describe, expect, it } from "vitest";
 
-import { accountLabel, activeAccount, MAX_ACCOUNTS, WIPED_ON_SWITCH } from "../src/background/accounts";
+import { accountLabel, activeAccount, MAX_INDEX, MAX_KEPT, WIPED_ON_SWITCH } from "../src/background/accounts";
 import { choicesOf, withChoices } from "../src/background/coin-control";
 import { LOCAL_ACCOUNT } from "../src/shared/preferences";
 import { testBalances, vectors } from "./fakes";
@@ -37,8 +37,11 @@ describe("the wallet's public accounts", () => {
     expect(await activeAccount(t.local)).toBe(0);
     await t.local.set(LOCAL_ACCOUNT, -1);
     expect(await activeAccount(t.local)).toBe(0);
-    await t.local.set(LOCAL_ACCOUNT, MAX_ACCOUNTS);
+    await t.local.set(LOCAL_ACCOUNT, MAX_INDEX + 1);
     expect(await activeAccount(t.local)).toBe(0);
+    // Any index CIP-1852 allows is one, though: the path component is hardened, so it runs to 2^31 - 1.
+    await t.local.set(LOCAL_ACCOUNT, MAX_INDEX);
+    expect(await activeAccount(t.local)).toBe(MAX_INDEX);
   });
 
   it("looks for accounts in order and stops at the first never used, one request each", async () => {
@@ -135,6 +138,61 @@ describe("the wallet's public accounts", () => {
     await expect(t.accounts.rename(2, "Nope")).rejects.toThrow("doesn't know that account");
   });
 
+  it("checks an account by number, whatever its index, and adds a used one", async () => {
+    const t = await unlocked();
+    // 1337 can never be reached by the sequential look: it stops at the first
+    // account never used, so account 1 ends it (the owner, 2026-10-02).
+    const stake = await stakeOf(t, 1337);
+    t.koios.usedStakes.add(stake);
+    t.koios.calls.length = 0;
+    expect(await t.accounts.check("preprod", 1337)).toEqual({ index: 1337, used: true });
+    expect(asked(t)).toEqual([[stake]]);
+    expect((await t.accounts.list()).accounts).toEqual([{ index: 0 }, { index: 1337, foundAt: t.clock.now }]);
+
+    // One never used is reported, not added: adding it is the user's call.
+    expect(await t.accounts.check("preprod", 9)).toEqual({ index: 9, used: false });
+    expect((await t.accounts.list()).accounts.map((a) => a.index)).toEqual([0, 1337]);
+
+    await expect(t.accounts.check("preprod", MAX_INDEX + 1)).rejects.toThrow("whole number from 0 to");
+    await expect(t.accounts.check("preprod", 1.5)).rejects.toThrow("whole number from 0 to");
+  });
+
+  it("adds an account that has never been used, asking nobody anything", async () => {
+    const t = await unlocked();
+    t.koios.calls.length = 0;
+    expect(await t.accounts.add(1337)).toEqual([{ index: 0 }, { index: 1337 }]);
+    // It exists in the phrase either way, and a user starting a custom account
+    // must not have to put something on chain first to be allowed to pick it.
+    expect(t.koios.calls).toEqual([]);
+    expect(await t.accounts.use(1337, ["preprod"])).toBe(1337);
+    expect(await t.wallet.withKeys(({ account }) => account)).toBe(1337);
+
+    // Adding it twice changes nothing, and a bad number is refused.
+    expect((await t.accounts.add(1337)).map((a) => a.index)).toEqual([0, 1337]);
+    await expect(t.accounts.add(-1)).rejects.toThrow("whole number from 0 to");
+    await expect(t.accounts.add(MAX_INDEX + 1)).rejects.toThrow("whole number from 0 to");
+  });
+
+  it("carries the sequential look on from the first gap, not the highest known", async () => {
+    const t = await unlocked();
+    // A custom account must not stop the look from ever reaching account 2.
+    await t.accounts.add(1337);
+    const second = await stakeOf(t, 1);
+    t.koios.usedStakes.add(second);
+    t.koios.calls.length = 0;
+
+    expect(await t.accounts.discover("preprod")).toEqual([{ index: 1, foundAt: t.clock.now }]);
+    expect(asked(t)).toEqual([[second], [await stakeOf(t, 2)]]);
+    expect((await t.accounts.list()).accounts.map((a) => a.index)).toEqual([0, 1, 1337]);
+  });
+
+  it("keeps at most MAX_KEPT accounts, which is a list length and not a limit on the numbers", async () => {
+    const t = await unlocked();
+    for (let i = 1; i < MAX_KEPT; i += 1) await t.accounts.add(i * 1000);
+    expect((await t.accounts.list()).accounts).toHaveLength(MAX_KEPT);
+    await expect(t.accounts.add(999_999)).rejects.toThrow(`keeps up to ${MAX_KEPT} accounts`);
+  });
+
   it("offers the active account even where discovery hasn't seen it used", async () => {
     const t = await unlocked();
     // Set by hand, as a network switch can leave it: account 2 is used on the
@@ -212,6 +270,41 @@ describe("paying your own public account from Seedelf", () => {
     // Someone else's address is still someone else's.
     const theirs = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!;
     expect(await resolveDestination(deps, "preprod", theirs.preprod.receive_0 as string)).toMatchObject({ own: false });
+  });
+});
+
+describe("the public Send and the wallet's own accounts", () => {
+  it("refuses another of your own accounts, however the address arrived", async () => {
+    const t = await unlocked();
+    t.koios.usedStakes.add(phrase(1).preprod.stake as string);
+    await t.accounts.discover("preprod");
+
+    // A public Send is an ordinary Cardano payment: anyone can see account A's
+    // address paying account B's and tell they are one wallet's. No warning
+    // undoes that once it is on chain, so it is refused (the owner, 2026-10-02).
+    const theirs = phrase(1).preprod.receive_0 as string;
+    await expect(t.send.build("preprod", [{ to: theirs, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
+      "That address is your own Account 2",
+    );
+    // Said with the way out, not just the refusal.
+    await expect(t.send.build("preprod", [{ to: theirs, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
+      "make this money private first",
+    );
+    // Among several recipients too, wherever it sits.
+    await expect(
+      t.send.build("preprod", [
+        { to: phrase(0).preprod.receive_1 as string, lovelace: "2000000", tokens: [] },
+        { to: theirs, lovelace: "2000000", tokens: [] },
+      ]),
+    ).rejects.toThrow("your own Account 2");
+  });
+
+  it("still pays this account, which is what the collateral payment is", async () => {
+    const t = await unlocked();
+    // The money comes straight back less the fee: it links nothing new, and
+    // Settings' collateral is exactly a payment to this account's own 0/0.
+    const summary = await t.send.build("preprod", [{ to: phrase(0).preprod.receive_0 as string, lovelace: "2000000", tokens: [] }]);
+    expect(summary.payments[0]).toMatchObject({ own: true, ownAccount: 0 });
   });
 });
 

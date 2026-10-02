@@ -156,7 +156,7 @@ export function Withdraw({
           </p>
         )}
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
-        {summary.payments.some((p) => p.own) && <OwnWarning />}
+        {summary.payments.some((p) => p.own) && <OwnWarning account={summary.payments.find((p) => p.own)?.ownAccount} />}
         <p className="note">
           Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.
         </p>
@@ -206,7 +206,7 @@ export function Withdraw({
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
             />
-            {read.state === "read" && read.destination.own && <OwnWarning />}
+            {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
 
             <div className="field">
               <label htmlFor={fieldId("withdraw-amount", d, i)}>Amount</label>
@@ -268,10 +268,12 @@ export function Withdraw({
   );
 }
 
-function OwnWarning() {
+/** `account`: which of the user's public accounts it is, when the wallet knows (chunk 18). */
+function OwnWarning({ account }: { account?: number }) {
   return (
     <Callout tone="warn" testId="withdraw-own">
-      This is your own public account. Making money public here links it back to it, and to whoever made it private.
+      This is your own {account === undefined ? "public account" : `Account ${account + 1}`}. Making money public here links
+      it back to it, and to whoever made it private.
     </Callout>
   );
 }

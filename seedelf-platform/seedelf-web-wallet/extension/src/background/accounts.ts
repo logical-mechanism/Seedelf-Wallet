@@ -37,15 +37,33 @@ import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
 
 /**
- * How many accounts past the last known one may be probed in one discovery.
- * BIP44 stops at the first unused account, so this is only a bound on the
- * Koios cost of a phrase whose accounts are a strange shape — one request
- * each, and nothing here is paged.
+ * How many accounts past the last sequential one may be probed in one
+ * discovery. BIP44 stops at the first unused account, so this is only a bound
+ * on the Koios cost of a phrase whose accounts are a strange shape — one
+ * request each, and nothing here is paged.
  */
 export const MAX_PROBE = 24;
 
-/** The most accounts a wallet keeps: past this the picker is no longer a picker. */
-export const MAX_ACCOUNTS = 25;
+/**
+ * The highest CIP-1852 account index there is: the path component is
+ * hardened, so `m/1852'/1815'/n'` runs to 2^31 - 1, and `seedelf-crypto`'s
+ * `check_account` refuses anything above it.
+ *
+ * **Not a count.** An earlier version of this file capped the *index* at 25,
+ * which quietly made a custom account — 1337, say — unreachable: sequential
+ * discovery stops at the first unused account, so it could never be found,
+ * and `use` refused anything discovery hadn't seen, so it could never be
+ * started either. Any index is allowed now; `check` and `add` are how a user
+ * reaches one (the owner, 2026-10-02).
+ */
+export const MAX_INDEX = 0x8000_0000 - 1;
+
+/**
+ * How many accounts the wallet keeps in its list. Not a limit on *which*
+ * accounts — any index up to `MAX_INDEX` may be one of them — only on how
+ * long the picker gets and how large the sealed record grows.
+ */
+export const MAX_KEPT = 100;
 
 /** Account 0, which every phrase has whether it has ever been used or not. */
 const FIRST: KnownAccount = { index: 0 };
@@ -141,7 +159,7 @@ export class AccountsService {
     if (!isIndex(index)) throw new Error("That isn't an account.");
     const known = await this.known();
     if (!known.some((a) => a.index === index)) {
-      throw new Error("Seedelf Wallet doesn't know that account. Check for it in Settings first.");
+      throw new Error("Seedelf Wallet doesn't know that account. Add it in Settings → Public accounts first.");
     }
     if ((await this.active()) === index) return index;
     await this.deps.local.set(LOCAL_ACCOUNT, index);
@@ -201,21 +219,72 @@ export class AccountsService {
    * account" passes 1, so it costs exactly one request.
    */
   async discover(network: NetworkName, limit = MAX_PROBE): Promise<KnownAccount[]> {
-    const { wallet, wasm, koios } = this.deps;
-    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const known = await this.known();
-    const highest = known.reduce((max, a) => Math.max(max, a.index), 0);
-    const client = koios(network);
     const found: KnownAccount[] = [];
-    for (let index = highest + 1; index < Math.min(highest + 1 + limit, MAX_ACCOUNTS); index += 1) {
-      const stake = await wallet.withAccount(index, ({ cardano }) => cardano.stakeAddress(net));
-      const addresses = await client.accountAddresses(stake);
-      // Never used: BIP44 stops here, and so does the Koios cost.
-      if (!addresses.length) break;
+    // From the first gap in the run up from 0, not from the highest known: a
+    // custom account the user added (1337, say) must not stop the sequential
+    // look from ever reaching account 2.
+    let index = nextSequential(known);
+    for (let probed = 0; probed < limit && index <= MAX_INDEX && known.length + found.length < MAX_KEPT; probed += 1) {
+      if (!(await this.used(network, index))) break; // Never used: BIP44 stops here, and so does the Koios cost.
       found.push({ index, foundAt: this.deps.now() });
+      index += 1;
     }
     if (found.length) await this.keep([...known, ...found]);
     return found;
+  }
+
+  /**
+   * Whether account `index` has ever been used, as **one** Koios
+   * `account_addresses` request about that one account's stake address.
+   */
+  private async used(network: NetworkName, index: number): Promise<boolean> {
+    const { wallet, wasm, koios } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const stake = await wallet.withAccount(index, ({ cardano }) => cardano.stakeAddress(net));
+    return (await koios(network).accountAddresses(stake)).length > 0;
+  }
+
+  /**
+   * Looks up **one** account the user named, whatever its index: the way to
+   * reach a custom or non-sequential account (1337, say), which the
+   * sequential look can never find because it stops at the first unused one
+   * (the owner, 2026-10-02).
+   *
+   * One `account_addresses` request. An account that has been used is added
+   * to the list; one that has not is only reported, since adding it is the
+   * user's call (`add`) and needs no request at all.
+   */
+  async check(network: NetworkName, index: number): Promise<{ index: number; used: boolean }> {
+    if (!isIndex(index)) throw new Error(badIndex);
+    const known = await this.known();
+    const used = await this.used(network, index);
+    if (used && !known.some((a) => a.index === index)) {
+      if (known.length >= MAX_KEPT) throw new Error(tooMany);
+      await this.keep([...known, { index, foundAt: this.deps.now() }]);
+    }
+    return { index, used };
+  }
+
+  /**
+   * Adds account `index` to the list whatever its index, and **whether or not
+   * it has ever been used** — the way to start a custom-numbered account
+   * (the owner, 2026-10-02). It exists in the derivation either way; an
+   * unused one simply holds nothing yet, and its addresses are derived as any
+   * account's are.
+   *
+   * **Asks nobody anything**, which makes it the more private of the two: a
+   * `check` tells Koios that this IP is interested in that account's stake
+   * address, and adding tells it nothing until the account is used.
+   */
+  async add(index: number): Promise<KnownAccount[]> {
+    if (!isIndex(index)) throw new Error(badIndex);
+    const known = await this.known();
+    if (known.some((a) => a.index === index)) return known;
+    if (known.length >= MAX_KEPT) throw new Error(tooMany);
+    const next = [...known, { index }];
+    await this.keep(next);
+    return sorted(next);
   }
 
   private async keep(known: KnownAccount[]): Promise<void> {
@@ -223,9 +292,22 @@ export class AccountsService {
   }
 }
 
-/** Whether `value` is an account index this wallet will use. */
+/** What the wallet says for an index outside CIP-1852's hardened range. */
+const badIndex = `An account number is a whole number from 0 to ${MAX_INDEX}.`;
+/** And for a list that is already as long as the picker should get. */
+const tooMany = `Seedelf Wallet keeps up to ${MAX_KEPT} accounts. Remove one from the list before adding another.`;
+
+/** The first index not in `known`, counting up from 0: where a sequential look carries on from. */
+function nextSequential(known: KnownAccount[]): number {
+  const have = new Set(known.map((a) => a.index));
+  let index = 0;
+  while (have.has(index)) index += 1;
+  return index;
+}
+
+/** Whether `value` is a CIP-1852 account index: any of them, not just a low one. */
 export function isIndex(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < MAX_ACCOUNTS;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_INDEX;
 }
 
 /** Account 0 first, each index once, and account 0 always there. */

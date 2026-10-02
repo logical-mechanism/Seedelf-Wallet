@@ -161,16 +161,23 @@ export function Settings({
  */
 function Accounts({ onBack, network }: { onBack: () => void; network: NetworkName }) {
   const { accounts, active, reload } = useAccounts();
-  const [busy, setBusy] = useState<"switch" | "check" | "name">();
+  const [busy, setBusy] = useState<"switch" | "check" | "name" | "look">();
   const [error, setError] = useState<string>();
   const [found, setFound] = useState<string>();
   const [naming, setNaming] = useState<number>();
   const [draft, setDraft] = useState("");
+  // The account number to look up or add. Any CIP-1852 index: a custom or
+  // non-sequential one (1337, say) is unreachable otherwise, since the
+  // sequential look stops at the first unused account (the owner, 2026-10-02).
+  const [number, setNumber] = useState("");
+  // Set when a checked account has never been used, so Add can be offered for it.
+  const [unused, setUnused] = useState<number>();
 
-  const run = async (what: "switch" | "check" | "name", task: () => Promise<void>) => {
+  const run = async (what: "switch" | "check" | "name" | "look", task: () => Promise<void>) => {
     setBusy(what);
     setError(undefined);
     setFound(undefined);
+    setUnused(undefined);
     try {
       await task();
       await reload();
@@ -181,14 +188,42 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
     }
   };
 
-  const check = () =>
-    run("check", async () => {
+  /** The next account in the sequential run, which is what most wallets have. */
+  const look = () =>
+    run("look", async () => {
       const { found: indexes } = await call("account-discover", { limit: 1 });
       setFound(
         indexes.length
           ? `Found Account ${indexes[0]! + 1}. It's in the list now.`
-          : `No account past Account ${accounts[accounts.length - 1]!.index + 1} has ever been used on ${NETWORKS[network].label}.`,
+          : `The next account in order has never been used on ${NETWORKS[network].label}. A custom number may still have been: check one below.`,
       );
+    });
+
+  /** The number typed, as an index from 0; undefined when it isn't a number a person would mean. */
+  const typed = () => {
+    const shown = Number(number.trim());
+    return Number.isInteger(shown) && shown >= 1 ? shown - 1 : undefined;
+  };
+
+  const checkOne = () => {
+    const index = typed();
+    if (index === undefined) return;
+    void run("check", async () => {
+      const { used } = await call("account-check", { index });
+      setFound(
+        used
+          ? `Account ${index + 1} has been used on ${NETWORKS[network].label}. It's in the list now.`
+          : `Account ${index + 1} has never been used on ${NETWORKS[network].label}. You can still add it and start using it.`,
+      );
+      if (!used) setUnused(index);
+    });
+  };
+
+  const addOne = (index: number) =>
+    run("check", async () => {
+      await call("account-add", { index });
+      setFound(`Account ${index + 1} is in the list now.`);
+      setNumber("");
     });
 
   return (
@@ -275,14 +310,65 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
           private payment would, so the wallet keeps them apart and says so when it can't.
         </p>
         <div className="actions">
-          <button type="button" className="secondary" onClick={() => void check()} disabled={busy !== undefined}>
-            {busy === "check" ? "Looking…" : "Check for another account"}
+          <button type="button" className="secondary" onClick={() => void look()} disabled={busy !== undefined}>
+            {busy === "look" ? "Looking…" : "Look for the next account"}
           </button>
         </div>
+        <form
+          className="account-number"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            checkOne();
+          }}
+        >
+          <label htmlFor="account-number">Account number</label>
+          <input
+            id="account-number"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={2147483648}
+            step={1}
+            value={number}
+            placeholder="1338"
+            onChange={(e) => {
+              setNumber(e.target.value);
+              setUnused(undefined);
+              setFound(undefined);
+            }}
+          />
+          <button type="submit" className="secondary" disabled={busy !== undefined || typed() === undefined}>
+            {busy === "check" ? "Looking…" : "Check it"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy !== undefined || typed() === undefined}
+            onClick={() => {
+              const index = typed();
+              if (index !== undefined) void addOne(index);
+            }}
+          >
+            Add it
+          </button>
+        </form>
         <p className="note" data-testid="accounts-cost-note">
-          That asks Koios about one account — the next one after Account {accounts[accounts.length - 1]!.index + 1}. The wallet
-          asks about one at a time: asking about twenty at once would tell Koios those twenty accounts are one wallet's.
+          <strong>Look for the next account</strong> and <strong>Check it</strong> each ask Koios about one account, and the
+          wallet only ever asks about one at a time: asking about twenty at once would tell Koios those twenty accounts are one
+          wallet's. <strong>Add it</strong> asks nobody anything.
         </p>
+        <p className="note" data-testid="accounts-custom-note">
+          A number of your own works too — 1338, say. The look above goes in order and stops at the first account never used, so
+          it can't find one out on its own; checking it by number can. You can add an account that has never been used and start
+          using it: it exists in your recovery phrase either way, and holds nothing until you put something there.
+        </p>
+        {unused !== undefined && (
+          <div className="actions" data-testid="accounts-add-unused">
+            <button type="button" className="primary" onClick={() => void addOne(unused)} disabled={busy !== undefined}>
+              Add Account {unused + 1} anyway
+            </button>
+          </div>
+        )}
         {found && (
           <p className="note" role="status" data-testid="accounts-found">
             {found}
