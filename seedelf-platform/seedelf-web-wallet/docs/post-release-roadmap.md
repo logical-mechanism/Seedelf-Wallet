@@ -16,6 +16,7 @@
 
 **The owner's call (2026-10-02): feature parity first, the look and feel after it.** The wallet can be feature-complete bar the dApp additions, and it's a better thing to put a style pass in front of once it is.
 
+0. **[A clean dependabot report](#step-0--a-clean-dependabot-report)** — the owner keeps these green, and it's cheap. Before chunk 18.
 1. **[Owed](#owed)** — promises the repo has already made.
 2. **[Feature parity: what's left](#feature-parity-whats-left)** — several accounts, language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
 3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
@@ -56,6 +57,33 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | Bitcoin, Midnight, mobile | None | **Cardano only for now**; others maybe much later |
 
 **Dark only**, by the owner's call — there is no light theme and no theme picker, and that isn't a gap. **One recovery phrase**, likewise: not a gap, not wanted.
+
+## Step 0 · a clean dependabot report
+
+**The owner, 2026-10-02: a pre-step, before chunk 18** — "I do like to maintain good dependabot reports."
+
+**Triaged on 2026-10-02: 25 open alerts, and none of the 14 high-severity ones reach the extension.**
+
+| What | Alerts | Where | What actually ships it |
+|---|---|---|---|
+| `urllib3` ×6, `cbor2` ×3, `idna`, `requests` | **11** | `seedelf-contracts/happy-path-scripts/seedelf/backend/requirements.txt` | **Nothing.** By-hand contract test scripts, pinned at 2024 versions. |
+| `openssl` | **8** | `Cargo.lock`, via `reqwest` → `hyper-tls` → `native-tls`, from `seedelf-koios` and `seedelf-display` | **The CLI binaries only.** 0.10.73 today; every one of the eight is patched by **0.10.80**. Absent from the WebAssembly — `cargo tree -p seedelf-wasm --target wasm32-unknown-unknown -i openssl` finds nothing. |
+| `rustls-webpki` 0.103.3 | **4** | `Cargo.lock` | **Nothing at all.** `cargo tree --target all -i rustls-webpki` finds no path to it on any target — a stale lock entry. A `cargo update` should drop it rather than upgrade it. |
+| `rpassword` (low) | **1** | `Cargo.lock`, a direct dependency of `seedelf-cli` | **The CLI only** — its password prompt. Patched 7.5.0. |
+| `rand` 0.8.5 (low) | **1** | `Cargo.lock`, via `group` ← `blstrs` | **The extension's WebAssembly** — the only flagged crate that reaches what users install. Patched 0.8.6. |
+
+**npm has no alerts at all:** the extension's own JavaScript dependencies are clean.
+
+**The order to do it in, and it's all cheap:**
+
+1. **Rust, in the lockfile only.** `openssl` → 0.10.80, `rand` → 0.8.6, `rpassword` → 7.5.0, and let `cargo update` drop `rustls-webpki` if nothing holds it. That's **all 14** Rust alerts with no source change and no version bump of our own crates.
+2. **The pip pins** in `happy-path-scripts/seedelf/backend/requirements.txt`. **11** alerts, and nothing shipped depends on any of them. Note `compile.sh` needs the `cbor2` package too (root [CLAUDE.md](../../../CLAUDE.md)), which is a separate install from this file — bumping the pin here doesn't touch it.
+
+**What proves the bump safe is already written.** `cargo test --workspace --locked` runs the **frozen derivation vectors** (`seedelf-crypto/tests/vectors/seedelf_key_v1.json`) and `constants_test.rs`'s pinned script hashes — exactly the two things a dependency change must not move: a phrase must still derive the same Seedelf key, and the contract hashes must still match what's deployed. Re-measure the module afterwards (`wasm/bench.mjs`), since its size is tracked and the store zip's size matters. Rust is pinned to 1.98.1 and `Cargo.lock` is tracked on purpose, so the whole thing is a reviewable diff.
+
+**The one worth fixing on merit rather than for a green badge:** `rpassword`'s advisory is *partial password reveal when input is interrupted*, and `rpassword` is what the CLI prompts for a wallet password with. Low severity, and precisely on-point for this project.
+
+**Worth a decision while in there:** `openssl` arrives only through `reqwest`'s default `native-tls` feature. On `rustls` instead, those eight alerts stop recurring rather than being patched each release, and the CLI loses its OpenSSL build dependency. That's a feature-flag change across `seedelf-koios` and `seedelf-display` with the live Koios tests as the check — bigger than a pre-step, so it's its own call. ❓
 
 ## Owed
 
@@ -260,4 +288,5 @@ What's left:
 
 1. **Confirm the DRep correction.** The owner's order was voting then DRep; registering is the *gate* on voting, so [the two are written as one chunk](#public-side-completeness) — *be your own DRep and vote*. Worth a yes, since it changes what gets built rather than only when.
 2. **Who reads the Spanish and Japanese privacy strings.** [P2](#p2--language) can be built before this is answered, but it can't ship without it — a machine-translated warning is a correctness bug, not a cosmetic one. If no fluent reader is available, shipping English-only for those strings is the honest fallback and the plan should say so.
-3. **Should each file in [plans/](plans/) say whether it's a live spec or a finished record?** Raised under [the documentation review](#the-documentation-review). Seventeen plans sit there now, and a stale one read as current is the failure mode that costs real work.
+3. **`rustls` instead of `native-tls`?** Raised in [step 0](#step-0--a-clean-dependabot-report): it would stop the eight `openssl` alerts recurring rather than patching them each release, and drop the CLI's OpenSSL build dependency. A feature-flag change, not a pre-step.
+4. **Should each file in [plans/](plans/) say whether it's a live spec or a finished record?** Raised under [the documentation review](#the-documentation-review). Seventeen plans sit there now, and a stale one read as current is the failure mode that costs real work.
