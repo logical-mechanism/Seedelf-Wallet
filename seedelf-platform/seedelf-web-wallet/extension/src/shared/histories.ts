@@ -35,6 +35,14 @@ export interface HistoryClass {
 export const UNKNOWN: HistoryClass = { id: "unknown", origin: "unknown" };
 /** Money made private from public account `account`, and its change. */
 export const madePrivate = (account: number): HistoryClass => ({ id: `public:${account}`, origin: "own" });
+export const receivedIn = (txHash: string): HistoryClass => ({ id: `received:${txHash}`, origin: "received" });
+/** Private session `index`'s (from 0, as the worker counts them). */
+export const sessionClass = (index: number): HistoryClass => ({ id: `session:${index}`, origin: "session" });
+/** A box back from Lovejoin: each withdraw brings back one. */
+export const boxFrom = (txHash: string): HistoryClass => ({ id: `box:${txHash}`, origin: "lovejoin" });
+/** Money with no history, by the transaction that made it: kept apart from other such money while anything else's is known. */
+export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txHash}`, origin: "unknown" });
+
 /**
  * The form `madePrivate` wrote before chunk 18, when there was one public
  * account: sealed history records on devices from then still hold it, bare or
@@ -53,15 +61,10 @@ const LEGACY_MADE_PRIVATE = "public";
 const canonicalPart = (part: string) => (part === LEGACY_MADE_PRIVATE ? "public:0" : part);
 
 /** The public account a part names, if it names one. */
-const accountIn = (part: string) =>
-  canonicalPart(part).startsWith("public:") ? Number(canonicalPart(part).slice("public:".length)) : undefined;
-export const receivedIn = (txHash: string): HistoryClass => ({ id: `received:${txHash}`, origin: "received" });
-/** Private session `index`'s (from 0, as the worker counts them). */
-export const sessionClass = (index: number): HistoryClass => ({ id: `session:${index}`, origin: "session" });
-/** A box back from Lovejoin: each withdraw brings back one. */
-export const boxFrom = (txHash: string): HistoryClass => ({ id: `box:${txHash}`, origin: "lovejoin" });
-/** Money with no history, by the transaction that made it: kept apart from other such money while anything else's is known. */
-export const unknownIn = (txHash: string): HistoryClass => ({ id: `unknown:${txHash}`, origin: "unknown" });
+const accountIn = (part: string) => {
+  const canonical = canonicalPart(part);
+  return canonical.startsWith("public:") ? Number(canonical.slice("public:".length)) : undefined;
+};
 
 const parts = (c: HistoryClass) => c.id.split("+").map(canonicalPart);
 
