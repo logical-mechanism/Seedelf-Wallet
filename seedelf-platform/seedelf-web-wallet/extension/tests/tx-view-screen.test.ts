@@ -93,6 +93,42 @@ describe("the transaction view's page", () => {
     expect(page).toContain("Collateral: 1 UTxO");
   });
 
+  it("shortens every id beside the button that copies it, and leaves an address whole", () => {
+    const detail = read(transferPreprod.final.txCbor);
+    const html = markup(transferPreprod.final.txCbor);
+    // An address is read rather than carried, so all of it is on the page — and
+    // copyable too, as everything else here is.
+    for (const out of detail.outputs) {
+      expect(html).toContain(`>${out.address.bech32}<`);
+    }
+    expect(html).toContain('aria-label="Copy the address"');
+    // A redeemer's budget is a line of its own, under the script it belongs to,
+    // so a ten-digit one can't squeeze which script it was.
+    expect(html).toMatch(/tx-detail__stack[\s\S]*?Runs a spending script[\s\S]*?tx-detail__budget/);
+  });
+
+  it("shortens a script's hash and a datum's, each with its own copy button", () => {
+    const detail: TxDetail = {
+      ...read(cborOf("payment")),
+      scripts: [{ kind: "plutusV3", hash: "cd".repeat(28), size: 2384, source: "witnesses" }],
+      datums: [{ hash: "ab".repeat(32), hex: "d87980", data: { type: "constr", constructorIndex: "0", fields: [] } }],
+    };
+    const html = renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }),
+      ),
+    ).replace(/&#x27;/g, "'");
+    for (const hash of ["cd".repeat(28), "ab".repeat(32)]) {
+      // Shortened where it's read, whole where it's taken from.
+      expect(html).not.toContain(`>${hash}<`);
+      expect(html).toContain(`data-value="${hash}"`);
+    }
+    expect(html).toContain("Copy the script's hash");
+    expect(html).toContain("Copy the datum's hash");
+  });
+
   it("shows a certificate transaction's certificates, its withdrawal and its note", () => {
     const page = shown(cborOf("certificates"));
     expect(page).toContain("Registers a stake key");

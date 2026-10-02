@@ -284,9 +284,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               <li key={i} className="list__row">
                 <span className="tx-detail__name">
                   {name(t)}
-                  <code className="tx-detail__ref" data-value={t.policyId} title={t.policyId}>
-                    {shortHex(t.policyId, 10, 6)}
-                  </code>
+                  <span className="tx-detail__line">
+                    <code className="tx-detail__ref" data-value={t.policyId} title={t.policyId}>
+                      {shortHex(t.policyId, 10, 6)}
+                    </code>
+                    <CopyButton value={t.policyId} label="Copy the policy id" />
+                  </span>
                 </span>
                 <span className="dapp-amount">
                   {BigInt(t.quantity) < 0n ? "−" : "+"}
@@ -353,8 +356,11 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           <ul className="list" data-testid={`${testId}-withdrawal-list`}>
             {d.withdrawals.map((w, i) => (
               <li key={i} className="list__row dapp-paid">
-                <span className="dapp-address" data-value={w.address}>
-                  {w.address}
+                <span className="tx-detail__line tx-detail__line--wide">
+                  <span className="dapp-address" data-value={w.address}>
+                    {w.address}
+                  </span>
+                  <CopyButton value={w.address} label="Copy the reward address" />
                 </span>
                 <span className="dapp-amount">{formatAda(w.lovelace)} ₳</span>
               </li>
@@ -367,12 +373,19 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         <Section title="Governance" id={`${testId}-governance`}>
           <ul className="list" data-testid={`${testId}-governance-list`}>
             {d.votes.map((v, i) => (
-              <li key={`v${i}`} className="list__row tx-detail__wrap">
+              <li key={`v${i}`} className="list__row tx-detail__stack">
                 <span className="tx-detail__name">
                   Votes {v.vote} as a {v.voter === "drep" ? "DRep" : v.voter === "pool" ? "stake pool" : "committee member"}
                 </span>
-                <span className="dapp-address">
-                  {v.action.txHash}#{v.action.index}
+                <span className="tx-detail__line">
+                  <code
+                    className="tx-detail__ref"
+                    data-value={`${v.action.txHash}#${v.action.index}`}
+                    title={`${v.action.txHash}#${v.action.index}`}
+                  >
+                    {shortHex(v.action.txHash, 12, 6)}#{v.action.index}
+                  </code>
+                  <CopyButton value={`${v.action.txHash}#${v.action.index}`} label="Copy the action's id" />
                 </span>
               </li>
             ))}
@@ -402,11 +415,14 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           {d.redeemers.length > 0 && (
             <ul className="list" data-testid={`${testId}-redeemer-list`}>
               {d.redeemers.map((r, i) => (
-                <li key={i} className="list__row tx-detail__wrap">
+                <li key={i} className="list__row tx-detail__stack">
                   <span className="tx-detail__name">
                     Runs a {redeemerWords(r.tag)} script, number {r.index}
                   </span>
-                  <span className="dapp-amount">
+                  {/* Its own line, under the script it belongs to: a budget runs
+                      to ten digits and more, and beside the words it squeezed
+                      them to a column (the owner, 2026-10-01). */}
+                  <span className="tx-detail__budget">
                     {/* Grouped through bigint: a budget can be bigger than a JavaScript number holds. */}
                     {formatQuantity(r.mem, 0)} mem · {formatQuantity(r.steps, 0)} steps
                   </span>
@@ -418,8 +434,11 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                       testId={`${testId}-redeemer-${i}`}
                     />
                   ) : (
-                    <span className="dapp-address" data-value={r.data}>
-                      {shortHex(r.data, 24, 12)}
+                    <span className="tx-detail__line">
+                      <code className="tx-detail__ref" data-value={r.data} title={r.data}>
+                        {shortHex(r.data, 24, 12)}
+                      </code>
+                      <CopyButton value={r.data} label="Copy the redeemer's bytes" />
                     </span>
                   )}
                 </li>
@@ -429,14 +448,16 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           {d.scripts.length > 0 && (
             <ul className="list" data-testid={`${testId}-script-list`}>
               {d.scripts.map((s, i) => (
-                <li key={`${s.hash}${i}`} className="list__row tx-detail__wrap">
+                <li key={`${s.hash}${i}`} className="list__row tx-detail__stack">
                   <span className="tx-detail__name">
                     {scriptWords(s.kind)}, {s.size} bytes, {scriptWhere(s.source)}
                   </span>
-                  <CopyButton value={s.hash} label="Copy the script's hash" />
-                  <code className="dapp-address" data-value={s.hash}>
-                    {s.hash}
-                  </code>
+                  <span className="tx-detail__line">
+                    <code className="tx-detail__ref" data-value={s.hash} title={s.hash}>
+                      {shortHex(s.hash, 12, 8)}
+                    </code>
+                    <CopyButton value={s.hash} label="Copy the script's hash" />
+                  </span>
                 </li>
               ))}
             </ul>
@@ -444,14 +465,17 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           {d.datums.length > 0 && (
             <ul className="list" data-testid={`${testId}-datum-list`}>
               {d.datums.map((datum, i) => (
-                <li key={i} className="list__row tx-detail__wrap">
+                <li key={i} className="list__row tx-detail__stack">
                   {/* Nothing here says whose datum it is: one in the witness set
                       belongs to whichever output names its hash, which could be
                       any contract at all. */}
                   <span className="tx-detail__name">A datum</span>
-                  <code className="dapp-address" data-value={datum.hash} title={`Its hash: ${datum.hash}`}>
-                    {datum.hash}
-                  </code>
+                  <span className="tx-detail__line">
+                    <code className="tx-detail__ref" data-value={datum.hash} title={`Its hash: ${datum.hash}`}>
+                      {shortHex(datum.hash, 12, 8)}
+                    </code>
+                    <CopyButton value={datum.hash} label="Copy the datum's hash" />
+                  </span>
                   <PlutusTree label="The datum" hex={datum.hex} value={datum.data} testId={`${testId}-datum-${i}`} />
                 </li>
               ))}
@@ -520,7 +544,13 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
   );
 }
 
-/** One output: the whole address on its own line, then what goes there. */
+/**
+ * One output: the whole address on its own line, then what goes there.
+ *
+ * The address is the one thing here read rather than carried — a payment is
+ * checked by reading all of it — so it isn't shortened the way the ids are. The
+ * button is for carrying it anyway (the owner, 2026-10-01).
+ */
 function Output({
   output: o,
   amount,
@@ -532,8 +562,11 @@ function Output({
 }) {
   return (
     <li className="list__row dapp-paid">
-      <span className="dapp-address" data-value={o.address.bech32}>
-        {o.address.bech32}
+      <span className="tx-detail__line tx-detail__line--wide">
+        <span className="dapp-address" data-value={o.address.bech32}>
+          {o.address.bech32}
+        </span>
+        <CopyButton value={o.address.bech32} label="Copy the address" />
       </span>
       <span className="note">
         {`#${o.index} · ${addressWords(o.address.kind, o.address.payment)}`}

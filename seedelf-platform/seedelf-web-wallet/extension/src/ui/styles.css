@@ -3117,6 +3117,44 @@ button.dapp-tile:hover {
   align-items: start;
 }
 
+/* A row whose parts each take the whole width, one line under another, rather
+   than sharing it: a redeemer's script and the budget it claims, a script and
+   its hash. Sharing a line, a long value squeezed the words beside it down to
+   a column of two syllables (the owner, 2026-10-01). */
+.tx-detail__stack {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+/* What a redeemer claims of the block's budget: its own line, and numbers that
+   line up under each other. */
+.tx-detail__budget {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* An id or an address beside the button that copies it. */
+.tx-detail__line {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* The same, where it takes the row's whole width: an address shown in full,
+   with the button kept at the top of it however many lines it runs to. */
+.tx-detail__line--wide {
+  grid-column: 1 / -1;
+  align-items: start;
+}
+
+.tx-detail__line > .chip {
+  flex: none;
+}
+
 .tx-detail__name {
   display: flex;
   flex-direction: column;
