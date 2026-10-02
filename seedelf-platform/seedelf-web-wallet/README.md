@@ -2,7 +2,7 @@
 
 A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
-> **Status:** launch prep. Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+> **Status:** released. v1.0.0 reached the Chrome Web Store on 2026-09-28 and 1.1.0 followed on 2026-10-01. Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what was built is in [docs/roadmap.md](docs/roadmap.md), and what comes next is in [docs/post-release-roadmap.md](docs/post-release-roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
@@ -46,9 +46,11 @@ So money that sits stays staked in the public account, and is made private when 
 
 **After v1: the transaction view** ([plans/chunk-17-transaction-view.md](docs/plans/chunk-17-transaction-view.md)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
 
-**Later, maybe:** NFT images, several accounts, and word of incoming payments without opening the wallet (it would need reading the chain in the background).
+**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): several Cardano accounts, not just the first; the wallet in Spanish and Japanese as well as English; NFT images, shown when you click one, downloaded to your own browser rather than through anything of ours. Then being your own DRep and voting on governance actions, and a pass over how all of it looks and reads.
 
-**Not planned:** voting on proposals or registering as a DRep, several pools per account, hardware wallets, other chains, mobile. We add features only if there's demand.
+**Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet.
+
+**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), other chains, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand.
 
 ## Relationship to the CLI
 
@@ -70,7 +72,8 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
 | [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
-| [roadmap.md](docs/roadmap.md) | Build chunks, their status, and handoff notes between sessions |
+| [roadmap.md](docs/roadmap.md) | How v1 was built: the 17 chunks and a one-line handoff note each ([archive/](docs/archive/roadmap-v1.md) keeps every note in full) |
+| [post-release-roadmap.md](docs/post-release-roadmap.md) | What comes after v1: the order (parity, then the look and feel), where Cardano parity stands against Lace, and what's declined and why |
 
 ## Reference: Lace
 
