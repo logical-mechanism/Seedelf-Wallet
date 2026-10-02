@@ -274,10 +274,12 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
                     )}
                   </span>
                   <span className="account-row__actions">
+                    {/* A chip, as Copy and Max are: one row an account, so a
+                        full-height button next to each name is far too heavy. */}
                     {a.index !== active && (
                       <button
                         type="button"
-                        className="secondary"
+                        className="chip"
                         disabled={busy !== undefined}
                         onClick={() => void run("switch", () => call("account-use", { index: a.index }).then(() => undefined))}
                       >
