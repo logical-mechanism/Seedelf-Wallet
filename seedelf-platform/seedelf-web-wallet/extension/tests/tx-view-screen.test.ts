@@ -43,6 +43,22 @@ function text(element: ReactElement, network: "preprod" | "mainnet" = "preprod")
 const shown = (cbor: string, network: "preprod" | "mainnet" = "preprod") =>
   text(createElement(TxDetailBody, { detail: read(cbor, network), network, testId: "tx" }), network);
 
+/**
+ * The page's markup, with the entities read back, for what a person sees only on
+ * hover: a hint's `title`, which never shows as text.
+ */
+const markup = (cbor: string, network: "preprod" | "mainnet" = "preprod") =>
+  renderToStaticMarkup(
+    createElement(
+      NetworkContext.Provider,
+      { value: network },
+      createElement(TxDetailBody, { detail: read(cbor, network), network, testId: "tx" }),
+    ),
+  )
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+
 describe("the transaction view's page", () => {
   it("leads with what the transaction spends and what it pays", async () => {
     const page = shown(transferPreprod.final.txCbor);
@@ -55,9 +71,8 @@ describe("the transaction view's page", () => {
     }
     // Where the value goes comes before the fee.
     expect(page.indexOf("Pays 2 outputs")).toBeLessThan(page.indexOf("Network fee"));
-    // An input is named, and the view says why it holds nothing more about it.
+    // An input is named, and nothing else takes up the room.
     expect(page).toContain(`${detail.inputs[0]!.txHash.slice(0, 12)}`);
-    expect(page).toContain("looking them up would tell whoever was asked");
   });
 
   it("says a Seedelf output is one, and that its register could be spent", () => {
@@ -75,7 +90,6 @@ describe("the transaction view's page", () => {
     expect(page).toContain("steps");
     expect(page).toContain("Reads 1 UTxO");
     expect(page).toContain("Collateral: 1 UTxO");
-    expect(page).toContain("It doesn't take one apart");
   });
 
   it("shows a certificate transaction's certificates, its withdrawal and its note", () => {
@@ -280,5 +294,47 @@ describe("nothing the decoder found is left off the page", () => {
     const page = shown(cborOf("payment"));
     expect(page).not.toContain("older");
     expect(page).not.toContain("legacy");
+  });
+});
+
+describe("the explanations behind their icons", () => {
+  // Each paragraph the page used to carry under its rows (the owner, 2026-10-01):
+  // it's a hint now, shown on hover and put on the page by a click.
+  const HINTS = [
+    "looking them up would tell whoever was asked which transaction you are reading",
+    "Read, not spent: a contract's script or its settings usually sit in one.",
+    "It doesn't take one apart",
+    "Metadata is in the open",
+  ];
+
+  it("keeps every explanation, but off the page until it's asked for", () => {
+    const page = shown(transferPreprod.final.txCbor);
+    const html = markup(transferPreprod.final.txCbor);
+    for (const hint of HINTS.slice(0, 3)) {
+      expect(html, hint).toContain(hint);
+      expect(page, hint).not.toContain(hint);
+    }
+    // Each is the icon's title, which is what shows on hover, and its button
+    // says what it does for anyone not using a mouse.
+    expect(html).toContain('title="What each one holds');
+    expect(html).toContain('aria-label="What this means"');
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("explains the metadata and the note where there are any", () => {
+    const html = markup(cborOf("certificates"));
+    expect(html).toContain("Metadata is in the open");
+    expect(html).toContain("A message written on the transaction");
+    expect(text(createElement(TxDetailBody, { detail: read(cborOf("certificates")), network: "preprod" as const, testId: "tx" }))).not.toContain(
+      "Metadata is in the open",
+    );
+  });
+
+  it("leaves a warning where everyone reads it, hint or no hint", () => {
+    // A callout is a decision, not an explanation: it never hides behind an icon.
+    const detail: TxDetail = { ...read(cborOf("payment")), valid: false, unknown: [{ at: "body", field: "23", hex: "00" }] };
+    const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
+    expect(page).toContain("marked to fail its contracts");
+    expect(page).toContain("has no name for");
   });
 });

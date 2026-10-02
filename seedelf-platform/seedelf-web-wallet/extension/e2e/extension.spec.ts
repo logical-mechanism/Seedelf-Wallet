@@ -991,6 +991,20 @@ test("the transaction view: the bytes under a review, their CBOR, and the paymen
   expect(koios.calls.length).toBe(reads);
   await snap(page, "tx-detail");
 
+  // The explanations sit behind icons rather than under the rows (the owner,
+  // 2026-10-01): on hover through the title, and on the page when clicked.
+  const inputs = view.getByTestId("send-tx-inputs-hint");
+  const explains = "looking them up would tell whoever was asked which transaction you are reading";
+  await expect(inputs).toHaveAttribute("title", new RegExp(explains));
+  await expect(view).not.toContainText(explains);
+  await expect(inputs).toHaveAttribute("aria-expanded", "false");
+  await inputs.click();
+  await expect(view.getByTestId("send-tx-inputs-hint-text")).toContainText(explains);
+  await expect(inputs).toHaveAttribute("aria-expanded", "true");
+  // And away again, so it never takes the room for good.
+  await inputs.click();
+  await expect(view.getByTestId("send-tx-inputs-hint-text")).toHaveCount(0);
+
   // The raw bytes, as hex, with nothing asked of anyone to show them.
   await view.getByRole("tab", { name: "Raw CBOR" }).click();
   const cbor = view.getByTestId("send-tx-cbor");
@@ -998,6 +1012,9 @@ test("the transaction view: the bytes under a review, their CBOR, and the paymen
   const hex = (await cbor.getAttribute("data-value"))!;
   expect(hex).toMatch(/^84[0-9a-f]+$/);
   await expect(view).toContainText(`${hex.length / 2} bytes of CBOR`);
+  await expect(view).not.toContainText("These are the bytes the wallet would sign");
+  await view.getByTestId("send-tx-cbor-hint").click();
+  await expect(view.getByTestId("send-tx-cbor-note")).toContainText("These are the bytes the wallet would sign");
   await snap(page, "tx-detail-cbor");
 
   // Closed with Escape, as a dialog closes; the review is where it was.
@@ -1032,8 +1049,11 @@ test("the transaction view on a Seedelf payment: the contract, the register, and
   // It pays Seedelf Wallet's own contract, under a register only its owner can spend.
   await expect(view).toContainText("Seedelf Wallet's contract");
   await expect(view).toContainText("under a register");
-  // And the view says why it holds nothing about what the inputs hold.
-  await expect(view).toContainText("looking them up would tell whoever was asked");
+  // And the icon beside Spends says why it holds nothing about what they hold.
+  await expect(view.getByTestId("move-in-tx-inputs-hint")).toHaveAttribute(
+    "title",
+    /looking them up would tell whoever was asked/,
+  );
   expect(koios.submitted).toHaveLength(0);
   await page.keyboard.press("Escape");
   await expect(view).toHaveCount(0);

@@ -254,3 +254,29 @@ would read as a warning about nothing. The Raw CBOR tab has the bytes.
 
 A tenth fixture went in with it: a stake pool's own registration, with every
 parameter, and its retirement, cross-checked against cardano-cli's reading.
+
+## Less prose on the page (the owner, 2026-10-01)
+
+> Lets cut the paragraph amount of text below inputs … like this could be an icon
+> that when hovering it shows that. Honestly probably a lot of the paragraphs we
+> have could be like that.
+
+The view's six explanations are behind icons now (`components/Hint.tsx`, new and
+shared): an ⓘ in the section's heading, the text on hover through `title`, and on
+the page under the heading when it's clicked. Hover alone would leave out anyone
+on a keyboard, a screen reader or a touch screen, so the icon does all three at
+once, and the text takes room in the flow when it opens rather than floating —
+a scrolling panel can never clip it.
+
+**Where it stops.** A privacy `Callout` is a decision from
+[privacy.md](../privacy.md), not an explanation to ask for, and
+`tests/screens.test.ts` pins the wording of several; a warning (a transaction
+marked to fail, a field the wallet can't name) is the same. Those stay where
+everyone reads them, and a test says so.
+
+**The rest of the wallet is the owner's to pick.** There are about 150 plain
+`<p className="note">` paragraphs across the screens — Swaps 22, Settings 20,
+Lovejoin 17, the connector's window 13, Staking 11 — and each was argued over in
+chunks 12 and 14 or in the privacy review, so sweeping them without the owner
+would undo decisions rather than tidy them. The component is there for whichever
+they name.

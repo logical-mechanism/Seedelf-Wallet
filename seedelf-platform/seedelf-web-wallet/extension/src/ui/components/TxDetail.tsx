@@ -25,6 +25,7 @@ import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, Tx
 import { call } from "../background";
 import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
+import { HintButton, HintText, useHint } from "./Hint";
 import { ExpandIcon, SpinnerIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
@@ -134,32 +135,53 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
   );
 }
 
+/** What the raw bytes are, behind the icon beside them. */
+const RAW_HINT =
+  "These are the bytes the wallet would sign and send, exactly as they are. Nothing was asked of the network to show them.";
+
 /** The bytes themselves, to take to any other decoder. */
 function Raw({ cbor, testId }: { cbor: string; testId: string }) {
+  const { open, toggle, id } = useHint();
   return (
     <>
       <div className="field-row">
         <span className="note">{cbor.length / 2} bytes of CBOR, as hex</span>
-        <CopyButton value={cbor} label="Copy the transaction's CBOR" />
+        <span className="tx-detail__head">
+          <HintButton
+            text={RAW_HINT}
+            open={open}
+            onToggle={toggle}
+            controls={id}
+            testId={`${testId}-cbor-hint`}
+          />
+          <CopyButton value={cbor} label="Copy the transaction's CBOR" />
+        </span>
       </div>
+      {open && <HintText text={RAW_HINT} id={id} testId={`${testId}-cbor-note`} />}
       <pre className="dapp-message" data-testid={`${testId}-cbor`} data-value={cbor}>
         {cbor}
       </pre>
-      <p className="note">
-        These are the bytes the wallet would sign and send, exactly as they are. Nothing was asked of the network to
-        show them.
-      </p>
     </>
   );
 }
 
-/** One section with a heading, when it has anything in it. */
-function Section({ title, id, children }: { title: string; id: string; children: ReactNode }) {
+/**
+ * One section with a heading, and what it holds. `hint` is the paragraph that
+ * explains it: it sits behind an icon in the heading rather than under the rows,
+ * where a few of them together crowded out what the section was for (the owner,
+ * 2026-10-01). Hovering the icon shows it; clicking puts it on the page.
+ */
+function Section({ title, id, hint, children }: { title: string; id: string; hint?: string; children: ReactNode }) {
+  const { open, toggle, id: hintId } = useHint();
   return (
     <section className="section" aria-labelledby={id}>
-      <h2 id={id} className="tx-detail__heading">
-        {title}
-      </h2>
+      <div className="tx-detail__head">
+        <h2 id={id} className="tx-detail__heading">
+          {title}
+        </h2>
+        {hint && <HintButton text={hint} open={open} onToggle={toggle} controls={hintId} testId={`${id}-hint`} />}
+      </div>
+      {hint && open && <HintText text={hint} id={hintId} testId={`${id}-hint-text`} />}
       {children}
     </section>
   );
@@ -213,12 +235,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         </Callout>
       )}
 
-      <Section title={`Spends ${plural(d.inputs.length, "UTxO")}`} id={`${testId}-inputs`}>
+      <Section
+        title={`Spends ${plural(d.inputs.length, "UTxO")}`}
+        id={`${testId}-inputs`}
+        hint="What each one holds isn't in the transaction, and the wallet asks nobody: looking them up would tell whoever was asked which transaction you are reading."
+      >
         <Outpoints list={d.inputs} testId={`${testId}-input-list`} />
-        <p className="note">
-          What each one holds isn't in the transaction, and the wallet asks nobody: looking them up would tell whoever
-          was asked which transaction you are reading.
-        </p>
       </Section>
 
       <Section title={`Pays ${plural(d.outputs.length, "output")}`} id={`${testId}-outputs`}>
@@ -230,9 +252,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       </Section>
 
       {d.referenceInputs.length > 0 && (
-        <Section title={`Reads ${plural(d.referenceInputs.length, "UTxO")}`} id={`${testId}-reference`}>
+        <Section
+          title={`Reads ${plural(d.referenceInputs.length, "UTxO")}`}
+          id={`${testId}-reference`}
+          hint="Read, not spent: a contract's script or its settings usually sit in one."
+        >
           <Outpoints list={d.referenceInputs} testId={`${testId}-reference-list`} />
-          <p className="note">Read, not spent: a contract's script or its settings usually sit in one.</p>
         </Section>
       )}
 
@@ -368,7 +393,11 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       )}
 
       {(d.redeemers.length > 0 || d.scripts.length > 0 || d.datums.length > 0 || d.requiredSigners.length > 0) && (
-        <Section title="Contracts" id={`${testId}-contracts`}>
+        <Section
+          title="Contracts"
+          id={`${testId}-contracts`}
+          hint="The wallet shows a script by its hash, its kind and its size. It doesn't take one apart: what a contract does is its code, and reading that here would say more than it could prove."
+        >
           {d.redeemers.length > 0 && (
             <ul className="list" data-testid={`${testId}-redeemer-list`}>
               {d.redeemers.map((r, i) => (
@@ -425,24 +454,27 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               ))}
             </ReviewRows>
           )}
-          <p className="note">
-            The wallet shows a script by its hash, its kind and its size. It doesn't take one apart: what a contract
-            does is its code, and reading that here would say more than it could prove.
-          </p>
         </Section>
       )}
 
       {d.note && (
-        <Section title="Its note" id={`${testId}-note`}>
+        <Section
+          title="Its note"
+          id={`${testId}-note`}
+          hint="A message written on the transaction (CIP-20's), which anyone reading the chain can read."
+        >
           <pre className="dapp-message" data-testid={`${testId}-note-text`}>
             {d.note.join("\n")}
           </pre>
-          <p className="note">A message on the transaction (CIP-20), which anyone can read.</p>
         </Section>
       )}
 
       {d.metadata.length > 0 && (
-        <Section title="Metadata" id={`${testId}-metadata`}>
+        <Section
+          title="Metadata"
+          id={`${testId}-metadata`}
+          hint="Metadata is in the open: anyone reading the chain can read it."
+        >
           <ul className="list" data-testid={`${testId}-metadata-list`}>
             {d.metadata.map((m, i) => (
               <li key={i} className="list__row tx-detail__wrap">
@@ -453,7 +485,6 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               </li>
             ))}
           </ul>
-          <p className="note">Metadata is in the open: anyone reading the chain can read it.</p>
         </Section>
       )}
 

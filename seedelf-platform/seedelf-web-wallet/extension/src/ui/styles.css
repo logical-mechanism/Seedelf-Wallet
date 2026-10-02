@@ -3085,7 +3085,15 @@ button.dapp-tile:hover {
   user-select: text;
 }
 
+/* A section's heading row: its name, and the icon that explains it. */
+.tx-detail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
 .tx-detail__heading {
+  flex: 1;
   margin: 0;
   font-size: 13px;
   font-weight: 600;
@@ -3158,4 +3166,31 @@ button.dapp-tile:hover {
   user-select: text;
   overflow-wrap: anywhere;
   unicode-bidi: isolate;
+}
+
+/* An explanation behind an icon (components/Hint.tsx): the text on hover, and
+   on the page once the icon is clicked. Quiet until it's wanted. */
+
+.hint {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: help;
+}
+
+.hint:not(:disabled):hover,
+.hint[aria-expanded="true"] {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.hint__text {
+  margin: 0;
 }
