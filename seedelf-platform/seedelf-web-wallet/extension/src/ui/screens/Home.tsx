@@ -49,6 +49,7 @@ import {
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
 import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, whenOf, withRewards } from "../format";
+import { useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
@@ -85,6 +86,9 @@ const ALL_LOCKED = "Every UTxO here is locked: unlock one under UTxOs";
  * Back pressed several times.
  */
 export function Home({ goHome = 0 }: { goHome?: number }) {
+  // The public tab says which account it is showing, once there is more than
+  // one: the balance below it is that account's alone, never a total.
+  const accounts = useAccounts();
   const [account, setAccount] = useState<Account>();
   const [balances, setBalances] = useState<Balances>();
   const [reading, setReading] = useState(false);
@@ -463,7 +467,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             <div className="hero">
               <div className="hero__head">
                 <h1 id="cardano-account" className="hero__label">
-                  Public account
+                  {accounts.several ? accounts.name : "Public account"}
                 </h1>
                 <HideToggle />
               </div>

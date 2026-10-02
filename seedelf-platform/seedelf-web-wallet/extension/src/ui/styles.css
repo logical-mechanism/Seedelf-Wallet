@@ -906,6 +906,41 @@ main {
 }
 
 /* Which network a new wallet is on, chosen before its phrase (a build with both). */
+/* The public account the wallet is working on, in the top bar: hidden with one
+   account, so a wallet that never had a second looks exactly as it did. */
+.account-picker select {
+  width: auto;
+  max-width: 11ch;
+  padding: 2px 6px;
+  font-size: var(--text-sm);
+}
+.account-picker__error {
+  position: absolute;
+}
+
+/* Settings → Public accounts: one row an account, with its name and what it can do. */
+.account-row__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  width: 100%;
+}
+.account-row__name input {
+  flex: 1 1 8rem;
+  width: auto;
+}
+.account-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.account-row__active {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 .network-picker {
   display: flex;
   flex-wrap: wrap;

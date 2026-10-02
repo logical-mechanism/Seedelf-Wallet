@@ -2,13 +2,14 @@
 // (`status`) on open and refreshes it whenever the worker says it changed.
 // Navigation is plain state switching, no router.
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { enabledNetworks, NETWORKS, serviceHosts } from "../networks";
 import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
+import { AccountPicker } from "./components/AccountPicker";
 import { LockCountdown } from "./components/LockCountdown";
 import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
 import { DappApprovals } from "./screens/DappApprovals";
@@ -16,6 +17,7 @@ import { Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
+import { AccountsProvider, useAccounts } from "./accounts";
 import { NetworkContext } from "./network";
 import { PreferencesProvider } from "./preferences";
 import { connectorWindow, openInTab, startFromHash, view } from "./view";
@@ -151,6 +153,7 @@ export function App() {
           brand
         )}
         {network && <NetworkBadge network={network.name} />}
+        {unlocked && !connectorWindow && <AccountPicker />}
         <span className="topbar__spacer" />
         {unlocked && !connectorWindow && (
           <button
@@ -183,7 +186,12 @@ export function App() {
         <NetworkContext.Provider value={status?.network ?? "preprod"}>
           {/* A switch in Settings starts every screen afresh on the new network: nothing read or reviewed on the other stays. */}
           <PreferencesProvider unlocked={unlocked}>
-            <Fragment key={status?.network}>{screen}</Fragment>
+            <AccountsProvider unlocked={unlocked}>
+              {/* And on the new public account, for the same reason: a balance,
+                  a review or a UTxO list read for one account says nothing
+                  about another (chunk 18). */}
+              <ScreenForAccount network={status?.network}>{screen}</ScreenForAccount>
+            </AccountsProvider>
           </PreferencesProvider>
         </NetworkContext.Provider>
       </main>
@@ -193,6 +201,12 @@ export function App() {
       </footer>
     </div>
   );
+}
+
+/** Every screen afresh when the network or the public account changes. */
+function ScreenForAccount({ network, children }: { network?: string; children: ReactNode }) {
+  const { active } = useAccounts();
+  return <Fragment key={`${network ?? ""}:${active}`}>{children}</Fragment>;
 }
 
 /** The manifest's host permissions: the wallet's own services, Koios among them. */

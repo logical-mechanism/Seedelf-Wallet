@@ -40,6 +40,7 @@ import {
   TrashIcon,
   UsersIcon,
   VaultIcon,
+  WalletIcon,
 } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
@@ -51,6 +52,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 import { plural } from "../format";
+import { accountName, useAccounts } from "../accounts";
 import { usePreferences } from "../preferences";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
@@ -60,7 +62,7 @@ const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
+type Page = "menu" | "accounts" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
 
 /** The currencies ADA's value can be shown in, by name. */
 const CURRENCY_NAMES: Record<(typeof CURRENCIES)[number], string> = {
@@ -92,6 +94,7 @@ export function Settings({
   const { prefs } = usePreferences();
   const prices = !!NETWORKS[status.network].prices && prefs.currency !== "off";
   const menu = () => setPage("menu");
+  if (page === "accounts") return <Accounts onBack={menu} network={status.network} />;
   if (page === "contacts") return <Contacts onBack={menu} />;
   if (page === "collateral") return <Collateral onBack={menu} />;
   if (page === "sites") return <ConnectedSites onBack={menu} />;
@@ -106,6 +109,7 @@ export function Settings({
       <section className="section" aria-labelledby="wallet-title">
         <h2 id="wallet-title">Wallet</h2>
         <ul className="list">
+          <MenuRow icon={<WalletIcon size={16} />} label="Public accounts" onClick={() => setPage("accounts")} />
           <MenuRow icon={<UsersIcon size={16} />} label="Contacts" onClick={() => setPage("contacts")} />
           <MenuRow icon={<VaultIcon size={16} />} label="Collateral" onClick={() => setPage("collateral")} />
         </ul>
@@ -139,6 +143,156 @@ export function Settings({
         <p className="note" data-testid="talks-to">
           {talksTo(prices, lovejoinOn(status.network))}
         </p>
+      </section>
+    </Screen>
+  );
+}
+
+
+/**
+ * The phrase's public accounts: which one the wallet works on, what each is
+ * called, and a look for one more.
+ *
+ * **What "check for another account" costs:** one Koios
+ * `account_addresses` request, for the next account after the highest the
+ * wallet knows. It asks about one account at a time on purpose — a single
+ * request for twenty stake addresses would tell Koios those twenty are one
+ * wallet's, which is the opposite of what several accounts are for.
+ */
+function Accounts({ onBack, network }: { onBack: () => void; network: NetworkName }) {
+  const { accounts, active, reload } = useAccounts();
+  const [busy, setBusy] = useState<"switch" | "check" | "name">();
+  const [error, setError] = useState<string>();
+  const [found, setFound] = useState<string>();
+  const [naming, setNaming] = useState<number>();
+  const [draft, setDraft] = useState("");
+
+  const run = async (what: "switch" | "check" | "name", task: () => Promise<void>) => {
+    setBusy(what);
+    setError(undefined);
+    setFound(undefined);
+    try {
+      await task();
+      await reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const check = () =>
+    run("check", async () => {
+      const { found: indexes } = await call("account-discover", { limit: 1 });
+      setFound(
+        indexes.length
+          ? `Found Account ${indexes[0]! + 1}. It's in the list now.`
+          : `No account past Account ${accounts[accounts.length - 1]!.index + 1} has ever been used on ${NETWORKS[network].label}.`,
+      );
+    });
+
+  return (
+    <Screen title="Public accounts" titleId="accounts-title" onBack={onBack}>
+      <section className="section" aria-labelledby="accounts-list-title">
+        <h2 id="accounts-list-title">Accounts</h2>
+        <ul className="list" data-testid="accounts-list">
+          {accounts.map((a) => (
+            <li key={a.index} className="account-row">
+              {naming === a.index ? (
+                <form
+                  className="account-row__name"
+                  onSubmit={(e: FormEvent) => {
+                    e.preventDefault();
+                    void run("name", async () => {
+                      await call("account-rename", { index: a.index, name: draft });
+                      setNaming(undefined);
+                    });
+                  }}
+                >
+                  <label className="sr-only" htmlFor={`account-name-${a.index}`}>
+                    What to call Account {a.index + 1}
+                  </label>
+                  <input
+                    id={`account-name-${a.index}`}
+                    value={draft}
+                    maxLength={24}
+                    autoFocus
+                    placeholder={`Account ${a.index + 1}`}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <button type="submit" className="secondary" disabled={busy !== undefined}>
+                    Save
+                  </button>
+                  <button type="button" className="link" onClick={() => setNaming(undefined)}>
+                    Cancel
+                  </button>
+                </form>
+              ) : (
+                <div className="account-row__name">
+                  <span>
+                    {accountName(a)}
+                    {a.index === active && (
+                      <span className="account-row__active" data-testid={`account-active-${a.index}`}>
+                        {" "}
+                        · working on this one
+                      </span>
+                    )}
+                  </span>
+                  <span className="account-row__actions">
+                    {a.index !== active && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={busy !== undefined}
+                        onClick={() => void run("switch", () => call("account-use", { index: a.index }).then(() => undefined))}
+                      >
+                        {busy === "switch" ? "Switching…" : "Switch to it"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => {
+                        setNaming(a.index);
+                        setDraft(a.name ?? "");
+                      }}
+                    >
+                      {a.name ? "Rename" : "Name it"}
+                    </button>
+                  </span>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+        <p className="note" data-testid="accounts-note">
+          Each account is a separate Cardano wallet from the same recovery phrase, with its own addresses, its own staking and
+          its own collateral. Other wallets call these accounts too, and show the same ones for this phrase.
+        </p>
+        <p className="note" data-testid="accounts-private-note">
+          Your private balance is shared: there's one of it for the whole phrase, whichever account you're on. Nothing on chain
+          links money you make private from one account to money you make private from another — but spending both in one
+          private payment would, so the wallet keeps them apart and says so when it can't.
+        </p>
+        <div className="actions">
+          <button type="button" className="secondary" onClick={() => void check()} disabled={busy !== undefined}>
+            {busy === "check" ? "Looking…" : "Check for another account"}
+          </button>
+        </div>
+        <p className="note" data-testid="accounts-cost-note">
+          That asks Koios about one account — the next one after Account {accounts[accounts.length - 1]!.index + 1}. The wallet
+          asks about one at a time: asking about twenty at once would tell Koios those twenty accounts are one wallet's.
+        </p>
+        {found && (
+          <p className="note" role="status" data-testid="accounts-found">
+            {found}
+          </p>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
       </section>
     </Screen>
   );

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { historyTags } from "../../shared/histories";
 import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyField } from "../components/CopyField";
@@ -40,8 +41,8 @@ export function utxoTag(u: UtxoInfo): string | undefined {
 const tag = utxoTag;
 
 /** Where a private UTxO's money came from: Back from Lovejoin, Received, Made private, Private session N, Unknown. */
-export function historyOf(u: UtxoInfo): string | undefined {
-  return u.history ? historyTags(u.history).join(", ") : undefined;
+export function historyOf(u: UtxoInfo, accounts = 1): string | undefined {
+  return u.history ? historyTags(u.history, accounts).join(", ") : undefined;
 }
 
 /** A seedelf's UTxO, the collateral and one no payment can take aren't locked or unlocked by hand. */
@@ -83,6 +84,10 @@ const arrange = (all: UtxoInfo[]) => [...all.filter((u) => tag(u)), ...all.filte
 
 export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => void; onChanged: () => void }) {
   const amounts = useAmounts();
+  // Private UTxOs name which public account money was made private from, once
+  // there is more than one to tell apart (chunk 18): locking one to keep an
+  // account's money apart is then an informed choice.
+  const { accounts } = useAccounts();
   const [lists, setLists] = useState<UtxoLists>();
   // The order is set when the list is read, so a row stays put while it's locked and unlocked.
   const [order, setOrder] = useState<string[]>([]);
@@ -175,7 +180,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
               const name = `${amounts.ada(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
-              const history = historyOf(u);
+              const history = historyOf(u, accounts.length);
               return (
                 <li key={ref(u)} className="utxo-row">
                   <button
