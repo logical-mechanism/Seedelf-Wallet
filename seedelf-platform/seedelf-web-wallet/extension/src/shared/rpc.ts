@@ -34,13 +34,33 @@ export type UnlockResult =
   /** `wrongPassword` is false when the attempt was refused for being too early. */
   | { unlocked: false; wrongPassword: boolean; retryAfterMs: number };
 
-/** The unlocked wallet's public identifiers. */
+/** The unlocked wallet's public identifiers, for the account it is working on. */
 export interface Account {
-  /** Cardano account 0, receive address 0/0. */
+  /** The active Cardano account's receive address 0/0. */
   receiveAddress: string;
   stakeAddress: string;
   /** The Seedelf base register's public value (compressed G1, hex). */
   seedelfPublicValue: string;
+  /** Which CIP-1852 account the two addresses are, as an index from 0. */
+  account: number;
+}
+
+/** The public accounts the wallet knows of, and which one it is working on. */
+export interface AccountList {
+  accounts: KnownAccount[];
+  active: number;
+}
+
+/**
+ * A public account the phrase is known to have used (chunk 18). Shown as
+ * "Account <index + 1>" with no name of its own, since people count from 1.
+ */
+export interface KnownAccount {
+  index: number;
+  /** What the user called it. */
+  name?: string;
+  /** When discovery first found it used (ms since the epoch); absent for account 0. */
+  foundAt?: number;
 }
 
 /** A native token amount. `quantity` is the raw integer, as a decimal string. */
@@ -1006,12 +1026,19 @@ export type DappAsk =
 /** Something a site asked for that waits for the user, in the connector's window. */
 export type DappApproval = { id: string; origin: string; title?: string } & DappAsk;
 
-/** A site connected to the public account. */
+/** A site connected to one of the wallet's public accounts, or to a private session. */
 export interface DappSite {
   origin: string;
   connectedAt: number;
-  /** Connected to this private session (private CIP-30), not the public account. */
+  /** Connected to this private session (private CIP-30), not a public account. */
   session?: number;
+  /**
+   * The public account it connected to, as an index from 0 (chunk 18). The
+   * site stays bound to it: a request made while the wallet is on another
+   * account is refused, never served from the active one. Absent on a site
+   * connected before chunk 18, which is account 0's.
+   */
+  account?: number;
 }
 
 /** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */
@@ -1576,6 +1603,25 @@ export interface Requests {
    * network is declined.
    */
   "network-set": { payload: { network: NetworkName }; result: Status };
+  /** The public accounts the phrase has used, and which one the wallet works on. */
+  accounts: { payload: None; result: AccountList };
+  /**
+   * Puts the wallet on another of its public accounts: every page starts
+   * afresh on it, and what the account it left read is dropped. Refused while
+   * something of that account's is in flight — a payment Koios didn't answer,
+   * or a mix being sent — since switching under a watch is how a watch loses
+   * its account.
+   */
+  "account-use": { payload: { index: number }; result: AccountList };
+  /** Names an account, or clears the name with an empty one. */
+  "account-rename": { payload: { index: number; name: string }; result: AccountList };
+  /**
+   * Looks for accounts past the ones the wallet knows, in order, stopping at
+   * the first never used. One Koios `account_addresses` request per account
+   * probed, never a batch: see accounts.ts. `limit` bounds one run; the
+   * picker's own button passes 1, so it costs one request.
+   */
+  "account-discover": { payload: { limit?: number }; result: AccountList & { found: number[] } };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /**
@@ -1780,6 +1826,10 @@ const REQUEST_LIST = [
   "preferences",
   "preferences-set",
   "network-set",
+  "accounts",
+  "account-use",
+  "account-rename",
+  "account-discover",
   "price",
   "tx-detail",
   "dapp-approvals",

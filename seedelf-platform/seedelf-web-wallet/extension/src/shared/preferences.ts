@@ -14,6 +14,22 @@ export const LOCAL_PREFERENCES = "seedelf.preferences";
  */
 export const LOCAL_NETWORK = "seedelf.network";
 
+/**
+ * chrome.storage.local: which public account the wallet works on (chunk 18),
+ * as an index from 0. Kept beside the network and for the same reason — the
+ * worker reads it while deriving the keys, before anything is unlocked, so it
+ * can't live in a sealed record. One integer for the wallet, not one per
+ * network: the account's keys are the same on both.
+ *
+ * **What this leaks, said where it's chosen:** anyone reading the profile's
+ * local storage sees which account is active. They already see that a vault
+ * exists, which network it is on, every setting, and that sealed records
+ * exist. *How many* accounts the phrase has, and what they are called, stay
+ * sealed (background/accounts.ts). Anything else here, or nothing, is
+ * account 0.
+ */
+export const LOCAL_ACCOUNT = "seedelf.account";
+
 /** How long without activity before the wallet locks, in minutes: Lace's choices, less "never". */
 export const LOCK_AFTER_MINUTES = [1, 5, 15, 30, 60] as const;
 export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number];

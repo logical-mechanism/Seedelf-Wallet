@@ -67,7 +67,10 @@ export const COLLATERAL_LOVELACE = 5_000_000n;
 /** A collateral payment is waited for this long before the wallet stops expecting it. */
 const WAIT_MS = 10 * 60_000;
 
-/** What the user chose on one network, sealed as `coins.<network>`. */
+/**
+ * What the user chose on one network, for the public account the wallet is
+ * working on: the shape every caller sees, flattened out of `Stored`.
+ */
 export interface Choices {
   /** Locked outpoints (`txhash#index`), per side. */
   seedelf: string[];
@@ -81,7 +84,72 @@ export interface Choices {
   collateralSentAt?: number;
 }
 
+/** One public account's own choices: what it has locked, and its collateral. */
+type Own = Pick<Choices, "cardano" | "collateral" | "collateralSentAt">;
+
+/**
+ * What is sealed as `coins.<network>` since chunk 18: the private side's
+ * locks, which are shared because the private balance is one, and each public
+ * account's own locks and collateral, by index.
+ *
+ * The collateral is the account's — each account sets its own, or the wallet
+ * takes that account's oldest pure 5 ₳ UTxO, which is the existing rule
+ * extended from "another wallet on this phrase" to "another account".
+ *
+ * `PRIVATE_RECORDS` is a fixed list, so this stays **one** record rather than
+ * two per account: reshaping its contents leaves `KEPT_ON_RESET` and Remove
+ * wallet untouched.
+ */
+interface Stored {
+  seedelf: string[];
+  accounts?: Record<string, Own>;
+  /**
+   * The shape sealed before chunk 18, when there was one public account.
+   * Read as account 0's, and folded into `accounts` on the first write; never
+   * written again. Dropping it instead would unlock every UTxO a user had
+   * locked and lose their collateral choice.
+   */
+  cardano?: string[];
+  collateral?: string | null;
+  collateralSentAt?: number;
+}
+
 const NONE: Choices = { seedelf: [], cardano: [] };
+
+/** The legacy flat fields, as account 0's own choices. */
+const legacyOwn = (stored: Stored): Own => ({
+  cardano: stored.cardano ?? [],
+  ...(stored.collateral !== undefined ? { collateral: stored.collateral } : {}),
+  ...(stored.collateralSentAt !== undefined ? { collateralSentAt: stored.collateralSentAt } : {}),
+});
+
+/** `stored` as account `account` sees it, reading the pre-chunk-18 shape as account 0's. */
+export function choicesOf(stored: Stored | undefined, account: number): Choices {
+  if (!stored) return NONE;
+  const own = stored.accounts?.[String(account)] ?? (account === 0 ? legacyOwn(stored) : undefined);
+  return {
+    seedelf: stored.seedelf ?? [],
+    cardano: own?.cardano ?? [],
+    ...(own?.collateral !== undefined ? { collateral: own.collateral } : {}),
+    ...(own?.collateralSentAt !== undefined ? { collateralSentAt: own.collateralSentAt } : {}),
+  };
+}
+
+/** `stored` with `choices` put back as account `account`'s, and the private side as given. */
+export function withChoices(stored: Stored | undefined, account: number, choices: Choices): Stored {
+  const accounts: Record<string, Own> = { ...(stored?.accounts ?? {}) };
+  // Account 0's legacy fields move into the map before they stop being read,
+  // whichever account is being written: a user who locked UTxOs on account 0
+  // keeps them locked after switching to another account and changing
+  // something there.
+  if (stored && !accounts["0"]) accounts["0"] = legacyOwn(stored);
+  accounts[String(account)] = {
+    cardano: choices.cardano,
+    ...(choices.collateral !== undefined ? { collateral: choices.collateral } : {}),
+    ...(choices.collateralSentAt !== undefined ? { collateralSentAt: choices.collateralSentAt } : {}),
+  };
+  return { seedelf: choices.seedelf, accounts };
+}
 
 /** A pure-ADA UTxO of exactly 5 ₳: what can be the collateral. */
 export const isCollateralShaped = (u: KoiosUtxo) => BigInt(u.value) === COLLATERAL_LOVELACE && !u.asset_list?.length;
@@ -107,6 +175,8 @@ export function collateralOf(
 
 export interface CoinControlDeps {
   wallet: Wallet;
+  /** Which public account's locks and collateral these are (accounts.ts). Account 0 without it. */
+  activeAccount?: () => number | Promise<number>;
   session: Area;
   store: PrivateStore;
   now: () => number;
@@ -121,9 +191,15 @@ export class CoinControlService {
 
   constructor(private readonly deps: CoinControlDeps) {}
 
-  /** What the user chose on `network`. Throws if locked. */
+  /** Which public account the locks and the collateral below are. */
+  private async activeIndex(): Promise<number> {
+    return (await this.deps.activeAccount?.()) ?? 0;
+  }
+
+  /** What the user chose on `network`, for the account the wallet is working on. Throws if locked. */
   async choices(network: NetworkName): Promise<Choices> {
-    return { ...NONE, ...(await this.deps.store.get<Choices>(`coins.${network}`)) };
+    const [stored, account] = await Promise.all([this.deps.store.get<Stored>(`coins.${network}`), this.activeIndex()]);
+    return choicesOf(stored, account);
   }
 
   /** The account's UTxOs that may be spent, and its collateral (never among them). */
@@ -280,8 +356,9 @@ export class CoinControlService {
     });
   }
 
-  private save(network: NetworkName, choices: Choices): Promise<void> {
-    return this.deps.store.set(`coins.${network}`, choices);
+  private async save(network: NetworkName, choices: Choices): Promise<void> {
+    const [stored, account] = await Promise.all([this.deps.store.get<Stored>(`coins.${network}`), this.activeIndex()]);
+    await this.deps.store.set(`coins.${network}`, withChoices(stored, account, choices));
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {

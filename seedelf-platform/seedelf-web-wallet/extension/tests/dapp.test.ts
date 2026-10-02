@@ -1123,7 +1123,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     await until(() => dapp.approvals().length === 1 && dapp.approvals()[0]!.id !== a!.id);
     expect(await dapp.answer(dapp.approvals()[0]!.id, true)).toEqual({});
     expect(await second).toBe(true);
-    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, account: 0, connectedAt: expect.any(Number) }]);
   });
 
   it("gives the site the session's account alone: its address, its reward address, its money and its collateral", async () => {

@@ -61,7 +61,7 @@ async function payment(t: T) {
 }
 
 function context(t: T): Context {
-  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions, lovejoin } =
+  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions, lovejoin, accounts } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -83,6 +83,7 @@ function context(t: T): Context {
     dapp,
     sessions,
     lovejoin,
+    accounts,
     connector: async (on) => on,
     version: "1.0.0",
     network: "preprod",

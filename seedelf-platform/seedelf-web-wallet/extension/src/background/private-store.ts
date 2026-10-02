@@ -1,7 +1,8 @@
 // Records this wallet keeps on the device that say something about its user
 // (contacts, the Seedelf history, which UTxOs are locked, the sites
 // connected to the public account, the private sessions, a payment that may
-// still go through, who paid for each Seedelf): sealed in
+// still go through, who paid for each Seedelf, which public accounts the
+// phrase has used and what they are called): sealed in
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
@@ -22,6 +23,7 @@ export const PRIVATE_PREFIX = "seedelf.private.";
 
 /** Every record, so removing the wallet can delete them all. */
 export const PRIVATE_RECORDS = [
+  "accounts",
   "contacts",
   "history.preprod",
   "history.mainnet",
@@ -86,6 +88,7 @@ const aad = (name: RecordName) => new TextEncoder().encode(PRIVATE_PREFIX + name
 
 /** What each record keeps, in the wallet's words. */
 const WHAT: Record<RecordName, string> = {
+  accounts: "your public accounts",
   contacts: "your contacts",
   "history.preprod": "your private history",
   "history.mainnet": "your private history",

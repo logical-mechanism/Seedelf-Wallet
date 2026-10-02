@@ -223,6 +223,13 @@ export interface DappDeps extends AccountDeps {
   fundingPollMs?: number;
   /** The network the wallet is on now: the user's choice (Settings), read for each call. */
   network: () => NetworkName | Promise<NetworkName>;
+  /**
+   * Which public account the wallet works on (accounts.ts). A site connected
+   * to the public account is bound to the one it connected to, so this is
+   * what a request is checked against — never what it is served with.
+   * Account 0 without it, which is every wallet from before chunk 18.
+   */
+  activeAccount?: () => number | Promise<number>;
   now: () => number;
   window: ApprovalWindow;
   /** Tells the connector's window that what's waiting changed. */
@@ -317,6 +324,10 @@ const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable(
 const OFF = "Connecting sites is off in Seedelf Wallet's settings.";
 /** What a site's request hears once the site is disconnected, or connected to another account, while it waited. */
 const DISCONNECTED = "This site was disconnected from Seedelf Wallet, so the request was declined.";
+/** A site connected to a public account the wallet isn't working on now (chunk 18). */
+const otherAccount = (index: number) =>
+  `This site is connected to Account ${index + 1} of your wallet, and Seedelf Wallet is working on another account now. ` +
+  `Switch back to Account ${index + 1}, or disconnect the site and connect it again.`;
 /** What a site hears when the user says no, or closed the window on it. */
 const DECLINED = "The user declined.";
 /** What a site's call ends with once its page is gone: nobody hears it. */
@@ -650,7 +661,14 @@ export class DappService {
     this.keepSites(all);
     return all
       .filter((s) => s.network === network)
-      .map(({ origin, connectedAt, session }) => ({ origin, connectedAt, ...(session === undefined ? {} : { session }) }))
+      // `account` is carried, not dropped: it is what `holder` binds a site
+      // to, and the dApps page says which account a site talks to.
+      .map(({ origin, connectedAt, session, account }) => ({
+        origin,
+        connectedAt,
+        ...(session === undefined ? {} : { session }),
+        ...(account === undefined ? {} : { account }),
+      }))
       .sort((a, b) => a.origin.localeCompare(b.origin));
   }
 
@@ -709,12 +727,16 @@ export class DappService {
 
   /** Records a site as connected on `network`, to `session` if given; false when it's connected already. */
   private async connect(network: NetworkName, origin: string, session?: number): Promise<boolean> {
+    const account = session === undefined ? await this.activeAccount() : undefined;
     let added = false;
     await this.changeSites((all) => {
       if (all.some((s) => s.origin === origin && s.network === network)) return all;
       added = true;
       const site: Connected = { origin, network, connectedAt: this.deps.now() };
-      return [...all, session === undefined ? site : { ...site, session }];
+      // A public-account connection records which account it is to: the site
+      // stays bound to it, so switching accounts never hands the site a
+      // second account's addresses and teaches it the two are one wallet's.
+      return [...all, session === undefined ? { ...site, account } : { ...site, session }];
     });
     return added;
   }
@@ -806,9 +828,30 @@ export class DappService {
     return state === "locked" && !!this.lastSites.get(network)?.has(origin);
   }
 
-  /** Who a connected site talks to: its private session's account, or the public account. */
+  /** Which public account the wallet works on, for binding a site to one. */
+  private async activeAccount(): Promise<number> {
+    return (await this.deps.activeAccount?.()) ?? 0;
+  }
+
+  /**
+   * Who a connected site talks to: its private session's account, or the
+   * public account it connected to.
+   *
+   * A site bound to a public account the wallet isn't on is **refused, not
+   * served from the active one**. Following the active account would hand a
+   * site that had already seen Account 1's addresses Account 2's as well,
+   * and teach it the two are one wallet's — the exact leak several accounts
+   * exist to prevent. The connect window chooses nothing by design (chunk
+   * 15), and this keeps that true across a switch.
+   */
   private async holder(network: NetworkName, site: DappSite): Promise<Holder> {
-    if (site.session === undefined) return undefined;
+    if (site.session === undefined) {
+      // No account recorded: a site connected before chunk 18, when there was
+      // only account 0.
+      const bound = site.account ?? 0;
+      if (bound !== (await this.activeAccount())) throw refused(otherAccount(bound));
+      return undefined;
+    }
     try {
       return { index: site.session, ...(await this.deps.sessions.siteAccount(network, site.session)) };
     } catch {
@@ -825,6 +868,12 @@ export class DappService {
     if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
     const site = await this.site(network, origin);
     if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
+    // And still to the public account the wallet is on: a switch between the
+    // request being read and its approval must not sign with another account.
+    if (site.session === undefined) {
+      const bound = site.account ?? 0;
+      if (bound !== (await this.activeAccount())) throw refused(otherAccount(bound));
+    }
   }
 
   /**

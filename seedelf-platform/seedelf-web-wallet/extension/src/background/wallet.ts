@@ -424,9 +424,9 @@ export class Wallet {
     });
   }
 
-  /** The unlocked wallet's public identifiers. */
+  /** The unlocked wallet's public identifiers, for the account it is working on. */
   account(network: NetworkName): Promise<Account> {
-    return this.withKeys(({ seedelf, cardano }) => {
+    return this.withKeys(({ seedelf, cardano, account }) => {
       const net = network === "mainnet" ? this.deps.wasm.Network.Mainnet : this.deps.wasm.Network.Preprod;
       const base = seedelf.baseRegister();
       try {
@@ -434,6 +434,7 @@ export class Wallet {
           receiveAddress: cardano.receiveAddress(net, 0),
           stakeAddress: cardano.stakeAddress(net),
           seedelfPublicValue: base.publicValue,
+          account,
         };
       } finally {
         base.free();

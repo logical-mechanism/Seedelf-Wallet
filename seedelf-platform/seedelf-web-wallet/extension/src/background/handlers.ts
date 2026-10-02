@@ -4,6 +4,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
+import type { AccountsService } from "./accounts";
 import type { AtStake, BuildStage, Message, Requests, Status } from "../shared/rpc";
 import type { ActivityService } from "./activity";
 import type { BalanceService } from "./balances";
@@ -59,6 +60,8 @@ export interface Context {
   networks: NetworkName[];
   /** The user's choice of network, which `network-set` changes. */
   networkChoice: NetworkChoice;
+  /** The phrase's public accounts, and which one the wallet works on (accounts.ts). */
+  accounts: AccountsService;
   /**
    * Says what a build is doing, on this request's own port (ui-port.ts): the
    * screen shows it instead of only greying out its button. Undefined outside
@@ -82,11 +85,23 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // The network it's made on (the welcome screen's choice) is kept first,
       // so the new wallet is never taken for one from before the switch.
       await ctx.networkChoice.keep(ctx.network);
+      // Before the keys are derived: the account choice outlives a Remove
+      // wallet, as the network does, so a new phrase starts on account 0
+      // rather than wherever the last one was left (accounts.ts `useFirst`).
+      await ctx.accounts.useFirst();
       await wallet.create(message.phrase, message.password);
       // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
       await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
       // So does a mix from the public account that may have gone through (final review F1).
       await ctx.lovejoin.adoptKept(ctx.networks).catch(() => undefined);
+      // Account 0 is the one account known from here.
+      await ctx.accounts.recordFirst().catch(() => undefined);
+      // A restored phrase may hold funds past account 0, so look for them —
+      // in the background, since it is one Koios request per account probed
+      // and nothing waits on the answer. A new phrase has nothing anywhere.
+      if (message.type === "restore-wallet") {
+        void ctx.accounts.discover(ctx.network).catch(() => undefined);
+      }
       return status(ctx);
     case "unlock":
       return wallet.unlock(message.password);
@@ -220,6 +235,26 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       }
       return prefs;
     }
+    case "accounts":
+      return ctx.accounts.list();
+    case "account-use": {
+      // What's in flight belongs to the account that sent it: a payment Koios
+      // didn't answer, or a mix still being sent. The same check Remove
+      // wallet makes, and for the same reason — a watch must not lose its
+      // account halfway through (accounts.ts `use`).
+      const open = (await atStake(ctx)).filter((a) => a.maybeSent || a.mixMaybeSent || a.chainSending);
+      if (open.length) throw new Error(SWITCH_AT_STAKE);
+      await ctx.accounts.use(message.index, ctx.networks);
+      // Sites keep talking to the account they connected to (dapp.ts), so
+      // nothing is declined here, unlike a network switch.
+      return ctx.accounts.list();
+    }
+    case "account-rename":
+      return { accounts: await ctx.accounts.rename(message.index, message.name), active: await ctx.accounts.active() };
+    case "account-discover": {
+      const found = await ctx.accounts.discover(ctx.network, message.limit);
+      return { ...(await ctx.accounts.list()), found: found.map((a) => a.index) };
+    }
     case "network-set": {
       // What's kept for Send stays tied to the network it was built on
       // (every submit checks it), so nothing built here goes out there.
@@ -336,6 +371,11 @@ export const RESET_AT_STAKE =
  * through (final review F1). A network whose records won't read says so.
  * Throws if locked.
  */
+/** Why a switch between public accounts waits: something of this one's is still going out. */
+export const SWITCH_AT_STAKE =
+  "Something of this account's is still on its way: a payment Seedelf Wallet is waiting on, or a mix still being sent. " +
+  "Wait for it to settle, then switch accounts.";
+
 async function atStake(ctx: Context): Promise<AtStake[]> {
   if ((await ctx.wallet.state()) !== "unlocked") throw new Error("The wallet is locked.");
   const found: AtStake[] = [];
