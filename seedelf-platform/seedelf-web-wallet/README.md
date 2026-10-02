@@ -2,7 +2,7 @@
 
 A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
-> **Status:** launch prep. Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), and progress is in [docs/roadmap.md](docs/roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+> **Status:** released. v1.0.0 reached the Chrome Web Store on 2026-09-28 and 1.1.0 followed on 2026-10-01. Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what was built is in [docs/roadmap.md](docs/roadmap.md), and what comes next is in [docs/post-release-roadmap.md](docs/post-release-roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
@@ -72,7 +72,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
 | [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
-| [roadmap.md](docs/roadmap.md) | Build chunks, their status, and handoff notes between sessions |
+| [roadmap.md](docs/roadmap.md) | How v1 was built: the 17 chunks and a one-line handoff note each ([archive/](docs/archive/roadmap-v1.md) keeps every note in full) |
 | [post-release-roadmap.md](docs/post-release-roadmap.md) | What comes after v1: the order (parity, then the look and feel), where Cardano parity stands against Lace, and what's declined and why |
 
 ## Reference: Lace

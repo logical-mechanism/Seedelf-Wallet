@@ -1,674 +1,77 @@
 # Roadmap
 
-The wallet is built in **chunks**, each about one working session.
+**Closed.** v1 was built in 17 chunks of about one session each, v1.0.0 reached the Chrome Web Store on 2026-09-28, and 1.1.0 — the transaction view — followed on 2026-10-01. **What comes next is in [post-release-roadmap.md](post-release-roadmap.md)**; a chunk picked up from there still lands its handoff note in this file.
 
-**Each chunk:**
-
-1. Starts on a branch `web-wallet/<topic>` taken from `main` (from `seedelf-web-wallet` before v1.0.0). See [development.md](development.md#branching).
-2. Ends with a PR back into `main`.
-3. At its end, updates this file: tick the chunk, and write what the next session needs to know under [Handoff notes](#handoff-notes).
+> **Compressed on 2026-10-02.** Every chunk's full scope and all 30 handoff notes — about 90 KB — are kept verbatim in **[archive/roadmap-v1.md](archive/roadmap-v1.md)**. Nothing was deleted. Each entry below is one line, so this file can be read at a glance; the archive has the reasoning, the surprises, and the transaction hashes and fees from the live runs. A line reference to this file written before 2026-10-02 resolves against the archive.
 
 **Status:** ✅ done · 🚧 in progress · ⬜ not started
 
 ## v1
 
-**Shipped.** Every chunk below is done, and v1.0.0 went to the Chrome Web Store on 2026-09-28 (see the newest handoff note). Work from here is *After v1*.
+**Shipped.** Every chunk is done. Scopes here are one line; the archive has each in full, and the plans have the detail.
 
-| # | Chunk | Status | Scope |
+| # | Chunk | | What it was |
 |---|---|---|---|
-| 1 | WASM foundation | ✅ | Create the `seedelf-web-wallet/wasm` crate (a workspace member). Expose register create, re-randomize, the ownership check and the Schnorr proof. Build with `wasm-bindgen` and smoke-test from JS. |
-| 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
-| 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
-| 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
-| 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). |
-| 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of Seedelfs. QR code for the receive address. |
-| 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
-| 8 | Create a Seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
-| 8b | Mint first | ✅ | The first Seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](flows.md#create-a-seedelf). |
-| 9 | Transfer | ✅ | Seedelf → Seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
-| 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
-| 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
-| 11b | Size and live runs | ✅ | A smaller WebAssembly module: a size-tuned cargo profile (`wasm-opt` measured and left out). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
-| 11c | Testers | ✅ | Everything needed to submit an unlisted, preprod-only Chrome Web Store listing, never submitted: `npm run package` (the store build, third-party notices, a reproducible zip), the listing text and privacy policy in [store/](store/README.md), the images from `npm run store:images`, and a release checklist. Same plan. |
-| 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 29 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, spending everything under the account's payment keys, a UTxOs screen on both sides with locks, the Cardano account's collateral in Settings, and Refresh on UTxOs and Activity. **Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).** |
-| 13 | Staking and voting | ✅ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), a pool browser, and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
-| 14 | Style and flow, second pass | ✅ | The user's second round of findings, each decided with the user, as in chunk 12. So far: Send from the Cardano account pays a Seedelf, one way to write the name (Seedelf, and Seedelf Wallet for the app), several recipients in one payment on both sides, and Private and Public in place of Seedelf and Cardano. Then what Lace and Eternl had that the wallet didn't: a full tab by default or the side panel (no popup), hide balances, a note on a public send, the lock time, your handles on Receive (and a warning for a handle in Seedelf), a check of the written phrase, Activity as CSV, staking in the public Activity, and ADA's value in a currency on mainnet. Readable dropdowns, and a code review's fixes before the PR. **Plan: [plans/chunk-14-style-flow-2.md](plans/chunk-14-style-flow-2.md).** |
-| 15 | dApps: the public connector, and private swaps | ✅ | The first steps towards using contracts privately. Private swaps: Minswap's aggregator swaps from a one-time account funded from the private balance, and everything comes back into it (step 2). CIP-30 for the public account, as Lace has it, behind a Settings switch that's off by default: Chrome is asked for access to sites only when it's turned on, and nothing is added to any page until then. A window to connect, sign transactions (what they do to the account, read in WebAssembly) and sign messages (CIP-8), connected sites to disconnect, and chaining on the account's own unconfirmed outputs. Then private sessions, a dApp browser, and Minswap. **Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).** |
-| 16 | Lovejoin | ✅ | The mixer in the wallet. A private session's spare ADA goes through Lovejoin on its way back: 10 ₳ boxes owned by the Seedelf key, a fan-out 3 wide (depth a setting, default 2) chained locally and paid by the session, then each box withdrawn into a fresh register after a random delay. The leftover and any tokens merge into the session's funding change. A Lovejoin tile mixes from the private balance or the public account. Scripts are evaluated in WebAssembly (`uplc`), after Pallas moves to 0.35. **Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).** |
+| 1 | WASM foundation | ✅ | The `seedelf-wasm` crate: register create and re-randomize, the ownership check, the Schnorr proof, built with `wasm-bindgen`. |
+| 2 | Seedelf key derivation | ✅ | The v1 HKDF spec in `seedelf-crypto`, **frozen**, with nine test vectors. BIP39 moved into Rust. |
+| 3 | Cardano keys | ✅ | Phrase → CIP-1852 account `0'`, checked against Lace's `@cardano-sdk/key-management` vectors. |
+| 4 | Extension scaffold | ✅ | Vite, React 19, TypeScript, an MV3 manifest, WASM in the worker, and CI (`web-wallet.yml`). |
+| 5 | Vault and lock | ✅ | Lace's SecretBox sealing the BIP39 entropy, create and restore onboarding, auto-lock, unlock back-off. [Plan](plans/chunk-05-vault-and-lock.md). |
+| 6 | Balance | ✅ | The TS Koios client, the contract scan, account discovery on both chains with gap limit 20, and the receive QR code. |
+| 7 | Builder extraction + move in | ✅ | Building split from network calls in `seedelf-core` so it compiles to WASM, then move-in end to end. [Plan](plans/chunk-07-move-in.md). |
+| 8 | Create a Seedelf | ✅ | The stealth mint (`util mint`) with giveme.my collateral. [Plan](plans/chunk-08-create-seedelf.md). |
+| 8b | Mint first | ✅ | The first Seedelf is paid by the Cardano account, using **its own** collateral, before any move-in — because a mint links the Seedelf to whatever paid for it. |
+| 9 | Transfer | ✅ | Seedelf → Seedelf. Found `Register::is_valid`'s identity-point hole here. [Plan](plans/chunk-09-transfer.md). |
+| 10 | Withdraw | ✅ | `sweep` and `remove` on `ScriptSpend`; every CLI script spend now ends in `commands/spend.rs`. [Plan](plans/chunk-10-withdraw.md). |
+| 11a | Style and flow pass | ✅ | The UI much more like Lace's dark mode — its look, not its brand. Dark only, Inter, Lucide. [Plan](plans/chunk-11-polish.md). |
+| 11b | Size and live runs | ✅ | A size-tuned WASM profile (`opt-level = "z"`, no `wasm-opt`), and live preprod runs of every flow. Same plan. |
+| 11c | Testers | ✅ | Everything for an unlisted preprod listing, never submitted: `npm run package`, the reproducible zip, [store/](store/README.md), the images. Same plan. |
+| 12 | Style and flow | ✅ | The owner's 29 findings, each decided with them: Tokens, Settings, Activity, Contacts, UTxOs with locks, and more. [Plan](plans/chunk-12-style-flow.md). |
+| 13 | Staking and voting | ✅ | A full Cardano wallet with Seedelf inside: staking with one pool, a pool browser, and voting delegation. [Plan](plans/chunk-13-staking.md). |
+| 14 | Style and flow, second pass | ✅ | The owner's second round: Private and Public naming, several recipients, hide balances, notes, CSV, a currency. [Plan](plans/chunk-14-style-flow-2.md). |
+| 15 | dApps: the connector, and private swaps | ✅ | CIP-30 off by default, private sessions through one-time accounts, a dApp browser, and private CIP-30. [Plan](plans/chunk-15-dapp-connector.md). |
+| 16 | Lovejoin | ✅ | The mixer in the wallet: 10 ₳ boxes, a fan-out chained locally, each box withdrawn after a random delay. [Plan](plans/chunk-16-lovejoin.md). |
 
 ## After v1
 
-**This section is closed, and so is this file.** Chunk 17 was the last thing chosen from it. Everything after v1.1.0 is tracked in [post-release-roadmap.md](post-release-roadmap.md) — what's owed, what the owner wants, and what we've decided against — and a chunk picked up from there still lands its handoff note in this file.
+**This section is closed, and so is this file.** Chunk 17 was the last thing chosen from it. Everything after v1.1.0 is in [post-release-roadmap.md](post-release-roadmap.md), which also carries what chunk 17 left open.
 
-| # | Chunk | Status | Scope |
+| # | Chunk | | What it was |
 |---|---|---|---|
-| 17 | The transaction view | ✅ | Open the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers, metadata — decoded from the CBOR about to be signed, plus the raw bytes, from every review and from the connector's sign window. A decoder in WebAssembly that takes CBOR and nothing else (`wasm/src/decode.rs`), the cheapest handler in the worker (`background/tx-view.ts`), one shared modal (`ui/components/TxDetail.tsx`), and a cross-check against `cardano-cli debug transaction view` for every fixture. **Plan: [plans/chunk-17-transaction-view.md](plans/chunk-17-transaction-view.md).** |
+| 17 | The transaction view | ✅ | **Transaction details** on every review and in the connector's sign window: the transaction decoded from the CBOR about to be signed, plus the raw bytes. [Plan](plans/chunk-17-transaction-view.md). |
 
-
-- ~~A detailed transaction view~~ **done (chunk 17 above).** The owner's ask from the 2026-09-28 mainnet test: there was nowhere to open the transaction itself. There is now, on every review and in the connector's window ([flows.md](flows.md#read-the-transaction-every-review-and-the-connectors-window), [architecture.md](architecture.md#reading-a-transaction)).
-- Contract round trip: one-time accounts, CIP-30, auto-return ([flows.md](flows.md#contract-round-trip)). Started in chunk 15: its plan has the steps, the user's two designs, and what Minswap allows.
-- ~~Turn on the mainnet build flag~~ **done (2026-09-26):** one build carries both networks, mainnet by default, with preprod in Settings ([architecture.md](architecture.md#networks)). Not a launch blocker.
-- ~~Merge `seedelf-web-wallet` into `main`~~ **done (2026-09-29, PR #266).** Web wallet work now branches from `main` and PRs into `main` ([development.md](development.md#branching)). The old branch is finished and can be deleted whenever.
+Also done from this section: the mainnet build flag (2026-09-26, one build carries both networks), and merging `seedelf-web-wallet` into `main` (2026-09-29, PR #266). The contract round trip (A2) is still open and is tracked in [post-release-roadmap.md](post-release-roadmap.md#owed).
 
 ## Handoff notes
 
-Newest first. Keep each entry short: what landed, what's next, and anything surprising.
+Newest first, **one line each, with the full note in [archive/roadmap-v1.md](archive/roadmap-v1.md)**. Each line keeps the one thing worth remembering — usually a surprise that would cost a later session real time.
 
-- **2026-10-01: chunk 17, the transaction view** (`web-wallet/transaction-view`, from `main`). The first *After v1* item, and the only one that was fully unblocked. **Transaction details** under every review and under the connector's sign window: the transaction decoded from its own bytes, and a Raw CBOR tab.
-  - **The decoder takes CBOR and nothing else** (`wasm/src/decode.rs`, `decodeTx(network, txCbor)`): no account, no keys, no UTxOs, so it makes no network call and a fixture is a whole test of it. `cip30::inspect_tx` was not touched — it answers a different question and is load-bearing for the approval decision — and `background/cbor.ts` stays the hardened pre-check it says it is.
-  - **The owner's calls, as planned:** inputs show as `txhash#index` with no lookup; no explorer link, a copy button instead; a modal, on every transaction the wallet builds, and the connector's too.
-  - **Found before building, and it held:** every flow already parks its built transaction's CBOR in session storage, and Submit reads it back out of there, not out of the screen. So the view needed no new plumbing, and opening or closing it cannot strand a signed transaction. Tests pin it in the worker and in the browser.
-  - **The expected values aren't our own output frozen.** `wasm/tests/fixtures/record-decode.mjs` records ten transactions with what `cardano-cli debug transaction view` makes of each: the wallet's own preprod transfer, stealth mint and remove, Minswap's swap, a session swap, and five cardano-cli builds (a payment with a reference input and a reference script, certificates with a withdrawal and metadata, a mint and a burn, a pool registration, governance). `decode_test.rs` checks the id, the inputs, every output's address and value, the datums, the collateral, the mint, the withdrawals, the validity range, the required signers, the script hashes and the budgets against that view, transaction by transaction. `cardano-cli transaction build-raw` needs no node, so the whole cross-check is offline.
-  - **Two things worth knowing.** Pallas gives a *Conway* transaction *alonzo's* auxiliary data, whose typed form knows only keys 0–2, so a Plutus V2 or V3 script in the metadata would silently vanish: every auxiliary script is read from the raw bytes instead. And the wallet's own transfer writes its redeemer map in the order 1, 0 — the view reports the bytes' order with each redeemer's own index, rather than renumbering them.
-  - **A review of the decoder against Conway's CDDL, after the branch was pushed,** found four ways the bytes could be shown wrongly, all fixed with tests built from what the CDDL allows: a `slot` or `ex_units` past 2^53 rounded on the way through `JSON.parse` (every number the bytes decide is a decimal string now); bytes that are no address, which the CDDL allows, hid the whole transaction behind an error (they show as hex); a right-to-left override in a note or a token name could rewrite the line it was on (escaped, and the stylesheet isolates direction); and nothing checked the metadata against the body's hash, so the view could show a note that could never reach the chain. Three things the page left out are shown too — a collateral return with no collateral inputs, a pool certificate's parameters and a proposal's own fields, and Byron witnesses — and the page now walks a certificate's and a proposal's fields rather than naming them, so a field the decoder gains can't be dropped there either. See the plan's *The CBOR review*.
-  - **The explanations are behind icons** (the owner, 2026-10-01): the view's six paragraphs are an ⓘ in each section's heading now — the text on hover, and on the page when clicked — through the new shared `components/Hint.tsx`. Privacy callouts and warnings stay where they are, since those are decisions rather than explanations. The owner's wider point ("a lot of the paragraphs we have could be like that") is theirs to pick from: about 150 plain note paragraphs sit across the screens, most of them argued over in chunks 12 and 14 or in the privacy review.
-  - **A datum is a tree that opens, all of it, and nothing is assumed about whose it is** (the owner, 2026-10-01, twice over). The 512-node cap is gone: a datum that stopped partway is a worse answer than none, so the whole tree comes through and the screen collapses it instead, drawing only the branches that have been opened — which is what makes no cap safe. Expand all, and Copy as CBOR or as JSON (the detailed schema cardano-cli and Koios speak). Depth is limited only by the CBOR guard that was already there for a site's transaction (128 levels, about sixty constructors). And the bug: `register_detail` ran on every datum, so another contract's constructor 0 with two 48-byte fields was called "a register" — it now runs only for an output at Seedelf Wallet's own contract, and not at all for a witness-set datum.
-  - **Datums are read as trees, for any contract** (the owner, 2026-10-01): a datum was hex with one special case for Seedelf's register, which is no datum view at all. Plutus data now decodes into its shape — constructors by their number, lists, maps, byte strings, and integers including the big tag-2 and tag-3 forms — in all three places data appears, a redeemer's argument included. There is no schema to read a datum against, so the shape is what can honestly be shown; the register stays as the one thing on top, since it says whether a payment under it could be spent. A tree was bounded at first (512 nodes), which the next change undid.
-  - **The owner's testing pass, on mainnet and preprod.** The splash is a cap, not a timer: it tracks the first reading and stands down after 8s so a slow Koios can't hide Refresh or an error — mainnet Koios reaches that cap, which is Koios being slow, not the splash. Four things in the view were changed: **one rule for what's shown whole** (an address is read, so all of it, wrapped, with a copy button; an id is carried, so it's shortened to one, which the script hash and the datum hash weren't), **a redeemer's budget on its own line** under the script it belongs to, since a ten-digit budget squeezed the words beside it, and **a chain's review now opens the transaction the money goes in through** — the deposit, not the last mix or the return that Send names, whose inputs are outputs nothing has sent yet, with the button saying which one it is. Left alone on purpose: the per-output `#0 · a contract · Seedelf Wallet's contract · under a register` line, where the Seedelf naming is a hash compare against the variant's own script hash and the register adds the one thing a shape can't say — whether a payment under it could be spent. Everything else in the view is already general, and a datum of another contract's is named nothing.
-  - **The chain stays abstracted away, and that's the call** (the owner, 2026-10-01). Approval is about the entry; audit is about the whole chain, afterwards, and belongs in Activity or the chain's own row rather than in a dialog held open before Send. Most of what the automation assumes is checked mechanically — `is_payable` for each box's register, Ogmios for the cost model before a chain starts, the sealed record so a chain cut short surfaces as not-mixed-yet. The one assumption that isn't is Lovejoin's own contract, which the review already says in words. **Still open:** a chain in flight is invisible to the view, since its transactions move to `seedelf.session.chain.<network>.<index>`, which `BUILT_KEYS` doesn't name — the audit view wants that prefix scan. And Home's banner watches the chain's last transaction, so it shows a hash the user never saw; it may want to say "the chain" instead.
-  - **Next:** the contract round trip (A2, a V2 order to a Seedelf) still waits on a batcher test; the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md) are still open. The style and flow pass the owner asked for after the roadmap is still to come, and this view is a fair thing to put in front of them.
-
-- **2026-10-01: v1.1.0, the transaction view, prepared for the Web Store** (`web-wallet/release-1.1.0`, from `main` after PR #270 merged chunk 17).
-  - **Why 1.1.0 and not 1.0.1** (the owner asked): the release adds something a user can do, which is a minor bump; a patch is for a fix or a listing hotfix on its own. The store only demands a strictly higher number, so the semantics are for the wallet's own users — [development.md](development.md#web-store-release-copypaste-procedure) now says which to pick.
-  - **The listing changes in one place only.** `src/manifest.ts` is byte-identical to the 1.0.0 release, so the four permissions and four hosts are unchanged: no new justification, and the data-use disclosure stands. The description gained one bullet for reading a transaction before it is signed. `npm run store:images` produced byte-identical images, so there are none to re-upload.
-  - **Two tests were stale, and a release is what finds that.** The e2e settings test asserted `Version1.0.0` in About, so every bump would have broken it: it reads the version from `package.json` now, as the manifest does. And `tests/live.test.ts` asserted that two readings make exactly two `credential_utxos` requests — preprod's shared contract has grown past one page of 1,000, so a reading takes two. The wallet is right (the second reading still asks only `block_height=gt.<last>`, and agrees with the first); the test now asserts that invariant rather than the count.
-  - **The package is built from the merge commit on `main`**, not from this branch, so the release record names a commit on `main`. The live preprod runs (`e2e/live/run.mjs all`, `staking`) and the by-hand [preprod checklist](development.md#preprod-checklist-before-a-release) are the owner's, as they submit real transactions and look at real screens. Tag `web-wallet/1.1.0` — with the slash, or [release.yml](../../../.github/workflows/release.yml) ships signed CLI binaries.
-
-- **2026-09-28: v1.0.0 submitted to the Chrome Web Store** — `seedelf-web-wallet` was merged into `main` first (PR #266, a fast-forward), so the listing's homepage and privacy-policy URLs, and the wallet's own Settings link, all point at `main` and resolve.
-  - **The package:** `seedelf-wallet-1.0.0-mainnet.zip`, built from `0d5ec42`, **SHA-256 `85c0fb093fa8bb157f5ad3d9ea1fd001db75d7273c3068aa52ea65932dee714b`** (1,533,435 bytes). Checked before upload: no dev key, mainnet and preprod hosts, `licenses/THIRD-PARTY.txt` present, and the privacy URL in its own bundle points at `main` — which is what proves it was built from the merged tree. The zip is reproducible from that commit.
-  - **Two things the dashboard asked that these docs didn't cover:** it refuses *every* upload until 2-Step Verification is on the developer account (the error blames the file, not the account); and it gives **one** host-permission box, not one per host, so the five justifications in [store/README.md](store/README.md) — 1,694 characters together, against its ~1,000 limit — had to be merged into the single block now recorded there.
-  - **Next:** the three Lovejoin items under *Smaller items* in [plans/launch-review.md](plans/launch-review.md), and the mainnet checks still not done by hand: nine of the ten `MAINNET_PROTOCOLS` routes, `exclude_protocols`, and Stop or a refund. None blocks the listing.
-
-- **2026-09-28: release prep and the owner's mainnet test** (`web-wallet/release-prep`, from `seedelf-web-wallet`).
-  - **Store:** the five screenshots are made on mainnet now (the fake Koios retags the recordings' addresses and stands real tokens in), and [store/README.md](store/README.md) has the two data-usage calls written out (*Location* and *Web history*, both recommended checked) and the new-listing-or-update trade-off.
-  - **From the owner's mainnet test:** the welcome screen's privacy claim and the round-amount advice are gone (docs' job, not the wallet's); Home's "create a Seedelf first" tip links to Create; the top bar's mark goes Home from any depth; a build says what it's doing (`BuildStage`, stages on the request's own port) instead of only greying its button; the swap and Lovejoin prose is shorter, minus nothing the privacy review requires.
-  - **Koios's limit, hit on mainnet:** the shared limit is 40 every 10 s (a restarted worker starts with an empty window, so two must fit the tier's 100), and a 429 now holds *every* request back for as long as `Retry-After` asks, kept in session storage across a worker restart.
-  - **Lovejoin could never start:** mainnet's pool was empty and the floor of 30 gated the deposit too, so nothing could go in — and the wallet's own boxes never count towards the floor. A **seed** (depth 0: the deposit alone, no mixes) now works on an empty pool, offered only when a mix was refused for want of boxes. It hides nothing of the seeder's and says so; its boxes wait with no due time. The floor stays 30 for mixing (the owner's call).
-  - **Lovejoin ran on mainnet** (the owner, 2026-09-28). The pool, seeded from a second wallet, holds 39 boxes of 10 ₳, over the floor of 30, and a swap's return went through it end to end: a deposit of three boxes (`64d636bd`), twelve mixes two waves deep, then the return (`c18a5207`). **The mainnet `mix_box` hash `c145c10f…1fad` is confirmed against real transactions** — it had none at all before this, and Lovejoin's own `config/network.mainnet.json` still has `mix_script_hash: null` (upstream). A mix measured **0.8225 ₳** across the twelve, which is `networks.ts`'s `mixCost` (825_000) and the launch review's 0.822–0.828 ₳, now read off the chain rather than estimated.
-  - **The rest of that run:** Minswap answered the extension's origin and a swap quoted, ordered, filled and paid out, through one route; a Seedelf was funded from the private balance and its return merged back into it. The 9.954 ₳ left at the end came back directly, as designed — a box is a fixed 10 ₳ and a fourth needed 56.7 ₳ of the 50.011 ₳ the swap returned. The review's arithmetic is the builder's own (`funding_for`), so the three boxes it promised are the three the chain made.
-  - **Next:** the owner's calls — the Store listing, and the zip's SHA-256 here once they package it. Still untested by hand on mainnet, and listed in [plans/launch-review.md](plans/launch-review.md)'s *Still open*: the other nine `MAINNET_PROTOCOLS` routes, `exclude_protocols`, and Stop or a refund. A detailed transaction view is recorded under *After v1* for its own branch.
-
-- **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). A fresh review before mainnet, and its fixes, are in [plans/independent-review.md](plans/independent-review.md) (see its *Status*).
-  - **What landed:**
-    - A stranger's junk at a session's account can no longer strand its money: a return is planned by cost.
-    - Payments are sealed as maybe sent before Koios is asked, and Remove wallet lists what's still open.
-    - A session ends only once Koios shows its funding spent.
-    - The unlock and quiet rules hold across a lock.
-    - History-aware selection never refuses what the CLI's order would pay.
-    - The connector is capped and can't be flooded, and warns when a transaction ties accounts.
-    - Swaps route only through DEXes the order check reads (SundaeSwapV3 is out on mainnet), and a refunded order says so.
-    - A final review of the merged fixes found 13 more bugs where the areas met; all are fixed.
-  - **Surprising:** most findings were bugs the earlier rounds' own fixes brought in, where two features meet. That's why the fixes were reviewed across areas after merging.
-  - **The owner's calls** (2026-09-28): a restored wallet checks on chain whether each box it can't account for was mixed, and holds the unmixed; strangers' token deliveries that can't pay their way stay behind; a stopped swap waits for an order Minswap doesn't list, and says so.
-  - **Next:** the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md).
-
-- **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](plans/privacy-review.md) (see its *Status*).
-  - **What landed:**
-    - Sites can no longer tell whether a UTxO or a recent transaction is the wallet's, or when it's locked.
-    - The connect window chooses nothing.
-    - Coin selection keeps money with different histories apart where it can (best effort, no gate), and the UTxOs screen tags each UTxO's origin.
-    - Nothing goes out at the moment of unlock.
-    - A Settings switch turns Lovejoin returns off, and each flow can come back directly.
-    - The copy and the privacy policy say what Koios, giveme.my (ours), sites and Minswap can still see.
-    - Also: every build has both networks; the welcome screen chooses one (a small dropdown); a wallet from before the switch stays on preprod.
-  - **Declined by the owner:** a longer default delay, the price lookup off, Hide balances on, a keep-apart switch, and a default account for new sites.
-  - **Next: a fresh, independent review in a new context,** before mainnet. See the PR into `seedelf-web-wallet`.
-
-- **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). The findings, the owner's calls, what's fixed and what's still open are in [plans/launch-review.md](plans/launch-review.md) (see its *Status*).
-  - **What landed:** every finding of the launch review, and of a second review of the fixes.
-    - Lovejoin on mainnet.
-    - One build with both networks.
-    - A Send Koios didn't answer is maybe sent, never paid twice.
-    - Strangers' UTxOs (deep datums, reference scripts, huge token totals, identity registers) can't break or fool the wallet.
-    - The dApp prompt counts staking money, and refuses unfound inputs and other-network UTxOs.
-    - Lovejoin never brings back a box it didn't mix.
-    - Sessions can't be stranded by Disconnect or a lost submit.
-    - The mainnet store package.
-    - `Cargo.lock` tracked and Rust pinned.
-  - **Surprises:**
-    - The bundler had put runtime helpers in `sw.js`, so every page ran a second worker. It's fixed, and a build now fails if it happens again.
-    - seedelf-contracts' `hashes/` is a later, undeployed build: never copy it into the constants.
-  - **Next:**
-    - the privacy-by-default analysis ([plans/privacy-review.md](plans/privacy-review.md));
-    - then the by-hand mainnet checks and the store in *Still open*.
-
-- **2026-09-25: crypto review** (`web-wallet/crypto-review`, from `web-wallet/lovejoin`). The findings, what's fixed, and what's left to decide are in [plans/crypto-review.md](plans/crypto-review.md).
-  - **What landed:**
-    - A one-time session account is never reused: the chain is asked first.
-    - The entropy no longer reaches UI pages through `storage.onChanged`.
-    - Hedged Seedelf proof nonces.
-    - Lovejoin boxes due together come back one at a time, with secure delays.
-    - Private spends are measured in the wallet: no draft goes to Ogmios.
-    - Storage is closed to content scripts.
-    - A CBOR reader a site can't hang.
-    - Random dApp approval ids.
-  - **Kept, at the user's call:** the vault's KDF, which matches Lace's.
-  - **Next:** its *Not fixed: for later* list.
-
-- **2026-09-25: chunk 16, Lovejoin (third session)** (`web-wallet/lovejoin`). The plan's *Built (third session)* lists everything.
-  - **What landed:** the two features the user decided at the end of the second session.
-    - *Mix my boxes again* on the Lovejoin page: every box of the wallet's in the pool fanned out again, paid from the private balance through a one-time account, with no deposit. No box is withdrawn while it runs, and each waits a fresh delay after.
-    - A countdown in the last 2 minutes before auto-lock, on every screen, with Stay unlocked.
-    - Then, as the user asked: progress while a chain goes (sent, then on chain, or where it stopped) wherever a return shows, and mixing again past 10 boxes, as far as the pool allows.
-  - **Chunk 16 ends here,** with its PR into `seedelf-web-wallet` (the user, 2026-09-25: "we are at a really nice spot").
-  - **Live on preprod:** the user tests the built wallet there themselves, and reported their runs working (2026-09-25). The wallet's own tests run offline only. Worth watching in later runs: a long chain against the node's mempool (the plan's *Handoff to the fourth session*).
-
-- **2026-09-25: chunk 16, Lovejoin (second session)** (`web-wallet/lovejoin`). The plan's *Built (second session)* lists everything.
-  - **What landed:**
-    - A session's return merges into the Seedelf UTxO its funding made: one Seedelf spend under the session's own collateral, measured in the wallet.
-    - The Lovejoin tile mixes from the private balance (a mix session that runs itself) or from the public account (its collateral backing every mix).
-    - Koios's Ogmios checks each chain's first mix before it's used.
-    - The swap approval's words, and Home's *In Lovejoin* row.
-    - End-to-end tests for the tile and a return's review.
-  - **Surprises:**
-    - The merged return first bound its proof to the session's key. A site connected to a session can ask that key to sign, so a proof bound to it could be replayed in what the site builds. It now uses a one-time key, as every Seedelf spend does.
-    - A request left out of `rpc.ts`'s list is dropped by the worker without a word. It's a type error now.
-  - **Then the user tested it live on preprod.**
-    - A 3-box mix went through.
-    - Four fixes came of it: a withdraw's odd fee short of collateral; no banner for Bring one back now; a swap whose return chain stopped partway and then waited for good; and chain submits Koios didn't answer.
-    - Koios requests are now held under the public tier's burst limit.
-  - **Next:** the plan's *Handoff to the third session*. It says what's uncommitted, where the user's live tests stood, and the two features the user decided next: *Mix my boxes again* from the private balance, and a countdown before auto-lock. Then the PR into `seedelf-web-wallet`.
-
-- **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
-  - **What landed:**
-    - Pallas 0.35.
-    - Scripts evaluated in the wallet (`uplc` 1.1.23).
-    - The withdraw-zero patch.
-    - Lovejoin's provers.
-    - Deposit, mix, withdraw and whole chains, measured offline against the deployed scripts.
-    - The worker: a private session's spare ADA goes through Lovejoin on its way back, and the boxes come back later, each on its own, through giveme.my.
-    - Settings, the review lines, and a Lovejoin tile.
-  - **Surprises:**
-    - `uplc` 1.1.21 (on our old Pallas) mis-costs protocol 11's cost model, and it failed every mix. 1.1.23 matches the chain exactly.
-    - No Pallas version (to 1.4.0) stages withdrawals or a `Reward` redeemer.
-    - The module grew from 484 to 739 KB gzipped.
-  - **Next:**
-    - the merge into the funding change
-    - the tile's own mixing (from the private balance and from the public account)
-    - the swap approval's words
-    - Home's *In Lovejoin* row
-    - end-to-end tests
-    - a live preprod run, on the user's go-ahead
-
-- **2026-09-25: chunk 15, the public dApp connector** (`web-wallet/dapp-connector`). Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). Chunk 14 merged as PR #261.
-  - **What landed:**
-    - **Core, in WebAssembly** (`wasm/src/cip30.rs`): CIP-30's encodings, what a dApp's transaction does to the public account, signing it with the keys it needs, and CIP-8 data signatures. Exports: `cip30Utxos`, `cip30Value`, `cip30Address`, `cip30ReadValue`, `inspectDappTx`, `signDappTx`, `dataSigner`, `signDappData`.
-    - **Worker:** `dapp.ts` (the service), `connector.ts` (registering the content scripts), `dapp-window.ts` (the popup), the port listener in `sw.ts`, and Koios `utxo_info`.
-    - **Content scripts:** `src/content/page.ts` and `bridge.ts`, built as self-contained IIFEs by a plugin in `vite.config.ts`.
-    - **UI:** the connector's window (`screens/DappApprovals.tsx`), and Settings' *Sites* switch and *Connected sites*.
-    - **Manifest:** `scripting`, and the sites as optional host permissions.
-  - **Tests:** Rust 18 (`cip30_test.rs`), Vitest 10 (`dapp.test.ts`), Playwright 2. Totals: `seedelf-wasm` 57, Vitest 232 (+2 live).
-    - **Checked independently:** CIP-8 signatures verify with the Cardano Foundation's `cardano-verify-datasignature`.
-  - **Surprises:**
-    - **Chrome's dialog for optional permissions can't be answered from Playwright.** The connector's e2e tests load a copy of the build with the sites granted from install.
-    - **The connector's window reuses itself.** A request within 800 ms of the last answer goes to the open window, so the tests wait for it to close.
-    - **The WebAssembly module grew** from 439 to 474 KB gzipped: Pallas's Conway decoding of whole transactions.
-    - **Minswap lists a fixed set of wallets**, and inside a frame it offers only Eternl, through Eternl's iframe bridge. See the plan's *Minswap*.
-    - **Koios's public tier stopped sending CORS headers** (2026-09-25; CORS is "Open" only with an API key now). The extension still reads it, because requests to a host in its host permissions skip CORS. But the connector's off state removed `https://*/*` at every start, and Chrome's remove takes Koios's and giveme.my's grants with it, so every Koios POST failed. Fixed: off keeps Chrome's access, and a withheld Koios grant shows **Ask Chrome again**. The user chose to stay on the public tier with no API key (limits per IP address, nothing to leak). See the plan's *Koios and CORS*.
-  - **For the user:**
-    - Resubmit the store listing: the new permissions, the privacy policy, and possibly *Web history* on the Privacy practices form.
-    - Choose how Minswap comes in: (a) in-wallet swaps through its aggregator, (b) framed as Eternl does it (needs Minswap), or (c) a tab with a private session.
-  - **Next:** private sessions (one-time accounts and the round trip), then the dApp browser.
-  - **Then, on the same branch (2026-09-25): step 2, a private swap.** The user chose route A1: swaps through Minswap's aggregator from a one-time account, accepting three transactions as the cost of privacy. See the plan's *Step 2*.
-    - **What landed:** `OneTimeAccounts`, `buildSessionReturn`, `inspectSessionTx`/`signSessionTx` and `attachWitnesses` in WebAssembly; `sessions.ts` and `minswap.ts` in the worker; `screens/Swaps.tsx` from a **Swaps** row on Home's Private tab.
-    - **Tests:** Rust 5 (`session_test.rs`), Vitest 6 (`sessions.test.ts`), Playwright 1 (the whole swap against fakes).
-    - **Surprises:**
-      - Minswap's `build-tx` takes only a sender, so a swap can't come from or go into Seedelf directly. Its V2 orders could (A2), which waits on a batcher test.
-      - Its transactions carry the order's datum in the witness set, so a signature has to be spliced in byte for byte (`attachWitnesses`); re-encoding would break the datum's hash.
-      - Its preprod API rate-limits quickly, and Cloudflare refuses a non-browser user agent (error 1010).
-    - **For the user:** approve a live swap on preprod; resubmit the store listing (Minswap is a new service: the description, the privacy policy and the data disclosure are updated).
-    - **Next:** the restore scan, a live cancel, then private CIP-30 (step 4).
-  - **Then (2026-09-25): preprod MIN's decimals** (384ef7b). It isn't in the token registry, so `src/tokens/list.json` can now carry a hand-vetted test-network token as `unregistered`.
-  - **Then (2026-09-25): the swap form in Minswap's shape** (e43cec9): You pay over You receive, a live quote, a token picker, slippage settings.
-  - **Then (2026-09-25): chunk 15b, a swap that runs itself, and the dApp browser.** Plan: [plans/chunk-15b-swap-runner.md](plans/chunk-15b-swap-runner.md), whose *Built* lists what landed.
-    - **The user decided:** an unfilled order is never cancelled by the wallet; **Stop**, always there, cancels it and brings everything back. Home's Swaps row became **dApps**, a grid of tiles, with Minswap's opening its swaps.
-    - **What landed:** the runner in `sessions.ts` (one approval, then `advance` from the page, a one-minute alarm and unlock), a timeline page with Stop, pauses that say why, Home's running rows, and `screens/Dapps.tsx`.
-    - **Tests:** Vitest 9, Playwright 2.
-    - **Surprises:** the plan's pause rule (any fresh minimum under the approved one) would have paused about half of mainnet swaps, so the order asks for the approved minimum and pauses only when it couldn't fill. An empty Minswap order list isn't a fill: it can lag the chain.
-    - **The user's first try, MIN to ADA, paused:** Minswap routed it through DanogoCLMMV1, which swaps against its pools and spends UTxOs that aren't the session's. The user chose orders only for now: routing leaves the DEXes that do this out (`exclude_protocols`). See the 15b plan's *Found on the user's first try*.
-    - **The user's second try sat on "Order placed"** (the order never reached the chain; the retry line under the timeline was missed). A failure now shows in the timeline itself, and retries start at 30 s.
-    - **Each session gets its own stake key** (the user, on learning all one-time accounts shared one): `24301'/2/i`, pinned against `cardano-address`. Older sessions keep their shared-stake address.
-    - **Third try:** Minswap's preprod Splash orders pay a mainnet address. Preprod routing leaves Splash out, and a transaction the wallet won't read pauses instead of retrying.
-    - **The swaps' look (the user asked for a review):**
-      - **Minswap's list:** *In progress* and *Past swaps* cards. Each row shows the pair's two tokens, what the swap is doing (or when it ran), and a tag: Running, Needs you, Retrying, Stopping, Done, Stopped or Failed.
-      - **The same row and tag elsewhere:** Home's *Swaps in progress* uses the row, and the dApp tile the tag.
-      - **The funding review** says what Send approves (the order placed by itself for at least the minimum, or a pause), and shows the four steps to come instead of the manual ones.
-      - **A swap's page:** a funding that never reached the chain fails its step in the error colour. A paused swap's callout comes first, and the page shows *Started*.
-      - **Fixed:** the list's card had lost its padding (`list section` on one element), and a second `.steps` rule from b858d22 had indented and muted Home's *Get started*.
-    - **For the user:** approve a live swap on preprod (fund, fill, back), and one Stop against a real order.
-    - **PR #262 opened (2026-09-25)** for everything above.
-  - **Then (2026-09-25): the password at Sign for sites.** The user connected the public account to Minswap's preprod site (custom wallet, CIP-30 ID `seedelf`) and asked whether signing without the password was safe.
-    - **What landed:** a site's transaction or message needs the password typed in the connector's window, even while unlocked (`dappPassword`, on by default, a switch under Settings' *Sites*). A wrong one leaves the request waiting and counts towards the unlock back-off (`Wallet.checkPassword`). The connector window's Unlock says a site is waiting.
-    - **Surprise:** skipping it right after an unlock doesn't work, because sites call `enable()` first and the unlock goes to that call. So Sign always asks.
-  - **Then (2026-09-25): chunk 15c, private CIP-30** (step 4). Plan: [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md), whose *Built* lists what landed.
-    - **The user decided:**
-      - the choice is in the connect window, remembered per site;
-      - one session per site;
-      - it's funded before the site gets it;
-      - it's managed from the dApps page's *Sites*.
-    - **My calls, in the plan:**
-      - Bring it back leaves the site connected; Disconnect ends the session, once it's empty.
-      - The funding asks for the password when `dappPassword` is on.
-      - The session's stake key signs too (`stakeIndex`).
-    - **What landed:** WebAssembly's `stakeIndex` and session data signing, site sessions in `sessions.ts`, every connector path resolving the site's account, the connect window's private path, and `screens/SiteSessions.tsx`.
-    - **Tests:** Rust 2, Vitest 5, Playwright 1.
-    - **Also fixed:** Settings said the wallet talks only to Koios and giveme.my, leaving out Minswap since chunk 15.
-    - **The user's first live try (2026-09-25):** a real preprod site connected to a private session and traded through it.
-      - The switch's old name, *Let sites connect to your public account*, read as the public account only. It's now **Let sites connect to Seedelf Wallet**, with the store listing, privacy policy and docs to match.
-    - **For the user:** bring that session back and disconnect it. The store listing text is updated for the connector's new name and private sessions.
-  - **Then (2026-09-25): Bring everything back.** The user found the back-and-forth clunky across many sessions.
-    - A card on the dApps page brings every session holding money back in one go. Each is its own transaction, sent together; spreading them out can come later.
-    - See the 15c plan's *Then: Bring everything back*.
-    - **Next:** the restore scan, then the chunk 15 PR's merge.
-
-- **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
-  - **What landed:**
-    - **Core:** `seedelf-core/src/staking.rs` patches certificates and a withdrawal into a built account transaction and writes the new body hash into the `BuiltTransaction`, so signing is unchanged. `build::account_staking` (a payment to `Payee::Nobody`) delegates, delegates the vote, withdraws, or stops; `move_in`, `account_send` and `account_mint` take a `&Staking` for rewards riding along. `ProtocolParameters` gains `key_deposit`.
-    - **WebAssembly:** `buildStaking`, `poolId`, `drepId`, and `withdrawal` on the move-in, send and account-mint requests; the stake key `2/0` signs inside it.
-    - **Worker:** `account_info` in every balance reading (`Balances.cardano.staking`), `staking.ts` (the pool list kept a day in `chrome.storage.local`, a pool's and a DRep's details, builds), `preferences.ts` (`spendRewards`, on by default), and staking refusals in plain words at submit.
-    - **UI:** Home's staking row and locked-rewards warning, the Cardano total with the rewards, Staking, the pool browser, the vote, the rewards in Send / Move in / Create reviews, and Settings' switch.
-    - **Docs:** the new positioning in the README, privacy.md, the store listing and the manifest's summary ("A Cardano wallet with private payments built in…"), for the user to resubmit. Store images regenerated; screenshot 5 is now "A full Cardano wallet".
-    - **DRep search** (the user asked after the PR opened): `npm run dreps` bundles every registered DRep with a name (`src/dreps/`: 61 on preprod, 452 on mainnet), and the vote page searches it by name or ID with no requests; a pasted ID still works for one registered since the release. Run it at each release, like `npm run tokens`.
-  - **Checked on preprod without spending:** `tests/fixtures/probe-staking.mjs`. Every staking transaction decodes on the node (Ogmios answers `[]`), and an account-paid mint with the rewards passes the real policy at the same budget.
-  - **Not done:** the live run. It needs the user's go-ahead: `node e2e/live/run.mjs staking` on the private test wallet (stake with TPREP, always abstain, then LOGIC), and later `withdraw-rewards` and `unstake`, once rewards arrive 15 to 20 days on.
-  - **Surprises:**
-    - Koios's `account_info` returns no row at all for a stake key that was never registered.
-    - `pool_list` has tickers but no names, and only the active stake: saturation needs `totals` and `optimal_pool_count` too, so browsing costs 3 requests on preprod, not 1.
-    - PostgREST's JSON-path `select` works on Koios's POST endpoints (`meta_json->body->givenName`), so a DRep's name comes without its metadata's bulk, or its image.
-    - The recorded 12-word account's rewards (57.475311 ₳) now ride along in the e2e and Vitest flows by default. Tests about something else keep their meaning: bigger amounts, or rewards spending switched off (`spent.test.ts`).
-    - The WebAssembly module grew from 424 to 439 KB gzipped (bech32 and the certificates); the store zip from 900 KB to 952 KB.
-  - **Tests:** cargo 241 (core 123, of which 12 are staking; WASM native 34), WASM Node 33, Vitest 196 (+2 live), Playwright 34.
-  - **Next:** the user's review of the staking screens, and the live run. The follow-up left (staking in the Cardano Activity) is in the plan. Then the after-v1 items.
-
-- **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).
-  - **What landed:** the user's 29 findings, each with its decision in the plan's list. Items 21–29 came after the PR opened: UTxOs on each Home tab, locks on both sides (from each row too), the collateral in Settings, Refresh on UTxOs and Activity, no "Unnamed" stand-in for an untagged Seedelf, and a centred transaction banner. The store images are regenerated (Home changed); the listing text isn't, until chunk 13's new positioning.
-  - **Decided for what's next:** the wallet is a full Cardano wallet with private payments built in, not a sidecar. Chunk 13 adds staking and voting delegation; the decisions are in [plans/chunk-13-staking.md](plans/chunk-13-staking.md).
-  - **Surprises:**
-    - `pallas-txbuilder` (0.33, and 1.4.0 too) can't build certificates or withdrawals; chunk 13 patches them into the built body.
-    - Koios's public tier refuses request bodies over 5,120 bytes: `credential_utxos` now asks about 75 keys a request.
-    - The account was read by stake key and kept only its own base addresses, so an enterprise address, or our key with someone else's stake key, went unseen. It's read by payment key now (item 20).
-    - The minimum ADA stays a hard rule in `seedelf-core`'s builders, so the CLI still refuses less; the web wallet raises a short amount in WebAssembly and says so on the review.
-    - `build::move_in`, `account_send` and `account_mint` no longer skip pure 5 ₳ UTxOs: they spend what they're given, and the web wallet leaves out locked UTxOs and its collateral (items 21–23). The CLI doesn't call them, and its own selection (`collect_address_utxos`) is unchanged.
-  - **Next:** merge this PR, then chunk 13 from its plan's *Start here*.
-
-- **2026-09-24: chunk 11c done** (`web-wallet/store`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md). The materials only; the listing was never submitted.
-  - **Decided with the user:**
-    - Preprod only, and **unlisted**.
-    - The privacy policy is [store/privacy-policy.md](store/privacy-policy.md), linked on the `seedelf-web-wallet` branch.
-    - The Privacy practices form declares *Authentication information* and *Financial and payment information*.
-    - The screenshots are the popup at 2×, framed on navy with a caption.
-    - Taken as given: version 1.0.0, the category Tools (Lace's), and the store icon from the guardian artwork (`brand/README.md`).
-  - **The store's rules, checked live on 2026-09-24:**
-    - The icon is 128 px: 96 px of artwork in 16 px of padding.
-    - 1 to 5 screenshots, at exactly 1280×800 or 640×400.
-    - A 440×280 small promo tile: listings without one rank lower. The marquee is optional.
-    - The summary is the manifest's `description`, at most 132 characters.
-    - The Privacy practices tab wants a single purpose, a justification for each permission, a remote-code answer, the data categories with three certifications, and a policy URL. Google's FAQ counts data handled only on the device.
-    - Nothing specific to wallets: crypto mining is banned, and crypto extensions aren't featured. The 1 August 2026 update tightened limited use and disclosure.
-  - **What landed:**
-    - `npm run package`: a store build, `licenses/THIRD-PARTY.txt`, and `release/seedelf-wallet-1.0.0.zip`.
-      - The zip is 900 KB and 18 files, SHA-256 `8bf7dd79…fd14f53`. It's reproducible: a rebuild with the same toolchain gives the same bytes.
-      - It refuses a `dist/` with the dev key.
-    - The notices list 109 crates, 6 npm packages and SecretBox, with 90 distinct licence texts (295 KB, 24 KB gzipped).
-    - `e2e/support.ts` holds what the two specs share. The tests read the extension's ID from its worker, so **a store build passes all 19**, and CI now runs them on both builds.
-    - `npm run store:images` writes [store/images/](store/images/) from the fixtures and the public 12-word phrase.
-    - [store/README.md](store/README.md) has every dashboard field, by tab. development.md has *Releasing to the Web Store*, around the preprod checklist.
-    - The manifest's `description`, the store's summary, is now "A Cardano stealth wallet. Pay and get paid through Seedelf, where no UTxO says who owns it."
-  - **Surprises:**
-    - 13 crates ship no licence file: seven Pallas crates, `blst` and `crc-catalog` (they point at the Apache-2.0 text), `base58` and `bech32` (MIT, with the authors from `Cargo.toml`), and two CC0 bitcoin crates. `third-party.mjs` falls back by licence and fails on anything else.
-    - Cargo.lock isn't tracked, so CI's package step would catch a newly resolved crate without a licence.
-  - **Not done:**
-    - The live runs weren't repeated. They weren't approved for 11c, and the extension's code didn't change: only its manifest `description` did.
-    - Submitting. The user submits after this merges, so the policy URL resolves. Then the first message to testers.
-  - **Tests:** cargo 209, WASM Node 29, Vitest 118 (+2 live), and Playwright 19 on the dev build and 19 on the store build.
-  - **Next: a major style and flow iteration.** The user found 11a "kind of looks like Lace but also totally does not", and has a list of improvements. Ask for it; don't guess.
-    - Treat 11a's tokens and components as a starting point, not a settled design. Correctness UX and every privacy note stay.
-    - When the look changes, regenerate the listing's images (`npm run store:images`) and upload them with the next version.
-    - After that come the after-v1 items: the contract round trip, the mainnet flag, and merging into `main`.
-
-- **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
-  - **Decided with the user:**
-    - The `wasm-release` profile with `opt-level = "z"`, and no `wasm-opt`.
-    - The live runs run from here, on the private test wallet.
-    - The withdrawal goes to that wallet's own account.
-  - **Size** (`wasm/bench.mjs`; a proof is about 1.8 ms and a transfer draft about 53 ms in every build):
-
-    | Build | Raw | gzip |
-    |---|---|---|
-    | `release` (before) | 2,330 KB | 582 KB |
-    | LTO, one codegen unit, stripped, `opt-level` 3 | 1,687 KB | 516 KB |
-    | … `opt-level = "s"` | 1,276 KB | 442 KB |
-    | … `opt-level = "z"` (**used**) | 1,223 KB | 424 KB |
-    | … plus `wasm-opt -Oz` | 1,113 KB | 448 KB |
-
-    - `wasm-opt` shrinks the raw file but grows the compressed one, and the Web Store's download is a zip. The zipped `dist/` went from 1,032 KB to 873 KB.
-    - CI's WebAssembly build takes about 20 s longer (LTO).
-  - **Live on preprod** (the private test wallet, `node e2e/live/run.mjs`):
-
-    | Flow | Transaction | Fee (₳) |
-    |---|---|---|
-    | Create `live-1`, paid by the account | [`c0f3449d…cfcb48`](https://preprod.cardanoscan.io/transaction/c0f3449d674718cc92071ac3d5e703c13134b1f372aecdf298952ce4d5cfcb48) | 0.200988 |
-    | Move in 25.5 ₳ | [`180277c5…9d7519`](https://preprod.cardanoscan.io/transaction/180277c5c63cf45b06cccdb03575c1eeafff68a325a13a5e875af71ee19d7519) | 0.172145 |
-    | Stealth mint `live-2` (giveme.my) | [`081a621d…286816`](https://preprod.cardanoscan.io/transaction/081a621d813e8ed6aba2b2dd5139ad8dfaef1b3cac9d3e9e23c6b4b572286816) | 0.255934 |
-    | Send 3.3 ₳ to `live-1` (own, flagged) | [`86eb9cb9…99d184c`](https://preprod.cardanoscan.io/transaction/86eb9cb920649f29a277e7c3797d3fd1098390551794779402597cc9899d184c) | 0.233912 |
-    | Withdraw 5.5 ₳ to its own account (flagged) | [`f7276736…c8ae240`](https://preprod.cardanoscan.io/transaction/f7276736e4bc32da699923fdbf05a6112eaf8ad46571b839b3ee18c53c8ae240) | 0.23026 |
-    | Remove `live-2` into Seedelf | [`8f00e464…aad7115`](https://preprod.cardanoscan.io/transaction/8f00e4641a641de62160d9e7de41e3f90f8b5a7774d70063b203e98e4aad7115) | 0.245746 |
-
-    - All six are confirmed (blocks 5,214,814 to 5,214,858). The extension contacted only `preprod.koios.rest` and `www.giveme.my`.
-    - The test wallet now holds `live-1` (1.74986 ₳), 19.034148 ₳ in Seedelf and 9,977.877007 ₳ in the account.
-  - **Found live, and fixed:**
-    - **A Koios backend that's behind.** After the mint confirmed, `account_utxos` still listed the UTxO it spent. After the move-in, a backend answered with the account as it was before the mint, 20 minutes earlier. `account_utxos` is a live db-sync query (koios-artifacts), so it's a backend lagging, not a cache.
-      - Fix: `spent.ts`. The worker remembers what it submits, reads again (up to 3 × 3 s) while an answer lists a spent UTxO, and never counts or builds on one.
-      - Tests: `tests/spent.test.ts`, with the fake Koios's new `spent` set.
-    - **Koios's node was down** (`TxSubmitConnectionError`) twice. That answer means nothing was sent, so `submittx` retries it (after 1 s and 3 s), and says so plainly if it keeps failing. `BadInputsUTxO` now explains itself too.
-  - **Loose ends:**
-    - **ADA Handles:** resolved against real preprod handles, `$buzzkill` (plain) and `$-2` (CIP-68), in the opt-in live test. No withdrawal to a handle has run live.
-    - **The public 12-word phrase's balance** is untouched: the private wallet covered every flow.
-    - development.md has the testing layers and a **preprod checklist before a release**.
-  - **The live scripts:** `e2e/live/{lib,flows,run}.mjs` replace `move-in.mjs` and `mint.mjs`. They run in one browser session, as a user would. A fresh session knows nothing of what earlier sessions spent, so it's more exposed to a lagging backend.
-  - **Tests:** Vitest 117 (+2 live), Playwright 19, WASM Node 29.
-  - **Next:** 11c, the unlisted Web Store listing, on `web-wallet/store` once this merges.
-
-- **2026-09-24: chunk 11a done** (`web-wallet/polish`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
-  - **Decided with the user:**
-    - **Dark only;** there's no light theme.
-    - **Inter** is bundled (OFL), and the icons are **Lucide** (ISC).
-    - **Home** is a Seedelf / Cardano account switch with round actions.
-    - There was no fix list, so this chunk did the plan's items plus chunk 10's wrap fix.
-  - **The look** ([architecture.md](architecture.md#ui)):
-    - Tokens at the top of `styles.css`: a near-black navy-tinted page, white-alpha surfaces, Lace's radii and 4 px grid, teal accent with navy text on it. The contrast ratios are in its comment.
-    - The CSP gains `font-src 'self'`. The light wordmark is gone.
-  - **Components:**
-    - `Screen` is every flow's layout, with Back, the title, and a sticky foot holding the error and the primary action.
-    - `ReviewRows`, `Callout` (privacy, warn, info), `ActionButton` and `Choice`.
-    - The five copies of `Row` and six of `plural` are gone. `format.ts` now has `plural`, `adaWithTokens` and `tokenKey`.
-  - **Flow changes:**
-    - Home's two tabs. **Receive** is its own screen, showing the QR code at once, with a note that the address is public.
-    - **Get started** for a new wallet (fund, create the Seedelf, move in) puts the mint-first order on screen.
-    - Remove shows the Seedelf's full name.
-    - "Send to a Seedelf" no longer wraps in the popup: it's the round **Send**, whose accessible name is still the long one.
-  - **Tests:** Vitest 109 (+1 live). Playwright 19:
-    - A new popup tour screenshots every wallet screen at 360 px (`test-results/popup-*.png`).
-    - The tests follow the tabs and Receive. Back is an icon button named "Back". The round-amount warning has a test id (`round-warning`) instead of a class.
-  - **Surprises:**
-    - React reused the Seedelf tab's round buttons for the Cardano tab, so the primary colour animated onto the wrong button. Each panel has a key now.
-    - Playwright's screenshot `style` option is refused by the page CSP. `snap()` in the spec unsticks the foot through the CSSOM instead, and turns animations off.
-  - **Next:** 11b, size and live runs, on `web-wallet/size-and-live` from `seedelf-web-wallet` once this merges.
-
-- **2026-09-24: chunk 11 planned** (after #255 merged; CI green).
-  - It's split into three sessions, 11a, 11b and 11c, each with a "Start here": [plans/chunk-11-polish.md](plans/chunk-11-polish.md). The plan is committed on the pushed branch `web-wallet/polish`, which 11a builds on.
-  - **Next:** 11a, the style and flow pass (done, above).
-
-- **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md).
-  - **Decided with the user:**
-    - A removed Seedelf's ADA goes to the Cardano account by default, or to the Seedelf balance.
-    - Withdrawals go to any key address or ADA Handle, with a warning when it's your own account.
-    - Max takes up to 20 UTxOs.
-  - **Rust (`seedelf-core/src/build.rs`):**
-    - `ScriptSpend::change_to(addr)` sends the change to a key address instead of the contract.
-    - `sweep`, `sweep_from` and `sweep_all` pay an address; `sweep` picks the token UTxOs first, as transfer does. `remove` burns the one Seedelf in a UTxO. `is_payable_address` is the CLI's rule: Shelley, this network, no script part.
-    - The CLI's `sweep` and `remove` are thin now. **Every CLI script spend ends in `commands/spend.rs`**, which also shortened `util mint` and `transfer`. Only `create` and `fund` still build inline.
-    - `remove`'s offline test now mocks Ogmios with real purposes (`mount_evaluate_mint(1)`); its assertions are unchanged.
-  - **WASM:**
-    - `draftWithdraw`/`finishWithdraw` (Max takes the 20 largest UTxOs, and `left` says how many stayed) and `draftRemove`/`finishRemove`.
-    - `checkWithdrawAddress`, and `CardanoAccount.isOwnAddress`, which checks for the account's staking key in an address.
-  - **Extension:**
-    - `withdraw.ts` covers resolve, withdraw and remove, on `script-spend.ts`. The Koios client gains `assetNftAddress` for handles (plain, then CIP-68).
-    - UI: **Withdraw** next to **Send to a Seedelf**, and **Remove** on each Seedelf row, whose row is now two lines. `TokenAmounts` is shared with Transfer.
-  - **Checked on preprod without spending anything:** `extension/tests/fixtures/record-withdraw.mjs`.
-    - All three shapes pass the real scripts under Ogmios. The removal ran both scripts, and the policy accepted the burn of the synthetic Seedelf.
-    - Fees: 270,270 for an amount with a token (two inputs); 261,734 for Max (two inputs); 242,394 for a removal.
-  - **Found in testing:** the fixture's synthetic Seedelf holds 1.5 ₳. After the fee, that's below a contract output's minimum, so "back into the Seedelf balance" is refused for it with "Not enough ADA". A real Seedelf's 1.74986 ₳ works, and a test checks both.
-  - **Tests:** core `mint_test` 24 (4 new); the CLI's offline tests 11; `seedelf-wasm` native 20 and Node 29; Vitest 109 (+1 live); Playwright 18. The withdraw and remove e2e tests stop at Send, as the other Seedelf spends' do.
-  - **Not done:** live runs, by hand.
-    - The public 12-word phrase's Seedelf balance, read live today after chunk 9, is 17.4 ₳ and 4.82028 ₳ (UTxOs from `9f564d0f…`). It also holds `TAK1` and `TAK2`.
-    - Withdraw some to another wallet's address, then remove `TAK1` to the Cardano account, and record both tx hashes here.
-    - An ADA Handle lookup against a real preprod handle is still untested.
-  - **Next:** chunk 11, polish and testers. See the chunk 11 entry above.
-
-- **2026-09-24: chunk 9 done** (`web-wallet/transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md).
-  - **Decided with the user:** the plan's table, except that **paying your own Seedelf is allowed, with a warning**. The plan suggested refusing it.
-  - **Rust (`seedelf-core/src/build.rs`):**
-    - `transfer` and `transfer_from` take `Payment { register, lovelace, tokens }`s. Each output is `deposit_output`, a fresh re-randomization of the register found on chain, checked against its minimum.
-    - **Found this chunk: `Register::is_valid` accepts the identity point.** An identity public value is `g^0`, so anyone could take a payment to it. The new `is_payable` also refuses the identity; `transfer` and both mints use it.
-    - `select_script_inputs` takes the tokens being sent. The UTxOs holding them come first, with the biggest holdings of each token first, then pure ADA as before.
-    - **Changed from the plan:** the "UTxOs don't hold the tokens" error didn't need to count as `NotEnough`. The token UTxOs are picked up front, so only `transfer_from` with given UTxOs can hit that error, and it stays a hard error there.
-    - The CLI's `transfer` `run()` is thin. Its offline tests pass unchanged.
-  - **WASM:**
-    - `draftTransfer` and `finishTransfer`. The recipient checks run here: a whole name, a wallet-contract UTxO holding that Seedelf, and a register datum. `toSelf` flags your own Seedelf.
-    - Mint and transfer share the owned-input check, the seed, the proofs and the draft and finish plumbing. `MintDraft` is now `SpendDraft`, and `TokenOut` is now `TokenAmount`.
-    - The module is 2.3 MB (582 KB gzipped).
-  - **Extension:**
-    - `script-spend.ts` holds the shared flow (read, draft → Ogmios → finish, keep, then giveme.my → sign → submit → pending). `mint.ts` now uses it too, and chunk 10 plugs in.
-    - `transfer.ts`, plus the RPCs `transfer-lookup`, `transfer-build` and `transfer-submit`. `PendingTx.kind` gains `"transfer"`.
-    - **Added beyond the plan:** `transfer-lookup`, so the form shows "Found: *tag*" (or "No Seedelf with that name") as soon as a whole name is pasted, before Review.
-    - The lookup is the same whole-contract `credential_utxos` query a balance reading makes. Koios never hears the recipient's token.
-    - UI: **Send to a Seedelf** on the Seedelf card, then the form, review and Send. The banner says "Transfer sent…", then "Transfer confirmed".
-    - **Found in review (the user):** there was no way to copy a Seedelf's full name, to give out or paste. Each row in **Your Seedelfs** now has a Copy button (`CopyButton`, split out of `CopyField`), and the e2e test copies a name there and pastes it into the form.
-    - giveme.my's refusal now says "refresh, then review it again", not "create it again".
-  - **Checked on preprod without spending anything:** `extension/tests/fixtures/record-transfer.mjs` drafted 5 ₳ and 1 tUSDM to the live Seedelf "This is a test." from the 12-word phrase's synthetic UTxOs. It passes the real wallet script under Ogmios.
-    - Each spend is 76,043 memory and 337,845,799 steps.
-    - The fee is 273,922 for two inputs, and 233,912 for one input with ADA only.
-    - giveme.my refused, as for the synthetic mint.
-  - **Tests:** core `mint_test` 20 (5 new: a fresh copy of the recipient's register, budgets on a shuffled answer, part of a token from the UTxOs holding it, several recipients including yourself, and the refusals, among them a real torsion point and the identity); the CLI's offline tests 11; `seedelf-wasm` native 15 and Node 26; Vitest 100 (+1 live); Playwright 16. The transfer e2e test stops at Send, as the stealth mint's does.
-  - **Live on preprod (2026-09-24, by the user):** the transfer [`22585835…fc8d9c`](https://preprod.cardanoscan.io/transaction/225858355a5bd56f55bb437330ebf312683dd912f961b211e7b5b23f92fc8d9c), from the public 12-word phrase to one of its own Seedelfs (the flagged pay-yourself case). "Everything worked."
-    - It spent the phrase's one Seedelf UTxO, chunk 8's 22,994,294 change: 7,654,321 paid, and 15,106,061 back as change.
-    - Fee 233,912 for 916 bytes, exactly the one-input figure measured under Ogmios. The collateral return is 4,649,132 (5 ₳ − 3/2 × fee).
-    - Checked live afterwards: both new outputs are owned by the phrase, under valid, freshly re-randomized registers.
-  - **Next:** chunk 10, withdraw (`sweep` and `remove`). Both are `ScriptSpend`s with other outputs: `sweep` pays an address, and `remove` burns a Seedelf (`ScriptSpend::mint` with −1). Write `docs/plans/chunk-10-*.md` first.
-
-- **2026-09-24: chunk 8b done** (`web-wallet/mint-first`).
-  - **Why:** the user pointed out that a mint links the Seedelf to whatever pays for it. See chunk 8's note, and privacy rule 5.
-  - **Rust:** `build::account_mint` / `AccountMint`, which drafts and finalizes like a `ScriptSpend`.
-    - Key inputs: pure ADA first, never a 5 ₳ pure UTxO.
-    - Change goes to `0/0`.
-    - Only the Seedelf policy runs, by reference. There are no proofs, no one-time key and no required signers.
-    - `change_outputs` now takes its "not enough" error.
-  - **Changed from the roadmap row: the collateral is the account's own UTxO, not giveme.my.**
-    - That's what the CLI's `create` does, and the transaction names the account anyway.
-    - It lets WASM sign at review like a move-in, with no giveme.my at Send.
-    - Order of preference: ADA-only, then at least 2 ₳, then not spent, then 5 ₳, then the largest.
-    - A token UTxO can be collateral, since the collateral return gives its tokens back. **Found live:** after the user's move-in, every UTxO in the public 12-word account holds tokens.
-    - With one UTxO, it's both an input and the collateral.
-  - **WASM:** `draftAccountMint` and `finishAccountMint` (signed). Move-in's path checks and per-key signing are now shared helpers.
-  - **Extension:**
-    - `MintService.build(network, label, from)`; `MintSummary.from`.
-    - Create has a "Pay with" choice (Cardano account by default, or Seedelf balance), each with a note on what it links.
-    - Home's Cardano card says to create a Seedelf before moving in, until one exists.
-  - **Checked live without submitting:** an account-paid draft from the public 12-word phrase's real preprod UTxOs passes the real policy under Ogmios. The mint uses 72,836 memory and 21.4M steps; the fee is 212,868 for 999 bytes.
-    - `extension/tests/fixtures/record-account-mint.mjs` records it.
-    - The fixture keeps no CBOR: a signed transaction over public-phrase UTxOs shouldn't sit in the repo.
-  - **Tests:** core `mint_test` 15 (4 new: collateral choice, token collateral, overlap, errors, and fees against the ledger's formula); `seedelf-wasm` native 12 and Node 24; Vitest 91; Playwright 15. The account path runs through Send to "Seedelf created", since no giveme.my signature is needed.
-  - **Live on preprod (2026-09-24, by the user):** the account-paid mint [`ca0fac00…ade137`](https://preprod.cardanoscan.io/transaction/ca0fac004c2b59a28cc7065b10225db8acfb2f5ef0c808a09d5ffbcba4ade137), the Seedelf `TAK2` (`5eed0e1f54414b32019dda2589…`) with 1.74986 ₳.
-    - Fee 212,516 for 990 bytes. One account input; the change, with its tokens, went back to the account.
-    - **The collateral held tokens:** a 3 ₳ UTxO with four. The collateral return is 2,681,226 (3 ₳ − 3/2 × fee) with all four tokens, so that path works live.
-  - **Next:** chunk 9, transfer. **Its plan is ready: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md),** committed on the `web-wallet/transfer` branch. Start there.
-
-- **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
-  - **Decided with the user:**
-    - The tag is optional, printable ASCII, at most 15 characters, with a live preview.
-    - giveme.my is asked at Send, not at Review.
-    - The Seedelf gets the user's own re-randomized register, and the wallet picks the UTxOs.
-    - The live run is the user's own funded wallet, by hand. The test wallet is still unfunded, so chunk 7's `move-in.mjs` hasn't run.
-  - **Rust (`seedelf-core/src/build.rs`):**
-    - `ScriptSpend` is the shape every Seedelf spend shares. `draft()` carries placeholder budgets; `finalize(budgets)` puts in Ogmios's and settles an even fee. Transfer, sweep and remove should reuse it.
-    - Budgets are matched by purpose and index (`Budgets::from_ogmios`). Ogmios errors become plain words.
-    - `mint` and `mint_from`. The CLI's `util mint` `run()` is thin now; its test mocks Ogmios with real purposes (`mount_evaluate_mint`).
-    - Smaller changes:
-      - `seedelf_token_name` refuses an output index past 255 (the policy takes one byte).
-      - `seedelf-koios`'s `evaluate_transaction` passes Ogmios's 400 answer on.
-      - `add_witnesses`, `tx_id` and `required_signers` sign and read a transaction kept as CBOR.
-  - **WASM:**
-    - `draftMint`, `finishMint` and `signScriptSpend`.
-    - **Changed from the plan: no stateful builder object.** The one-time key is HKDF of the Seedelf scalar and a random seed, so the seed waits in session storage and Send re-derives the key, even in a worker Chrome restarted after 30 idle seconds.
-    - `signScriptSpend` checks giveme.my's signature before adding it.
-    - The module is 2.2 MB (545 KB gzipped). An all-era `MultiEraTx` decode cost about 540 KB more, so Conway-only decoding is used.
-  - **Extension:**
-    - `mint.ts`, `collateral.ts` (giveme.my) and `pending.ts`. The pending watch moved out of `move-in.ts`, and `PendingTx` has a `kind`.
-    - Koios has `evaluate`.
-    - UI: Create a Seedelf (form, review, send), and the banner goes "Seedelf mint sent…" then "Seedelf created".
-  - **Checked on preprod without spending anything:**
-    - A draft for the 12-word phrase's synthetic UTxOs passes both real scripts under preprod Ogmios (the UTxOs go along as `additionalUtxo`).
-    - Measured: a spend is 76,043 memory and 338M steps; the mint is 72,836 memory and 21M steps. A one-input mint costs 0.256 ADA.
-    - Our transaction matches a real CLI mint on preprod field for field.
-    - giveme.my checks against the chain before it signs, so it refused the synthetic mint ("Transaction Fails Validation"). There's no real giveme.my signature in the tests.
-    - Recorders: `extension/tests/fixtures/record-mint.mjs` and `seedelf-core/tests/fixtures/ogmios/`.
-  - **Tests:** core `mint_test` 10 (value, minimums, registers, proofs bound to the one-time key, collateral, budgets on a shuffled answer, selection, a draft on a tight balance); `seedelf-wasm` native 10 and Node 23; Vitest 88 (+1 live); Playwright 14; the CLI's offline tests (11) are green.
-    - **Coverage gap:** Playwright stops at Send, checking a forged witness is refused and nothing is submitted, because only giveme.my's key signs. Vitest covers Send with a stubbed signer, and Rust signs with a stand-in key.
-  - **Fixed after the user's first live mint:** the node refused it with `FeeTooSmallUTxO` (255,788 supplied, 255,801 expected).
-    - The cause: `linear_fee` used Pallas's `PolicyParams::default()`, which is Byron's 43.946 lovelace a byte, not the protocol's 44.
-    - It now reads `min_fee_a` and `min_fee_b` from the protocol parameters (`ProtocolParameters` gained both).
-    - Move-in had the same bug through `settle_fee`.
-    - The core tests now check every fee against the ledger's formula written out, and they fail on the old one.
-  - **Live on preprod (2026-09-24), both by the user from the public 12-word test phrase's account:**
-    - Move-in [`9dda2589…28bc8`](https://preprod.cardanoscan.io/transaction/9dda2589d1029e6d6596a3449b05986e2c489dd81aa65fcf40082eea2c428bc8): five key inputs, 25 ₳ into the contract, change to `0/0`. Fee 186,979 for 718 bytes. This is chunk 7's live move-in.
-    - Mint [`939ae7df…aa6ac`](https://preprod.cardanoscan.io/transaction/939ae7df3d6a31255bd6036d05857ea7c6f3cb4d95480813283e9dfca01aa6ac): the Seedelf `TAK1` (`5eed0e1f54414b31009dda2589…`) with 1.74986 ₳.
-      - Fee 255,846 for 1,107 bytes. The collateral return is 4,616,231 (5 ₳ − 3/2 × fee), and the change is 22,994,294.
-      - This is the first transaction with a real giveme.my signature.
-    - The live balance scan (`LIVE_KOIOS=1`) finds both. That phrase is public, so anyone can spend them; the live test now checks their shape, not their count.
-    - `e2e/live/*.mjs` on the private test wallet still haven't run (it's unfunded).
-  - **Privacy correction (the user):** a stealth mint paid by money you moved in yourself links the Cardano account to the Seedelf. The live mint spent exactly its move-in's UTxO.
-    - The docs, privacy rule 5 and the Create screen's text now say so.
-    - The fix is to mint first, then move in: chunk 8b.
-    - **The user's rule:** stealth minting only helps when Seedelf money you received pays for the Seedelf ("hidden money paying for the hidden Seedelf").
-    - **An idea for 8b:** the wallet can tell received UTxOs from moved-in ones by the transaction that created them. A received one came from a tx spending contract inputs; a moved-in one came from key inputs.
-  - **Next:** chunk 8b, mint first: the account-paid mint, then the Create screen's default, before chunk 9 (transfer).
-
-- **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).
-  - **Decided with the user:**
-    - Move-in takes an ADA amount or Max, plus a token picker (a picked token moves in full).
-    - After sending, the wallet watches `tx_status` every 15 s, then refreshes.
-    - Change goes to `0/0`.
-    - The live run is on a fresh test wallet the user funds.
-  - **Rust:**
-    - `seedelf-core` now compiles to WebAssembly. The only blocker was `seedelf-koios`'s reqwest timeouts, now gated off on wasm32.
-    - `seedelf-core/src/build.rs` holds network-free builders:
-      - `deposit_outputs`: fresh re-randomized registers, tokens 20 to an output.
-      - `settle_fee`: one throwaway signature per signer, repriced until it covers the signed size.
-      - `external_sweep`: the CLI command is now a thin `run()` around it, and its offline tests pass unchanged.
-      - `move_in`: never spends a 5-ADA pure-ADA UTxO.
-    - `ProtocolParameters::from_koios` parses a Koios row. The platform CLAUDE.md's "no `build_*`" rule is reversed.
-  - **WASM:** `buildMoveIn` checks each UTxO against its `role/index`, builds, and signs once per payment key. The module is now 1.6 MB (468 KB gzipped); `wasm-opt` is chunk 11.
-  - **Extension:**
-    - The Koios client gains `epochParams`, `submitTx` (never retried) and `txStatus`.
-    - `move-in.ts` builds, holds the signed tx in session storage until **Send**, submits exactly it, and watches it.
-    - Lock now clears all of `chrome.storage.session`.
-    - UI: Move in (form → review → send) and a pending banner that resumes on reopen.
-  - **Fixes from the user's manual testing:**
-    - **"Failed to fetch" and nothing else.** A rebuild under a running extension left the old worker asking for a deleted, hash-named WASM file, and the failure was cached. Now the start is retried, "The wallet couldn't start" offers Try again or Reload the extension, and Koios errors are in plain words.
-    - **`AdaInput`:** at most 6 decimals (truncated, with a note), nothing above the 45 billion ADA supply, and a note when the amount exceeds the balance. The WASM builder refuses over-supply amounts too.
-  - **Tests:** core builder 6; `seedelf-wasm` native 6 (witnesses verify against the tx hash, and the signers are exactly the inputs' keys, on the real recorded preprod UTxOs); Node 21; Vitest 79 + 1 live; Playwright 13; the CLI's offline tests (11) are green.
-  - **Not done: the live preprod move-in.** (Done 2026-09-24: see chunk 8's note.)
-    - The test wallet in `extension/.preprod-test-wallet.txt` (gitignored) was never funded.
-    - The user tried the flow by hand in their own wallet, but no transaction hash was recorded.
-    - To finish: fund that wallet, `npm run build`, then `node e2e/live/move-in.mjs 10`. It restores the wallet, moves 10 tADA plus any tokens, waits for confirmation, and prints the result.
-  - **Next:**
-    - The user plans CSS and UX fixes as part of the Lace style and flow pass (chunk 11). Keep new screens simple until then.
-    - Chunk 8, create a Seedelf (`util mint`), is the first script spend. **Its plan is ready: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).** Start there, and finish chunk 7's live move-in first.
-    - A real owned contract UTxO (from a live move-in) would let chunk 8 test on-chain.
-
-- **2026-09-23: chunk 6 done** (`web-wallet/balances`).
-  - **Decided with the user:** the receive-address QR code is in (`uqr`, MIT, a port of Nayuki's generator). Balances are read when Home opens, if the last reading is over a minute old, and on Refresh; there's no background polling. (Since then, while unlocked, a one-minute alarm reads what's running: swaps, Lovejoin chains and boxes due, a payment that may still go through. See [architecture.md](architecture.md#chain-data) and the privacy review's §6.)
-  - **What landed:** `extension/src/background/koios.ts`, `chain.ts` and `balances.ts`, plus the new Home. See [architecture.md](architecture.md#chain-data).
-    - One reading is three Koios requests: `credential_utxos` for the contract, and `account_addresses` plus `account_utxos` for the Cardano account's stake key.
-    - Ownership runs in WebAssembly inside `wallet.withKeys`, which also writes the session cache, so a lock can't interleave. A reading that finishes after a lock is dropped.
-    - The Seedelf tag is the leading printable run of the 15-byte window after `5eed0e1f`, slightly stricter than the CLI's filter.
-  - **Checked against the real chain:** the recorded preprod fixtures (`extension/tests/fixtures/`) match what `LIVE_KOIOS=1` reads today. The built extension, run against live preprod with no interception, shows the 12-word test phrase's account (10,350.538725 ₳, 4 addresses used) and contacts only `preprod.koios.rest`. The receive QR decodes back to the exact address with `zxing-cpp` and OpenCV.
-  - **Tests:** Vitest 64, plus 1 opt-in live test (Koios paging and retries, datum parsing on all 25 real contract UTxOs, the gap limit, bigint sums, Seedelf tags, the balance service with the cache and the lock, formatting). Playwright 10: all e2e tests now get Koios from the fixtures with every other host blocked, and 2 are new, for balances and a Koios failure.
-  - **Surprises:**
-    - The `abandon … art` phrase's stake key has a foreign script UTxO on preprod. Anyone can pair a stake key with their own payment part, so the account's UTxOs count only at derived addresses.
-    - Older preprod contract UTxOs carry the shared Seedelf stake key; the current CLI writes none. Querying by payment credential finds both.
-    - Real token names carry CIP-68 labels (`0014df10…`), which the UI drops.
-    - No phrase wallet owns contract UTxOs yet, so owned-UTxO coverage uses synthetic fixtures (re-randomized registers of the 12-word vector). Chunk 7's move-in makes real ones.
-  - **Next:** chunk 7, builder extraction and move-in. It's the biggest chunk, so start by writing `docs/plans/chunk-07-*.md` with a "Start here" list, and merge `main` first.
-
-- **2026-09-23: chunk 5 done** (`web-wallet/vault-lock`).
-  - **Decided with the user:** auto-lock after 15 minutes; passwords of at least 12 characters with a strength hint and no composition rules; the receive-address QR code waits for chunk 6 or 11. It's for someone paying from a phone wallet who scans the desktop screen.
-  - **Rust / WASM:** `phrase_to_entropy`, `entropy_to_phrase` and `wordlist` in `seedelf-crypto::derivation`. The frozen v1 derivation is untouched.
-    - Exported as `phraseToEntropy`, `entropyToPhrase` and `bip39Wordlist`.
-    - Added beyond the plan: `SeedelfKey.fromEntropy` and `CardanoAccount.fromEntropy`, so unlock never turns the phrase into a JS string.
-  - **Vault:** Lace's SecretBox is in `extension/src/background/secret-box/` (Apache-2.0, license and change list in that folder, no EMIP-003). The entropy is sealed under `seedelf.vault`.
-    - Checked against vectors made independently in Python (`argon2-cffi`, `cryptography`): `extension/tests/vectors/secret_box_sbv1.json`.
-    - Unlock takes about 190 ms in the service worker, so pure-JS Argon2id stays.
-  - **State:** `extension/src/background/wallet.ts`, with the states `no-wallet`, `locked` and `unlocked`.
-    - Keys stay in worker memory, and the entropy sits in `chrome.storage.session`.
-    - Auto-lock uses `chrome.alarms` plus UI activity pings. The back-off is enforced in the worker and kept in `chrome.storage.local`.
-    - Operations run one at a time, so concurrent unlocks can't race the back-off.
-    - The worker broadcasts `state-changed`, so every open page follows a lock.
-  - **RPC:** the plan's table, plus `validate-phrase`, so restore can show the Rust core's reason before asking for a password. `status` also carries `retryAfterMs`.
-  - **UI:** Welcome, Create (reveal → confirm 3 words → password), Restore (per-word boxes, autocomplete, paste fills all), Unlock (countdown, forgot → reset → restore), and a Home placeholder.
-    - From the popup, onboarding opens in a full tab.
-    - The chunk-4 Wallet core check is gone.
-  - **Brand:** the user added the Seedelf logo set; the originals are in `brand/`.
-    - The emblem is the extension icon at 16, 32, 48 and 128 px. The wordmark is on Welcome, with a dark-mode variant whose navy lettering is lifted to near-white.
-    - The design tokens now use the logo's navy and teal, and the dark theme follows Lace's structure. The full Lace-style pass is still chunk 11.
-  - **Tests:**
-    - Rust: 5 new derivation tests and 1 new `seedelf-wasm` test. Node: `wasm/tests/entropy.test.mjs`.
-    - Vitest (37): SecretBox, the wallet state machine (including restart, browser restart, auto-lock and the back-off), the handlers, and the password rule.
-    - Playwright (8): create, restore by paste and by autocomplete, lock and unlock across pages, the back-off, reset, and a browser restart that comes back locked. It also times unlock.
-  - **Gotchas:**
-    - `chrome.runtime.sendMessage` from one page also reaches other open extension pages. The UI's listener ignores anything that isn't `state-changed` and never replies.
-    - A hash-only `page.goto` doesn't remount the app, so open a new page to test `#create` or `#restore`.
-  - **Next:** chunk 6, balances. The Koios client and contract scan go in the worker, using the unlocked `SeedelfKey` in `wallet.ts`. The Home screen is the placeholder to replace.
-
-- **2026-09-23: chunk 4 done** (`web-wallet/extension-scaffold`).
-  - **What landed:** `extension/`, built with Vite 8 (Rolldown), React 19, TypeScript 7 and an MV3 manifest.
-    - The manifest is generated per build: preprod by default, mainnet behind `VITE_ENABLE_MAINNET`, a strict CSP, and a dev `key` that pins the ID to `jfekiogplaamnceifeehipmomhojngcb`.
-    - The service worker is an ES module. It loads WASM lazily and answers typed RPC (`src/shared/rpc.ts`) only from the extension's own pages.
-    - The UI works as a popup (360 px) or a full tab (`?view=tab`).
-    - A temporary "Wallet core check" screen derives a phrase's Cardano account and Seedelf key in the worker.
-  - **Tests:**
-    - Vitest (9): the manifest, and the handlers with the real WASM against the shared vectors.
-    - Playwright (3): loads `dist/` into Chromium, checks the pinned ID and module worker, and checks the popup derives the Lace-matching addresses. It also covers the full tab.
-  - **CI:** added `.github/workflows/web-wallet.yml`, which runs on PRs touching `seedelf-platform/`. It covers Rust fmt/clippy/tests, the WASM build and tests, and the extension typecheck, tests, build and end-to-end run.
-    - `Cargo.lock` is untracked, so CI resolves dependencies fresh and installs the matching `wasm-bindgen-cli`.
-  - **Gotchas:**
-    - Vite 8 renamed `rollupOptions` to `rolldownOptions`.
-    - Aliases don't apply to `?url` imports, so the WASM binary is imported by relative path.
-    - Playwright 1.63 needs its own Chromium: `npx playwright install chromium`.
-  - **Next:** chunk 5, the vault and lock. It adds the `storage` permission and replaces the preview screen with create/restore onboarding.
-- **2026-09-23: chunk 3 done** (`web-wallet/cardano-keys`).
-  - **What landed:** `seedelf-crypto/src/cardano.rs`, `CardanoAccount`.
-    - Icarus master key (CIP-3) via `pallas-wallet`, then `m/1852'/1815'/account'/role/index`.
-    - Base addresses for receive and change, plus the stake address, on either network.
-    - The account xpub.
-  - **WASM:** `CardanoAccount` and a `Network` enum. The module is now about 590 KB before `wasm-opt`; shrinking it is a job for chunk 4 or 11.
-  - **Verified against Lace's library.** `seedelf-crypto/tests/vectors/cardano_account.json` (12/15/24 words, accounts 0 and 1, preprod and mainnet) matches `@cardano-sdk/key-management` 0.29.13's `InMemoryKeyAgent` on all 80 values.
-    - I ran the check with a Node script that loaded the installed SDK from another local project.
-    - The Rust and WASM tests read the same file.
-  - **Decided this chunk:**
-    - "Deposit account" is renamed "Cardano account". For a restored Lace or Yoroi phrase, it is that wallet's account 0.
-    - v1 uses account `0'` only, but every function takes the index.
-    - The six Cardano-account rules are in [keys-and-accounts.md](keys-and-accounts.md#the-cardano-account). They include: coin selection skips 5 ADA pure-ADA UTxOs (someone's collateral), as the CLI does; and staking is left alone.
-    - One-time accounts move to the reserved account `24301'` (`0x5EED`). Account `1'` could be a real Lace account and would link one-time addresses back to the user.
-  - **Not done here:** signing (chunk 7) and address discovery (chunk 6).
-  - **Next:** chunk 4, the extension scaffold.
-- **2026-09-23: chunk 2 done** (`web-wallet/key-derivation`).
-  - **What landed:** the v1 derivation, frozen, in `seedelf-crypto/src/derivation.rs`:
-    - `parse_phrase`: checksum and case/whitespace normalization, with user-facing errors. New phrases are 24 words; restore accepts 12, 15 or 24, like Lace.
-    - `generate_phrase`, `bip39_seed`, `okm_v1`, `scalar_from_okm`, `seedelf_key_v1`.
-    - No new crates: `bip39` comes via `pallas-wallet`, and HKDF comes from `cryptoxide`.
-  - **Vectors:** nine (12, 15 and 24 words), in `seedelf-crypto/tests/vectors/seedelf_key_v1.json`.
-    - Checked against independent implementations: Python `hashlib`/`hmac`, `py_ecc` for the public values, the Trezor BIP39 vector, and the well-known 12-word seed.
-    - The Rust tests (`derivation_test.rs`) and the WASM tests (`derivation.test.mjs`) both read them.
-  - **WASM:** added `SeedelfKey.fromPhrase(phrase, account)`, `generatePhrase()` and `validatePhrase()`. The module is now about 350 KB, mostly the word list and SHA-512.
-  - **Change from the plan:** BIP39 moved into Rust, so `@scure/bip39` is out of the JS stack.
-  - **Next:** chunk 3, the phrase → CIP-1852 deposit account.
-    - `pallas-wallet` (already in the tree) has an HD module and `bip39`. Check it for Icarus master-key and CIP-1852 derivation before reaching for a JS library.
-    - Verify the results against a known wallet's addresses for the same phrase.
-- **2026-09-23: chunk 1 done** (`web-wallet/wasm-foundation`).
-  - **What landed:** the `seedelf-wasm` crate in `seedelf-web-wallet/wasm/`.
-    - `SeedelfKey` keeps the scalar inside WASM.
-    - `Register`, `rerandomize`, `isValidRegister`, `registerToDatum`, `verifyProof`.
-    - `build.sh` produces an ES module of about 260 KB.
-  - **Tests:**
-    - Native: `cargo test -p seedelf-wasm`.
-    - From JS: `node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"`, run after `build.sh`.
-    - Both check the same pinned vector as `seedelf-crypto`.
-    - A proof takes about 10 ms.
-  - **Things to know:**
-    - `wasm-bindgen-cli` must match the crate version (0.2.128 today).
-    - `seedelf-platform/Cargo.lock` was gitignored (`*.lock`) then, so versions could float on a fresh clone. It's tracked since the launch review (#61), and every build uses it (`--locked`).
-    - The `seedelf-koios` `connect_timeout` gate moved to chunk 7, where `seedelf-core` first needs WASM.
-  - **Next:** chunk 2. Implement the v1 key derivation in `seedelf-crypto`, then add `SeedelfKey.fromPhrase()`.
+- **2026-10-01: chunk 17, the transaction view** (`web-wallet/transaction-view`). The decoder takes CBOR and nothing else, so a fixture is a whole test of it, and the expected values are `cardano-cli debug transaction view`'s rather than our own output frozen. **Pallas gives a Conway transaction Alonzo's auxiliary data,** whose typed form knows only keys 0–2, so every auxiliary script is read from the raw bytes instead. What it left open is [post-release-roadmap.md](post-release-roadmap.md#owed)'s O3.
+- **2026-10-01: v1.1.0 prepared for the Web Store** (`web-wallet/release-1.1.0`). Minor, not patch, because it adds something a user can do. `src/manifest.ts` is byte-identical to 1.0.0, so no new justification and the data disclosure stands. **Two tests were stale, and a release is what finds that:** one asserted the version in About, one asserted a Koios page count that preprod's growth had changed.
+- **2026-09-28: v1.0.0 submitted to the Chrome Web Store.** Built from `0d5ec42`, SHA-256 `85c0fb093fa8bb157f5ad3d9ea1fd001db75d7273c3068aa52ea65932dee714b`, 1,533,435 bytes, reproducible from that commit. **Two things the dashboard asked that the docs didn't cover:** it refuses *every* upload until 2-Step Verification is on the developer account (and blames the file, not the account), and it gives **one** host-permission box rather than one per host.
+- **2026-09-28: release prep and the owner's mainnet test** (`web-wallet/release-prep`). **Koios's shared limit is 40 every 10 s**, and a 429 now holds every request back for as long as `Retry-After` asks, kept across a worker restart. **Lovejoin could never start on mainnet** — the pool was empty and the floor of 30 gated the deposit too — so a **seed** (depth 0, the deposit alone) now works on an empty pool. Then **Lovejoin ran on mainnet end to end**, and that run is where **the mainnet `mix_box` hash `c145c10f…1fad` was confirmed against real transactions**: it had none before, and **Lovejoin's own `config/network.mainnet.json` still has `mix_script_hash: null` upstream**, so our value is right and upstream's absence is not a reason to change it. A mix measured **0.8225 ₳**, matching `networks.ts`'s `mixCost`.
+- **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). See [plans/independent-review.md](plans/independent-review.md). **Most findings were bugs the earlier rounds' own fixes brought in, where two features meet** — which is why the merged fixes were then reviewed across areas, finding 13 more.
+- **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule: the most private option is the default, with a control to turn it down. See [plans/privacy-review.md](plans/privacy-review.md) for what landed and what the owner declined.
+- **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). See [plans/launch-review.md](plans/launch-review.md), whose *Still open* is live. Lovejoin on for mainnet, one build with both networks, and a Send that Koios didn't answer is *maybe sent* — never paid twice.
+- **2026-09-25: crypto review** (`web-wallet/crypto-review`). See [plans/crypto-review.md](plans/crypto-review.md). Hedged proof nonces; private spends measured **in the wallet**, so no draft goes to Ogmios; storage closed to content scripts. The vault's KDF was kept as-is, matching Lace's, at the owner's call.
+- **2026-09-25: chunk 16, Lovejoin (third session)** (`web-wallet/lovejoin`). *Mix my boxes again*, and a countdown in the last two minutes before auto-lock. Chunk 16 ends here.
+- **2026-09-25: chunk 16, Lovejoin (second session)**. **A proof bound to the session's key could be replayed in what a connected site builds**, since a site can ask that key to sign — it uses a one-time key now, as every Seedelf spend does. Also: a request missing from `rpc.ts`'s list was dropped by the worker in silence; it's a type error now.
+- **2026-09-25: chunk 16, Lovejoin (first session)**. **`uplc` 1.1.21 mis-costs protocol 11's cost model and failed every mix; 1.1.23 matches the chain exactly** — which is why Pallas moved to 0.35. No Pallas version up to 1.4.0 stages withdrawals or a `Reward` redeemer.
+- **2026-09-25: chunk 15, the public dApp connector, private swaps, the dApp browser and private CIP-30** (`web-wallet/dapp-connector`). The longest note in the archive, and worth reading there. **Koios's public tier stopped sending CORS headers** (open only with an API key now); the extension still reads it because host permissions skip CORS, but the connector's off state removed `https://*/*` and Chrome took Koios's and giveme.my's grants with it, so every POST failed. **Minswap's transactions carry the order's datum in the witness set**, so a signature is spliced in byte for byte — re-encoding breaks the datum's hash. **Each session gets its own stake key** (`24301'/2/i`). Minswap's `build-tx` takes only a sender, which is why a swap can't come from Seedelf directly and A2 waits on a batcher test.
+- **2026-09-24: chunk 13 done** (`web-wallet/staking`). **Pallas can't stage certificates or withdrawals**, so `staking.rs` patches them into the built body and rewrites the body hash — patch first, sign after. Koios's `account_info` returns no row at all for a stake key that was never registered.
+- **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). The owner's 29 findings. **Koios refuses request bodies over 5,120 bytes**, so `credential_utxos` asks about 75 keys a request. **The account is read by payment key now**, so an enterprise address, or our key with someone else's stake key, is seen and spent.
+- **2026-09-24: chunk 11c done** (`web-wallet/store`). The zip is reproducible from its commit, and refuses a `dist/` built with the dev key. **13 crates ship no licence file**, so `third-party.mjs` falls back by licence and fails on anything else. The store's rules as checked live are in [store/README.md](store/README.md).
+- **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). **`wasm-opt` shrinks the raw module but grows the compressed one, and the store downloads a zip** — so `opt-level = "z"` is used and `wasm-opt` isn't. Six flows ran live on preprod (hashes and fees in the archive). **A Koios backend can lag twenty minutes**, so `spent.ts` remembers what was submitted and never counts or builds on a spent UTxO.
+- **2026-09-24: chunk 11a done** (`web-wallet/polish`). Dark only, Inter, Lucide, Home as a tab switch. React reused the Seedelf tab's round buttons for the Cardano tab, so each panel needs a key. **The owner's verdict afterwards: "kind of looks like Lace but also totally does not"** — which is why a style and flow pass keeps recurring.
+- **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). `ScriptSpend::change_to(addr)` sends change to a key address instead of the contract. Every CLI script spend ends in `commands/spend.rs`; only `create` and `fund` still build inline.
+- **2026-09-24: chunk 9 done** (`web-wallet/transfer`). **Found here: `Register::is_valid` accepts the identity point.** An identity public value is `g^0`, so anyone could take a payment to it — hence `build::is_payable`, which is what to check before paying a register.
+- **2026-09-24: chunk 8b done** (`web-wallet/mint-first`). The account-paid mint uses **the account's own UTxO as collateral**, not giveme.my: that's what the CLI's `create` does, the transaction names the account anyway, and it lets WASM sign at review.
+- **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). The node refused the first live mint with `FeeTooSmallUTxO` — 13 lovelace short — which is how the Byron fee-policy bug was found. **The owner's privacy correction: a stealth mint paid by money you moved in yourself links the account to the Seedelf**, so stealth minting only helps when received Seedelf money pays for it.
+- **2026-09-23: chunk 7 done** (`web-wallet/move-in`). A rebuild under a running extension left the old worker asking for a deleted, hash-named WASM file, and the failure was cached — which is why a stale worker now says so.
+- **2026-09-23: chunk 6 done** (`web-wallet/balances`). The recorded preprod fixtures match what live Koios returns. Balances are read when Home opens if the last reading is over a minute old.
+- **2026-09-23: chunk 5 done** (`web-wallet/vault-lock`). Lace's SecretBox seals the BIP39 entropy; the words themselves are never stored. Auto-lock after 15 minutes, passwords of at least 12 characters with no composition rules.
+- **2026-09-23: chunk 4 done** (`web-wallet/extension-scaffold`). Vite, React 19, TypeScript, MV3, and `.github/workflows/web-wallet.yml`.
+- **2026-09-23: chunk 3 done** (`web-wallet/cardano-keys`). `CardanoAccount`, **verified against Lace's `@cardano-sdk/key-management`** across 12, 15 and 24 words, accounts 0 and 1, both networks.
+- **2026-09-23: chunk 2 done** (`web-wallet/key-derivation`). The v1 derivation, **frozen**, with nine vectors. BIP39 moved into Rust, so `@scure/bip39` left the JS stack.
+- **2026-09-23: chunk 1 done** (`web-wallet/wasm-foundation`). The `seedelf-wasm` crate.
 - **2026-09-23: design done.** The docs in this folder hold every decision.

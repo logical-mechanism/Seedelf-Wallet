@@ -109,7 +109,12 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 - **No strings are externalised today.** This is the bulk of the work, and it touches every screen.
 - **`tests/words.test.ts` has to move with them.** It parses source files for a lowercase "seedelf" in anything a person reads; once the text is in JSON it must check the locale files' values instead — and **Seedelf stays Seedelf in every language**, so it can check them all, not just English.
 - **A missing translation must fall back to English, never vanish** — i18next's `fallbackLng` does this, and it matters most for the privacy notes, which the rules say may never be dropped.
-- **The privacy notes need a human who reads the language.** A machine translation is fine for a button and not for a warning that decides whether someone understands what they're about to publish. Translate the bulk however is practical; have the privacy and warning strings read by someone fluent before they ship, and treat a missing one as untranslated (English) rather than guessed.
+- **There is no Spanish or Japanese reader on the project** (the owner, 2026-10-02), so the translation is Claude's, double- and triple-checked, and an error found later by a user is accepted as the risk. That makes the handling of it the design, since "be careful" isn't a plan:
+  - **Mark the safety-critical strings as a set.** The privacy notes and warnings get an identifiable key prefix, so there's a short list — not 150 scattered strings — to hand a fluent reader, or a user who reports one. This is the highest-leverage part: it's what makes a later correction cheap instead of a hunt.
+  - **Back-translate that set only.** Translate it back to English without the original in view and compare meaning. It catches the failure that matters — a dropped clause or an inverted negation, as in "anyone can see money went into Seedelf, **though not whose Seedelf it is**" — which is exactly what a confident wrong translation looks like.
+  - **Pin the structure in a test**, as `words.test.ts` already pins the name: same sentence count, a negation where English has one, placeholders intact, Seedelf still capitalised, and never silently equal to the English or empty.
+  - **Make reporting one the designed path.** Say in Settings that translations aren't checked by a native speaker and where to report an error. "Someone later says it's wrong" is then the feedback loop working, not a surprise.
+  - **English stays reachable** — the picker can always go back, and the docs are English — so a user who distrusts a translated warning has somewhere to check it.
 
 ### P3 · NFT images
 
@@ -132,9 +137,9 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 
 | # | Item | |
 |---|---|---|
-| 1 | **[P1, several accounts](#p1-several-accounts)** | the owner's first pick |
+| 1 | **[P1, several accounts](#p1--several-accounts)** | the owner's first pick |
 | 2 | **Be your own DRep, and vote on governance actions.** Register the account's DRep credential, then vote Yes, No or Abstain on a live action. Needs a list of open governance actions, which is a new read and so a new Koios cost to state. | ⬜ |
-| — | **Staking per account** needs no slot: it falls out of [P1](#p1-several-accounts) for free. Each account has its own stake key (`2/0` under its own index), so several accounts means stake spread across several pools. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching one-pool-per-account. | ✅ via P1 |
+| — | **Staking per account** needs no slot: it falls out of [P1](#p1--several-accounts) for free. Each account has its own stake key (`2/0` under its own index), so several accounts means stake spread across several pools. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching one-pool-per-account. | ✅ via P1 |
 
 **What doesn't change:** a vote or a registration is a public act by a public key. None of it reaches the private side, and none of it weakens the rule that money made private has no stake key behind it. A Seedelf address has no staking part, so the private balance has no voice to cast and never will.
 
@@ -205,6 +210,7 @@ The list is the owner's to write when parity lands. Carried candidates:
 **The two audiences are different documents, and the review should treat them that way:**
 
 - **Human-facing.** The root [README](../../../README.md), the web wallet's [README](../README.md), and the design docs ([architecture.md](architecture.md), [flows.md](flows.md), [privacy.md](privacy.md), [keys-and-accounts.md](keys-and-accounts.md), [development.md](development.md)) plus [store/](store/README.md). These are read by users, by people judging whether to trust the wallet, and by the Web Store reviewer. The forward-looking lines are the ones that rot: the web wallet README's *Later, maybe* and *Not planned* already lag every decision on this page.
+- **The record.** [archive/roadmap-v1.md](archive/roadmap-v1.md) holds v1's full roadmap, compressed out of the live file on 2026-10-02. It's where the reasoning behind a one-line entry lives, and it isn't maintained — if something in it is still load-bearing, the review is when it moves into a design doc.
 - **Agent-facing.** [plans/](plans/) is, in the owner's words, "just prompts for you basically" — specs a session is handed to build something, with the decisions that were made along the way. They're written to be read once, by whoever picks the chunk up. A finished plan is a record, not a page to maintain; what a *later* session needs out of it belongs in the design docs or a handoff note, and the review is the moment to move anything that's quietly become load-bearing.
 
 **Worth settling as part of it:** whether [plans/](plans/) should say at the top of each file which it is — a live spec or a finished record — since a stale plan read as current is the one failure mode that costs real work. The two [CLAUDE.md](../../../CLAUDE.md) files are agent-facing too, and are the one place where being out of date actively misleads.
@@ -248,10 +254,10 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 
 ## Open questions for the owner
 
-**Settled on 2026-10-02:** [P1](#p1-several-accounts)'s key (account 0, one private balance) and that it's chunk 18; [P2](#p2-language)'s languages (English, Spanish, Japanese); [P3](#p3-nft-images)'s design (click to show); [the data layer](#the-data-layer)'s shape, and that it's **parked** until the sequence is done; [public-side completeness](#public-side-completeness) going after the accounts and before the UX pass; a [documentation review](#the-documentation-review) closing the sequence; dark only; one phrase; and no analytics, AML/KYC or on-ramp. The web wallet [README](../README.md) is tidied.
+**Settled on 2026-10-02:** [P1](#p1--several-accounts)'s key (account 0, one private balance) and that it's chunk 18; [P2](#p2--language)'s languages (English, Spanish, Japanese); [P3](#p3--nft-images)'s design (click to show); [the data layer](#the-data-layer)'s shape, and that it's **parked** until the sequence is done; [public-side completeness](#public-side-completeness) going after the accounts and before the UX pass; a [documentation review](#the-documentation-review) closing the sequence; dark only; one phrase; and no analytics, AML/KYC or on-ramp. The web wallet [README](../README.md) is tidied.
 
 What's left:
 
 1. **Confirm the DRep correction.** The owner's order was voting then DRep; registering is the *gate* on voting, so [the two are written as one chunk](#public-side-completeness) — *be your own DRep and vote*. Worth a yes, since it changes what gets built rather than only when.
-2. **Who reads the Spanish and Japanese privacy strings.** [P2](#p2-language) can be built before this is answered, but it can't ship without it — a machine-translated warning is a correctness bug, not a cosmetic one. If no fluent reader is available, shipping English-only for those strings is the honest fallback and the plan should say so.
+2. **Who reads the Spanish and Japanese privacy strings.** [P2](#p2--language) can be built before this is answered, but it can't ship without it — a machine-translated warning is a correctness bug, not a cosmetic one. If no fluent reader is available, shipping English-only for those strings is the honest fallback and the plan should say so.
 3. **Should each file in [plans/](plans/) say whether it's a live spec or a finished record?** Raised under [the documentation review](#the-documentation-review). Seventeen plans sit there now, and a stale one read as current is the failure mode that costs real work.
