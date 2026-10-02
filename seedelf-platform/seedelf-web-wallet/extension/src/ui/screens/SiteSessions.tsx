@@ -37,6 +37,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
@@ -212,6 +213,7 @@ export function SiteSession({
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at private session ${s.index + 1}`} />
           <IntoRow back={back} />
         </ReviewRows>
+        <TxDetailButton txHash={back.txHash} testId="site-back-tx" />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote
@@ -449,6 +451,7 @@ function TopUp({
           <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
           <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
         </ReviewRows>
+        <TxDetailButton txHash={review.txHash} testId="top-up-tx" />
         {collateral && (
           <p className="note" data-testid="top-up-collateral">
             The account has no collateral left: a return took it, or a site's transaction spent it. This puts back 5 ₳, which

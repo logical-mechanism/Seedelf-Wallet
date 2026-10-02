@@ -32,6 +32,7 @@ import {
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
 import { adaWithTokens, formatAda, lockedAside, rewardsAside, shortHex, tokenKey as key } from "../format";
@@ -141,6 +142,7 @@ export function CardanoSend({
           <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="UTxOs spent" value={String(summary.inputs)} />
         </ReviewRecipients>
+        <TxDetailButton txHash={summary.txHash} testId="send-tx" />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}

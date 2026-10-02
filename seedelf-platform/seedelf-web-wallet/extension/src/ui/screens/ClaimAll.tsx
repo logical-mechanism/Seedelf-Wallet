@@ -23,6 +23,7 @@ import { HandleWarning } from "../components/HandleWarning";
 import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda, plural } from "../format";
@@ -196,6 +197,18 @@ export function ClaimAll({
  * build them all again to come back directly (`onDirect`; `direct` once
  * they were).
  */
+/**
+ * What the button says: whose return it is, where more than one is going, and
+ * which transaction of a chain it opens. A chain's is its first, so saying
+ * "transaction" of it would be saying one of twelve.
+ */
+function claimLabel(r: SessionBackSummary, several: boolean): string | undefined {
+  const which = r.lovejoin && r.lovejoin.txs > 1 ? (r.lovejoin.again ? "first mix" : "deposit") : undefined;
+  if (several) return `Private session ${r.index + 1}'s ${which ?? "transaction"}`;
+  // One return coming back directly is one transaction: the button's own words do.
+  return which && `The ${which}'s transaction`;
+}
+
 export function ClaimReview({
   built,
   chosen,
@@ -304,6 +317,17 @@ export function ClaimReview({
         <Row label="Network fees" value={`${formatAda(fees.toString())} ₳`} />
         <Row label="Transactions" value={String(txs)} />
       </ReviewRows>
+      {/* Each session comes back in its own transaction, so each is its own
+          view — and where one goes through Lovejoin, the one shown is its
+          chain's first, not the return it ends with. */}
+      {picked.map((r) => (
+        <TxDetailButton
+          key={r.index}
+          txHash={r.lovejoin?.entry ?? r.txHash}
+          label={claimLabel(r, picked.length > 1)}
+          testId={`claim-tx-${r.index}`}
+        />
+      ))}
       <Callout tone="privacy">
         Each session comes back in its own transaction, so nothing in them ties the sessions together. They're sent one
         after another, though, and returns that land together hint that they're one person's.

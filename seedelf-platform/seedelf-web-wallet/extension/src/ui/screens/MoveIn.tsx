@@ -11,6 +11,7 @@ import { BuildStage } from "../components/BuildStage";
 import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
 import { LeftOutNote } from "../components/LeftOut";
@@ -101,6 +102,7 @@ export function MoveIn({
           <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           <Row label="New private UTxOs" value={String(summary.depositOutputs)} />
         </ReviewRows>
+        <TxDetailButton txHash={summary.txHash} testId="move-in-tx" />
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
         <LeftOutNote leftOut={summary.leftOut} testId="move-in-left-out" />
         <p className="note">

@@ -15,6 +15,7 @@ import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { TxBanner } from "../components/TxBanner";
 import { formatAda, shortHex } from "../format";
 import { useNetwork } from "../network";
@@ -81,6 +82,7 @@ export function Collateral({ onBack }: { onBack: () => void }) {
           <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
           <Row label="UTxOs spent" value={String(summary.inputs)} />
         </ReviewRows>
+        <TxDetailButton txHash={summary.txHash} testId="collateral-tx" />
         <p className="note">
           Once the network confirms it, in about a minute, this 5 ₳ is your collateral. Only the fee leaves your account.
         </p>

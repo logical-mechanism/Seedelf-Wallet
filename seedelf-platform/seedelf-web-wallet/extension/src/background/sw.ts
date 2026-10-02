@@ -190,6 +190,7 @@ function getContext(): Promise<Worker> {
     worker = {
       wasm,
       wallet,
+      session,
       balances,
       moveIn,
       mint,

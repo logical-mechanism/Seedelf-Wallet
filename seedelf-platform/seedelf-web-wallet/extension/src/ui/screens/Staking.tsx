@@ -14,6 +14,7 @@ import { Callout } from "../components/Callout";
 import { ChevronRightIcon, TrashIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton } from "../components/TxDetail";
 import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, shortId, voteLabel } from "../format";
 import { useAmounts } from "../preferences";
 import { Pools, SharedTicker } from "./Pools";
@@ -349,6 +350,7 @@ export function StakingReview({
         <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
         <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
       </ReviewRows>
+      <TxDetailButton txHash={summary.txHash} testId="staking-tx" />
       {/* The whole ID: a name or ticker is anyone's to choose (launch review #59). */}
       {action.kind === "delegate" && <ReviewId label="Pool ID" id={summary.pool ?? action.pool} />}
       {action.kind === "delegate" && <SharedTicker shared={shared} />}

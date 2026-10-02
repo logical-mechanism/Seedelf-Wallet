@@ -44,6 +44,8 @@ So money that sits stays staked in the public account, and is made private when 
 
 **Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. See [plans/chunk-14-style-flow-2.md](docs/plans/chunk-14-style-flow-2.md).
 
+**After v1: the transaction view** ([plans/chunk-17-transaction-view.md](docs/plans/chunk-17-transaction-view.md)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
+
 **Later, maybe:** NFT images, several accounts, and word of incoming payments without opening the wallet (it would need reading the chain in the background).
 
 **Not planned:** voting on proposals or registering as a DRep, several pools per account, hardware wallets, other chains, mobile. We add features only if there's demand.

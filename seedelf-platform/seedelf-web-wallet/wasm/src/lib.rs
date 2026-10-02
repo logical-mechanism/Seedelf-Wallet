@@ -18,6 +18,7 @@ use wasm_bindgen::prelude::*;
 use zeroize::Zeroizing;
 
 pub mod cip30;
+pub mod decode;
 pub mod lovejoin;
 
 /// The module's start function, which does nothing. wasm-bindgen's reset
@@ -3508,4 +3509,19 @@ pub fn data_signer(account: &WasmCardanoAccount, request: &str) -> Result<String
 pub fn sign_dapp_data(account: &WasmCardanoAccount, request: &str) -> Result<String, JsError> {
     let request: cip30::DataRequest = from_json(request)?;
     to_json(&cip30::sign_data(&account.inner, &request).map_err(js_error)?)
+}
+
+// ---------------------------------------------------------------------------
+// The transaction itself, decoded: see [`decode`].
+// ---------------------------------------------------------------------------
+
+/// Everything in a transaction's bytes, as JSON, for the transaction view:
+/// inputs, outputs, datums, scripts, certificates, votes, redeemers and
+/// metadata. CBOR in, structure out — it reads no account and asks nothing of
+/// the network, so opening it leaks nothing. `network` only names Seedelf
+/// Wallet's own contract; every address is read from its own bytes.
+#[wasm_bindgen(js_name = decodeTx)]
+pub fn decode_tx(network: Network, tx_cbor: &str) -> Result<String, JsError> {
+    let name = if network.flag() { "preprod" } else { "mainnet" };
+    to_json(&decode::decode_tx(name, tx_cbor).map_err(js_error)?)
 }

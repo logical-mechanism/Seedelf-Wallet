@@ -545,7 +545,7 @@ describe("what the swap and session screens say sites and chain watchers see (pr
       tokens: [],
       depositOutputs: 1,
       inputs: 2,
-      lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6" },
+      lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) },
     };
     const line = text(createElement(LovejoinNote, { back, busy: false, onDirect: () => undefined }));
     expect(line).toContain("so what comes back is harder to tie to this session on chain");
@@ -658,8 +658,25 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
       }),
     );
 
+  it("names which transaction of a chain it shows, and it's the deposit", () => {
+    const chain = { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) };
+    // One return through Lovejoin: ten transactions, and the one shown is named.
+    const one = review([back({ lovejoin: chain })]);
+    expect(one).toContain("The deposit's transaction");
+    expect(one).not.toContain("Transaction details");
+    // Mixing its own boxes again puts nothing in, so it begins at the first mix.
+    expect(review([back({ lovejoin: { ...chain, again: true } })])).toContain("The first mix's transaction");
+    // Several, and each says whose it is.
+    const two = review([back({ lovejoin: chain }), back({ index: 5, lovejoin: chain })]);
+    expect(two).toContain("Private session 5's deposit");
+    expect(two).toContain("Private session 6's deposit");
+    expect(two).not.toContain("deposit's transaction");
+    // Coming back directly is one transaction, so the button's own words do.
+    expect(review([back({})])).toContain("Transaction details");
+  });
+
   it("offers to bring them back directly when some go through Lovejoin, and says it has had no audit (privacy review §4.1)", () => {
-    const line = review([back({ lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6" } })]);
+    const line = review([back({ lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) } })]);
     expect(line).toContain("Through Lovejoin 2 boxes of 10 ₳, each back after 1 to 6 hours");
     expect(line).toContain("Bring them back directly instead");
     expect(line).toContain("Lovejoin hasn't had a third-party audit");
@@ -773,7 +790,7 @@ describe("mixing a public mix's boxes again (privacy review §2.10)", () => {
   it("reviews mixing them again from the public account: no deposit, and nothing new tied", () => {
     const line = text(
       createElement(PublicReview, {
-        summary: { network: "preprod", txHash: "ab".repeat(32), boxes: 2, depth: 2, delay: "1-6", mixes: 8, txs: 8, fees: "6600000", change: "40000000", again: true },
+        summary: { network: "preprod", txHash: "ab".repeat(32), entry: "11".repeat(32), boxes: 2, depth: 2, delay: "1-6", mixes: 8, txs: 8, fees: "6600000", change: "40000000", again: true },
       }),
     );
     expect(line).toContain("Mixed again 2 boxes your public account put in");
@@ -790,7 +807,7 @@ describe("what Lovejoin's page says a box's way back hides (privacy review §2.4
   ];
   const summary = { index: 4, address: "addr_test1" + "q".repeat(50), payments, fee: { total: "200000" }, changeLovelace: "1000000" };
   const funding = { boxes: 2, lovelace: "20400000", mixes: 8, mixFees: "6600000", depth: 2, delay: "1-6" };
-  const publicMix = { network: "preprod", txHash: "ab".repeat(32), boxes: 2, depth: 2, delay: "1-6", mixes: 8, txs: 9, fees: "6600000", change: "40000000" } as const;
+  const publicMix = { network: "preprod", txHash: "ab".repeat(32), entry: "11".repeat(32), boxes: 2, depth: 2, delay: "1-6", mixes: 8, txs: 9, fees: "6600000", change: "40000000" } as const;
 
   it("says nothing on a box's way back names a session or an account, and that Koios and giveme.my see both ends", () => {
     const line = text(createElement(WayBack));

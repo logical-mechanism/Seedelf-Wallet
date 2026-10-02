@@ -2,8 +2,12 @@ import { useState } from "react";
 
 import { CheckIcon, CopyIcon } from "./Icons";
 
-/** A small "Copy" pill that puts `value` on the clipboard and says "Copied" for a moment. */
-export function CopyButton({ value, label }: { value: string; label?: string }) {
+/**
+ * A small "Copy" pill that puts `value` on the clipboard and says "Copied" for a
+ * moment. `what` names it something else, for a row offering more than one thing
+ * to copy ("CBOR", "JSON").
+ */
+export function CopyButton({ value, label, what }: { value: string; label?: string; what?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -18,7 +22,7 @@ export function CopyButton({ value, label }: { value: string; label?: string }) 
       }}
     >
       {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-      {copied ? "Copied" : "Copy"}
+      {copied ? "Copied" : (what ?? "Copy")}
     </button>
   );
 }

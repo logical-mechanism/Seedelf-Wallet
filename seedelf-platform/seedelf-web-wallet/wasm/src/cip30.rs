@@ -70,7 +70,7 @@ pub struct KoiosAsset {
     pub quantity: String,
 }
 
-fn network_flag(network: &str) -> Result<bool> {
+pub(crate) fn network_flag(network: &str) -> Result<bool> {
     match network {
         "preprod" => Ok(true),
         "mainnet" => Ok(false),
@@ -498,7 +498,7 @@ impl Keys {
 /// ledger's limit today (16 KiB), so a raise of it breaks no site. Reading
 /// checks every register datum's points, about a millisecond each, so this
 /// keeps a read well under a second.
-const MAX_TX_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_TX_BYTES: usize = 64 * 1024;
 
 /// How deep a site's CBOR may nest. Pallas decodes plutus data, metadata and
 /// native scripts recursively, and a few thousand levels (a 3 KB
@@ -649,7 +649,7 @@ fn cbor_step(
 
 /// Refuses a site's CBOR that nests deeper than [`MAX_NESTING`], before
 /// anything decodes it.
-fn check_nesting(bytes: &[u8]) -> Result<()> {
+pub(crate) fn check_nesting(bytes: &[u8]) -> Result<()> {
     if !nests_within(bytes, MAX_NESTING) {
         bail!(
             "The wallet can't read this transaction: its data is nested more than {MAX_NESTING} levels deep."
@@ -886,12 +886,16 @@ fn output_parts(out: &conway::TransactionOutput) -> Result<OutputParts> {
 }
 
 /// Whether an inline datum is a register a Seedelf payment could go under:
-/// constructor 0 (tag 121) holding two 48-byte points that pass
-/// `is_payable`, in a definite or indefinite list.
+/// one [`register_datum`] reads that also passes `is_payable`.
 fn is_register_datum(datum_hex: &str) -> bool {
-    let Ok(bytes) = hex::decode(datum_hex) else {
-        return false;
-    };
+    register_datum(datum_hex).is_some_and(|r| build::is_payable(&r))
+}
+
+/// The register an inline datum holds, if it is one: constructor 0 (tag 121)
+/// holding two 48-byte points, in a definite or indefinite list. It says
+/// nothing about whether a payment under it could be spent (`is_payable`).
+pub(crate) fn register_datum(datum_hex: &str) -> Option<Register> {
+    let bytes = hex::decode(datum_hex).ok()?;
     let mut d = minicbor::Decoder::new(&bytes);
     let points = (|| -> Result<(Vec<u8>, Vec<u8>), minicbor::decode::Error> {
         if d.tag()? != minicbor::data::Tag::new(121) {
@@ -909,9 +913,9 @@ fn is_register_datum(datum_hex: &str) -> bool {
     })();
     match points {
         Ok((g, u)) if g.len() == 48 && u.len() == 48 => {
-            build::is_payable(&Register::new(hex::encode(g), hex::encode(u)))
+            Some(Register::new(hex::encode(g), hex::encode(u)))
         }
-        _ => false,
+        _ => None,
     }
 }
 

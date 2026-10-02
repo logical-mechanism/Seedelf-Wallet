@@ -19,13 +19,17 @@ import type { SendService } from "./send";
 import type { LovejoinService } from "./lovejoin";
 import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
+import type { Area } from "./storage";
 import type { TransferService } from "./transfer";
+import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
 import type { Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
   wallet: Wallet;
+  /** Session storage, where every built transaction waits for Send (tx-view.ts reads it). */
+  session: Area;
   balances: BalanceService;
   moveIn: MoveInService;
   mint: MintService;
@@ -226,6 +230,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     }
     case "price":
       return ctx.prices.get(ctx.network);
+    // The transaction the review or the site's prompt is about, decoded from
+    // its own bytes (tx-view.ts): no Koios request, nothing kept.
+    case "tx-detail":
+      return txView(ctx, ctx.network, message.txHash, (hash) => ctx.dapp.waitingCbor(hash));
     case "dapp-approvals":
       return ctx.dapp.approvals();
     case "dapp-unlocking":

@@ -58,6 +58,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { Tabs } from "../components/Tabs";
 import { formatAda, plural, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
@@ -508,6 +509,21 @@ export function Lovejoin({
         }
       >
         {review.source === "private" ? <PrivateReview summary={review.summary} /> : <PublicReview summary={review.summary} />}
+        {/* The chain's first transaction, not the one Send names: the account's
+            money goes in there, and every mix after it only moves what that put
+            in the pool, under rules nothing here could change (the owner,
+            2026-10-01). A mix from the private balance is this one transaction —
+            its chain is built later, when the session runs, against the pool as
+            it is then. */}
+        {review.source === "private" ? (
+          <TxDetailButton txHash={review.summary.txHash} testId="lovejoin-tx" />
+        ) : (
+          <TxDetailButton
+            txHash={review.summary.entry}
+            label={entryLabel(review.summary)}
+            testId="lovejoin-tx"
+          />
+        )}
         <p className="note" data-testid="lovejoin-unaudited">
           {LOVEJOIN_UNAUDITED}
         </p>

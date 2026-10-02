@@ -2918,8 +2918,12 @@ button.dapp-tile:hover {
   overflow-wrap: anywhere;
 }
 
+/* A block of text or hex from the chain, or from a site: a note, data to sign,
+   a transaction's CBOR. Isolated, so text that runs right to left can't reorder
+   what is around it. */
 .dapp-message {
   margin: 0;
+  unicode-bidi: isolate;
   padding: var(--s3);
   max-height: 180px;
   overflow: auto;
@@ -3054,4 +3058,263 @@ button.dapp-tile:hover {
 .build-stage {
   margin-top: var(--s2);
   margin-bottom: 0;
+}
+
+/* The transaction view (components/TxDetail.tsx): the transaction itself, in
+   a modal over any review. Dense, so its own sizes are a notch smaller than a
+   review's, and every id wraps rather than pushing the page sideways. */
+
+.tx-detail__open {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tx-detail__hash {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.tx-detail__hash-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* A section's heading row: its name, and the icon that explains it. */
+.tx-detail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.tx-detail__heading {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* A UTxO or a hash shown short, with the whole value on the element for
+   copying and for the title. */
+.tx-detail__ref {
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* A row whose parts stack: what it is, then its ids under it. */
+.tx-detail__wrap {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+/* A row whose parts each take the whole width, one line under another, rather
+   than sharing it: a redeemer's script and the budget it claims, a script and
+   its hash. Sharing a line, a long value squeezed the words beside it down to
+   a column of two syllables (the owner, 2026-10-01). */
+.tx-detail__stack {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+/* What a redeemer claims of the block's budget: its own line, and numbers that
+   line up under each other. */
+.tx-detail__budget {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* An id or an address beside the button that copies it. */
+.tx-detail__line {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* The same, where it takes the row's whole width: an address shown in full,
+   with the button kept at the top of it however many lines it runs to. */
+.tx-detail__line--wide {
+  grid-column: 1 / -1;
+  align-items: start;
+}
+
+.tx-detail__line > .chip {
+  flex: none;
+}
+
+.tx-detail__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A metadatum's tree: each level indented, keys before their values.
+
+   `unicode-bidi: isolate` is the second line of defence behind the decoder's
+   escaping of bidi controls: a right-to-left *script* is nobody's trick, but
+   its direction must not reorder the row around it. */
+.tx-detail__tree {
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  unicode-bidi: isolate;
+}
+
+.tx-detail__branch {
+  list-style: none;
+  margin: 0;
+  padding-left: var(--s3);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tx-detail__branch li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tx-detail__key {
+  color: var(--muted);
+}
+
+.tx-detail__key::after {
+  content: ": ";
+}
+
+.tx-detail__leaf {
+  font-family: var(--mono);
+  font-size: 12px;
+  user-select: text;
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
+
+/* An explanation behind an icon (components/Hint.tsx): the text on hover, and
+   on the page once the icon is clicked. Quiet until it's wanted. */
+
+.hint {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: help;
+}
+
+.hint:not(:disabled):hover,
+.hint[aria-expanded="true"] {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.hint__text {
+  margin: 0;
+}
+
+/* A datum, or a redeemer's argument, as a tree that opens
+   (components/PlutusTree.tsx). A collapsed branch isn't drawn at all, so the
+   size of the data costs nothing until someone opens that part of it. */
+
+.plutus {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+  /* Text from the chain can run right to left: it stays inside its own row. */
+  unicode-bidi: isolate;
+}
+
+.plutus__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.plutus__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+/* Which field, item or pair this is, in the order the bytes have them. */
+.plutus__name {
+  flex: none;
+  min-width: 1.2em;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.plutus__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+.plutus__toggle:not(:disabled):hover {
+  color: var(--accent);
+}
+
+/* Each level in from the one above, with a line to follow back up. */
+.plutus__children {
+  margin-left: 7px;
+  padding-left: var(--s3);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* A map's two halves stay together. */
+.plutus__pair {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plutus__leaf {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.plutus__size {
+  color: var(--muted);
+  font-size: 11px;
 }
