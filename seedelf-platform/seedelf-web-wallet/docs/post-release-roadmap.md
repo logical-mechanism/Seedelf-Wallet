@@ -19,9 +19,10 @@
 1. **[Owed](#owed)** — promises the repo has already made.
 2. **[Feature parity: what's left](#feature-parity-whats-left)** — several accounts, language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
 3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
-4. **[The data layer](#the-data-layer)** — its own track, decided in shape, and the thing the notification centre waits on.
-5. **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, once 2 and 3 have landed.
-6. **[The documentation review](#the-documentation-review)** — last, because everything above rewrites parts of it.
+4. **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, once 2 and 3 have landed.
+5. **[The documentation review](#the-documentation-review)** — closes the sequence, because everything above rewrites parts of it.
+
+**Then [the data layer](#the-data-layer).** Parked on purpose (the owner, 2026-10-02): Koios works today, so the sequence above comes first and the data layer is thought through properly afterwards — "it will require some things that go beyond just making the wallet work as expected." The design is recorded now so the thinking isn't lost, not because it's next.
 
 **[dApp additions](#dapp-additions)** run alongside all of it and are not counted in parity.
 
@@ -73,6 +74,8 @@ Three items. At the end of them the wallet is feature-complete for Cardano, bar 
 
 ### P1 · Several accounts
 
+**This is chunk 18** — the owner's first pick after the release (2026-10-02).
+
 **The owner's reason (2026-10-02):** a user restoring a phrase may hold funds on accounts other than `0'` and want to move them into Seedelf, and **some people run several accounts as a form of privacy in the first place** — so a wallet that can only see one is both losing their money and working against the habit they came with.
 
 The groundwork is in: every function already takes the account index, and a picker would discover accounts in order the way BIP44 does, stopping at the first never used ([keys-and-accounts.md](keys-and-accounts.md#the-cardano-account)).
@@ -118,15 +121,26 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 
 ## Public-side completeness
 
-**The owner, 2026-10-02: do this before the UX pass.** Some of what sat under *Not planned* is worth doing **for the public side**, because it's what makes this a full wallet rather than a private balance with a wallet attached. So the pass gets a finished wallet to look at, not one with governance still arriving:
+**The owner, 2026-10-02: after the accounts, and before the UX pass.** Some of what sat under *Not planned* is worth doing **for the public side**, because it's what makes this a full wallet rather than a private balance with a wallet attached — and the pass should get a finished wallet to look at rather than one with governance still arriving.
 
-- **Voting on proposals.** The wallet delegates voting power today — Always abstain, No confidence, or a DRep — but can't vote on a governance action itself. For the public account that's an ordinary Cardano wallet feature, and it has no private-side meaning: a Seedelf address has no staking part, so the private balance has no voice to cast.
-- **Registering as a DRep.** The same shape: a public-account action, and the one that turns a user from someone who delegates into someone others delegate to.
-- **Staking per account.** This falls out of [P1](#p1-several-accounts) for free, and is worth naming so it isn't mistaken for multi-delegation: each account has its own stake key (`2/0` under its own account index), so several accounts means stake spread across several pools. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching the one-pool-per-account rule.
+**The order, with one correction.** The owner's sequence was accounts, then voting, then DRep, on the reasoning that "DRep is part of staking too since it's required". Both halves are right, about different things:
 
-**What doesn't change:** a vote or a registration is a public act by a public key. None of it reaches the private side, and none of it weakens the rule that money made private has no stake key behind it.
+- **Vote delegation really is required for staking rewards** — Conway pays none until voting power is delegated, and the wallet already does this and says so (chunk 13). **So nothing about rewards waits on anything here.** That box is ticked.
+- **But registering as a DRep is the gate on voting, not a sibling of it.** A plain delegator doesn't cast a vote on a governance action; votes come from DReps, SPOs and the constitutional committee. To vote with your own stake you register as a DRep — for yourself, if nobody else delegates to you. So voting-before-registering isn't an order, it's a dependency the wrong way round.
+
+**Which makes them one chunk, not two:** *be your own DRep and vote.* Registration on its own is a half-feature (a credential nobody uses), and voting on its own can't be built. ⬜
+
+| # | Item | |
+|---|---|---|
+| 1 | **[P1, several accounts](#p1-several-accounts)** | the owner's first pick |
+| 2 | **Be your own DRep, and vote on governance actions.** Register the account's DRep credential, then vote Yes, No or Abstain on a live action. Needs a list of open governance actions, which is a new read and so a new Koios cost to state. | ⬜ |
+| — | **Staking per account** needs no slot: it falls out of [P1](#p1-several-accounts) for free. Each account has its own stake key (`2/0` under its own index), so several accounts means stake spread across several pools. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching one-pool-per-account. | ✅ via P1 |
+
+**What doesn't change:** a vote or a registration is a public act by a public key. None of it reaches the private side, and none of it weakens the rule that money made private has no stake key behind it. A Seedelf address has no staking part, so the private balance has no voice to cast and never will.
 
 ## The data layer
+
+> **Parked until the sequence above is done** (the owner, 2026-10-02). Koios works today. What's below is the shape as it stands, kept so the next look starts from it rather than from scratch — **it is not the next chunk.** The reason for the wait is the honest one: a service is not a feature. It goes beyond making the wallet work as expected, into something that has to stay up, stay paid for, and stay unexploited for as long as the wallet is in the store.
 
 **Decided in shape (the owner, 2026-10-02): a db-sync wrapper in Rust, for the web wallet.** Not a general API — queries written for this wallet. **The CLI stays on Koios**, which already works for it, so this is one client, not two. **giveme.my needs no fork**: the owner runs it, so it can be adjusted directly if the collateral side ever wants the same treatment.
 
@@ -166,9 +180,9 @@ The wallet makes **two** `credential_utxos` queries, and they are opposite in ev
 
 **What the service still learns, said plainly.** The contract endpoint learns that an IP uses Seedelf. The account endpoint learns which payment credentials that IP asks about — the same thing Koios learns today, moved to us. The local ownership check is what keeps the *private balance* out of it entirely. So the no-log promise and the open source carry the account endpoint, and those are a policy and an audit trail, not a proof — which is worth saying in the privacy docs in exactly those words.
 
-### Still open
+### Still open, for when it's picked up
 
-What it costs to run; whether it's the default with Koios as fallback or a choice; whether a user can point the wallet at their own instance; and the host-permission problem in Chrome (a new origin at install, or an optional grant when it's set).
+What it costs to run, and who pays; whether it's the default with Koios as the fallback or a choice; whether a user can point the wallet at their own instance; the host-permission problem in Chrome (a new origin at install, or an optional grant when it's set); and the operational half a feature doesn't have — monitoring, what an outage looks like from inside the wallet, and what is promised to users about uptime and logging, in writing.
 
 ## The UX and UI pass
 
@@ -234,10 +248,10 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 
 ## Open questions for the owner
 
-**Settled on 2026-10-02:** [P1](#p1-several-accounts)'s key (account 0, one private balance), [P2](#p2-language)'s languages (English, Spanish, Japanese), [P3](#p3-nft-images)'s design (click to show), [the data layer](#the-data-layer)'s shape (a db-sync wrapper for the web wallet, clearnet, CLI stays on Koios), [public-side completeness](#public-side-completeness) going before the UX pass, a [documentation review](#the-documentation-review) after it all, dark only, one phrase, and no analytics, AML/KYC or on-ramp.
+**Settled on 2026-10-02:** [P1](#p1-several-accounts)'s key (account 0, one private balance) and that it's chunk 18; [P2](#p2-language)'s languages (English, Spanish, Japanese); [P3](#p3-nft-images)'s design (click to show); [the data layer](#the-data-layer)'s shape, and that it's **parked** until the sequence is done; [public-side completeness](#public-side-completeness) going after the accounts and before the UX pass; a [documentation review](#the-documentation-review) closing the sequence; dark only; one phrase; and no analytics, AML/KYC or on-ramp. The web wallet [README](../README.md) is tidied.
 
 What's left:
 
-1. **The data layer's go-ahead, and what it costs to run.** The shape is settled and the DoS answer is written; what isn't decided is whether it's the default with Koios as the fallback or an opt-in, and whether a user can point at their own instance.
-2. **Which public-side item first** — proposal voting or DRep registration. Staking per account comes free with [P1](#p1-several-accounts) and needs no slot of its own.
-3. **Whether the web wallet [README](../README.md)'s two forward-looking lines get a one-line correction now** or wait for the [documentation review](#the-documentation-review). They currently say several accounts and NFT images are *later, maybe* and that governance is *not planned*, which is no longer true.
+1. **Confirm the DRep correction.** The owner's order was voting then DRep; registering is the *gate* on voting, so [the two are written as one chunk](#public-side-completeness) — *be your own DRep and vote*. Worth a yes, since it changes what gets built rather than only when.
+2. **Who reads the Spanish and Japanese privacy strings.** [P2](#p2-language) can be built before this is answered, but it can't ship without it — a machine-translated warning is a correctness bug, not a cosmetic one. If no fluent reader is available, shipping English-only for those strings is the honest fallback and the plan should say so.
+3. **Should each file in [plans/](plans/) say whether it's a live spec or a finished record?** Raised under [the documentation review](#the-documentation-review). Seventeen plans sit there now, and a stale one read as current is the failure mode that costs real work.
