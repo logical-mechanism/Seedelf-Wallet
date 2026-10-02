@@ -1282,7 +1282,21 @@ export interface SessionBackSummary {
    * back at once; each box comes back later, after a random wait in `delay`
    * (hours, "1-6").
    */
-  lovejoin?: { boxes: number; depth: number; mixes: number; fees: string; txs: number; delay: string; again?: boolean };
+  lovejoin?: {
+    boxes: number;
+    depth: number;
+    mixes: number;
+    fees: string;
+    txs: number;
+    delay: string;
+    again?: boolean;
+    /**
+     * The chain's first transaction: the deposit, or the first mix where its own
+     * boxes are mixed again. `txHash` is the return, the last of the chain; this
+     * is the one the review shows, where the session's money goes in.
+     */
+    entry: string;
+  };
   /**
    * Why the spare ADA doesn't go through Lovejoin this time, though it would
    * pay for a box: the network measured its scripts differently from the
@@ -1343,6 +1357,13 @@ export interface LovejoinPublicSummary {
   network: NetworkName;
   /** The last mix's: Send names it, and Home's banner watches it. */
   txHash: string;
+  /**
+   * The chain's first transaction: the deposit, or, mixing its own boxes again,
+   * the first mix. The one the review shows — it's where the account's money
+   * goes in, and the rest of the chain only moves what it put there (the owner,
+   * 2026-10-02).
+   */
+  entry: string;
   boxes: number;
   depth: number;
   delay: string;

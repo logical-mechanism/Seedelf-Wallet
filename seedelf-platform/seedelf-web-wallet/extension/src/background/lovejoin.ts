@@ -1702,6 +1702,7 @@ export class LovejoinService {
       network,
       ...(seed ? { seed: true } : {}),
       txHash: last.txHash,
+      entry: chain.txs[0]!.txHash,
       boxes: chain.boxes,
       depth: chain.depth,
       delay,
@@ -1811,6 +1812,7 @@ export class LovejoinService {
     const summary: PublicAgain = {
       network,
       txHash: last.txHash,
+      entry: chain.txs[0]!.txHash,
       boxes: chain.boxes,
       depth: chain.depth,
       delay,

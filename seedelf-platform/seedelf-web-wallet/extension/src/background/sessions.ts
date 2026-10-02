@@ -2366,6 +2366,9 @@ export class SessionService {
             txs: chain.txs.length,
             delay,
             ...(record?.mix?.again ? { again: true } : {}),
+            // The deposit, which the review shows: `txHash` above is the return,
+            // the last of the chain, which spends what nothing has sent yet.
+            entry: chain.txs[0]!.txHash,
           },
           chain: chain.txs,
           leaves: chain.leaves,

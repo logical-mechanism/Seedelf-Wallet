@@ -78,7 +78,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { TxDetailButton } from "../components/TxDetail";
+import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
   ADA_RULES,
@@ -1712,7 +1712,13 @@ export function Session({
           <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
           <IntoRow back={back} />
         </ReviewRows>
-        <TxDetailButton txHash={back.txHash} testId="session-back-tx" />
+        {/* Through Lovejoin, its chain's first transaction: `txHash` is the
+            return, the last of the chain, which spends what isn't sent yet. */}
+        <TxDetailButton
+          txHash={back.lovejoin?.entry ?? back.txHash}
+          label={back.lovejoin && entryLabel(back.lovejoin)}
+          testId="session-back-tx"
+        />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote

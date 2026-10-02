@@ -63,6 +63,19 @@ export function TxDetailButton({
   );
 }
 
+/**
+ * What the button says where a chain's first transaction is the one shown. It
+ * can't be "Transaction details" when the review counts twelve of them: the
+ * review shows the one the money goes in through, and names it (the owner,
+ * 2026-10-02). A chain of one — a seed, a deposit with no mixes — is just its
+ * transaction, so it keeps the plain label.
+ */
+export function entryLabel({ txs, again }: { txs: number; again?: boolean }): string | undefined {
+  if (txs <= 1) return undefined;
+  // Mixing its own boxes again puts nothing in: it begins at the first mix.
+  return again ? "The first mix's transaction" : "The deposit's transaction";
+}
+
 type Tab = "transaction" | "cbor";
 
 function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: string; onClose: () => void }) {
