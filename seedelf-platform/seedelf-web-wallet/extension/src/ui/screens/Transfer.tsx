@@ -14,6 +14,7 @@ import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { Clearable } from "../components/Clearable";
 import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
 import {
   AddRecipient,
@@ -295,19 +296,23 @@ function SeedelfNameInput({
           </button>
         )}
       </div>
-      <textarea
-        id={id}
-        className="seedelf-name"
-        rows={2}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="5eed0e1f…"
-        autoComplete="off"
-        spellCheck={false}
-        autoFocus
-        aria-invalid={nameProblem || found.state === "error" ? true : undefined}
-        aria-describedby={`${id}-note`}
-      />
+      {/* A seedelf's name is 68 characters: the hardest field in the wallet to
+          clear by hand (the owner, 2026-10-02). */}
+      <Clearable id={id} value={value} onClear={() => onChange("")} what="recipient">
+        <textarea
+          id={id}
+          className="seedelf-name"
+          rows={2}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="5eed0e1f…"
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+          aria-invalid={nameProblem || found.state === "error" ? true : undefined}
+          aria-describedby={`${id}-note`}
+        />
+      </Clearable>
       <div id={`${id}-note`} data-testid={`${id}-note`}>
         {nameProblem ? (
           <p className="field-note">{nameProblem}</p>

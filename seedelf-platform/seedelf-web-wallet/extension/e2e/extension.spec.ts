@@ -593,6 +593,12 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   await expect(page.getByTestId("send-own")).toHaveCount(0);
   await page.getByLabel("Amount").fill("2");
   await expect(page.getByRole("button", { name: "Review" })).toBeEnabled();
+  // The × empties the field and puts the cursor back in it (the owner, 2026-10-02).
+  await page.getByRole("button", { name: "Clear the recipient" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("To", { exact: true })).toBeFocused();
+  // Gone once there is nothing to clear, so an empty field looks as it did.
+  await expect(page.getByRole("button", { name: "Clear the recipient" })).toHaveCount(0);
   await page.getByRole("button", { name: "Back", exact: true }).click();
 
   // A custom number the sequential look can never reach (the owner,

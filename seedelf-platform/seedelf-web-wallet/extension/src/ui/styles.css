@@ -2917,6 +2917,23 @@ button.dapp-tile:hover {
 
 /* Send to a seedelf, Withdraw */
 
+/* A × inside a field that empties it (Clearable.tsx): the destination fields
+   hold the longest text in the wallet, and clearing one meant
+   select-all-and-delete. */
+.clearable {
+  position: relative;
+}
+.clearable__button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+}
+/* Room for it, so the text never runs under the button. */
+.clearable > input,
+.clearable > textarea {
+  padding-right: 44px;
+}
+
 .seedelf-name {
   font: 13px/1.5 var(--mono);
   resize: none;

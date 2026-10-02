@@ -16,6 +16,7 @@ import { shortHex } from "../format";
 import { useNetwork } from "../network";
 import { useAccounts } from "../accounts";
 import { AccountRecipients } from "./AccountRecipients";
+import { Clearable } from "./Clearable";
 import { ContactEditor, ContactPicker, useContacts } from "./Contacts";
 
 export type DestinationRead =
@@ -180,18 +181,20 @@ export function DestinationField({
           </button>
         )}
       </div>
-      <input
-        id={id}
-        className="seedelf-name"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={seedelfs ? `${address}, $handle or 5eed0e1f…` : `${address} or $handle`}
-        autoComplete="off"
-        spellCheck={false}
-        autoFocus
-        aria-invalid={read.state === "error" ? true : undefined}
-        aria-describedby={`${id}-note`}
-      />
+      <Clearable id={id} value={value} onClear={() => onChange("")} what={seedelfs ? "recipient" : "address"}>
+        <input
+          id={id}
+          className="seedelf-name"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={seedelfs ? `${address}, $handle or 5eed0e1f…` : `${address} or $handle`}
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+          aria-invalid={read.state === "error" ? true : undefined}
+          aria-describedby={`${id}-note`}
+        />
+      </Clearable>
       <div id={`${id}-note`} data-testid={`${id}-note`}>
         {read.state === "reading" ? (
           <p className="note">Reading it…</p>
