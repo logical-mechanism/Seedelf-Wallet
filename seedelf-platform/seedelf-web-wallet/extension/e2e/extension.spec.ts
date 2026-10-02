@@ -610,9 +610,18 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   await expect(page.getByTestId("accounts-found")).toContainText("Account 1338 is in the list now");
   expect(koios.stakesAsked.length).toBe(before + 1);
   await expect(page.getByTestId("accounts-list")).toContainText("Account 1338");
+
   // And it is in the picker like any other, never having been on chain.
   // (A select's option text isn't its own text content, so the options are read.)
   await expect(page.getByLabel("Public account").locator("option")).toHaveText(["Account 1", "Account 2", "Account 1338"]);
+  // A wallet with a lot of accounts: the rows keep their rhythm and the list
+  // scrolls rather than pushing the rest of the screen away.
+  for (const n of [4, 5, 6, 7, 8, 9, 42]) {
+    await page.getByLabel("Account number").fill(String(n));
+    await page.getByRole("button", { name: "Add it" }).click();
+    await expect(page.getByTestId("accounts-found")).toContainText(`Account ${n} is in the list now`);
+  }
+  await snap(page, "settings-accounts-many");
 });
 
 test("contacts: save a Seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {

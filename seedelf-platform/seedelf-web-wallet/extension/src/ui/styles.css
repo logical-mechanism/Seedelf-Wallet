@@ -918,7 +918,25 @@ main {
   position: absolute;
 }
 
-/* Settings → Public accounts: one row an account, with its name and what it can do. */
+/* Settings → Public accounts: one row an account.
+   A wallet may hold a lot of them, so the rows get the same vertical rhythm
+   as every other list in the app, a hairline between them to read down, and
+   the list scrolls at about eight rather than pushing the rest of the screen
+   away. */
+.section__count {
+  color: var(--muted);
+  font-weight: 400;
+}
+.accounts-list {
+  max-height: 336px;
+  overflow-y: auto;
+  /* The rows bleed to the card's edge, as .menu-row and .token-row do. */
+  margin: 0 calc(-1 * var(--s2));
+  padding: 0 var(--s2);
+}
+.account-row + .account-row {
+  border-top: 1px solid var(--border);
+}
 .account-row__name {
   display: flex;
   flex-wrap: wrap;
@@ -926,6 +944,8 @@ main {
   justify-content: space-between;
   gap: var(--s2);
   width: 100%;
+  min-height: 44px;
+  padding: var(--s2) 0;
 }
 .account-row__name input {
   flex: 1 1 8rem;
@@ -934,7 +954,17 @@ main {
 .account-row__actions {
   display: flex;
   align-items: center;
-  gap: var(--s2);
+  gap: var(--s3);
+}
+/* The one being worked on, so it is findable without reading every row. */
+.account-row--active .account-row__name {
+  margin: 0 calc(-1 * var(--s2));
+  padding-inline: var(--s2);
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+.account-row--active + .account-row {
+  border-top-color: transparent;
 }
 /* Settings → Public accounts: the number entry for a custom account. */
 .account-number {

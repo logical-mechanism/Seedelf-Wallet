@@ -229,10 +229,15 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   return (
     <Screen title="Public accounts" titleId="accounts-title" onBack={onBack}>
       <section className="section" aria-labelledby="accounts-list-title">
-        <h2 id="accounts-list-title">Accounts</h2>
-        <ul className="list" data-testid="accounts-list">
+        {/* The count, because the list scrolls: a row cut off at the bottom
+            edge otherwise reads as clipped rather than as more below. */}
+        <h2 id="accounts-list-title">
+          Accounts
+          {accounts.length > 1 && <span className="section__count"> · {accounts.length}</span>}
+        </h2>
+        <ul className="list accounts-list" data-testid="accounts-list">
           {accounts.map((a) => (
-            <li key={a.index} className="account-row">
+            <li key={a.index} className={a.index === active ? "account-row account-row--active" : "account-row"}>
               {naming === a.index ? (
                 <form
                   className="account-row__name"
