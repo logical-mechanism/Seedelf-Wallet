@@ -138,7 +138,7 @@ describe("sanitizeAmount: commas", () => {
   });
 
   it("takes a comma typed or pasted as a thousands separator only where one belongs", async () => {
-    const { sanitizeAda, COMMA_NOTE } = await import("../src/ui/format");
+    const { sanitizeAda, commaNote } = await import("../src/ui/format");
     expect(sanitizeAda("", "1,234,567")).toEqual({ value: "1,234,567" });
     expect(sanitizeAda("", "12,500")).toEqual({ value: "12,500" });
     expect(sanitizeAda("", "1,234.5")).toEqual({ value: "1,234.5" });
@@ -153,7 +153,7 @@ describe("sanitizeAmount: commas", () => {
       ["7", "1,2.5"],
       ["1,000", "1,,000"],
     ]) {
-      expect(sanitizeAda(before!, typed!), typed).toEqual({ value: before, note: COMMA_NOTE });
+      expect(sanitizeAda(before!, typed!), typed).toEqual({ value: before, note: commaNote() });
     }
   });
 

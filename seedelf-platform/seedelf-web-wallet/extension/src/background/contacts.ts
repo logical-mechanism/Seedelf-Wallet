@@ -5,6 +5,7 @@
 // by WebAssembly's rule for a withdrawal's destination, and an ADA Handle by
 // its shape only (it's looked up when a withdrawal uses it).
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -34,13 +35,13 @@ export class ContactsService {
   save(network: NetworkName, contact: { id?: string; name: string; value: string }): Promise<Contact[]> {
     return this.serial(async () => {
       const name = contact.name.trim();
-      if (!name) throw new Error("Give the contact a name.");
-      if (name.length > CONTACT_NAME_MAX) throw new Error(`A contact's name is at most ${CONTACT_NAME_MAX} characters.`);
+      if (!name) throw new Error(t("worker.contacts.needName"));
+      if (name.length > CONTACT_NAME_MAX) throw new Error(t("worker.contacts.nameTooLong", { max: CONTACT_NAME_MAX }));
       const { kind, value } = this.check(network, contact.value);
 
       const all = (await this.deps.store.get<Contact[]>("contacts")) ?? [];
       const same = all.find((c) => c.network === network && c.value === value && c.id !== contact.id);
-      if (same) throw new Error(`That's already saved, as ${same.name}.`);
+      if (same) throw new Error(t("worker.contacts.alreadySaved", { name: same.name }));
       const id = contact.id ?? this.deps.random?.() ?? crypto.randomUUID();
       const next: Contact = { id, name, kind, value, network };
       await this.deps.store.set("contacts", [...all.filter((c) => c.id !== id), next]);
@@ -66,14 +67,14 @@ export class ContactsService {
     const trimmed = text.trim();
     if (trimmed.startsWith("$")) {
       const handle = trimmed.slice(1).toLowerCase();
-      if (!HANDLE.test(handle)) throw new Error("An ADA Handle is $ and up to 28 letters, digits, or . _ - @.");
+      if (!HANDLE.test(handle)) throw new Error(t("worker.handle.format"));
       return { kind: "address", value: `$${handle}` };
     }
     const { wasm } = this.deps;
     try {
       wasm.checkPayableAddress(trimmed, network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod);
     } catch (e) {
-      throw new Error(`That isn't a Seedelf's full name, a $handle, or an address you can pay. ${(e as Error).message}`);
+      throw new Error(t("worker.contacts.notPayable", { why: (e as Error).message }));
     }
     return { kind: "address", value: trimmed };
   }

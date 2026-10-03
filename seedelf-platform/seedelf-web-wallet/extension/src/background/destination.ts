@@ -8,6 +8,7 @@
 // (account.ts): the first 20 of each chain, and those the last balance
 // reading found (privacy review §2.17). Nothing is asked of anyone for it.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -43,19 +44,19 @@ export async function resolveDestination(
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const text = to.trim();
   // Send pays a seedelf before it gets here; Withdraw can't.
-  if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS);
+  if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS());
   let address = text;
   let handle: string | undefined;
   if (text.startsWith("$")) {
     handle = text.slice(1).toLowerCase();
-    if (!HANDLE.test(handle)) throw new Error("An ADA Handle is $ and up to 28 letters, digits, or . _ - @.");
+    if (!HANDLE.test(handle)) throw new Error(t("worker.handle.format"));
     const koios = deps.koios(network);
     let found: string | undefined;
     for (const name of [hex(handle), CIP68_USER_TOKEN + hex(handle)]) {
       found = await koios.assetNftAddress(ADA_HANDLE_POLICY, name);
       if (found) break;
     }
-    if (!found) throw new Error(`No ADA Handle $${handle} on ${network}.`);
+    if (!found) throw new Error(t("worker.handle.notFound", { handle, network }));
     address = found;
   }
   // Throws the reason: not an address, a script, a stake address, the other network.

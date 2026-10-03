@@ -4,6 +4,7 @@
 // UTxOs are, and the headline counts them in what it sends; these say
 // whether they come back to it.
 
+import { t } from "../i18n";
 import type { DappTxSummary } from "../shared/rpc";
 import { formatAda, voteLabel } from "./format";
 
@@ -24,17 +25,17 @@ export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "st
 export function paidTo(p: Paid): string {
   const what =
     p.yours === "account"
-      ? "Your public account"
+      ? t("dappUi.paid.account")
       : p.yours !== undefined
-        ? `Your private session ${p.yours + 1}`
+        ? t("dappUi.paid.session", { number: p.yours + 1 })
         : p.ownPaymentKey
-          ? "Your payment key, with a stake part that isn't yours"
+          ? t("dappUi.paid.ownPaymentKey")
           : p.seedelf
-            ? "Seedelf Wallet's contract"
+            ? t("dappUi.paid.seedelfContract")
             : p.script
-              ? "A contract"
-              : "An address";
-  return p.datum ? `${what}, with data` : what;
+              ? t("dappUi.paid.contract")
+              : t("dappUi.paid.address");
+  return p.datum ? t("dappUi.paid.withData", { what }) : what;
 }
 
 /**
@@ -44,9 +45,12 @@ export function paidTo(p: Paid): string {
  * session, not the public account.
  */
 export function tiesLine(ties: Array<"account" | number>, session: boolean): string {
-  const names = ties.map((t) => (t === "account" ? "your public account" : `your private session ${t + 1}`));
-  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
-  return `It moves money between ${session ? "this private session" : "your public account"} and ${list}. Signing ties them together on chain, where anyone can see it.`;
+  const names = ties.map((x) => (x === "account" ? t("dappUi.ties.account") : t("dappUi.ties.session", { number: x + 1 })));
+  const list =
+    names.length > 1
+      ? t("dappUi.ties.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
+      : names[0];
+  return t("dappUi.ties.moves", { from: t(session ? "dappUi.ties.thisSession" : "dappUi.ties.yourAccount"), list });
 }
 
 /**
@@ -60,10 +64,10 @@ export function tiesLine(ties: Array<"account" | number>, session: boolean): str
 export function signingTies(ties: Array<"account" | number> | undefined, session: boolean, seedelf = false): string {
   const checked = ties !== undefined && ties.length === 0;
   if (session) {
-    const out = !checked ? "" : seedelf ? " Your public account isn't in it." : " Your public account and your private balance aren't in it.";
-    return `Signing ties this transaction to the session's one-time account.${out}`;
+    const out = !checked ? "" : ` ${t(seedelf ? "dappUi.privacy.notAccount" : "dappUi.privacy.notAccountNorPrivate")}`;
+    return `${t("dappUi.privacy.tiesToSession")}${out}`;
   }
-  return `Signing ties this transaction to your public account, as any payment from it.${checked && !seedelf ? " Your private balance isn't in it." : ""}`;
+  return `${t("dappUi.privacy.tiesToAccount")}${checked && !seedelf ? ` ${t("dappUi.privacy.notPrivate")}` : ""}`;
 }
 
 /**
@@ -72,35 +76,34 @@ export function signingTies(ties: Array<"account" | number> | undefined, session
  * private session".
  */
 export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): string {
-  if (!w.own) return `Withdraws ${formatAda(w.lovelace)} ₳ from a reward account that isn't yours.`;
-  const rewards = `Withdraws your staking rewards, ${formatAda(w.lovelace)} ₳`;
-  return back
-    ? `${rewards}, into ${whose}.`
-    : `${rewards}, and they don't all come back to ${whose}: they're counted in what it sends above.`;
+  if (!w.own) return t("dappUi.withdrawal.notYours", { amount: formatAda(w.lovelace) });
+  return t(back ? "dappUi.withdrawal.into" : "dappUi.withdrawal.notAllBack", { amount: formatAda(w.lovelace), whose });
 }
 
 /** A certificate in a sentence: the account's own staking, or someone else's. `back` and `whose` as for a withdrawal. */
 export function certificateLine(c: Certificate, back: boolean, whose: string): string {
   if (!c.own) {
     if (c.kind === "pool") {
-      if (c.pool && c.poolAction === "retire") return `Retires stake pool ${c.pool}.`;
-      if (c.pool && c.poolAction === "register") return `Registers stake pool ${c.pool}, or updates its terms.`;
-      return "A stake pool's certificate.";
+      if (c.pool && c.poolAction === "retire") return t("dappUi.cert.retirePool", { pool: c.pool });
+      if (c.pool && c.poolAction === "register") return t("dappUi.cert.registerPool", { pool: c.pool });
+      return t("dappUi.cert.pool");
     }
-    if (c.kind === "drep") return "A DRep's certificate.";
-    if (c.kind === "committee") return "A constitutional committee certificate.";
-    return "A certificate for a stake key that isn't yours.";
+    if (c.kind === "drep") return t("dappUi.cert.drep");
+    if (c.kind === "committee") return t("dappUi.cert.committee");
+    return t("dappUi.cert.otherStakeKey");
   }
   const parts: string[] = [];
-  if (c.kind.startsWith("register")) parts.push(`Registers your stake key${c.deposit ? ` (a ${formatAda(c.deposit)} ₳ deposit)` : ""}`);
-  if (c.kind === "unregister") {
-    const deposit = c.refund ? `, and its ${formatAda(c.refund)} ₳ deposit` : "";
-    if (!c.refund) parts.push("Stops your staking");
-    else if (back) parts.push(`Stops your staking${deposit} comes back to ${whose}`);
-    else parts.push(`Stops your staking${deposit} doesn't all come back to ${whose}: it's counted in what it sends above`);
+  if (c.kind.startsWith("register")) {
+    parts.push(c.deposit ? t("dappUi.cert.registersWithDeposit", { amount: formatAda(c.deposit) }) : t("dappUi.cert.registers"));
   }
-  if (c.pool) parts.push(`stakes with ${c.pool}`);
-  if (c.drep) parts.push(`delegates your vote: ${voteLabel(c.drep)}`);
-  const sentence = parts.join(", ");
+  if (c.kind === "unregister") {
+    const deposit = c.refund ? t("dappUi.cert.andItsDeposit", { amount: formatAda(c.refund) }) : "";
+    if (!c.refund) parts.push(t("dappUi.cert.stops"));
+    else if (back) parts.push(t("dappUi.cert.stopsBack", { deposit, whose }));
+    else parts.push(t("dappUi.cert.stopsNotAllBack", { deposit, whose }));
+  }
+  if (c.pool) parts.push(t("dappUi.cert.stakesWith", { pool: c.pool }));
+  if (c.drep) parts.push(t("dappUi.cert.delegatesVote", { what: voteLabel(c.drep) }));
+  const sentence = parts.join(t("histories.list.comma"));
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
 }

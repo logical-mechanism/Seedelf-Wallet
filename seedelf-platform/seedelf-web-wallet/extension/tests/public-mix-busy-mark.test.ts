@@ -33,7 +33,7 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
     expect(net.seen.submits).toBe(1);
     await t.wallet.unlock(PASSWORD);
     const progress = await t.lovejoin.progress("preprod");
-    expect(progress).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT });
+    expect(progress).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT() });
     net.restore();
     await t.lovejoin.publicBuild("preprod", 1);
   });
@@ -48,8 +48,8 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
     });
     const mix = await lovejoin.publicBuild("preprod", 1);
     const net = submits(t, ["slow down"]);
-    await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(CHAIN_CUT);
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT });
+    await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(CHAIN_CUT());
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT() });
     net.restore();
     await t.lovejoin.publicBuild("preprod", 1);
   });
@@ -64,7 +64,7 @@ describe("a mix from the public account's deposit Koios asked the wallet to send
     await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(/locked/i);
     expect(net.seen.submits).toBe(2);
     await t.wallet.unlock(PASSWORD);
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT, maybeSent: true });
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
     net.restore();
     await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
   });

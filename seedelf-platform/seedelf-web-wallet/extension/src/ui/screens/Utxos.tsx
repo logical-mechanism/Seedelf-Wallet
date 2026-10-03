@@ -11,6 +11,7 @@
 // (privacy review §2.3).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Rich, t, useT } from "../../i18n";
 
 import { historyTags } from "../../shared/histories";
 import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
@@ -23,7 +24,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { plural, shortHex, tokenKey } from "../format";
+import { shortHex, tokenKey } from "../format";
 import { useAmounts } from "../preferences";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, viewToken } from "../tokens";
@@ -32,10 +33,10 @@ const ref = (u: UtxoInfo) => `${u.txHash}#${u.index}`;
 
 /** What a UTxO is kept for, if anything, or that no payment can take it. */
 export function utxoTag(u: UtxoInfo): string | undefined {
-  if (u.seedelf) return "Seedelf";
-  if (u.collateral) return "Collateral";
-  if (u.unspendable) return "Can't spend";
-  if (u.locked) return "Locked";
+  if (u.seedelf) return t("utxos.tag.seedelf");
+  if (u.collateral) return t("utxos.tag.collateral");
+  if (u.unspendable) return t("utxos.tag.unspendable");
+  if (u.locked) return t("utxos.tag.locked");
   return undefined;
 }
 const tag = utxoTag;
@@ -63,20 +64,18 @@ type MixProgress = { total: number; sent: number; stopped?: string } | null;
  * sent, so they don't look gone.
  */
 export function MixHolding({ progress }: { progress: MixProgress }) {
+  const t = useT();
   if (!progress || progress.stopped || progress.sent >= progress.total) return null;
   return (
     <Callout tone="info" testId="utxos-mix-holding">
-      A mix through Lovejoin is being sent from this account ({progress.sent} of {progress.total} sent). The UTxOs it
-      spends, and its change, are held by the mix: they're left out here and from your balance until it's all sent.
+      {t("utxos.mixHolding", { sent: progress.sent, total: progress.total })}
     </Callout>
   );
 }
 
 /** Why the wallet can't spend a UTxO marked `unspendable`, on its side. */
 export function unspendableWhy(of: UtxoSide): string {
-  return of === "seedelf"
-    ? "It holds a reference script, which the wallet can't spend yet: no payment takes it, and it isn't counted in your private balance. It stays yours."
-    : "It holds a reference script that Koios doesn't give the wallet, so the wallet can't price spending it: no payment takes it, Max included.";
+  return t(of === "seedelf" ? "utxos.warn.unspendablePrivate" : "utxos.warn.unspendablePublic");
 }
 
 /** Kept ones first, so they're found among hundreds; each group largest first, as the worker sends them. */
@@ -147,36 +146,32 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
 
   return (
     <Screen
-      title={of === "seedelf" ? "Private UTxOs" : "Public UTxOs"}
+      title={t(of === "seedelf" ? "utxos.titlePrivate" : "utxos.titlePublic")}
       titleId="utxos-title"
       onBack={onBack}
-      aside={list ? `${plural(list.length, "UTxO")}${locked ? ` · ${locked} locked` : ""}` : " "}
+      aside={list ? `${t("amount.utxos", { count: list.length })}${locked ? t("utxos.lockedMeta", { count: locked }) : ""}` : " "}
       error={shown ? undefined : error}
     >
       <p className="note" data-testid="utxos-lock-note">
-        Lock a UTxO to keep it out of every payment from this balance, Max included.
-        {of === "cardano" && " A site's transaction can't use a locked UTxO either: the wallet refuses to sign it."}
+        {t("utxos.lockNote")}
+        {of === "cardano" && ` ${t("utxos.lockNoteSite")}`}
       </p>
       {of === "cardano" && <MixHolding progress={mix} />}
       {stuck > 0 && (
         <Callout tone="warn" testId="utxos-unspendable">
-          {stuck === 1 ? "One UTxO here holds" : `${stuck} UTxOs here hold`} a reference script the wallet can't spend,
-          marked Can't spend. Anyone can send one.
+          {t("utxos.warn.someUnspendable", { count: stuck })}
         </Callout>
       )}
       {of === "seedelf" && (
-        <Callout tone="privacy">
-          Only this wallet can tell these are yours. Looking one up on an explorer tells that site which UTxO you care
-          about.
-        </Callout>
+        <Callout tone="privacy">{t("utxos.privacy.onlyThisWallet")}</Callout>
       )}
       <RefreshRow reading={refreshing} updatedAt={lists?.updatedAt} onRefresh={() => void read(true)} />
       {list === undefined ? (
-        <p className="note center empty">{error ? "" : "Reading…"}</p>
+        <p className="note center empty">{error ? "" : t("activity.reading")}</p>
       ) : list.length === 0 ? (
-        <p className="note center empty">No UTxOs yet.</p>
+        <p className="note center empty">{t("utxos.empty")}</p>
       ) : (
-        <section className="section" aria-label="UTxOs">
+        <section className="section" aria-label={t("utxos.listLabel")}>
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
               const name = `${amounts.ada(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
@@ -193,7 +188,9 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                       <Icon u={u} />
                     </span>
                     <span className="token-row__label">
-                      {amounts.ada(u.lovelace)} ₳{u.tokens.length ? ` and ${plural(u.tokens.length, "token")}` : ""}
+                      {u.tokens.length
+                        ? t("format.adaAndTokens", { ada: amounts.ada(u.lovelace), count: u.tokens.length })
+                        : `${amounts.ada(u.lovelace)} ₳`}
                     </span>
                     <span className="token-row__amount">
                       {!lockable(u) && <span className="utxo-tag">{tag(u)}</span>}
@@ -208,8 +205,8 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                       type="button"
                       className="icon-button utxo-row__lock"
                       aria-pressed={u.locked}
-                      aria-label={`Lock ${name}`}
-                      title={u.locked ? "Locked: tap to spend it again" : "Lock: keep it out of payments"}
+                      aria-label={t("utxos.lock.lockOne", { name })}
+                      title={t(u.locked ? "utxos.lock.locked" : "utxos.lock.lock")}
                       onClick={() => void setLocked(u, !u.locked)}
                       disabled={saving === ref(u)}
                     >
@@ -266,7 +263,7 @@ export function UtxoDetails({
       )}
       <button type="button" className={utxo.locked ? "secondary" : "primary"} onClick={() => onLock(!utxo.locked)} disabled={busy}>
         {utxo.locked ? <LockOpenIcon size={16} /> : <LockIcon size={16} />}
-        {busy ? "Saving…" : utxo.locked ? "Unlock" : "Lock"}
+        {t(busy ? "utxos.lock.saving" : utxo.locked ? "utxos.lock.unlockIt" : "utxos.lock.lockIt")}
       </button>
     </>
   ) : undefined;
@@ -277,16 +274,14 @@ export function UtxoDetails({
           <>
             <Callout tone="info">
               {utxo.seedelf.label ? (
-                <>
-                  It holds your Seedelf <strong>{utxo.seedelf.label}</strong>.
-                </>
+                <Rich k="utxos.holdsSeedelfNamed" parts={{ name: <strong>{utxo.seedelf.label}</strong> }} />
               ) : (
-                "It holds one of your Seedelfs."
+                t("utxos.holdsSeedelf")
               )}{" "}
-              Only removing the Seedelf spends it.
+              {t("utxos.onlyRemoveSpends")}
             </Callout>
             <CopyField
-              label="Seedelf name"
+              label={t("utxos.seedelfName")}
               value={utxo.seedelf.name}
               display={shortHex(utxo.seedelf.name, 14, 8)}
               testId="utxo-seedelf-name"
@@ -294,8 +289,7 @@ export function UtxoDetails({
           </>
         ) : utxo.collateral ? (
           <Callout tone="info" testId="utxo-collateral">
-            Your collateral: put up by transactions that run a script, and otherwise kept. Reclaim it in Settings, under
-            Collateral.
+            {t("utxos.collateralNote")}
           </Callout>
         ) : utxo.unspendable ? (
           <Callout tone="warn" testId="utxo-unspendable">
@@ -303,24 +297,22 @@ export function UtxoDetails({
           </Callout>
         ) : (
           <p className="note" data-testid="utxo-state">
-            {utxo.locked ? "Locked: left out of every payment." : "Spent by payments as needed."}
+            {t(utxo.locked ? "utxos.state.locked" : "utxos.state.spendable")}
           </p>
         )}
         <UtxoTokens tokens={utxo.tokens} />
-        <CopyField label="Transaction" value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
+        <CopyField label={t("utxos.transaction")} value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
         {utxo.history && (
           <p className="note" data-testid="utxo-history-note">
-            Came from: {historyOf(utxo)}. Payments try to keep money with different histories apart, since spending
-            them together ties them to each other, and say when they can't. Lock it to keep it out of payments
-            altogether.
+            {t("utxos.privacy.cameFrom", { history: historyOf(utxo) })}
           </p>
         )}
         <ReviewRows testId="utxo-output">
-          <Row label="Output" value={String(utxo.index)} />
-          {utxo.blockHeight !== undefined && <Row label="Block" value={utxo.blockHeight.toLocaleString("en-GB")} />}
+          <Row label={t("utxos.output")} value={String(utxo.index)} />
+          {utxo.blockHeight !== undefined && <Row label={t("utxos.block")} value={utxo.blockHeight.toLocaleString("en-GB")} />}
         </ReviewRows>
         {utxo.address && (
-          <CopyField label="Address" value={utxo.address} display={shortHex(utxo.address, 16, 8)} testId="utxo-address" />
+          <CopyField label={t("utxos.address")} value={utxo.address} display={shortHex(utxo.address, 16, 8)} testId="utxo-address" />
         )}
       </div>
     </Modal>
@@ -347,14 +339,14 @@ function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
   const shown = all ? searchTokens(views, query) : views.slice(0, PREVIEW);
   return (
     <div className="stack-tight" data-testid="utxo-tokens">
-      <span className="label">{plural(views.length, "token")}</span>
+      <span className="label">{t("tokens.count", { count: views.length })}</span>
       {all && views.length > SEARCH_FROM && (
         <label className="search">
           <SearchIcon size={16} />
           <input
             type="search"
-            aria-label="Search this UTxO's tokens"
-            placeholder="Name, ticker or ID"
+            aria-label={t("utxos.searchTokens")}
+            placeholder={t("tokens.searchPlaceholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             spellCheck={false}
@@ -369,7 +361,7 @@ function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
             ))}
           </ReviewRows>
         ) : (
-          <p className="note center">No token matches.</p>
+          <p className="note center">{t("utxos.noTokenMatch")}</p>
         )}
       </div>
       {views.length > PREVIEW && (
@@ -381,7 +373,7 @@ function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
             setQuery("");
           }}
         >
-          {all ? "Show fewer" : `Show all ${views.length} tokens`}
+          {all ? t("utxos.showFewer") : t("utxos.showAll", { number: views.length })}
         </button>
       )}
     </div>

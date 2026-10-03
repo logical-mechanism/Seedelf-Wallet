@@ -17,6 +17,7 @@
 
 import type * as Wasm from "@seedelf/wasm";
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { TxDetail, TxView } from "../shared/rpc";
 import { SESSION_MINT } from "./mint";
@@ -70,7 +71,7 @@ export const BUILT_KEYS: readonly string[] = [
 ];
 
 /** What the view says when it isn't holding the transaction asked for. */
-export const NOT_HELD = "That transaction isn't one the wallet is holding. Review it again.";
+export const NOT_HELD = () => t("worker.txView.notHeld");
 
 /**
  * The transaction `txHash`, decoded. It looks in what the wallet built and is
@@ -101,7 +102,7 @@ export async function txView(
       return undefined;
     });
   const cbor = kept ?? waiting?.(wanted);
-  if (!cbor) throw new Error(NOT_HELD);
+  if (!cbor) throw new Error(NOT_HELD());
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   return { detail: JSON.parse(wasm.decodeTx(net, cbor)) as TxDetail, cbor };
 }

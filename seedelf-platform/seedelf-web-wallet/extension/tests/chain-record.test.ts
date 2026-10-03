@@ -95,7 +95,7 @@ describe("a mix from the public account and its record (independent review L28)"
     // A new worker (the old one stopped here) finds the record and no progress: cut.
     const restarted = lovejoinOf(t);
     expect(await restarted.held("preprod")).toMatchObject({ stopped: 1 });
-    expect((await chains(t)).map((c) => c.stopped)).toEqual([CHAIN_CUT]);
+    expect((await chains(t)).map((c) => c.stopped)).toEqual([CHAIN_CUT()]);
   });
 });
 

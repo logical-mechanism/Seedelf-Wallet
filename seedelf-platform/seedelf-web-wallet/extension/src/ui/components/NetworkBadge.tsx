@@ -5,6 +5,7 @@
 // window.
 
 import { NETWORKS, type NetworkName } from "../../networks";
+import { useT } from "../../i18n";
 
 export function NetworkBadge({ network }: { network: NetworkName }) {
   return (
@@ -14,14 +15,12 @@ export function NetworkBadge({ network }: { network: NetworkName }) {
   );
 }
 
-/** What the strip says while preprod is on. */
-export const TEST_NETWORK = "Preprod, Cardano's test network: ADA here is test ADA, with no value.";
-
 export function TestNetworkStrip({ network }: { network: NetworkName }) {
+  const t = useT();
   if (network !== "preprod") return null;
   return (
     <p className="network-strip" role="note" data-testid="test-network">
-      {TEST_NETWORK}
+      {t("network.testStrip")}
     </p>
   );
 }

@@ -8,6 +8,7 @@
 
 import { blake2b } from "@noble/hashes/blake2.js";
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { TokenAmount, TokenRef } from "../shared/rpc";
 import mainnet from "../tokens/registry.mainnet.json";
@@ -105,8 +106,10 @@ export function tokenText(network: NetworkName, t: TokenRef & { fingerprint?: st
   const id = shortHex(fingerprint, 10, 6);
   if (info) return { label: info.ticker, listed: true, fingerprint, id };
   const own = tokenName(t.assetName);
+  // An empty asset name is what `tokenName` answers "(no name)" to, in whichever
+  // language: tested here as the empty name, never as that answer's text.
   const readable =
-    own !== shortHex(t.assetName) && own !== "(no name)" && !HIDDEN.test(own.replace(EMOJI, "")) && /\S/.test(own);
+    !!t.assetName && own !== shortHex(t.assetName) && !HIDDEN.test(own.replace(EMOJI, "")) && /\S/.test(own);
   if (!readable) return { label: id, listed: false, fingerprint, id };
   const posesAs = lookalikeOf(network, own);
   return posesAs ? { label: id, listed: false, fingerprint, id, posesAs, own } : { label: own, listed: false, fingerprint, id };
@@ -120,14 +123,13 @@ export function tokenText(network: NetworkName, t: TokenRef & { fingerprint?: st
  */
 export function tokenMark(text: TokenText, whole = false): string | undefined {
   if (text.listed) return undefined;
-  const LIST = "not on the wallet's list";
   if (text.posesAs) {
-    const real = text.posesAs === ADA ? ADA : `the listed ${text.posesAs}`;
-    return `${LIST}: it calls itself ${text.own}, but it isn't ${real}`;
+    const real = text.posesAs === ADA ? ADA : t("tokens.theListed", { token: text.posesAs });
+    return t("tokens.mark.posesAs", { own: text.own, real });
   }
   // The label is its fingerprint already, unless it's a CSV's whole one.
-  if (text.label === text.id) return whole ? `${LIST}, ${text.fingerprint}` : LIST;
-  return `${LIST}, ${whole ? text.fingerprint : text.id}`;
+  if (text.label === text.id && !whole) return t("tokens.mark.unlisted");
+  return t("tokens.mark.unlistedId", { id: whole ? text.fingerprint : text.id });
 }
 
 /**
@@ -289,7 +291,7 @@ export function viewToken(network: NetworkName, token: TokenAmount): TokenView {
     info,
     label: text.label,
     // One passing for another says what it calls itself, beside its fingerprint.
-    sub: info ? info.name : text.posesAs ? `Calls itself ${text.own}, not on the wallet's list` : text.id,
+    sub: info ? info.name : text.posesAs ? t("tokens.callsItself", { own: text.own }) : text.id,
     decimals,
     amount: formatQuantity(token.quantity, decimals),
     nft: isNft(token, info),

@@ -8,6 +8,7 @@
 // browser closes). A restarted worker re-derives the keys from there instead
 // of asking for the password again. See docs/architecture.md#service-worker.
 
+import { t } from "../i18n";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type * as Wasm from "@seedelf/wasm";
@@ -114,7 +115,7 @@ export const SESSION_PRIVATE_STALE_PREFIX = "seedelf.balancesPrivateStale.";
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
 
 /** What a request gets when WebAssembly trapped under it: the wallet locked itself (see `broken`). */
-export const WASM_BROKEN = "The wallet's core stopped working, so the wallet locked itself. Unlock it to carry on.";
+export const WASM_BROKEN = () => t("worker.wallet.trapped");
 
 /**
  * Whether session storage holds an unlocked wallet's entropy. Without it
@@ -223,7 +224,7 @@ export class Wallet {
       const problem = passwordProblem(password);
       if (problem) throw new Error(problem);
       if (await this.deps.local.get(VAULT_KEY)) {
-        throw new Error("A wallet already exists. Reset it before creating or restoring another.");
+        throw new Error(t("worker.wallet.exists"));
       }
       const entropy = this.deps.wasm.phraseToEntropy(phrase);
       try {
@@ -242,7 +243,7 @@ export class Wallet {
     return this.serial(async () => {
       const state = await this.load();
       if (state === "unlocked") return { unlocked: true };
-      if (state === "no-wallet") throw new Error("There is no wallet to unlock.");
+      if (state === "no-wallet") throw new Error(t("worker.wallet.none"));
 
       const wait = await this.remainingBackoff();
       if (wait > 0) return { unlocked: false, wrongPassword: false, retryAfterMs: wait };
@@ -290,7 +291,7 @@ export class Wallet {
    */
   unlockedAt(): Promise<number> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
       const at = await this.deps.session.get<number>(SESSION_UNLOCKED_AT);
       if (typeof at === "number") return at;
       const now = this.deps.now();
@@ -312,7 +313,7 @@ export class Wallet {
    */
   sends(): Promise<{ sent: number; forgotten: number }> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
       const { session, now } = this.deps;
       const kept = (await session.get<KnownSends>(SESSION_SENDS)) ?? {};
       const spent = (await lastSpentAt(session, now())) ?? 0;
@@ -378,7 +379,7 @@ export class Wallet {
    */
   checkPhrase(phrase: string): Promise<boolean> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
       const typed = this.deps.wasm.phraseToEntropy(phrase);
       const kept = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
       try {
@@ -449,7 +450,7 @@ export class Wallet {
    */
   withKeys<T>(task: (keys: Keys) => T | Promise<T>): Promise<T> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
       return task(this.keys!);
     });
   }
@@ -470,7 +471,7 @@ export class Wallet {
    */
   withAccount<T>(index: number, task: (keys: Keys) => T | Promise<T>): Promise<T> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
       const keys = this.keys!;
       if (index === keys.account) return task(keys);
       let cardano = this.others.get(index);
@@ -494,7 +495,7 @@ export class Wallet {
    */
   withStoreKey<T>(task: (key: Uint8Array) => T | Promise<T>): Promise<T> {
     return this.serial(async () => {
-      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
       const entropy = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
       const key = hkdf(sha256, entropy, STORE_SALT, STORE_INFO, 32);
       entropy.fill(0);
@@ -525,7 +526,7 @@ export class Wallet {
       } catch (e) {
         if (!isTrap(e)) throw e;
         await this.broken();
-        throw new Error(WASM_BROKEN);
+        throw new Error(WASM_BROKEN());
       }
     };
     const run = this.queue.then(guarded, guarded);
@@ -674,9 +675,9 @@ export class Wallet {
    * again. The caller zeroes it. Wrong passwords count, and wait, like unlock's.
    */
   private async openWithPassword(password: string): Promise<Uint8Array> {
-    if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+    if ((await this.load()) !== "unlocked") throw new Error(t("worker.wallet.locked"));
     const wait = await this.remainingBackoff();
-    if (wait > 0) throw new Error(`Too many wrong passwords. Try again in ${Math.ceil(wait / 1000)} s.`);
+    if (wait > 0) throw new Error(t("worker.wallet.backoff", { seconds: Math.ceil(wait / 1000) }));
     const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
     try {
       const entropy = await openVault(record, password);

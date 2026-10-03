@@ -50,6 +50,7 @@
 // session's account only while a swap runs or when asked: one Koios request
 // for all the open ones, and one tx_status for what's waiting.
 
+import { t } from "../i18n";
 import { NETWORKS, type NetworkName } from "../networks";
 import type {
   AtStake,
@@ -411,7 +412,7 @@ export interface SessionDeps extends ScriptSpendDeps {
 /** What Minswap built failed a check: the swap pauses for the user instead of trying again. */
 export class Refused extends Error {
   constructor(readonly detail: string) {
-    super(`The wallet won't sign what Minswap built: ${detail}`);
+    super(t("sess.refused", { detail }));
   }
 }
 
@@ -421,7 +422,7 @@ export class NothingComesBack extends Error {}
 /** The fresh quote expects less than the least approved, so the order couldn't fill. */
 class PriceMoved extends Error {
   constructor(readonly amountOut: string) {
-    super("The price moved past what was approved.");
+    super(t("sess.priceMoved"));
   }
 }
 
@@ -435,10 +436,10 @@ const PENDING_KIND = {
 } as const satisfies Record<SessionTx["kind"], PendingTx["kind"]>;
 
 /** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
-const NO_COLLATERAL = "its 5 ₳ collateral isn't at its account anymore, and the mixes need it";
+const NO_COLLATERAL = () => t("sess.noCollateral");
 
 /** Why a return leaves Lovejoin out while its last chain's rest, sent back directly, isn't on chain (independent review L17). */
-const REST_NOT_BACK = "the return of what its last chain through Lovejoin left wasn't on chain yet";
+const REST_NOT_BACK = () => t("sess.restNotBack");
 
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
@@ -469,16 +470,15 @@ const LISTED: Record<NetworkName, ReadonlySet<string>> = {
 };
 
 /** Why a swap into a token that isn't verified isn't funded. */
-const UNVERIFIED =
-  "The token you'd get isn't on the wallet's list or verified by Minswap, so the wallet won't swap into it: anyone can give a token a known token's name.";
+const UNVERIFIED = () => t("sess.unverified");
 
 /** An ask as the user typed it, checked before Minswap sees it. */
 export function checkAsk(ask: SwapAsk): SwapAsk {
   const token = (id: string) => id === "lovelace" || /^[0-9a-f]{56}([0-9a-f]{2}){0,32}$/.test(id);
-  if (!/^[1-9][0-9]*$/.test(ask.amount)) throw new Error("Enter an amount to swap.");
-  if (!token(ask.tokenIn) || !token(ask.tokenOut)) throw new Error("That isn't a token the wallet can swap.");
-  if (ask.tokenIn === ask.tokenOut) throw new Error("Choose two different tokens.");
-  if (!(ask.slippage >= 0.1 && ask.slippage <= 20)) throw new Error("Slippage is between 0.1% and 20%.");
+  if (!/^[1-9][0-9]*$/.test(ask.amount)) throw new Error(t("sess.enterAmount"));
+  if (!token(ask.tokenIn) || !token(ask.tokenOut)) throw new Error(t("sess.notSwappable"));
+  if (ask.tokenIn === ask.tokenOut) throw new Error(t("sess.twoDifferent"));
+  if (!(ask.slippage >= 0.1 && ask.slippage <= 20)) throw new Error(t("sess.slippageRange"));
   return { amount: ask.amount, tokenIn: ask.tokenIn, tokenOut: ask.tokenOut, slippage: ask.slippage };
 }
 
@@ -583,12 +583,10 @@ function ownGone(s: SessionRecord, known: ReadonlyMap<string, boolean>, listed: 
 }
 
 /** Why a session doesn't end on a read of its empty account that Koios doesn't back up (ownGone). */
-const NOT_CAUGHT_UP =
-  "Koios hasn't caught up with this session yet, so the wallet can't be sure its account is empty. Try again in a minute.";
+const NOT_CAUGHT_UP = () => t("sess.notCaughtUp");
 
 /** Why a site's session doesn't end while a funding or a top-up Koios knows nothing of may still land (ownGone, final review F13). */
-const FUNDING_UNSEEN =
-  "The chain hasn't shown this session's funding, or its top-up, and it may still land: Koios can be behind by several minutes, and a payment can wait longer than that to go in. The wallet can't be sure the session's account is empty until two hours after it was sent. Try again then.";
+const FUNDING_UNSEEN = () => t("sess.fundingUnseen");
 
 /**
  * WebAssembly couldn't build a return because what it takes doesn't pay for
@@ -760,13 +758,13 @@ export class SessionService {
     return this.serial(async () => {
       const views = await this.listNow(network, true);
       const view = views.find((v) => v.index === index);
-      if (!view) throw new Error("There's no such session.");
-      if (view.stage !== "failed") throw new Error("Only a session whose funding never reached the chain can be forgotten.");
+      if (!view) throw new Error(t("sess.noSuchSession"));
+      if (view.stage !== "failed") throw new Error(t("sess.onlyFailedForgotten"));
       const book = await this.book(network);
       const record = book.sessions.find((s) => s.index === index)!;
       // One the wallet is still sending may land yet, into a session no one reads (final review sessions-6).
       if (await this.stillWatched(network, record)) {
-        throw new Error("Its funding may still reach the chain: the wallet is still sending it. Wait for it, then forget the session.");
+        throw new Error(t("sess.stillSendingFunding"));
       }
       // One Koios knows an output of landed, whatever tx_status and the account's read said: a backend behind
       // them doesn't show it (independent review M4). Unspent, it's the session's money, so the session stays,
@@ -780,7 +778,7 @@ export class SessionService {
           delete r.auto?.failed;
         });
         if (record.auto) await this.deps.alarm?.start();
-        throw new Error("Its funding reached the chain after all, so the session isn't forgotten. Refresh to see what it holds.");
+        throw new Error(t("sess.fundingLanded"));
       }
       await this.save(network, { ...book, sessions: book.sessions.filter((s) => s.index !== index) });
       return this.listNow(network);
@@ -812,9 +810,7 @@ export class SessionService {
     const est = await this.deps.minswap(network).estimate(checked);
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
-      throw new Error(
-        `Minswap routes this swap through ${unchecked.join(" and ")}, whose orders the wallet can't check yet, so it won't swap this way. Try another amount or pair.`,
-      );
+      throw new Error(t("sess.routesThrough", { protocols: unchecked.join(t("histories.list.and")) }));
     }
     const quote = quoteOf(network, checked, est);
     // Worked out here, without the pool: that's read once, at Review (outBuild).
@@ -905,7 +901,7 @@ export class SessionService {
     display?: { in: SwapSide; out: SwapSide },
   ): Promise<SessionOutSummary & { lovejoin?: SwapLovejoin }> {
     const ask = checkAsk(quote.ask);
-    if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED);
+    if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED());
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     const { summary, txCbor, seed } = await this.buildFunding(
@@ -916,7 +912,7 @@ export class SessionService {
         { to: address, lovelace: quote.fund.lovelace, tokens: quote.fund.tokens },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
-      "Your private balance is empty, so there's nothing to swap from.",
+      t("sess.emptySwap"),
     );
     const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
     // Sending this is the approval: the swap runs itself within it.
@@ -945,7 +941,7 @@ export class SessionService {
         { to: address, lovelace, tokens },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
-      "Your private balance is empty, so there's nothing to put in a private session.",
+      t("sess.emptySession"),
     );
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed, site: { origin } };
     await keep(this.deps, SESSION_SITE_OUT, kept);
@@ -958,13 +954,13 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_SITE_OUT));
       if (!built || built.txHash !== txHash || built.network !== network || built.site?.origin !== origin) {
-        throw new Error("That payment isn't ready to send. Review it again.");
+        throw new Error(t("sess.outNotReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error("That payment was built more than 10 minutes ago. Review it again.");
+        throw new Error(t("sess.outTooOld"));
       }
       const book = await this.book(network);
-      if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
+      if (built.index < book.next) throw new Error(t("sess.alreadyStarted"));
       await this.stillUnused(network, built.index);
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
@@ -998,7 +994,7 @@ export class SessionService {
     seed = false,
   ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
-    if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
     // A seed makes no mixes, so it draws nothing from the pool: the floor
     // doesn't apply, and it takes as many boxes as one deposit holds. Its
     // funding is still a Seedelf spend, with giveme.my's collateral as any is.
@@ -1017,8 +1013,8 @@ export class SessionService {
    */
   async againBuild(network: NetworkName, anyway = false): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
-    if (!lovejoin?.available(network)) throw new Error("Lovejoin isn't on this network yet.");
-    if (await this.mixingAgain(network)) throw new Error("Your boxes are being mixed again already.");
+    if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
+    if (await this.mixingAgain(network)) throw new Error(t("sess.mixingAgain"));
     const { boxes, owned } = await lovejoin.againBoxes(network, anyway);
     return this.mixFunding(network, { ...(await lovejoin.funding(network, boxes, true)), owned, ...(anyway ? { publicToo: true } : {}) });
   }
@@ -1040,7 +1036,7 @@ export class SessionService {
         { to: address, lovelace: mix.lovelace, tokens: [] },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
-      mix.again ? "Your private balance is empty, so there's nothing to pay for the mixes with." : "Your private balance is empty, so there's nothing to mix.",
+      t(mix.again ? "sess.emptyMixPay" : "sess.emptyMix"),
     );
     const kept: Omit<KeptMix, "builtAt"> = { ...summary, txCbor, seed, mix };
     await keep(this.deps, SESSION_MIX_OUT, kept);
@@ -1053,12 +1049,12 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptMix>(SESSION_MIX_OUT));
       if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error("That mix isn't ready to send. Review it again.");
+        throw new Error(t("lj.mixNotReady"));
       }
-      if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
+      if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("lj.mixTooOld"));
       const book = await this.book(network);
-      if (built.index < book.next) throw new Error("That mix was started already. Start a new one.");
-      if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error("Your boxes are being mixed again already.");
+      if (built.index < book.next) throw new Error(t("sess.mixStarted"));
+      if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error(t("sess.mixingAgain"));
       await this.stillUnused(network, built.index);
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
@@ -1098,7 +1094,7 @@ export class SessionService {
    */
   async topUpBuild(network: NetworkName, index: number, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const s = await this.live(network, index);
-    if (!s.site) throw new Error("Only a site's private session takes a top-up.");
+    if (!s.site) throw new Error(t("sess.onlySiteTopUp"));
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const held = await this.accountUtxos(network, keyHash);
     const payments = [{ to: address, lovelace, tokens }];
@@ -1108,7 +1104,7 @@ export class SessionService {
       index,
       address,
       payments,
-      "Your private balance is empty, so there's nothing to top up with.",
+      t("sess.emptyTopUp"),
     );
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
     await keep(this.deps, SESSION_TOP_UP, kept);
@@ -1121,10 +1117,10 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_TOP_UP));
       if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error("That top-up isn't ready to send. Review it again.");
+        throw new Error(t("sess.topUpNotReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error("That top-up was built more than 10 minutes ago. Review it again.");
+        throw new Error(t("sess.topUpTooOld"));
       }
       await this.live(network, built.index);
       const out = await this.outRecord(network, built.index, txHash, built.txCbor);
@@ -1164,9 +1160,9 @@ export class SessionService {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       let s = await this.live(network, index);
-      if (!s.site) throw new Error("This session isn't a site's.");
+      if (!s.site) throw new Error(t("sess.notSite"));
       if (await this.pendingChain(network, index)) {
-        throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish, then disconnect.");
+        throw new Error(t("sess.chainSendingDisconnect"));
       }
       const koios = this.deps.koios(network);
       const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
@@ -1176,7 +1172,7 @@ export class SessionService {
         if (on.size) s = await this.noteLanded(network, await this.update(network, index, (r) => void settle(r, on)));
         const recent = s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS);
         if (recent || (await this.stillWatched(network, s))) {
-          throw new Error("Its last transaction hasn't reached the chain yet. Wait for it, then disconnect.");
+          throw new Error(t("sess.lastTxWaiting"));
         }
       }
       // A return seen on chain earlier, whose history's write failed then: written now, before its record goes
@@ -1190,7 +1186,7 @@ export class SessionService {
       const seen = fundingsListed(s, rows);
       if (seen.size) s = await this.update(network, index, (r) => void settle(r, seen));
       if (returnable(s, rows).length) {
-        throw new Error("The session's account still holds something. Bring it back first, then disconnect.");
+        throw new Error(t("sess.accountHolds"));
       }
       // An empty read proves nothing alone: a Koios backend behind the funding, a top-up or the site's own
       // transaction reads the account empty. What they paid it must show spent (independent review M4).
@@ -1199,7 +1195,7 @@ export class SessionService {
       if (!ownGone(s, known, listed, now())) {
         // A funding or a top-up Koios knows nothing of, that may still land, waits its time out (final review F13).
         const unseen = s.txs.some((t) => awaitsLanding(t, now()) && t.outs?.some((o) => !known.has(o)));
-        throw new Error(unseen ? FUNDING_UNSEEN : NOT_CAUGHT_UP);
+        throw new Error(unseen ? FUNDING_UNSEEN() : NOT_CAUGHT_UP());
       }
       // What's left behind, as far as the account still has it (independent review L19): one a transaction
       // took since (the site's, or a later return) points to nothing, and keeps no record, nor the site's
@@ -1258,7 +1254,7 @@ export class SessionService {
   /** A site's private session, for the connector: its address, reward address and payment key hash. */
   async siteAccount(network: NetworkName, index: number): Promise<{ address: string; reward: string; keyHash: string }> {
     const s = await this.live(network, index);
-    if (!s.site) throw new Error("This session isn't a site's.");
+    if (!s.site) throw new Error(t("sess.notSite"));
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const { wasm, wallet } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
@@ -1283,7 +1279,7 @@ export class SessionService {
   ): Promise<void> {
     return this.serial(async () => {
       const s = await this.live(network, index);
-      if (!s.site) throw new Error("This session isn't a site's.");
+      if (!s.site) throw new Error(t("sess.notSite"));
       const { keyHash } = (await this.accounts(network, [s])).get(index)!;
       const outs =
         paysAccount(txCbor, summary.txHash, keyHash) ?? summary.ownOutputs.map((o) => `${summary.txHash}#${o.txIndex}`);
@@ -1404,13 +1400,13 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptOut>(SESSION_OUT));
       if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error("That payment isn't ready to send. Review it again.");
+        throw new Error(t("sess.outNotReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error("That payment was built more than 10 minutes ago. Review it again.");
+        throw new Error(t("sess.outTooOld"));
       }
       const book = await this.book(network);
-      if (built.index < book.next) throw new Error("That session was started already. Start a new one.");
+      if (built.index < book.next) throw new Error(t("sess.alreadyStarted"));
       await this.stillUnused(network, built.index);
       // Where Lovejoin is, how it comes back is kept with it: through it, as deep and as long as approved.
       const back: Pick<AutoRecord, "direct" | "lovejoin"> = {};
@@ -1443,20 +1439,18 @@ export class SessionService {
   /** Has Minswap build the session's swap, freshly quoted, and reads it against the session's key. */
   async swapBuild(network: NetworkName, index: number): Promise<SessionTxReview> {
     const s = await this.live(network, index);
-    if (!s.swap) throw new Error("This session isn't for a swap.");
-    if (s.txs.some((t) => t.kind === "swap" && !t.unsent)) throw new Error("This session's swap was sent already.");
+    if (!s.swap) throw new Error(t("sess.notSwap"));
+    if (s.txs.some((t) => t.kind === "swap" && !t.unsent)) throw new Error(t("sess.swapSent"));
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const rows = await this.utxosOf(network, keyHash);
-    if (!rows.length) throw new Error("The session's account holds nothing yet: wait for its funding to confirm.");
+    if (!rows.length) throw new Error(t("sess.accountEmptyYet"));
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
     const est = await minswap.estimate(ask);
     // Its route now, as the runner's order checks it (independent review M17).
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
-      throw new Error(
-        `Minswap now routes this swap through ${unchecked.join(" and ")}, whose orders the wallet can't check yet, so it won't swap this way. Try again later, or Stop to bring it back.`,
-      );
+      throw new Error(t("sess.nowRoutesThrough", { protocols: unchecked.join(t("histories.list.and")) }));
     }
     const txCbor = await minswap.buildTx(address, est.min_amount_out, ask);
     return this.review(network, s, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
@@ -1465,7 +1459,7 @@ export class SessionService {
   /** The session's orders that aren't filled yet. */
   async orders(network: NetworkName, index: number): Promise<SessionOrder[]> {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
-    if (!s) throw new Error("There's no such session.");
+    if (!s) throw new Error(t("sess.noSuchSession"));
     const { address } = (await this.accounts(network, [s])).get(index)!;
     const orders = await this.deps.minswap(network).pendingOrders(address);
     return orders.map((o) => ({
@@ -1483,7 +1477,7 @@ export class SessionService {
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const minswap = this.deps.minswap(network);
     const orders = (await minswap.pendingOrders(address)).slice(0, 6);
-    if (!orders.length) throw new Error("No order of this session is waiting: it was filled, or cancelled already.");
+    if (!orders.length) throw new Error(t("sess.noOrderWaiting"));
     const txCbor = await minswap.cancelTx(address, orders);
     const rows = await this.utxosOf(network, keyHash);
     return this.review(network, s, "cancel", txCbor, rows, { orders: orders.length });
@@ -1494,12 +1488,11 @@ export class SessionService {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptTx>(SESSION_TX));
-      const what = kind === "swap" ? "swap" : "cancel";
       if (!built || built.txHash !== txHash || built.network !== network || built.kind !== kind) {
-        throw new Error(`That ${what} isn't ready to send. Review it again.`);
+        throw new Error(t(kind === "swap" ? "sess.swap.notReady" : "sess.cancel.notReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error(`That ${what} was built more than 10 minutes ago. Review it again.`);
+        throw new Error(t(kind === "swap" ? "sess.swap.tooOld" : "sess.cancel.tooOld"));
       }
       return this.signAndSend(network, built);
     });
@@ -1518,10 +1511,10 @@ export class SessionService {
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     // Money that arrives after the return would need another one.
     if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
-      throw new Error("An order of this session is still waiting. Cancel it, or wait for it to fill, then bring the session back.");
+      throw new Error(t("sess.orderWaitingBack"));
     }
     const rows = await this.utxosOf(network, keyHash);
-    if (!rows.length) throw new Error("The session's account is empty, so there's nothing to bring back.");
+    if (!rows.length) throw new Error(t("sess.accountEmptyBack"));
     const built = await this.buildBack(network, index, rows, undefined, direct);
     await wallet.withKeys(() => session.set(SESSION_BACK, built));
     const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, ...summary } = built;
@@ -1534,9 +1527,9 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptBack>(SESSION_BACK));
       if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error("That return isn't ready to send. Review it again.");
+        throw new Error(t("sess.backNotReady"));
       }
-      if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That return was built more than 10 minutes ago. Review it again.");
+      if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("sess.backTooOld"));
       return this.sendBack(network, built);
     });
   }
@@ -1569,13 +1562,13 @@ export class SessionService {
     for (const index of [...new Set(indexes)]) {
       try {
         const s = await this.live(network, index);
-        if (s.auto) throw new Error(s.mix ? "A mix comes back by itself." : "A swap that runs itself comes back by itself.");
+        if (s.auto) throw new Error(t(s.mix ? "sess.mixComesBack" : "sess.autoComesBack"));
         const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
         if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
-          throw new Error("An order of this session is still waiting.");
+          throw new Error(t("sess.orderWaiting"));
         }
         const rows = await this.utxosOf(network, keyHash);
-        if (!rows.length) throw new Error("It holds nothing.");
+        if (!rows.length) throw new Error(t("sess.holdsNothing"));
         returns.push(await this.buildBack(network, index, rows, params, direct));
       } catch (e) {
         skipped.push({ index, reason: (e as Error).message });
@@ -1597,9 +1590,9 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const kept = (await wallet.withKeys(() => session.get<KeptBack[]>(SESSION_CLAIM))) ?? [];
       const chosen = txHashes.map((h) => kept.find((k) => k.txHash === h && k.network === network));
-      if (!chosen.length || chosen.some((c) => !c)) throw new Error("Those returns aren't ready to send. Review them again.");
+      if (!chosen.length || chosen.some((c) => !c)) throw new Error(t("sess.claimNotReady"));
       if (chosen.some((c) => now() - c!.builtAt > BUILT_TTL_MS)) {
-        throw new Error("Those returns were built more than 10 minutes ago. Review them again.");
+        throw new Error(t("sess.claimTooOld"));
       }
       const sent: Array<{ index: number; txHash: string }> = [];
       const failed: Array<{ index: number; error: string }> = [];
@@ -1764,7 +1757,7 @@ export class SessionService {
       const started = s.txs.some((t) => t.at >= chain.at && (t.kind === "deposit" || t.kind === "mix") && sent.has(t.txHash));
       if (!started || sent.has(chain.last) || (await this.pendingChain(network, s.index))) continue;
       await this.update(network, s.index, (r) => {
-        r.chain!.stopped = CHAIN_CUT;
+        r.chain!.stopped = CHAIN_CUT();
       });
     }
   }
@@ -2089,7 +2082,7 @@ export class SessionService {
 
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
   private async order(network: NetworkName, s: SessionRecord, address: string, rows: KoiosUtxo[]): Promise<void> {
-    if (!s.swap) throw new Refused("this session isn't for a swap.");
+    if (!s.swap) throw new Refused(t("sess.refuse.notSwap"));
     const approved = s.auto!.approved;
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
@@ -2098,7 +2091,7 @@ export class SessionService {
     // through. It pauses, as the quote would have refused it (independent review M17).
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
-      throw new Refused(`Minswap now routes it through ${unchecked.join(" and ")}, whose orders the wallet can't check yet.`);
+      throw new Refused(t("sess.refuse.nowRoutes", { protocols: unchecked.join(t("histories.list.and")) }));
     }
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
@@ -2123,8 +2116,8 @@ export class SessionService {
     const txCbor = await this.deps.minswap(network).cancelTx(address, orders.slice(0, 6));
     const built = await this.inspect(network, s, "cancel", txCbor, rows);
     // A cancel only brings the orders' funds back to the session: it pays nothing out but its fee, and that's small.
-    if (paidOut(built.summary, address).length) throw new Refused("its cancel pays someone other than this session.");
-    if (BigInt(built.summary.fee) > MAX_CANCEL_FEE) throw new Refused("its cancel's fee is more than a cancel takes.");
+    if (paidOut(built.summary, address).length) throw new Refused(t("sess.refuse.cancelPaysOther"));
+    if (BigInt(built.summary.fee) > MAX_CANCEL_FEE) throw new Refused(t("sess.refuse.cancelFee"));
     await this.signAndSend(network, built);
   }
 
@@ -2169,12 +2162,12 @@ export class SessionService {
       refs = [...new Set([...(bodyOutpoints(bytes, 0) ?? []), ...(bodyOutpoints(bytes, 13) ?? [])])];
       outputs = builtOutputs(bytes);
     } catch {
-      throw new Error("The wallet can't read the transaction Minswap built.");
+      throw new Error(t("sess.cannotRead"));
     }
     const own = new Map(rows.map((r) => [outpoint(r), r]));
     const others = refs.filter((r) => !own.has(r));
     // A swap spends only the session's UTxOs; a cancel also spends its orders, at the DEXes' contracts.
-    if (kind === "swap" && others.length) throw new Refused("it spends something that isn't this session's.");
+    if (kind === "swap" && others.length) throw new Refused(t("sess.refuse.spendsOther"));
     const foreign = others.length ? await this.deps.koios(network).utxoInfo(others) : [];
     const request = JSON.stringify({
       network,
@@ -2223,11 +2216,11 @@ export class SessionService {
     const { wasm, wallet } = this.deps;
     const whole = await wallet.withKeys((keys) => {
       const signed = JSON.parse(wasm.signSessionTx(keys.oneTime, built.request)) as { witnessSet: string; summary: DappTxSummary };
-      if (signed.summary.txHash !== built.txHash) throw new Error("Signing changed the transaction, so it wasn't sent.");
+      if (signed.summary.txHash !== built.txHash) throw new Error(t("worker.spend.signingChanged"));
       return wasm.attachWitnesses(built.txCbor, signed.witnessSet);
     });
     const bytes = hexBytes(whole);
-    if (txId(bytes) !== built.txHash) throw new Error("Putting the signature in changed the transaction, so it wasn't sent.");
+    if (txId(bytes) !== built.txHash) throw new Error(t("sess.witnessChanged"));
     return this.sendRecorded(network, built.index, built.kind, built.txHash, bytes, SESSION_TX, {
       // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked
       // at, and its own minimum the one shown.
@@ -2256,7 +2249,7 @@ export class SessionService {
   ): Promise<KeptBack> {
     const { wasm, wallet, now } = this.deps;
     if (await this.pendingChain(network, index)) {
-      throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
+      throw new Error(t("sess.chainSending"));
     }
     // A reference script the wallet can't measure: no transaction of its takes that UTxO, ever.
     const unpriced = held.filter((u) => !measurable(u));
@@ -2264,9 +2257,7 @@ export class SessionService {
     const rows = held.filter(measurable);
     if (!rows.length) {
       await this.nothingBack(network, index, held);
-      throw new NothingComesBack(
-        "What's at the session's account holds a reference script the wallet can't price, so no return can take it. It stays there.",
-      );
+      throw new NothingComesBack(t("sess.scriptStays"));
     }
     const params = known ?? (await this.deps.koios(network).epochParams());
     const merge = await this.fundingChange(network, index);
@@ -2287,7 +2278,7 @@ export class SessionService {
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
       await this.update(network, index, (r) => {
-        r.chain!.stopped = CHAIN_CUT;
+        r.chain!.stopped = CHAIN_CUT();
       });
     }
     // What the session's own transactions left at the account comes back first when not everything can at once:
@@ -2301,7 +2292,7 @@ export class SessionService {
     // What that chain left was sent back directly, and isn't on chain yet: this return comes back directly too,
     // and says why when it would have gone through Lovejoin (independent review L17).
     const restOnItsWay = started && sent.some((t) => t.kind === "back" && !t.confirmed && !t.replaced);
-    if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK;
+    if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK();
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
       // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
@@ -2312,7 +2303,7 @@ export class SessionService {
         // Something the account signed spent it (a site's transaction, or a return before this one, which takes
         // it; a top-up puts one back): no mix can go, so it comes back directly, and says so when its spare ADA
         // would have paid for a box.
-        if (record?.mix || spareOf(rows) >= BigInt((await lovejoin.funding(network, 1)).lovelace)) skipped = NO_COLLATERAL;
+        if (record?.mix || spareOf(rows) >= BigInt((await lovejoin.funding(network, 1)).lovelace)) skipped = NO_COLLATERAL();
       } else {
         try {
           chain = await lovejoin.chain(
@@ -2335,7 +2326,7 @@ export class SessionService {
         }
       }
       // A mix that can't pay for its boxes anymore (the fees went up) says so too.
-      if (!chain && !skipped && record?.mix) skipped = "its ADA doesn't pay for a box and its mixes anymore";
+      if (!chain && !skipped && record?.mix) skipped = t("sess.mixCannotPay");
       if (skipped && record?.mix) {
         await this.update(network, index, (r) => {
           r.mix!.skipped = skipped;
@@ -2378,7 +2369,7 @@ export class SessionService {
     }
     // A mix stopped before its boxes went in: it's all coming back, unmixed.
     if (direct && !started && record?.mix && !record.mix.skipped) {
-      skipped = "you stopped it before its boxes went in";
+      skipped = t("sess.mixStopped");
       await this.update(network, index, (r) => {
         r.mix!.skipped = skipped;
       });
@@ -2400,7 +2391,7 @@ export class SessionService {
       // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
       await this.leaveBehind(network, index, rows, "fee");
       await this.nothingBack(network, index, rows);
-      throw new NothingComesBack("What's left at the session's account is too little to pay for its own way back, so it stays there.");
+      throw new NothingComesBack(t("sess.tooLittleBack"));
     }
     await this.leftBy(network, index, rows, result.leftOut);
     return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
@@ -2570,14 +2561,14 @@ export class SessionService {
     // Another return of the session kept for Send (its page's, Bring everything back's) never takes the place
     // of a chain on its way: its progress, its reservation and its record stay as they are (final review lovejoin-4).
     if (await this.pendingChain(network, built.index)) {
-      throw new Error("Its return through Lovejoin is still being sent. Wait for it to finish.");
+      throw new Error(t("sess.chainSending"));
     }
     // Something it spends went out in another of the wallet's transactions since it was reviewed (a private
     // spend sent meanwhile took the funding change its last transaction merges into): it would stop at that one,
     // after the rest went in, so nothing of it goes, and a new review leaves that out (independent review L18).
     const spent = await this.deps.wallet.withKeys(() => spentSet(this.deps.session));
     if (txs!.some((t) => txInputs(hexBytes(t.txCbor)).some((o) => spent.has(o)))) {
-      throw new Error("Something this return spends went out in another transaction since you reviewed it. Review it again.");
+      throw new Error(t("sess.spentSince"));
     }
     let was: Pick<SessionRecord, "chain" | "lovejoinSkipped"> = {};
     await this.update(network, built.index, (s) => {
@@ -2889,7 +2880,7 @@ export class SessionService {
     const koios = this.deps.koios(network);
     try {
       const submitted = await koios.submitTx(bytes);
-      if (submitted !== txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
+      if (submitted !== txHash) throw new Error(t("sess.otherTxId", { id: submitted }));
     } catch (e) {
       if (!(e instanceof SpentInputError)) throw e;
       await sentAlready(koios, txHash, e);
@@ -2975,7 +2966,7 @@ export class SessionService {
   /** One session as it is now, with what its account held at the last reading. */
   private async one(network: NetworkName, index: number): Promise<SessionView> {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
-    if (!s) throw new Error("There's no such session.");
+    if (!s) throw new Error(t("sess.noSuchSession"));
     const { address } = (await this.accounts(network, [s])).get(index)!;
     return this.view(network, s, address, this.seen.get(`${network}:${index}`));
   }
@@ -3021,15 +3012,15 @@ export class SessionService {
   /** A session that isn't over, or why not. */
   private async live(network: NetworkName, index: number): Promise<SessionRecord> {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
-    if (!s) throw new Error("There's no such session.");
-    if (s.closedAt) throw new Error("That session is over: everything in it came back.");
+    if (!s) throw new Error(t("sess.noSuchSession"));
+    if (s.closedAt) throw new Error(t("sess.sessionOver"));
     return s;
   }
 
   /** A session that isn't over and runs itself, or why not. */
   private async automatic(network: NetworkName, index: number): Promise<SessionRecord> {
     const s = await this.live(network, index);
-    if (!s.auto) throw new Error("This swap doesn't run by itself: take its steps with its buttons.");
+    if (!s.auto) throw new Error(t("sess.notAutomatic"));
     return s;
   }
 
@@ -3152,9 +3143,7 @@ export class SessionService {
       // Used on chain, so skipping it is always safe. The record as it is now, after Koios answered.
       const book = await this.book(network);
       if (book.next <= index) await this.save(network, { ...book, next: index + 1 });
-      throw new Error(
-        "That session's one-time account was used meanwhile, by your recovery phrase in another browser, say. Nothing was sent. Review it again: it takes the next unused one.",
-      );
+      throw new Error(t("sess.indexUsed"));
     }
   }
 
@@ -3170,7 +3159,7 @@ export class SessionService {
   private async update(network: NetworkName, index: number, change: (s: SessionRecord) => void): Promise<SessionRecord> {
     const book = await this.book(network);
     const s = book.sessions.find((r) => r.index === index);
-    if (!s) throw new Error("There's no such session.");
+    if (!s) throw new Error(t("sess.noSuchSession"));
     change(s);
     await this.save(network, book);
     return s;
@@ -3232,7 +3221,7 @@ function leftOut(e: unknown): string {
   if (e instanceof LovejoinSkipped) return e.reason;
   const message = e instanceof Error ? e.message : String(e);
   if (e instanceof KoiosError || /locked/i.test(message)) throw e;
-  return `the wallet couldn't build its chain: ${message.charAt(0).toLowerCase()}${message.slice(1).replace(/\.$/, "")}`;
+  return t("sess.chainFailed", { reason: `${message.charAt(0).toLowerCase()}${message.slice(1).replace(/\.$/, "")}` });
 }
 
 /**
@@ -3242,11 +3231,10 @@ function leftOut(e: unknown): string {
  */
 function poolShort(network: NetworkName, room: { others: number; free: number }, depth: number): string | undefined {
   const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
-  const boxes = (n: number) => `${n} ${n === 1 ? "box" : "boxes"}`;
-  if (room.others < floor) return `Right now Lovejoin's pool holds ${boxes(room.others)} that aren't yours, under the ${floor} it needs`;
+  if (room.others < floor) return t("sess.poolFloor", { count: room.others, floor });
   const needs = mixesPerBox(depth) * 2;
   if (room.free < needs) {
-    return `Right now Lovejoin's pool has ${boxes(room.free)} to mix with, and a box ${depth} ${depth === 1 ? "wave" : "waves"} deep needs ${needs}`;
+    return t("sess.poolFree", { count: room.free, deep: t("sess.deep", { count: depth }), needs });
   }
   return undefined;
 }
@@ -3373,10 +3361,10 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
     lovelace += BigInt(p.lovelace);
     for (const t of p.tokens) tokens.set(t.policyId + t.assetName, (tokens.get(t.policyId + t.assetName) ?? 0n) + BigInt(t.quantity));
   }
-  if (lovelace > BigInt(fund.lovelace)) throw new Refused("it pays out more ADA than was funded for the swap.");
+  if (lovelace > BigInt(fund.lovelace)) throw new Refused(t("sess.refuse.moreAda"));
   for (const [id, quantity] of tokens) {
     const funded = fund.tokens.find((t) => t.policyId + t.assetName === id);
-    if (!funded || quantity > BigInt(funded.quantity)) throw new Refused("it pays out tokens that weren't funded for the swap.");
+    if (!funded || quantity > BigInt(funded.quantity)) throw new Refused(t("sess.refuse.moreTokens"));
   }
 }
 
@@ -3410,7 +3398,7 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
     const type = Number.parseInt(o.address.charAt(0), 16);
     const script = type <= 7 && type % 2 === 1;
     if (!script && o.address.slice(2, 58) === session.keyHash) {
-      throw new Refused("it pays this session's key under someone else's staking part.");
+      throw new Refused(t("sess.refuse.otherStake"));
     }
     const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
     if (script && staked && o.datum && names(o.datum, session.keyHash)) {
@@ -3421,12 +3409,12 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
       fee = true;
       return;
     }
-    if (!script) throw new Refused("it pays an address that isn't this session's.");
-    if (!staked) throw new Refused("it pays a contract under someone else's staking part.");
-    if (!o.datum) throw new Refused("it pays a contract without saying who the order is for.");
-    throw new Refused("its order isn't for this session.");
+    if (!script) throw new Refused(t("sess.refuse.otherAddress"));
+    if (!staked) throw new Refused(t("sess.refuse.contractOtherStake"));
+    if (!o.datum) throw new Refused(t("sess.refuse.contractNoOwner"));
+    throw new Refused(t("sess.refuse.orderNotOurs"));
   });
-  if (!orders.length) throw new Refused("it places no order.");
+  if (!orders.length) throw new Refused(t("sess.refuse.noOrder"));
   return orders;
 }
 
@@ -3444,12 +3432,12 @@ function names(cbor: string, keyHash: string): boolean {
  * wouldn't count.
  */
 function refuseOddities(s: DappTxSummary, index: number): void {
-  if (!s.complete || s.othersSign) throw new Refused("it needs someone else's signature too.");
-  if (s.signs.length !== 1 || s.signs[0] !== `0/${index}`) throw new Refused("it isn't signed by this session's key alone.");
-  if (s.unknownInputs.length) throw new Refused("it spends UTxOs the wallet couldn't find.");
+  if (!s.complete || s.othersSign) throw new Refused(t("sess.refuse.otherSignature"));
+  if (s.signs.length !== 1 || s.signs[0] !== `0/${index}`) throw new Refused(t("sess.refuse.notOnlyKey"));
+  if (s.unknownInputs.length) throw new Refused(t("sess.refuse.unknownInputs"));
   if (s.certificates.length || s.withdrawals.length || s.votes || s.proposals) {
-    throw new Refused("it does something with staking or governance.");
+    throw new Refused(t("sess.refuse.staking"));
   }
-  if (s.mint.length) throw new Refused("it mints or burns tokens.");
-  if (s.donation && BigInt(s.donation) > 0n) throw new Refused("it gives ADA to the treasury.");
+  if (s.mint.length) throw new Refused(t("sess.refuse.mints"));
+  if (s.donation && BigInt(s.donation) > 0n) throw new Refused(t("sess.refuse.treasury"));
 }

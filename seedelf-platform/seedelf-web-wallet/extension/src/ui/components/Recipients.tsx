@@ -6,6 +6,7 @@
 // turns it off.
 
 import { useRef, useState, type ReactNode } from "react";
+import { useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { Paid, TokenAmount } from "../../shared/rpc";
@@ -81,8 +82,9 @@ export function RecipientCard({
   onRemove: () => void;
   children: ReactNode;
 }) {
+  const t = useT();
   if (count === 1) return <>{children}</>;
-  const title = `Recipient ${index + 1}`;
+  const title = t("recipients.numbered", { number: index + 1 });
   const headId = `recipient-${index + 1}-title`;
   return (
     <section className="recipient" role="group" aria-labelledby={headId}>
@@ -91,8 +93,8 @@ export function RecipientCard({
         <button
           type="button"
           className="icon-button icon-button--small"
-          aria-label={`Take ${title.toLowerCase()} off`}
-          title="Take it off"
+          aria-label={t("recipients.takeOffWhat", { what: title.toLowerCase() })}
+          title={t("recipients.takeOff")}
           onClick={onRemove}
         >
           <CloseIcon size={14} />
@@ -105,23 +107,25 @@ export function RecipientCard({
 
 /** Add recipient, or the limit once it's reached. */
 export function AddRecipient({ count, onAdd }: { count: number; onAdd: () => void }) {
+  const t = useT();
   if (count >= MAX_RECIPIENTS) {
-    return <p className="note center">A payment pays at most {MAX_RECIPIENTS} recipients.</p>;
+    return <p className="note center">{t("recipients.atMost", { number: MAX_RECIPIENTS })}</p>;
   }
   return (
     <button type="button" className="secondary add-recipient" onClick={onAdd}>
       <PlusIcon size={16} />
-      Add recipient
+      {t("recipients.add")}
     </button>
   );
 }
 
 /** Under the recipients: when together they ask for more than there is. */
 export function TooMuchTogether({ total, available, testId, where }: { total: bigint; available: string; testId: string; where: string }) {
+  const t = useT();
   if (total <= BigInt(available)) return null;
   return (
     <p className="field-note" data-testid={testId}>
-      Together that's {formatAda(total.toString())} ₳, more than the {formatAda(available)} ₳ {where}.
+      {t("recipients.tooMuch", { total: formatAda(total.toString()), available: formatAda(available), where })}
     </p>
   );
 }
@@ -143,6 +147,7 @@ export function ReviewRecipients({
   /** The rows after them: fee, change, UTxOs spent. */
   children: ReactNode;
 }) {
+  const t = useT();
   if (payments.length === 1) {
     return (
       <ReviewRows testId={testId}>
@@ -158,13 +163,13 @@ export function ReviewRecipients({
       {payments.map((_, i) => (
         <section key={i} className="review-recipient" aria-labelledby={`${testId}-${i + 1}-title`}>
           <h3 id={`${testId}-${i + 1}-title`} className="review__caption">
-            Recipient {i + 1}
+            {t("recipients.nth", { number: i + 1 })}
           </h3>
           <ReviewRows testId={`${testId}-${i + 1}`}>{rows(i)}</ReviewRows>
         </section>
       ))}
       <ReviewRows testId={testId}>
-        <Row label="Total" value={adaWithTokens(lovelace, kinds)} strong />
+        <Row label={t("recipients.total")} value={adaWithTokens(lovelace, kinds)} strong />
         {children}
       </ReviewRows>
     </>

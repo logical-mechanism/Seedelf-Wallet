@@ -18,19 +18,22 @@
 // Koios all speak, so it can go straight into another tool.
 
 import { createContext, useContext, useId, useState } from "react";
+import { type I18nKey, t, useT } from "../../i18n";
 
 import type { TxPlutus } from "../../shared/rpc";
 import { CopyButton } from "./CopyButton";
 import { ChevronDownIcon, ChevronRightIcon } from "./Icons";
-import { formatQuantity, plural, shortHex } from "../format";
+import { formatQuantity, shortHex } from "../format";
 
 /**
  * How many of something, grouped: a datum can hold thousands of fields, and
  * "2,000 fields" reads where "2000 fields" doesn't. Through bigint, as every
  * number in this view is.
  */
-function count(n: number, word: string, many = `${word}s`): string {
-  return `${formatQuantity(String(n), 0)} ${n === 1 ? word : many}`;
+function count(n: number, key: I18nKey): string {
+  // `count` picks the form, `n` is what's shown: the separated number, not the
+  // raw one i18next would interpolate for `count`.
+  return t(key, { count: n, n: formatQuantity(String(n), 0) });
 }
 
 /**
@@ -68,11 +71,14 @@ function childrenOf(value: TxPlutus): TxPlutus[] {
 function labelOf(value: TxPlutus): string {
   switch (value.type) {
     case "constr":
-      return `Constructor ${value.constructorIndex} · ${count(value.fields.length, "field")}`;
+      return t("tx.plutus.constructor", {
+        index: value.constructorIndex,
+        fields: count(value.fields.length, "tx.plutus.fields"),
+      });
     case "list":
-      return count(value.items.length, "item");
+      return count(value.items.length, "tx.plutus.items");
     case "map":
-      return count(value.entries.length, "pair");
+      return count(value.entries.length, "tx.plutus.pairs");
     default:
       return "";
   }
@@ -128,20 +134,21 @@ function Node({ value, depth, name }: { value: TxPlutus; depth: number; name?: s
 
 /** A number, or bytes: the whole value is on the element, for copying and hover. */
 function Leaf({ value }: { value: TxPlutus }) {
+  const tr = useT();
   if (value.type === "int") {
     return <code className="plutus__leaf">{value.value}</code>;
   }
   if (value.type === "bytes") {
     const bytes = value.hex.length / 2;
     return (
-      <code className="plutus__leaf" data-value={value.hex} title={`${value.hex} (${plural(bytes, "byte")})`}>
+      <code className="plutus__leaf" data-value={value.hex} title={tr("tx.hexBytes", { hex: value.hex, count: bytes })}>
         {value.text ?? shortHex(value.hex, 20, 10)}
-        <span className="plutus__size"> {count(bytes, "byte")}</span>
+        <span className="plutus__size"> {count(bytes, "tx.plutus.bytes")}</span>
       </code>
     );
   }
   // A constructor, list or map with nothing in it.
-  return <span className="plutus__leaf note">{labelOf(value) || "empty"}</span>;
+  return <span className="plutus__leaf note">{labelOf(value) || tr("tx.plutus.empty")}</span>;
 }
 
 /**
@@ -183,13 +190,18 @@ export function PlutusTree({
   value: TxPlutus;
   testId?: string;
 }) {
+  const tr = useT();
   const [all, setAll] = useState<AllOf>({ generation: 0, open: false });
   const nodes = plutusNodes(value);
   return (
     <div className="plutus" data-testid={testId}>
       <div className="field-row">
         <span className="note">
-          {label}, {count(hex.length / 2, "byte")} · {count(nodes, "node")}
+          {tr("tx.plutus.summary", {
+            label,
+            bytes: count(hex.length / 2, "tx.plutus.bytes"),
+            nodes: count(nodes, "tx.plutus.nodes"),
+          })}
         </span>
         <span className="plutus__actions">
           <button
@@ -198,12 +210,12 @@ export function PlutusTree({
             onClick={() => setAll({ generation: all.generation + 1, open: !all.open })}
             data-testid={testId && `${testId}-all`}
           >
-            {all.open ? "Collapse all" : "Expand all"}
+            {tr(all.open ? "tx.collapseAll" : "tx.expandAll")}
           </button>
-          <CopyButton value={hex} label={`Copy the ${label.toLowerCase()} as CBOR`} what="CBOR" />
+          <CopyButton value={hex} label={tr("tx.copyAsCbor", { what: label.toLowerCase() })} what="CBOR" />
           <CopyButton
             value={JSON.stringify(plutusJson(value), null, 2)}
-            label={`Copy the ${label.toLowerCase()} as JSON`}
+            label={tr("tx.copyAsJson", { what: label.toLowerCase() })}
             what="JSON"
           />
         </span>

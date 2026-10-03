@@ -35,7 +35,7 @@ describe("a mix from the public account's first transaction, marked while it's s
     await t.wallet.unlock(PASSWORD);
 
     // It says the deposit may have gone through, and no mix from the account is built meanwhile.
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT, maybeSent: true });
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
     await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("may have gone through");
     expect((await t.lovejoin.status("preprod")).chains).toEqual([expect.objectContaining({ sent: 0, maybeSent: true })]);
 
@@ -66,7 +66,7 @@ describe("a mix from the public account's first transaction, marked while it's s
     };
     await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(/locked/i);
     await t.wallet.unlock(PASSWORD);
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT, maybeSent: true });
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
     await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("may have gone through");
     t.koios.confirmations = 1;
     // The page looks for it again after a while (PUBLIC_LOOK_MS).

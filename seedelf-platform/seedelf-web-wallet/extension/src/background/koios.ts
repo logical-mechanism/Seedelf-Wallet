@@ -3,6 +3,7 @@
 // (seedelf-koios `credential_utxos`). Results are paged 1000 rows at a time in
 // a fixed order, and rate limits or server errors are retried twice.
 
+import { t } from "../i18n";
 export interface KoiosAsset {
   policy_id: string;
   asset_name: string;
@@ -397,8 +398,7 @@ const chromeAllows: HostCheck = async (url) => {
 };
 
 /** Retrying can't help, and the wallet's page offers to ask Chrome again (App.tsx). */
-export const KOIOS_NOT_ALLOWED =
-  "Chrome isn't letting Seedelf Wallet reach Koios, where it reads Cardano. Press Ask Chrome again, at the top of the wallet, and allow it.";
+export const KOIOS_NOT_ALLOWED = () => t("koios.notAllowed");
 
 /**
  * A request that never got an answer. A timeout is Koios being slow, not the
@@ -409,15 +409,9 @@ export const KOIOS_NOT_ALLOWED =
 function unreachable(e: unknown): string {
   const cause = e instanceof Error ? e.message : String(e);
   if (e instanceof DOMException && e.name === "TimeoutError") {
-    return (
-      "Koios, the service the wallet reads Cardano from, didn't answer in time. " +
-      "It reads more on mainnet than on preprod, and its public tier is shared, so it can be slow. Press Refresh to try again."
-    );
+    return t("koios.timeout");
   }
-  return (
-    `Couldn't reach Koios, the service the wallet reads Cardano from (${cause}). ` +
-    "Check your internet connection, and any VPN or ad blocker that might block koios.rest."
-  );
+  return t("koios.unreachable", { cause });
 }
 
 /** An answer that isn't data. */
@@ -425,10 +419,10 @@ function koiosTrouble(status: number, path: string): string {
   if (status === 429) {
     // The public tier caps both a burst (100 every 10 seconds) and a day (5,000),
     // and answers 429 for either, so the words have to cover both.
-    return "Koios is limiting requests from your connection. The wallet has slowed down: wait a minute and try again. If it keeps happening, the public tier's daily limit may be used up, which clears the next day.";
+    return t("koios.rateLimited");
   }
-  if (status >= 500) return `Koios is having trouble right now (${status} for ${path}). Try again in a minute.`;
-  return `Koios refused the request (${status} for ${path}).`;
+  if (status >= 500) return t("koios.trouble", { status, path });
+  return t("koios.refused", { status, path });
 }
 
 /**
@@ -438,19 +432,19 @@ function koiosTrouble(status: number, path: string): string {
  */
 function stakingRefusal(text: string): string | undefined {
   if (text.includes("WithdrawalsNotInRewards")) {
-    return "Your staking rewards changed since you reviewed this: a new epoch may have paid more. Review it again.";
+    return t("koios.staking.rewardsChanged");
   }
   if (text.includes("NotDelegatedToDRep")) {
-    return "The network won't pay out rewards until your voting power is delegated. Delegate it on the Staking page, then try again.";
+    return t("koios.staking.notDelegated");
   }
   if (text.includes("DelegateeStakePoolNotRegistered")) {
-    return "That pool isn't registered any more: it may have retired. Choose another.";
+    return t("koios.staking.poolGone");
   }
   if (text.includes("DelegateeDRepNotRegistered")) {
-    return "That DRep isn't registered any more. Choose another, or always abstain.";
+    return t("koios.staking.drepGone");
   }
   if (/StakeKey(Not)?Registered|IncorrectDeposit|NonZeroRewardAccountBalance/.test(text)) {
-    return "Your account's staking changed since you reviewed this. Refresh, and review it again.";
+    return t("koios.staking.changed");
   }
   return undefined;
 }
@@ -595,7 +589,7 @@ export class Koios {
       undefined,
       "select=epoch_no,supply&order=epoch_no.desc&limit=1",
     );
-    if (!row) throw new KoiosError("Koios returned no totals.");
+    if (!row) throw new KoiosError(t("koios.noTotals"));
     return row.supply;
   }
 
@@ -617,7 +611,7 @@ export class Koios {
   /** The current epoch's protocol parameters: one `epoch_params` row, passed to WebAssembly as is. */
   async epochParams(): Promise<Record<string, unknown>> {
     const [row] = await this.request<Record<string, unknown>>("GET", "epoch_params", undefined, "limit=1");
-    if (!row) throw new KoiosError("Koios returned no protocol parameters.");
+    if (!row) throw new KoiosError(t("koios.noParams"));
     return row;
   }
 
@@ -655,7 +649,7 @@ export class Koios {
           signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
         });
       } catch (e) {
-        if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED);
+        if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED());
         throw new KoiosBusyError(unreachable(e));
       }
       // Koios's gateway answers a 429 before passing anything on, whatever its body.
@@ -674,7 +668,7 @@ export class Koios {
       // and the gateway likely picks another backend.
       if (!text.includes("TxSubmitConnectionError")) break;
       if (attempt === RETRY_DELAYS_MS.length) {
-        throw new KoiosError("Koios couldn't reach its Cardano node, so the transaction wasn't sent. Press Send again in a moment.");
+        throw new KoiosError(t("koios.nodeDown"));
       }
       await this.sleep(RETRY_DELAYS_MS[attempt]!);
     }
@@ -687,7 +681,7 @@ export class Koios {
     // through Lovejoin whose resend met it (found live, 2026-09-28).
     if (text.includes("BadInputsUTxO") || text.includes("All inputs are spent")) {
       throw new SpentInputError(
-        "The network refused it: a UTxO it spends is already spent, by a payment on its way or made elsewhere, or Koios showed an out-of-date view of the chain. Wait a minute and check Activity before you review it again.",
+        t("koios.spentInput"),
       );
     }
     const staking = stakingRefusal(text);
@@ -695,15 +689,15 @@ export class Koios {
     // The public account's transactions are valid for two hours from this device's clock (account.ts).
     if (text.includes("OutsideValidityIntervalUTxO")) {
       throw new KoiosError(
-        "The network refused it: its time to be sent had run out, or this device's clock is far off. Nothing was sent. Check the clock, then review it again.",
+        t("koios.outsideValidity"),
       );
     }
     if (text.includes("FeeTooSmallUTxO")) {
       throw new KoiosError(
-        "The network refused it: its fee is less than the network asks. Its fee settings may have changed since the review. Nothing was sent: review it again.",
+        t("koios.feeTooSmall"),
       );
     }
-    if (!response.ok) throw new KoiosError(`The network rejected the transaction: ${text.slice(0, 500)}`);
+    if (!response.ok) throw new KoiosError(t("koios.rejected", { why: text.slice(0, 500) }));
     let id: unknown;
     try {
       id = JSON.parse(text);
@@ -711,7 +705,7 @@ export class Koios {
       id = undefined;
     }
     // Taken, with an answer that isn't a transaction's id: it may well be on its way.
-    if (typeof id !== "string") throw new KoiosBusyError(`Koios took the transaction, and its answer couldn't be read (${text.slice(0, 100)}).`);
+    if (typeof id !== "string") throw new KoiosBusyError(t("koios.unreadableAnswer", { why: text.slice(0, 100) }));
     return id;
   }
 
@@ -732,7 +726,7 @@ export class Koios {
   /** The slot of the newest block Koios has. */
   async tipSlot(): Promise<number> {
     const [row] = await this.request<{ abs_slot?: unknown }>("GET", "tip", undefined);
-    if (typeof row?.abs_slot !== "number") throw new KoiosError("Koios returned no tip.");
+    if (typeof row?.abs_slot !== "number") throw new KoiosError(t("koios.noTip"));
     return row.abs_slot;
   }
 
@@ -805,7 +799,7 @@ export class Koios {
         if (response.ok || (answer400 && response.status === 400)) return (await response.json()) as R;
         failure = koiosTrouble(response.status, path);
       } catch (e) {
-        if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED);
+        if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED());
         slow = e instanceof DOMException && e.name === "TimeoutError";
         failure = unreachable(e);
       }

@@ -109,7 +109,7 @@ describe("a payment, before it goes to Koios", () => {
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
     expect(await spentSet(t.session)).toEqual(new Set(txInputs(t.koios.submitted[0]!)));
-    await expect(pay(t)).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(pay(t)).rejects.toThrow(MAYBE_SENT_WAIT());
     // It lands: new payments go ahead, and only the one went out.
     t.koios.confirmations = 1;
     await expect(pay(t)).resolves.toBeDefined();
@@ -125,7 +125,7 @@ describe("a payment, before it goes to Koios", () => {
 
     await t.wallet.unlock(PASSWORD);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
-    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     t.koios.confirmations = 1;
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: 1 });
     expect(await t.activity.seedelf("preprod")).toMatchObject([{ kind: "withdraw", txHash: summary.txHash }]);
@@ -139,7 +139,7 @@ describe("a payment, before it goes to Koios", () => {
     whileAsked(t, () => t.session.clear(), "timeout");
     await t.send.submit("preprod", summary.txHash).catch(() => undefined);
     await t.wallet.unlock(PASSWORD);
-    await expect(pay(t)).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(pay(t)).rejects.toThrow(MAYBE_SENT_WAIT());
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
   });
 
@@ -338,6 +338,6 @@ describe("a payment Koios answers with another transaction id", () => {
     expect((e as KoiosBusyError).maybeSent).toBe(true);
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: summary.txHash, maybeSent: true });
     expect(t.local.data.has(SEALED)).toBe(true);
-    await expect(pay(t)).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(pay(t)).rejects.toThrow(MAYBE_SENT_WAIT());
   });
 });

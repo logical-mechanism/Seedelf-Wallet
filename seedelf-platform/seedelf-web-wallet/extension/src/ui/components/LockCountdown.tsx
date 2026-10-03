@@ -7,6 +7,7 @@
 // off; at 0:00, asking locks it.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "../../i18n";
 
 import { call, stayUnlocked } from "../background";
 import { LockIcon } from "./Icons";
@@ -24,6 +25,7 @@ const clock = (ms: number) => {
 };
 
 export function LockCountdown() {
+  const t = useT();
   const [deadline, setDeadline] = useState<{ at: number | null; lockAfterMs: number }>();
   const [now, setNow] = useState(Date.now);
   const staying = useRef(false);
@@ -95,16 +97,16 @@ export function LockCountdown() {
 
   if (!near || left === undefined) return null;
   return (
-    <section className="callout callout--warn lock-countdown" role="timer" aria-label="Auto-lock" data-testid="lock-countdown">
+    <section className="callout callout--warn lock-countdown" role="timer" aria-label={t("lock.autoLock")} data-testid="lock-countdown">
       <span className="callout__icon">
         <LockIcon size={16} />
       </span>
       <div className="callout__body">
-        <strong className="lock-countdown__time">Locking in {clock(left)}</strong>
-        <div>Nothing has been clicked or typed for a while.</div>
+        <strong className="lock-countdown__time">{t("lock.lockingIn", { time: clock(left) })}</strong>
+        <div>{t("lock.idle")}</div>
       </div>
       <button type="button" className="chip lock-countdown__stay" onClick={stay} data-testid="lock-stay">
-        Stay unlocked
+        {t("lock.stayUnlocked")}
       </button>
     </section>
   );

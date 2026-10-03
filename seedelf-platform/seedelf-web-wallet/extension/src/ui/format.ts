@@ -1,6 +1,7 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
+import { t } from "../i18n";
 import {
   ALWAYS_ABSTAIN,
   ALWAYS_NO_CONFIDENCE,
@@ -33,7 +34,7 @@ const CIP67_LABELS = ["000643b0", "000de140", "0014df10", "001bc280"];
 
 /** A token's name for display: UTF-8 text when it reads as text, otherwise shortened hex. */
 export function tokenName(assetName: string): string {
-  if (!assetName) return "(no name)";
+  if (!assetName) return t("format.noName");
   const label = CIP67_LABELS.find((l) => assetName.startsWith(l));
   const body = label ? assetName.slice(8) : assetName;
   try {
@@ -93,10 +94,10 @@ export function shortHex(hex: string, head = 8, tail = 4): string {
 /** "just now", "12 s ago", "3 min ago", "2 h ago". */
 export function timeAgo(then: number, now: number): string {
   const s = Math.max(0, Math.round((now - then) / 1000));
-  if (s < 5) return "just now";
-  if (s < 60) return `${s} s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  return `${Math.floor(s / 3600)} h ago`;
+  if (s < 5) return t("format.justNow");
+  if (s < 60) return t("format.secondsAgo", { n: s });
+  if (s < 3600) return t("format.minutesAgo", { n: Math.floor(s / 60) });
+  return t("format.hoursAgo", { n: Math.floor(s / 3600) });
 }
 
 /** When something happened, in a list: "Today, 14:02", "Yesterday, 09:12", "23 Mar, 18:40", and the year if it isn't this one. */
@@ -104,10 +105,10 @@ export function whenOf(at: number, now: Date): string {
   const d = new Date(at);
   const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
-  if (days === 0) return `Today, ${time}`;
-  if (days === 1) return `Yesterday, ${time}`;
+  if (days === 0) return t("format.today", { time });
+  if (days === 1) return t("format.yesterday", { time });
   const year = d.getFullYear() === now.getFullYear() ? {} : ({ year: "numeric" } as const);
-  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year })}, ${time}`;
+  return t("format.dateAndTime", { date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year }), time });
 }
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
@@ -139,8 +140,13 @@ const DECIMAL_COMMA = /^\d+,\d{0,2}$/;
 /** Whole units grouped by commas only where they belong, or not at all: "1,234", "1234", never "1,23" or "0,500". */
 const WELL_GROUPED = /^(\d+|[1-9]\d{0,2}(,\d{3})+)$/;
 
-/** What an amount field says when a comma typed or pasted can't be a thousands separator. */
-export const COMMA_NOTE = "Use a point for decimals, like 12.5. A comma only groups thousands, like 1,000.";
+/**
+ * What an amount field says when a comma typed or pasted can't be a thousands
+ * separator. A function, not a constant: a module-level `t()` would be read
+ * when this file is first imported — before `main.tsx` has had a chance to put
+ * the wallet in the user's language — and would stay English for the session.
+ */
+export const commaNote = () => t("format.commaNote");
 
 /**
  * What an edit put into `previous` to make `typed`: where, and the text
@@ -192,7 +198,7 @@ export interface AmountRules {
  *   no point, one comma with fewer than three digits after it is the decimal
  *   point: "12,5" is 12.5, and "0,5" is 0.5, never 125 or 5. Otherwise it must
  *   group thousands where it belongs ("12,500"), or the edit is refused
- *   (`COMMA_NOTE`): a comma never just disappears.
+ *   (`commaNote`): a comma never just disappears.
  * - Decimal places past `decimals` are dropped, not rounded: the amount never
  *   grows.
  * - Anything that isn't a number, or is more than `max`, keeps the previous
@@ -218,8 +224,8 @@ export function sanitizeAmount(previous: string, typed: string, rules: AmountRul
   }
   if (text.startsWith(".")) text = `0${text}`;
   const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
-  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: commaTyped ? COMMA_NOTE : rules.notANumber };
-  if (commaTyped && !decimalComma && !WELL_GROUPED.test(match[1]!)) return { value: previous, note: COMMA_NOTE };
+  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: commaTyped ? commaNote() : rules.notANumber };
+  if (commaTyped && !decimalComma && !WELL_GROUPED.test(match[1]!)) return { value: previous, note: commaNote() };
   let fraction = match[2];
   let note: string | undefined;
   if (fraction !== undefined && fraction.length > rules.decimals) {
@@ -238,9 +244,15 @@ export function sanitizeAmount(previous: string, typed: string, rules: AmountRul
 export const ADA_RULES: AmountRules = {
   decimals: 6,
   max: MAX_SUPPLY_LOVELACE,
-  notANumber: "Enter an amount in ADA, like 25 or 12.5.",
-  tooPrecise: "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.",
-  tooMuch: "That's more than all the ADA there is: 45 billion ₳.",
+  get notANumber() {
+    return t("format.ada.notANumber");
+  },
+  get tooPrecise() {
+    return t("format.ada.tooPrecise");
+  },
+  get tooMuch() {
+    return t("format.ada.tooMuch");
+  },
 };
 
 /** `sanitizeAmount` with ADA's rules. */
@@ -285,14 +297,17 @@ export function deleteBesideComma(
   return { text: typed, caret };
 }
 
-/** "1 UTxO", "3 UTxOs"; `many` for irregular plurals. */
-export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
+// `plural()` lived here until chunk 19. It took the noun as an English string
+// ("1 UTxO", "3 UTxOs"), so every call was display text no locale file could
+// reach — and because its arguments are bare lowercase words, the scan that
+// found the rest of the strings walked straight past them. Use a plural key
+// instead: `t("amount.utxos", { count: n })`, or, where the number is formatted,
+// a key with `{{n}}` shown and `count` only choosing the form (PlutusTree's
+// `count()` does that). Its absence is what stops the pattern coming back.
 
 /** An ADA amount, and how many tokens come with it: "22.7 ₳ and 1 token". */
 export function adaWithTokens(lovelace: string, tokens: number): string {
-  return tokens ? `${formatAda(lovelace)} ₳ and ${plural(tokens, "token")}` : `${formatAda(lovelace)} ₳`;
+  return tokens ? t("format.adaAndTokens", { ada: formatAda(lovelace), count: tokens }) : `${formatAda(lovelace)} ₳`;
 }
 
 /** A token's key in maps and React lists: `policy.name`. */
@@ -311,7 +326,7 @@ export function unlocked<S extends { lovelace: string; tokens: TokenAmount[]; ut
 
 /** " · 5 ₳ locked" when some of a balance side is locked, for a form's line under its title. */
 export function lockedAside(side: { locked: Locked }): string {
-  return side.locked.utxos ? ` · ${formatAda(side.locked.lovelace)} ₳ locked` : "";
+  return side.locked.utxos ? t("home.lockedMeta", { amount: formatAda(side.locked.lovelace) }) : "";
 }
 
 /** A percentage to at most two places: "18.79%", "2%". */
@@ -338,7 +353,7 @@ export function withRewards<S extends { lovelace: string }>(side: S, rewards: bi
 
 /** ", with 57.47 ₳ of rewards" after what a form can pay, when rewards ride along. */
 export function rewardsAside(rewards?: string): string {
-  return rewards ? `, with ${formatAda(rewards)} ₳ of rewards` : "";
+  return rewards ? t("format.withRewards", { amount: formatAda(rewards) }) : "";
 }
 
 /**
@@ -355,9 +370,9 @@ export function poolLabel(pool: PoolRef): string {
 
 /** Where the vote goes, in words: a pinned choice, the DRep's name or shortened ID, or nowhere. */
 export function voteLabel(drep: string | null, name?: string): string {
-  if (!drep) return "Not delegated";
-  if (drep === ALWAYS_ABSTAIN) return "Always abstain";
-  if (drep === ALWAYS_NO_CONFIDENCE) return "Always no confidence";
+  if (!drep) return t("format.vote.notDelegated");
+  if (drep === ALWAYS_ABSTAIN) return t("format.vote.abstain");
+  if (drep === ALWAYS_NO_CONFIDENCE) return t("format.vote.noConfidence");
   return name ?? shortId(drep);
 }
 

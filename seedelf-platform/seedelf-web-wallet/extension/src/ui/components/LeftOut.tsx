@@ -5,35 +5,37 @@
 // nor one a return through Lovejoin still being sent spends (final review
 // lovejoin-3). Without this, "everything" would quietly not be.
 
+import { useT, type I18nKey } from "../../i18n";
 import type { LeftOutUtxo } from "../../shared/rpc";
-import { plural, shortHex } from "../format";
+import { shortHex } from "../format";
 import { Callout } from "./Callout";
 
 /** Why a UTxO was left out, after its outpoint. */
-export function leftOutReason(reason: LeftOutUtxo["reason"]): string {
-  if (reason === "tokens") return "comes with a later payment";
-  if (reason === "returning") return "waits for a return through Lovejoin that's still being sent, which adds to it";
-  return "holds a reference script the wallet can't spend";
+export function leftOutReasonKey(reason: LeftOutUtxo["reason"]): I18nKey {
+  if (reason === "tokens") return "leftOut.reason.tokens";
+  if (reason === "returning") return "leftOut.reason.returning";
+  return "leftOut.reason.script";
 }
 
 /** Max's review: each UTxO it left out, and why; nothing when it took them all. */
 export function LeftOutNote({ leftOut, testId }: { leftOut?: LeftOutUtxo[]; testId: string }) {
+  const t = useT();
   if (!leftOut?.length) return null;
   const tokens = leftOut.some((u) => u.reason === "tokens");
   return (
     <Callout tone="info" testId={testId}>
-      Max leaves {plural(leftOut.length, "UTxO")} where {leftOut.length === 1 ? "it is" : "they are"}:
+      {t("leftOut.leaves", { count: leftOut.length })}
       <ul className="dapp-points left-out">
         {leftOut.map((u) => (
           <li key={`${u.txHash}#${u.txIndex}`}>
             <code>
               {shortHex(u.txHash, 8, 4)}#{u.txIndex}
             </code>{" "}
-            {leftOutReason(u.reason)}
+            {t(leftOutReasonKey(u.reason))}
           </li>
         ))}
       </ul>
-      {tokens && "A token it holds would add up to more with the rest than one output can hold, so it waits for the next payment."}
+      {tokens && t("leftOut.tokensWait")}
     </Callout>
   );
 }

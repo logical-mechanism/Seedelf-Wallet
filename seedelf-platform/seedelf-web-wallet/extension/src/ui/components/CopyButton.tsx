@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useT } from "../../i18n";
 
 import { CheckIcon, CopyIcon } from "./Icons";
 
@@ -9,6 +10,7 @@ import { CheckIcon, CopyIcon } from "./Icons";
  */
 export function CopyButton({ value, label, what }: { value: string; label?: string; what?: string }) {
   const [copied, setCopied] = useState(false);
+  const t = useT();
   return (
     <button
       type="button"
@@ -22,7 +24,7 @@ export function CopyButton({ value, label, what }: { value: string; label?: stri
       }}
     >
       {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-      {copied ? "Copied" : (what ?? "Copy")}
+      {copied ? t("common.copied") : (what ?? t("common.copy"))}
     </button>
   );
 }

@@ -26,6 +26,7 @@
 // its transaction left in the private balance (`origin`), and coin selection
 // keeps different ones apart. It's read from the device alone.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import {
   boxFrom,
@@ -136,7 +137,8 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
 /** Who was paid: the one, or the first and how many more. */
-const several = (names: string[]) => (names.length > 1 ? `${names[0]} and ${names.length - 1} more` : names[0]);
+const several = (names: string[]) =>
+  names.length > 1 ? t("activity.andMore", { first: names[0], count: names.length - 1 }) : names[0];
 const feeOf = (fee: unknown) => (typeof fee === "string" ? fee : (fee as { total?: string } | undefined)?.total);
 
 export interface ActivityDeps {
@@ -199,7 +201,7 @@ export class ActivityService {
       ...(assets.length ? { assets } : {}),
     };
     // A session is shown by its number, from 1; its address says nothing to the user.
-    const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
+    const session = typeof s.index === "number" ? t("claim.session", { number: s.index + 1 }) : undefined;
     // What it leaves in the private balance: the history its review worked out (the inputs' own; a session's
     // funding's, with the session's), or a session's funding change and return, which are that session's.
     const origin: HistoryClass | undefined =
@@ -347,7 +349,7 @@ export class ActivityService {
           await session.get<AccountPages>(key),
         ] as const,
     );
-    if (!account) throw new Error("Read the balances first: open Home, then Activity.");
+    if (!account) throw new Error(t("worker.activity.readFirst"));
     const { stake } = account;
     const koios = this.deps.koios(network);
     const ours = accountMatcher(account);

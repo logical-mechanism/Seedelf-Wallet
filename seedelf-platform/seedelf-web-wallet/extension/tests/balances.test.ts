@@ -215,8 +215,8 @@ describe("a reading too large to keep", () => {
     expect(kept(t)).toEqual([]);
     expect(await t.balances.lastRead("preprod")).toBeUndefined();
     // The UTxOs and collateral screens say why they can't list them, rather than showing none.
-    await expect(t.coins.lists("preprod")).rejects.toThrow(TOO_LARGE);
-    await expect(t.coins.collateral("preprod")).rejects.toThrow(TOO_LARGE);
+    await expect(t.coins.lists("preprod")).rejects.toThrow(TOO_LARGE());
+    await expect(t.coins.collateral("preprod")).rejects.toThrow(TOO_LARGE());
 
     // Asked again, it reads again; after a lock and an unlock too.
     const calls = t.koios.calls.length;
@@ -245,7 +245,7 @@ describe("a reading too large to keep", () => {
     expect(kept(t)).toEqual([]);
     // Activity's addresses are kept: they're small, and go first.
     expect(t.session.data.has(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`)).toBe(true);
-    await expect(t.coins.lists("preprod")).rejects.toThrow(TOO_LARGE);
+    await expect(t.coins.lists("preprod")).rejects.toThrow(TOO_LARGE());
 
     await t.wallet.lock();
     await t.wallet.unlock(PASSWORD);

@@ -10,11 +10,13 @@
 // something of that account's is still on its way, and the refusal says so.
 
 import { useState } from "react";
+import { useT } from "../../i18n";
 
 import { useAccounts } from "../accounts";
 import { call } from "../background";
 
 export function AccountPicker() {
+  const t = useT();
   const { accounts, active, several, name, reload } = useAccounts();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -36,12 +38,12 @@ export function AccountPicker() {
   return (
     <div className="account-picker" data-testid="account-picker">
       <label className="sr-only" htmlFor="account-select">
-        Public account
+        {t("accountPicker.label")}
       </label>
       <select
         id="account-select"
-        aria-label="Public account"
-        title={`Working on ${name}`}
+        aria-label={t("accountPicker.label")}
+        title={t("accountPicker.workingOn", { name })}
         value={active}
         disabled={busy}
         onChange={(e) => {
@@ -51,7 +53,7 @@ export function AccountPicker() {
       >
         {accounts.map((a) => (
           <option key={a.index} value={a.index}>
-            {a.name?.trim() || `Account ${a.index + 1}`}
+            {a.name?.trim() || t("accountPicker.numbered", { number: a.index + 1 })}
           </option>
         ))}
       </select>

@@ -3,6 +3,7 @@
 // component's state.
 
 import { useState } from "react";
+import { useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
@@ -15,6 +16,7 @@ const blank = (n: number) => Array<string>(n).fill("");
 export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: Status) => void }) {
   const [count, setCount] = useState<WordCount>(24);
   const [words, setWords] = useState<string[]>(blank(24));
+  const t = useT();
   const [step, setStep] = useState<"phrase" | "password">("phrase");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -53,29 +55,27 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
 
   if (step === "password") {
     return (
-      <Screen title="Set a password" titleId="restore-title" onBack={() => setStep("phrase")} aside="Step 2 of 2" error={error}>
-        <SetPassword submitLabel="Restore wallet" busy={busy} onSubmit={restore} />
+      <Screen title={t("password.setTitle")} titleId="restore-title" onBack={() => setStep("phrase")} aside={t("restore.step2")} error={error}>
+        <SetPassword submitLabel={t("restore.restoreWallet")} busy={busy} onSubmit={restore} />
       </Screen>
     );
   }
 
   return (
     <Screen
-      title="Restore a wallet"
+      title={t("restore.title")}
       titleId="restore-title"
       onBack={onBack}
-      aside="Step 1 of 2"
+      aside={t("restore.step1")}
       error={error}
       foot={
         <button className="primary" disabled={busy || words.some((w) => !w)} onClick={checkPhrase}>
-          Continue
+          {t("common.continue")}
         </button>
       }
     >
-      <p className="note">
-        Enter your recovery phrase. A phrase from Lace, Eternl or Yoroi also works: its first account becomes this wallet's public account.
-      </p>
-      <div className="segmented" role="radiogroup" aria-label="Number of words">
+      <p className="note">{t("restore.note")}</p>
+      <div className="segmented" role="radiogroup" aria-label={t("restore.wordCount")}>
         {WORD_COUNTS.map((n) => (
           <button
             key={n}
@@ -85,12 +85,12 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
             className={n === count ? "segmented__item segmented__item--on" : "segmented__item"}
             onClick={() => changeCount(n)}
           >
-            {n} words
+            {t("restore.words", { number: n })}
           </button>
         ))}
       </div>
       <PhraseInput words={words} onChange={setWords} onCountChange={changeCount} />
-      <p className="note">Tip: paste the whole phrase into any box.</p>
+      <p className="note">{t("restore.pasteTip")}</p>
     </Screen>
   );
 }

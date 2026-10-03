@@ -2,6 +2,7 @@
 // 5eed0e1f prefix. Tags aren't unique (anyone can mint "alice"), so a
 // seedelf is only ever paid by its full name.
 
+import { t } from "../i18n";
 /** The seedelf token-name prefix (lib/token_name.ak). */
 export const SEEDELF_PREFIX = "5eed0e1f";
 
@@ -13,10 +14,10 @@ export function seedelfName(input: string): string | undefined {
   return NAME.test(name) ? name : undefined;
 }
 
-export const SEEDELF_NAME_RULE = "A Seedelf's name is 64 hex characters starting 5eed0e1f.";
+export const SEEDELF_NAME_RULE = () => t("shared.seedelf.nameRule");
 
 /** Send from the public account pays someone else's seedelf; paying your own is Make private (a move-in). */
-export const OWN_SEEDELF_FROM_ACCOUNT = "That Seedelf is yours. To put money into your private balance, use Make private.";
+export const OWN_SEEDELF_FROM_ACCOUNT = () => t("shared.seedelf.ownFromAccount");
 
 /** Make public (withdraw) pays an address; a seedelf is paid by Send. */
-export const SEEDELF_NOT_AN_ADDRESS = "That's a Seedelf's name. Make public pays a Cardano address; Send pays a Seedelf.";
+export const SEEDELF_NOT_AN_ADDRESS = () => t("shared.seedelf.notAnAddress");

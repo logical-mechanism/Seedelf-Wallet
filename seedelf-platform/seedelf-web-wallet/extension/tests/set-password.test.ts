@@ -22,4 +22,21 @@ describe("the new-password form", () => {
       expect(input).toContain('autocapitalize="off"');
     }
   });
+
+  // Both default their first box's label, and chunk 19 broke that: moving
+  // "Password" into a key dropped the default parameter that supplied it, so
+  // the label rendered empty. Every unit test still passed; six e2e tests,
+  // which find the box by its label, did not.
+  it("labels its box even when the caller names none", () => {
+    const label = (html: string) => html.match(/<label[^>]*>([^<]*)<\/label>/)?.[1] ?? "";
+    expect(label(renderToStaticMarkup(createElement(SetPassword, { submitLabel: "Create", busy: false, onSubmit: () => undefined })))).toBe("Password");
+    expect(label(renderToStaticMarkup(createElement(PasswordField, { id: "password", value: "", onChange: () => undefined })))).toBe("Password");
+  });
+
+  it("uses the caller's label when there is one", () => {
+    const html = renderToStaticMarkup(
+      createElement(SetPassword, { submitLabel: "Change", busy: false, onSubmit: () => undefined, label: "New password" }),
+    );
+    expect(html).toContain(">New password<");
+  });
 });

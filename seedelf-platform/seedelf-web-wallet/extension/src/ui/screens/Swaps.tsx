@@ -20,6 +20,7 @@
 // wallet asks Minswap for; Minswap builds the order (#21).
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { type I18nKey, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type {
@@ -88,7 +89,6 @@ import {
   formatPercent,
   formatQuantity,
   parseQuantity,
-  plural,
   sanitizeAmount,
   shortHex,
   tokenKey,
@@ -158,25 +158,25 @@ function sidesOf(network: NetworkName, s: SessionView): { pay: Pick; get: Pick }
 /** A session's swap in a line: "10 ₳ → MIN", "906.5941 MIN → ADA". */
 export function pairOf(s: SessionView, network: NetworkName): string {
   const sides = sidesOf(network, s);
-  if (!s.swap || !sides) return "A swap";
+  if (!s.swap || !sides) return t("swaps.aSwap");
   return `${amountOf(s.swap.amount, sides.pay)} → ${nameOf(sides.get)}`;
 }
 
-const STAGE: Record<SessionView["stage"], string> = {
-  funding: "Being funded",
-  open: "Open",
-  returning: "Coming back",
-  closed: "Done",
-  failed: "Its funding didn't go through",
+const STAGE: Record<SessionView["stage"], I18nKey> = {
+  funding: "swaps.stage.funding",
+  open: "swaps.stage.open",
+  returning: "swaps.stage.returning",
+  closed: "swaps.stage.done",
+  failed: "swaps.stage.failed",
 };
 
-const STEP: Record<SessionAuto["step"], string> = {
-  funding: "Being funded",
-  ordering: "Placing the order",
-  filling: "Waiting for the fill",
-  cancelling: "Cancelling",
-  returning: "Coming back",
-  done: "Done",
+const STEP: Record<SessionAuto["step"], I18nKey> = {
+  funding: "swaps.stage.funding",
+  ordering: "swaps.step.ordering",
+  filling: "swaps.step.filling",
+  cancelling: "swaps.step.cancelling",
+  returning: "swaps.stage.returning",
+  done: "swaps.stage.done",
 };
 
 /**
@@ -200,40 +200,44 @@ export type SwapTone = "live" | "wait" | "done" | "off" | "bad";
 /** A session's tag: a word or two, in its tone. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   // A funding the chain hasn't shown may still land: it waits on the user's Try again or Forget it.
-  if (s.stage === "failed") return s.unsent || !s.auto ? { tone: "bad", label: "Failed" } : { tone: "wait", label: "Not seen" };
+  if (s.stage === "failed") {
+    return s.unsent || !s.auto ? { tone: "bad", label: t("swaps.tag.failed") } : { tone: "wait", label: t("swaps.tag.notSeen") };
+  }
   const a = s.auto;
   if (!a) {
     // From before: every step after the funding is the user's.
-    if (s.stage === "closed") return { tone: "done", label: "Done" };
-    return s.stage === "open" ? { tone: "wait", label: "Open" } : { tone: "live", label: "Running" };
+    if (s.stage === "closed") return { tone: "done", label: t("swaps.tag.done") };
+    return s.stage === "open"
+      ? { tone: "wait", label: t("swaps.tag.open") }
+      : { tone: "live", label: t("swaps.tag.running") };
   }
   if (a.step === "done") {
     // A refunded order isn't a swap done (independent review M18).
-    if (a.refunded) return { tone: "off", label: "Refunded" };
-    if (a.partly) return { tone: "done", label: "Partly filled" };
-    return a.filled ? { tone: "done", label: "Done" } : { tone: "off", label: "Stopped" };
+    if (a.refunded) return { tone: "off", label: t("swaps.tag.refunded") };
+    if (a.partly) return { tone: "done", label: t("swaps.tag.partly") };
+    return a.filled ? { tone: "done", label: t("swaps.tag.done") } : { tone: "off", label: t("swaps.tag.stopped") };
   }
-  if (a.paused) return { tone: "wait", label: "Needs you" };
-  if (a.retry) return { tone: "wait", label: "Retrying" };
+  if (a.paused) return { tone: "wait", label: t("swaps.tag.needsYou") };
+  if (a.retry) return { tone: "wait", label: t("swaps.tag.retrying") };
   // Stopped, and waiting on an order it can't cancel yet: neither done nor an error (independent review L16).
-  if (a.orderOpen !== undefined) return { tone: "off", label: "Order open" };
-  return { tone: "live", label: a.stopping ? "Stopping" : "Running" };
+  if (a.orderOpen !== undefined) return { tone: "off", label: t("swaps.tag.orderOpen") };
+  return { tone: "live", label: t(a.stopping ? "swaps.tag.stopping" : "swaps.tag.running") };
 }
 
-const PAUSED: Record<SessionPause["why"], string> = {
-  price: "The price moved",
-  refused: "Refused Minswap's build",
+const PAUSED: Record<SessionPause["why"], I18nKey> = {
+  price: "swaps.paused.price",
+  refused: "swaps.paused.refused",
 };
 
 /** A session's second line: what it's doing while it runs (its tag says if it's stopping), or when it ran. */
 function subOf(s: SessionView, now: number): string {
   if (isOver(s)) return whenOf(s.createdAt, new Date(now));
-  if (!s.auto) return s.stage === "open" ? "Its next step is yours" : STAGE[s.stage];
-  if (fundingUnseen(s)) return "Its funding hasn't shown up yet";
-  if (s.auto.paused) return PAUSED[s.auto.paused.why];
-  if (s.auto.orderOpen !== undefined) return "An order is still open at a DEX";
+  if (!s.auto) return t(s.stage === "open" ? "swaps.sub.nextIsYours" : STAGE[s.stage]);
+  if (fundingUnseen(s)) return t("swaps.sub.fundingUnseen");
+  if (s.auto.paused) return t(PAUSED[s.auto.paused.why]);
+  if (s.auto.orderOpen !== undefined) return t("swaps.sub.orderOpen");
   // Stopped before its order: it comes back rather than place one.
-  return STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step];
+  return t(STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step]);
 }
 
 /** A swap's state as a small pill: a live dot, a tick, a warning, a stop, or a cross. */
@@ -323,6 +327,7 @@ export function Swaps({
   /** A funding payment was sent: Home's banner watches it. */
   onPending: (pending: PendingTx) => void;
 }) {
+  const tr = useT();
   const [sessions, setSessions] = useState<SessionView[]>();
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [reading, setReading] = useState(false);
@@ -379,7 +384,7 @@ export function Swaps({
     );
   }
 
-  const noFunds = seedelf.utxos === 0 ? "Make some ADA private first: a swap is paid from your private balance" : undefined;
+  const noFunds = seedelf.utxos === 0 ? tr("swaps.noFunds") : undefined;
   const running = sessions?.filter((s) => !isOver(s)) ?? [];
   const over = sessions?.filter(isOver) ?? [];
   return (
@@ -387,7 +392,7 @@ export function Swaps({
       title="Minswap"
       titleId="swaps-title"
       onBack={onBack}
-      aside="Swaps, each from a one-time account"
+      aside={tr("swaps.aside")}
       error={error}
       foot={
         <button
@@ -397,27 +402,23 @@ export function Swaps({
           disabled={!!(blocked ?? noFunds)}
           title={blocked ?? noFunds}
         >
-          New swap
+          {tr("swaps.new")}
         </button>
       }
     >
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load(true)} />
       {sessions?.length === 0 && (
         <p className="note center empty" data-testid="swaps-empty">
-          No swaps yet.
+          {tr("swaps.empty")}
         </p>
       )}
       {!!sessions?.length && (
         <div className="stack" data-testid="swaps">
-          {running.length > 0 && <SwapList title="In progress" sessions={running} onOpen={setOpen} />}
-          {over.length > 0 && <SwapList title="Past swaps" sessions={over} onOpen={setOpen} />}
+          {running.length > 0 && <SwapList title={tr("swaps.inProgress")} sessions={running} onOpen={setOpen} />}
+          {over.length > 0 && <SwapList title={tr("swaps.past")} sessions={over} onOpen={setOpen} />}
         </div>
       )}
-      <Callout tone="privacy">
-        Each swap runs from a new one-time account, funded from your private balance, so your public account isn't in its
-        transactions. Anyone can follow the money through the one-time account back into your private balance, and money
-        you made private yourself leads on to your public account; the amounts and times tie the two ends together.
-      </Callout>
+      <Callout tone="privacy">{tr("swaps.privacy.oneTime")}</Callout>
     </Screen>
   );
 }
@@ -453,7 +454,7 @@ function ownPicks(network: NetworkName, seedelf: Balances["seedelf"]): OwnPick[]
     "name",
   ).filter((v) => !v.nft);
   return [
-    { ...ADA_PICK, sub: "Cardano", held: seedelf.lovelace, listed: true },
+    { ...ADA_PICK, sub: t("swaps.cardano"), held: seedelf.lovelace, listed: true },
     ...views.map((v) => {
       const text = tokenText(network, v.token);
       const mark = tokenMark(text);
@@ -475,11 +476,11 @@ function rulesFor(p: Pick): AmountRules {
   return {
     decimals,
     max: TOKEN_MAX,
-    notANumber: decimals ? "Enter an amount, like 25 or 12.5." : "Enter a whole number, like 25.",
+    notANumber: t(decimals ? "swaps.rules.notANumber" : "swaps.rules.notAWholeNumber"),
     tooPrecise: decimals
-      ? `${label} has at most ${decimals} decimal places, so the extra digits were dropped.`
-      : `${label} comes in whole units, so the decimals were dropped.`,
-    tooMuch: `That's more ${label} than there can be.`,
+      ? t("swaps.rules.tooPrecise", { token: label, count: decimals })
+      : t("swaps.rules.wholeUnits", { token: label }),
+    tooMuch: t("swaps.rules.tooMuch", { token: label }),
   };
 }
 
@@ -509,11 +510,12 @@ function SwapAvatar({ pick }: { pick: Pick }) {
 
 /** A card's token: its logo, name and a chevron, or Select token. Opens the picker. */
 function TokenButton({ pick, what, testId, onClick }: { pick?: Pick; what: string; testId: string; onClick: () => void }) {
+  const tr = useT();
   if (!pick) {
     return (
       <button type="button" className="swap-token swap-token--empty" onClick={onClick} aria-haspopup="dialog" data-testid={testId}>
         <PlusIcon size={16} />
-        Select token
+        {tr("swaps.selectToken")}
         <ChevronDownIcon size={16} />
       </button>
     );
@@ -524,8 +526,8 @@ function TokenButton({ pick, what, testId, onClick }: { pick?: Pick; what: strin
       className="swap-token"
       onClick={onClick}
       aria-haspopup="dialog"
-      aria-label={`${nameOf(pick)}: change ${what}`}
-      title={`Change ${what}`}
+      aria-label={tr("swaps.changeTokenLabel", { token: nameOf(pick), what })}
+      title={tr("swaps.changeToken", { what })}
       data-testid={testId}
     >
       <SwapAvatar pick={pick} />
@@ -555,6 +557,7 @@ export function NewSwap({
   /** The funding was sent: session `index` runs from here. */
   onStarted: (index: number, pending: PendingTx) => void;
 }) {
+  const tr = useT();
   const [pay, setPay] = useState<Pick>(ADA_PICK);
   const [get, setGet] = useState<Pick>();
   const [amount, setAmount] = useState("");
@@ -700,15 +703,15 @@ export function NewSwap({
   if (out && get) {
     return (
       <Screen
-        title="Review the swap"
+        title={tr("swaps.review.title")}
         titleId="swap-fund-review"
         onBack={() => setOut(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={tr("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? tr("common.sending") : tr("common.send")}
           </button>
         }
       >
@@ -722,36 +725,36 @@ export function NewSwap({
   const fiat = (id: string, quantity?: string) =>
     id === "lovelace" && quantity && quantity !== "0" && price ? `≈ ${formatFiat(quantity, price)}` : "";
   const cta = !get
-    ? "Select a token"
+    ? tr("swaps.cta.selectToken")
     : !raw || raw === "0"
-      ? "Enter an amount"
+      ? tr("swaps.cta.enterAmount")
       : tooMuch
-        ? `Not enough ${nameOf(pay)}`
+        ? tr("swaps.cta.notEnough", { token: nameOf(pay) })
         : !current
-          ? "Getting a quote…"
+          ? tr("swaps.cta.quoting")
           : unverified
-            ? "Not verified by Minswap"
+            ? tr("swaps.cta.unverified")
             : short
-              ? "Not enough ADA"
+              ? tr("swaps.cta.notEnoughAda")
               : busy
-                ? "Building…"
-                : "Review swap";
+                ? tr("common.building")
+                : tr("swaps.cta.review");
 
   return (
     <Screen
       onSubmit={review}
-      title="Swap"
+      title={tr("swaps.form.title")}
       titleId="swap-title"
       onBack={onCancel}
       backDisabled={busy}
-      aside="Through Minswap, from a one-time account"
+      aside={tr("swaps.form.aside")}
       action={
         <button
           type="button"
           className="icon-button"
           onClick={() => setSettings(true)}
-          aria-label={`Slippage: ${formatPercent(slippage)}`}
-          title="Slippage"
+          aria-label={tr("swaps.slippageIs", { percent: formatPercent(slippage) })}
+          title={tr("swaps.slippage")}
         >
           <SlidersIcon />
         </button>
@@ -760,7 +763,7 @@ export function NewSwap({
       foot={
         quoteError && !error ? (
           <button type="button" className="primary" onClick={() => setAgain((n) => n + 1)}>
-            Try again
+            {tr("common.tryAgain")}
           </button>
         ) : (
           <button type="submit" className="primary" disabled={!ready || busy}>
@@ -772,33 +775,33 @@ export function NewSwap({
       <div className="swap-cards">
         <div className="swap-card">
           <div className="swap-card__head">
-            <label htmlFor="swap-amount">You pay</label>
+            <label htmlFor="swap-amount">{tr("swaps.youPay")}</label>
             <span className="swap-card__quick">
               <button
                 type="button"
                 className="link"
                 onClick={() => fill(half)}
                 disabled={half === "0"}
-                aria-label={`Half of your ${nameOf(pay)}`}
-                title={pay.side.decimals ? "Half, in whole units" : "Half"}
+                aria-label={tr("swaps.halfOf", { token: nameOf(pay) })}
+                title={tr(pay.side.decimals ? "swaps.halfWhole" : "swaps.half")}
               >
-                Half
+                {tr("swaps.half")}
               </button>
               <button
                 type="button"
                 className="link"
                 onClick={() => fill(max)}
                 disabled={max === "0"}
-                aria-label={`As much ${nameOf(pay)} as a swap can take`}
+                aria-label={tr("swaps.maxOf", { token: nameOf(pay) })}
                 title={
                   pay.id === "lovelace"
-                    ? "All but what's under 1 ₳, less the swap's costs and the collateral"
+                    ? tr("swaps.maxAda")
                     : pay.side.decimals
-                      ? `All but what's under 1 ${pay.side.label}`
-                      : "All of it"
+                      ? tr("swaps.maxToken", { token: pay.side.label })
+                      : tr("swaps.maxAll")
                 }
               >
-                Max
+                {tr("swaps.max")}
               </button>
             </span>
           </div>
@@ -816,13 +819,13 @@ export function NewSwap({
               aria-invalid={tooMuch || undefined}
               autoFocus
             />
-            <TokenButton pick={pay} what="the token you pay with" testId="swap-from" onClick={() => setPicking("pay")} />
+            <TokenButton pick={pay} what={tr("swaps.what.pay")} testId="swap-from" onClick={() => setPicking("pay")} />
           </div>
           <div className="swap-card__foot">
             <span>{fiat(pay.id, raw)}</span>
             <span
               className={tooMuch ? "swap-card__held swap-card__held--short" : "swap-card__held"}
-              title="In your private balance"
+              title={tr("swaps.inPrivate")}
               data-testid="swap-held"
             >
               <WalletIcon size={14} />
@@ -835,15 +838,15 @@ export function NewSwap({
           className="swap-flip"
           onClick={flip}
           disabled={!get}
-          aria-label="Switch what you pay and what you receive"
-          title="Switch them"
+          aria-label={tr("swaps.switchLabel")}
+          title={tr("swaps.switch")}
         >
           <ArrowDownIcon size={18} />
         </button>
         <div className="swap-card">
           <div className="swap-card__head">
             <span className="label" id="swap-out-label">
-              You receive
+              {tr("swaps.youReceive")}
             </span>
           </div>
           <div className="swap-card__main">
@@ -855,12 +858,12 @@ export function NewSwap({
             >
               {outText || "0.0"}
             </output>
-            <TokenButton pick={get} what="the token you receive" testId="swap-to" onClick={() => setPicking("get")} />
+            <TokenButton pick={get} what={tr("swaps.what.get")} testId="swap-to" onClick={() => setPicking("get")} />
           </div>
           <div className="swap-card__foot">
             <span>{get && fiat(get.id, shown?.amountOut)}</span>
             {get && (
-              <span className="swap-card__held" title="In your private balance">
+              <span className="swap-card__held" title={tr("swaps.inPrivate")}>
                 <WalletIcon size={14} />
                 {formatQuantity(heldOf(seedelf, get.id), get.side.decimals)}
               </span>
@@ -871,15 +874,17 @@ export function NewSwap({
       {note && <p className="field-note">{note}</p>}
       {tooMuch && (
         <p className="field-note" data-testid="swap-short">
-          That's more than the {amountOf(held, pay)} in your private balance.
+          {tr("swaps.tooMuch", { held: amountOf(held, pay) })}
         </p>
       )}
       {unverified && get && <Unverified pick={get} />}
       {short && current && (
         <p className="field-note" data-testid="swap-short">
-          Not enough ADA: the swap takes {formatAda(current.fund.lovelace)} ₳ with its costs, and the one-time account{" "}
-          {formatAda(current.collateral)} ₳ of collateral, which comes back. Your private balance has{" "}
-          {formatAda(seedelf.lovelace)} ₳.
+          {tr("swaps.short", {
+            takes: formatAda(current.fund.lovelace),
+            collateral: formatAda(current.collateral),
+            held: formatAda(seedelf.lovelace),
+          })}
         </p>
       )}
       {shown && get && (
@@ -889,23 +894,33 @@ export function NewSwap({
               type="button"
               className="swap-rate__text"
               onClick={() => setInverted(!inverted)}
-              title="Turn the rate around"
+              title={tr("swaps.turnRate")}
               data-testid="swap-rate"
             >
               {inverted
-                ? `1 ${nameOf(get)} ≈ ${rateOf(shown.amountOut, get.side.decimals, shown.amountIn, pay.side.decimals)} ${nameOf(pay)}`
-                : `1 ${nameOf(pay)} ≈ ${rateOf(shown.amountIn, pay.side.decimals, shown.amountOut, get.side.decimals)} ${nameOf(get)}`}
+                ? tr("swaps.rate", {
+                    one: nameOf(get),
+                    rate: rateOf(shown.amountOut, get.side.decimals, shown.amountIn, pay.side.decimals),
+                    other: nameOf(pay),
+                  })
+                : tr("swaps.rate", {
+                    one: nameOf(pay),
+                    rate: rateOf(shown.amountIn, pay.side.decimals, shown.amountOut, get.side.decimals),
+                    other: nameOf(get),
+                  })}
             </button>
             {level !== "ok" && !details && (
-              <span className={`swap-rate__impact swap-impact--${level}`}>{formatPercent(shown.priceImpact)} impact</span>
+              <span className={`swap-rate__impact swap-impact--${level}`}>
+                {tr("swaps.impact", { percent: formatPercent(shown.priceImpact) })}
+              </span>
             )}
             <button
               type="button"
               className="icon-button icon-button--small"
               onClick={() => setAgain((n) => n + 1)}
               disabled={quoting}
-              aria-label="Ask Minswap again"
-              title="Ask Minswap again"
+              aria-label={tr("swaps.askAgain")}
+              title={tr("swaps.askAgain")}
             >
               <span className={quoting ? "spin" : "swap-rate__icon"}>
                 <RefreshIcon size={14} />
@@ -917,8 +932,8 @@ export function NewSwap({
               onClick={() => setDetails(!details)}
               aria-expanded={details}
               aria-controls="swap-quote-rows"
-              aria-label="The quote's details"
-              title={details ? "Hide the details" : "Show the details"}
+              aria-label={tr("swaps.quoteDetails")}
+              title={tr(details ? "swaps.hideDetails" : "swaps.showDetails")}
             >
               <span className={details ? "swap-chevron swap-chevron--open" : "swap-chevron"}>
                 <ChevronDownIcon size={16} />
@@ -927,20 +942,25 @@ export function NewSwap({
           </div>
           {details && (
             <dl className="swap-details__rows" id="swap-quote-rows" data-testid="swap-quote-rows">
-              <Detail label="Asks for at least" value={amountOf(shown.minAmountOut, get)} />
-              <Detail label="Price impact" value={formatPercent(shown.priceImpact)} tone={level} />
+              <Detail label={tr("swaps.detail.atLeast")} value={amountOf(shown.minAmountOut, get)} />
+              <Detail label={tr("swaps.detail.impact")} value={formatPercent(shown.priceImpact)} tone={level} />
               <Detail
-                label="Slippage"
+                label={tr("swaps.slippage")}
                 value={
                   <button type="button" className="link" onClick={() => setSettings(true)}>
                     {formatPercent(slippage)}
                   </button>
                 }
               />
-              <Detail label="Route" value={shown.route.join(", ")} />
-              <Detail label="DEX fee" value={`${formatAda(shown.dexFee)} ₳`} />
-              {shown.aggregatorFee !== "0" && <Detail label="Minswap's fee" value={`${formatAda(shown.aggregatorFee)} ₳`} />}
-              <Detail label="Order deposit" value={`${formatAda(shown.deposits)} ₳, back with the proceeds`} />
+              <Detail label={tr("swaps.detail.route")} value={shown.route.join(tr("histories.list.comma"))} />
+              <Detail label={tr("swaps.detail.dexFee")} value={`${formatAda(shown.dexFee)} ₳`} />
+              {shown.aggregatorFee !== "0" && (
+                <Detail label={tr("swaps.detail.minswapFee")} value={`${formatAda(shown.aggregatorFee)} ₳`} />
+              )}
+              <Detail
+                label={tr("swaps.detail.deposit")}
+                value={tr("swaps.detail.depositValue", { ada: formatAda(shown.deposits) })}
+              />
             </dl>
           )}
         </div>
@@ -950,19 +970,15 @@ export function NewSwap({
           <span className="spin">
             <SpinnerIcon size={14} />
           </span>
-          Asking Minswap for a quote…
+          {tr("swaps.asking")}
         </p>
       )}
       {level === "high" && shown && (
         <Callout tone="warn" testId="swap-impact-warning">
-          This swap moves the price by {formatPercent(shown.priceImpact)}, so each {nameOf(pay)} gets noticeably less than
-          the pool's price. A smaller amount moves it less.
+          {tr("swaps.warn.impact", { percent: formatPercent(shown.priceImpact), token: nameOf(pay) })}
         </Callout>
       )}
-      <Callout tone="privacy" testId="swap-quote-privacy">
-        Minswap sees the pair, the amount and your IP address as you type, never your public account. Half and Max round
-        down to a whole unit, but still tell it roughly what your private balance holds.
-      </Callout>
+      <Callout tone="privacy" testId="swap-quote-privacy">{tr("swaps.privacy.quote")}</Callout>
       {picking && (
         <TokenSelect
           which={picking}
@@ -1001,6 +1017,7 @@ export function SwapApproval({
   onThrough: (through: boolean) => void;
   busy: boolean;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const [swapPart, collateral] = summary.payments;
   const got = get.id === "lovelace" ? undefined : tokenText(network, tokenOf(get.id));
@@ -1012,45 +1029,42 @@ export function SwapApproval({
       <div className="swap-summary" data-testid="swap-summary">
         <div className="swap-summary__row">
           <SwapAvatar pick={pay} />
-          <span className="swap-summary__label">You pay</span>
+          <span className="swap-summary__label">{tr("swaps.youPay")}</span>
           <span className="swap-summary__amount">{amountOf(quote.amountIn, pay)}</span>
         </div>
         <div className="swap-summary__row">
           <SwapAvatar pick={get} />
-          <span className="swap-summary__label">You receive</span>
+          <span className="swap-summary__label">{tr("swaps.youReceive")}</span>
           <span className="swap-summary__amount">≈ {amountOf(quote.amountOut, get)}</span>
         </div>
         <p className="swap-summary__foot">
-          Asks for at least {amountOf(quote.minAmountOut, get)} · {formatPercent(quote.priceImpact)} price impact · through{" "}
-          {quote.route.join(", ")}
+          {tr("swaps.summary.foot", {
+            least: amountOf(quote.minAmountOut, get),
+            impact: formatPercent(quote.priceImpact),
+            route: quote.route.join(tr("histories.list.comma")),
+          })}
         </p>
         {got && !got.listed && quote.verified && (
           <p className="swap-summary__foot" data-testid="swap-out-unlisted">
-            {got.label} isn't on the wallet's list: Minswap verifies it, by its ID ({got.fingerprint}).
+            {tr("swaps.summary.unlisted", { token: got.label, fingerprint: got.fingerprint })}
           </p>
         )}
       </div>
-      <h2>First, a one-time account is funded</h2>
+      <h2>{tr("lovejoin.review.firstFunded")}</h2>
       <ReviewRows testId="swap-fund-review">
-        <Row label="To" value={`Private session ${summary.index + 1}`} strong />
-        <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label="For the swap" value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
-        <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
-        <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-        <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
+        <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
+        <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
+        <Row label={tr("swaps.review.forSwap")} value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
+        <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral!.lovelace)} ₳`} />
+        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
+        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)} ₳`} />
       </ReviewRows>
-      <h2>Then it runs by itself</h2>
+      <h2>{tr("lovejoin.review.thenItself")}</h2>
       <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={any && through && !l!.skipped && l!.boxes > 0} adaOut={adaOut} />
       <p className="note" data-testid="swap-approves">
-        Send approves the whole run: the order is for at least {amountOf(quote.minAmountOut, get)}, and the wallet places
-        it and brings everything back without asking again. It checks that what Minswap built pays only this session, its
-        order and Minswap's fee; the order's own minimum it can't read. If the price moves too far first, it pauses and
-        asks. A refunded order comes back with the rest, and the page says so. Stop is there until it's done.
+        {tr("swaps.review.approves", { least: amountOf(quote.minAmountOut, get) })}
       </p>
-      <p className="note">
-        The collateral, the order's deposit and whatever the swap doesn't use come back with the proceeds. Three
-        transactions, three network fees: the cost of keeping your public account out.
-      </p>
+      <p className="note">{tr("swaps.review.threeFees")}</p>
       {any && (
         <LovejoinChoice
           lovejoin={l!}
@@ -1063,15 +1077,12 @@ export function SwapApproval({
       )}
       {l && !any && (
         <p className="note" data-testid="swap-lovejoin">
-          Less than a box's worth of ADA is spare, so none of it goes through Lovejoin: it all comes back at once.
+          {tr("swaps.review.noBox")}
         </p>
       )}
-      <Callout tone="privacy">
-        This payment links the private UTxOs it spends to the one-time account, as Make public does. The account then links
-        to Minswap and back again.
-      </Callout>
+      <Callout tone="privacy">{tr("swaps.review.privacy.links")}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="swap-histories" />
-      <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
+      <p className="note">{tr("swaps.review.givemeNote")}</p>
     </>
   );
 }
@@ -1082,17 +1093,14 @@ export function SwapApproval({
  * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
  */
 export function Plan({ least, lovejoin, adaOut }: { least: string; lovejoin: boolean; adaOut: boolean }) {
+  const tr = useT();
   const steps = [
-    ["Funded", "A one-time account, from your private balance"],
-    ["Order placed", `Minswap builds it, asked for at least ${least}`],
-    ["Filled", "By a DEX's batcher, usually within a few blocks"],
+    [tr("swaps.plan.funded"), tr("swaps.plan.fundedSub")],
+    [tr("swaps.plan.ordered"), tr("swaps.plan.orderedSub", { least })],
+    [tr("swaps.plan.filled"), tr("swaps.plan.filledSub")],
     [
-      "Back in your private balance",
-      !lovejoin
-        ? "The proceeds and everything left, directly"
-        : adaOut
-          ? "The proceeds and spare ADA through Lovejoin first, in boxes that come back later; the rest at once"
-          : "Spare ADA through Lovejoin first, in boxes that come back later; the proceeds and the rest at once",
+      tr("swaps.plan.back"),
+      tr(!lovejoin ? "swaps.plan.backDirect" : adaOut ? "swaps.plan.backAdaOut" : "swaps.plan.backTokenOut"),
     ],
   ];
   return (
@@ -1135,17 +1143,16 @@ export function LovejoinChoice({
   onThrough: (through: boolean) => void;
   busy: boolean;
 }) {
+  const tr = useT();
   const cost = through && !l.skipped && l.boxes > 0;
   const stopped = through && !l.skipped ? l.ifStopped : undefined;
   return (
     <>
       <div className="setting-row">
         <span className="stack-tight">
-          <span id="swap-lovejoin-label">Bring it back through Lovejoin</span>
+          <span id="swap-lovejoin-label">{tr("swaps.lovejoin.label")}</span>
           <span className="note" id="swap-lovejoin-note" data-testid="swap-lovejoin-choice">
-            {through
-              ? "Its spare ADA is mixed with other people's on the way back, so what comes back is harder to tie to this session."
-              : "It all comes back at once, directly: anyone can tie it on chain to this session and its funding. Your public account stays out either way."}
+            {tr(through ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.off")}
           </span>
         </span>
         <button
@@ -1162,22 +1169,25 @@ export function LovejoinChoice({
       </div>
       {through && l.skipped && (
         <Callout tone="warn" testId="swap-lovejoin-pool">
-          {l.skipped}, so this swap's ADA would come back directly, tied to this session on chain. The wallet looks again when
-          it brings it back: if the pool has room by then, it goes through Lovejoin.
+          {tr("swaps.lovejoin.warn.pool", { why: l.skipped })}
         </Callout>
       )}
       {cost && <LovejoinCost lovejoin={l} adaOut={adaOut} />}
       {stopped && (
         <p className="note" data-testid="swap-lovejoin-stopped">
-          If you stop it, or Minswap refunds the order, its {formatAda(funded)} ₳ come back instead, through Lovejoin first:{" "}
-          {boxesText(stopped)}, mixed in {plural(stopped.mixes, "mix", "mixes")} for about {formatAda(stopped.mixFees)} ₳
-          in fees, which the session pays, and about {formatAda(stopped.withdrawFees)} ₳ to bring them back, each after{" "}
-          {delayText(l.delay)}. Stop also lets you bring it back directly.
+          {tr("swaps.lovejoin.ifStopped", {
+            ada: formatAda(funded),
+            boxes: boxesText(stopped),
+            mixes: tr("amount.mixes", { count: stopped.mixes }),
+            mixFees: formatAda(stopped.mixFees),
+            backFees: formatAda(stopped.withdrawFees),
+            delay: delayText(l.delay),
+          })}
         </p>
       )}
       {through && !cost && (
         <p className="note" data-testid="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED}
+          {LOVEJOIN_UNAUDITED()}
         </p>
       )}
     </>
@@ -1187,8 +1197,8 @@ export function LovejoinChoice({
 /** About how many boxes of 10 ₳: at most, or as many as the pool has room for now (`of`: what the ADA pays for). */
 function boxesText(l: { boxes: number; of?: number }): string {
   return l.of
-    ? `about ${plural(l.boxes, "box", "boxes")} of 10 ₳ of the ${l.of} its ADA pays for, as many as Lovejoin's pool has room for now (fewer, or none, if it has less by then)`
-    : `about ${plural(l.boxes, "box", "boxes")} of 10 ₳ (at most: the pool may take fewer, or none)`;
+    ? t("swaps.boxes.roomFor", { count: l.boxes, of: l.of })
+    : t("swaps.boxes.atMost", { count: l.boxes });
 }
 
 /**
@@ -1199,25 +1209,33 @@ function boxesText(l: { boxes: number; of?: number }): string {
  * too when they're ADA (launch review #26).
  */
 export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; adaOut: boolean }) {
+  const tr = useT();
   return (
     <>
-      <h2>On the way back, through Lovejoin</h2>
+      <h2>{tr("swaps.cost.title")}</h2>
       <ReviewRows testId="swap-lovejoin-cost">
-        <Row label="Boxes of 10 ₳" value={l.of ? `About ${l.boxes} of ${l.of}, as the pool is now` : `About ${l.boxes}, at most`} />
-        <Row label="Mixed" value={`${l.depth} ${l.depth === 1 ? "wave" : "waves"} deep, ${plural(l.mixes, "mix", "mixes")}`} />
-        <Row label="Mix fees, about" value={`${formatAda(l.mixFees)} ₳`} />
-        <Row label="Bringing them back, about" value={`${formatAda(l.withdrawFees)} ₳`} />
-        <Row label="Back later" value={`Each box on its own, after ${delayText(l.delay)}`} />
+        <Row
+          label={tr("swaps.cost.boxesLabel")}
+          value={l.of ? tr("swaps.cost.boxesOf", { boxes: l.boxes, of: l.of }) : tr("swaps.cost.boxesAtMost", { boxes: l.boxes })}
+        />
+        <Row
+          label={tr("lovejoin.mixedLabel")}
+          value={tr("lovejoin.mix.depthAndMixes", { count: l.depth, mixes: tr("amount.mixes", { count: l.mixes }) })}
+        />
+        <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(l.mixFees)} ₳`} />
+        <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(l.withdrawFees)} ₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} />
       </ReviewRows>
       <p className="note" data-testid="swap-lovejoin">
-        On the way back, {adaOut ? "the proceeds and ADA to spare go" : "ADA to spare goes"} through Lovejoin first:{" "}
-        {boxesText(l)}, mixed with other people's in {plural(l.mixes, "mix", "mixes")} for about {formatAda(l.mixFees)} ₳,
-        which the session pays. {lovejoinHides(l.depth)} Each box comes back on its own after {delayText(l.delay)}, at the
-        first unlock after that, for about {formatAda(l.withdrawFees)} ₳ in all; less than a box's worth, and any tokens,
-        come back at once. Settings changes later swaps, not this one. Stop brings it back directly.
+        {tr(adaOut ? "swaps.cost.wayBackAda" : "swaps.cost.wayBackToken", {
+          boxes: boxesText(l),
+          mixes: tr("amount.mixes", { count: l.mixes }),
+          mixFees: formatAda(l.mixFees),
+        })}{" "}
+        {lovejoinHides(l.depth)} {tr("swaps.cost.eachBack", { delay: delayText(l.delay), backFees: formatAda(l.withdrawFees) })}
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
-        {LOVEJOIN_UNAUDITED}
+        {LOVEJOIN_UNAUDITED()}
       </p>
     </>
   );
@@ -1229,15 +1247,13 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
  * Review stays off: the worker refuses to fund it.
  */
 export function Unverified({ pick }: { pick: Pick }) {
+  const tr = useT();
   const text = tokenText(useNetwork(), tokenOf(pick.id));
   return (
     <Callout tone="warn" testId="swap-unverified">
       <div className="stack-tight">
-        <strong>Not verified by Minswap</strong>
-        <span>
-          {text.label} isn't on the wallet's list, and Minswap's verified list doesn't have it by its ID, so the wallet won't
-          swap into it: anyone can give a token a known token's name.
-        </span>
+        <strong>{tr("swaps.cta.unverified")}</strong>
+        <span>{tr("swaps.warn.unverified", { token: text.label })}</span>
         <code className="swap-token-id">{text.fingerprint}</code>
       </div>
     </Callout>
@@ -1248,7 +1264,10 @@ export function Unverified({ pick }: { pick: Pick }) {
 function fundText(lovelace: string, tokens: TokenQuantity[], side: SwapSide, network: NetworkName): string {
   const ada = `${formatAda(lovelace)} ₳`;
   if (!tokens.length) return ada;
-  return `${ada} and ${tokens.map((t) => tokenAmountText(network, { ...t, decimals: side.decimals })).join(", ")}`;
+  return t("swaps.fundAndTokens", {
+    ada,
+    tokens: tokens.map((q) => tokenAmountText(network, { ...q, decimals: side.decimals })).join(t("histories.list.comma")),
+  });
 }
 
 /** A token on the wallet's list that isn't held, as the picker offers it: its ticker, and the list's name under it. */
@@ -1300,6 +1319,7 @@ export function TokenSelect({
   onPick: (pick: Pick) => void;
   onClose: () => void;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const own = useMemo(() => ownPicks(network, seedelf), [network, seedelf]);
   const [query, setQuery] = useState("");
@@ -1353,13 +1373,13 @@ export function TokenSelect({
   );
 
   return (
-    <Modal title={which === "pay" ? "You pay with" : "You receive"} titleId="swap-pick-title" onClose={onClose}>
+    <Modal title={tr(which === "pay" ? "swaps.pick.pay" : "swaps.youReceive")} titleId="swap-pick-title" onClose={onClose}>
       <label className="search">
         <SearchIcon size={16} />
         <input
           type="search"
-          aria-label="Search tokens"
-          placeholder={which === "get" ? "A ticker, a name, or the token's ID" : "Name, ticker or ID"}
+          aria-label={tr("swaps.pick.search")}
+          placeholder={tr(which === "get" ? "swaps.pick.placeholderGet" : "swaps.pick.placeholderPay")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
@@ -1367,22 +1387,21 @@ export function TokenSelect({
         />
       </label>
       {which === "get" && (
-        <p className="field-note">
-          The wallet's own list is searched here first. Minswap is asked only when nothing here matches, or when you search
-          it, and then knows what you looked for.
-        </p>
+        <p className="field-note">{tr("swaps.pick.privacy.ownListFirst")}</p>
       )}
-      <h3 className="swap-pick__heading">In your private balance</h3>
+      <h3 className="swap-pick__heading">{tr("swaps.inPrivate")}</h3>
       {mine.length ? (
         <ul className="list" data-testid="swap-own-tokens">
           {mine.map((p) => row(p, p.sub, p.held))}
         </ul>
       ) : (
-        <p className="note">{others.length ? "Nothing else you hold is listed or verified." : `Nothing you hold matches “${q}”.`}</p>
+        <p className="note">
+          {others.length ? tr("swaps.pick.noneVouched") : tr("swaps.pick.noneHeld", { query: q })}
+        </p>
       )}
       {listed.length > 0 && (
         <>
-          <h3 className="swap-pick__heading">On the wallet's list</h3>
+          <h3 className="swap-pick__heading">{tr("swaps.pick.onOurList")}</h3>
           <ul className="list" data-testid="swap-listed-tokens">
             {listed.map((p) => row(p, p.sub))}
           </ul>
@@ -1390,34 +1409,33 @@ export function TokenSelect({
       )}
       {which === "get" && (
         <>
-          <h3 className="swap-pick__heading">On Minswap</h3>
+          <h3 className="swap-pick__heading">{tr("swaps.pick.onMinswap")}</h3>
           {!search &&
             (q.length >= 2 ? (
               <button type="button" className="link align-start" onClick={() => setAsked(q)} data-testid="swap-search-minswap">
-                Search Minswap for “{q}”
+                {tr("swaps.pick.searchMinswap", { query: q })}
               </button>
             ) : (
-              <p className="note">Search to find any token Minswap lists.</p>
+              <p className="note">{tr("swaps.pick.searchToFind")}</p>
             ))}
           {search && error && <p className="error">{error}</p>}
-          {search && !found && !error && <p className="note">Searching…</p>}
-          {theirs?.length === 0 && <p className="note">Minswap lists nothing else by that name.</p>}
+          {search && !found && !error && <p className="note">{tr("swaps.pick.searching")}</p>}
+          {theirs?.length === 0 && <p className="note">{tr("swaps.pick.minswapNone")}</p>}
           {!!theirs?.length && (
             <ul className="list" data-testid="swap-tokens">
               {theirs.slice(0, 12).map((t) => {
                 // Named as every text view names a token; Minswap's own name for it goes under.
                 const pick = pickOf(network, t.id, t.decimals);
                 const minswap = [t.ticker, t.name].filter(Boolean).join(" · ") || shortHex(t.id, 12, 6);
-                return row(pick, `${minswap}, verified by Minswap`);
+                return row(pick, tr("swaps.pick.verifiedBy", { name: minswap }));
               })}
             </ul>
           )}
           {others.length > 0 && (
             <>
-              <h3 className="swap-pick__heading">Also in your private balance</h3>
+              <h3 className="swap-pick__heading">{tr("swaps.pick.alsoHeld")}</h3>
               <p className="field-note" data-testid="swap-unverified-note">
-                Not on the wallet's list{found ? ", nor on Minswap's verified list" : ""}: anyone can give a token a known
-                token's name. The quote says whether Minswap verifies one, by its ID; the wallet swaps into no other.
+                {tr(found ? "swaps.pick.warn.notListedNorMinswap" : "swaps.pick.warn.notListed")}
               </p>
               <ul className="list" data-testid="swap-unverified-tokens">
                 {others.map((p) => row(p, p.sub, p.held))}
@@ -1440,25 +1458,23 @@ function SlippageSettings({
   onChange: (value: number) => void;
   onClose: () => void;
 }) {
+  const tr = useT();
   const presets = [0.5, 1, 3];
   const [own, setOwn] = useState(presets.includes(value) ? "" : String(value));
   const typed = own.trim() ? parseSlippage(own) : undefined;
   return (
     <Modal
-      title="Slippage"
+      title={tr("swaps.slippage")}
       titleId="swap-slippage-title"
       onClose={onClose}
       foot={
         <button type="button" className="primary" onClick={onClose}>
-          Done
+          {tr("swaps.slippage.done")}
         </button>
       }
     >
-      <p className="note">
-        How far the price may move against you before the order is filled. Past it, the order isn't filled: it waits, and
-        you can cancel it.
-      </p>
-      <div className="segmented" role="group" aria-label="Usual slippages">
+      <p className="note">{tr("swaps.slippage.note")}</p>
+      <div className="segmented" role="group" aria-label={tr("swaps.slippage.usual")}>
         {presets.map((p) => {
           const on = value === p && !own.trim();
           return (
@@ -1478,7 +1494,7 @@ function SlippageSettings({
         })}
       </div>
       <div className="field">
-        <label htmlFor="swap-slippage-own">Your own</label>
+        <label htmlFor="swap-slippage-own">{tr("swaps.slippage.yourOwn")}</label>
         <div className="amount-box">
           <input
             id="swap-slippage-own"
@@ -1497,13 +1513,13 @@ function SlippageSettings({
         </div>
         {!!own.trim() && typed === undefined && (
           <p className="field-note">
-            Between {formatPercent(SLIPPAGE_MIN)} and {formatPercent(SLIPPAGE_MAX)}, with at most two decimal places.
+            {tr("swaps.slippage.range", { min: formatPercent(SLIPPAGE_MIN), max: formatPercent(SLIPPAGE_MAX) })}
           </p>
         )}
       </div>
       {value >= 5 && (
         <Callout tone="warn" testId="swap-slippage-warning">
-          At {formatPercent(value)}, the order can be filled for that much less than the quote.
+          {tr("swaps.slippage.warn.high", { percent: formatPercent(value) })}
         </Callout>
       )}
     </Modal>
@@ -1532,6 +1548,7 @@ export function Session({
   onBack: () => void;
   onChanged: (sessions: SessionView[]) => void;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const amounts = useAmounts();
   const [s, setS] = useState(session);
@@ -1620,11 +1637,11 @@ export function Session({
     const paid = review.summary.paid;
     return (
       <Screen
-        title={review.kind === "swap" ? "Review the order" : "Review the cancel"}
+        title={tr(review.kind === "swap" ? "swaps.tx.reviewOrder" : "swaps.tx.reviewCancel")}
         titleId="session-tx-review"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
-        aside="Built by Minswap, read by the wallet, signed only by this session's key"
+        aside={tr("swaps.tx.aside")}
         error={error}
         foot={
           <button
@@ -1638,40 +1655,50 @@ export function Session({
               })
             }
           >
-            {busy ? "Sending…" : "Send"}
+            {busy ? tr("common.sending") : tr("common.send")}
           </button>
         }
       >
         <ReviewRows testId="session-tx-review">
           {review.kind === "swap" && review.quote && sides && (
             <>
-              <Row label="You get about" value={amountOf(review.quote.amountOut, sides.get)} strong />
-              <Row label="Asked for at least" value={amountOf(review.quote.minAmountOut, sides.get)} />
+              <Row label={tr("swaps.tx.getAbout")} value={amountOf(review.quote.amountOut, sides.get)} strong />
+              <Row label={tr("swaps.tx.askedLeast")} value={amountOf(review.quote.minAmountOut, sides.get)} />
             </>
           )}
-          {review.kind === "cancel" && <Row label="Cancels" value={plural(review.orders ?? 0, "order")} strong />}
+          {review.kind === "cancel" && (
+            <Row label={tr("swaps.tx.cancels")} value={tr("swaps.tx.orderCount", { count: review.orders ?? 0 })} strong />
+          )}
           {paid.map((p, i) => (
             <Row
               key={i}
-              label={p.script ? "Into the order" : "To"}
-              value={`${formatAda(p.lovelace)} ₳${p.tokens.length ? ` and ${plural(p.tokens.length, "token")}` : ""}`}
+              label={tr(p.script ? "swaps.tx.intoOrder" : "lovejoin.review.to")}
+              value={
+                p.tokens.length
+                  ? tr("format.adaAndTokens", { ada: formatAda(p.lovelace), count: p.tokens.length })
+                  : `${formatAda(p.lovelace)} ₳`
+              }
               title={p.address}
             />
           ))}
-          <Row label="Network fee" value={`${formatAda(review.summary.fee)} ₳`} />
-          <Row label="Back to the session" value={`${formatAda(review.summary.returnedLovelace)} ₳`} />
-          {review.summary.collateral && <Row label="Collateral at risk" value={`${formatAda(review.summary.collateral.atRisk)} ₳`} />}
+          <Row label={tr("review.fee")} value={`${formatAda(review.summary.fee)} ₳`} />
+          <Row label={tr("swaps.tx.backToSession")} value={`${formatAda(review.summary.returnedLovelace)} ₳`} />
+          {review.summary.collateral && (
+            <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(review.summary.collateral.atRisk)} ₳`} />
+          )}
         </ReviewRows>
         <TxDetailButton txHash={review.txHash} testId="session-tx-detail" />
         {review.summary.note && (
-          <p className="note">Minswap's note on it, which anyone can read: “{review.summary.note.join("")}”.</p>
+          <p className="note">{tr("swaps.tx.minswapNote", { note: review.summary.note.join("") })}</p>
         )}
         <p className="note">
-          {review.kind === "swap"
-            ? s.auto
-              ? "A DEX's batchers fill the order, usually within a few blocks, and pay the proceeds to this session. Then it all comes back by itself. If the price moves past your slippage, it waits: Stop cancels it."
-              : "A DEX's batchers fill the order, usually within a few blocks, and pay the proceeds to this session. If the price moves past your slippage, it waits: cancel it here."
-            : "The order's funds come back to this session. Then bring the session back."}
+          {tr(
+            review.kind !== "swap"
+              ? "swaps.tx.afterCancel"
+              : s.auto
+                ? "swaps.tx.afterOrderAuto"
+                : "swaps.tx.afterOrder",
+          )}
         </p>
       </Screen>
     );
@@ -1680,11 +1707,11 @@ export function Session({
   if (back) {
     return (
       <Screen
-        title="Review the return"
+        title={tr("swaps.back.title")}
         titleId="session-back-review"
         onBack={() => setBack(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={tr("review.nothingSent")}
         error={error}
         foot={
           <button
@@ -1698,18 +1725,25 @@ export function Session({
               })
             }
           >
-            {busy ? backSending : "Send"}
+            {busy ? backSending : tr("common.send")}
           </button>
         }
       >
         <ReviewRows testId="session-back-review">
           <LovejoinRows back={back} />
-          <Row label={back.lovejoin ? "Back now" : "Into your private balance"} value={`${formatAda(back.lovelace)} ₳`} strong />
+          <Row
+            label={tr(back.lovejoin ? "swaps.back.backNow" : "swaps.back.intoPrivate")}
+            value={`${formatAda(back.lovelace)} ₳`}
+            strong
+          />
           {back.tokens.map((t) => (
             <Row key={tokenKey(t)} label="" value={heldText(t, s, network)} />
           ))}
-          <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
-          <Row label="From" value={`${plural(back.inputs, "UTxO")} at session ${s.index + 1}`} />
+          <Row label={tr(back.lovejoin ? "lovejoin.review.fees" : "review.fee")} value={`${formatAda(back.fee)} ₳`} />
+          <Row
+            label={tr("swaps.back.from")}
+            value={tr("swaps.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
+          />
           <IntoRow back={back} />
         </ReviewRows>
         {/* Through Lovejoin, its chain's first transaction: `txHash` is the
@@ -1726,7 +1760,7 @@ export function Session({
           busy={busy}
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
-        <ReturnLinks back={back} after={back.leftOut?.length ? undefined : "The account is never used again."} />
+        <ReturnLinks back={back} after={back.leftOut?.length ? undefined : tr("swaps.back.neverAgain")} />
       </Screen>
     );
   }
@@ -1736,13 +1770,19 @@ export function Session({
   const rows = (
     <ReviewRows testId="session-rows">
       {!s.auto && (
-        <Row label="Where it's at" value={s.stage === "failed" && !s.unsent ? "Its funding hasn't shown up" : STAGE[s.stage]} strong />
+        <Row
+          label={tr("swaps.rows.whereAt")}
+          value={tr(s.stage === "failed" && !s.unsent ? "swaps.rows.fundingNotShown" : STAGE[s.stage])}
+          strong
+        />
       )}
-      {s.swap && sides && <Row label="Quoted" value={`about ${amountOf(s.swap.amountOut, sides.get)}`} />}
-      <Row label="Started" value={whenOf(s.createdAt, new Date())} />
-      <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
+      {s.swap && sides && (
+        <Row label={tr("swaps.rows.quoted")} value={tr("swaps.rows.about", { amount: amountOf(s.swap.amountOut, sides.get) })} />
+      )}
+      <Row label={tr("swaps.rows.started")} value={whenOf(s.createdAt, new Date())} />
+      <Row label={tr("lovejoin.review.account")} value={shortHex(s.address, 16, 8)} title={s.address} />
       {/* What it holds is a balance: hidden while balances are (launch review #56). */}
-      {holding && <Row label="It holds" value={`${amounts.ada(holding.lovelace)} ₳`} />}
+      {holding && <Row label={tr("swaps.rows.itHolds")} value={`${amounts.ada(holding.lovelace)} ₳`} />}
       {holding?.tokens.map((t) => (
         <Row key={tokenKey(t)} label="" value={amounts.text(heldText(t, s, network))} />
       ))}
@@ -1759,25 +1799,21 @@ export function Session({
   const lookAgain = () => void act(async () => setS(await call("session-resume", { index: s.index })));
   const forgetModal = forgetting && (
     <Modal
-      title="Forget this swap?"
+      title={tr("swaps.forget.title")}
       titleId="session-forget-title"
       onClose={() => setForgetting(false)}
       foot={
         <>
           <button type="button" className="secondary" onClick={() => setForgetting(false)} disabled={busy}>
-            Keep it
+            {tr("lovejoin.anyway.keep")}
           </button>
           <button type="button" className="danger" onClick={forgetNow} disabled={busy}>
-            {busy ? "Forgetting…" : "Forget it"}
+            {tr(busy ? "swaps.forget.working" : "swaps.forget.confirm")}
           </button>
         </>
       }
     >
-      <p className="note">
-        The chain hasn't shown its funding, but Koios may have taken it, so it may still land. If it lands after you forget
-        the swap, the wallet doesn't look at this account again, and the money waits there unseen. Try again looks for it
-        first.
-      </p>
+      <p className="note">{tr("swaps.forget.note")}</p>
     </Modal>
   );
 
@@ -1802,27 +1838,27 @@ export function Session({
         title={pairOf(s, network)}
         titleId="session-title"
         onBack={onBack}
-        aside={`Private session ${s.index + 1}`}
+        aside={tr("lovejoin.privateSession", { number: s.index + 1 })}
         error={error}
         foot={
           done ? (
             <button type="button" className="primary" onClick={onBack}>
-              Done
+              {tr("swaps.stage.done")}
             </button>
           ) : s.stage === "failed" ? (
             <div className="actions">
               {!s.unsent && (
                 <button type="button" className="primary" onClick={lookAgain} disabled={busy} data-testid="session-look-again">
-                  {busy ? "Looking…" : "Try again"}
+                  {tr(busy ? "swaps.looking" : "common.tryAgain")}
                 </button>
               )}
               <button type="button" className="secondary" onClick={forget} disabled={busy}>
-                Forget it
+                {tr("swaps.forget.confirm")}
               </button>
             </div>
           ) : auto.stopping ? null : (
             <button type="button" className="secondary" onClick={openStop} disabled={busy}>
-              Stop
+              {tr("lovejoin.mixes.stop")}
             </button>
           )
         }
@@ -1832,7 +1868,7 @@ export function Session({
         {auto.paused && (
           <Callout tone="warn" testId="session-paused">
             <div className="stack-tight">
-              <strong>Paused: it needs you</strong>
+              <strong>{tr("swaps.paused.title")}</strong>
               <span data-testid="session-paused-why">{pauseText(auto.paused, auto.approvedMinOut, sides?.get)}</span>
               <span className="row-links">
                 <button
@@ -1841,7 +1877,7 @@ export function Session({
                   disabled={busy}
                   onClick={() => void act(async () => setS(await call("session-resume", { index: s.index })))}
                 >
-                  Try again
+                  {tr("common.tryAgain")}
                 </button>
                 {!placed && !auto.stopping && (
                   <button
@@ -1850,7 +1886,7 @@ export function Session({
                     disabled={busy}
                     onClick={() => void act(async () => setReview(await call("session-swap-build", { index: s.index })))}
                   >
-                    Review it myself
+                    {tr("swaps.paused.reviewMyself")}
                   </button>
                 )}
               </span>
@@ -1858,10 +1894,7 @@ export function Session({
           </Callout>
         )}
         {stoppedLate && (
-          <Callout tone="warn" testId="session-stop-ordered">
-            An order had gone out before Stop took effect. The wallet cancels it, unless a batcher fills it first, and then
-            everything comes back into your private balance.
-          </Callout>
+          <Callout tone="warn" testId="session-stop-ordered">{tr("swaps.warn.stoppedLate")}</Callout>
         )}
         <Timeline
           s={s}
@@ -1896,7 +1929,7 @@ export function Session({
   const waiting = !!orders?.length;
   return (
     <Screen
-      title={`Private session ${s.index + 1}`}
+      title={tr("lovejoin.privateSession", { number: s.index + 1 })}
       titleId="session-title"
       onBack={onBack}
       aside={pairOf(s, network)}
@@ -1926,7 +1959,7 @@ export function Session({
 }
 
 /** Stop's words for an order the runner may be placing as the dialog shows (independent review L22). */
-const IF_ORDERED = "If the wallet is placing one right now, it's cancelled, unless a batcher fills it first.";
+const IF_ORDERED = () => t("swaps.stop.ifOrdered");
 
 /**
  * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
@@ -1947,45 +1980,56 @@ export function StopDialog({
   onStop: (direct: boolean) => void;
   onClose: () => void;
 }) {
+  const tr = useT();
   const mixes = !!cost && !cost.skipped && cost.boxes > 0;
   return (
     <Modal
-      title="Stop this swap?"
+      title={tr("swaps.stop.title")}
       titleId="session-stop-title"
       onClose={onClose}
       foot={
         <>
           <button type="button" className="secondary" onClick={onClose} disabled={busy}>
-            Keep going
+            {tr("lovejoin.stop.keep")}
           </button>
           <button type="button" className="danger" disabled={busy} onClick={() => onStop(false)}>
-            {busy ? "Stopping…" : mixes ? "Stop, through Lovejoin" : "Stop the swap"}
+            {tr(busy ? "swaps.stop.stopping" : mixes ? "swaps.stop.throughLovejoin" : "swaps.stop.confirm")}
           </button>
         </>
       }
     >
       <p className="note" data-testid="session-stop-what">
         {mixes
-          ? `${placed ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance." : `If no order has gone out yet, none is placed, and everything comes back into your private balance. ${IF_ORDERED}`} Its ADA goes through Lovejoin first: ${boxesText(cost)}, mixed in ${plural(cost.mixes, "mix", "mixes")} for about ${formatAda(cost.mixFees)} ₳ in fees, which the session pays, and about ${formatAda(cost.withdrawFees)} ₳ to bring them back, each on its own after ${delayText(cost.delay)}.${placed ? " The cancel costs a network fee too." : ""}`
+          ? [
+              tr(placed ? "swaps.stop.cancelled" : "swaps.stop.notPlaced"),
+              placed ? "" : IF_ORDERED(),
+              tr("swaps.stop.throughCost", {
+                boxes: boxesText(cost),
+                mixes: tr("amount.mixes", { count: cost.mixes }),
+                mixFees: formatAda(cost.mixFees),
+                backFees: formatAda(cost.withdrawFees),
+                delay: delayText(cost.delay),
+              }),
+              placed ? tr("swaps.stop.cancelFeeToo") : "",
+            ]
+              .filter(Boolean)
+              .join(" ")
           : placed
-            ? "The order is cancelled, unless a batcher fills it first, and everything comes back into your private balance. The cancel and the return each cost a network fee."
-            : `If no order has gone out yet, none is placed, and everything comes back into your private balance, less the return's network fee. ${IF_ORDERED}`}
+            ? tr("swaps.stop.cancelledDirect")
+            : `${tr("swaps.stop.notPlacedDirect")} ${IF_ORDERED()}`}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
-          {cost.skipped}, so it would come back directly, tied to this session on chain.
+          {tr("swaps.stop.poolShort", { why: cost.skipped })}
         </p>
       )}
-      {cost === undefined && <p className="note">Working out what goes through Lovejoin…</p>}
+      {cost === undefined && <p className="note">{tr("swaps.stop.working")}</p>}
       {mixes && (
         <div className="stack-tight">
           <button type="button" className="link align-start" disabled={busy} onClick={() => onStop(true)} data-testid="session-stop-direct">
-            Stop and bring it back directly
+            {tr("swaps.stop.direct")}
           </button>
-          <p className="note">
-            Directly, it all comes back at once, for the return's network fee alone, and anyone can tie it on chain to this
-            session and its funding.
-          </p>
+          <p className="note">{tr("swaps.stop.privacy.direct")}</p>
         </div>
       )}
     </Modal>
@@ -2009,24 +2053,25 @@ function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): strin
  */
 export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick): string {
   if (p.why === "refused") {
-    return `The wallet won't sign what Minswap built: ${p.detail.trim().replace(/\.?$/, ".")} Try again asks Minswap to build it afresh.`;
+    return t("swaps.pause.refused", { detail: p.detail.trim().replace(/\.?$/, ".") });
   }
   const amount = (q: string) => (out ? amountOf(q, out) : q);
-  return `The price moved: an order now would give about ${amount(p.amountOut)}, less than the ${amount(approvedMinOut)} you approved at least, so the wallet didn't ask for one. Try again later, or review the new price yourself.`;
+  return t("swaps.pause.price", { now: amount(p.amountOut), approved: amount(approvedMinOut) });
 }
 
 /** When a failed step is tried again. */
 function retryText(at: number): string {
   const ms = at - Date.now();
-  return ms <= 0 ? "Trying again now" : ms < 60_000 ? "Trying again in under a minute" : `Trying again in ${Math.ceil(ms / 60_000)} minutes`;
+  if (ms <= 0) return t("swaps.retry.now");
+  return ms < 60_000 ? t("swaps.retry.soon") : t("swaps.retry.in", { count: Math.ceil(ms / 60_000) });
 }
 
 /** Why a step failed, in plain words, when the error is one that's known; else the error itself. */
 function retryReason(error: string): string {
-  if (/limiting requests/i.test(error)) return "Minswap is limiting requests from this connection for a minute.";
-  if (/no wallet utxos|insufficient balance/i.test(error)) return "Minswap hasn't seen the funding yet.";
-  if (/couldn't reach minswap/i.test(error)) return "Minswap didn't answer.";
-  if (/koios/i.test(error)) return "Koios didn't answer.";
+  if (/limiting requests/i.test(error)) return t("swaps.retry.rateLimited");
+  if (/no wallet utxos|insufficient balance/i.test(error)) return t("swaps.retry.fundingUnseen");
+  if (/couldn't reach minswap/i.test(error)) return t("swaps.retry.minswapSilent");
+  if (/koios/i.test(error)) return t("swaps.retry.koiosSilent");
   return error;
 }
 
@@ -2040,6 +2085,7 @@ type StepState = "done" | "now" | "paused" | "failed" | "todo" | "skipped";
  * step, and none of the others happen.
  */
 function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry: () => void }) {
+  const tr = useT();
   const network = useNetwork();
   const auto = s.auto!;
   const sides = sidesOf(network, s);
@@ -2062,54 +2108,62 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const least = sides ? amountOf((tx("swap") && auto.placedMinOut) || auto.approvedMinOut, sides.get) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
     {
-      title: failed ? "Not funded" : "Funded",
+      title: tr(failed ? "swaps.step.notFunded" : "swaps.plan.funded"),
       // Only one turned away is known never to have gone out: one unseen may still land.
       sub: failed
-        ? s.unsent
-          ? "It never reached the chain"
-          : "The chain hasn't shown it yet"
-        : "A one-time account, from your private balance",
+        ? tr(s.unsent ? "swaps.step.neverReached" : "swaps.step.notShownYet")
+        : tr("swaps.plan.fundedSub"),
       tx: tx("out"),
     },
     {
-      title: unordered ? "No order" : "Order placed",
-      sub: unordered ? "Stopped before one was placed" : least ? `Asked for at least ${least}` : "Through Minswap",
+      title: tr(unordered ? "swaps.step.noOrder" : "swaps.plan.ordered"),
+      sub: unordered
+        ? tr("swaps.step.stoppedBefore")
+        : least
+          ? tr("swaps.step.askedLeast", { least })
+          : tr("swaps.step.throughMinswap"),
       tx: tx("swap"),
     },
     {
-      title: unordered
-        ? "Nothing to fill"
-        : open
-          ? "Waiting on an order"
-          : cancelled
-            ? "Cancelled"
-            : auto.refunded
-              ? "Refunded"
-              : auto.partly
-                ? "Partly filled"
-                : "Filled",
-      sub: unordered
-        ? "Nothing was ordered"
-        : open
-          ? "One is still open at a DEX, and Minswap doesn't list it"
-          : cancelled
-            ? "The order's funds back at the account"
-            : auto.refunded
-              ? "Not filled: the DEX gave the order's funds back to the account"
-              : auto.partly
-                ? "Part of it filled; the DEX gave the rest back. Both are at the account"
-                : auto.filled
-                  ? "The proceeds are at the account"
-                  : "By a DEX's batcher, usually within a few blocks",
+      title: tr(
+        unordered
+          ? "swaps.step.nothingToFill"
+          : open
+            ? "swaps.step.waitingOnOrder"
+            : cancelled
+              ? "swaps.step.cancelled"
+              : auto.refunded
+                ? "swaps.tag.refunded"
+                : auto.partly
+                  ? "swaps.tag.partly"
+                  : "swaps.plan.filled",
+      ),
+      sub: tr(
+        unordered
+          ? "swaps.step.nothingOrdered"
+          : open
+            ? "swaps.step.openAtDex"
+            : cancelled
+              ? "swaps.step.fundsBack"
+              : auto.refunded
+                ? "swaps.step.refundedSub"
+                : auto.partly
+                  ? "swaps.step.partlySub"
+                  : auto.filled
+                    ? "swaps.step.proceedsAt"
+                    : "swaps.plan.filledSub",
+      ),
       tx: tx("cancel"),
     },
     {
-      title: "Back in your private balance",
-      sub: s.lovejoinSkipped
-        ? "Directly: Lovejoin was left out"
-        : auto.direct
-          ? "Directly, as you chose: everything at the account, under fresh registers"
-          : "Everything at the account, under fresh registers",
+      title: tr("swaps.plan.back"),
+      sub: tr(
+        s.lovejoinSkipped
+          ? "swaps.step.directLeftOut"
+          : auto.direct
+            ? "swaps.step.directChosen"
+            : "swaps.step.freshRegisters",
+      ),
       tx: tx("back"),
     },
   ];
@@ -2141,7 +2195,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
               <span className="timeline__title">{step.title}</span>
               {step.tx && st === "done" && (
                 <ExplorerLink network={network} tx={step.tx.txHash} private note={false} className="timeline__link">
-                  Cardanoscan
+                  {tr("swaps.cardanoscan")}
                 </ExplorerLink>
               )}
               <p className="timeline__sub">{step.sub}</p>
@@ -2152,9 +2206,9 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       {auto.retry && !auto.paused ? (
         <div className="timeline__now timeline__now--retry" data-testid="session-retry" aria-live="polite">
           <p>
-            {retryReason(auto.retry.error)} {retryText(auto.retry.at)}.{" "}
+            {tr("swaps.retry.line", { why: retryReason(auto.retry.error), when: retryText(auto.retry.at) })}{" "}
             <button type="button" className="link" disabled={busy} onClick={onRetry}>
-              Try now
+              {tr("lovejoin.mixes.tryNow")}
             </button>
           </p>
           {retryReason(auto.retry.error) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
@@ -2174,48 +2228,37 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
 }
 
 /** A stopped swap waiting on an order Minswap doesn't list (independent review L16). */
-const ORDER_OPEN =
-  "Stopped, but one of this swap's orders is still open at a DEX, and Minswap doesn't list it, so it can't be cancelled yet. " +
-  "What's left waits at the swap's account: it comes back once that order is filled or refunded, or cancelled once Minswap " +
-  "lists it. Nothing is lost meanwhile.";
+const ORDER_OPEN = () => t("swaps.now.orderOpen");
 
 /** What's happening now, in plain words. */
 export function nowLine(s: SessionView): string {
   const a = s.auto!;
   if (s.stage === "failed") {
-    return s.unsent
-      ? "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again."
-      : "The chain hasn't shown its funding in 20 minutes, so the swap waits. Koios may have taken it, and it may still land: Try again looks for it again.";
+    return t(s.unsent ? "swaps.now.neverSent" : "swaps.now.fundingUnseen");
   }
   switch (a.step) {
     case "funding":
-      return a.stopping
-        ? "Stopping: once the funding is confirmed, it all comes back."
-        : "Waiting for the network to confirm the funding. It usually takes about a minute.";
+      return t(a.stopping ? "swaps.now.stoppingAtFunding" : "swaps.now.funding");
     case "ordering":
-      if (a.stopping) return "Stopping: bringing it all back.";
-      return s.txs.some((t) => t.kind === "swap")
-        ? "The order is on its way: waiting for the network to confirm it."
-        : "Asking Minswap for a fresh quote, then placing the order.";
+      if (a.stopping) return t("swaps.now.stoppingBringingBack");
+      return t(s.txs.some((x) => x.kind === "swap") ? "swaps.now.orderOnItsWay" : "swaps.now.quoting");
     case "filling":
-      return "The order waits for a DEX's batcher to fill it, usually within a few blocks. It all comes back by itself once it's filled; Stop cancels it.";
+      return t("swaps.now.filling");
     case "cancelling":
       // An order Minswap doesn't list can't be cancelled: what the swap waits on, plainly (independent review L16).
-      if (a.orderOpen !== undefined) return ORDER_OPEN;
-      return "Cancelling the order. Once that's confirmed, it all comes back.";
+      if (a.orderOpen !== undefined) return ORDER_OPEN();
+      return t("swaps.now.cancelling");
     case "returning":
       if (s.chain) {
         const how = chainText(s.chain, !s.auto);
-        return `Coming back through Lovejoin: ${how.charAt(0).toLowerCase()}${how.slice(1)}.`;
+        return t("swaps.now.throughLovejoin", { how: `${how.charAt(0).toLowerCase()}${how.slice(1)}` });
       }
-      return "Coming back into your private balance: waiting for the network to confirm it.";
+      return t("swaps.now.returning");
     case "done":
       // Refunded, the swap didn't happen: never "Done" (independent review M18).
-      if (a.refunded) return "Refunded: the order wasn't filled, so what you swapped is back in your private balance.";
-      if (a.partly) {
-        return "Partly filled: part of the swap went through and the rest was refunded. Both are back in your private balance.";
-      }
-      return a.filled ? "Done: the swap is in your private balance." : "Stopped: everything is back in your private balance.";
+      if (a.refunded) return t("swaps.now.refunded");
+      if (a.partly) return t("swaps.now.partly");
+      return t(a.filled ? "swaps.now.done" : "swaps.now.stopped");
   }
 }
 
@@ -2233,19 +2276,17 @@ function tokenKeyOf(id: string): string {
 function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
   switch (s.stage) {
     case "funding":
-      return "Waiting for the network to confirm the funding. It takes about a minute: refresh to check.";
+      return t("swaps.next.funding");
     case "failed":
-      return s.unsent
-        ? "Its funding never reached the chain, so the account is empty. Forget it: its account isn't used again."
-        : "The chain hasn't shown its funding in 20 minutes. Refresh to look again: it may still land. Forget it only once you're sure it didn't go out.";
+      return t(s.unsent ? "swaps.now.neverSent" : "swaps.next.fundingUnseen");
     case "returning":
-      return "Coming back into your private balance. Refresh to check.";
+      return t("swaps.next.returning");
     case "closed":
-      return "Everything came back into your private balance. This account is never used again.";
+      return t("swaps.next.closed");
     case "open":
-      if (!swapped) return "Funded. Place the order: the wallet asks Minswap for a fresh quote and shows it before anything is signed.";
-      if (waiting) return "The order is waiting for a DEX's batcher to fill it. If it doesn't, cancel it.";
-      return "Nothing is waiting: bring everything in the account back into your private balance.";
+      if (!swapped) return t("swaps.next.placeOrder");
+      if (waiting) return t("swaps.next.waiting");
+      return t("swaps.next.bringBack");
   }
 }
 
@@ -2268,10 +2309,11 @@ function SessionFoot({
   onBack: () => void;
   onForget: () => void;
 }) {
+  const tr = useT();
   if (s.stage === "failed") {
     return (
       <button type="button" className="secondary" onClick={onForget} disabled={busy}>
-        Forget it
+        {tr("swaps.forget.confirm")}
       </button>
     );
   }
@@ -2280,17 +2322,17 @@ function SessionFoot({
     <div className="stack">
       {!swapped && (
         <button type="button" className="primary" onClick={onSwap} disabled={busy}>
-          {busy ? "Asking Minswap…" : "Place the order"}
+          {tr(busy ? "swaps.foot.asking" : "swaps.foot.placeOrder")}
         </button>
       )}
       {waiting && (
         <button type="button" className="secondary" onClick={onCancel} disabled={busy}>
-          Cancel the order
+          {tr("swaps.foot.cancelOrder")}
         </button>
       )}
       {!waiting && (
         <button type="button" className={swapped ? "primary" : "secondary"} onClick={onBack} disabled={busy}>
-          Bring it back
+          {tr("swaps.foot.bringBack")}
         </button>
       )}
     </div>

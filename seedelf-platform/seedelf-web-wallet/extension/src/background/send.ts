@@ -20,6 +20,7 @@
 // account's own `0/0`, whose output (the first: the payment comes before the
 // change) is the collateral from Send on.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { Paid, PaymentAsk, PendingTx, SendPaid, SendSummary, WithdrawDestination, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
@@ -111,7 +112,7 @@ export class SendService {
       readAccount(this.deps, network),
       validUntil(this.deps.koios(network)),
     ]);
-    if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to send.");
+    if (utxos.length === 0) throw nothingInAccount(held, t("worker.send.empty"));
 
     const payments = destinations.map((d, i) => ({
       to: d.seedelf?.name ?? d.address,
@@ -149,7 +150,7 @@ export class SendService {
 /** Someone else's seedelf, found in the wallet contract. Your own is a move-in, so it's refused. */
 function seedelf(view: ContractView, network: NetworkName, name: string): Destination {
   const recipient = seedelfUtxo(view, name, network);
-  if (holdsOwn(view, recipient)) throw new Error(OWN_SEEDELF_FROM_ACCOUNT);
+  if (holdsOwn(view, recipient)) throw new Error(OWN_SEEDELF_FROM_ACCOUNT());
   const label = seedelfLabel(name);
   return { address: recipient.address, own: false, seedelf: label ? { name, label } : { name }, recipient };
 }

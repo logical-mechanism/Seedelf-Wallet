@@ -103,10 +103,10 @@ describe("a payment Koios didn't answer", () => {
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
 
     // Review it again, and the wallet would pay again with other UTxOs: it waits instead.
-    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
-    await expect(t.moveIn.build("preprod", "5000000", [])).rejects.toThrow(MAYBE_SENT_WAIT);
-    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
-    await expect(t.moveIn.submit("preprod", other.txHash)).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
+    await expect(t.moveIn.build("preprod", "5000000", [])).rejects.toThrow(MAYBE_SENT_WAIT());
+    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
+    await expect(t.moveIn.submit("preprod", other.txHash)).rejects.toThrow(MAYBE_SENT_WAIT());
 
     // Send again: the network has it already, and it isn't on chain yet. Still maybe sent, not an error.
     t.koios.rejectSubmit = SPENT;
@@ -263,7 +263,7 @@ describe("the watch of a payment that may still go through", () => {
     let paid: unknown;
     whileSubmitting(t, async () => (paid = await t.send.submit("preprod", payment.txHash).catch((e: unknown) => e)));
     expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ kind: "move-in", confirmations: null });
-    expect((paid as Error).message).toBe(MAYBE_SENT_WAIT);
+    expect((paid as Error).message).toBe(MAYBE_SENT_WAIT());
     expect(ids(t)).toEqual([moveIn.txHash]);
 
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash });
@@ -280,7 +280,7 @@ describe("the watch of a payment that may still go through", () => {
     let paid: unknown;
     whileSubmitting(t, async () => (paid = await t.send.submit("preprod", payment.txHash).catch((e: unknown) => e)), true);
     expect(await t.moveIn.submit("preprod", moveIn.txHash)).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
-    expect((paid as Error).message).toBe(MAYBE_SENT_WAIT);
+    expect((paid as Error).message).toBe(MAYBE_SENT_WAIT());
     expect(ids(t)).toEqual([moveIn.txHash]);
 
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
@@ -326,7 +326,7 @@ describe("the watch, asked about from several places at once (final review money
     slow.release();
     expect(await poll).toMatchObject({ txHash: payment.txHash, confirmations: 1 });
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: moveIn.txHash, maybeSent: true });
-    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
   });
 
   it("never writes a slow resend of one back over the watch of another", async () => {
@@ -407,7 +407,7 @@ describe("a private payment Koios didn't answer", () => {
 
     await busyFor(t, UNSEEN_AFTER_MS - 60_000);
     expect(await t.pending.pending("preprod")).toMatchObject({ maybeSent: true });
-    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     await busyFor(t, 2 * 60_000);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
     expect(await spentSet(t.session)).toEqual(new Set());
@@ -442,7 +442,7 @@ describe("a payment that may still go through, across a lock (final review money
       await lock();
       await t.wallet.unlock(PASSWORD);
       // The first thing asked after the unlock is a new payment: it waits.
-      await expect(again(t)).rejects.toThrow(MAYBE_SENT_WAIT);
+      await expect(again(t)).rejects.toThrow(MAYBE_SENT_WAIT());
       expect(await spentSet(t.session)).toEqual(inputs);
       expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true });
     }

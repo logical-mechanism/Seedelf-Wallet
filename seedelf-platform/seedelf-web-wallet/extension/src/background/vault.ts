@@ -3,6 +3,7 @@
 // Every key is re-derived from it on unlock; no derived key is ever stored.
 // See docs/keys-and-accounts.md#password-and-vault.
 
+import { t } from "../i18n";
 import { SecretBox } from "./secret-box";
 import { fromBase64, toBase64 } from "./storage";
 
@@ -24,7 +25,7 @@ export interface VaultRecord {
 /** Opening the vault failed authentication: the password is wrong. */
 export class WrongPasswordError extends Error {
   constructor() {
-    super("Wrong password.");
+    super(t("unlock.wrongPassword"));
   }
 }
 
@@ -44,9 +45,9 @@ export async function sealVault(entropy: Uint8Array, password: string): Promise<
  * check, so no separate sentinel is stored.
  */
 export async function openVault(record: VaultRecord, password: string): Promise<Uint8Array> {
-  if (record.version !== 1) throw new Error(`Unknown vault version ${String(record.version)}.`);
+  if (record.version !== 1) throw new Error(t("worker.vault.unknownVersion", { version: String(record.version) }));
   const blob = fromBase64(record.blob);
-  if (!SecretBox.isSealed(blob)) throw new Error("The vault is damaged.");
+  if (!SecretBox.isSealed(blob)) throw new Error(t("worker.vault.damaged"));
   const secret = new TextEncoder().encode(password);
   try {
     return await SecretBox.open(blob, secret);

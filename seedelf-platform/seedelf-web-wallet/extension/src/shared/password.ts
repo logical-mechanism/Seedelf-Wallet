@@ -1,13 +1,14 @@
 // The vault password rule, shared by the UI (to guide) and the service worker
 // (to enforce): at least 12 characters, no composition rules.
 
+import { t } from "../i18n";
 export const MIN_PASSWORD_LENGTH = 12;
 
 /** Why a new password is refused, or undefined if it's acceptable. */
 export function passwordProblem(password: string): string | undefined {
   const length = [...password].length;
   if (length < MIN_PASSWORD_LENGTH) {
-    return `Use at least ${MIN_PASSWORD_LENGTH} characters (${length} so far).`;
+    return t("shared.password.tooShort", { min: MIN_PASSWORD_LENGTH, length });
   }
   return undefined;
 }

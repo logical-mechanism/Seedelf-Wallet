@@ -15,6 +15,7 @@
 // It answers browsers with CORS headers, so the wallet needs no host
 // permission for it (networks.ts).
 
+import { t } from "../i18n";
 import { blake2b } from "@noble/hashes/blake2.js";
 
 import { skip } from "./cbor";
@@ -282,11 +283,11 @@ export class Minswap {
       });
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
-      throw new MinswapError(`Couldn't reach Minswap (${cause}). Check your connection and try again.`);
+      throw new MinswapError(t("minswap.unreachable", { cause }));
     }
     if (response.ok) return (await response.json()) as T;
     const text = await response.text().catch(() => "");
-    if (response.status === 429) throw new MinswapError("Minswap is limiting requests from your connection. Wait a minute and try again.");
+    if (response.status === 429) throw new MinswapError(t("minswap.rateLimited"));
     let message = text.slice(0, 300);
     try {
       const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
@@ -294,7 +295,7 @@ export class Minswap {
     } catch {
       // Not JSON: keep the text.
     }
-    throw new MinswapError(`Minswap refused it (${response.status}): ${message}`);
+    throw new MinswapError(t("minswap.refused", { status: response.status, why: message }));
   }
 }
 
@@ -331,7 +332,7 @@ export interface BuiltOutput {
  * orders do. Throws on bytes it can't read.
  */
 export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
-  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
   const witnesses = skip(tx, 1);
   const carried = new Map<string, string>();
   for (const [key, at] of entries(tx, witnesses)) {
@@ -342,7 +343,7 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
     }
   }
   const outputs = entries(tx, 1).find(([key]) => key === 1);
-  if (!outputs) throw new Error("the transaction has no outputs");
+  if (!outputs) throw new Error(t("minswap.cbor.noOutputs"));
   return items(tx, outputs[1]).map((o) => {
     const fields = new Map<number, number>();
     if (head(tx, o).major === 5) {
@@ -352,7 +353,7 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
     }
     const address = bytesAt(tx, fields.get(0));
     const value = fields.get(1);
-    if (value === undefined) throw new Error("an output has no value");
+    if (value === undefined) throw new Error(t("minswap.cbor.noValue"));
     const coin = head(tx, value);
     const [lovelace, tokens] =
       coin.major === 0 ? [coin.n, false] : [head(tx, items(tx, value)[0]!).n, head(tx, items(tx, value)[1]!).n > 0n];
@@ -363,7 +364,7 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
       const [which, inner] = items(tx, option);
       if (head(tx, which!).n === 1n) {
         const tag = head(tx, inner!);
-        if (tag.major !== 6 || tag.n !== 24n) throw new Error("an output's inline datum isn't wrapped as CBOR");
+        if (tag.major !== 6 || tag.n !== 24n) throw new Error(t("minswap.cbor.datumNotWrapped"));
         datum = hex(bytesAt(tx, tag.p));
       } else {
         datum = carried.get(hex(bytesAt(tx, inner))) ?? null;
@@ -384,12 +385,12 @@ interface Head {
 }
 
 function head(b: Uint8Array, pos: number): Head {
-  if (pos >= b.length) throw new Error("the transaction's CBOR ends too soon");
+  if (pos >= b.length) throw new Error(t("worker.cbor.endsTooSoon"));
   const major = b[pos]! >> 5;
   const info = b[pos]! & 0x1f;
   const size = info === 24 ? 1 : info === 25 ? 2 : info === 26 ? 4 : info === 27 ? 8 : 0;
-  if (info > 27 && info < 31) throw new Error("the transaction's CBOR isn't well formed");
-  if (pos + 1 + size > b.length) throw new Error("the transaction's CBOR ends too soon");
+  if (info > 27 && info < 31) throw new Error(t("worker.cbor.notWellFormed"));
+  if (pos + 1 + size > b.length) throw new Error(t("worker.cbor.endsTooSoon"));
   let n = BigInt(info);
   if (size) n = [...b.subarray(pos + 1, pos + 1 + size)].reduce((v, x) => (v << 8n) | BigInt(x), 0n);
   return { major, n, p: pos + 1 + size, indefinite: info === 31 };
@@ -399,7 +400,7 @@ function head(b: Uint8Array, pos: number): Head {
 function items(b: Uint8Array, pos: number): number[] {
   let h = head(b, pos);
   if (h.major === 6) h = head(b, h.p);
-  if (h.major !== 4) throw new Error("the transaction's CBOR has a map where a list goes");
+  if (h.major !== 4) throw new Error(t("minswap.cbor.mapForList"));
   const found: number[] = [];
   let p = h.p;
   for (let i = 0n; h.indefinite ? b[p] !== 0xff : i < h.n; i++) {
@@ -412,7 +413,7 @@ function items(b: Uint8Array, pos: number): number[] {
 /** The map at `pos`: each small-number key, and where its value starts. */
 function entries(b: Uint8Array, pos: number): Array<[number, number]> {
   const h = head(b, pos);
-  if (h.major !== 5) throw new Error("the transaction's CBOR has a list where a map goes");
+  if (h.major !== 5) throw new Error(t("minswap.cbor.listForMap"));
   const found: Array<[number, number]> = [];
   let p = h.p;
   for (let i = 0n; h.indefinite ? b[p] !== 0xff : i < h.n; i++) {
@@ -426,10 +427,10 @@ function entries(b: Uint8Array, pos: number): Array<[number, number]> {
 
 /** The byte string at `pos`. */
 function bytesAt(b: Uint8Array, pos: number | undefined): Uint8Array {
-  if (pos === undefined) throw new Error("an output has no address");
+  if (pos === undefined) throw new Error(t("minswap.cbor.noAddress"));
   const h = head(b, pos);
-  if (h.major !== 2 || h.indefinite) throw new Error("the transaction's CBOR has something else where bytes go");
-  if (h.n > BigInt(b.length - h.p)) throw new Error("the transaction's CBOR ends too soon");
+  if (h.major !== 2 || h.indefinite) throw new Error(t("minswap.cbor.notBytes"));
+  if (h.n > BigInt(b.length - h.p)) throw new Error(t("worker.cbor.endsTooSoon"));
   return b.subarray(h.p, h.p + Number(h.n));
 }
 

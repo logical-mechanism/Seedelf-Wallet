@@ -86,8 +86,9 @@
 // isn't known yet: a box someone else's mix moved has no record (made,
 // independent review M14).
 
+import { t } from "../i18n";
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
-import { lovejoinOn, NETWORKS, POOL_SEEDABLE, type NetworkName } from "../networks";
+import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
   LovejoinFunding,
@@ -130,10 +131,20 @@ export const SESSION_LOVEJOIN_SENDING = "seedelf.lovejoin.sending.";
 /** A built mix is only sent within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
 
+/**
+ * Ends the refusal when Lovejoin's pool is under its floor and the public
+ * account could seed it instead. The Lovejoin page matches on it to offer
+ * that, so the worker and the page keep one wording between them. It lived in
+ * `networks.ts` until chunk 19: that module is imported by `vite.config.ts`
+ * (through `manifest.ts`), so a `t()` there pulled i18next and all three
+ * locale files into the build's own config graph.
+ */
+export const POOL_SEEDABLE = () => t("lj.poolSeedable");
+
 /** A mix from the public account is built or sent while the last one from it is still being sent. */
-const PUBLIC_STILL_SENDING = "Your last mix from the public account is still being sent. Wait for it to finish.";
+const PUBLIC_STILL_SENDING = () => t("lj.mixSending");
 /** The mix kept for Send isn't the one asked for, or something took its place since. */
-const NOT_READY = "That mix isn't ready to send. Review it again.";
+const NOT_READY = () => t("lj.mixNotReady");
 /**
  * A mix from the public account is built while a transaction of the last one
  * may have gone through, unseen yet, and the wallet is sure of it `left` ms
@@ -144,13 +155,14 @@ const NOT_READY = "That mix isn't ready to send. Review it again.";
  */
 const publicMaybeWait = (left: number) => {
   if (left <= 0) {
-    return "Your last mix from the public account stopped at a transaction that may have gone through, and the wallet couldn't reach Koios to check whether it did. No other mix from the account is built until it knows. Try again in a minute.";
+    return t("lj.mixMaybeNoKoios");
   }
   const minutes = Math.max(1, Math.ceil(left / 60_000));
   const hours = Math.floor(minutes / 60);
-  const unit = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
-  const about = hours ? `${unit(hours, "hour")}${minutes % 60 ? ` ${unit(minutes % 60, "minute")}` : ""}` : unit(minutes, "minute");
-  return `Your last mix from the public account stopped at a transaction that may have gone through, and the network hasn't shown it yet. No other mix from the account is built until the wallet knows: once the network shows it, or what it spends, that takes a few minutes. If it never went through, the wallet can only be sure two hours after it was sent, in about ${about}.`;
+  const hoursText = (n: number) => t("lj.hours", { count: n });
+  const minutesText = (n: number) => t("lj.minutes", { count: n });
+  const about = hours ? `${hoursText(hours)}${minutes % 60 ? ` ${minutesText(minutes % 60)}` : ""}` : minutesText(minutes);
+  return t("lj.mixMaybeWait", { about });
 };
 
 /**
@@ -396,14 +408,14 @@ export async function pumpChain(
  */
 export class ChainGone extends Error {
   constructor() {
-    super(CHAIN_CUT);
+    super(CHAIN_CUT());
   }
 }
 
 /** The network measured a chain's scripts differently from the wallet: the chain doesn't start. */
 export class LovejoinSkipped extends Error {
   constructor(readonly reason: string) {
-    super(`Lovejoin was left out: ${reason}.`);
+    super(t("lj.leftOut", { reason }));
   }
 }
 
@@ -414,7 +426,7 @@ export class LovejoinSkipped extends Error {
  */
 class StalePool extends Error {
   constructor(readonly unknown: string[]) {
-    super("Lovejoin's pool changed while the wallet read it.");
+    super(t("lj.stalePool"));
   }
 }
 
@@ -603,7 +615,7 @@ interface Withdrawing {
 /** Koios didn't answer a withdraw's submit: it may have gone through. */
 class WithdrawMaybeSent extends Error {
   constructor(
-    message = "Koios didn't answer when the box was sent back, so it may have gone through. The wallet looks for it before bringing back another.",
+    message = t("lj.boxMaybeSent"),
   ) {
     super(message);
   }
@@ -690,7 +702,7 @@ interface KeptMaybe {
 const keptMaybeName = (network: NetworkName) => `lovejoinMaybe.${network}` as const;
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
-export const CHAIN_CUT = "The wallet locked, or the browser closed, while its chain was being sent.";
+export const CHAIN_CUT = () => t("lj.chainCut");
 
 /**
  * A chain's record is kept this long after it ended, even when the pool
@@ -731,7 +743,7 @@ interface SendingPublic extends ChainProgress {
 
 /** What a chain's transaction `i` is called, where a stop says which went and which may have. */
 const stepName = (txs: LovejoinChain["txs"], i: number) =>
-  txs[i]?.kind === "deposit" ? "its deposit" : `its transaction ${i + 1} of ${txs.length}`;
+  txs[i]?.kind === "deposit" ? t("lj.step.deposit") : t("lj.step.transaction", { number: i + 1, total: txs.length });
 
 export interface LovejoinDeps extends ScriptSpendDeps {
   store: PrivateStore;
@@ -1125,7 +1137,7 @@ export const POOL_ROOM_MS = 5 * 60_000;
  */
 export function checkBoxes(boxes: number, most: number = MAX_MIX_BOXES): void {
   if (!Number.isInteger(boxes) || boxes < 1 || boxes > most) {
-    throw new Error(`${most === MAX_MIX_BOXES ? "Mix" : "Seed"} 1 to ${most} boxes at a time.`);
+    throw new Error(t(most === MAX_MIX_BOXES ? "lj.boxRange.mix" : "lj.boxRange.seed", { most }));
   }
 }
 
@@ -1218,7 +1230,7 @@ export class LovejoinService {
   /** The pool as Koios lists it (a read), and what the wallet's sent transactions spend. */
   private async listing(network: NetworkName): Promise<{ rows: KoiosUtxo[]; spent: Set<string> }> {
     const hash = NETWORKS[network].lovejoin?.mixBox;
-    if (!hash) throw new Error("Lovejoin isn't on this network yet.");
+    if (!hash) throw new Error(t("lj.notOnNetwork"));
     const { wallet, session } = this.deps;
     const [rows, spent] = await Promise.all([
       this.deps.koios(network).credentialUtxos([hash]),
@@ -1317,18 +1329,18 @@ export class LovejoinService {
     const { depth } = await this.settings();
     const split = await this.split(network);
     const { reserved } = split;
-    if (!split.owned.length) throw new Error("None of your boxes is in Lovejoin's pool, so there's nothing to mix again.");
+    if (!split.owned.length) throw new Error(t("lj.noneToMixAgain"));
     // What made each box no record accounts for says which the account put in: asked of now, whatever the pool
     // reads' count says, and none is paid for from the private balance while Koios hasn't said (independent review M14).
     if (!publicToo && (await this.made(network, split.owned)).untold.length) {
       throw new Error(
-        "Koios hasn't said how some of your boxes went into Lovejoin's pool, so the wallet can't tell yet whether your public account put them in. Try again in a minute.",
+        t("lj.untoldSome"),
       );
     }
     const owned = publicToo ? split.owned : this.privately(split.owned, await this.read(network));
     if (!owned.length) {
       throw new Error(
-        "Your boxes in Lovejoin's pool came from a mix from your public account: mixing them again from your private balance would tie the two. Mix them again from your public account instead.",
+        t("lj.privacy.fromAccount"),
       );
     }
     this.floor(network, split.others.length);
@@ -1353,7 +1365,7 @@ export class LovejoinService {
   private floorShort(network: NetworkName, others: number): string | undefined {
     const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
     if (others >= floor) return undefined;
-    return `Lovejoin's pool holds ${others} ${others === 1 ? "box" : "boxes"} that aren't yours, and the wallet mixes only once it holds ${floor}, so there's enough to mix with`;
+    return t("lj.floorShort", { count: others, floor });
   }
 
   /**
@@ -1363,7 +1375,7 @@ export class LovejoinService {
    */
   private floor(network: NetworkName, others: number, seedable = false): void {
     const short = this.floorShort(network, others);
-    if (short) throw new Error(`${short}. ${seedable ? POOL_SEEDABLE : "Try again later."}`);
+    if (short) throw new Error(`${short}. ${seedable ? POOL_SEEDABLE() : t("lj.tryLater")}`);
   }
 
   /** Whether `others` boxes in the pool mix `boxes` boxes at the set depth, or why not. */
@@ -1372,7 +1384,7 @@ export class LovejoinService {
     const needed = boxes * mixesPerBox(depth) * 2;
     if (others < needed) {
       throw new Error(
-        `Lovejoin's pool has ${others} boxes to mix with, and ${boxes === 1 ? "a box" : `${boxes} boxes`} ${depth} ${depth === 1 ? "wave" : "waves"} deep ${boxes === 1 ? "needs" : "need"} ${needed}. Mix fewer, or less deep (Settings, Lovejoin).`,
+        t("lj.notEnough", { others, count: boxes, depth, needed }),
       );
     }
   }
@@ -1468,8 +1480,8 @@ export class LovejoinService {
       if (!owned.length) {
         throw new LovejoinSkipped(
           untold.length
-            ? "Koios hasn't said how your boxes went into Lovejoin's pool, so none could be mixed again from your private balance"
-            : "none of your boxes is in Lovejoin's pool anymore",
+            ? t("lj.untoldAll")
+            : t("lj.noneLeft"),
         );
       }
       count = Math.min(count, owned.length);
@@ -1477,7 +1489,7 @@ export class LovejoinService {
     // Each mix takes two boxes from the pool, never one twice, and never one of ours.
     const perBox = mixesPerBox(depth);
     if (others.length < perBox * 2) {
-      throw new LovejoinSkipped(`Lovejoin's pool has ${others.length} boxes to mix with, and this needs ${perBox * 2}`);
+      throw new LovejoinSkipped(t("lj.needsMore", { others: others.length, needed: perBox * 2 }));
     }
     // One chain is at most MAX_CHAIN_MIXES long, and one deposit makes at most MAX_DEPOSIT_BOXES,
     // whatever the spare ADA pays for: what's left comes back with the return.
@@ -1533,7 +1545,7 @@ export class LovejoinService {
         if (!(e instanceof StalePool)) throw e;
         if (tries >= STALE_POOL_TRIES) {
           // Koios is behind: another try, later, may find it caught up.
-          throw new KoiosError("Lovejoin's pool changed while the wallet read it: a box it drew isn't there anymore. Try again in a minute.");
+          throw new KoiosError(t("lj.poolDrifted"));
         }
         for (const o of e.unknown) avoid.add(o);
       }
@@ -1561,8 +1573,8 @@ export class LovejoinService {
     const mine = reservationOf(txs, until);
     await this.reserving(network, (kept) => {
       const was = kept[owner];
-      if (owner === chainOwner() && until !== undefined && was && was.until === undefined) throw new Error(PUBLIC_STILL_SENDING);
-      if (held && !(was?.until !== undefined && sameInputs(was, mine))) throw new Error(NOT_READY);
+      if (owner === chainOwner() && until !== undefined && was && was.until === undefined) throw new Error(PUBLIC_STILL_SENDING());
+      if (held && !(was?.until !== undefined && sameInputs(was, mine))) throw new Error(NOT_READY());
       const others = new Set(Object.entries(kept).flatMap(([chain, r]) => (chain === owner ? [] : r.inputs)));
       const taken = mine.inputs.filter((o) => others.has(o));
       if (taken.length) throw new StalePool(taken);
@@ -1649,7 +1661,7 @@ export class LovejoinService {
     const unknown = unknownInputs(answer);
     if (unknown) throw new StalePool(unknown);
     const checked = JSON.parse(wasm.declaredCovers(first.txCbor, JSON.stringify(answer))) as { covers: boolean; reason?: string };
-    if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? "the network measured its scripts differently");
+    if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? t("lj.measuredDifferently"));
   }
 
   /**
@@ -1667,7 +1679,7 @@ export class LovejoinService {
    * deposits, which `sortOut` holds back), until Bring one back.
    */
   async publicBuild(network: NetworkName, boxes: number, seed = false): Promise<LovejoinPublicSummary> {
-    if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
     // A seed is one deposit with no mixes, so it takes as many boxes as the
     // transaction holds, not the handful a mix chain can send.
     checkBoxes(boxes, seed ? MAX_DEPOSIT_BOXES : MAX_MIX_BOXES);
@@ -1679,10 +1691,10 @@ export class LovejoinService {
     // Only a mix puts collateral up: it spends the pool's scripts. A seed is
     // the deposit alone, which spends no script, so it asks for none.
     if (!collateral && !seed) {
-      throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
+      throw new Error(t("lj.needCollateral"));
     }
     if (!utxos.length) {
-      throw nothingInAccount(held, seed ? "Your public account is empty, so there's nothing to put in." : "Your public account is empty, so there's nothing to mix.");
+      throw nothingInAccount(held, seed ? t("lj.accountEmptyPutIn") : t("lj.accountEmptyMix"));
     }
     const { depth: chosen, delay } = await this.settings();
     // A seed makes no mixes, so it draws nothing from the pool and the floor
@@ -1726,7 +1738,7 @@ export class LovejoinService {
   private publicReady(network: NetworkName): Promise<void> {
     return this.inTurn(`public.${network}`, async () => {
       const sending = await this.sendingOf(network);
-      if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING);
+      if (sending && !sending.stopped) throw new Error(PUBLIC_STILL_SENDING());
       const until = await this.publicUnsettledNow(network);
       if (until !== undefined) throw new Error(publicMaybeWait(until - this.deps.now()));
       await this.reserving(network, (kept) => {
@@ -1746,7 +1758,7 @@ export class LovejoinService {
       await this.crossCheck(network, built);
     } catch (e) {
       await this.unreserve(network, chainOwner(), reserved).catch(() => undefined);
-      if (e instanceof LovejoinSkipped) throw new Error(`The network doesn't measure Lovejoin's scripts as the wallet does (${e.reason}), so nothing was sent.`);
+      if (e instanceof LovejoinSkipped) throw new Error(t("lj.crossCheckFailed", { reason: e.reason }));
       throw e;
     }
     return { ...built, reserved };
@@ -1773,23 +1785,23 @@ export class LovejoinService {
    * account. The boxes not mixed yet go first.
    */
   async publicAgainBuild(network: NetworkName): Promise<PublicAgain> {
-    if (!this.available(network)) throw new Error("Lovejoin isn't on this network yet.");
+    if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
     await this.publicReady(network);
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
-      throw new Error("Lovejoin's mixes need your public account's collateral. Set it aside in Settings, Collateral, first.");
+      throw new Error(t("lj.needCollateral"));
     }
-    if (!utxos.length) throw nothingInAccount(held, "Your public account is empty, so there's nothing to pay for the mixes with.");
+    if (!utxos.length) throw nothingInAccount(held, t("lj.accountEmptyPay"));
     const { depth, delay } = await this.settings();
     const chain = await this.unstale(async (avoid) => {
       const split = await this.split(network, chainOwner(), avoid);
       this.floor(network, split.others.length);
       const schedule = await this.read(network);
       const theirs = free(fromPublic(split.owned, schedule), split.reserved);
-      if (!theirs.length) throw new Error("None of your boxes in Lovejoin's pool came from a mix from your public account.");
+      if (!theirs.length) throw new Error(t("lj.noneFromAccount"));
       const others = free(split.others, split.reserved).length;
       const perBox = mixesPerBox(depth);
       const boxes = Math.min(theirs.length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
@@ -1850,12 +1862,12 @@ export class LovejoinService {
   private async publicStart(network: NetworkName, txHash: string): Promise<void> {
     const { wallet, session, now } = this.deps;
     const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
-    if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY);
-    if (now() - built.builtAt > BUILT_TTL_MS) throw new Error("That mix was built more than 10 minutes ago. Review it again.");
+    if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY());
+    if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("lj.mixTooOld"));
     // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
     await settleMaybeSent(this.deps, network);
     const before = await this.sendingOf(network);
-    if (before && !before.stopped) throw new Error(PUBLIC_STILL_SENDING);
+    if (before && !before.stopped) throw new Error(PUBLIC_STILL_SENDING());
     const until = await this.publicUnsettledNow(network);
     if (until !== undefined) throw new Error(publicMaybeWait(until - now()));
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
@@ -1971,7 +1983,7 @@ export class LovejoinService {
               try {
                 try {
                   const submitted = await koios.submitTx(bytes);
-                  if (submitted !== step.txHash) throw new Error(`Koios answered with another transaction id (${submitted}).`);
+                  if (submitted !== step.txHash) throw new Error(t("worker.pending.otherTxId", { id: submitted }));
                 } catch (e) {
                   if (!(e instanceof SpentInputError)) throw e;
                   await sentAlready(koios, step.txHash, e);
@@ -2039,7 +2051,7 @@ export class LovejoinService {
       // A lock cut it: whatever holds its place now stays as it is, and its record says it was cut; its first
       // transaction's mark with it, unless that's known to have gone.
       if (e instanceof ChainGone) {
-        await this.chainEnded(network, id, CHAIN_CUT, sending.next > 0 ? null : undefined).catch(() => undefined);
+        await this.chainEnded(network, id, CHAIN_CUT(), sending.next > 0 ? null : undefined).catch(() => undefined);
         throw e;
       }
       // Stopped at a transaction that may have gone through: what it spends counts as spent, and stays reserved,
@@ -2058,7 +2070,7 @@ export class LovejoinService {
       };
       sending.stopped =
         unsure !== undefined
-          ? `Koios didn't answer when ${stepName(sending.txs, unsure)} was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.`
+          ? t("lj.stepMaybeSent", { what: stepName(sending.txs, unsure) })
           : e instanceof Error
             ? e.message
             : String(e);
@@ -2269,16 +2281,16 @@ export class LovejoinService {
     const by = m.at + SPENT_KEEP_MS;
     const how = await this.lookFor(network, m);
     if (!how) return by;
-    const what = c.deposit === m.txHash ? "its deposit" : `its transaction ${m.index + 1} of ${c.total}`;
+    const what = c.deposit === m.txHash ? t("lj.step.deposit") : t("lj.step.transaction", { number: m.index + 1, total: c.total });
     const lead = m.unanswered
-      ? `Koios didn't answer when ${what} was sent`
-      : c.stopped === CHAIN_CUT
-        ? `The wallet locked, or the browser closed, as ${what} was sent`
-        : `The mix stopped as ${what} was sent`;
+      ? t("lj.lead.unanswered", { what })
+      : c.stopped === CHAIN_CUT()
+        ? t("lj.lead.cut", { what })
+        : t("lj.lead.stopped", { what });
     const why = {
-      in: `${lead}. It went through, and the mix stopped there.`,
-      spent: `${lead}, and what it spends is spent now: if that was it, the boxes it made wait in the pool, not mixed yet.`,
-      never: `${lead}, and it never went through.`,
+      in: t("lj.why.in", { lead }),
+      spent: t("lj.why.spent", { lead }),
+      never: t("lj.why.never", { lead }),
     }[how];
     await this.update(network, (s) => {
       const r = s.chains.find((x) => x.id === c.id);
@@ -2399,7 +2411,7 @@ export class LovejoinService {
   /**
    * Marks each chain recorded as being sent whose progress is gone as
    * stopped: a lock, a closed browser or an update wiped it partway, and
-   * nothing sends the rest (CHAIN_CUT); or, whose progress says it stopped,
+   * nothing sends the rest (CHAIN_CUT()); or, whose progress says it stopped,
    * with its reason. No Koios request.
    */
   async cuts(network: NetworkName): Promise<void> {
@@ -2412,7 +2424,7 @@ export class LovejoinService {
       if (this.starting.has(c.id)) continue;
       const progress = await wallet.withKeys(() => session.get<ChainProgress & { stopped?: string }>(c.progress));
       // Another chain's in its place is this one's gone too.
-      if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, CHAIN_CUT);
+      if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, CHAIN_CUT());
       else if (progress.stopped) stopped.set(c.id, progress.stopped);
     }
     if (!stopped.size) return;
@@ -2978,13 +2990,13 @@ export class LovejoinService {
 
   private async withdrawNowNow(network: NetworkName, box: OutRef | undefined, anyway: boolean): Promise<PendingTx> {
     if (await this.deps.mixingAgain?.(network)) {
-      throw new Error("Your boxes are being mixed again. Bring one back once that's done.");
+      throw new Error(t("lj.mixingAgain"));
     }
     if (await this.chainsSending(network)) {
-      throw new Error("A chain of yours is being sent through Lovejoin. Bring a box back once it's all sent.");
+      throw new Error(t("lj.chainSending"));
     }
     if (await this.settleWithdrawing(network)) {
-      throw new Error("The last box brought back may still be on its way: Koios didn't answer when it was sent. Try again in a few minutes.");
+      throw new Error(t("lj.lastBoxMaybe"));
     }
     // Nor while a payment may still go through: Home's banner watches that one until it's settled (pending.ts).
     await settleMaybeSent(this.deps, network);
@@ -3001,8 +3013,8 @@ export class LovejoinService {
     let force: OutRef[] = [];
     if (box) {
       chosen = owned.find((b) => ref(b) === ref(box));
-      if (!chosen) throw new Error("That box isn't in Lovejoin's pool as yours anymore.");
-      if (reserved.has(ref(chosen))) throw new Error("A mix you built is about to take that box. Bring it back once that's sent.");
+      if (!chosen) throw new Error(t("lj.boxGone"));
+      if (reserved.has(ref(chosen))) throw new Error(t("lj.boxReserved"));
       if (!anyway && !known(chosen)) force = [chosen];
     } else {
       const held = new Set(notMixedYet(before, owned).map(ref));
@@ -3016,22 +3028,22 @@ export class LovejoinService {
       // A box Koios hasn't said the making of may be a deposit's: after a restore, or where a count missed it (M14).
       if (!anyway && [...unsure, ...untold].some((b) => ref(b) === ref(chosen!))) {
         throw new Error(
-          "Koios hasn't said how that box went into the pool, so the wallet can't tell whether it was mixed. Brought back now, it may show where it went in. Try again in a minute, or bring it back anyway.",
+          t("lj.privacy.boxUntold"),
         );
       }
       if (!anyway && unmixed.some((b) => ref(b) === ref(chosen!))) {
         // After a restore, one a deposit made: whose deposit, and why no mix followed it, the wallet can't know (M14).
         throw new Error(
           deposits.some((b) => ref(b) === ref(chosen!))
-            ? "That box wasn't mixed: Koios says a deposit put it into the pool, and no mix has moved it since. Brought back now, it shows where it went in. Mix your boxes again first, or bring it back anyway."
-            : "That box wasn't mixed: its chain stopped before mixing it. Brought back now, it shows where it went in. Mix your boxes again first, or bring it back anyway.",
+            ? t("lj.privacy.boxUnmixed")
+            : t("lj.privacy.boxChainStopped"),
         );
       }
     } else {
       // One ahead Koios can't say of: none is taken in its place, which would bring back one backOrder puts after it.
       if (untold.length) {
         throw new Error(
-          "Koios hasn't said yet how some of your boxes went into Lovejoin's pool, so the wallet can't tell whether they were mixed. Try again in a minute.",
+          t("lj.untoldSomeMixed"),
         );
       }
       // Only a box whose making is known now: a record accounts for it, or Koios said a mix made it. Never one
@@ -3043,12 +3055,12 @@ export class LovejoinService {
         // known not to be mixed are said apart from those Koios hasn't said of, which may be (M14).
         throw new Error(
           unsure.length && unsure.length === unmixed.length
-            ? "Koios hasn't said yet how your boxes went into Lovejoin's pool, so none comes back until it has. Try again in a minute, or choose one to bring back anyway."
+            ? t("lj.untoldAllBack")
             : unsure.length
-              ? "Some of your boxes in Lovejoin's pool weren't mixed yet, and Koios hasn't said yet how the others went in. Mix them again (Mix my boxes again once Koios has said), or choose one to bring back anyway."
+              ? t("lj.privacy.someUnmixed")
               : unmixed.length
-                ? "Your boxes in Lovejoin's pool weren't mixed yet. Mix them again first, or choose one to bring back anyway."
-                : "None of your boxes is in Lovejoin's pool.",
+                ? t("lj.privacy.allUnmixed")
+                : t("lj.noneInPool"),
         );
       }
     }
@@ -3121,9 +3133,9 @@ export class LovejoinService {
       txCbor: string;
       txHash: string;
     };
-    if (finished.txHash !== built.txHash) throw new Error("Signing changed the withdraw, so it wasn't sent.");
+    if (finished.txHash !== built.txHash) throw new Error(t("lj.signingChanged"));
     if (unlocked !== undefined && (await wallet.unlockedAt()) !== unlocked) {
-      throw new Error("The wallet locked while the withdraw was built, so it wasn't sent.");
+      throw new Error(t("lj.lockedWhileBuilding"));
     }
     const bytes = hexBytes(finished.txCbor);
     // Kept, sealed, and its box counted as spent, before it's sent: a lock, a
@@ -3169,7 +3181,7 @@ export class LovejoinService {
     }
     if (submitted !== built.txHash) {
       throw new WithdrawMaybeSent(
-        `Koios answered with another transaction id (${submitted}), so the box may have gone back. The wallet looks for it before bringing back another.`,
+        t("lj.withdrawOtherTxId", { id: submitted }),
       );
     }
     // Sent: what's left is best effort. A lock before its history is written

@@ -5,6 +5,7 @@
 // never submits that form.
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { useT } from "../../i18n";
 
 import { CloseIcon } from "./Icons";
 
@@ -22,6 +23,7 @@ export function Modal({
   foot?: ReactNode;
   children: ReactNode;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current!;
@@ -46,7 +48,7 @@ export function Modal({
         <h2 id={titleId} className="modal__title">
           {title}
         </h2>
-        <button type="button" className="icon-button" onClick={onClose} aria-label="Close" title="Close">
+        <button type="button" className="icon-button" onClick={onClose} aria-label={t("common.close")} title={t("common.close")}>
           <CloseIcon />
         </button>
       </header>

@@ -4,6 +4,7 @@
 // until the user has reviewed the result and pressed Send.
 
 import { useState, type FormEvent } from "react";
+import { useT } from "../../i18n";
 
 import type { Balances, MoveInSummary, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
@@ -35,6 +36,7 @@ export function MoveIn({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const t = useT();
   const [amount, setAmount] = useState("");
   const [max, setMax] = useState(false);
   const [tokenAmounts, setTokenAmounts] = useState<Record<string, string>>({});
@@ -79,36 +81,33 @@ export function MoveIn({
   if (summary) {
     return (
       <Screen
-        title="Review making it private"
+        title={t("moveIn.review.title")}
         titleId="move-in-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={t("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? t("common.sending") : t("common.send")}
           </button>
         }
       >
         <ReviewRows testId="move-in-review">
-          <Row label="Into your private balance" value={`${formatAda(summary.lovelace)} ₳`} strong />
+          <Row label={t("moveIn.review.into")} value={`${formatAda(summary.lovelace)} ₳`} strong />
           {summary.tokens.map((t) => {
             const known = cardano.tokens.find((c) => key(c) === key(t));
             return <TokenAmountRow key={key(t)} label="" token={known ?? t} amount={tokenQuantity(network, { ...known, ...t })} />;
           })}
-          <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label="New private UTxOs" value={String(summary.depositOutputs)} />
+          <Row label={t("review.backToPublic")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label={t("moveIn.review.newUtxos")} value={String(summary.depositOutputs)} />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="move-in-tx" />
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
         <LeftOutNote leftOut={summary.leftOut} testId="move-in-left-out" />
-        <p className="note">
-          The new UTxOs are locked to fresh copies of your Seedelf key's register. It takes about a minute for the network
-          to confirm them.
-        </p>
+        <p className="note">{t("moveIn.review.note")}</p>
       </Screen>
     );
   }
@@ -116,46 +115,45 @@ export function MoveIn({
   return (
     <Screen
       onSubmit={review}
-      title="Make private"
+      title={t("home.action.makePrivate")}
       titleId="move-in-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
+      aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
         <>
           <button type="submit" className="primary" disabled={!ready || busy}>
-            {busy ? "Building…" : "Review"}
+            {busy ? t("common.building") : t("common.review")}
           </button>
           <BuildStage busy={busy} />
         </>
       }
     >
-      <p className="note">Move ADA, and any amount of your tokens, from your public account into your private balance.</p>
+      <p className="note">{t("moveIn.note")}</p>
 
       <div className="field">
-        <label htmlFor="move-in-amount">Amount</label>
+        <label htmlFor="move-in-amount">{t("common.amount")}</label>
         <AdaInput
           id="move-in-amount"
           value={amount}
           onChange={setAmount}
           disabled={max}
-          shown="Max"
-          placeholder={withTokens ? "Minimum" : "0"}
+          shown={t("common.max")}
+          placeholder={withTokens ? t("common.minimum") : "0"}
         >
           <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
-            Max
+            {t("common.max")}
           </button>
         </AdaInput>
         {tooMuch && (
           <p className="field-note" data-testid="move-in-too-much">
-            That's more than the {formatAda(cardano.lovelace)} ₳ available in your public account.
+            {t("moveIn.tooMuch", { amount: formatAda(cardano.lovelace) })}
           </p>
         )}
       </div>
       {max ? (
         <p className="note">
-          Everything except the fee and what the tokens you keep need{rewards ? ", staking rewards included" : ""}. Your
-          collateral and any UTxOs you locked stay put.
+          {t(rewards ? "moveIn.maxNoteRewards" : "moveIn.maxNote")}
         </p>
       ) : (
         <>
@@ -167,13 +165,11 @@ export function MoveIn({
         held={cardano.tokens}
         typed={tokenAmounts}
         onChange={setTokenAmounts}
-        legend="Bring tokens along (optional)"
+        legend={t("moveIn.bringTokens")}
       />
       <HandleWarning tokens={tokens.sent} />
 
-      <Callout tone="privacy">
-        Making money private links your public account to the new private UTxOs, but not to any Seedelf name.
-      </Callout>
+      <Callout tone="privacy">{t("moveIn.privacy.links")}</Callout>
     </Screen>
   );
 }

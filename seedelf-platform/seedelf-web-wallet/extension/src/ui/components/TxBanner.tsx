@@ -6,6 +6,7 @@
 // use it.
 
 import type { ReactNode } from "react";
+import { useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import { shortHex } from "../format";
@@ -34,6 +35,7 @@ export function TxBanner({
   /** A private transaction: its link says what opening it tells Cardanoscan. */
   private?: boolean;
 }) {
+  const t = useT();
   return (
     <section className={`callout tx-banner${state === "done" ? " callout--done" : ""}`} role="status" data-testid={testId}>
       <strong className="tx-banner__title">
@@ -56,11 +58,11 @@ export function TxBanner({
         </span>
       )}
       <ExplorerLink network={network} tx={txHash} private={isPrivate} className="banner__link">
-        {shortHex(txHash, 10, 6)} on Cardanoscan
+        {t("txBanner.onCardanoscan", { hash: shortHex(txHash, 10, 6) })}
       </ExplorerLink>
       {onDismiss && (
         <button type="button" className="tx-banner__dismiss" onClick={onDismiss}>
-          Dismiss
+          {t("common.dismiss")}
         </button>
       )}
     </section>

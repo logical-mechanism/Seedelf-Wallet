@@ -2,6 +2,7 @@
 // await, so the event that woke the worker is never lost.
 
 import { enabledNetworks, NETWORKS } from "../networks";
+import { t } from "../i18n";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
 import { DAPP_CHANGED, STATE_CHANGED, type BuildStage, type Message } from "../shared/rpc";
@@ -303,7 +304,7 @@ async function answerUi(message: Message, report: (stage: BuildStage) => void): 
   } catch (e) {
     if (!isTrap(e)) throw e;
     await ctx.wallet.trapped();
-    throw new Error(WASM_BROKEN);
+    throw new Error(WASM_BROKEN());
   }
 }
 
@@ -330,7 +331,7 @@ chrome.runtime.onConnect.addListener((port) => {
     if (call.ping || typeof call.id !== "string") return;
     const id = call.id;
     if (!isDappMethod(call.method) || !Array.isArray(call.args)) {
-      answer({ id, error: { code: APIError.InvalidRequest, info: "Seedelf Wallet doesn't know that method." } });
+      answer({ id, error: { code: APIError.InvalidRequest, info: t("dapp.unknownMethod") } });
       return;
     }
     const method = call.method;
