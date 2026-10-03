@@ -14,6 +14,7 @@
 // review §4.1).
 
 import { useEffect, useState } from "react";
+import { t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
@@ -26,7 +27,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
-import { formatAda, plural } from "../format";
+import { formatAda } from "../format";
 import { useNetwork } from "../network";
 import { pairOf } from "./Swaps";
 
@@ -34,7 +35,7 @@ import { pairOf } from "./Swaps";
 export const isClaimable = (s: SessionView) => s.stage === "open" && !s.auto && (s.holding?.utxos ?? 0) > 0;
 
 /** A session by name: its site, or its swap. */
-const nameOf = (network: NetworkName, s?: SessionView) => (s?.site ? new URL(s.site.origin).host : s ? pairOf(s, network) : "A session");
+const nameOf = (network: NetworkName, s?: SessionView) => (s?.site ? new URL(s.site.origin).host : s ? pairOf(s, network) : t("claim.aSession"));
 
 type Built = { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
 type Result = { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
@@ -50,6 +51,7 @@ export function ClaimAll({
   /** Sent: the dApps page reads the sessions again. */
   onDone: () => void;
 }) {
+  const t = useT();
   const [built, setBuilt] = useState<Built>();
   const [chosen, setChosen] = useState<Set<number>>(new Set());
   // Built again to come back directly: none of them goes through Lovejoin.
@@ -111,24 +113,24 @@ export function ClaimAll({
   if (result) {
     return (
       <Screen
-        title="Coming back"
+        title={t("claim.result.title")}
         titleId="claim-result-title"
-        aside={`${plural(result.sent.length, "return")} sent`}
+        aside={t("claim.result.sentCount", { count: result.sent.length })}
         error={error}
         foot={
           <button type="button" className="primary" onClick={onDone}>
-            Done
+            {t("common.done")}
           </button>
         }
       >
         {result.sent.length > 0 && (
-          <section className="section" aria-label="Sent">
-            <h2>Sent</h2>
+          <section className="section" aria-label={t("claim.sent")}>
+            <h2>{t("claim.sent")}</h2>
             <ul className="list" data-testid="claim-sent">
               {result.sent.map((x) => (
                 <li key={x.index} className="list__row">
                   <span className="list__name">{nameOf(network, byIndex.get(x.index))}</span>
-                  <span className="list__value note">Private session {x.index + 1}</span>
+                  <span className="list__value note">{t("claim.session", { number: x.index + 1 })}</span>
                 </li>
               ))}
             </ul>
@@ -146,7 +148,7 @@ export function ClaimAll({
           </Callout>
         )}
         <p className="note">
-          Each lands within a minute or two. A site's session stays connected, to an empty account, until you disconnect it.
+          {t("claim.result.note")}
         </p>
       </Screen>
     );
@@ -162,19 +164,19 @@ export function ClaimAll({
 
   return (
     <Screen
-      title="Bring everything back"
+      title={t("claim.title")}
       titleId="claim-title"
       onBack={onBack}
       backDisabled={busy}
-      aside="Each session in its own transaction. Nothing is sent until you press Send"
+      aside={t("claim.aside")}
       error={error}
       foot={
         <button type="button" className="primary" onClick={() => void send()} disabled={!built || busy || !picked.length}>
-          {busy ? "Sending…" : picked.length ? `Send ${plural(picked.length, "return")}` : "Choose a session"}
+          {busy ? t("common.sending") : picked.length ? t("claim.sendReturns", { count: picked.length }) : t("claim.chooseSession")}
         </button>
       }
     >
-      {!built && !error && <p className="note center empty">Building each session's return…</p>}
+      {!built && !error && <p className="note center empty">{t("claim.building")}</p>}
       {built && (
         <ClaimReview
           built={built}
@@ -203,10 +205,10 @@ export function ClaimAll({
  * "transaction" of it would be saying one of twelve.
  */
 function claimLabel(r: SessionBackSummary, several: boolean): string | undefined {
-  const which = r.lovejoin && r.lovejoin.txs > 1 ? (r.lovejoin.again ? "first mix" : "deposit") : undefined;
-  if (several) return `Private session ${r.index + 1}'s ${which ?? "transaction"}`;
+  const which = r.lovejoin && r.lovejoin.txs > 1 ? t(r.lovejoin.again ? "claim.firstMix" : "claim.deposit") : undefined;
+  if (several) return t("claim.sessionsTx", { number: r.index + 1, which: which ?? t("claim.transaction") });
   // One return coming back directly is one transaction: the button's own words do.
-  return which && `The ${which}'s transaction`;
+  return which && t("claim.whichTx", { which });
 }
 
 export function ClaimReview({
@@ -226,6 +228,7 @@ export function ClaimReview({
   onToggle: (index: number) => void;
   onDirect: () => void;
 }) {
+  const t = useT();
   const network = useNetwork();
   const byIndex = new Map(sessions.map((s) => [s.index, s]));
   const picked = built.returns.filter((r) => chosen.has(r.index));
@@ -239,8 +242,8 @@ export function ClaimReview({
   return (
     <>
       {built.returns.length > 0 && (
-        <section className="section" aria-label="Sessions">
-          <h2>Tap a session to leave it out</h2>
+        <section className="section" aria-label={t("claim.sessions")}>
+          <h2>{t("claim.tapToLeaveOut")}</h2>
           <ul className="list" data-testid="claim-returns">
             {built.returns.map((r) => {
               const on = chosen.has(r.index);
@@ -258,11 +261,11 @@ export function ClaimReview({
                     <span className="token-row__label">{nameOf(network, byIndex.get(r.index))}</span>
                     <span className="token-row__amount">{formatAda(r.lovelace)} ₳</span>
                     <span className="token-row__sub">
-                      Private session {r.index + 1}
-                      {r.tokens.length ? ` · and ${plural(r.tokens.length, "token")}` : ""}
-                      {r.lovejoin ? ` · and ${plural(r.lovejoin.boxes, "box", "boxes")} of 10 ₳ through Lovejoin` : ""}
-                      {r.lovejoinSkipped ? " · Lovejoin left out" : ""}
-                      {r.leftOut?.length ? ` · leaves ${plural(r.leftOut.length, "UTxO")}` : ""}
+                      {t("claim.session", { number: r.index + 1 })}
+                      {r.tokens.length ? ` · ${t("claim.andTokens", { count: r.tokens.length })}` : ""}
+                      {r.lovejoin ? ` · ${t("claim.andBoxes", { count: r.lovejoin.boxes })}` : ""}
+                      {r.lovejoinSkipped ? ` · ${t("claim.lovejoinLeftOut")}` : ""}
+                      {r.leftOut?.length ? ` · ${t("claim.leaves", { count: r.leftOut.length })}` : ""}
                     </span>
                   </button>
                 </li>
@@ -272,8 +275,8 @@ export function ClaimReview({
         </section>
       )}
       {built.skipped.length > 0 && (
-        <section className="section" aria-label="Left out">
-          <h2>Left out</h2>
+        <section className="section" aria-label={t("claim.leftOut")}>
+          <h2>{t("claim.leftOut")}</h2>
           <ul className="list" data-testid="claim-skipped">
             {built.skipped.map((x) => (
               <li key={x.index} className="list__row">
@@ -288,8 +291,7 @@ export function ClaimReview({
       )}
       {picked.some((r) => r.lovejoinSkipped) && (
         <Callout tone="warn" testId="claim-lovejoin-skipped">
-          Lovejoin is left out of{" "}
-          {picked.filter((r) => r.lovejoinSkipped).length === 1 ? "one return" : "some returns"}, which come back directly:
+          {t("claim.warn.lovejoinSkipped", { count: picked.filter((r) => r.lovejoinSkipped).length })}
           <ul className="dapp-points">
             {picked
               .filter((r) => r.lovejoinSkipped)
@@ -302,20 +304,20 @@ export function ClaimReview({
         </Callout>
       )}
       {picked.map((r) => (
-        <ReturnLeftOut key={r.index} leftOut={r.leftOut} name={`private session ${r.index + 1}`} />
+        <ReturnLeftOut key={r.index} leftOut={r.leftOut} name={t("claim.sessionLower", { number: r.index + 1 })} />
       ))}
       {sessions.map((s) => (
-        <LeftBehindNote key={s.index} leftBehind={s.leftBehind} name={`private session ${s.index + 1}`} />
+        <LeftBehindNote key={s.index} leftBehind={s.leftBehind} name={t("claim.sessionLower", { number: s.index + 1 })} />
       ))}
       <HandleWarning tokens={picked.flatMap((r) => r.tokens)} returning />
       <ReviewRows testId="claim-total">
-        <Row label={boxes ? "Back now" : "Into your private balance"} value={`${formatAda(total.toString())} ₳`} strong />
-        {tokens > 0 && <Row label="" value={`and ${plural(tokens, "token")}`} />}
+        <Row label={t(boxes ? "claim.backNow" : "moveIn.review.into")} value={`${formatAda(total.toString())} ₳`} strong />
+        {tokens > 0 && <Row label="" value={t("claim.andTokens", { count: tokens })} />}
         {boxes > 0 && delay && (
-          <Row label="Through Lovejoin" value={`${plural(boxes, "box", "boxes")} of 10 ₳, each back after ${delayText(delay)}`} />
+          <Row label={t("claim.throughLovejoin")} value={t("claim.boxesBackAfter", { count: boxes, delay: delayText(delay) })} />
         )}
-        <Row label="Network fees" value={`${formatAda(fees.toString())} ₳`} />
-        <Row label="Transactions" value={String(txs)} />
+        <Row label={t("claim.fees")} value={`${formatAda(fees.toString())} ₳`} />
+        <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>
       {/* Each session comes back in its own transaction, so each is its own
           view — and where one goes through Lovejoin, the one shown is its
@@ -329,11 +331,9 @@ export function ClaimReview({
         />
       ))}
       <Callout tone="privacy">
-        Each session comes back in its own transaction, so nothing in them ties the sessions together. They're sent one
-        after another, though, and returns that land together hint that they're one person's.
-        {boxes > 0 &&
-          " A session's spare ADA goes through Lovejoin first, paid by that session, and each box comes back on its own, later. But their deposits land in the same block or two and their mixes share blocks, and a pool with few boxes serves the first sessions while the rest come back directly. Bringing each back from its own page, hours apart, avoids both."}
-        {direct && " They come back directly, as you chose: anyone can tie each on chain to its session and its funding."}
+        {t("claim.privacy.ownTransactions")}
+        {boxes > 0 && ` ${t("claim.privacy.throughLovejoin")}`}
+        {direct && ` ${t("claim.privacy.directly")}`}
       </Callout>
       {boxes > 0 && (
         <>
@@ -341,7 +341,7 @@ export function ClaimReview({
             {LOVEJOIN_UNAUDITED}
           </p>
           <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="claim-direct">
-            Bring them back directly instead
+            {t("claim.directInstead")}
           </button>
         </>
       )}

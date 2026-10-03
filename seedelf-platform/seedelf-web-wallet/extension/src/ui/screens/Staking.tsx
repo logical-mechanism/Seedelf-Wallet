@@ -7,6 +7,7 @@
 // details, fresh: one request.
 
 import { useEffect, useState } from "react";
+import { type I18nKey, t, useT } from "../../i18n";
 
 import type { PendingTx, PoolDetails, PoolRef, StakeInfo, StakingAction, StakingSummary } from "../../shared/rpc";
 import { call } from "../background";
@@ -50,6 +51,7 @@ export function Staking({
   onBack: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const t = useT();
   const amounts = useAmounts();
   const [page, setPage] = useState<Page>(start);
   const [pool, setPool] = useState<PoolDetails>();
@@ -140,44 +142,41 @@ export function Staking({
 
   const locked = rewardsLocked(staking);
   const rewards = BigInt(staking.rewards);
-  const withdrawTitle = blocked ?? (locked ? "Delegate your voting power first" : rewards === 0n ? "No rewards yet" : undefined);
+  const withdrawTitle = blocked ?? (locked ? t("staking.delegateFirst") : rewards === 0n ? t("staking.noRewards") : undefined);
   return (
-    <Screen title="Staking" titleId="staking-title" onBack={onBack} backDisabled={busy} error={error}>
+    <Screen title={t("staking.title")} titleId="staking-title" onBack={onBack} backDisabled={busy} error={error}>
       {staking.pool ? (
         <section className="section" aria-labelledby="pool-title">
-          <h2 id="pool-title">Your pool</h2>
+          <h2 id="pool-title">{t("staking.yourPool")}</h2>
           <PoolFacts pool={pool ?? staking.pool} error={pool ? undefined : poolError} testId="your-pool" />
           <button type="button" className="secondary" onClick={() => setPage("pools")} disabled={!!blocked || busy} title={blocked}>
-            Change pool
+            {t("staking.changePool")}
           </button>
         </section>
       ) : (
         <section className="section" aria-labelledby="pool-title">
-          <h2 id="pool-title">Not staking</h2>
+          <h2 id="pool-title">{t("home.staking.not")}</h2>
           <p className="note">
-            Stake your public account with a pool to earn rewards every epoch (5 days). Your ADA stays in your account,
-            free to spend.
+            {t("staking.note")}
           </p>
           {!staking.registered && (
-            <p className="note">The first time takes a 2 ₳ deposit, which comes back when you stop.</p>
+            <p className="note">{t("staking.depositNote")}</p>
           )}
           <button type="button" className="primary" onClick={() => setPage("pools")} disabled={!!blocked || busy} title={blocked}>
-            Choose a pool
+            {t("staking.choosePool")}
           </button>
         </section>
       )}
 
       {staking.registered && (
         <section className="section" aria-labelledby="rewards-title">
-          <h2 id="rewards-title">Rewards</h2>
+          <h2 id="rewards-title">{t("staking.rewards")}</h2>
           <p className="amount amount--small" data-testid="staking-rewards">
             {amounts.ada(staking.rewards)}
             <span className="amount__unit"> ₳</span>
           </p>
           <p className="note">
-            {spendRewards
-              ? "Spent along with anything your public account pays, or withdrawn here. Settings can keep them here instead."
-              : "They wait here until you withdraw them: Settings keeps them out of your payments."}
+            {t(spendRewards ? "staking.rewardsSpent" : "staking.rewardsWait")}
           </p>
           <button
             type="button"
@@ -186,25 +185,24 @@ export function Staking({
             disabled={!!withdrawTitle || busy}
             title={withdrawTitle}
           >
-            {busy ? "Building…" : "Withdraw rewards"}
+            {busy ? t("common.building") : t("staking.withdraw")}
           </button>
         </section>
       )}
 
       <section className="section" aria-labelledby="vote-title">
-        <h2 id="vote-title">Voting power</h2>
+        <h2 id="vote-title">{t("activity.row.votingPower")}</h2>
         <ReviewRows testId="vote-now">
-          <Row label="Delegated to" value={voteLabel(staking.drep)} title={staking.drep ?? undefined} strong />
+          <Row label={t("staking.delegatedTo")} value={voteLabel(staking.drep)} title={staking.drep ?? undefined} strong />
         </ReviewRows>
         {locked && (
           <Callout tone="warn" testId="rewards-locked">
-            Your {amounts.ada(staking.rewards)} ₳ of rewards can't be withdrawn until you delegate your voting power: to a
-            DRep, or always abstain.
+            {t("staking.warn.rewardsLocked", { amount: amounts.ada(staking.rewards) })}
           </Callout>
         )}
-        <p className="note">Your stake has a say in Cardano's governance, through a DRep who votes for you.</p>
+        <p className="note">{t("staking.voteNote")}</p>
         <button type="button" className="secondary" onClick={() => setPage("vote")} disabled={!!blocked || busy} title={blocked}>
-          {staking.drep ? "Change" : "Delegate"}
+          {t(staking.drep ? "staking.change" : "staking.delegate")}
         </button>
       </section>
 
@@ -216,12 +214,12 @@ export function Staking({
               className="menu-row menu-row--danger"
               onClick={() => void build({ kind: "stop" })}
               disabled={locked || !!blocked || busy}
-              title={blocked ?? (locked ? "Delegate your voting power first: stopping withdraws the rewards" : undefined)}
+              title={blocked ?? (locked ? t("staking.delegateFirstStop") : undefined)}
             >
               <span className="menu-row__icon">
                 <TrashIcon size={16} />
               </span>
-              <span>Stop staking</span>
+              <span>{t("staking.stop")}</span>
               <ChevronRightIcon size={16} />
             </button>
           </li>
@@ -229,7 +227,7 @@ export function Staking({
       )}
 
       <Callout tone="privacy">
-        Staking and voting are public: anyone can see which pool and DRep your public account chose. Private money can't be staked: it has no staking part, so it earns nothing while it's private.
+        {t("staking.privacy.public")}
       </Callout>
     </Screen>
   );
@@ -248,6 +246,7 @@ export function PoolFacts({
   /** Whether to say which pool: not when the screen's title does. */
   named?: boolean;
 }) {
+  const t = useT();
   const details = "margin" in pool ? pool : undefined;
   const warnings = details ? poolWarnings(details) : [];
   return (
@@ -267,15 +266,15 @@ export function PoolFacts({
       )}
       {details ? (
         <ReviewRows testId={`${testId}-facts`}>
-          <Row label="Saturation" value={formatPercent(details.saturation)} />
-          <Row label="Margin" value={formatPercent(details.margin * 100)} />
-          <Row label="Cost per epoch" value={`${formatAda(details.cost)} ₳`} />
-          <Row label="Pledge" value={`${formatAda(details.pledge)} ₳`} />
-          <Row label="Delegators" value={details.delegators.toLocaleString("en-US")} />
-          <Row label="Blocks made" value={details.blocks.toLocaleString("en-US")} />
+          <Row label={t("pool.saturation")} value={formatPercent(details.saturation)} />
+          <Row label={t("pool.margin")} value={formatPercent(details.margin * 100)} />
+          <Row label={t("pool.cost")} value={`${formatAda(details.cost)} ₳`} />
+          <Row label={t("pool.pledge")} value={`${formatAda(details.pledge)} ₳`} />
+          <Row label={t("pool.delegators")} value={details.delegators.toLocaleString("en-US")} />
+          <Row label={t("pool.blocks")} value={details.blocks.toLocaleString("en-US")} />
         </ReviewRows>
       ) : (
-        <p className="note">{error ? `Couldn't read the pool's details: ${error}` : "Reading the pool's details…"}</p>
+        <p className="note">{error ? t("pool.readFailed", { error }) : t("pool.reading")}</p>
       )}
       {warnings.map((w) => (
         <Callout key={w} tone="warn">
@@ -289,23 +288,23 @@ export function PoolFacts({
 /** Why a pool pays its delegators less, or will stop: Lace's warnings. */
 export function poolWarnings(p: PoolDetails): string[] {
   const warnings: string[] = [];
-  if (p.status === "retired") warnings.push("This pool has retired: it earns nothing now. Choose another.");
+  if (p.status === "retired") warnings.push(t("pool.warn.retired"));
   if (p.status === "retiring") {
-    warnings.push(`This pool retires in epoch ${p.retiringEpoch ?? "soon"}: choose another before then.`);
+    warnings.push(t("pool.warn.retiring", { epoch: p.retiringEpoch ?? t("pool.soon") }));
   }
-  if (p.saturation > 100) warnings.push("This pool is oversaturated: every delegator's rewards shrink.");
+  if (p.saturation > 100) warnings.push(t("pool.warn.oversaturated"));
   if (BigInt(p.livePledge) < BigInt(p.pledge)) {
-    warnings.push("Its owners stake less than they pledged, so the pool earns no rewards until they make it up.");
+    warnings.push(t("pool.warn.underPledged"));
   }
   return warnings;
 }
 
-const TITLES: Record<StakingAction["kind"], string> = {
-  delegate: "Review staking",
-  vote: "Review the vote",
-  withdraw: "Review the withdrawal",
-  stop: "Review stopping",
-};
+const TITLES = {
+  delegate: "staking.review.delegate",
+  vote: "staking.review.vote",
+  withdraw: "staking.review.withdraw",
+  stop: "staking.review.stop",
+} as const satisfies Record<StakingAction["kind"], I18nKey>;
 
 export function StakingReview({
   summary,
@@ -318,62 +317,62 @@ export function StakingReview({
   onBack,
   onSend,
 }: { summary: StakingSummary; busy: boolean; error?: string; onBack: () => void; onSend: () => void } & Chosen) {
+  const t = useT();
   const { action } = summary;
   const nonzero = (l: string) => BigInt(l) > 0n;
   return (
     <Screen
-      title={TITLES[action.kind]}
+      title={t(TITLES[action.kind])}
       titleId="staking-review-title"
       onBack={onBack}
       backDisabled={busy}
-      aside="Nothing is sent until you press Send"
+      aside={t("review.nothingSent")}
       error={error}
       foot={
         <button type="button" className="primary" onClick={onSend} disabled={busy}>
-          {busy ? "Sending…" : "Send"}
+          {busy ? t("common.sending") : t("common.send")}
         </button>
       }
     >
       <ReviewRows testId="staking-review">
         {action.kind === "delegate" && (
-          <Row label="Stake with" value={poolLabel(pool ?? { id: action.pool })} title={summary.pool ?? undefined} strong />
+          <Row label={t("staking.review.stakeWith")} value={poolLabel(pool ?? { id: action.pool })} title={summary.pool ?? undefined} strong />
         )}
         {action.kind === "vote" && (
-          <Row label="Voting power to" value={voteLabel(summary.drep, drepName)} title={summary.drep ?? undefined} strong />
+          <Row label={t("staking.review.voteTo")} value={voteLabel(summary.drep, drepName)} title={summary.drep ?? undefined} strong />
         )}
-        {action.kind === "stop" && <Row label="Staking" value="Stops" strong />}
+        {action.kind === "stop" && <Row label={t("staking.title")} value={t("staking.stops")} strong />}
         {nonzero(summary.withdrawal) && (
-          <Row label="Rewards withdrawn" value={`${formatAda(summary.withdrawal)} ₳`} strong={action.kind === "withdraw"} />
+          <Row label={t("activity.row.rewardsWithdrawn")} value={`${formatAda(summary.withdrawal)} ₳`} strong={action.kind === "withdraw"} />
         )}
-        {nonzero(summary.deposit) && <Row label="Deposit" value={`${formatAda(summary.deposit)} ₳`} />}
-        {nonzero(summary.refund) && <Row label="Deposit back" value={`${formatAda(summary.refund)} ₳`} />}
-        <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
-        <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+        {nonzero(summary.deposit) && <Row label={t("activity.row.deposit")} value={`${formatAda(summary.deposit)} ₳`} />}
+        {nonzero(summary.refund) && <Row label={t("activity.row.depositBack")} value={`${formatAda(summary.refund)} ₳`} />}
+        <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
+        <Row label={t("review.backToPublic")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
       </ReviewRows>
       <TxDetailButton txHash={summary.txHash} testId="staking-tx" />
       {/* The whole ID: a name or ticker is anyone's to choose (launch review #59). */}
-      {action.kind === "delegate" && <ReviewId label="Pool ID" id={summary.pool ?? action.pool} />}
+      {action.kind === "delegate" && <ReviewId label={t("pool.id")} id={summary.pool ?? action.pool} />}
       {action.kind === "delegate" && <SharedTicker shared={shared} />}
-      {action.kind === "vote" && summary.drep?.startsWith("drep1") && <ReviewId label="DRep ID" id={summary.drep} />}
+      {action.kind === "vote" && summary.drep?.startsWith("drep1") && <ReviewId label={t("staking.drepId")} id={summary.drep} />}
       {action.kind === "vote" && shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
-          {sharedDrepName({ shared, listed: drepListed })}: only the ID above tells them apart.
+          {t("staking.warn.sharedDrepName", { shared: sharedDrepName({ shared, listed: drepListed }) })}
         </Callout>
       )}
       {nonzero(summary.deposit) && (
-        <p className="note">Registering your account to stake takes the deposit. Stopping staking gives it back.</p>
+        <p className="note">{t("staking.review.depositNote")}</p>
       )}
       {action.kind === "delegate" && (
         <p className="note">
-          Rewards start after about 15 to 20 days (the network takes a snapshot, then pays out an epoch later), then come
-          every 5 days.
+          {t("staking.review.rewardsStart")}
         </p>
       )}
       {action.kind === "stop" && (
-        <p className="note">Your pool and your voting power's delegation end, and no more rewards come.</p>
+        <p className="note">{t("staking.review.stopNote")}</p>
       )}
-      <Callout tone="privacy">This is public: it names your public account.</Callout>
-      <p className="note">It takes about a minute for the network to confirm.</p>
+      <Callout tone="privacy">{t("staking.privacy.namesAccount")}</Callout>
+      <p className="note">{t("send.review.confirmTime")}</p>
     </Screen>
   );
 }
