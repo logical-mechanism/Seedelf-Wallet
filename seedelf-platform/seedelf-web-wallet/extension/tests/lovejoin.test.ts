@@ -709,7 +709,7 @@ describe("the pool the chains draw from", CHAINS, () => {
     t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
     // The tile's own mix says the public account could seed the pool instead.
     await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow(
-      `Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. ${POOL_SEEDABLE}`,
+      `Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. ${POOL_SEEDABLE()}`,
     );
     expect(t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials[0])).toContain(mainnetBox);
     // Preprod's pool of the same size has no floor.
@@ -1139,7 +1139,7 @@ describe("a chain's boxes", CHAINS, () => {
     await t.wallet.lock();
     t.clock.now += 7 * HOUR;
     await t.wallet.unlock(PASSWORD);
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4, stopped: CHAIN_CUT });
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4, stopped: CHAIN_CUT() });
     // Home counts the three it mixed all the way as on their way back, not the fourth.
     expect(await t.lovejoin.held("preprod")).toMatchObject({ boxes: 3, stopped: 1 });
     // On chain: three boxes mixed all the way, and one still the deposit's.
@@ -1162,7 +1162,7 @@ describe("a chain's boxes", CHAINS, () => {
     // The page shows it as not mixed yet, and the stopped mix; Home counts both.
     const status = await lovejoin.status("preprod");
     expect(status.notMixed).toEqual([{ txHash: record!.deposit, txIndex: 3 }]);
-    expect(status.chains).toEqual([{ boxes: 4, total: 5, sent: 4, at: expect.any(Number), stopped: CHAIN_CUT }]);
+    expect(status.chains).toEqual([{ boxes: 4, total: 5, sent: 4, at: expect.any(Number), stopped: CHAIN_CUT() }]);
     expect(await lovejoin.held("preprod")).toMatchObject({ notMixed: 1, stopped: 1 });
     // Brought back by hand only when asked anyway.
     await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("weren't mixed yet");
@@ -1190,7 +1190,7 @@ describe("a chain's boxes", CHAINS, () => {
       sent: 1,
       at: t.clock.now - 2 * HOUR,
       scheduled: true,
-      stopped: CHAIN_CUT,
+      stopped: CHAIN_CUT(),
       ended: t.clock.now - 2 * HOUR,
     };
     t.koios.addedToAccounts.push(await ownedBox(t, D, 0), await ownedBox(t, D, 1));
@@ -1292,7 +1292,7 @@ describe("a chain's boxes", CHAINS, () => {
       sent: 1,
       at: t.clock.now - 24 * HOUR,
       scheduled: true,
-      stopped: CHAIN_CUT,
+      stopped: CHAIN_CUT(),
       ended: t.clock.now - 24 * HOUR,
     };
     await t.store.set("lovejoin.preprod", { due: [], chains: [S] });
@@ -1498,7 +1498,7 @@ describe("a chain's boxes", CHAINS, () => {
     await t.wallet.withKeys(() => t.session.set(key, { txs: txs("b1"), next: 1, flying: [], stopped: "The network rejected the transaction: X" }));
     await t.lovejoin.recordChain("preprod", { progress: key, txs: txs("b1"), leaves: [], boxes: 1 });
     const { chains } = await t.lovejoin.status("preprod");
-    expect(chains.map((c) => c.stopped)).toEqual([CHAIN_CUT, "The network rejected the transaction: X"]);
+    expect(chains.map((c) => c.stopped)).toEqual([CHAIN_CUT(), "The network rejected the transaction: X"]);
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 2, sent: 1, stopped: "The network rejected the transaction: X" });
   });
 
@@ -1509,9 +1509,9 @@ describe("a chain's boxes", CHAINS, () => {
     await t.wallet.lock();
     await t.wallet.unlock(PASSWORD);
     await sessions.runAll("preprod");
-    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 4, confirmed: 0, cut: false, stopped: CHAIN_CUT });
+    expect((await sessions.list("preprod"))[0]!.chain).toEqual({ total: 10, sent: 4, confirmed: 0, cut: false, stopped: CHAIN_CUT() });
     expect((await t.lovejoin.status("preprod")).chains).toEqual([
-      { session: 0, boxes: 2, total: 10, sent: 4, at: expect.any(Number), stopped: CHAIN_CUT },
+      { session: 0, boxes: 2, total: 10, sent: 4, at: expect.any(Number), stopped: CHAIN_CUT() },
     ]);
   });
 });
@@ -1986,7 +1986,7 @@ describe("mixing from the tile", CHAINS, () => {
       sent: 1,
       at: t.clock.now - 2 * HOUR,
       scheduled: true,
-      stopped: CHAIN_CUT,
+      stopped: CHAIN_CUT(),
       ended: t.clock.now - 2 * HOUR,
     };
     const done = {
@@ -2040,7 +2040,7 @@ describe("mixing from the tile", CHAINS, () => {
       sent: 1,
       at: t.clock.now - 2 * HOUR,
       scheduled: true,
-      stopped: CHAIN_CUT,
+      stopped: CHAIN_CUT(),
       ended: t.clock.now - 2 * HOUR,
     };
     t.koios.addedToAccounts.push(await ownedBox(t, D, 1));
@@ -2248,7 +2248,7 @@ describe("mixing from the tile", CHAINS, () => {
     NETWORKS.preprod.lovejoin!.poolFloor = 30;
     try {
       // Nothing in the pool: a mix is refused, and says the pool can be seeded instead.
-      await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(POOL_SEEDABLE);
+      await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(POOL_SEEDABLE());
       // A seed needs no other boxes at all.
       const summary = await t.lovejoin.publicBuild("preprod", 1, true);
       expect(summary).toMatchObject({ seed: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });

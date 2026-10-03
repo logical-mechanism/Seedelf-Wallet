@@ -320,17 +320,17 @@ type SignedTx = { witnessSet: string; summary: DappTxSummary };
 const ALREADY_CONNECTED =
   t("dapp.connectedMeanwhile");
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
-const NOT_CONNECTED = t("dapp.notConnected");
+const NOT_CONNECTED = () => t("dapp.notConnected");
 /** What a site hears while the connector is off, and what it was waiting for hears once it's turned off. */
-const OFF = t("dapp.connectorOff");
+const OFF = () => t("dapp.connectorOff");
 /** What a site's request hears once the site is disconnected, or connected to another account, while it waited. */
-const DISCONNECTED = t("dapp.disconnected");
+const DISCONNECTED = () => t("dapp.disconnected");
 /** What a site hears when the user says no, or closed the window on it. */
-const DECLINED = t("dapp.userDeclined");
+const DECLINED = () => t("dapp.userDeclined");
 /** What a site's call ends with once its page is gone: nobody hears it. */
-const PAGE_GONE = t("dapp.pageGone");
+const PAGE_GONE = () => t("dapp.pageGone");
 /** What a site asking on the network the wallet left hears, and the window says. */
-const NETWORK_LEFT = t("dapp.networkMoved");
+const NETWORK_LEFT = () => t("dapp.networkMoved");
 
 export class DappService {
   private readonly waiting: Waiting[] = [];
@@ -397,13 +397,13 @@ export class DappService {
     const on = (await this.deps.preferences.get()).dappConnector;
     const { origin } = session;
     if (method === "isEnabled" && !on) return false;
-    if (!on) throw refused(OFF);
+    if (!on) throw refused(OFF());
     if (method === "isEnabled") return this.isEnabled(origin);
     if ((await this.deps.wallet.state()) !== "unlocked") {
       // Which sites are connected is sealed while locked: a read is refused
       // at once, as a stranger's is, and never opens the window. A connected
       // dApp hears to call enable(), which unlocks in the window.
-      if (READ_METHODS.has(method)) throw refused(NOT_CONNECTED);
+      if (READ_METHODS.has(method)) throw refused(NOT_CONNECTED());
       await this.unlocked(session, method);
     }
     // The network the wallet is on as this call goes on: a site connected on
@@ -411,7 +411,7 @@ export class DappService {
     const network = await this.deps.network();
     if (method === "enable") return this.enable(session, network);
     const site = await this.site(network, origin);
-    if (!site) throw refused(NOT_CONNECTED);
+    if (!site) throw refused(NOT_CONNECTED());
     const holder = await this.holder(network, site);
     switch (method) {
       case "getNetworkId":
@@ -465,14 +465,14 @@ export class DappService {
     // Turned off while it waited: nothing is connected, funded or signed (independent review L33).
     if (approve && !(await this.deps.preferences.get()).dappConnector) {
       this.connectorOff();
-      return { error: OFF };
+      return { error: OFF() };
     }
     const { approval } = asked;
     if (approval.kind === "connect" && approval.funding) return { error: "Its private session is funded already." };
     // Asked on the network the wallet has left: never signed or connected on the one it's on.
     if (asked.network !== (await this.deps.network())) {
       await this.networkChanged();
-      return { error: NETWORK_LEFT };
+      return { error: NETWORK_LEFT() };
     }
     // A signature, or a private session's funding, needs the password when the setting says so.
     const guarded = approval.kind === "connect" ? !!fund : true;
@@ -505,9 +505,9 @@ export class DappService {
       // wallet locks, as under a site's call (`answerSite`), and the site
       // hears only that it wasn't answered (independent review M15).
       if (isTrap(e)) {
-        w!.reject(new DappError({ code: APIError.InternalError, info: SITE_TRAPPED }));
+        w!.reject(new DappError({ code: APIError.InternalError, info: SITE_TRAPPED() }));
         await this.deps.wallet.trapped();
-        return { error: WASM_BROKEN };
+        return { error: WASM_BROKEN() };
       }
       const error = e instanceof DappError ? e : failed(w!.approval, e);
       w!.reject(error);
@@ -573,7 +573,7 @@ export class DappService {
     for (const u of this.unlocking.splice(0)) {
       this.refuseFor(u.session.origin);
       // As a declined request is: nothing more about the wallet.
-      u.reject(refused(DECLINED));
+      u.reject(refused(DECLINED()));
     }
     // A private session's funding is sent: it isn't undone, and the site connects once it arrives.
     for (const w of this.waiting.filter((x) => !funding(x))) {
@@ -596,7 +596,7 @@ export class DappService {
     if (!left.length) return;
     for (const w of left) {
       remove(this.waiting, (x) => x === w);
-      w.reject(new DappError({ ...w.declined, info: NETWORK_LEFT }));
+      w.reject(new DappError({ ...w.declined, info: NETWORK_LEFT() }));
     }
     this.deps.changed();
   }
@@ -609,8 +609,8 @@ export class DappService {
    */
   connectorOff(): void {
     const unlocking = this.unlocking.splice(0);
-    for (const u of unlocking) u.reject(refused(OFF));
-    if (!this.decline(() => true, OFF) && unlocking.length) this.deps.changed();
+    for (const u of unlocking) u.reject(refused(OFF()));
+    if (!this.decline(() => true, OFF()) && unlocking.length) this.deps.changed();
   }
 
   /** Declines what `which` picks of what's waiting, with `info`, as the user saying no would; whether any was. */
@@ -641,9 +641,9 @@ export class DappService {
     remove(this.unlocking, (u) => unlocking.includes(u));
     for (const w of waiting) {
       w.gone = true;
-      w.reject(refused(PAGE_GONE));
+      w.reject(refused(PAGE_GONE()));
     }
-    for (const u of unlocking) u.reject(refused(PAGE_GONE));
+    for (const u of unlocking) u.reject(refused(PAGE_GONE()));
     this.deps.changed();
   }
 
@@ -672,7 +672,7 @@ export class DappService {
     if (site?.session !== undefined) await this.deps.sessions.disconnect(network, site.session);
     await this.changeSites((all) => all.filter((s) => !(s.origin === origin && s.network === network)));
     // What it asked for and the user hasn't answered goes with it (independent review L33).
-    this.decline((w) => w.session.origin === origin && w.network === network, DISCONNECTED);
+    this.decline((w) => w.session.origin === origin && w.network === network, DISCONNECTED());
     return this.sitesOn(network);
   }
 
@@ -690,7 +690,7 @@ export class DappService {
     );
     await this.deps.sessions.disconnect(network, index);
     await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
-    this.decline((w) => origins.includes(w.session.origin) && w.network === network, DISCONNECTED);
+    this.decline((w) => origins.includes(w.session.origin) && w.network === network, DISCONNECTED());
   }
 
   /**
@@ -702,7 +702,7 @@ export class DappService {
     const w = this.waiting.find((x) => x.approval.id === id);
     if (!w || w.approval.kind !== "connect") throw new Error("The site stopped waiting for this.");
     if (w.approval.funding) throw new Error("Its private session is funded already.");
-    if (w.network !== (await this.deps.network())) throw new Error(NETWORK_LEFT);
+    if (w.network !== (await this.deps.network())) throw new Error(NETWORK_LEFT());
     if (await this.connected(w.network, w.session.origin)) throw new Error(ALREADY_CONNECTED);
     return this.deps.sessions.siteOutBuild(w.network, w.session.origin, lovelace, tokens);
   }
@@ -769,12 +769,12 @@ export class DappService {
     if (asking) {
       const settled = await asking.settled;
       // This page went away too: nothing is asked for it.
-      if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
+      if (this.gonePages.has(session.id)) throw refused(PAGE_GONE());
       if (settled === "gone") return this.run(session, "enable", []) as Promise<true>;
       if (settled) throw settled;
       return true;
     }
-    if (this.refusing(origin)) throw refused(DECLINED);
+    if (this.refusing(origin)) throw refused(DECLINED());
     await this.ask(session, network, { kind: "connect", password }, APIError.Refused, () => this.connect(network, origin));
     return true;
   }
@@ -868,9 +868,9 @@ export class DappService {
    * approved, after the password (independent review L33).
    */
   private async stillConnected(network: NetworkName, origin: string, holder: Holder): Promise<void> {
-    if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
+    if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF());
     const site = await this.site(network, origin);
-    if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
+    if (!site || site.session !== holder?.index) throw refused(DISCONNECTED());
   }
 
   /**
@@ -952,16 +952,16 @@ export class DappService {
     // hears what a site that isn't connected does; `enable()` from one, that
     // it was declined. A connected site's `enable()` still opens the window.
     const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
-    if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED : NOT_CONNECTED);
+    if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED() : NOT_CONNECTED());
     // Its page went away while this call was on its way: nobody would answer it (independent review L31).
-    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE());
     // Another of its pages' `enable()` waits already: this one shares its
     // place, as it will its connect question, so a site open in several tabs
     // is never refused for it (independent review L35).
     const enable = method === "enable";
     const shares = enable && this.unlocking.some((u) => u.enable && u.session.origin === origin);
     if (!shares && (this.queued() >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING)) {
-      throw refused(enable || known ? BUSY() : NOT_CONNECTED);
+      throw refused(enable || known ? BUSY() : NOT_CONNECTED());
     }
     let waiter: Unlocking | undefined;
     const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, enable, resolve, reject })));
@@ -987,12 +987,12 @@ export class DappService {
     txCbor?: string,
   ): Promise<T> {
     // Its page went away while it was read: nobody would answer it (independent review L31).
-    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
+    if (this.gonePages.has(session.id)) throw refused(PAGE_GONE());
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY());
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
     const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
-    const failure: DappFailure = { code: declined, info: DECLINED };
+    const failure: DappFailure = { code: declined, info: DECLINED() };
     let entry!: Waiting;
     const answered = new Promise<T>((resolve, reject) => {
       entry = {
@@ -1875,7 +1875,7 @@ export class DappService {
 }
 
 /** What a site hears when WebAssembly trapped under its request: nothing of the lock that follows. */
-export const SITE_TRAPPED = t("dapp.couldNotAnswer");
+export const SITE_TRAPPED = () => t("dapp.couldNotAnswer");
 
 /**
  * A site's call, as the worker answers it (sw.ts). WebAssembly that trapped
@@ -1895,7 +1895,7 @@ export async function answerSite(
   } catch (e) {
     if (!isTrap(e)) throw e;
     await wallet.trapped();
-    throw new DappError({ code: APIError.InternalError, info: SITE_TRAPPED });
+    throw new DappError({ code: APIError.InternalError, info: SITE_TRAPPED() });
   }
 }
 

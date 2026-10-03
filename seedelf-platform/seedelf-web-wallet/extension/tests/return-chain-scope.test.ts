@@ -170,7 +170,7 @@ describe("a mix whose chain stopped partway and whose rest came back (independen
           txs: [done("out", "ab".repeat(32)), done("deposit", "ac".repeat(32)), done("back", "ad".repeat(32))],
           mix: { boxes: 1 },
           auto: { approved: { minAmountOut: "0", fund: { lovelace: "15000000", tokens: [] } } },
-          chain: { total: 4, last, at, stopped: CHAIN_CUT },
+          chain: { total: 4, last, at, stopped: CHAIN_CUT() },
         },
       ],
     });

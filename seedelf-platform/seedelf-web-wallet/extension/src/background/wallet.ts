@@ -115,7 +115,7 @@ export const SESSION_PRIVATE_STALE_PREFIX = "seedelf.balancesPrivateStale.";
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
 
 /** What a request gets when WebAssembly trapped under it: the wallet locked itself (see `broken`). */
-export const WASM_BROKEN = t("worker.wallet.trapped");
+export const WASM_BROKEN = () => t("worker.wallet.trapped");
 
 /**
  * Whether session storage holds an unlocked wallet's entropy. Without it
@@ -526,7 +526,7 @@ export class Wallet {
       } catch (e) {
         if (!isTrap(e)) throw e;
         await this.broken();
-        throw new Error(WASM_BROKEN);
+        throw new Error(WASM_BROKEN());
       }
     };
     const run = this.queue.then(guarded, guarded);

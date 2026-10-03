@@ -303,7 +303,7 @@ async function answerUi(message: Message, report: (stage: BuildStage) => void): 
   } catch (e) {
     if (!isTrap(e)) throw e;
     await ctx.wallet.trapped();
-    throw new Error(WASM_BROKEN);
+    throw new Error(WASM_BROKEN());
   }
 }
 

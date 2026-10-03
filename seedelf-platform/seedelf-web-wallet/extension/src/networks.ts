@@ -3,6 +3,7 @@
 // Settings switches between them. VITE_ENABLE_MAINNET=false makes a
 // preprod-only build, for tests. See docs/architecture.md#networks.
 
+import { t } from "./i18n";
 export type NetworkName = "preprod" | "mainnet";
 
 /** Lovejoin, the mixer, where it's deployed (docs/plans/chunk-16-lovejoin.md). */
@@ -73,7 +74,7 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
  * account could seed it instead. The Lovejoin page matches on it to offer
  * that, so the worker and the page keep one wording between them.
  */
-export const POOL_SEEDABLE = "You can seed it instead: put boxes in with no mixes, for other people to mix with.";
+export const POOL_SEEDABLE = () => t("lj.poolSeedable");
 
 /** Whether Lovejoin is deployed on `network`: the worker's gate and the UI's, one source. */
 export function lovejoinOn(network: NetworkName): boolean {

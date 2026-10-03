@@ -134,7 +134,7 @@ describe("a trap under a site's call", () => {
     const s = await connected(dapp);
     // Never turned into a refusal the wallet would carry on after.
     const heard = await answerSite(dapp, t.wallet, s, "getUtxos", ["1a000f4240"]).catch((e: { failure: unknown }) => e.failure);
-    expect(heard).toEqual({ code: APIError.InternalError, info: SITE_TRAPPED });
+    expect(heard).toEqual({ code: APIError.InternalError, info: SITE_TRAPPED() });
     expect(await t.wallet.state()).toBe("locked");
 
     // What isn't a trap is answered as ever, and nothing locks.
@@ -172,8 +172,8 @@ describe("a trap as the user approves a site's request", () => {
     const signing = dapp.call(s, "signTx", [tx, false]).catch((e: { failure: unknown }) => e.failure);
     await until(() => dapp.approvals().length === 1);
     trap = true;
-    expect(await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({ error: WASM_BROKEN });
-    expect(await signing).toEqual({ code: APIError.InternalError, info: SITE_TRAPPED });
+    expect(await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({ error: WASM_BROKEN() });
+    expect(await signing).toEqual({ code: APIError.InternalError, info: SITE_TRAPPED() });
     expect(await t.wallet.state()).toBe("locked");
     expect(dapp.approvals()).toEqual([]);
   });

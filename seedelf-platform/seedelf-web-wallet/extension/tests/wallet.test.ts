@@ -442,7 +442,7 @@ describe("a wallet whose WebAssembly breaks", () => {
     await wallet.create(cardano[0]!.phrase, PASSWORD);
     const old = await wallet.withKeys((k) => k);
 
-    await expect(wallet.withKeys((k) => k.seedelf.isOwned(outOfBounds()))).rejects.toThrow(WASM_BROKEN);
+    await expect(wallet.withKeys((k) => k.seedelf.isOwned(outOfBounds()))).rejects.toThrow(WASM_BROKEN());
     expect(fresh()).toBe(1);
     expect(session.data.size).toBe(0);
     expect(events.alarm).toBe("stopped");
