@@ -8,7 +8,6 @@
 // one-time account the user funded for the site: never the private balance
 // itself, though a session's funding is on chain for anyone to follow.
 
-import { t } from "../i18n";
 /** The port the bridge opens to the worker. */
 export const DAPP_PORT = "seedelf.cip30";
 
@@ -64,9 +63,18 @@ export const READ_METHODS: ReadonlySet<DappMethod> = new Set<DappMethod>([
  * What a call the worker stopped under hears from the bridge. A send may
  * have gone out already, and a site that sent it again blindly, or built it
  * again from other UTxOs, could pay twice (independent review M3).
+ *
+ * **English, and it must stay English.** Both content scripts import this
+ * module, and `content/page.ts` runs in the page's own world, where `chrome`
+ * is undefined — so i18next, which reads `chrome.i18n` and
+ * `chrome.storage.local` as it initialises, must not be reachable from here.
+ * It isn't a loss: these go to the site, not to a wallet surface.
+ * `tests/content-script.test.ts` holds the rule.
  */
 export function cutOff(method: DappMethod): string {
-  return t(method === "submitTx" ? "shared.dapp.cutOffSubmit" : "shared.dapp.cutOffSign");
+  return method === "submitTx"
+    ? "Seedelf Wallet stopped before answering, and the transaction may have gone through. Check for it on chain before you send it again."
+    : "Seedelf Wallet stopped before answering, so nothing was signed. Try again.";
 }
 
 export const isDappMethod = (m: unknown): m is DappMethod => (DAPP_METHODS as readonly unknown[]).includes(m);

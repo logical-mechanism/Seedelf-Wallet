@@ -1206,8 +1206,6 @@
   "settings.staking.useRewards": "支払い時にステーキング報酬を使う",
   "settings.version": "バージョン",
   "settings.wallet": "ウォレット",
-  "shared.dapp.cutOffSign": "Seedelf Wallet が応答する前に停止したため、何も署名されていません。もう一度お試しください。",
-  "shared.dapp.cutOffSubmit": "Seedelf Wallet が応答する前に停止したため、トランザクションは完了した可能性があります。もう一度送る前にチェーン上で確認してください。",
   "shared.label.badCharacter": "タグには英数字、スペース、ASCII の記号が使えます。「{{character}}」は使えません。",
   "shared.label.tooLong": "タグは最大 {{max}} 文字です。",
   "shared.password.tooShort": "{{min}} 文字以上にしてください（現在 {{length}} 文字）。",

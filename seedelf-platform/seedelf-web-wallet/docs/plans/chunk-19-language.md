@@ -277,22 +277,26 @@ than the string count, because repeated sentences share one key and a
 `scripts/i18n-critical.mjs`, and every one is back-translated and recorded in
 `verified-critical-{es,ja}.json`.
 
-**Size, `npm run build:ext`, against `c72bb99`:**
+**Size, `npm run build:ext`, against `main`:**
 
 | | before | after |
 |---|---|---|
-| `sw.js` | 304.1 kB (gzip 89.1) | 289.8 kB (gzip 83.9) |
-| `shared-*.js` | 20.9 kB (gzip 8.4) | 643.6 kB (gzip 167.0) |
-| `index-*.js` | 793.0 kB (gzip 289.1) | 708.1 kB (gzip 256.8) |
-| **all JS** | **1,118 kB (gzip 387)** | **1,642 kB (gzip 508)** |
+| `sw.js` | 304.1 kB (gzip 88.0) | 289.8 kB (gzip 82.8) |
+| `shared-*.js` | 20.9 kB (gzip 8.3) | 642.6 kB (gzip 166.1) |
+| `index-*.js` | 748.6 kB (gzip 275.5) | 708.1 kB (gzip 256.4) |
+| `cip30-bridge.js` | 1.8 kB (gzip 0.9) | 1.8 kB (gzip 0.9) |
+| `cip30-page.js` | 8.5 kB (gzip 6.3) | 8.5 kB (gzip 6.3) |
+| **all JS** | **1,084 kB (gzip 378)** | **1,651 kB (gzip 513)** |
 
-**+524 kB raw, +121 kB gzip**, which is the three locale files (594 kB raw, 142
+**+567 kB raw, +134 kB gzip**, which is the three locale files (594 kB raw, 142
 kB gzip on disk) plus i18next, less what left `sw.js` and `index` as literals.
 The worker and the UI both import the bundles, so they moved into the shared
-chunk, which is why the other two shrank. The WebAssembly is unchanged at
-2,639 kB, so the whole extension is still dominated by it.
+chunk, which is why the other two shrank. **The content scripts are unchanged**,
+and that is the point of the rule below: for one commit they weren't, and each
+carried all three locale files. The WebAssembly is unchanged at 2,639 kB, so the
+whole extension is still dominated by it; the store zip is 1,670 kB.
 
-**1,186 tests pass, and the English they assert did not move.** That was the
+**1,190 tests pass, and the English they assert did not move.** That was the
 acceptance test and it held: no behavioural test was edited for wording. The
 test files that changed did so because a constant they import became a function.
 
@@ -309,6 +313,14 @@ Four things the extraction found that were wrong before it:
   nombre)", the comparison would have passed, and a token with an empty asset
   name would have been labelled "(sin nombre)" rather than by its fingerprint.
   It tests the empty asset name itself now.
+- **A shared module pulled i18next into the content scripts, and killed them.**
+  `shared/dapp.ts` gained one `t()` call for `cutOff()`. Both content scripts
+  import that module, and `content/page.ts` runs in the page's own world, where
+  `chrome` is undefined — so i18next's init threw, the script died before
+  defining `window.cardano.seedelf`, and **every dApp connector e2e test failed**
+  while all 1,186 unit tests passed. `cutOff()` is English again (it is only
+  ever called from the content script), and `tests/content-script.test.ts` walks
+  the import graph from each entry so it can't come back.
 - **The derived critical set cannot see a warning assembled above its JSX.**
   `NotMixed` builds its sentences into `const` bindings and renders the joined
   string, so the deriver — which walks `<Callout tone="warn">` subtrees — marked
@@ -329,6 +341,11 @@ Besides the Rust messages named above:
 - **`content/bridge.ts`**, injected into every page the user visits. Two strings
   (a stale bridge, an unknown method) go to the site, not to a wallet surface,
   and are not worth i18next in the content script.
+- **`cutOff()` in `shared/dapp.ts`**, for the harder reason: both content scripts
+  import that module, and `content/page.ts` runs in the page's own world, where
+  `chrome` is undefined, so i18next must not be *reachable* from it at all. The
+  rule is wider than one file, which is why `tests/content-script.test.ts` walks
+  the import graph rather than checking a list.
 - **The two prefixes `dapp.ts` matches** to classify a WebAssembly failure
   (`"The wallet can't read"`, `"bad request"`). They read Rust's words, not
   keys, and the source now says so.

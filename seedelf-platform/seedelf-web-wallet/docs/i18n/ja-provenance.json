@@ -1206,8 +1206,6 @@
   "settings.staking.useRewards": "machine",
   "settings.version": "machine",
   "settings.wallet": "machine",
-  "shared.dapp.cutOffSign": "machine",
-  "shared.dapp.cutOffSubmit": "machine",
   "shared.label.badCharacter": "machine",
   "shared.label.tooLong": "machine",
   "shared.password.tooShort": "machine",

@@ -1352,8 +1352,6 @@
   "settings.staking.useRewards": "Usar las recompensas de staking al gastar",
   "settings.version": "Versión",
   "settings.wallet": "Billetera",
-  "shared.dapp.cutOffSign": "Seedelf Wallet se detuvo antes de responder, así que no se firmó nada. Vuelve a intentarlo.",
-  "shared.dapp.cutOffSubmit": "Seedelf Wallet se detuvo antes de responder, y la transacción puede haberse completado. Búscala en la cadena antes de volver a enviarla.",
   "shared.label.badCharacter": "Una etiqueta puede usar letras, dígitos, espacios y puntuación ASCII, no “{{character}}”.",
   "shared.label.tooLong": "Una etiqueta tiene como máximo {{max}} caracteres.",
   "shared.password.tooShort": "Usa al menos {{min}} caracteres ({{length}} hasta ahora).",
