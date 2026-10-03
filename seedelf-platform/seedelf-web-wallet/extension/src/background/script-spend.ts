@@ -19,6 +19,7 @@
 // public account's send and staking) is kept without a seed, and Send only
 // submits it.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -174,15 +175,15 @@ export function nothingToSpend(
   if (!all.length) return new Error(empty);
   if (returning.length === all.length) {
     return new Error(
-      "Your private balance waits for a return through Lovejoin that's still being sent: its last transaction adds to what's there, so nothing else spends it meanwhile. Try again once it's all sent.",
+      t("worker.spend.waitsForReturn"),
     );
   }
   if (returning.length) {
     return new Error(
-      "Every UTxO in your private balance is locked, or waits for a return through Lovejoin that's still being sent. Unlock one on its UTxOs screen, or try again once the return is all sent.",
+      t("worker.spend.allLockedOrWaiting"),
     );
   }
-  return new Error("Every UTxO in your private balance is locked. Unlock one on its UTxOs screen first.");
+  return new Error(t("worker.spend.allLocked"));
 }
 
 /**
@@ -259,12 +260,12 @@ export async function send(
   const { wasm, wallet, session, now } = deps;
   const built = await wallet.withKeys(() => session.get<Kept>(key));
   if (!built || built.txHash !== txHash || built.network !== network) {
-    throw new Error(`That ${what} isn't ready to send. Review it again.`);
+    throw new Error(t("worker.spend.notReady", { what }));
   }
   const again = built.sentCbor !== undefined;
   if (!again) {
     if (now() - built.builtAt > BUILT_TTL_MS) {
-      throw new Error(`That ${what} was built more than 10 minutes ago. Review it again.`);
+      throw new Error(t("worker.spend.tooOld", { what }));
     }
     await settleMaybeSent(deps, network);
   }
@@ -287,7 +288,7 @@ export async function send(
           wasm.signScriptSpend(keys.seedelf, JSON.stringify({ txCbor: built.txCbor, seed: built.seed, collateral })),
         ) as { txCbor: string; txHash: string },
     );
-    if (signed.txHash !== txHash) throw new Error("Signing changed the transaction, so it wasn't sent.");
+    if (signed.txHash !== txHash) throw new Error(t("worker.spend.signingChanged"));
     txCbor = signed.txCbor;
   }
   // Reviewed before a return through Lovejoin started being sent, it may take what that chain spends: the
@@ -321,6 +322,6 @@ async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbo
   const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
   const reserved = await deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true, now: deps.now() }));
   if (inputs.some((o) => reserved.inputs.has(o))) {
-    throw new Error(`That ${what} spends a UTxO a chain through Lovejoin, sent since you reviewed it, spends too. Review it again.`);
+    throw new Error(t("worker.spend.chainConflict", { what }));
   }
 }

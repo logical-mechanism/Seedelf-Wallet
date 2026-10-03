@@ -26,6 +26,7 @@
 // its transaction left in the private balance (`origin`), and coin selection
 // keeps different ones apart. It's read from the device alone.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import {
   boxFrom,
@@ -199,7 +200,7 @@ export class ActivityService {
       ...(assets.length ? { assets } : {}),
     };
     // A session is shown by its number, from 1; its address says nothing to the user.
-    const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
+    const session = typeof s.index === "number" ? t("claim.session", { number: s.index + 1 }) : undefined;
     // What it leaves in the private balance: the history its review worked out (the inputs' own; a session's
     // funding's, with the session's), or a session's funding change and return, which are that session's.
     const origin: HistoryClass | undefined =
@@ -347,7 +348,7 @@ export class ActivityService {
           await session.get<AccountPages>(key),
         ] as const,
     );
-    if (!account) throw new Error("Read the balances first: open Home, then Activity.");
+    if (!account) throw new Error(t("worker.activity.readFirst"));
     const { stake } = account;
     const koios = this.deps.koios(network);
     const ours = accountMatcher(account);

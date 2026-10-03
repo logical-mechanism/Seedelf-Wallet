@@ -21,6 +21,7 @@
 // This wallet's own spends drop out as it makes them (spent.ts). A spend made
 // with the same phrase elsewhere, or a rollback, shows at the next full read.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -96,7 +97,7 @@ export async function readContractView(
   let started: Keys | undefined;
   const same = (keys: Keys) => {
     started ??= keys;
-    if (keys !== started) throw new Error("The wallet is locked.");
+    if (keys !== started) throw new Error(t("worker.locked"));
   };
   const [kept, spent] = await wallet.withKeys(async (keys) => {
     same(keys);

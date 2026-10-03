@@ -18,6 +18,7 @@
 //           fresh, then built and signed in WebAssembly with the payment keys
 //           and the stake key, and kept until Send, which only submits it.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import {
   ALWAYS_ABSTAIN,
@@ -191,7 +192,7 @@ export class StakingService {
   async pool(network: NetworkName, id: string): Promise<PoolDetails> {
     const poolId = this.deps.wasm.poolId(id);
     const [info] = await this.deps.koios(network).poolInfo([poolId]);
-    if (!info) throw new Error("Koios doesn't know that pool. Check its ID.");
+    if (!info) throw new Error(t("worker.staking.unknownPool"));
     await rememberPool(this.deps, network, refOf(info));
     return {
       ...refOf(info),
@@ -214,11 +215,11 @@ export class StakingService {
   async drep(network: NetworkName, id: string): Promise<DrepDetails> {
     const drepId = this.deps.wasm.drepId(id);
     if (drepId === ALWAYS_ABSTAIN || drepId === ALWAYS_NO_CONFIDENCE) {
-      throw new Error("That's one of the two pinned choices, not a DRep. Choose it from the list instead.");
+      throw new Error(t("worker.staking.pinnedChoice"));
     }
     const koios = this.deps.koios(network);
     const [[info], names] = await Promise.all([koios.drepInfo([drepId]), koios.drepNames([drepId])]);
-    if (!info) throw new Error("Koios doesn't know that DRep. Check the ID.");
+    if (!info) throw new Error(t("worker.staking.unknownDrep"));
     const name = drepName(names.find((n) => n.drep_id === drepId)?.givenName);
     return {
       id: drepId,

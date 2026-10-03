@@ -24,6 +24,7 @@
 // sealed Seedelf history (activity.ts `classes`), so a lock that keeps one
 // history apart is an informed choice (privacy review §2.3).
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { Balances, CollateralStatus, Locked, UtxoInfo, UtxoLists, UtxoSide } from "../shared/rpc";
 import type { PathedUtxo } from "./account";
@@ -49,7 +50,7 @@ export const SESSION_TOO_LARGE_PREFIX = "seedelf.readingTooLarge.";
 
 /** What the lists say for a reading too large to keep. */
 export const TOO_LARGE =
-  "You hold too many tokens or UTxOs for the wallet to keep its last reading, so it can't list them here. Payments still leave out what you locked, and your collateral.";
+  t("worker.coins.tooMany");
 
 /** A balance reading's own UTxOs, for one too large to keep: what's locked is summed from these. */
 export interface ReadingUtxos {
@@ -289,9 +290,9 @@ export class CoinControlService {
     return this.serial(async () => {
       const lists = await this.lists(network);
       const found = lists[side].find((u) => `${u.txHash}#${u.index}` === utxo);
-      if (!found) throw new Error("That UTxO isn't in your last reading. Refresh, then try again.");
-      if (found.seedelf) throw new Error("A Seedelf's UTxO is never spent by a payment: only removing it does.");
-      if (found.collateral) throw new Error("That's your collateral. Reclaim it in Settings, under Collateral.");
+      if (!found) throw new Error(t("worker.coins.notInReading"));
+      if (found.seedelf) throw new Error(t("worker.coins.seedelfUtxo"));
+      if (found.collateral) throw new Error(t("worker.coins.isCollateral"));
       const choices = await this.choices(network);
       // The others stay as they are, listed in this reading or not: a
       // backend that's behind, or a page read twice, can leave out a UTxO
@@ -326,7 +327,7 @@ export class CoinControlService {
     return this.serial(async () => {
       const found = (await this.lists(network, undefined, false)).cardano.find((u) => `${u.txHash}#${u.index}` === utxo);
       if (!found || !isCollateralShaped(asKoios(found))) {
-        throw new Error("Only a UTxO of exactly 5 ₳ and nothing else can be the collateral.");
+        throw new Error(t("worker.coins.exactlyFive"));
       }
       const choices = await this.choices(network);
       await this.save(network, {

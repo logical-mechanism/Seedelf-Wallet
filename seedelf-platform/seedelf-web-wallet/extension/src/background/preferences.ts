@@ -31,6 +31,7 @@
 // browser's, not the wallet's (shared/open-in.ts). Nor is the network, which
 // has a key of its own (`NetworkChoice`, below).
 
+import { t } from "../i18n";
 import { isNetworkName, NETWORKS, type NetworkName } from "../networks";
 import {
   DEFAULT_PREFERENCES,
@@ -84,7 +85,7 @@ export class NetworkChoice {
   async set(network: unknown): Promise<NetworkName> {
     if (!isNetworkName(network) || !this.networks.includes(network)) {
       throw new Error(
-        isNetworkName(network) ? `This build of Seedelf Wallet can't use ${NETWORKS[network].label}.` : "That isn't a network.",
+        isNetworkName(network) ? t("worker.network.notInBuild", { network: NETWORKS[network].label }) : t("worker.network.notANetwork"),
       );
     }
     await this.local.set(LOCAL_NETWORK, network);

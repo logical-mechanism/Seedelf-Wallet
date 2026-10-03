@@ -2466,9 +2466,9 @@ describe("a payment that may still go through", CHAINS, () => {
     const submitted = t.koios.submitted.length;
 
     const lovejoin = witnessed(t);
-    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow(MAYBE_SENT_WAIT);
-    await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(MAYBE_SENT_WAIT);
-    await expect(lovejoin.publicBuild("preprod", 1)).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow(MAYBE_SENT_WAIT());
+    await expect(lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow(MAYBE_SENT_WAIT());
+    await expect(lovejoin.publicBuild("preprod", 1)).rejects.toThrow(MAYBE_SENT_WAIT());
     // Nothing went beside it: giveme.my wasn't asked, and none of the mix was sent, recorded or taken as being sent.
     expect(t.koios.submitted).toHaveLength(submitted);
     expect(t.collateral.asked).toEqual([]);

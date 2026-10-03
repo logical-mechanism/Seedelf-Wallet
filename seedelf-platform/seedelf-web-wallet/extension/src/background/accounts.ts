@@ -24,6 +24,7 @@
 // does *not* cover is co-spending, which `shared/histories.ts` handles by
 // giving each account's money its own history class.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -174,10 +175,10 @@ export class AccountsService {
    * is how a watch loses its account.
    */
   async use(index: number, networks: readonly NetworkName[]): Promise<number> {
-    if (!isIndex(index)) throw new Error("That isn't an account.");
+    if (!isIndex(index)) throw new Error(t("worker.accounts.notAnAccount"));
     const known = await this.known();
     if (!known.some((a) => a.index === index)) {
-      throw new Error("Seedelf Wallet doesn't know that account. Add it in Settings → Public accounts first.");
+      throw new Error(t("worker.accounts.unknownAdd"));
     }
     if ((await this.active()) === index) return index;
     await this.deps.local.set(LOCAL_ACCOUNT, index);
@@ -195,7 +196,7 @@ export class AccountsService {
   async rename(index: number, name: string): Promise<KnownAccount[]> {
     const trimmed = name.trim().slice(0, NAME_MAX);
     const known = await this.known();
-    if (!known.some((a) => a.index === index)) throw new Error("Seedelf Wallet doesn't know that account.");
+    if (!known.some((a) => a.index === index)) throw new Error(t("worker.accounts.unknown"));
     const next = known.map((a) => (a.index === index ? { ...a, ...(trimmed ? { name: trimmed } : { name: undefined }) } : a));
     await this.keep(next);
     return sorted(next);
@@ -274,11 +275,11 @@ export class AccountsService {
    * user's call (`add`) and needs no request at all.
    */
   async check(network: NetworkName, index: number): Promise<{ index: number; used: boolean }> {
-    if (!isIndex(index)) throw new Error(badIndex);
+    if (!isIndex(index)) throw new Error(badIndex());
     const known = await this.known();
     const used = await this.used(network, index);
     if (used && !known.some((a) => a.index === index)) {
-      if (known.length >= MAX_KEPT) throw new Error(tooMany);
+      if (known.length >= MAX_KEPT) throw new Error(tooMany());
       await this.keep([...known, { index, foundAt: this.deps.now() }]);
     }
     return { index, used };
@@ -296,10 +297,10 @@ export class AccountsService {
    * address, and adding tells it nothing until the account is used.
    */
   async add(index: number): Promise<KnownAccount[]> {
-    if (!isIndex(index)) throw new Error(badIndex);
+    if (!isIndex(index)) throw new Error(badIndex());
     const known = await this.known();
     if (known.some((a) => a.index === index)) return known;
-    if (known.length >= MAX_KEPT) throw new Error(tooMany);
+    if (known.length >= MAX_KEPT) throw new Error(tooMany());
     const next = [...known, { index }];
     await this.keep(next);
     return sorted(next);
@@ -311,9 +312,9 @@ export class AccountsService {
 }
 
 /** What the wallet says for an index outside CIP-1852's hardened range. */
-const badIndex = `An account number is a whole number from 0 to ${MAX_INDEX}.`;
+const badIndex = () => t("worker.accounts.badIndex", { max: MAX_INDEX });
 /** And for a list that is already as long as the picker should get. */
-const tooMany = `Seedelf Wallet keeps up to ${MAX_KEPT} accounts. Remove one from the list before adding another.`;
+const tooMany = () => t("worker.accounts.tooMany", { max: MAX_KEPT });
 
 /** The first index not in `known`, counting up from 0: where a sequential look carries on from. */
 function nextSequential(known: KnownAccount[]): number {

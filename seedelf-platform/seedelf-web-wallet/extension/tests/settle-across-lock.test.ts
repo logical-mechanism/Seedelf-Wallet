@@ -105,7 +105,7 @@ describe("a maybe-sent payment's look, across a lock and an unlock", () => {
       t.clock.now += 30_000;
       await t.wallet.unlock(PASSWORD);
     });
-    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: id, maybeSent: true });
     expect(ids(t)).toEqual([id]);
   });

@@ -143,7 +143,7 @@ describe("a payment that may still go through, across Remove wallet", () => {
     await ask({ type: "restore-wallet", phrase: MINE, password: PASSWORD }, w.ctx);
     expect(await w.t.pending.pending("preprod")).toMatchObject({ txHash, maybeSent: true });
     expect((await spentSet(w.t.session)).size).toBeGreaterThan(0);
-    await expect(w.t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(w.t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     // It lands: settled, the record goes.
     w.t.koios.confirmations = 1;
     expect(await w.t.pending.pending("preprod")).toMatchObject({ txHash, confirmations: 1 });
@@ -158,7 +158,7 @@ describe("a payment that may still go through, across Remove wallet", () => {
     expect(w.t.local.data.has(SEALED)).toBe(true);
     await ask({ type: "restore-wallet", phrase: MINE, password: PASSWORD }, w.ctx);
     expect(await w.t.session.get(pendingKey("preprod"))).toBeUndefined();
-    await expect(w.t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(w.t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     expect(await w.t.pending.pending("preprod")).toMatchObject({ txHash, maybeSent: true });
   });
 
