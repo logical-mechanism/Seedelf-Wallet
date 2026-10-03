@@ -1,5 +1,8 @@
 [
   "accountRecipients.privacy.ownAccounts",
+  "activity.export.privacy.private",
+  "activity.export.privacy.public",
+  "activity.privacy.kept",
   "create.phrase.warn.neverCopy",
   "handleWarning.note",
   "handleWarning.returning",
@@ -17,5 +20,10 @@
   "settings.language.warn.unchecked",
   "startup.reloadNote",
   "startup.title",
-  "unlock.warn.trap"
+  "unlock.warn.trap",
+  "utxos.privacy.cameFrom",
+  "utxos.privacy.onlyThisWallet",
+  "utxos.warn.someUnspendable",
+  "utxos.warn.unspendablePrivate",
+  "utxos.warn.unspendablePublic"
 ]
