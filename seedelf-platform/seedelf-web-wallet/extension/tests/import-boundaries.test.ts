@@ -1,4 +1,7 @@
-// What the content scripts are allowed to carry. `content/page.ts` runs in the
+// Two module graphs that must stay free of the wallet's UI layer, both of which
+// chunk 19 broke and only a build or the e2e suite noticed.
+//
+// 1. The content scripts. `content/page.ts` runs in the
 // page's own world, where `chrome` is undefined, so a module that touches
 // `chrome` as it loads kills the whole script — and with it `window.cardano`,
 // which is how a site finds the wallet at all. That failure is silent in the
@@ -7,8 +10,14 @@
 // that module, and every dApp connector test failed with
 // `Cannot read properties of undefined (reading 'seedelf')`).
 //
-// So this walks the static import graph from each content script and holds the
-// rule: no i18next, and nothing that reads `chrome` at import.
+// 2. What `vite.config.ts` imports. It builds the manifest from
+// `src/manifest.ts`, which reads `networks.ts` and `shared/dapp.ts`, and Vite
+// loads that graph with Node — so a `t()` in one of them pulls i18next and all
+// three locale files into the build's own config. `networks.ts` had one, for
+// `POOL_SEEDABLE`, and Vite said so in seven `configLoader: 'native'` warnings.
+//
+// So this walks the static import graph from each entry and holds the rules: no
+// i18next in either, and nothing that reads `chrome` at import in the page's.
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -80,5 +89,21 @@ describe("what a content script is allowed to import", () => {
     // gains a third, this list has to know about it.
     const config = readFileSync(resolve(SRC, "../vite.config.ts"), "utf8");
     for (const entry of ENTRIES) expect(config).toContain(`src/${entry}`);
+  });
+});
+
+describe("what the build's own config is allowed to import", () => {
+  // Read from the config rather than listed here: a new `./src/…` import in it
+  // joins this check by itself.
+  const config = readFileSync(resolve(SRC, "../vite.config.ts"), "utf8");
+  const entries = [...config.matchAll(/from "\.\/src\/([^"]+)"/g)].map((m) => m[1]!);
+
+  it("imports something from src/ at all, so this check isn't vacuous", () => {
+    expect(entries.length).toBeGreaterThan(0);
+  });
+
+  it.each(entries)("src/%s reaches no i18n module", (entry) => {
+    const i18n = reachable(entry).filter((f) => f.startsWith("i18n/"));
+    expect(i18n, `vite.config.ts would load i18next and every locale to build the manifest`).toEqual([]);
   });
 });

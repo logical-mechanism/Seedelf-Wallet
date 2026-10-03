@@ -296,7 +296,7 @@ and that is the point of the rule below: for one commit they weren't, and each
 carried all three locale files. The WebAssembly is unchanged at 2,639 kB, so the
 whole extension is still dominated by it; the store zip is 1,670 kB.
 
-**1,190 tests pass, and the English they assert did not move.** That was the
+**1,192 tests pass, and the English they assert did not move.** That was the
 acceptance test and it held: no behavioural test was edited for wording. The
 test files that changed did so because a constant they import became a function.
 
@@ -313,14 +313,23 @@ Four things the extraction found that were wrong before it:
   nombre)", the comparison would have passed, and a token with an empty asset
   name would have been labelled "(sin nombre)" rather than by its fingerprint.
   It tests the empty asset name itself now.
+- **Two module graphs that must stay free of i18n, and both were broken.** The
+  content scripts, below — and **`vite.config.ts`'s own**: it builds the
+  manifest from `src/manifest.ts`, which reads `networks.ts`, and a `t()` there
+  (for `POOL_SEEDABLE`) pulled i18next and all three locale files into the
+  build's config, which Vite loads with Node. That is what Vite's seven
+  `configLoader: 'native'` warnings were pointing at. `POOL_SEEDABLE` moved to
+  its only caller, `background/lovejoin.ts`, and the warnings went with it.
+  `tests/import-boundaries.test.ts` holds both graphs, reading the config's
+  `./src/…` imports rather than listing them.
 - **A shared module pulled i18next into the content scripts, and killed them.**
   `shared/dapp.ts` gained one `t()` call for `cutOff()`. Both content scripts
   import that module, and `content/page.ts` runs in the page's own world, where
   `chrome` is undefined — so i18next's init threw, the script died before
   defining `window.cardano.seedelf`, and **every dApp connector e2e test failed**
   while all 1,186 unit tests passed. `cutOff()` is English again (it is only
-  ever called from the content script), and `tests/content-script.test.ts` walks
-  the import graph from each entry so it can't come back.
+  ever called from the content script), and `tests/import-boundaries.test.ts`
+  walks the import graph from each entry so it can't come back.
 - **The derived critical set cannot see a warning assembled above its JSX.**
   `NotMixed` builds its sentences into `const` bindings and renders the joined
   string, so the deriver — which walks `<Callout tone="warn">` subtrees — marked
@@ -344,8 +353,8 @@ Besides the Rust messages named above:
 - **`cutOff()` in `shared/dapp.ts`**, for the harder reason: both content scripts
   import that module, and `content/page.ts` runs in the page's own world, where
   `chrome` is undefined, so i18next must not be *reachable* from it at all. The
-  rule is wider than one file, which is why `tests/content-script.test.ts` walks
-  the import graph rather than checking a list.
+  rule is wider than one file, which is why `tests/import-boundaries.test.ts`
+  walks the import graph rather than checking a list.
 - **The two prefixes `dapp.ts` matches** to classify a WebAssembly failure
   (`"The wallet can't read"`, `"bad request"`). They read Rust's words, not
   keys, and the source now says so.

@@ -23,6 +23,7 @@ import {
   mixesPerBox,
   pumpChain,
   QUIET_AFTER_SEND_MS,
+  POOL_SEEDABLE,
   QUIET_PUSH_MS,
   QUIET_PUSHES,
   secureRandom,
@@ -37,7 +38,7 @@ import { nothingToSpend, readContract } from "../src/background/script-spend";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
 import { SESSION_WITHDRAW } from "../src/background/withdraw";
 import { Minswap } from "../src/background/minswap";
-import { lovejoinOn, NETWORKS, POOL_SEEDABLE } from "../src/networks";
+import { lovejoinOn, NETWORKS } from "../src/networks";
 import { SESSION_CHAIN_PREFIX, SessionService } from "../src/background/sessions";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, swapTx } from "./fixtures/swap-tx";

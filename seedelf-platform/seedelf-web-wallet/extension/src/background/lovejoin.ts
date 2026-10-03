@@ -88,7 +88,7 @@
 
 import { t } from "../i18n";
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
-import { lovejoinOn, NETWORKS, POOL_SEEDABLE, type NetworkName } from "../networks";
+import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
   LovejoinFunding,
@@ -130,6 +130,16 @@ export const SESSION_LOVEJOIN_SENDING = "seedelf.lovejoin.sending.";
 
 /** A built mix is only sent within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
+
+/**
+ * Ends the refusal when Lovejoin's pool is under its floor and the public
+ * account could seed it instead. The Lovejoin page matches on it to offer
+ * that, so the worker and the page keep one wording between them. It lived in
+ * `networks.ts` until chunk 19: that module is imported by `vite.config.ts`
+ * (through `manifest.ts`), so a `t()` there pulled i18next and all three
+ * locale files into the build's own config graph.
+ */
+export const POOL_SEEDABLE = () => t("lj.poolSeedable");
 
 /** A mix from the public account is built or sent while the last one from it is still being sent. */
 const PUBLIC_STILL_SENDING = () => t("lj.mixSending");
