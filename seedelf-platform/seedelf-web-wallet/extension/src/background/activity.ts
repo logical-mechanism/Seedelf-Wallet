@@ -137,7 +137,8 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
 /** Who was paid: the one, or the first and how many more. */
-const several = (names: string[]) => (names.length > 1 ? `${names[0]} and ${names.length - 1} more` : names[0]);
+const several = (names: string[]) =>
+  names.length > 1 ? t("activity.andMore", { first: names[0], count: names.length - 1 }) : names[0];
 const feeOf = (fee: unknown) => (typeof fee === "string" ? fee : (fee as { total?: string } | undefined)?.total);
 
 export interface ActivityDeps {

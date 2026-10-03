@@ -9,9 +9,16 @@ the word.
 ## Never translated
 
 **Seedelf**, **Seedelf Wallet**, **Lovejoin**, **Koios**, **Cardanoscan**,
-**giveme.my**, **Minswap**, **Preprod**, **ADA Handle**, **UTxO**, **CIP-30**,
-**DRep**, **ADA**, **₳**. Seedelf is the name and
+**giveme.my**, **Minswap**, **Preprod**, **mainnet**, **ADA Handle**, **UTxO**,
+**CIP-30**, **DRep**, **ADA**, **₳**. Seedelf is the name and
 `extension/tests/words.test.ts` checks it in every locale.
+
+**Seedelf and Lovejoin are brands and are never transliterated** — not
+シードエルフ, not ラブジョイン. The two network names are Cardano's own and stay
+Latin in every language: the *sentence* around them is translated ("Preprod, la
+red de pruebas de Cardano"), the name is not. The owner asked for this
+explicitly (2026-10-03), and there is no Spanish or Japanese form of either
+brand that would make sense.
 
 **The recovery phrase itself** is never translated: the 24 words are BIP39's
 English list and the derivation is frozen. The screens *about* the phrase are

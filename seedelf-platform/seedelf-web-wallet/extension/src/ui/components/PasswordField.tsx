@@ -3,10 +3,11 @@
 // and hides again whenever the screen is left.
 
 import { useState } from "react";
+import { useT } from "../../i18n";
 
 export function PasswordField({
   id,
-  label = "Password",
+  label,
   value,
   onChange,
   autoFocus,
@@ -17,13 +18,14 @@ export function PasswordField({
   onChange: (value: string) => void;
   autoFocus?: boolean;
 }) {
+  const tr = useT();
   const [show, setShow] = useState(false);
   return (
     <div className="field">
       <div className="field-row">
-        <label htmlFor={id}>{label}</label>
+        <label htmlFor={id}>{label ?? tr("password.label")}</label>
         <button type="button" className="link" aria-controls={id} onClick={() => setShow(!show)}>
-          {show ? "Hide" : "Show"}
+          {tr(show ? "common.hide" : "common.show")}
         </button>
       </div>
       <input

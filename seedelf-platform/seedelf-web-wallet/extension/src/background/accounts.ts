@@ -77,7 +77,7 @@ interface Record_ {
 }
 
 /** The name an account is shown by with none of its own: "Account 1" for index 0, as a person counts. */
-export const accountLabel = (a: KnownAccount): string => a.name?.trim() || `Account ${a.index + 1}`;
+export const accountLabel = (a: KnownAccount): string => a.name?.trim() || t("accounts.numbered", { number: a.index + 1 });
 
 export interface AccountsDeps {
   wasm: typeof Wasm;

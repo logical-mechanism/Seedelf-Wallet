@@ -21,7 +21,8 @@ const HINTS = {
   strong: "setPassword.hint.strong",
 } as const satisfies Record<string, I18nKey>;
 
-export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }: SetPasswordProps) {
+export function SetPassword({ submitLabel, busy, onSubmit, label }: SetPasswordProps) {
+  const tr = useT();
   const t = useT();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -43,9 +44,9 @@ export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }:
       <p className="note">{t("setPassword.note", { min: MIN_PASSWORD_LENGTH })}</p>
       <div className="field">
         <div className="field-row">
-          <label htmlFor="new-password">{label}</label>
+          <label htmlFor="new-password">{label ?? tr("password.label")}</label>
           <button type="button" className="link" onClick={() => setShow(!show)}>
-            {show ? "Hide" : "Show"}
+            {tr(show ? "common.hide" : "common.show")}
           </button>
         </div>
         <input

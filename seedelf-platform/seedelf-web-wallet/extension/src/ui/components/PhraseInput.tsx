@@ -135,7 +135,7 @@ function WordBox({ position, value, list, inputRef, onChange, onAccept, onPaste 
       <input
         ref={inputRef}
         className="word__input"
-        aria-label={`Word ${position}`}
+        aria-label={t("phrase.wordNumber", { number: position })}
         aria-invalid={invalid || undefined}
         role="combobox"
         aria-autocomplete="list"

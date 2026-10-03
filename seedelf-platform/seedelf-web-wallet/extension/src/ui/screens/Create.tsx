@@ -80,7 +80,7 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
   }
 
   const steps: Step[] = ["reveal", "confirm", "password"];
-  const aside = `Step ${steps.indexOf(step) + 1} of ${steps.length}`;
+  const aside = t("create.stepOf", { step: steps.indexOf(step) + 1, total: steps.length });
   const back = step === "reveal" ? onBack : () => setStep(step === "password" ? "confirm" : "reveal");
 
   if (step === "reveal") {

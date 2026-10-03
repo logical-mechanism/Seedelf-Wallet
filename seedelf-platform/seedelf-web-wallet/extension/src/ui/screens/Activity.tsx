@@ -11,7 +11,7 @@
 // on the chain (privacy review §2.21).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useT } from "../../i18n";
+import { t, useT } from "../../i18n";
 
 import type { ActivityEntry } from "../../shared/rpc";
 import { activityCsv, activityTitle as title, poolOf, signedQuantity, stakingLine, voteOf } from "../activity";
@@ -34,7 +34,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TokenAmountRow } from "../components/TokenList";
-import { formatAda, plural, shortHex } from "../format";
+import { formatAda, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 
@@ -63,7 +63,8 @@ function icon(e: ActivityEntry): ReactNode {
 /** "+25 ₳", "−5 ₳ and 1 token", or "1.74986 ₳" for a seedelf's locked ADA; masked while balances are hidden. */
 function amount(e: ActivityEntry, ada: (lovelace: string) => string): string {
   const sign = e.direction === "in" ? "+" : e.direction === "out" ? "−" : "";
-  return `${sign}${ada(e.lovelace)} ₳${e.tokens ? ` and ${plural(e.tokens, "token")}` : ""}`;
+  const held = e.tokens ? t("format.adaAndTokens", { ada: ada(e.lovelace), count: e.tokens }) : `${ada(e.lovelace)} ₳`;
+  return `${sign}${held}`;
 }
 
 /** Saves `text` as a file on the device, as the browser saves any download. */

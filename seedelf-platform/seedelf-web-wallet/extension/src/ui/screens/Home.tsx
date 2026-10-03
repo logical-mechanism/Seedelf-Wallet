@@ -49,7 +49,7 @@ import {
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { formatFiat, plural, poolLabel, rewardsLocked, spentRewards, unlocked, whenOf, withRewards } from "../format";
+import { formatFiat, poolLabel, rewardsLocked, spentRewards, unlocked, whenOf, withRewards } from "../format";
 import { useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
@@ -476,7 +476,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               <Amount lovelace={balances && accountTotal(balances.cardano)} price={price} testId="cardano-lovelace" />
               <span className="hero__meta" data-testid="cardano-meta">
                 {balances
-                  ? `${plural(balances.cardano.addressesUsed, "address", "addresses")} used${lockedMeta(balances.cardano, amounts.ada)}`
+                  ? `${t("home.addressesUsed", { count: balances.cardano.addressesUsed })}${lockedMeta(balances.cardano, amounts.ada)}`
                   : "\u00a0"}
               </span>
               <div className="hero__actions">

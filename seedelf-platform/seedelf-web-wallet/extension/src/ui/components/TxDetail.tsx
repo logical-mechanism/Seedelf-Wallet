@@ -32,7 +32,7 @@ import { ExpandIcon, SpinnerIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
 import { Tabs } from "./Tabs";
-import { formatAda, formatQuantity, plural, shortHex } from "../format";
+import { formatAda, formatQuantity, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
 
@@ -259,7 +259,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         <Outpoints list={d.inputs} testId={`${testId}-input-list`} />
       </Section>
 
-      <Section title={`Pays ${plural(d.outputs.length, "output")}`} id={`${testId}-outputs`}>
+      <Section title={tr("tx.paysOutputs", { count: d.outputs.length })} id={`${testId}-outputs`}>
         <ul className="list" data-testid={`${testId}-output-list`}>
           {d.outputs.map((o, i) => (
             <Output key={i} output={o} amount={amount} name={name} />

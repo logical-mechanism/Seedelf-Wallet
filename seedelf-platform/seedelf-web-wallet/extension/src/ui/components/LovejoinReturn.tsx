@@ -90,13 +90,15 @@ export function useSendingLabel(index: number, active: boolean): string {
   useEffect(() => {
     if (!active) setChain(undefined);
   }, [active]);
-  return active && chain && !chain.cut && chain.sent < chain.total ? `Sending ${chain.sent} of ${chain.total}…` : "Sending…";
+  return active && chain && !chain.cut && chain.sent < chain.total
+    ? t("lovejoin.sendingOf", { sent: chain.sent, total: chain.total })
+    : t("common.sending");
 }
 
 /** "1-6" as "1 to 6 hours". */
 export function delayText(delay: string): string {
   const [low, high] = delay.split("-");
-  return `${low} to ${high} hours`;
+  return t("lovejoin.delayHours", { low, high });
 }
 
 /** The review's rows for the part that goes through Lovejoin; nothing for a plain return. */

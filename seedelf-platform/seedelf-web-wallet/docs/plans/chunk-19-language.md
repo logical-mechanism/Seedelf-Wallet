@@ -302,7 +302,7 @@ test files that changed did so because a constant they import became a function.
 
 ## What this turned up
 
-Four things the extraction found that were wrong before it:
+Six things the extraction found that were wrong before it:
 
 - **Fourteen module-level `t()` constants were eager**, so they bound English at
   import and never heard a language change. All of them are functions now. The
@@ -337,11 +337,40 @@ Four things the extraction found that were wrong before it:
   keys moved under `lovejoin.warn.notMixed.*`, where the name rule catches them.
   The lesson generalises: **a key whose sentence is built outside its callout
   must carry `.warn.` or `.privacy.` in its name.**
+- **The scan that found the strings hid every single-word one.** It only reported
+  a literal or template fragment whose trimmed value contained whitespace, which
+  is a fine heuristic for prose and a terrible one for `"Show"`, `"Password"`,
+  `" to "`, `" hours"` and `" and "`. So a whole class survived: default
+  parameter values (`label = "Password"`), ternary branches
+  (`show ? "Hide" : "Show"`), the fragments of text-building helpers
+  (`delayText`'s `"${low} to ${high} hours"`), and every call of `plural()` and
+  of PlutusTree's own `count()`, both of which take the noun as an English
+  argument. **The owner found four of them by opening the wallet; a scan without
+  the whitespace filter found twenty-two.** `plural()` is deleted rather than
+  fixed — with no callers left, its absence is what stops the pattern returning,
+  and `format.ts` says so where it used to be.
 - **English word order was load-bearing in about twenty places** —
   `many ? "They" : "It"`, `plural(n, "box", "boxes")`, `${what} isn't ready`.
   Each became whole-sentence keys, with a pronoun count passed as `count` where
   agreement was the only variable, so Spanish picks its form and Japanese needs
   none.
+
+## Known gap: dates and numbers, not words
+
+Every string is translated; **the formatting around them is still English.**
+`toLocaleDateString`, `toLocaleTimeString`, `toLocaleString` and
+`Intl.NumberFormat` are called in 19 places with `"en-GB"` or `"en-US"` pinned,
+so a Japanese wallet shows `23 Mar, 18:40` where it should show a Japanese date,
+and a Spanish one shows `1,234.5` where `1.234,5` is expected. Two of the 19
+pass no locale at all (`Lovejoin.tsx`'s retry time, `Settings.tsx`'s connected-since date), so they
+already follow the browser instead — the app is inconsistent with itself before
+any translation.
+
+The fix is a small locale map (`en` → `en-GB`, `es` → `es-ES`, `ja` → `ja-JP`)
+threaded through those calls, which keeps English byte-identical and gives the
+other two native dates and separators. It is **not** done here: it touches
+assertions in several tests, and it is a different question from "is the text
+translated". Named rather than quietly left.
 
 ## What stays English on purpose
 
@@ -375,6 +404,8 @@ Besides the Rust messages named above:
   a listing per locale in the dashboard, through `_locales/` for the manifest's
   own name and description. It publishes nothing new about the owner. Worth a
   look now that the extension itself speaks three languages.
+- **Dates and numbers** (above): 19 calls with `en-GB`/`en-US` pinned. The
+  smallest honest fix is a locale map threaded through them.
 - **Whether the quality of a whole locale gets a pass of its own.** Each area
   was translated with its screen in view, and the critical set was
   back-translated, but nobody has read `es.json` or `ja.json` end to end looking

@@ -24,7 +24,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { plural, shortHex, tokenKey } from "../format";
+import { shortHex, tokenKey } from "../format";
 import { useAmounts } from "../preferences";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, viewToken } from "../tokens";
@@ -188,7 +188,9 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                       <Icon u={u} />
                     </span>
                     <span className="token-row__label">
-                      {amounts.ada(u.lovelace)} ₳{u.tokens.length ? ` and ${plural(u.tokens.length, "token")}` : ""}
+                      {u.tokens.length
+                        ? t("format.adaAndTokens", { ada: amounts.ada(u.lovelace), count: u.tokens.length })
+                        : `${amounts.ada(u.lovelace)} ₳`}
                     </span>
                     <span className="token-row__amount">
                       {!lockable(u) && <span className="utxo-tag">{tag(u)}</span>}
@@ -203,7 +205,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                       type="button"
                       className="icon-button utxo-row__lock"
                       aria-pressed={u.locked}
-                      aria-label={`Lock ${name}`}
+                      aria-label={t("utxos.lock.lockOne", { name })}
                       title={t(u.locked ? "utxos.lock.locked" : "utxos.lock.lock")}
                       onClick={() => void setLocked(u, !u.locked)}
                       disabled={saving === ref(u)}
@@ -261,7 +263,7 @@ export function UtxoDetails({
       )}
       <button type="button" className={utxo.locked ? "secondary" : "primary"} onClick={() => onLock(!utxo.locked)} disabled={busy}>
         {utxo.locked ? <LockOpenIcon size={16} /> : <LockIcon size={16} />}
-        {busy ? "Saving…" : utxo.locked ? "Unlock" : "Lock"}
+        {t(busy ? "utxos.lock.saving" : utxo.locked ? "utxos.lock.unlockIt" : "utxos.lock.lockIt")}
       </button>
     </>
   ) : undefined;

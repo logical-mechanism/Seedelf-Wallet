@@ -105,10 +105,10 @@ export function whenOf(at: number, now: Date): string {
   const d = new Date(at);
   const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
-  if (days === 0) return `Today, ${time}`;
-  if (days === 1) return `Yesterday, ${time}`;
+  if (days === 0) return t("format.today", { time });
+  if (days === 1) return t("format.yesterday", { time });
   const year = d.getFullYear() === now.getFullYear() ? {} : ({ year: "numeric" } as const);
-  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year })}, ${time}`;
+  return t("format.dateAndTime", { date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year }), time });
 }
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
@@ -297,10 +297,13 @@ export function deleteBesideComma(
   return { text: typed, caret };
 }
 
-/** "1 UTxO", "3 UTxOs"; `many` for irregular plurals. */
-export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
+// `plural()` lived here until chunk 19. It took the noun as an English string
+// ("1 UTxO", "3 UTxOs"), so every call was display text no locale file could
+// reach — and because its arguments are bare lowercase words, the scan that
+// found the rest of the strings walked straight past them. Use a plural key
+// instead: `t("amount.utxos", { count: n })`, or, where the number is formatted,
+// a key with `{{n}}` shown and `count` only choosing the form (PlutusTree's
+// `count()` does that). Its absence is what stops the pattern coming back.
 
 /** An ADA amount, and how many tokens come with it: "22.7 ₳ and 1 token". */
 export function adaWithTokens(lovelace: string, tokens: number): string {

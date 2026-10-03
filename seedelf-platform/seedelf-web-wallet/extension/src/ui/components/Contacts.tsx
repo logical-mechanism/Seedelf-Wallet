@@ -30,6 +30,7 @@ export function useContacts(): [Contact[] | undefined, (next?: Contact[]) => voi
 export const shortValue = (c: Pick<Contact, "value">) => (c.value.startsWith("$") ? c.value : shortHex(c.value, 12, 6));
 
 function ContactRow({ contact, onClick, label }: { contact: Contact; onClick: () => void; label?: string }) {
+  const tr = useT();
   return (
     <li>
       <button type="button" className="token-row" onClick={onClick} aria-label={label ?? contact.name}>
@@ -37,7 +38,9 @@ function ContactRow({ contact, onClick, label }: { contact: Contact; onClick: ()
           {initials(contact.name)}
         </span>
         <span className="token-row__label">{contact.name}</span>
-        <span className="token-row__amount note">{contact.kind === "seedelf" ? "Seedelf" : "Address"}</span>
+        <span className="token-row__amount note">
+          {contact.kind === "seedelf" ? "Seedelf" : tr("contacts.kind.address")}
+        </span>
         <code className="token-row__sub">{shortValue(contact)}</code>
       </button>
     </li>

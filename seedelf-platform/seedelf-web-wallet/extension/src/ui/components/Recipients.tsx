@@ -84,7 +84,7 @@ export function RecipientCard({
 }) {
   const t = useT();
   if (count === 1) return <>{children}</>;
-  const title = `Recipient ${index + 1}`;
+  const title = t("recipients.numbered", { number: index + 1 });
   const headId = `recipient-${index + 1}-title`;
   return (
     <section className="recipient" role="group" aria-labelledby={headId}>
