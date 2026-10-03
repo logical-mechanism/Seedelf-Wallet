@@ -4,17 +4,18 @@
 // and measures scripts looks the same as one that has hung.
 
 import { useEffect, useState } from "react";
+import { useT, type I18nKey } from "../../i18n";
 
 import type { BuildStage as Stage } from "../../shared/rpc";
 import { buildStage, onBuildStage } from "../background";
 
 /** What each stage is called on screen, in the order they happen. */
-const WORDS: Record<Stage, string> = {
-  checking: "Checking your earlier payments…",
-  reading: "Reading the chain…",
-  building: "Building the transaction…",
-  measuring: "Measuring the scripts…",
-  collateral: "Getting collateral…",
+const WORDS: Record<Stage, I18nKey> = {
+  checking: "buildStage.checking",
+  reading: "buildStage.reading",
+  building: "buildStage.building",
+  measuring: "buildStage.measuring",
+  collateral: "buildStage.collateral",
 };
 
 /** The running build's stage, or undefined between builds. */
@@ -26,11 +27,12 @@ export function useBuildStage(): Stage | undefined {
 
 /** A quiet line saying what the build is doing; nothing at all when none is. */
 export function BuildStage({ busy }: { busy: boolean }) {
+  const t = useT();
   const stage = useBuildStage();
   if (!busy || !stage) return null;
   return (
     <p className="note center build-stage" data-testid="build-stage" aria-live="polite">
-      {WORDS[stage]}
+      {t(WORDS[stage])}
     </p>
   );
 }

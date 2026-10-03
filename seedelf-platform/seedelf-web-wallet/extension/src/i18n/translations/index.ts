@@ -10,9 +10,11 @@
 // the key sets identical, so a half-finished file fails rather than ships.
 
 import en from "./en.json";
+import es from "./es.json";
+import ja from "./ja.json";
 
 /** Every bundle we ship, by its fallback code. */
-export const bundles = { en } as const;
+export const bundles = { en, es, ja } as const;
 
 export type LanguageCode = keyof typeof bundles;
 

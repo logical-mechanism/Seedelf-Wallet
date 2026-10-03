@@ -11,6 +11,7 @@
 // first.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { availableLanguages, currentLanguage, type LanguageCode, setLanguage, useT } from "../../i18n";
 
 import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
 import { DAPP_ORIGINS } from "../../shared/dapp";
@@ -60,6 +61,8 @@ import { Collateral } from "./Collateral";
 import { disconnectWait } from "./SiteSessions";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
+/** Where a wrong translation is reported: no native speaker has checked them (chunk 19). */
+const ISSUES = "https://github.com/logical-mechanism/Seedelf-Wallet/issues";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
@@ -526,6 +529,7 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
  * Switching where it opens opens it that way at once, as in Lace.
  */
 function PreferencesSection({ network }: { network: Status["network"] }) {
+  const t = useT();
   const { prefs, loaded, set } = usePreferences();
   const [openIn, setOpenIn] = useState<OpenIn>();
   const [error, setError] = useState<string>();
@@ -544,6 +548,28 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
   return (
     <section className="section" aria-labelledby="preferences-title">
       <h2 id="preferences-title">Preferences</h2>
+      <div className="field">
+        <label htmlFor="language">{t("settings.language.label")}</label>
+        <select
+          id="language"
+          value={currentLanguage()}
+          onChange={(e) => void setLanguage(e.target.value as LanguageCode).catch((err: Error) => setError(err.message))}
+        >
+          {availableLanguages.map((l) => (
+            // Each language under its own name, from its own bundle: never
+            // "Japanese" in English.
+            <option key={l.code} value={l.code}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+        <p className="note" data-testid="language-note">
+          {t("settings.language.warn.unchecked")}{" "}
+          <a className="link" href={ISSUES} target="_blank" rel="noreferrer">
+            {t("settings.language.report")}
+          </a>
+        </p>
+      </div>
       {openIn && (
         <div className="stack-tight">
           <Choice<OpenIn>

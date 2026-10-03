@@ -1,0 +1,11 @@
+{
+  "reviewer": "Claude (Opus 5), 2026-10-02. Each value was translated back to English without the English original in view, then compared for meaning: a dropped clause, an inverted negation, a lost \"instead\". Two fixes came out of it — es accountRecipients.privacy.ownAccounts gained \"En cambio\" for English's \"instead\", and ja receive.privacy.publicAddress gained \"いずれかの\" for \"one of your Seedelfs\". NO NATIVE SPEAKER HAS READ THESE. That is the accepted risk (post-release roadmap, open question 2); a user who reports an error is the feedback loop working.",
+  "keys": [
+    "accountRecipients.privacy.ownAccounts",
+    "handleWarning.note",
+    "handleWarning.returning",
+    "receive.privacy.publicAddress",
+    "receive.privacy.seedelfName",
+    "settings.language.warn.unchecked"
+  ]
+}

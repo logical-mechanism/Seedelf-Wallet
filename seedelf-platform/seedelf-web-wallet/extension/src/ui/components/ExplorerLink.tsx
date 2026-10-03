@@ -7,23 +7,28 @@
 // UTxOs screen's warning (privacy review §3.4). Copy stays wherever it is.
 
 import { useId, type ReactNode } from "react";
+import { useT, type I18nKey } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import { explorerAddressUrl, explorerUrl } from "../format";
 import { ExternalIcon } from "./Icons";
 
-/** What a private link tells Cardanoscan, and the browser's history, is the user's. */
-export function explorerWarning(what: "transaction" | "transactions" | "account"): string {
-  return what === "transactions"
-    ? "Opening these on Cardanoscan tells that site, and your browser history, that these transactions are yours."
-    : `Opening this on Cardanoscan tells that site, and your browser history, that this ${what} is yours.`;
+/**
+ * What a private link tells Cardanoscan, and the browser's history, is the
+ * user's. One key a case, not one sentence with the noun dropped into it:
+ * "this transaction"/"this account" doesn't decline the same way everywhere.
+ */
+export function explorerWarningKey(what: "transaction" | "transactions" | "account"): I18nKey {
+  if (what === "transactions") return "explorer.warning.transactions";
+  return what === "account" ? "explorer.warning.account" : "explorer.warning.transaction";
 }
 
 /** The warning on its own: under a group of private links, each shown with `note={false}`. */
 export function ExplorerNote({ what, id }: { what: "transaction" | "transactions" | "account"; id?: string }) {
+  const t = useT();
   return (
     <p className="note explorer-note" id={id} data-testid="explorer-note">
-      {explorerWarning(what)}
+      {t(explorerWarningKey(what))}
     </p>
   );
 }
@@ -48,6 +53,7 @@ export function ExplorerLink({
   className?: string;
   children: ReactNode;
 }) {
+  const t = useT();
   const noteId = useId();
   const href = address !== undefined ? explorerAddressUrl(network, address) : explorerUrl(network, tx ?? "");
   const noted = isPrivate && note;
@@ -59,7 +65,7 @@ export function ExplorerLink({
         target="_blank"
         rel="noreferrer"
         aria-describedby={noted ? noteId : undefined}
-        title={isPrivate && !note ? explorerWarning(address !== undefined ? "account" : "transaction") : undefined}
+        title={isPrivate && !note ? t(explorerWarningKey(address !== undefined ? "account" : "transaction")) : undefined}
       >
         {children}
         <ExternalIcon size={12} />
