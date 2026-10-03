@@ -19,7 +19,7 @@
 import i18next from "i18next";
 
 import { LOCAL_LANGUAGE } from "../shared/preferences";
-import { DEFAULT_LANGUAGE, isSupportedLanguage, type LanguageCode, resources } from "./translations";
+import { DEFAULT_LANGUAGE, type I18nKey, isSupportedLanguage, type LanguageCode, resources } from "./translations";
 
 i18next.init({
   lng: DEFAULT_LANGUAGE,
@@ -125,9 +125,17 @@ function follow(): void {
   }
 }
 
+/** What a `t()` call takes: one of our keys, and the values to put in it. */
+export type Translate = (key: I18nKey, values?: Record<string, unknown>) => string;
+
 /**
  * The wallet's words, outside React: the worker's messages, and anything a
  * plain function writes. Screens use `useT` from `./index.tsx` instead, so
  * they redraw when the language changes.
+ *
+ * Typed by us rather than by i18next, for one reason: a plural is named by its
+ * base key and i18next's own types only know the `_one`/`_other` entries that
+ * are really in the JSON. `Translate` accepts the base, which is what a call
+ * site writes, and the cast is here — once — instead of at every call.
  */
-export const t = i18next.t.bind(i18next);
+export const t: Translate = (key, values) => i18next.t(key as never, values as never) as unknown as string;

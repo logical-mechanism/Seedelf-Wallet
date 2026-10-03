@@ -7,7 +7,7 @@
 
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 
-import { i18n, t } from "./core";
+import { i18n, t, type Translate } from "./core";
 import type { I18nKey } from "./translations";
 
 export { currentLanguage, setLanguage, startI18n, t } from "./core";
@@ -18,7 +18,7 @@ export type { I18nKey };
  * The wallet's words, and a redraw when the language changes — including a
  * change another page made, which `core.ts` follows.
  */
-export function useT(): typeof t {
+export function useT(): Translate {
   const [, redraw] = useState(0);
   useEffect(() => {
     const changed = () => redraw((n) => n + 1);

@@ -57,10 +57,19 @@ function isCriticalElement(node) {
   return tone?.value?.type === "Literal" && (tone.value.value === "privacy" || tone.value.value === "warn");
 }
 
-/** Every key named by a string literal anywhere in a subtree. */
+/**
+ * Controls whose own label is navigation, not the message. A `role="alert"`
+ * wrapper holds the warning *and* the buttons under it ("Try again", "Lock"),
+ * and a button's label is not where a wrong translation costs money — the
+ * sentence above it is. Their subtrees are skipped.
+ */
+const CONTROLS = new Set(["button", "a", "select", "input", "textarea", "label"]);
+
+/** Every key named by a string literal in a subtree, minus the controls' own labels. */
 function keysIn(node, into) {
   if (!node || typeof node !== "object") return;
   if (Array.isArray(node)) return node.forEach((c) => keysIn(c, into));
+  if (node.type === "JSXElement" && CONTROLS.has(node.openingElement?.name?.name)) return;
   // Flat dot-notation, two segments at least: what a key looks like and a
   // sentence doesn't.
   if (node.type === "Literal" && typeof node.value === "string" && /^[a-z][\w]*(\.[\w]+){1,}$/.test(node.value)) {
@@ -71,6 +80,13 @@ function keysIn(node, into) {
 
 /** A key whose own name says it carries a privacy decision or a warning. */
 export const criticalByName = (key) => /\.(privacy|warn)\./.test(key);
+
+/**
+ * `x.y_one` → `x.y`. The set is kept in base keys only: a plural is named by
+ * its base at the call site, so a set holding `_one` and `_other` separately
+ * would not match the base a source literal gives, and the gate would miss it.
+ */
+const baseOf = (key) => key.replace(/_(few|many|one|other|two|zero)$/, "");
 
 /** The accuracy-critical keys: what a critical component shows, and what a critical name declares. */
 export function criticalKeys(allKeys = []) {
@@ -91,7 +107,7 @@ export function criticalKeys(allKeys = []) {
     };
     visit(ast);
   }
-  return [...found].sort();
+  return [...new Set([...found].map(baseOf))].sort();
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

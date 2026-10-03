@@ -10,7 +10,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { DEFAULT_PREFERENCES, LOCAL_PREFERENCES, type Preferences } from "../shared/preferences";
 import { call } from "./background";
-import { formatAda, formatQuantity, plural } from "./format";
+import { t, type I18nKey } from "../i18n";
+import { formatAda, formatQuantity } from "./format";
 
 interface PreferencesValue {
   prefs: Preferences;
@@ -85,8 +86,14 @@ export function useAmounts() {
       /**
        * A count that is an amount too, as "3 boxes": every Lovejoin box is
        * 10 ₳, so the count says what's in the pool (privacy review §2.16).
+       *
+       * `key` is a plural key whose forms carry the noun, because "3 boxes" is
+       * not a number and a word everywhere — Japanese counts with a classifier
+       * ("3 件のボックス"). `{{n}}` is what's shown and `count` only picks the
+       * form, so a hidden amount asks for the plural form with the mask in
+       * place of the number.
        */
-      count: (n: number, one: string, many: string) => (hidden ? `${HIDDEN} ${many}` : plural(n, one, many)),
+      count: (n: number, key: I18nKey) => (hidden ? t(key, { count: 2, n: HIDDEN }) : t(key, { count: n, n })),
     }),
     [hidden],
   );

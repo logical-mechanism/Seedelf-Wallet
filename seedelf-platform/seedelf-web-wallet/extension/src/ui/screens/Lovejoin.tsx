@@ -162,7 +162,7 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
               <ShieldIcon size={16} />
             </span>
             <span className="token-row__label">
-              {chainName(c)}, {amounts.count(c.boxes, "box", "boxes")}
+              {chainName(c)}, {amounts.count(c.boxes, "amount.boxes")}
             </span>
             <SwapTag {...(c.stopped ? { tone: "off" as const, label: "Stopped" } : { tone: "live" as const, label: "Sending" })} />
             {/* One stopped at a transaction that may have gone through says so (independent review L5). */}
@@ -561,9 +561,9 @@ export function Lovejoin({
       {status?.available && (
         <ReviewRows testId="lovejoin-status">
           {/* What the wallet has in the pool is a balance, and so is how many boxes: hidden while balances are (launch review #56, privacy review §2.16). */}
-          <Row label="Your boxes in the pool" value={owned ? `${amounts.count(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
-          {notMixed > unsure.size && <Row label="Not mixed yet" value={amounts.count(notMixed - unsure.size, "box", "boxes")} />}
-          {unsure.size > 0 && <Row label="Not known to be mixed yet" value={amounts.count(unsure.size, "box", "boxes")} />}
+          <Row label="Your boxes in the pool" value={owned ? `${amounts.count(owned, "amount.boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
+          {notMixed > unsure.size && <Row label="Not mixed yet" value={amounts.count(notMixed - unsure.size, "amount.boxes")} />}
+          {unsure.size > 0 && <Row label="Not known to be mixed yet" value={amounts.count(unsure.size, "amount.boxes")} />}
           {owned > notMixed && next !== undefined && (
             <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
           )}
@@ -739,7 +739,7 @@ export function Lovejoin({
                   <ShieldIcon size={16} />
                 </span>
                 <span className="token-row__label">
-                  {amounts.count(m.mix!.boxes, "box", "boxes")} {m.mix!.again ? "mixed again" : "of 10 ₳"}
+                  {amounts.count(m.mix!.boxes, "amount.boxes")} {m.mix!.again ? "mixed again" : "of 10 ₳"}
                 </span>
                 <SwapTag {...tagOf(m)} />
                 <span className="token-row__sub">{subOf(m, Date.now())}</span>

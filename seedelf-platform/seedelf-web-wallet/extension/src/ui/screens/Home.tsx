@@ -21,6 +21,7 @@
 // datum, which anyone can take.
 
 import { useCallback, useEffect, useState } from "react";
+import { t, useT } from "../../i18n";
 
 import { handlesIn } from "../../shared/handles";
 import type { Account, AdaPrice, Balances, LovejoinHeld, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
@@ -76,9 +77,9 @@ const SETTLE_EVERY_MS = 60_000;
 
 type Tab = "seedelf" | "cardano";
 
-const BUSY = "Wait for the last transaction to confirm";
-const MAYBE_BUSY = "Your last payment may still go through: wait until it lands, or can't any more";
-const ALL_LOCKED = "Every UTxO here is locked: unlock one under UTxOs";
+const BUSY = "home.busy.wait" as const;
+const MAYBE_BUSY = "home.busy.maybe" as const;
+const ALL_LOCKED = "home.busy.allLocked" as const;
 
 /**
  * `goHome` counts the times the top bar's Seedelf mark was pressed: each one
@@ -86,6 +87,7 @@ const ALL_LOCKED = "Every UTxO here is locked: unlock one under UTxOs";
  * Back pressed several times.
  */
 export function Home({ goHome = 0 }: { goHome?: number }) {
+  const t = useT();
   // The public tab says which account it is showing, once there is more than
   // one: the balance below it is that account's alone, never a total.
   const accounts = useAccounts();
@@ -213,7 +215,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     const timer = setInterval(() => void watch(), watching ? WATCH_EVERY_MS : SETTLE_EVERY_MS);
     return () => clearInterval(timer);
   }, [watching, settling, watch]);
-  const busy = pending?.maybeSent ? MAYBE_BUSY : BUSY;
+  const busy = t(pending?.maybeSent ? MAYBE_BUSY : BUSY);
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
   // What the forms may spend: each side less what's locked, and the account's
@@ -230,21 +232,21 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const spendTitle = watching
     ? busy
     : balances && balances.seedelf.utxos === 0
-      ? "Make some ADA private first: these are paid from your private balance"
+      ? t("home.busy.makePrivateFirst")
       : free && free.seedelf.utxos === 0
-        ? ALL_LOCKED
+        ? t(ALL_LOCKED)
         : undefined;
   const canCreate = !!free && (free.cardano.utxos > 0 || free.seedelf.utxos > 0) && !watching;
   const createTitle = watching
     ? busy
     : balances && !canCreate
       ? balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
-        ? ALL_LOCKED
-        : "Fund your public account first: it pays for the Seedelf"
+        ? t(ALL_LOCKED)
+        : t("home.busy.fundFirst")
       : undefined;
   // Move in and Send both spend the account.
   const canMoveIn = !!free && free.cardano.utxos > 0 && !watching;
-  const moveInTitle = watching ? busy : balances && free && balances.cardano.utxos > 0 && !canMoveIn ? ALL_LOCKED : undefined;
+  const moveInTitle = watching ? busy : balances && free && balances.cardano.utxos > 0 && !canMoveIn ? t(ALL_LOCKED) : undefined;
 
   const sent = (p: PendingTx) => {
     setPending(p);
@@ -346,10 +348,10 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         {error && (
           <Callout tone="warn" role="alert">
             <div className="stack-tight">
-              <strong>Couldn't read your balances</strong>
+              <strong>{t("home.warn.readFailed")}</strong>
               <span>{error}</span>
               <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
-                {reading ? "Trying…" : "Try again"}
+                {reading ? t("home.trying") : t("common.tryAgain")}
               </button>
             </div>
           </Callout>
@@ -357,10 +359,10 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         {pending && <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
 
         <Tabs
-          label="Balances"
+          label={t("home.tabsLabel")}
           tabs={[
-            { value: "seedelf", label: "Private" },
-            { value: "cardano", label: "Public" },
+            { value: "seedelf", label: t("home.tab.private") },
+            { value: "cardano", label: t("home.tab.public") },
           ]}
           value={tab}
           onChange={setTab}
@@ -375,42 +377,42 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             <div className="hero">
               <div className="hero__head">
                 <h1 id="seedelf-balance" className="hero__label">
-                  Private balance
+                  {t("home.private.title")}
                 </h1>
                 <HideToggle />
               </div>
               <Amount lovelace={balances?.seedelf.lovelace} price={price} testId="seedelf-lovelace" />
               <span className="hero__meta" data-testid="seedelf-meta">
-                {balances ? `${plural(balances.seedelf.utxos, "UTxO")}${lockedMeta(balances.seedelf, amounts.ada)}` : "\u00a0"}
+                {balances ? `${t("amount.utxos", { count: balances.seedelf.utxos })}${lockedMeta(balances.seedelf, amounts.ada)}` : "\u00a0"}
               </span>
               <div className="hero__actions">
                 <ActionButton
                   icon={<ReceiveIcon />}
-                  label="Receive"
-                  name="Receive privately"
+                  label={t("home.action.receive")}
+                  name={t("home.action.receivePrivately")}
                   onClick={() => setScreen("receive-seedelf")}
                   disabled={!balances}
                 />
                 <ActionButton
                   primary
                   icon={<SendIcon />}
-                  label="Send"
-                  name="Send privately"
+                  label={t("home.action.send")}
+                  name={t("home.action.sendPrivately")}
                   onClick={() => setScreen("transfer")}
                   disabled={!canSpend}
                   title={spendTitle}
                 />
                 <ActionButton
                   icon={<WithdrawIcon />}
-                  label="Make public"
+                  label={t("home.action.makePublic")}
                   onClick={() => setScreen("withdraw")}
                   disabled={!canSpend}
                   title={spendTitle}
                 />
                 <ActionButton
                   icon={<SproutIcon />}
-                  label="Create"
-                  name="Create a Seedelf"
+                  label={t("home.action.create")}
+                  name={t("home.action.createSeedelf")}
                   onClick={() => setScreen("create")}
                   disabled={!canCreate}
                   title={createTitle}
@@ -433,13 +435,13 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
 
             {balances && handlesIn(balances.seedelf.tokens).length > 0 && (
               <Callout tone="warn" testId="private-handle">
-                {handleWarning(handlesIn(balances.seedelf.tokens))} Make it public to your public account.
+                {handleWarning(handlesIn(balances.seedelf.tokens))} {t("home.handles.makePublic")}
               </Callout>
             )}
 
             {balances && balances.seedelf.tokens.length > 0 && (
               <section className="section" aria-labelledby="seedelf-tokens-title">
-                <h2 id="seedelf-tokens-title">Tokens</h2>
+                <h2 id="seedelf-tokens-title">{t("home.tokens")}</h2>
                 <TokenList
                   tokens={balances.seedelf.tokens}
                   testId="seedelf-tokens"
@@ -467,7 +469,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             <div className="hero">
               <div className="hero__head">
                 <h1 id="cardano-account" className="hero__label">
-                  {accounts.several ? accounts.name : "Public account"}
+                  {accounts.several ? accounts.name : t("home.public.title")}
                 </h1>
                 <HideToggle />
               </div>
@@ -480,15 +482,15 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               <div className="hero__actions">
                 <ActionButton
                   icon={<ReceiveIcon />}
-                  label="Receive"
-                  name="Receive publicly"
+                  label={t("home.action.receive")}
+                  name={t("home.action.receivePublicly")}
                   onClick={() => setScreen("receive")}
                   disabled={!account}
                 />
                 <ActionButton
                   icon={<SendIcon />}
-                  label="Send"
-                  name="Send publicly"
+                  label={t("home.action.send")}
+                  name={t("home.action.sendPublicly")}
                   onClick={() => setScreen("send")}
                   disabled={!canMoveIn}
                   title={moveInTitle}
@@ -496,7 +498,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 <ActionButton
                   primary
                   icon={<MoveInIcon />}
-                  label="Make private"
+                  label={t("home.action.makePrivate")}
                   onClick={() => setScreen("move-in")}
                   disabled={!canMoveIn}
                   title={moveInTitle}
@@ -512,12 +514,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             {balances && rewardsLocked(balances.cardano.staking) && (
               <Callout tone="warn" testId="home-rewards-locked">
                 <div className="stack-tight">
-                  <span>
-                    Your {amounts.ada(balances.cardano.staking.rewards)} ₳ of staking rewards are locked until you delegate
-                    your voting power.
-                  </span>
+                  <span>{t("home.warn.rewardsLocked", { amount: amounts.ada(balances.cardano.staking.rewards) })}</span>
                   <button type="button" className="link align-start" onClick={() => setScreen("staking-vote")}>
-                    Delegate your vote
+                    {t("home.delegateVote")}
                   </button>
                 </div>
               </Callout>
@@ -526,9 +525,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             {balances && seedelfs.length === 0 && (
               <Callout tone="privacy" testId="mint-first">
                 <div className="stack">
-                  <span>Create your Seedelf before making money private: then what you make private isn't tied to it.</span>
+                  <span>{t("home.privacy.mintFirst")}</span>
                   <button type="button" className="link align-start" onClick={() => setScreen("create")}>
-                    Create a Seedelf
+                    {t("home.action.createSeedelf")}
                   </button>
                 </div>
               </Callout>
@@ -536,7 +535,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
 
             {balances && balances.cardano.tokens.length > 0 && (
               <section className="section" aria-labelledby="cardano-tokens-title">
-                <h2 id="cardano-tokens-title">Tokens</h2>
+                <h2 id="cardano-tokens-title">{t("home.tokens")}</h2>
                 <TokenList
                   tokens={balances.cardano.tokens}
                   testId="cardano-tokens"
@@ -555,18 +554,17 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
 
 /** " · 5 ₳ locked" under a balance, when some of it is. */
 function lockedMeta(side: Balances["seedelf" | "cardano"], ada: (lovelace: string) => string): string {
-  return side.locked.utxos ? ` · ${ada(side.locked.lovelace)} ₳ locked` : "";
+  return side.locked.utxos ? t("home.lockedMeta", { amount: ada(side.locked.lovelace) }) : "";
 }
 
 /** Why an ADA Handle doesn't belong in Seedelf: what's paid to it can be taken by anyone. */
 export function handleWarning(handles: string[]): string {
-  const names = handles.map((h) => `$${h}`).join(", ");
-  const one = handles.length === 1;
-  return `${one ? "The handle" : "The handles"} ${names} ${one ? "is" : "are"} in your private balance. Anyone who pays ${one ? "it" : "them"} from another wallet pays the Seedelf contract with nothing to say whose the payment is, so anyone can take it.`;
+  return t("home.handles.warn.inPrivate", { names: handles.map((h) => `$${h}`).join(", "), count: handles.length });
 }
 
 /** The eye beside a balance: hides every amount on the screens that show what the wallet holds, or shows them again. */
 function HideToggle() {
+  const t = useT();
   const { prefs, set } = usePreferences();
   const hidden = prefs.hideBalances;
   return (
@@ -574,9 +572,9 @@ function HideToggle() {
       type="button"
       className="icon-button icon-button--small"
       onClick={() => void set({ hideBalances: !hidden }).catch(() => undefined)}
-      aria-label={hidden ? "Show balances" : "Hide balances"}
+      aria-label={t(hidden ? "home.showBalances" : "home.hideBalances")}
       aria-pressed={hidden}
-      title={hidden ? "Show balances" : "Hide balances"}
+      title={t(hidden ? "home.showBalances" : "home.hideBalances")}
     >
       {hidden ? <EyeOffIcon size={16} /> : <EyeIcon size={16} />}
     </button>
@@ -590,6 +588,7 @@ function accountTotal(cardano: Balances["cardano"]): string {
 
 /** "Staking with LOGIC · 57.47 ₳ rewards", or "Not staking": opens Staking. */
 function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => void }) {
+  const t = useT();
   const amounts = useAmounts();
   const rewards = BigInt(staking.rewards) > 0n;
   return (
@@ -601,9 +600,9 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
               <PieIcon size={16} />
             </span>
             <span className="menu-row__text">
-              <span>{staking.pool ? `Staking with ${poolLabel(staking.pool)}` : "Not staking"}</span>
+              <span>{staking.pool ? t("home.staking.with", { pool: poolLabel(staking.pool) }) : t("home.staking.not")}</span>
               <span className="menu-row__sub">
-                {staking.pool || rewards ? `${amounts.ada(staking.rewards)} ₳ rewards` : "Stake to earn rewards"}
+                {staking.pool || rewards ? t("home.staking.rewards", { amount: amounts.ada(staking.rewards) }) : t("home.staking.earn")}
               </span>
             </span>
             <ChevronRightIcon size={16} />
@@ -616,9 +615,10 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
 
 /** Swaps running by themselves, as Minswap's page lists them: each opens its page, where it's watched. */
 function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index: number) => void }) {
+  const t = useT();
   return (
     <section className="section" aria-labelledby="swaps-running-title">
-      <h2 id="swaps-running-title">Swaps in progress</h2>
+      <h2 id="swaps-running-title">{t("home.swapsRunning")}</h2>
       <ul className="list" data-testid="swaps-running">
         {swaps.map((s) => (
           <li key={s.index}>
@@ -641,15 +641,13 @@ type MixProgress = { total: number; sent: number; stopped?: string } | null;
  * it's all sent, so the balance doesn't look as if some of it vanished.
  */
 export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<MixProgress>; onOpen: () => void }) {
+  const t = useT();
   return (
     <Callout tone="info" testId="home-mix-holding">
       <div className="stack-tight">
-        <span>
-          A mix through Lovejoin is being sent from this account: {progress.sent} of {progress.total} transactions so far.
-          What it spends, and its change, are held by the mix, and left out of this balance until it's all sent.
-        </span>
+        <span>{t("home.mixHolding", { sent: progress.sent, total: progress.total })}</span>
         <button type="button" className="link align-start" onClick={onOpen}>
-          Open Lovejoin
+          {t("home.openLovejoin")}
         </button>
       </div>
     </Callout>
@@ -664,34 +662,43 @@ export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<M
  * Every box is 10 ₳, so the counts are hidden with the balances.
  */
 export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
+  const t = useT();
   const amounts = useAmounts();
   // Due, it goes a few minutes on: never the moment the wallet unlocks, nor right after it sends something else.
-  const next = held.next === null ? "" : held.next <= now ? "Next back in a few minutes" : `Next back ${whenOf(held.next, new Date(now))}`;
+  const next =
+    held.next === null
+      ? ""
+      : held.next <= now
+        ? t("home.lovejoin.nextSoon")
+        : t("home.lovejoin.next", { when: whenOf(held.next, new Date(now)) });
   // Boxes not mixed yet have no due time: they're the row's own when none is on its way back.
   const boxes = held.boxes || held.notMixed;
   const lovelace = held.boxes ? held.lovelace : (BigInt(held.notMixed) * LOVEJOIN_BOX).toString();
   // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy review §2.16).
   // Those Koios hasn't said the making of yet, after a restore, may be mixed: said apart (independent review M14).
   const unsure = Math.min(held.unsure ?? 0, held.notMixed);
+  const some = t("home.lovejoin.some");
   const flags = [
-    held.notMixed > unsure ? `${amounts.hidden ? "some" : held.notMixed - unsure} not mixed yet` : "",
-    unsure ? `${amounts.hidden ? "some" : unsure} not known to be mixed yet` : "",
-    held.stopped ? (held.stopped === 1 ? "a mix stopped partway" : `${held.stopped} mixes stopped partway`) : "",
+    held.notMixed > unsure ? t("home.lovejoin.flag.notMixed", { n: amounts.hidden ? some : held.notMixed - unsure }) : "",
+    unsure ? t("home.lovejoin.flag.unsure", { n: amounts.hidden ? some : unsure }) : "",
+    held.stopped ? t("home.lovejoin.flag.stopped", { count: held.stopped, n: held.stopped }) : "",
   ].filter(Boolean);
-  const flagged = flags.join(", and ");
+  const flagged = flags.join(t("home.lovejoin.flagJoin"));
   return (
     <section className="section" aria-labelledby="in-lovejoin-title">
-      <h2 id="in-lovejoin-title">In Lovejoin</h2>
+      <h2 id="in-lovejoin-title">{t("home.lovejoin.title")}</h2>
       <button type="button" className="token-row" onClick={onOpen} data-testid="in-lovejoin">
         <span className="avatar avatar--contact" aria-hidden="true">
           <ShieldIcon size={16} />
         </span>
-        <span className="token-row__label">{boxes ? `${amounts.count(boxes, "box", "boxes")} of 10 ₳` : "Your mixes"}</span>
+        <span className="token-row__label">
+          {boxes ? t("home.lovejoin.boxesOf", { boxes: amounts.count(boxes, "amount.boxes") }) : t("home.lovejoin.yourMixes")}
+        </span>
         <span className="token-row__amount">{boxes ? `${amounts.ada(lovelace)} ₳` : ""}</span>
-        <span className="token-row__sub">{held.boxes ? next : held.notMixed ? "Not on their way back" : ""}</span>
+        <span className="token-row__sub">{held.boxes ? next : held.notMixed ? t("home.lovejoin.notBack") : ""}</span>
         {flagged && (
           <span className="token-row__detail" data-testid="in-lovejoin-flag">
-            {flagged.charAt(0).toUpperCase() + flagged.slice(1)}: open Lovejoin to see what to do.
+            {t("home.lovejoin.flagged", { flags: flagged.charAt(0).toUpperCase() + flagged.slice(1) })}
           </span>
         )}
       </button>
@@ -704,6 +711,7 @@ const LOVEJOIN_BOX = 10_000_000n;
 
 /** Opens this tab's Activity, or its UTxOs, and on the private tab the dApp browser. */
 function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtxos: () => void; onDapps?: () => void }) {
+  const t = useT();
   return (
     <section className="section">
       <ul className="list">
@@ -713,7 +721,7 @@ function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtx
               <span className="menu-row__icon">
                 <GridIcon size={16} />
               </span>
-              <span>dApps</span>
+              <span>{t("home.dapps")}</span>
               <ChevronRightIcon size={16} />
             </button>
           </li>
@@ -723,7 +731,7 @@ function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtx
             <span className="menu-row__icon">
               <HistoryIcon size={16} />
             </span>
-            <span>Activity</span>
+            <span>{t("home.activity")}</span>
             <ChevronRightIcon size={16} />
           </button>
         </li>
@@ -732,7 +740,7 @@ function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtx
             <span className="menu-row__icon">
               <CoinsIcon size={16} />
             </span>
-            <span>UTxOs</span>
+            <span>{t("home.utxos")}</span>
             <ChevronRightIcon size={16} />
           </button>
         </li>
@@ -755,31 +763,32 @@ function GettingStarted({
   onCreate: () => void;
   onMoveIn: () => void;
 }) {
+  const t = useT();
   const created = balances.seedelf.seedelfs.length > 0;
   const movedIn = balances.seedelf.utxos > 0;
   const funded = balances.cardano.utxos > 0 || created || movedIn;
   const steps = [
     {
       done: funded,
-      title: "Fund your public account",
-      text: "Pay it from an exchange or another wallet.",
-      action: "Receive",
+      title: t("home.start.fund.title"),
+      text: t("home.start.fund.text"),
+      action: t("home.action.receive"),
       onClick: onReceive,
       disabled: false,
     },
     {
       done: created,
-      title: "Create your Seedelf",
-      text: "Your public account pays for it, before any money is made private.",
-      action: "Create",
+      title: t("home.start.create.title"),
+      text: t("home.start.create.text"),
+      action: t("home.action.create"),
       onClick: onCreate,
       disabled: watching || !funded,
     },
     {
       done: movedIn,
-      title: "Make ADA private",
-      text: "What you make private afterwards isn't tied to your Seedelf.",
-      action: "Make private",
+      title: t("home.start.private.title"),
+      text: t("home.start.private.text"),
+      action: t("home.action.makePrivate"),
       onClick: onMoveIn,
       disabled: watching || balances.cardano.utxos === 0,
     },
@@ -787,7 +796,7 @@ function GettingStarted({
   const current = steps.findIndex((s) => !s.done);
   return (
     <section className="section" aria-labelledby="getting-started">
-      <h2 id="getting-started">Get started</h2>
+      <h2 id="getting-started">{t("home.start.title")}</h2>
       <ol className="steps" data-testid="getting-started">
         {steps.map((s, i) => (
           <li key={s.title} className={s.done ? "step step--done" : "step"}>
@@ -796,7 +805,7 @@ function GettingStarted({
             </span>
             <span className="step__title">
               {s.title}
-              {s.done && <span className="sr-only"> (done)</span>}
+              {s.done && <span className="sr-only">{t("home.start.done")}</span>}
             </span>
             {i === current ? (
               <button
@@ -804,7 +813,7 @@ function GettingStarted({
                 className="chip"
                 onClick={s.onClick}
                 disabled={s.disabled}
-                title={watching && s.disabled ? BUSY : undefined}
+                title={watching && s.disabled ? t(BUSY) : undefined}
               >
                 {s.action}
               </button>
@@ -821,6 +830,7 @@ function GettingStarted({
 
 /** A balance in ADA, and under it its value in the chosen currency when there's a price. */
 function Amount({ lovelace, price, testId }: { lovelace?: string; price: AdaPrice | null; testId: string }) {
+  const t = useT();
   const amounts = useAmounts();
   return (
     <>
@@ -829,7 +839,7 @@ function Amount({ lovelace, price, testId }: { lovelace?: string; price: AdaPric
         <span className="amount__unit"> ₳</span>
       </p>
       {lovelace !== undefined && price && (
-        <p className="hero__fiat" data-testid={`${testId}-fiat`} title={`At ${formatFiat("1000000", price)} for one ADA, from CoinGecko`}>
+        <p className="hero__fiat" data-testid={`${testId}-fiat`} title={t("home.fiatTitle", { price: formatFiat("1000000", price) })}>
           ≈ {amounts.text(formatFiat(lovelace, price))}
         </p>
       )}

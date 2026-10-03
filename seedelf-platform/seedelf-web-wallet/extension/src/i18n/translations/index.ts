@@ -49,5 +49,16 @@ export const resources = Object.fromEntries(
 export const isSupportedLanguage = (value: unknown): value is LanguageCode =>
   typeof value === "string" && supportedLanguageCodes.includes(value.toLowerCase());
 
-/** The keys of `en.json`, so a typo in a `t()` call is a compile error. */
-export type I18nKey = keyof typeof en;
+/** i18next's plural suffixes: `tokens.count_one`, `tokens.count_other`. */
+type PluralSuffix = "_few" | "_many" | "_one" | "_other" | "_two" | "_zero";
+
+/** `tokens.count_one` → `tokens.count`; anything else unchanged. */
+type WithoutPlural<K extends string> = K extends `${infer Base}${PluralSuffix}` ? Base : K;
+
+/**
+ * Every key a `t()` call may name, so a typo is a compile error: en.json's own
+ * keys, plus the **base** of each plural pair. A plural is asked for by its
+ * base (`t("tokens.count", { count: n })`) and i18next picks the form, so the
+ * base has to be a key the types accept even though en.json has no such entry.
+ */
+export type I18nKey = keyof typeof en | WithoutPlural<keyof typeof en & string>;

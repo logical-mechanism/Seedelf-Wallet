@@ -3,13 +3,14 @@
 // sort. Rows open the same details as Home's. After Lace's portfolio.
 
 import { useMemo, useState } from "react";
+import { useT } from "../../i18n";
 
 import type { TokenAmount } from "../../shared/rpc";
 import { SearchIcon } from "../components/Icons";
 import { Screen } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
 import { TokenDetails, TokenRow } from "../components/TokenList";
-import { plural, tokenKey } from "../format";
+import { tokenKey } from "../format";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, type TokenSort, type TokenView, viewToken } from "../tokens";
 
@@ -32,6 +33,7 @@ export function Tokens({
   const views = useMemo(() => tokens.map((t) => viewToken(network, t)), [network, tokens]);
   const fungible = views.filter((v) => !v.nft);
   const nfts = views.filter((v) => v.nft);
+  const t = useT();
   const [kind, setKind] = useState<Kind>(fungible.length || !nfts.length ? "tokens" : "nfts");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<TokenSort>("name");
@@ -39,21 +41,20 @@ export function Tokens({
   const [open, setOpen] = useState<TokenView>();
 
   const found = sortTokens(searchTokens(kind === "tokens" ? fungible : nfts, query), sort);
-  const what = kind === "tokens" ? "tokens" : "NFTs";
 
   return (
     <Screen
-      title={of === "seedelf" ? "Private tokens" : "Public tokens"}
+      title={t(of === "seedelf" ? "tokens.titlePrivate" : "tokens.titlePublic")}
       titleId="tokens-title"
       onBack={onBack}
-      aside={`${plural(fungible.length, "token")} · ${plural(nfts.length, "NFT")}`}
+      aside={`${t("tokens.count", { count: fungible.length })} · ${t("tokens.nftCount", { count: nfts.length })}`}
     >
       <Tabs
-        label="Tokens or NFTs"
+        label={t("tokens.tabsLabel")}
         prefix="tokens-"
         tabs={[
-          { value: "tokens", label: `Tokens (${fungible.length})` },
-          { value: "nfts", label: `NFTs (${nfts.length})` },
+          { value: "tokens", label: t("tokens.tabTokens", { number: fungible.length }) },
+          { value: "nfts", label: t("tokens.tabNfts", { number: nfts.length }) },
         ]}
         value={kind}
         onChange={(k) => {
@@ -66,8 +67,8 @@ export function Tokens({
           <SearchIcon size={16} />
           <input
             type="search"
-            aria-label="Search tokens"
-            placeholder="Name, ticker or ID"
+            aria-label={t("tokens.search")}
+            placeholder={t("tokens.searchPlaceholder")}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -76,7 +77,7 @@ export function Tokens({
             spellCheck={false}
           />
         </label>
-        <div className="segmented segmented--small" role="group" aria-label="Sort by">
+        <div className="segmented segmented--small" role="group" aria-label={t("tokens.sortBy")}>
           {(["name", "amount"] as const).map((s) => (
             <button
               key={s}
@@ -85,7 +86,7 @@ export function Tokens({
               aria-pressed={s === sort}
               onClick={() => setSort(s)}
             >
-              {s === "name" ? "Name" : "Amount"}
+              {t(s === "name" ? "tokens.sortName" : "tokens.sortAmount")}
             </button>
           ))}
         </div>
@@ -99,13 +100,15 @@ export function Tokens({
           </ul>
         ) : (
           <p className="note center empty">
-            {query.trim() ? `No ${what} match “${query.trim()}”.` : `No ${what} in this balance.`}
+            {query.trim()
+              ? t(kind === "tokens" ? "tokens.noneMatch" : "tokens.noNftsMatch", { query: query.trim() })
+              : t(kind === "tokens" ? "tokens.none" : "tokens.noNfts")}
           </p>
         )}
       </section>
       {found.length > limit && (
         <button type="button" className="secondary" onClick={() => setLimit(limit + PAGE)}>
-          Show {Math.min(PAGE, found.length - limit)} more
+          {t("tokens.showMore", { number: Math.min(PAGE, found.length - limit) })}
         </button>
       )}
       {open && <TokenDetails view={open} onClose={() => setOpen(undefined)} />}
