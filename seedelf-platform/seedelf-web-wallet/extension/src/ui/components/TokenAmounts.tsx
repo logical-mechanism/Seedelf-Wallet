@@ -7,10 +7,11 @@
 // with hundreds of tokens never lists them all in the form.
 
 import { useMemo, useState } from "react";
+import { t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
-import { formatQuantity, parseQuantity, plural, sanitizeAmount, tokenKey as key, type AmountRules } from "../format";
+import { formatQuantity, parseQuantity, sanitizeAmount, tokenKey as key, type AmountRules } from "../format";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, tokenDecimals, tokenLabel, viewToken } from "../tokens";
 import { AmountField } from "./AmountField";
@@ -22,15 +23,13 @@ import { TokenAvatar } from "./TokenList";
 const SHOWN = 100;
 
 /** A token's amount box: its decimals (`tokenDecimals`), and at most what the wallet holds. */
-export function tokenRules(t: TokenAmount, label: string, decimals: number): AmountRules {
+export function tokenRules(token: TokenAmount, label: string, decimals: number): AmountRules {
   return {
     decimals,
-    max: BigInt(t.quantity),
-    notANumber: decimals ? "Enter an amount, like 25 or 12.5." : "Enter a whole number, like 25.",
-    tooPrecise: decimals
-      ? `${label} has at most ${decimals} decimal places, so the extra digits were dropped.`
-      : `${label} comes in whole units, so the decimals were dropped.`,
-    tooMuch: `That's more than the ${formatQuantity(t.quantity, decimals)} ${label} you hold.`,
+    max: BigInt(token.quantity),
+    notANumber: t(decimals ? "token.amount.notANumber" : "token.amount.notAWholeNumber"),
+    tooPrecise: decimals ? t("token.amount.tooPrecise", { label, decimals }) : t("token.amount.wholeUnits", { label }),
+    tooMuch: t("token.amount.tooMuch", { amount: formatQuantity(token.quantity, decimals), label }),
   };
 }
 
@@ -46,17 +45,17 @@ export function tokenChoices(
 ): { sent: TokenQuantity[]; problems: Record<string, string>; ok: boolean } {
   const sent: TokenQuantity[] = [];
   const problems: Record<string, string> = {};
-  for (const t of held) {
-    const text = (typed[key(t)] ?? "").trim();
+  for (const token of held) {
+    const text = (typed[key(token)] ?? "").trim();
     if (text === "") continue;
-    const decimals = tokenDecimals(network, t);
+    const decimals = tokenDecimals(network, token);
     const quantity = parseQuantity(text, decimals);
     if (quantity === undefined) {
-      problems[key(t)] = decimals ? `Enter an amount with at most ${decimals} decimal places.` : "Enter a whole number.";
-    } else if (BigInt(quantity) > BigInt(t.quantity)) {
-      problems[key(t)] = `That's more than the ${formatQuantity(t.quantity, decimals)} you hold.`;
+      problems[key(token)] = decimals ? t("token.amount.atMostDecimals", { decimals }) : t("token.amount.wholeNumber");
+    } else if (BigInt(quantity) > BigInt(token.quantity)) {
+      problems[key(token)] = t("token.amount.tooMuchPlain", { amount: formatQuantity(token.quantity, decimals) });
     } else if (quantity !== "0") {
-      sent.push({ policyId: t.policyId, assetName: t.assetName, quantity });
+      sent.push({ policyId: token.policyId, assetName: token.assetName, quantity });
     }
   }
   return { sent, problems, ok: Object.keys(problems).length === 0 };
@@ -70,13 +69,14 @@ export function TokenAmounts({
   held,
   typed,
   onChange,
-  legend = "Send tokens too (optional)",
+  legend,
 }: {
   held: TokenAmount[];
   typed: Record<string, string>;
   onChange: (typed: Record<string, string>) => void;
   legend?: string;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const [picking, setPicking] = useState(false);
   // What the last edit of each box changed or refused.
@@ -88,7 +88,7 @@ export function TokenAmounts({
 
   return (
     <fieldset className="token-picker">
-      <legend>{legend}</legend>
+      <legend>{legend ?? tr("token.sendTooLegend")}</legend>
       {picked.map((t) => {
         const problem = problems[key(t)] ?? notes[key(t)];
         const label = tokenLabel(network, t);
@@ -108,25 +108,25 @@ export function TokenAmounts({
                 clean={(previous, text) => sanitizeAmount(previous, text, tokenRules(t, label, decimals))}
                 onChange={set}
                 aria-invalid={problems[key(t)] ? true : undefined}
-                aria-label={`Amount of ${label}`}
+                aria-label={tr("token.amountOf", { label })}
               />
             </label>
             <div className="token-amount__foot">
-              <span className="note">of {all}</span>
+              <span className="note">{tr("token.ofAll", { all })}</span>
               <span className="token-amount__actions">
                 <button
                   type="button"
                   className="chip"
-                  aria-label={`All of ${label}`}
+                  aria-label={tr("token.allOf", { label })}
                   onClick={() => set(all)}
                 >
-                  Max
+                  {tr("common.max")}
                 </button>
                 <button
                   type="button"
                   className="icon-button icon-button--small"
-                  aria-label={`Take ${label} off`}
-                  title="Take it off"
+                  aria-label={tr("recipients.takeOffWhat", { what: label })}
+                  title={tr("recipients.takeOff")}
                   onClick={() => {
                     const { [key(t)]: _, ...rest } = typed;
                     setNotes({ ...notes, [key(t)]: undefined });
@@ -143,7 +143,7 @@ export function TokenAmounts({
       })}
       {left > 0 && (
         <button type="button" className="secondary" onClick={() => setPicking(true)}>
-          {picked.length ? "Add more tokens" : "Add tokens"}
+          {tr(picked.length ? "token.addMore" : "token.add")}
         </button>
       )}
       {picking && (
@@ -170,6 +170,7 @@ function TokenPicker({
   onClose: () => void;
   onPick: (keys: string[]) => void;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -184,7 +185,7 @@ function TokenPicker({
 
   return (
     <Modal
-      title="Add tokens"
+      title={tr("token.add")}
       titleId="add-tokens-title"
       onClose={onClose}
       foot={
@@ -195,10 +196,10 @@ function TokenPicker({
             onClick={() => setChosen(new Set([...chosen, ...found.map((v) => key(v.token))]))}
             disabled={found.every((v) => chosen.has(key(v.token)))}
           >
-            Select all{query.trim() ? " found" : ""}
+            {tr(query.trim() ? "token.selectAllFound" : "token.selectAll")}
           </button>
           <button type="button" className="primary" onClick={() => onPick([...chosen])} disabled={!chosen.size}>
-            {chosen.size ? `Add ${plural(chosen.size, "token")}` : "Add"}
+            {chosen.size ? tr("token.addCount", { count: chosen.size }) : tr("token.addPlain")}
           </button>
         </>
       }
@@ -207,8 +208,8 @@ function TokenPicker({
         <SearchIcon size={16} />
         <input
           type="search"
-          aria-label="Search tokens"
-          placeholder="Name, ticker or ID"
+          aria-label={tr("tokens.search")}
+          placeholder={tr("tokens.searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           spellCheck={false}
@@ -238,11 +239,11 @@ function TokenPicker({
           })}
         </ul>
       ) : (
-        <p className="note center empty">No tokens match “{query.trim()}”.</p>
+        <p className="note center empty">{tr("tokens.noneMatch", { query: query.trim() })}</p>
       )}
       {found.length > SHOWN && (
         <p className="note center">
-          Showing {SHOWN} of {found.length}. Search to narrow them down.
+          {tr("token.showing", { shown: SHOWN, total: found.length })}
         </p>
       )}
     </Modal>

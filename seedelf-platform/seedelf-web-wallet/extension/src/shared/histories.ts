@@ -23,6 +23,7 @@
 //                  any other money's history is known (independent review L40)
 // Money whose histories were merged names each, sorted, joined by "+".
 
+import { t } from "../i18n";
 /** Where a UTxO's money came from, as WebAssembly reads it. */
 export type Origin = "own" | "received" | "session" | "lovejoin" | "unknown";
 
@@ -119,33 +120,38 @@ export function historyTags(c: HistoryClass, accounts = 1): string[] {
   const tag = (p: string) => {
     switch (originOf(p)) {
       case "own":
-        return accounts > 1 ? `Made private (account ${accountIn(p)! + 1})` : "Made private";
+        return accounts > 1 ? t("histories.tag.madePrivateFrom", { number: accountIn(p)! + 1 }) : t("histories.tag.madePrivate");
       case "received":
-        return "Received";
+        return t("histories.tag.received");
       case "session":
-        return `Private session ${Number(p.slice("session:".length)) + 1}`;
+        return t("histories.tag.session", { number: Number(p.slice("session:".length)) + 1 });
       case "lovejoin":
-        return "Back from Lovejoin";
+        return t("histories.tag.lovejoin");
       default:
-        return "Unknown";
+        return t("histories.tag.unknown");
     }
   };
   return [...new Set(parts(c).map(tag))];
 }
 
-const count = (n: number, one: string, many: string) => (n === 1 ? one : `${n} ${many}`);
-/** "a", "a and b", "a, b and c"; "a, and b and c" when the last has an "and" of its own. */
+/**
+ * "a", "a and b", "a, b and c"; "a, and b and c" when the last has an "and" of
+ * its own. The joining stays here rather than in the translations because the
+ * shape of the sentence is English's and must not move; what a language gets to
+ * choose is the separator and the conjunction, which are keys.
+ */
 function listed(items: string[]): string {
   if (items.length < 2) return items[0] ?? "";
   const last = items[items.length - 1]!;
-  return `${items.slice(0, -1).join(", ")}${last.includes(" and ") ? ", and" : " and"} ${last}`;
+  const and = last.includes(t("histories.list.and")) ? t("histories.list.andAnd") : t("histories.list.and");
+  return `${items.slice(0, -1).join(t("histories.list.comma"))}${and}${last}`;
 }
 /** Private session numbers, as a person counts them. */
 const sessionNames = (indexes: number[]) =>
-  `Private session${indexes.length > 1 ? "s" : ""} ${listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1)))}`;
+  t("histories.sessions", { count: indexes.length, list: listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1))) });
 /** Public account numbers, as a person counts them (from 1). */
 const accountNames = (indexes: number[]) =>
-  `account${indexes.length > 1 ? "s" : ""} ${listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1)))}`;
+  t("histories.accounts", { count: indexes.length, list: listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1))) });
 
 /**
  * What a review says of the histories a spend's inputs have (`spent`, each
@@ -176,27 +182,29 @@ export function historiesNote(
   const said: string[] = [];
   if (classes.length > 1) {
     const kinds = [
-      ...(boxes ? [count(boxes, "a box back from Lovejoin", "boxes back from Lovejoin")] : []),
-      ...(received ? [count(received, "a payment you received", "payments you received")] : []),
-      ...(accounts.length ? [`money you made private${accounts.length > 1 || accounts[0] !== 0 ? ` from ${accountNames(accounts)}` : ""}`] : []),
-      ...(unknown === 1 ? ["money the wallet has no history for"] : []),
-      ...(unknown > 1 ? [`money from ${unknown} transactions the wallet has no history for`] : []),
-      ...(sessions.length ? [`money from ${sessionNames(sessions)}`] : []),
+      ...(boxes ? [t("histories.kind.boxes", { count: boxes })] : []),
+      ...(received ? [t("histories.kind.received", { count: received })] : []),
+      ...(accounts.length
+        ? [
+            accounts.length > 1 || accounts[0] !== 0
+              ? t("histories.kind.madePrivateFrom", { accounts: accountNames(accounts) })
+              : t("histories.kind.madePrivate"),
+          ]
+        : []),
+      ...(unknown === 1 ? [t("histories.kind.unknownOne")] : []),
+      ...(unknown > 1 ? [t("histories.kind.unknownMany", { count: unknown })] : []),
+      ...(sessions.length ? [t("histories.kind.sessions", { sessions: sessionNames(sessions) })] : []),
     ];
     // What's spent together, as a fact: another choice might have paid, merging other histories (independent review L39).
-    const lead = max ? "Sending everything spends" : "This spends";
-    const lovejoin = boxes ? `, and undoes some of what Lovejoin did for ${boxes === 1 ? "the box" : "the boxes"}` : "";
-    said.push(`${lead} ${listed(kinds)} together. Anyone can see they're one owner's, which ties them to each other${lovejoin}.`);
+    const lead = t(max ? "histories.privacy.leadMax" : "histories.privacy.lead");
+    const lovejoin = boxes ? t("histories.privacy.lovejoinUndone", { count: boxes }) : "";
+    said.push(t("histories.privacy.together", { lead, kinds: listed(kinds), lovejoin }));
   }
   if (accounts.length > 1) {
-    said.push(
-      `It spends money you made private from ${accountNames(accounts)}, so anyone can tie those accounts to each other.`,
-    );
+    said.push(t("histories.privacy.accounts", { accounts: accountNames(accounts) }));
   }
   if (session !== undefined && others.length) {
-    said.push(
-      `It spends money that ${sessionNames(others)} left, so anyone can tie ${others.length === 1 ? "that session" : "those sessions"} to this one.`,
-    );
+    said.push(t("histories.privacy.sessions", { sessions: sessionNames(others), count: others.length }));
   }
   return said.length ? said.join(" ") : undefined;
 }

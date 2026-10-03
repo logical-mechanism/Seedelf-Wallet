@@ -17,6 +17,7 @@
 // warns when the wallet has since moved to another.
 
 import { useState, type FormEvent } from "react";
+import { type I18nKey, t, useT } from "../../i18n";
 
 import type { MintSource, PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
@@ -29,7 +30,8 @@ import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { formatAda, shortHex } from "../format";
 
-const DESTINATIONS: Record<RemoveTo, string> = { account: "Public account", seedelf: "Private balance" };
+/** Where the freed ADA goes. Keys: the review's "Back to your …" is a whole key, not this one lowercased. */
+const DESTINATIONS = { account: "mint.source.account", seedelf: "mint.source.seedelf" } as const satisfies Record<RemoveTo, I18nKey>;
 
 /**
  * What sending the freed ADA to `to` links, for a Seedelf `paidBy` paid for;
@@ -57,19 +59,13 @@ export function removeNote(
   ) {
     return {
       tone: "warn",
-      text:
-        `Account ${accounts.paidByAccount + 1} paid for this Seedelf, and the wallet is on Account ${accounts.active + 1}. ` +
-        "The mint already links the Seedelf's name to the account that paid, so sending its ADA here links this account to " +
-        `that name as well — and anyone can tie your two accounts together through it. Switch to Account ${accounts.paidByAccount + 1} ` +
-        "first, or send it to your private balance instead.",
+      text: t("remove.warn.otherAccount", { paid: accounts.paidByAccount + 1, active: accounts.active + 1 }),
     };
   }
   if (to === undefined) {
     return {
       tone: "privacy",
-      text:
-        "Choose where the freed ADA goes. This wallet doesn't know who paid for this Seedelf, as when it was minted in " +
-        "another browser or before a restore. Send it back to the side that paid, so it links nothing new.",
+      text: t("remove.privacy.unknownPayer"),
     };
   }
   if (to === paidBy) {
@@ -77,39 +73,34 @@ export function removeNote(
       tone: "privacy",
       text:
         to === "account"
-          ? `Back where this Seedelf's ADA came from: ${
-              accounts?.several && accounts.paidByAccount !== undefined ? `Account ${accounts.paidByAccount + 1}` : "your public account"
-            } paid for it, so this links nothing new.`
-          : "Back where this Seedelf's ADA came from: your private balance paid for it, so this links nothing new.",
+          ? t("remove.privacy.backToAccount", {
+              whose:
+                accounts?.several && accounts.paidByAccount !== undefined
+                  ? t("accountPicker.numbered", { number: accounts.paidByAccount + 1 })
+                  : t("remove.yourPublicAccount"),
+            })
+          : t("remove.privacy.backToPrivate"),
     };
   }
   if (to === "account") {
     return paidBy === "seedelf"
       ? {
           tone: "warn",
-          text:
-            "Your private balance paid for this Seedelf. Sending its ADA to your public account ties the account to the " +
-            "Seedelf's name, and through the mint to the private UTxOs that paid for it and their change.",
+          text: t("remove.warn.privatePaid"),
         }
       : {
           tone: "privacy",
-          text:
-            "This links nothing new only if your public account paid for this Seedelf. If your private balance did, it ties " +
-            "the account to the Seedelf's name, and through the mint to the private UTxOs that paid for it.",
+          text: t("remove.privacy.maybeAccountPaid"),
         };
   }
   return paidBy === "account"
     ? {
         tone: "warn",
-        text:
-          "Your public account paid for this Seedelf. Sending its ADA to your private balance ties the Seedelf's name, and so " +
-          "your account, to the new UTxO, and to whatever it's later spent with.",
+        text: t("remove.warn.accountPaid"),
       }
     : {
         tone: "privacy",
-        text:
-          "For a Seedelf you minted from your private balance. For one your public account paid for, this ties the " +
-          "Seedelf's name to the new UTxO, and to whatever it's later spent with.",
+        text: t("remove.privacy.maybePrivatePaid"),
       };
 }
 
@@ -122,12 +113,13 @@ export function RemoveSeedelf({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const t = useT();
   // The side that paid for it, when the wallet knows; nothing otherwise.
   const [to, setTo] = useState<RemoveTo | undefined>(seedelf.paidBy);
   const [summary, setSummary] = useState<RemoveSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const name = seedelf.label ?? "a Seedelf";
+  const name = seedelf.label ?? t("remove.aSeedelf");
   const { active, several } = useAccounts();
   const note = removeNote(to, seedelf.paidBy, { paidByAccount: seedelf.paidByAccount, active, several });
 
@@ -160,28 +152,27 @@ export function RemoveSeedelf({
   if (summary) {
     return (
       <Screen
-        title="Review the removal"
+        title={t("remove.review.title")}
         titleId="remove-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={t("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? t("common.sending") : t("common.send")}
           </button>
         }
       >
         <ReviewRows testId="remove-review">
-          {summary.label && <Row label="Seedelf" value={summary.label} strong />}
-          <Row label="Token name" value={shortHex(summary.name, 16, 8)} title={summary.name} strong={!summary.label} />
-          <Row label={`Back to your ${DESTINATIONS[summary.to].toLowerCase()}`} value={`${formatAda(summary.lovelace)} ₳`} strong />
-          <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
+          {summary.label && <Row label={t("activity.row.seedelf")} value={summary.label} strong />}
+          <Row label={t("mint.review.tokenName")} value={shortHex(summary.name, 16, 8)} title={summary.name} strong={!summary.label} />
+          <Row label={t(summary.to === "account" ? "review.backToPublic" : "review.backToPrivate")} value={`${formatAda(summary.lovelace)} ₳`} strong />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="remove-tx" />
         <p className="note">
-          The token is burned. Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the
-          network to confirm.
+          {t("remove.review.note")}
         </p>
       </Screen>
     );
@@ -190,34 +181,33 @@ export function RemoveSeedelf({
   return (
     <Screen
       onSubmit={review}
-      title={`Remove ${name}`}
+      title={t("remove.title", { name })}
       titleId="remove-title"
       onBack={onCancel}
-      aside={`${formatAda(seedelf.lovelace)} ₳ locked with it`}
+      aside={t("remove.aside", { amount: formatAda(seedelf.lovelace) })}
       error={error}
       foot={
         <>
-          <button type="submit" className="primary" disabled={busy || !to} title={to ? undefined : "Choose where the freed ADA goes"}>
-            {busy ? "Building…" : "Review"}
+          <button type="submit" className="primary" disabled={busy || !to} title={to ? undefined : t("remove.chooseWhere")}>
+            {busy ? t("common.building") : t("common.review")}
           </button>
           <BuildStage busy={busy} />
         </>
       }
     >
       <p className="note">
-        Removing burns the Seedelf's token and frees the ADA locked with it, less the fee. Payments already sent to it
-        stay yours; after this, nobody can pay it by name.
+        {t("remove.note")}
       </p>
       <code className="copy-field__value" title={seedelf.assetName}>
         {seedelf.assetName}
       </code>
 
       <Choice
-        label="Send what's freed to"
+        label={t("remove.sendFreedTo")}
         id="remove-to"
         value={to}
         onChange={setTo}
-        options={(["account", "seedelf"] as const).map((d) => ({ value: d, label: DESTINATIONS[d] }))}
+        options={(["account", "seedelf"] as const).map((d) => ({ value: d, label: t(DESTINATIONS[d]) }))}
       />
       <Callout tone={note.tone} testId="remove-to-note">
         {note.text}
