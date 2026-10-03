@@ -124,7 +124,10 @@ describe("a translation that quietly says the opposite", () => {
   const NEGATED: Record<string, RegExp> = {
     en: /\b(not|never|no|none|nothing|nobody|cannot|can't|isn't|aren't|won't|don't|doesn't|didn't|wouldn't|couldn't|shouldn't|hasn't|haven't|without)\b/i,
     es: /\b(no|ni|nunca|nada|nadie|ningún|ninguna|ninguno|sin|tampoco)\b/i,
-    ja: /(ない|ません|ありませ|せず|なく|不可|できません|与えません|結び付きません|価値はあり)/,
+    // Japanese negates in more than one shape: the plain ない/ません, the
+    // classical ず, and なし for English's "without". Each one here was added
+    // because a real sentence used it and this check flagged it wrongly.
+    ja: /(ない|ません|ありませ|せず|ずに|なく|なし|不可|決して)/,
   };
 
   it.each(others)("%s keeps a negation where English has one, for every critical key", (file) => {
