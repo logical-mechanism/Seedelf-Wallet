@@ -19,6 +19,7 @@
 // all. Copying the hash costs nothing and goes nowhere.
 
 import { useEffect, useState, type ReactNode } from "react";
+import { type I18nKey, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView } from "../../shared/rpc";
@@ -42,20 +43,21 @@ import { tokenDecimals, tokenText } from "../tokens";
  */
 export function TxDetailButton({
   txHash,
-  label = "Transaction details",
+  label,
   testId = "tx-detail",
 }: {
   txHash: string;
   label?: string;
   testId?: string;
 }) {
+  const tr = useT();
   const [open, setOpen] = useState(false);
   return (
     <>
       <div className="tx-detail__open">
         <button type="button" className="chip" onClick={() => setOpen(true)} data-testid={`${testId}-open`}>
           <ExpandIcon size={13} />
-          {label}
+          {label ?? tr("tx.detailsButton")}
         </button>
       </div>
       {open && <TxDetailModal txHash={txHash} testId={testId} onClose={() => setOpen(false)} />}
@@ -73,12 +75,13 @@ export function TxDetailButton({
 export function entryLabel({ txs, again }: { txs: number; again?: boolean }): string | undefined {
   if (txs <= 1) return undefined;
   // Mixing its own boxes again puts nothing in: it begins at the first mix.
-  return again ? "The first mix's transaction" : "The deposit's transaction";
+  return t(again ? "tx.entry.firstMix" : "tx.entry.deposit");
 }
 
 type Tab = "transaction" | "cbor";
 
 function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: string; onClose: () => void }) {
+  const tr = useT();
   const network = useNetwork();
   const [view, setView] = useState<TxView>();
   const [error, setError] = useState<string>();
@@ -96,7 +99,7 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
   }, [txHash]);
 
   return (
-    <Modal title="The transaction" titleId={`${testId}-title`} onClose={onClose}>
+    <Modal title={tr("tx.title")} titleId={`${testId}-title`} onClose={onClose}>
       <div className="stack" data-testid={testId}>
         {/* The id of the bytes shown, worked out from them, once they're here:
             the hash the view was asked for until then. They are the same for
@@ -111,7 +114,7 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
           >
             {shortHex(view?.detail.txHash ?? txHash, 16, 8)}
           </code>
-          <CopyButton value={view?.detail.txHash ?? txHash} label="Copy the transaction's id" />
+          <CopyButton value={view?.detail.txHash ?? txHash} label={tr("tx.copyId")} />
         </div>
         {error && (
           <p className="error" role="alert" data-testid={`${testId}-error`}>
@@ -120,19 +123,19 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
         )}
         {!view && !error && (
           <p className="note" data-testid={`${testId}-loading`}>
-            <SpinnerIcon size={14} /> Reading it…
+            <SpinnerIcon size={14} /> {tr("destination.reading")}
           </p>
         )}
         {view && (
           <>
             <Tabs<Tab>
-              label="What to show of the transaction"
+              label={tr("tx.tabsLabel")}
               prefix={`${testId}-`}
               value={tab}
               onChange={setTab}
               tabs={[
-                { value: "transaction", label: "Transaction" },
-                { value: "cbor", label: "Raw CBOR" },
+                { value: "transaction", label: tr("tx.tab.transaction") },
+                { value: "cbor", label: tr("tx.tab.cbor") },
               ]}
             />
             <div id={`${testId}-panel-${tab}`} role="tabpanel" aria-labelledby={`${testId}-tab-${tab}`} className="stack">
@@ -150,28 +153,28 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
 }
 
 /** What the raw bytes are, behind the icon beside them. */
-const RAW_HINT =
-  "These are the bytes the wallet would sign and send, exactly as they are. Nothing was asked of the network to show them.";
+const rawHint = () => t("tx.rawHint");
 
 /** The bytes themselves, to take to any other decoder. */
 function Raw({ cbor, testId }: { cbor: string; testId: string }) {
+  const tr = useT();
   const { open, toggle, id } = useHint();
   return (
     <>
       <div className="field-row">
-        <span className="note">{cbor.length / 2} bytes of CBOR, as hex</span>
+        <span className="note">{tr("tx.cborBytes", { bytes: cbor.length / 2 })}</span>
         <span className="tx-detail__head">
           <HintButton
-            text={RAW_HINT}
+            text={rawHint()}
             open={open}
             onToggle={toggle}
             controls={id}
             testId={`${testId}-cbor-hint`}
           />
-          <CopyButton value={cbor} label="Copy the transaction's CBOR" />
+          <CopyButton value={cbor} label={tr("tx.copyCbor")} />
         </span>
       </div>
-      {open && <HintText text={RAW_HINT} id={id} testId={`${testId}-cbor-note`} />}
+      {open && <HintText text={rawHint()} id={id} testId={`${testId}-cbor-note`} />}
       <pre className="dapp-message" data-testid={`${testId}-cbor`} data-value={cbor}>
         {cbor}
       </pre>
@@ -207,6 +210,7 @@ function Section({ title, id, hint, children }: { title: string; id: string; hin
  * a key would render as one.
  */
 function Outpoints({ list, testId }: { list: TxOutpoint[]; testId: string }) {
+  const tr = useT();
   return (
     <ul className="list" data-testid={testId}>
       {list.map((o, i) => (
@@ -214,7 +218,7 @@ function Outpoints({ list, testId }: { list: TxOutpoint[]; testId: string }) {
           <code className="tx-detail__ref" data-value={`${o.txHash}#${o.index}`} title={`${o.txHash}#${o.index}`}>
             {shortHex(o.txHash, 12, 6)}#{o.index}
           </code>
-          <CopyButton value={`${o.txHash}#${o.index}`} label="Copy the UTxO" />
+          <CopyButton value={`${o.txHash}#${o.index}`} label={tr("tx.copyUtxo")} />
         </li>
       ))}
     </ul>
@@ -223,6 +227,7 @@ function Outpoints({ list, testId }: { list: TxOutpoint[]; testId: string }) {
 
 /** The transaction, field by field: exported for its tests. */
 export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; network: NetworkName; testId: string }) {
+  const tr = useT();
   const amount = (t: TxAsset) => {
     const q = BigInt(t.quantity);
     return formatQuantity((q < 0n ? -q : q).toString(), tokenDecimals(network, t));
@@ -232,27 +237,24 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
     <>
       {!d.valid && (
         <Callout tone="warn" testId={`${testId}-invalid`}>
-          This transaction is marked to fail its contracts: if it is sent, its collateral is taken and its inputs stay
-          where they are.
+          {tr("tx.warn.invalid")}
         </Callout>
       )}
       {d.metadataHashMatches === false && (
         <Callout tone="warn" testId={`${testId}-metadata-hash`}>
-          The metadata hash in its body isn't the hash of the metadata it carries, so the network would refuse this
-          transaction — and the metadata below isn't what it commits to.
+          {tr("tx.warn.metadataHash")}
         </Callout>
       )}
       {d.unknown.length > 0 && (
         <Callout tone="warn" testId={`${testId}-unknown`}>
-          It carries {plural(d.unknown.length, "field")} this version of the wallet has no name for, shown below as
-          they are written. A newer Cardano, or a newer wallet, would name them.
+          {tr("tx.warn.unknownFields", { count: d.unknown.length })}
         </Callout>
       )}
 
       <Section
-        title={`Spends ${plural(d.inputs.length, "UTxO")}`}
+        title={tr("tx.spends", { count: d.inputs.length })}
         id={`${testId}-inputs`}
-        hint="What each one holds isn't in the transaction, and the wallet asks nobody: looking them up would tell whoever was asked which transaction you are reading."
+        hint={tr("tx.privacy.inputsHint")}
       >
         <Outpoints list={d.inputs} testId={`${testId}-input-list`} />
       </Section>
@@ -267,9 +269,9 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       {d.referenceInputs.length > 0 && (
         <Section
-          title={`Reads ${plural(d.referenceInputs.length, "UTxO")}`}
+          title={tr("tx.reads", { count: d.referenceInputs.length })}
           id={`${testId}-reference`}
-          hint="Read, not spent: a contract's script or its settings usually sit in one."
+          hint={tr("tx.referenceHint")}
         >
           <Outpoints list={d.referenceInputs} testId={`${testId}-reference-list`} />
         </Section>
@@ -277,21 +279,21 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       {(d.collateral.length > 0 || d.collateralReturn || d.totalCollateral) && (
         <Section
-          title={d.collateral.length ? `Collateral: ${plural(d.collateral.length, "UTxO")}` : "Collateral"}
+          title={d.collateral.length ? tr("tx.collateralCount", { count: d.collateral.length }) : tr("utxos.tag.collateral")}
           id={`${testId}-collateral`}
         >
           {d.collateral.length > 0 && <Outpoints list={d.collateral} testId={`${testId}-collateral-list`} />}
           <ReviewRows testId={`${testId}-collateral-rows`}>
-            {d.totalCollateral && <Row label="The most taken" value={`${formatAda(d.totalCollateral)} ₳`} />}
+            {d.totalCollateral && <Row label={tr("tx.mostTaken")} value={`${formatAda(d.totalCollateral)} ₳`} />}
             {d.collateralReturn && (
-              <Row label="Comes back" value={`${formatAda(d.collateralReturn.lovelace)} ₳`} />
+              <Row label={tr("tx.comesBack")} value={`${formatAda(d.collateralReturn.lovelace)} ₳`} />
             )}
           </ReviewRows>
         </Section>
       )}
 
       {d.mint.length > 0 && (
-        <Section title="Mints and burns" id={`${testId}-mint`}>
+        <Section title={tr("tx.mints")} id={`${testId}-mint`}>
           <ul className="list" data-testid={`${testId}-mint-list`}>
             {d.mint.map((t, i) => (
               <li key={i} className="list__row">
@@ -301,7 +303,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                     <code className="tx-detail__ref" data-value={t.policyId} title={t.policyId}>
                       {shortHex(t.policyId, 10, 6)}
                     </code>
-                    <CopyButton value={t.policyId} label="Copy the policy id" />
+                    <CopyButton value={t.policyId} label={tr("tx.copyPolicyId")} />
                   </span>
                 </span>
                 <span className="dapp-amount">
@@ -314,43 +316,43 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         </Section>
       )}
 
-      <Section title="The transaction" id={`${testId}-body`}>
+      <Section title={tr("tx.title")} id={`${testId}-body`}>
         <ReviewRows testId={`${testId}-rows`}>
-          <Row label="Network fee" value={`${formatAda(d.fee)} ₳`} strong />
-          {d.validFrom !== null && <Row label="Valid from slot" value={d.validFrom} />}
-          {d.validUntil !== null && <Row label="Valid until slot" value={d.validUntil} />}
-          {d.networkId !== null && <Row label="Network" value={d.networkId === 1 ? "Mainnet" : "A test network"} />}
-          <Row label="Size" value={`${d.size} bytes (${d.bodySize} of body)`} />
+          <Row label={tr("review.fee")} value={`${formatAda(d.fee)} ₳`} strong />
+          {d.validFrom !== null && <Row label={tr("tx.validFrom")} value={d.validFrom} />}
+          {d.validUntil !== null && <Row label={tr("tx.validUntil")} value={d.validUntil} />}
+          {d.networkId !== null && <Row label={tr("network.label")} value={d.networkId === 1 ? "Mainnet" : tr("tx.testNetwork")} />}
+          <Row label={tr("tx.size")} value={tr("tx.sizeValue", { size: d.size, body: d.bodySize })} />
           {/* What matters is whether anything has signed it, not what else the
               witness set carries: a transaction with its redeemers and no
               signature is unsigned. */}
           <Row
-            label="Signed"
-            value={d.signatures.length ? `${plural(d.signatures.length, "signature")} so far` : "Not yet"}
+            label={tr("tx.signed")}
+            value={d.signatures.length ? tr("tx.signaturesSoFar", { count: d.signatures.length }) : tr("tx.notYet")}
           />
           {d.bootstrapWitnesses > 0 && (
-            <Row label="Byron witnesses" value={plural(d.bootstrapWitnesses, "witness", "witnesses")} />
+            <Row label={tr("tx.byronWitnesses")} value={tr("tx.witnessCount", { count: d.bootstrapWitnesses })} />
           )}
           {d.scriptDataHash && (
-            <Row label="Script data hash" value={shortHex(d.scriptDataHash, 10, 6)} title={d.scriptDataHash} />
+            <Row label={tr("tx.scriptDataHash")} value={shortHex(d.scriptDataHash, 10, 6)} title={d.scriptDataHash} />
           )}
           {d.auxiliaryDataHash && (
-            <Row label="Metadata hash" value={shortHex(d.auxiliaryDataHash, 10, 6)} title={d.auxiliaryDataHash} />
+            <Row label={tr("tx.metadataHash")} value={shortHex(d.auxiliaryDataHash, 10, 6)} title={d.auxiliaryDataHash} />
           )}
-          {d.donation && <Row label="To the treasury" value={`${formatAda(d.donation)} ₳`} />}
-          {d.treasuryValue && <Row label="The treasury, as it says" value={`${formatAda(d.treasuryValue)} ₳`} />}
+          {d.donation && <Row label={tr("tx.toTreasury")} value={`${formatAda(d.donation)} ₳`} />}
+          {d.treasuryValue && <Row label={tr("tx.treasuryValue")} value={`${formatAda(d.treasuryValue)} ₳`} />}
         </ReviewRows>
       </Section>
 
       {d.certificates.length > 0 && (
-        <Section title={plural(d.certificates.length, "Certificate")} id={`${testId}-certs`}>
+        <Section title={tr("tx.certificates", { count: d.certificates.length })} id={`${testId}-certs`}>
           <ul className="list" data-testid={`${testId}-cert-list`}>
             {d.certificates.map((c, i) => (
               <li key={i} className="list__row tx-detail__wrap">
                 <span className="tx-detail__name">{certificateWords(c.kind)}</span>
                 <span className="dapp-amount">
-                  {c.deposit && `${formatAda(c.deposit)} ₳ deposit`}
-                  {c.refund && `${formatAda(c.refund)} ₳ back`}
+                  {c.deposit && tr("tx.depositAmount", { amount: formatAda(c.deposit) })}
+                  {c.refund && tr("tx.backAmount", { amount: formatAda(c.refund) })}
                 </span>
                 {(c.pool || c.drep) && (
                   <span className="dapp-address">{[c.pool, c.drep].filter(Boolean).join(" · ")}</span>
@@ -365,7 +367,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       )}
 
       {d.withdrawals.length > 0 && (
-        <Section title="Withdraws rewards" id={`${testId}-withdrawals`}>
+        <Section title={tr("tx.withdrawsRewards")} id={`${testId}-withdrawals`}>
           <ul className="list" data-testid={`${testId}-withdrawal-list`}>
             {d.withdrawals.map((w, i) => (
               <li key={i} className="list__row dapp-paid">
@@ -373,7 +375,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   <span className="dapp-address" data-value={w.address}>
                     {w.address}
                   </span>
-                  <CopyButton value={w.address} label="Copy the reward address" />
+                  <CopyButton value={w.address} label={tr("tx.copyRewardAddress")} />
                 </span>
                 <span className="dapp-amount">{formatAda(w.lovelace)} ₳</span>
               </li>
@@ -383,12 +385,12 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       )}
 
       {(d.votes.length > 0 || d.proposals.length > 0) && (
-        <Section title="Governance" id={`${testId}-governance`}>
+        <Section title={tr("tx.governance")} id={`${testId}-governance`}>
           <ul className="list" data-testid={`${testId}-governance-list`}>
             {d.votes.map((v, i) => (
               <li key={`v${i}`} className="list__row tx-detail__stack">
                 <span className="tx-detail__name">
-                  Votes {v.vote} as a {v.voter === "drep" ? "DRep" : v.voter === "pool" ? "stake pool" : "committee member"}
+                  {tr("tx.votesAs", { vote: v.vote, voter: tr(v.voter === "drep" ? "tx.voter.drep" : v.voter === "pool" ? "tx.voter.pool" : "tx.voter.committee") })}
                 </span>
                 <span className="tx-detail__line">
                   <code
@@ -398,14 +400,14 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   >
                     {shortHex(v.action.txHash, 12, 6)}#{v.action.index}
                   </code>
-                  <CopyButton value={`${v.action.txHash}#${v.action.index}`} label="Copy the action's id" />
+                  <CopyButton value={`${v.action.txHash}#${v.action.index}`} label={tr("tx.copyActionId")} />
                 </span>
               </li>
             ))}
             {d.proposals.map((p, i) => (
               <li key={`p${i}`} className="list__row tx-detail__wrap">
-                <span className="tx-detail__name">Proposes {proposalWords(p.action)}</span>
-                <span className="dapp-amount">{formatAda(p.deposit)} ₳ deposit</span>
+                <span className="tx-detail__name">{tr("tx.proposes", { what: proposalWords(p.action) })}</span>
+                <span className="dapp-amount">{tr("tx.depositAmount", { amount: formatAda(p.deposit) })}</span>
                 <div className="tx-detail__tree">
                   <Fields
                     of={{ ...p, parameters: p.parameters.length ? p.parameters : null, withdrawals: p.withdrawals.length ? p.withdrawals : null }}
@@ -421,27 +423,27 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       {(d.redeemers.length > 0 || d.scripts.length > 0 || d.datums.length > 0 || d.requiredSigners.length > 0) && (
         <Section
-          title="Contracts"
+          title={tr("tx.contracts")}
           id={`${testId}-contracts`}
-          hint="The wallet shows a script by its hash, its kind and its size. It doesn't take one apart: what a contract does is its code, and reading that here would say more than it could prove."
+          hint={tr("tx.contractsHint")}
         >
           {d.redeemers.length > 0 && (
             <ul className="list" data-testid={`${testId}-redeemer-list`}>
               {d.redeemers.map((r, i) => (
                 <li key={i} className="list__row tx-detail__stack">
                   <span className="tx-detail__name">
-                    Runs a {redeemerWords(r.tag)} script, number {r.index}
+                    {tr("tx.runsScript", { what: redeemerWords(r.tag), number: r.index })}
                   </span>
                   {/* Its own line, under the script it belongs to: a budget runs
                       to ten digits and more, and beside the words it squeezed
                       them to a column (the owner, 2026-10-01). */}
                   <span className="tx-detail__budget">
                     {/* Grouped through bigint: a budget can be bigger than a JavaScript number holds. */}
-                    {formatQuantity(r.mem, 0)} mem · {formatQuantity(r.steps, 0)} steps
+                    {tr("tx.budget", { mem: formatQuantity(r.mem, 0), steps: formatQuantity(r.steps, 0) })}
                   </span>
                   {r.argument ? (
                     <PlutusTree
-                      label="Its argument"
+                      label={tr("tx.itsArgument")}
                       hex={r.data}
                       value={r.argument}
                       testId={`${testId}-redeemer-${i}`}
@@ -451,7 +453,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                       <code className="tx-detail__ref" data-value={r.data} title={r.data}>
                         {shortHex(r.data, 24, 12)}
                       </code>
-                      <CopyButton value={r.data} label="Copy the redeemer's bytes" />
+                      <CopyButton value={r.data} label={tr("tx.copyRedeemer")} />
                     </span>
                   )}
                 </li>
@@ -463,13 +465,13 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               {d.scripts.map((s, i) => (
                 <li key={`${s.hash}${i}`} className="list__row tx-detail__stack">
                   <span className="tx-detail__name">
-                    {scriptWords(s.kind)}, {s.size} bytes, {scriptWhere(s.source)}
+                    {tr("tx.scriptLine", { kind: scriptWords(s.kind), size: s.size, where: scriptWhere(s.source) })}
                   </span>
                   <span className="tx-detail__line">
                     <code className="tx-detail__ref" data-value={s.hash} title={s.hash}>
                       {shortHex(s.hash, 12, 8)}
                     </code>
-                    <CopyButton value={s.hash} label="Copy the script's hash" />
+                    <CopyButton value={s.hash} label={tr("tx.copyScriptHash")} />
                   </span>
                 </li>
               ))}
@@ -482,14 +484,14 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   {/* Nothing here says whose datum it is: one in the witness set
                       belongs to whichever output names its hash, which could be
                       any contract at all. */}
-                  <span className="tx-detail__name">A datum</span>
+                  <span className="tx-detail__name">{tr("tx.aDatum")}</span>
                   <span className="tx-detail__line">
-                    <code className="tx-detail__ref" data-value={datum.hash} title={`Its hash: ${datum.hash}`}>
+                    <code className="tx-detail__ref" data-value={datum.hash} title={tr("tx.itsHash", { hash: datum.hash })}>
                       {shortHex(datum.hash, 12, 8)}
                     </code>
-                    <CopyButton value={datum.hash} label="Copy the datum's hash" />
+                    <CopyButton value={datum.hash} label={tr("tx.copyDatumHash")} />
                   </span>
-                  <PlutusTree label="The datum" hex={datum.hex} value={datum.data} testId={`${testId}-datum-${i}`} />
+                  <PlutusTree label={tr("tx.theDatum")} hex={datum.hex} value={datum.data} testId={`${testId}-datum-${i}`} />
                 </li>
               ))}
             </ul>
@@ -497,7 +499,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           {d.requiredSigners.length > 0 && (
             <ReviewRows testId={`${testId}-signers`}>
               {d.requiredSigners.map((hash, i) => (
-                <Row key={i} label="Must be signed by" value={shortHex(hash, 10, 6)} title={hash} />
+                <Row key={i} label={tr("tx.mustBeSignedBy")} value={shortHex(hash, 10, 6)} title={hash} />
               ))}
             </ReviewRows>
           )}
@@ -506,9 +508,9 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       {d.note && (
         <Section
-          title="Its note"
+          title={tr("tx.itsNote")}
           id={`${testId}-note`}
-          hint="A message written on the transaction (CIP-20's), which anyone reading the chain can read."
+          hint={tr("tx.privacy.noteHint")}
         >
           <pre className="dapp-message" data-testid={`${testId}-note-text`}>
             {d.note.join("\n")}
@@ -518,14 +520,14 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       {d.metadata.length > 0 && (
         <Section
-          title="Metadata"
+          title={tr("tx.metadata")}
           id={`${testId}-metadata`}
-          hint="Metadata is in the open: anyone reading the chain can read it."
+          hint={tr("tx.privacy.metadataHint")}
         >
           <ul className="list" data-testid={`${testId}-metadata-list`}>
             {d.metadata.map((m, i) => (
               <li key={i} className="list__row tx-detail__wrap">
-                <span className="tx-detail__name">Label {m.label}</span>
+                <span className="tx-detail__name">{tr("tx.metadataLabel", { label: m.label })}</span>
                 <div className="tx-detail__tree">
                   <Metadatum value={m.value} />
                 </div>
@@ -536,15 +538,17 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
       )}
 
       {d.unknown.length > 0 && (
-        <Section title="Not named by this wallet" id={`${testId}-unknown-fields`}>
+        <Section title={tr("tx.notNamed")} id={`${testId}-unknown-fields`}>
           <ul className="list" data-testid={`${testId}-unknown-list`}>
             {d.unknown.map((u, i) => (
               <li key={i} className="list__row tx-detail__wrap">
                 <span className="tx-detail__name">
-                  {u.at === "body" ? "The body's" : u.at === "witnesses" ? "The witness set's" : "The metadata's"} field{" "}
-                  {u.field}
+                  {tr("tx.unknownField", {
+                    where: tr(u.at === "body" ? "tx.where.body" : u.at === "witnesses" ? "tx.where.witnesses" : "tx.where.metadata"),
+                    field: u.field,
+                  })}
                 </span>
-                <CopyButton value={u.hex} label="Copy the field" />
+                <CopyButton value={u.hex} label={tr("tx.copyField")} />
                 <code className="dapp-address" data-value={u.hex}>
                   {u.hex}
                 </code>
@@ -573,13 +577,14 @@ function Output({
   amount: (t: TxAsset) => string;
   name: (t: TxAsset) => string;
 }) {
+  const tr = useT();
   return (
     <li className="list__row dapp-paid">
       <span className="tx-detail__line tx-detail__line--wide">
         <span className="dapp-address" data-value={o.address.bech32}>
           {o.address.bech32}
         </span>
-        <CopyButton value={o.address.bech32} label="Copy the address" />
+        <CopyButton value={o.address.bech32} label={tr("tx.copyAddress")} />
       </span>
       <span className="note">
         {`#${o.index} · ${addressWords(o.address.kind, o.address.payment)}`}
@@ -588,11 +593,11 @@ function Output({
             that needs neither an inline datum nor a script, and the two mean
             exactly the same to the ledger. Saying it on every row would read as
             a warning about nothing. The Raw CBOR tab has the bytes. */}
-        {o.address.seedelf && " · Seedelf Wallet's contract"}
-        {o.register && (o.register.payable ? " · under a register" : " · a register nobody could spend")}
-        {o.inlineDatum && !o.register && " · with a datum"}
-        {o.datumHash && " · names a datum by its hash"}
-        {o.scriptRef && ` · carries a ${scriptWords(o.scriptRef.kind)}`}
+        {o.address.seedelf && ` · ${tr("tx.out.seedelfContract")}`}
+        {o.register && ` · ${tr(o.register.payable ? "tx.out.underRegister" : "tx.out.deadRegister")}`}
+        {o.inlineDatum && !o.register && ` · ${tr("tx.out.withDatum")}`}
+        {o.datumHash && ` · ${tr("tx.out.datumByHash")}`}
+        {o.scriptRef && ` · ${tr("tx.out.carriesScript", { kind: scriptWords(o.scriptRef.kind) })}`}
       </span>
       <span className="dapp-amount">
         {formatAda(o.lovelace)} ₳
@@ -605,7 +610,7 @@ function Output({
         ))}
       </span>
       {/* Whatever contract it is for: the shape is all that can be shown of it. */}
-      {o.datum && o.inlineDatum && <PlutusTree label="Its datum" hex={o.inlineDatum} value={o.datum} />}
+      {o.datum && o.inlineDatum && <PlutusTree label={tr("tx.itsDatum")} hex={o.inlineDatum} value={o.datum} />}
     </li>
   );
 }
@@ -616,14 +621,17 @@ function Output({
  * fields it knows, so a field the decoder gains is never silently left out —
  * which is the same rule the decoder follows for the bytes.
  */
-function Fields({ of, skip, labels }: { of: object; skip: string[]; labels: Record<string, string> }) {
+function Fields({ of, skip, labels }: { of: object; skip: string[]; labels: Record<string, I18nKey> }) {
+  const tr = useT();
   const rows = Object.entries(of).filter(([key, value]) => !skip.includes(key) && value !== null && value !== undefined);
   if (!rows.length) return null;
   return (
     <ul className="tx-detail__branch">
       {rows.map(([key, value]) => (
         <li key={key}>
-          <span className="tx-detail__key">{labels[key] ?? key}</span>
+          {/* The table holds keys, not words: a field the table doesn't name
+              keeps its own name, as it did. */}
+          <span className="tx-detail__key">{labels[key] ? tr(labels[key]) : key}</span>
           <span className="tx-detail__leaf">{fieldText(value)}</span>
         </li>
       ))}
@@ -648,30 +656,30 @@ function fieldText(value: unknown): string {
 }
 
 /** The names the view gives a certificate's and a proposal's own fields. */
-const CERT_FIELDS: Record<string, string> = {
-  credential: "Credential",
-  cold: "Cold credential",
-  hot: "Hot credential",
-  vrfKeyHash: "VRF key hash",
-  pledge: "Pledge (lovelace)",
-  cost: "Cost (lovelace)",
-  margin: "Margin",
-  rewardAccount: "Rewards to",
-  owners: "Owners",
-  relays: "Relays",
-  metadata: "Pool metadata",
-  anchor: "Anchor",
-  epoch: "Epoch",
+const CERT_FIELDS: Record<string, I18nKey> = {
+  credential: "tx.certField.credential",
+  cold: "tx.certField.cold",
+  hot: "tx.certField.hot",
+  vrfKeyHash: "tx.certField.vrfKeyHash",
+  pledge: "tx.certField.pledge",
+  cost: "tx.certField.cost",
+  margin: "tx.certField.margin",
+  rewardAccount: "tx.certField.rewardAccount",
+  owners: "tx.certField.owners",
+  relays: "tx.certField.relays",
+  metadata: "tx.certField.metadata",
+  anchor: "tx.certField.anchor",
+  epoch: "tx.certField.epoch",
 };
 
-const PROPOSAL_FIELDS: Record<string, string> = {
-  rewardAccount: "Deposit back to",
-  follows: "Follows",
-  parameters: "Parameters",
-  withdrawals: "Withdraws",
-  script: "Script",
-  version: "Protocol version",
-  anchor: "Anchor",
+const PROPOSAL_FIELDS: Record<string, I18nKey> = {
+  rewardAccount: "tx.proposalField.rewardAccount",
+  follows: "tx.proposalField.follows",
+  parameters: "tx.proposalField.parameters",
+  withdrawals: "tx.proposalField.withdrawals",
+  script: "tx.proposalField.script",
+  version: "tx.proposalField.version",
+  anchor: "tx.proposalField.anchor",
 };
 
 /** A metadatum, as the tree it is. */
@@ -715,69 +723,73 @@ function Metadatum({ value }: { value: TxMetadatum }) {
 
 /** A certificate's kind in words. An unknown one is shown as it came. */
 export function certificateWords(kind: string): string {
-  const words: Record<string, string> = {
-    stakeRegistration: "Registers a stake key (the old way)",
-    stakeDeregistration: "Stops a stake key's staking (the old way)",
-    stakeDelegation: "Stakes with a pool",
-    poolRegistration: "Registers a stake pool, or its new terms",
-    poolRetirement: "Retires a stake pool",
-    registration: "Registers a stake key",
-    deregistration: "Stops a stake key's staking",
-    voteDelegation: "Delegates the vote",
-    stakeVoteDelegation: "Stakes with a pool and delegates the vote",
-    stakeRegistrationDelegation: "Registers a stake key and stakes with a pool",
-    voteRegistrationDelegation: "Registers a stake key and delegates the vote",
-    stakeVoteRegistrationDelegation: "Registers a stake key, stakes with a pool and delegates the vote",
-    committeeHotAuth: "Authorises a committee hot key",
-    committeeColdResign: "Resigns a committee cold key",
-    drepRegistration: "Registers a DRep",
-    drepDeregistration: "Retires a DRep",
-    drepUpdate: "Updates a DRep",
+  const words: Record<string, I18nKey> = {
+    stakeRegistration: "tx.cert.stakeRegistration",
+    stakeDeregistration: "tx.cert.stakeDeregistration",
+    stakeDelegation: "tx.cert.stakeDelegation",
+    poolRegistration: "tx.cert.poolRegistration",
+    poolRetirement: "tx.cert.poolRetirement",
+    registration: "tx.cert.registration",
+    deregistration: "tx.cert.deregistration",
+    voteDelegation: "tx.cert.voteDelegation",
+    stakeVoteDelegation: "tx.cert.stakeVoteDelegation",
+    stakeRegistrationDelegation: "tx.cert.stakeRegistrationDelegation",
+    voteRegistrationDelegation: "tx.cert.voteRegistrationDelegation",
+    stakeVoteRegistrationDelegation: "tx.cert.stakeVoteRegistrationDelegation",
+    committeeHotAuth: "tx.cert.committeeHotAuth",
+    committeeColdResign: "tx.cert.committeeColdResign",
+    drepRegistration: "tx.cert.drepRegistration",
+    drepDeregistration: "tx.cert.drepDeregistration",
+    drepUpdate: "tx.cert.drepUpdate",
   };
-  return words[kind] ?? kind;
+  const key = words[kind];
+  return key ? t(key) : kind;
 }
 
 /** A governance action's kind in words. */
 export function proposalWords(action: string): string {
-  const words: Record<string, string> = {
-    parameterChange: "a protocol parameter change",
-    hardFork: "a hard fork",
-    treasuryWithdrawals: "withdrawals from the treasury",
-    noConfidence: "no confidence in the committee",
-    updateCommittee: "a change to the committee",
-    newConstitution: "a new constitution",
-    information: "information, which changes nothing",
+  const words: Record<string, I18nKey> = {
+    parameterChange: "tx.proposal.parameterChange",
+    hardFork: "tx.proposal.hardFork",
+    treasuryWithdrawals: "tx.proposal.treasuryWithdrawals",
+    noConfidence: "tx.proposal.noConfidence",
+    updateCommittee: "tx.proposal.updateCommittee",
+    newConstitution: "tx.proposal.newConstitution",
+    information: "tx.proposal.information",
   };
-  return words[action] ?? action;
+  const key = words[action];
+  return key ? t(key) : action;
 }
 
 /** What a redeemer's tag is for. */
 export function redeemerWords(tag: string): string {
-  const words: Record<string, string> = {
-    spend: "spending",
-    mint: "minting",
-    cert: "certificate",
-    reward: "withdrawal",
-    vote: "voting",
-    propose: "proposal",
+  const words: Record<string, I18nKey> = {
+    spend: "tx.redeemer.spend",
+    mint: "tx.redeemer.mint",
+    cert: "tx.redeemer.cert",
+    reward: "tx.redeemer.reward",
+    vote: "tx.redeemer.vote",
+    propose: "tx.redeemer.propose",
   };
-  return words[tag] ?? `tag ${tag}`;
+  const key = words[tag];
+  return key ? t(key) : t("tx.redeemer.unknown", { tag });
 }
 
 export function scriptWords(kind: string): string {
-  return kind === "native" ? "native script" : `Plutus ${kind.replace("plutus", "")} script`;
+  return kind === "native" ? t("tx.script.native") : t("tx.script.plutus", { version: kind.replace("plutus", "") });
 }
 
 function scriptWhere(source: string): string {
-  return source === "output" ? "in an output" : source === "metadata" ? "in the metadata" : "in the witness set";
+  return t(source === "output" ? "tx.scriptWhere.output" : source === "metadata" ? "tx.scriptWhere.metadata" : "tx.scriptWhere.witness");
 }
 
 /** What an address is, from its own bytes. */
 export function addressWords(kind: string, payment: string | null): string {
-  if (kind === "unreadable") return "bytes that aren't an address";
-  if (kind === "byron") return "a Byron address";
-  if (kind === "reward") return "a reward address";
-  const who = payment === "script" ? "a contract" : "a key";
-  const where = kind === "base" ? " that stakes" : kind === "pointer" ? " with a pointer" : "";
-  return `${who}${where}`;
+  if (kind === "unreadable") return t("tx.address.unreadable");
+  if (kind === "byron") return t("tx.address.byron");
+  if (kind === "reward") return t("tx.address.reward");
+  const who = t(payment === "script" ? "tx.address.contract" : "tx.address.key");
+  if (kind === "base") return t("tx.address.thatStakes", { who });
+  if (kind === "pointer") return t("tx.address.withPointer", { who });
+  return who;
 }
