@@ -18,6 +18,7 @@
 // Koios all speak, so it can go straight into another tool.
 
 import { createContext, useContext, useId, useState } from "react";
+import { useT } from "../../i18n";
 
 import type { TxPlutus } from "../../shared/rpc";
 import { CopyButton } from "./CopyButton";
@@ -183,6 +184,7 @@ export function PlutusTree({
   value: TxPlutus;
   testId?: string;
 }) {
+  const tr = useT();
   const [all, setAll] = useState<AllOf>({ generation: 0, open: false });
   const nodes = plutusNodes(value);
   return (
@@ -198,12 +200,12 @@ export function PlutusTree({
             onClick={() => setAll({ generation: all.generation + 1, open: !all.open })}
             data-testid={testId && `${testId}-all`}
           >
-            {all.open ? "Collapse all" : "Expand all"}
+            {tr(all.open ? "tx.collapseAll" : "tx.expandAll")}
           </button>
-          <CopyButton value={hex} label={`Copy the ${label.toLowerCase()} as CBOR`} what="CBOR" />
+          <CopyButton value={hex} label={tr("tx.copyAsCbor", { what: label.toLowerCase() })} what="CBOR" />
           <CopyButton
             value={JSON.stringify(plutusJson(value), null, 2)}
-            label={`Copy the ${label.toLowerCase()} as JSON`}
+            label={tr("tx.copyAsJson", { what: label.toLowerCase() })}
             what="JSON"
           />
         </span>

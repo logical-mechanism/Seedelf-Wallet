@@ -118,7 +118,7 @@ export function MoveIn({
       title={t("home.action.makePrivate")}
       titleId="move-in-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
+      aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
         <>

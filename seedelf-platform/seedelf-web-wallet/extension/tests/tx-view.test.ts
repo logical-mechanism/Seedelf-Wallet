@@ -90,8 +90,8 @@ describe("the transaction view", () => {
   it("refuses a hash it isn't holding, and one built on another network", async () => {
     const t = await unlocked();
     const summary = await built(t);
-    await expect(txView(deps(t), "preprod", "ab".repeat(32))).rejects.toThrow(NOT_HELD);
-    await expect(txView(deps(t), "mainnet", summary.txHash)).rejects.toThrow(NOT_HELD);
+    await expect(txView(deps(t), "preprod", "ab".repeat(32))).rejects.toThrow(NOT_HELD());
+    await expect(txView(deps(t), "mainnet", summary.txHash)).rejects.toThrow(NOT_HELD());
   });
 
   it("reads nothing while the wallet is locked", async () => {
@@ -154,7 +154,7 @@ describe("the transaction view", () => {
     await t.dapp.answer(waiting.id, false);
     await expect(signing).rejects.toBeDefined();
     expect(t.dapp.waitingCbor(summary.txHash)).toBeUndefined();
-    await expect(txView(deps(t), "preprod", summary.txHash, (h) => t.dapp.waitingCbor(h))).rejects.toThrow(NOT_HELD);
+    await expect(txView(deps(t), "preprod", summary.txHash, (h) => t.dapp.waitingCbor(h))).rejects.toThrow(NOT_HELD());
   });
 
   it("opening it can't strand a signed transaction: the submit still goes", async () => {

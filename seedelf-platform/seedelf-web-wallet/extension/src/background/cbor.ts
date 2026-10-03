@@ -120,7 +120,7 @@ export function txInputs(tx: Uint8Array): string[] {
 
 /** Where the value under one key of a transaction's body starts, or undefined. */
 function bodyField(tx: Uint8Array, field: number): number | undefined {
-  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
   const body = head(tx, 1);
   if (body.major !== 5 || body.indefinite) throw new Error(t("worker.cbor.bodyNotMap"));
   let p = body.p;
@@ -178,6 +178,6 @@ function outpoints(b: Uint8Array, pos: number): string[] {
 
 /** A transaction's id: the BLAKE2b-256 of its body, exactly as encoded. */
 export function txId(tx: Uint8Array): string {
-  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
   return hex(blake2b(tx.subarray(1, skip(tx, 1, 1)), { dkLen: 32 }));
 }

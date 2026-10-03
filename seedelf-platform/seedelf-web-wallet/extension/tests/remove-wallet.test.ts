@@ -80,7 +80,7 @@ describe("Remove wallet's check", () => {
     const txHash = await maybeSent(w);
     const stake = (await ask({ type: "reset-check" }, w.ctx)) as AtStake[];
     expect(stake).toEqual([{ network: "preprod", maybeSent: expect.objectContaining({ txHash, maybeSent: true }), sessions: [], chainSending: false }]);
-    await expect(ask({ type: "reset-wallet" }, w.ctx)).rejects.toThrow(RESET_AT_STAKE);
+    await expect(ask({ type: "reset-wallet" }, w.ctx)).rejects.toThrow(RESET_AT_STAKE());
     expect(((await ask({ type: "status" }, w.ctx)) as Status).state).toBe("unlocked");
     expect(await ask({ type: "reset-wallet", force: true }, w.ctx)).toMatchObject({ state: "no-wallet" });
   });
@@ -110,7 +110,7 @@ describe("Remove wallet's check", () => {
         chainSending: false,
       },
     ]);
-    await expect(ask({ type: "reset-wallet" }, w.ctx)).rejects.toThrow(RESET_AT_STAKE);
+    await expect(ask({ type: "reset-wallet" }, w.ctx)).rejects.toThrow(RESET_AT_STAKE());
   });
 
   it("lists a chain through Lovejoin still being sent, and not one the lock cut", async () => {

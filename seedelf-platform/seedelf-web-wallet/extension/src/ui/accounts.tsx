@@ -15,6 +15,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { LOCAL_ACCOUNT } from "../shared/preferences";
 import type { KnownAccount } from "../shared/rpc";
+import { t } from "../i18n";
 import { call } from "./background";
 
 /** The name an account is shown by: its own, or its number as a person counts (from 1). */
@@ -42,7 +43,7 @@ export const AccountsContext = createContext<AccountsValue>({
   accounts: ALONE,
   active: 0,
   loaded: false,
-  name: "Account 1",
+  name: t("accounts.firstName"),
   several: false,
   reload: async () => undefined,
 });

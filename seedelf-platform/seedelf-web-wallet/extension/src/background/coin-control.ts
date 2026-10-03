@@ -49,8 +49,7 @@ export const SESSION_ACCOUNT_UTXOS_PREFIX = "seedelf.accountUtxos.";
 export const SESSION_TOO_LARGE_PREFIX = "seedelf.readingTooLarge.";
 
 /** What the lists say for a reading too large to keep. */
-export const TOO_LARGE =
-  t("worker.coins.tooMany");
+export const TOO_LARGE = () => t("worker.coins.tooMany");
 
 /** A balance reading's own UTxOs, for one too large to keep: what's locked is summed from these. */
 export interface ReadingUtxos {
@@ -241,7 +240,7 @@ export class CoinControlService {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
     const [owned, account, spent, updatedAt] = await wallet.withKeys(async () => {
       if (from) return [from.owned, from.account, await spentSet(session), from.updatedAt] as const;
-      if ((await session.get(SESSION_TOO_LARGE_PREFIX + network)) !== undefined) throw new Error(TOO_LARGE);
+      if ((await session.get(SESSION_TOO_LARGE_PREFIX + network)) !== undefined) throw new Error(TOO_LARGE());
       return [
         (await keptContractView(session, network, contract))?.owned ?? [],
         (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [],

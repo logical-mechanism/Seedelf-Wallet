@@ -332,7 +332,7 @@ export interface BuiltOutput {
  * orders do. Throws on bytes it can't read.
  */
 export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
-  if (tx[0] !== 0x84) throw new Error("not a 4-item transaction array");
+  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
   const witnesses = skip(tx, 1);
   const carried = new Map<string, string>();
   for (const [key, at] of entries(tx, witnesses)) {
@@ -385,12 +385,12 @@ interface Head {
 }
 
 function head(b: Uint8Array, pos: number): Head {
-  if (pos >= b.length) throw new Error("the transaction's CBOR ends too soon");
+  if (pos >= b.length) throw new Error(t("worker.cbor.endsTooSoon"));
   const major = b[pos]! >> 5;
   const info = b[pos]! & 0x1f;
   const size = info === 24 ? 1 : info === 25 ? 2 : info === 26 ? 4 : info === 27 ? 8 : 0;
-  if (info > 27 && info < 31) throw new Error("the transaction's CBOR isn't well formed");
-  if (pos + 1 + size > b.length) throw new Error("the transaction's CBOR ends too soon");
+  if (info > 27 && info < 31) throw new Error(t("worker.cbor.notWellFormed"));
+  if (pos + 1 + size > b.length) throw new Error(t("worker.cbor.endsTooSoon"));
   let n = BigInt(info);
   if (size) n = [...b.subarray(pos + 1, pos + 1 + size)].reduce((v, x) => (v << 8n) | BigInt(x), 0n);
   return { major, n, p: pos + 1 + size, indefinite: info === 31 };
@@ -430,7 +430,7 @@ function bytesAt(b: Uint8Array, pos: number | undefined): Uint8Array {
   if (pos === undefined) throw new Error(t("minswap.cbor.noAddress"));
   const h = head(b, pos);
   if (h.major !== 2 || h.indefinite) throw new Error(t("minswap.cbor.notBytes"));
-  if (h.n > BigInt(b.length - h.p)) throw new Error("the transaction's CBOR ends too soon");
+  if (h.n > BigInt(b.length - h.p)) throw new Error(t("worker.cbor.endsTooSoon"));
   return b.subarray(h.p, h.p + Number(h.n));
 }
 

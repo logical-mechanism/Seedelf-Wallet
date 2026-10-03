@@ -185,7 +185,7 @@ export function CardanoSend({
       title={t("home.action.send")}
       titleId="send-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
+      aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
         <>

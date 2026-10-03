@@ -245,14 +245,14 @@ export class StakingService {
       validUntil(this.deps.koios(network)),
     ]);
     if (utxos.length === 0) {
-      throw nothingInAccount(held, "Your public account is empty. Staking needs ADA for the fee, and a 2 ₳ deposit the first time.");
+      throw nothingInAccount(held, t("worker.staking.accountEmpty"));
     }
     const state = stakeInfoOf(stake, null);
     if (action.kind === "delegate" && state.registered && stake?.delegated_pool === wasm.poolId(action.pool)) {
-      throw new Error("You're already staking with this pool.");
+      throw new Error(t("worker.staking.samePool"));
     }
     if (action.kind === "vote" && state.drep === wasm.drepId(action.drep)) {
-      throw new Error("Your voting power is already delegated there.");
+      throw new Error(t("worker.staking.sameDrep"));
     }
 
     const request = {

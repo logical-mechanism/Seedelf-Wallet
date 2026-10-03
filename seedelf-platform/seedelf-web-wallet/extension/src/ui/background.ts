@@ -1,6 +1,7 @@
 // The UI's side of the RPC: ask the service worker to do something, and hear
 // when the wallet's state changes (for example on auto-lock).
 
+import { t } from "../i18n";
 import {
   isBuildProgress,
   isDappChanged,
@@ -12,7 +13,7 @@ import {
   type Requests,
 } from "../shared/rpc";
 
-const NO_ANSWER = "The wallet's background service didn't answer.";
+const NO_ANSWER = () => t("worker.noAnswer");
 
 /**
  * Asks the worker, on a port of its own that only the worker listens for
@@ -40,14 +41,14 @@ export function call<K extends RequestName>(type: K, payload: Requests[K]["paylo
       port.disconnect();
       done();
       if (reply?.ok) resolve(reply.value);
-      else reject(new Error(reply?.error ?? NO_ANSWER));
+      else reject(new Error(reply?.error ?? NO_ANSWER()));
     });
     port.onDisconnect.addListener(() => {
       // Read, so Chrome doesn't log it as unchecked: the worker couldn't be reached.
       void chrome.runtime.lastError;
       if (!answered) {
         done();
-        reject(new Error(NO_ANSWER));
+        reject(new Error(NO_ANSWER()));
       }
     });
     port.postMessage({ type, ...payload });

@@ -317,8 +317,7 @@ interface Unlocking {
 
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
-const ALREADY_CONNECTED =
-  t("dapp.connectedMeanwhile");
+const ALREADY_CONNECTED = () => t("dapp.connectedMeanwhile");
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = () => t("dapp.notConnected");
 /** What a site hears while the connector is off, and what it was waiting for hears once it's turned off. */
@@ -461,14 +460,14 @@ export class DappService {
     fund?: { txHash: string },
   ): Promise<{ error?: string }> {
     const asked = this.waiting.find((w) => w.approval.id === id);
-    if (!asked) return { error: "The site stopped waiting for this." };
+    if (!asked) return { error: t("dapp.stoppedWaiting") };
     // Turned off while it waited: nothing is connected, funded or signed (independent review L33).
     if (approve && !(await this.deps.preferences.get()).dappConnector) {
       this.connectorOff();
       return { error: OFF() };
     }
     const { approval } = asked;
-    if (approval.kind === "connect" && approval.funding) return { error: "Its private session is funded already." };
+    if (approval.kind === "connect" && approval.funding) return { error: t("dapp.alreadyFunded") };
     // Asked on the network the wallet has left: never signed or connected on the one it's on.
     if (asked.network !== (await this.deps.network())) {
       await this.networkChanged();
@@ -487,7 +486,7 @@ export class DappService {
     if (approve && fund && approval.kind === "connect") return this.fundPrivate(asked, fund.txHash);
     // The site may have gone while the password was checked.
     const i = this.waiting.indexOf(asked);
-    if (i < 0) return { error: "The site stopped waiting for this." };
+    if (i < 0) return { error: t("dapp.stoppedWaiting") };
     const [w] = this.waiting.splice(i, 1);
     this.deps.changed();
     if (!approve) {
@@ -700,10 +699,10 @@ export class DappService {
    */
   async privateBuild(id: string, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const w = this.waiting.find((x) => x.approval.id === id);
-    if (!w || w.approval.kind !== "connect") throw new Error("The site stopped waiting for this.");
-    if (w.approval.funding) throw new Error("Its private session is funded already.");
+    if (!w || w.approval.kind !== "connect") throw new Error(t("dapp.stoppedWaiting"));
+    if (w.approval.funding) throw new Error(t("dapp.alreadyFunded"));
     if (w.network !== (await this.deps.network())) throw new Error(NETWORK_LEFT());
-    if (await this.connected(w.network, w.session.origin)) throw new Error(ALREADY_CONNECTED);
+    if (await this.connected(w.network, w.session.origin)) throw new Error(ALREADY_CONNECTED());
     return this.deps.sessions.siteOutBuild(w.network, w.session.origin, lovelace, tokens);
   }
 
@@ -883,7 +882,7 @@ export class DappService {
     const network = w.network;
     // Another of its requests connected it meanwhile (two tabs, or enable() twice):
     // the session wouldn't be the one the site talks to, so it isn't funded.
-    if (await this.connected(network, w.session.origin)) return { error: ALREADY_CONNECTED };
+    if (await this.connected(network, w.session.origin)) return { error: ALREADY_CONNECTED() };
     let index: number;
     try {
       ({ index } = await this.deps.sessions.siteOutSubmit(network, txHash, w.session.origin));
@@ -1469,6 +1468,8 @@ export class DappService {
           JSON.parse(holder ? wasm.inspectSessionTx(oneTime, request) : wasm.inspectDappTx(cardano, request)) as DappTxSummary,
       );
     } catch (e) {
+      // WebAssembly's own message, which the wallet doesn't translate: these two
+      // prefixes are Rust's, not keys, and classify the failure for the site.
       const info = (e as Error).message;
       throw refuse(
         info.startsWith("The wallet can't read") || info.startsWith("bad request")
@@ -1512,7 +1513,7 @@ export class DappService {
       inputs = bodyOutpoints(bytes, 0) ?? [];
       collateral = bodyOutpoints(bytes, 13) ?? [];
     } catch {
-      throw invalid("The wallet can't read this transaction.");
+      throw invalid(t("dapp.cannotReadTx"));
     }
     await this.heldForLovejoin(network, holder, inputs, collateral);
     const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
@@ -1732,7 +1733,7 @@ export class DappService {
     try {
       id = txId(bytes);
     } catch {
-      throw invalid("The wallet can't read this transaction.");
+      throw invalid(t("dapp.cannotReadTx"));
     }
     // The site sends it again while the wallet is still sending it (its own
     // timeout, or Submit pressed twice): that call has the first one's

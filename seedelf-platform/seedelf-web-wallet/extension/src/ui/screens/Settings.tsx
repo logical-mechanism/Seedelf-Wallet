@@ -550,7 +550,7 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
 
   return (
     <section className="section" aria-labelledby="preferences-title">
-      <h2 id="preferences-title">Preferences</h2>
+      <h2 id="preferences-title">{t("settings.preferences")}</h2>
       <div className="field">
         <label htmlFor="language">{t("settings.language.label")}</label>
         <select
@@ -633,7 +633,7 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
 export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
   const mixes = (3 ** depth - 1) / 2;
   const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);
-  return `${mixes} ${mixes === 1 ? "mix" : "mixes"}, about ${(lovelace / 1_000_000).toFixed(1)} ₳`;
+  return t("settings.lovejoin.depthCost", { count: mixes, ada: (lovelace / 1_000_000).toFixed(1) });
 }
 
 /**
@@ -795,7 +795,7 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
       async (granted) => {
         setAllowed(granted);
         if (!granted) {
-          setError("Chrome wasn't allowed to let the wallet onto sites, so sites still can't connect.");
+          setError(t("settings.sites.notGranted"));
           return;
         }
         await set({ dappConnector: true });

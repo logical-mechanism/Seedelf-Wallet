@@ -61,7 +61,7 @@ describe("a mix from the public account that may have gone through, and Remove w
     const { t, ctx } = await stoppedMaybe();
     const stake = (await ask({ type: "reset-check" }, ctx)) as AtStake[];
     expect(stake).toEqual([{ network: "preprod", sessions: [], chainSending: false, mixMaybeSent: true }]);
-    await expect(ask({ type: "reset-wallet" }, ctx)).rejects.toThrow(RESET_AT_STAKE);
+    await expect(ask({ type: "reset-wallet" }, ctx)).rejects.toThrow(RESET_AT_STAKE());
     expect(await ask({ type: "reset-wallet", force: true }, ctx)).toMatchObject({ state: "no-wallet" });
     expect(t.local.data.has(KEPT)).toBe(true);
     expect(t.local.data.has("seedelf.private.lovejoin.preprod")).toBe(false);

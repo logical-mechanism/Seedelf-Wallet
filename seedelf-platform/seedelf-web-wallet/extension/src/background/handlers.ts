@@ -158,7 +158,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // nothing can be read: a payment that may still go through is kept all
       // the same (wallet.ts reset, independent review M2, M5).
       if (message.force !== true && (await wallet.state()) === "unlocked" && (await atStake(ctx)).length) {
-        throw new Error(RESET_AT_STAKE);
+        throw new Error(RESET_AT_STAKE());
       }
       // A wallet from before the switch has no network kept, only worked out
       // from its vault: kept now, it outlives the vault, so the next restore
@@ -368,8 +368,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
 }
 
 /** Remove wallet's refusal, when something opened since its list was read. */
-export const RESET_AT_STAKE =
-  t("worker.remove.stillOpen");
+export const RESET_AT_STAKE = () => t("worker.remove.stillOpen");
 
 /**
  * What removing the wallet would leave behind, each of the build's networks
