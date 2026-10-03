@@ -442,7 +442,7 @@ export function talksTo(prices: boolean, lovejoin: boolean): string {
     t(prices ? "settings.privacy.talksToPrices" : "settings.privacy.talksTo"),
     t("settings.privacy.eachSeesIp"),
     t("settings.privacy.giveme"),
-    ...(lovejoin ? [LOVEJOIN_SEEN] : []),
+    ...(lovejoin ? [LOVEJOIN_SEEN()] : []),
   ].join(" ");
 }
 
@@ -655,10 +655,10 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
       <p className="note">
         {t("settings.lovejoin.note")}
         {floor > 0 && ` ${t("settings.lovejoin.floor", { count: floor })}`}{" "}
-        {LOVEJOIN_SEEN}
+        {LOVEJOIN_SEEN()}
       </p>
       <Callout tone="warn" testId="lovejoin-unaudited">
-        {LOVEJOIN_UNAUDITED}
+        {LOVEJOIN_UNAUDITED()}
       </Callout>
       <div className="setting-row">
         <span className="stack-tight">

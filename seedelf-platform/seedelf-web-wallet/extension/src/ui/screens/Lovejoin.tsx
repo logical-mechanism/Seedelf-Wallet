@@ -525,7 +525,7 @@ export function Lovejoin({
           />
         )}
         <p className="note" data-testid="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED}
+          {LOVEJOIN_UNAUDITED()}
         </p>
       </Screen>
     );
@@ -779,7 +779,7 @@ export function Lovejoin({
       <WayBack />
       {status?.available && (
         <Callout tone="warn" testId="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED}
+          {LOVEJOIN_UNAUDITED()}
         </Callout>
       )}
       {asking && "anyway" in asking && (
@@ -861,7 +861,7 @@ export function WayBack() {
     <Callout tone="privacy" testId="lovejoin-way-back">
       A box waits in the pool while other people's mixes move it, and comes back into your private balance on its own,
       paid from itself, with giveme.my's collateral: nothing on its way back names a session or an account. Bringing one
-      back early shortens that wait, which makes it easier to match by its timing. {LOVEJOIN_SEEN}
+      back early shortens that wait, which makes it easier to match by its timing. {LOVEJOIN_SEEN()}
     </Callout>
   );
 }

@@ -12,6 +12,7 @@
 // the balances (launch review #56).
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { type I18nKey, useT } from "../../i18n";
 
 import { lovejoinOn } from "../../networks";
 import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
@@ -20,7 +21,7 @@ import { Callout } from "../components/Callout";
 import { ShieldIcon, SwapIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
-import { plural } from "../format";
+
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { ClaimAll, isClaimable } from "./ClaimAll";
@@ -33,14 +34,14 @@ type DappId = "minswap" | "lovejoin";
 interface Dapp {
   id: DappId;
   name: string;
-  /** What it's for, in a few words. */
-  what: string;
+  /** What it's for, in a few words: a key, read as the tile is drawn. */
+  what: I18nKey;
   icon: ReactNode;
 }
 
 const DAPPS: Dapp[] = [
-  { id: "minswap", name: "Minswap", what: "Swap tokens, routed across Cardano's DEXes", icon: <SwapIcon size={20} /> },
-  { id: "lovejoin", name: "Lovejoin", what: "Mix ADA in 10 ₳ boxes: your boxes, and bringing them back", icon: <ShieldIcon size={20} /> },
+  { id: "minswap", name: "Minswap", what: "dapps.minswap.what", icon: <SwapIcon size={20} /> },
+  { id: "lovejoin", name: "Lovejoin", what: "dapps.lovejoin.what", icon: <ShieldIcon size={20} /> },
 ];
 
 /** Where the browser opens: a dApp, and one of its sessions. */
@@ -66,6 +67,7 @@ export function Dapps({
   onBack: () => void;
   onPending: (pending: PendingTx) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState<DappId | undefined>(start?.dapp);
   const [session, setSession] = useState(start?.session);
   const [sessions, setSessions] = useState<SessionView[]>([]);
@@ -162,7 +164,7 @@ export function Dapps({
   const sites = sessions.filter(isSiteSession);
 
   return (
-    <Screen title="dApps" titleId="dapps-title" onBack={onBack} aside="Used privately, from one-time accounts" error={error}>
+    <Screen title={t("dapps.title")} titleId="dapps-title" onBack={onBack} aside={t("dapps.aside")} error={error}>
       {sessions.some((s) => s.stage !== "closed") && (
         <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load(true)} />
       )}
@@ -172,25 +174,25 @@ export function Dapps({
           <button key={d.id} type="button" className="dapp-tile" onClick={() => setOpen(d.id)}>
             <span className="dapp-tile__logo">{d.icon}</span>
             <span className="dapp-tile__name">{d.name}</span>
-            <span className="dapp-tile__what">{d.what}</span>
+            <span className="dapp-tile__what">{t(d.what)}</span>
             {d.id === "minswap" && running.length > 0 && (
               <span className="dapp-tile__badge">
                 {waiting ? (
-                  <SwapTag tone="wait" label={`${waiting} ${waiting === 1 ? "needs" : "need"} you`} />
+                  <SwapTag tone="wait" label={t("dapps.needYou", { count: waiting })} />
                 ) : (
-                  <SwapTag tone="live" label={`${running.length} running`} />
+                  <SwapTag tone="live" label={t("dapps.running", { count: running.length })} />
                 )}
               </span>
             )}
           </button>
         ))}
         <div className="dapp-tile dapp-tile--soon">
-          <span className="dapp-tile__what">More dApps come here as the wallet learns to use them privately.</span>
+          <span className="dapp-tile__what">{t("dapps.moreSoon")}</span>
         </div>
       </div>
       {sites.length > 0 && (
-        <section className="section" aria-label="Sites">
-          <h2>Sites</h2>
+        <section className="section" aria-label={t("settings.sites")}>
+          <h2>{t("settings.sites")}</h2>
           <ul className="list" data-testid="dapp-sites">
             {sites.map((s) => (
               <li key={s.index}>
@@ -201,14 +203,11 @@ export function Dapps({
         </section>
       )}
       <Callout tone="privacy">
-        A dApp here is given only a one-time account, never your public account or your private balance: each use runs
-        from a new one, funded from your private balance and brought back into it. Anyone can follow the money through
-        that account, and money you made private yourself leads on to your public account.
+        {t("dapps.privacy.oneTime")}
       </Callout>
       {sites.length === 0 && (
         <p className="note" data-testid="dapp-sites-hint">
-          On a dApp's own site, connect Seedelf Wallet and choose a private session: the site then sees a one-time account,
-          and it's listed here.
+          {t("dapps.sitesHint")}
         </p>
       )}
     </Screen>
@@ -217,20 +216,21 @@ export function Dapps({
 
 /** Money waiting in private sessions, and Bring everything back. A balance: hidden while balances are. */
 export function ClaimCard({ sessions, onOpen }: { sessions: SessionView[]; onOpen: () => void }) {
+  const t = useT();
   const amounts = useAmounts();
   const lovelace = sessions.reduce((sum, s) => sum + BigInt(s.holding?.lovelace ?? "0"), 0n);
   const tokens = new Set(sessions.flatMap((s) => (s.holding?.tokens ?? []).map((t) => t.policyId + t.assetName))).size;
   return (
     <section className="section claim-card" aria-labelledby="claim-card-title" data-testid="claim-card">
-      <h2 id="claim-card-title">In private sessions</h2>
+      <h2 id="claim-card-title">{t("dapps.inSessions")}</h2>
       <p className="claim-card__amount">
-        {amounts.ada(lovelace.toString())} ₳{tokens ? ` and ${plural(tokens, "token")}` : ""}
+        {amounts.ada(lovelace.toString())} ₳{tokens ? ` ${t("claim.andTokens", { count: tokens })}` : ""}
       </p>
       <p className="note">
-        {plural(sessions.length, "session")} {sessions.length === 1 ? "holds" : "hold"} it, with nothing of theirs on its way.
+        {t("dapps.sessionsHold", { count: sessions.length })}
       </p>
       <button type="button" className="secondary" onClick={onOpen}>
-        Bring everything back
+        {t("claim.title")}
       </button>
     </section>
   );

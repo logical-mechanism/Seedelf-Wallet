@@ -1177,7 +1177,7 @@ export function LovejoinChoice({
       )}
       {through && !cost && (
         <p className="note" data-testid="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED}
+          {LOVEJOIN_UNAUDITED()}
         </p>
       )}
     </>
@@ -1217,7 +1217,7 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
         come back at once. Settings changes later swaps, not this one. Stop brings it back directly.
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
-        {LOVEJOIN_UNAUDITED}
+        {LOVEJOIN_UNAUDITED()}
       </p>
     </>
   );

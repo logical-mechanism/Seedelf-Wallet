@@ -338,7 +338,7 @@ export function ClaimReview({
       {boxes > 0 && (
         <>
           <p className="note" data-testid="lovejoin-unaudited">
-            {LOVEJOIN_UNAUDITED}
+            {LOVEJOIN_UNAUDITED()}
           </p>
           <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="claim-direct">
             {t("claim.directInstead")}
