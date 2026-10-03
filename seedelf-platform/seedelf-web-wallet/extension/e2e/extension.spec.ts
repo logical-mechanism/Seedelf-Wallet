@@ -6,6 +6,7 @@ import type { BrowserContext, Page } from "@playwright/test";
 
 import {
   accountMintPreprod,
+  accountVector,
   addTokens,
   appUrl,
   askWorker,
@@ -276,8 +277,13 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   await expect(page.getByTestId("cardano-tokens")).toContainText("LINK");
   await expect(page.getByTestId("staking-row")).toHaveText(`Staking with LOGIC${ada(rewards)} ₳ rewards`);
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
-  // The account, the contract and the stake key; the pool's ticker the first time.
+  // The account, the contract and the stake key; the pool's ticker the first
+  // time; and the one `account_addresses` a restore spends looking for a
+  // second public account (chunk 18), which this phrase has never used.
+  // Discovery's ask is the one about a stake address that isn't account 0's.
+  await expect.poll(() => koios.stakesAsked.filter((a) => a !== v.preprod.stake)).not.toHaveLength(0);
   expect(koios.calls.sort()).toEqual([
+    "account_addresses",
     "account_addresses",
     "account_info",
     "credential_utxos",
@@ -318,10 +324,11 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   const panel = await openApp(context, "panel");
   await expect(panel.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await snap(panel, "home-balances-panel");
-  expect(koios.calls).toHaveLength(5);
+  // Six, not five: the restore's one look for a second public account is among them (chunk 18).
+  expect(koios.calls).toHaveLength(6);
   // The pool's ticker is remembered for the session.
   await panel.getByRole("button", { name: "Refresh" }).click();
-  await expect.poll(() => koios.calls.length).toBe(9);
+  await expect.poll(() => koios.calls.length).toBe(10);
   await expect(panel.getByTestId("updated")).toHaveText("Updated just now");
 
   // In the narrow panel the name is cut in the middle, keeping its start and end.
@@ -460,6 +467,12 @@ test("settings: the phrase behind the password, a new password, and removing the
   const page = await openApp(context);
   await restore(page, v.phrase);
   await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+  // A restore looks for a second public account in the background (chunk 18):
+  // one request, for the next account, which this phrase has never used. It
+  // has to have landed before anything is counted, or "Settings asks Koios
+  // nothing" would be racing it.
+  const second = accountVector(24, 1).preprod.stake;
+  await expect.poll(() => koios.stakesAsked).toContain(second);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
@@ -503,6 +516,131 @@ test("settings: the phrase behind the password, a new password, and removing the
   await page.getByLabel("Type delete wallet to confirm").fill("delete wallet");
   await page.getByRole("button", { name: "Remove wallet" }).click();
   await expect(page.getByRole("button", { name: "Create new wallet" })).toBeVisible();
+});
+
+test("several accounts: find one, switch to it, and the screens follow", async ({ context, koios }) => {
+  const v = vector(24);
+  const second = accountVector(24, 1);
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+
+  // One account: nothing to choose between, so the picker isn't there and the
+  // wallet looks exactly as it did before this chunk.
+  await expect.poll(() => koios.stakesAsked).toContain(second.preprod.stake);
+  await expect(page.getByTestId("account-picker")).toHaveCount(0);
+  await cardanoTab(page);
+  await expect(page.locator("#cardano-account")).toHaveText("Public account");
+  await page.getByRole("tab", { name: "Private", exact: true }).click();
+
+  // Account 1 has used an address now. Settings looks for it, one account at a time.
+  koios.usedStakes.add(second.preprod.stake);
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Public accounts" }).click();
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("each ask Koios about one account");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("would tell Koios those twenty accounts are one wallet's");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("Add it");
+  const asked = koios.stakesAsked.length;
+  await page.getByRole("button", { name: "Look for the next account" }).click();
+  await expect(page.getByTestId("accounts-found")).toContainText("Found Account 2");
+  expect(koios.stakesAsked.length).toBe(asked + 1);
+  await snap(page, "settings-accounts");
+
+  // Switch to it from the list. A switch starts every screen afresh on the new
+  // account, as a network switch does, so Settings comes back at its menu.
+  await page.getByRole("button", { name: "Switch to it" }).click();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  // The picker is in the top bar now, on the account just chosen.
+  await expect(page.getByTestId("account-picker")).toBeVisible();
+  await expect(page.getByLabel("Public account")).toHaveValue("1");
+  // And the list says which one the wallet is working on.
+  await page.getByRole("button", { name: "Public accounts" }).click();
+  await expect(page.getByTestId("account-active-1")).toBeVisible();
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Back" }).click();
+
+  // Home's public tab, and Receive, are account 2's now.
+  await cardanoTab(page);
+  await expect(page.locator("#cardano-account")).toHaveText("Account 2");
+  await page.getByRole("button", { name: "Receive" }).click();
+  await expect(page.getByTestId("receive-address")).toContainText(second.preprod.receive_0.slice(0, 20));
+
+  // And back to account 1 from the picker alone.
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByLabel("Public account").selectOption("0");
+  await expect(page.getByLabel("Public account")).toHaveValue("0");
+  await cardanoTab(page);
+  await expect(page.locator("#cardano-account")).toHaveText("Account 1");
+  await page.getByRole("button", { name: "Receive" }).click();
+  await expect(page.getByTestId("receive-address")).toContainText(v.preprod.receive_0.slice(0, 20));
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // The public Send offers the wallet's other accounts, and picking one says
+  // what the payment reveals rather than refusing it (the owner, 2026-10-02).
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "Send publicly" }).click();
+  // Only the other account is offered: paying the one you're on sends the
+  // money straight back, which is the collateral payment's job.
+  await page.getByRole("button", { name: "Your accounts" }).click();
+  await expect(page.getByTestId("account-recipients").getByRole("button")).toHaveCount(1);
+  await snap(page, "send-account-picker");
+  await page.getByTestId("account-recipients").getByRole("button", { name: "Account 2" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue(second.preprod.receive_0);
+  // Read like any other address, and said: named, not refused, and Review opens.
+  await expect(page.getByTestId("send-other-account")).toContainText("This is your own Account 2");
+  await expect(page.getByTestId("send-other-account")).toContainText("tell they're one wallet's");
+  await snap(page, "send-to-own-account");
+  await expect(page.getByTestId("send-own")).toHaveCount(0);
+  await page.getByLabel("Amount").fill("2");
+  await expect(page.getByRole("button", { name: "Review" })).toBeEnabled();
+  // The × empties the field and puts the cursor back in it (the owner, 2026-10-02).
+  await page.getByRole("button", { name: "Clear the recipient" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("To", { exact: true })).toBeFocused();
+  // Gone once there is nothing to clear, so an empty field looks as it did.
+  await expect(page.getByRole("button", { name: "Clear the recipient" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // A custom number the sequential look can never reach (the owner,
+  // 2026-10-02): checked by number, then added even though it has never been
+  // used, which is how a user starts one.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Public accounts" }).click();
+  await page.getByLabel("Account number").fill("1338");
+  const before = koios.stakesAsked.length;
+  await page.getByRole("button", { name: "Check it" }).click();
+  await expect(page.getByTestId("accounts-found")).toContainText("Account 1338 has never been used");
+  expect(koios.stakesAsked.length).toBe(before + 1);
+  // Adding it asks nobody anything at all.
+  await page.getByRole("button", { name: "Add Account 1338 anyway" }).click();
+  await expect(page.getByTestId("accounts-found")).toContainText("Account 1338 is in the list now");
+  expect(koios.stakesAsked.length).toBe(before + 1);
+  await expect(page.getByTestId("accounts-list")).toContainText("Account 1338");
+
+  // And it is in the picker like any other, never having been on chain.
+  // (A select's option text isn't its own text content, so the options are read.)
+  await expect(page.getByLabel("Public account").locator("option")).toHaveText(["Account 1", "Account 2", "Account 1338"]);
+  // A wallet with a lot of accounts: the rows keep their rhythm and the list
+  // scrolls rather than pushing the rest of the screen away.
+  for (const n of [4, 5, 6, 7, 8, 9, 42]) {
+    await page.getByLabel("Account number").fill(String(n));
+    await page.getByRole("button", { name: "Add it" }).click();
+    await expect(page.getByTestId("accounts-found")).toContainText(`Account ${n} is in the list now`);
+  }
+  // The filter arrives once the list scrolls, and narrows by number or name.
+  await expect(page.getByTestId("accounts-filter")).toBeVisible();
+  await snap(page, "settings-accounts-many");
+  await page.getByLabel("Find an account").fill("42");
+  await expect(page.getByTestId("accounts-list").getByRole("listitem")).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: /Accounts/ })).toContainText("1 of 10");
+  await page.getByLabel("Find an account").fill("nothing");
+  await expect(page.getByTestId("accounts-none")).toBeVisible();
+  await page.getByLabel("Find an account").fill("");
+
+  // The account sites use is chosen here, and doesn't follow the picker.
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("dapp-account-note")).toContainText("whichever one you're working on");
+  await expect(page.getByLabel("The account sites use")).toHaveValue("0");
 });
 
 test("contacts: save a Seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {

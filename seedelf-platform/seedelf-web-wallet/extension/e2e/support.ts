@@ -36,6 +36,13 @@ const cardanoVectors = JSON.parse(
 }>;
 export const vector = (words: number) =>
   cardanoVectors.find((v) => v.account === 0 && v.phrase.split(" ").length === words)!;
+/**
+ * The same phrase's CIP-1852 account `index'`, for several accounts (chunk
+ * 18). Only the 24-word vector phrase has account 1 recorded, and its values
+ * come from `@cardano-sdk/key-management`.
+ */
+export const accountVector = (words: number, index: number) =>
+  cardanoVectors.find((v) => v.account === index && v.phrase.split(" ").length === words)!;
 
 /**
  * Chromium with the extension in `extension` (dist/ by default) loaded. It
@@ -160,6 +167,14 @@ export interface KoiosFake {
   nfts: Map<string, string>;
   /** Each stake key's account_info, by stake address: the recorded 12-word account's to begin with. */
   stakes: Map<string, Record<string, unknown>>;
+  /**
+   * Which stake addresses `account_addresses` answers as used, past the
+   * recorded accounts: how a second public account is put on the chain for
+   * discovery to find (chunk 18).
+   */
+  usedStakes: Set<string>;
+  /** Every stake address `account_addresses` was asked about, in order: discovery asks one at a time. */
+  stakesAsked: string[];
   /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
   /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
@@ -342,6 +357,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
     }
     const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
+    if (path === "account_addresses" && body._stake_addresses?.[0]) koios.stakesAsked.push(body._stake_addresses[0]);
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
     const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
     // credential_utxos: the wallet contract's, or the accounts' by payment key.
@@ -358,7 +374,10 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
           ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
           : byKey
         : path === "account_addresses"
-          ? (account?.account_addresses ?? [])
+          ? (account?.account_addresses ??
+            (koios.usedStakes.has(body._stake_addresses?.[0])
+              ? [{ stake_address: body._stake_addresses[0], addresses: [`addr_of_${body._stake_addresses[0]}`] }]
+              : []))
           : null;
     if (!rows) return fulfill({ status: 404, body: "" });
     return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
@@ -448,6 +467,8 @@ export const test = base.extend<{
       evaluation: mintPreprod.evaluation,
       nfts: new Map(),
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
+      usedStakes: new Set<string>(),
+      stakesAsked: [],
       addedToAccounts: [],
       spent: new Set(),
       unlistedSpent: false,

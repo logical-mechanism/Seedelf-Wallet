@@ -34,12 +34,14 @@ import {
   CheckIcon,
   ChevronRightIcon,
   ExternalIcon,
+  SearchIcon,
   EyeIcon,
   LockIcon,
   PlugIcon,
   TrashIcon,
   UsersIcon,
   VaultIcon,
+  WalletIcon,
 } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
@@ -51,6 +53,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 import { plural } from "../format";
+import { accountName, useAccounts } from "../accounts";
 import { usePreferences } from "../preferences";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
@@ -60,7 +63,7 @@ const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
+type Page = "menu" | "accounts" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
 
 /** The currencies ADA's value can be shown in, by name. */
 const CURRENCY_NAMES: Record<(typeof CURRENCIES)[number], string> = {
@@ -92,6 +95,7 @@ export function Settings({
   const { prefs } = usePreferences();
   const prices = !!NETWORKS[status.network].prices && prefs.currency !== "off";
   const menu = () => setPage("menu");
+  if (page === "accounts") return <Accounts onBack={menu} network={status.network} />;
   if (page === "contacts") return <Contacts onBack={menu} />;
   if (page === "collateral") return <Collateral onBack={menu} />;
   if (page === "sites") return <ConnectedSites onBack={menu} />;
@@ -106,6 +110,7 @@ export function Settings({
       <section className="section" aria-labelledby="wallet-title">
         <h2 id="wallet-title">Wallet</h2>
         <ul className="list">
+          <MenuRow icon={<WalletIcon size={16} />} label="Public accounts" onClick={() => setPage("accounts")} />
           <MenuRow icon={<UsersIcon size={16} />} label="Contacts" onClick={() => setPage("contacts")} />
           <MenuRow icon={<VaultIcon size={16} />} label="Collateral" onClick={() => setPage("collateral")} />
         </ul>
@@ -139,6 +144,284 @@ export function Settings({
         <p className="note" data-testid="talks-to">
           {talksTo(prices, lovejoinOn(status.network))}
         </p>
+      </section>
+    </Screen>
+  );
+}
+
+
+/** Past this many accounts the list gets a filter: it scrolls from about eight. */
+const FILTER_FROM = 8;
+
+/**
+ * The phrase's public accounts: which one the wallet works on, what each is
+ * called, and a look for one more.
+ *
+ * **What "check for another account" costs:** one Koios
+ * `account_addresses` request, for the next account after the highest the
+ * wallet knows. It asks about one account at a time on purpose — a single
+ * request for twenty stake addresses would tell Koios those twenty are one
+ * wallet's, which is the opposite of what several accounts are for.
+ */
+function Accounts({ onBack, network }: { onBack: () => void; network: NetworkName }) {
+  const { accounts, active, reload } = useAccounts();
+  const [busy, setBusy] = useState<"switch" | "check" | "name" | "look">();
+  const [error, setError] = useState<string>();
+  const [found, setFound] = useState<string>();
+  const [naming, setNaming] = useState<number>();
+  const [draft, setDraft] = useState("");
+  // The account number to look up or add. Any CIP-1852 index: a custom or
+  // non-sequential one (1337, say) is unreachable otherwise, since the
+  // sequential look stops at the first unused account (the owner, 2026-10-02).
+  const [number, setNumber] = useState("");
+  // Set when a checked account has never been used, so Add can be offered for it.
+  const [unused, setUnused] = useState<number>();
+  // A filter, once the list is long enough to scroll past: by number or by
+  // the name the user gave it (the owner, 2026-10-02).
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? accounts.filter((a) => accountName(a).toLowerCase().includes(q) || String(a.index + 1).includes(q))
+    : accounts;
+
+  const run = async (what: "switch" | "check" | "name" | "look", task: () => Promise<void>) => {
+    setBusy(what);
+    setError(undefined);
+    setFound(undefined);
+    setUnused(undefined);
+    try {
+      await task();
+      await reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  /** The next account in the sequential run, which is what most wallets have. */
+  const look = () =>
+    run("look", async () => {
+      const { found: indexes } = await call("account-discover", { limit: 1 });
+      setFound(
+        indexes.length
+          ? `Found Account ${indexes[0]! + 1}. It's in the list now.`
+          : `The next account in order has never been used on ${NETWORKS[network].label}. A custom number may still have been: check one below.`,
+      );
+    });
+
+  /** The number typed, as an index from 0; undefined when it isn't a number a person would mean. */
+  const typed = () => {
+    const shown = Number(number.trim());
+    return Number.isInteger(shown) && shown >= 1 ? shown - 1 : undefined;
+  };
+
+  const checkOne = () => {
+    const index = typed();
+    if (index === undefined) return;
+    void run("check", async () => {
+      const { used } = await call("account-check", { index });
+      setFound(
+        used
+          ? `Account ${index + 1} has been used on ${NETWORKS[network].label}. It's in the list now.`
+          : `Account ${index + 1} has never been used on ${NETWORKS[network].label}. You can still add it and start using it.`,
+      );
+      if (!used) setUnused(index);
+    });
+  };
+
+  const addOne = (index: number) =>
+    run("check", async () => {
+      await call("account-add", { index });
+      setFound(`Account ${index + 1} is in the list now.`);
+      setNumber("");
+    });
+
+  return (
+    <Screen title="Public accounts" titleId="accounts-title" onBack={onBack}>
+      <section className="section" aria-labelledby="accounts-list-title">
+        {/* The count, because the list scrolls: a row cut off at the bottom
+            edge otherwise reads as clipped rather than as more below. */}
+        <h2 id="accounts-list-title">
+          Accounts
+          {accounts.length > 1 && (
+            <span className="section__count">
+              {" · "}
+              {shown.length === accounts.length ? accounts.length : `${shown.length} of ${accounts.length}`}
+            </span>
+          )}
+        </h2>
+        {accounts.length > FILTER_FROM && (
+          <label className="search" data-testid="accounts-filter">
+            <SearchIcon size={16} />
+            <input
+              type="search"
+              aria-label="Find an account"
+              placeholder="Number or name"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              spellCheck={false}
+            />
+          </label>
+        )}
+        <ul className="list accounts-list" data-testid="accounts-list">
+          {shown.map((a) => (
+            <li key={a.index} className={a.index === active ? "account-row account-row--active" : "account-row"}>
+              {naming === a.index ? (
+                <form
+                  className="account-row__name"
+                  onSubmit={(e: FormEvent) => {
+                    e.preventDefault();
+                    void run("name", async () => {
+                      await call("account-rename", { index: a.index, name: draft });
+                      setNaming(undefined);
+                    });
+                  }}
+                >
+                  <label className="sr-only" htmlFor={`account-name-${a.index}`}>
+                    What to call Account {a.index + 1}
+                  </label>
+                  <input
+                    id={`account-name-${a.index}`}
+                    value={draft}
+                    maxLength={24}
+                    autoFocus
+                    placeholder={`Account ${a.index + 1}`}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <button type="submit" className="secondary" disabled={busy !== undefined}>
+                    Save
+                  </button>
+                  <button type="button" className="link" onClick={() => setNaming(undefined)}>
+                    Cancel
+                  </button>
+                </form>
+              ) : (
+                <div className="account-row__name">
+                  <span>
+                    {accountName(a)}
+                    {a.index === active && (
+                      <span className="account-row__active" data-testid={`account-active-${a.index}`}>
+                        {" "}
+                        · working on this one
+                      </span>
+                    )}
+                  </span>
+                  <span className="account-row__actions">
+                    {/* A chip, as Copy and Max are: one row an account, so a
+                        full-height button next to each name is far too heavy. */}
+                    {a.index !== active && (
+                      <button
+                        type="button"
+                        className="chip"
+                        disabled={busy !== undefined}
+                        onClick={() => void run("switch", () => call("account-use", { index: a.index }).then(() => undefined))}
+                      >
+                        {busy === "switch" ? "Switching…" : "Switch to it"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => {
+                        setNaming(a.index);
+                        setDraft(a.name ?? "");
+                      }}
+                    >
+                      {a.name ? "Rename" : "Name it"}
+                    </button>
+                  </span>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+        {!shown.length && (
+          <p className="note center empty" data-testid="accounts-none">
+            No account matches “{query.trim()}”.
+          </p>
+        )}
+        <p className="note" data-testid="accounts-note">
+          Each account is a separate Cardano wallet from the same recovery phrase, with its own addresses, its own staking and
+          its own collateral. Other wallets call these accounts too, and show the same ones for this phrase.
+        </p>
+        <p className="note" data-testid="accounts-private-note">
+          Your private balance is shared: there's one of it for the whole phrase, whichever account you're on. Nothing on chain
+          links money you make private from one account to money you make private from another — but spending both in one
+          private payment would, so the wallet keeps them apart and says so when it can't.
+        </p>
+        <div className="actions">
+          <button type="button" className="secondary" onClick={() => void look()} disabled={busy !== undefined}>
+            {busy === "look" ? "Looking…" : "Look for the next account"}
+          </button>
+        </div>
+        <form
+          className="account-number"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            checkOne();
+          }}
+        >
+          <label htmlFor="account-number">Account number</label>
+          <input
+            id="account-number"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={2147483648}
+            step={1}
+            value={number}
+            placeholder="1338"
+            onChange={(e) => {
+              setNumber(e.target.value);
+              setUnused(undefined);
+              setFound(undefined);
+            }}
+          />
+          {/* Chips, like Switch to it and Name it in the list above: these sit
+              inline with a field, not at the foot of a form. */}
+          <button type="submit" className="chip" disabled={busy !== undefined || typed() === undefined}>
+            {busy === "check" ? "Looking…" : "Check it"}
+          </button>
+          <button
+            type="button"
+            className="chip"
+            disabled={busy !== undefined || typed() === undefined}
+            onClick={() => {
+              const index = typed();
+              if (index !== undefined) void addOne(index);
+            }}
+          >
+            Add it
+          </button>
+        </form>
+        <p className="note" data-testid="accounts-cost-note">
+          <strong>Look for the next account</strong> and <strong>Check it</strong> each ask Koios about one account, and the
+          wallet only ever asks about one at a time: asking about twenty at once would tell Koios those twenty accounts are one
+          wallet's. <strong>Add it</strong> asks nobody anything.
+        </p>
+        <p className="note" data-testid="accounts-custom-note">
+          A number of your own works too — 1338, say. The look above goes in order and stops at the first account never used, so
+          it can't find one out on its own; checking it by number can. You can add an account that has never been used and start
+          using it: it exists in your recovery phrase either way, and holds nothing until you put something there.
+        </p>
+        {unused !== undefined && (
+          <div className="actions" data-testid="accounts-add-unused">
+            <button type="button" className="primary" onClick={() => void addOne(unused)} disabled={busy !== undefined}>
+              Add Account {unused + 1} anyway
+            </button>
+          </div>
+        )}
+        {found && (
+          <p className="note" role="status" data-testid="accounts-found">
+            {found}
+          </p>
+        )}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
       </section>
     </Screen>
   );
@@ -466,6 +749,7 @@ function LockAfter() {
  * and can't be turned on, and the note says why.
  */
 export function DappConnector({ blocked, onSites }: { blocked?: Status["connectorBlocked"]; onSites: () => void }) {
+  const accounts = useAccounts();
   const { prefs, loaded, set } = usePreferences();
   const [allowed, setAllowed] = useState<boolean>();
   const [error, setError] = useState<string>();
@@ -523,6 +807,40 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
           disabled={!!blocked || !loaded || allowed === undefined}
         />
       </div>
+      {/* Which account sites use, where there is more than one to choose
+          between: one account is the dApp account, and it does not follow the
+          picker (Eternl's model; the owner, 2026-10-02). */}
+      {accounts.several && (
+        <div className="stack-tight" data-testid="dapp-account">
+          {/* A select, not a segmented Choice: a wallet may hold a lot of
+              accounts, and ten buttons in a row would not fit. */}
+          <div className="field">
+            <label className="label" htmlFor="dapp-account-select">
+              The account sites use
+            </label>
+            <select
+              id="dapp-account-select"
+              value={String(loaded ? prefs.dappAccount : 0)}
+              disabled={!loaded}
+              onChange={(e) => {
+                setError(undefined);
+                set({ dappAccount: Number(e.target.value) }).catch((err: Error) => setError(err.message));
+              }}
+            >
+              {accounts.accounts.map((a) => (
+                <option key={a.index} value={a.index}>
+                  {accountName(a)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="note" data-testid="dapp-account-note">
+            Connected sites always use this account, whichever one you're working on, so switching accounts never shows a site a
+            second account of yours. Changing it here shows every connected site the new account instead — which anyone watching
+            both can see is the same wallet.
+          </p>
+        </div>
+      )}
       <div className="setting-row">
         <span className="stack-tight">
           <span id="dapp-password-label">Ask for your password to sign for a site</span>

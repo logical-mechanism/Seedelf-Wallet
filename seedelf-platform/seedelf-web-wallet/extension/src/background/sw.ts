@@ -19,6 +19,7 @@ import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
+import { AccountsService, activeAccount } from "./accounts";
 import { LOCAL_NETWORK, NetworkChoice, PreferencesService } from "./preferences";
 import { PriceService } from "./prices";
 import { runNetworks, type Runner } from "./runs";
@@ -140,6 +141,9 @@ function getContext(): Promise<Worker> {
       now: Date.now,
       autoLock,
       lockAfterMs: () => preferences.lockAfterMs(),
+      // Which public account to derive, read at every key use: a switch
+      // writes the choice and the next use follows it (accounts.ts).
+      activeAccount: () => activeAccount(local),
       fresh: freshWasm,
       changed: () => {
         broadcast(STATE_CHANGED);
@@ -153,14 +157,29 @@ function getContext(): Promise<Worker> {
     // Every request waits its turn under Koios's public-tier limit, whatever the network.
     const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios, undefined, undefined, undefined, KOIOS_LIMIT);
     const store = new PrivateStore({ wallet, local });
+    const accounts = new AccountsService({ wasm, wallet, store, local, session, koios, now: Date.now });
     const prices = new PriceService({ session, local, preferences, now: Date.now });
     const activity = new ActivityService({ wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
-    const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity });
+    const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity, activeAccount: () => activeAccount(local) });
     const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
     const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
-    const spends = { wasm, wallet, session, koios, collateral, now: Date.now, activity, coins, preferences, store };
+    const spends = {
+      wasm,
+      wallet,
+      session,
+      koios,
+      collateral,
+      now: Date.now,
+      activity,
+      coins,
+      preferences,
+      store,
+      // So paying your own public account from Seedelf is flagged whichever
+      // account it is, not only the active one (destination.ts).
+      knownAccounts: () => accounts.known().then((all) => all.map((a) => a.index)),
+    };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
@@ -184,6 +203,7 @@ function getContext(): Promise<Worker> {
       store,
       sessions,
       network: () => networkChoice.get(),
+      activeAccount: () => activeAccount(local),
       window: approvalWindow,
       changed: () => broadcast(DAPP_CHANGED),
     });
@@ -204,6 +224,7 @@ function getContext(): Promise<Worker> {
       staking,
       preferences,
       prices,
+      accounts,
       dapp,
       sessions,
       lovejoin,

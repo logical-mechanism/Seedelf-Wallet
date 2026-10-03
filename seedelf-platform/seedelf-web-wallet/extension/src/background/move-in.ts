@@ -12,6 +12,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
+import { madePrivate, type HistoryClass } from "../shared/histories";
 import type { MoveInSummary, PendingTx, TokenQuantity, BuildStage } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { ActivityService } from "./activity";
@@ -36,6 +37,14 @@ interface Built extends MoveInSummary {
   invalidHereafter: number;
   /** Set once a submit went unanswered: Send sends it again as it is (pending.ts). */
   sentCbor?: string;
+  /**
+   * The history the money gains in the private balance: the public account it
+   * came from (chunk 18). Kept with the built transaction rather than worked
+   * out when it's sent, so it names the account that actually paid even if
+   * the user switches afterwards. The Seedelf history reads it from the
+   * summary a submit hands on (activity.ts `classOf`).
+   */
+  origin: HistoryClass;
 }
 
 export interface MoveInDeps {
@@ -86,7 +95,13 @@ export class MoveInService {
       const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
       const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
       const summary: MoveInSummary = { ...rest, network };
-      await session.set(SESSION_BUILT, { ...summary, txCbor, builtAt: now(), invalidHereafter } satisfies Built);
+      await session.set(SESSION_BUILT, {
+        ...summary,
+        txCbor,
+        builtAt: now(),
+        invalidHereafter,
+        origin: madePrivate(keys.account),
+      } satisfies Built);
       return summary;
     });
   }

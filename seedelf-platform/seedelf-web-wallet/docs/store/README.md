@@ -45,7 +45,7 @@ Seedelf hides who owns money. Each payment to a Seedelf reaches its owner under 
 
 What you can do:
 • Create a wallet, or restore one from a 12, 15 or 24-word recovery phrase, and lock it with a password.
-• Use its public account: a normal Cardano account that any wallet can pay, and that pays any address, ADA Handle or Seedelf, several at once. A phrase from Lace or Eternl opens that wallet's first account.
+• Use its public accounts: normal Cardano accounts that any wallet can pay, and that pay any address, ADA Handle or Seedelf, several at once. A phrase from Lace or Eternl opens that wallet's accounts, and the wallet finds the ones the phrase has used.
 • Stake the public account with a pool, from a list of every live pool, and spend or withdraw the rewards.
 • Delegate its voting power: always abstain, always no confidence, or a DRep you find by name.
 • Create a Seedelf: a name you give out so that anyone can pay you privately.

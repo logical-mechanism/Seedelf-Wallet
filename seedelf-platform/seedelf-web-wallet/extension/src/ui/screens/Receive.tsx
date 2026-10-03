@@ -9,6 +9,7 @@
 // create it first.
 
 import type { Account, SeedelfInfo } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
 import { CopyField } from "../components/CopyField";
@@ -19,8 +20,17 @@ import { Screen } from "../components/Screen";
 import { useAmounts } from "../preferences";
 
 export function Receive({ account, handles, onBack }: { account: Account; handles: string[]; onBack: () => void }) {
+  // Which account's address this is, once there is more than one: paying the
+  // wrong account's address is money in the wrong place, not a lost payment,
+  // but it is still worth naming.
+  const { several, name } = useAccounts();
   return (
-    <Screen title="Receive" titleId="receive-title" onBack={onBack} aside="Into your public account">
+    <Screen
+      title="Receive"
+      titleId="receive-title"
+      onBack={onBack}
+      aside={several ? `Into ${name}, your public account` : "Into your public account"}
+    >
       <div className="qr-wrap">
         <QrCode text={account.receiveAddress} maxSize={200} label="QR code of the receive address" />
       </div>

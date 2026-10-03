@@ -8,10 +8,18 @@
 // is chosen, and Review waits for the user to pick. Each side's note says
 // what it links for this seedelf. Nothing is sent until the user has
 // reviewed it and pressed Send.
+//
+// **Which account paid matters, not only which side** (chunk 18). The mint is
+// public, so it already links the Seedelf to the account that paid for it.
+// Sending the freed ADA to a *different* account links that one to the
+// Seedelf's name too, and anyone can join the two by the name — so the two
+// accounts are tied together. `paidByAccount` says which paid, and the note
+// warns when the wallet has since moved to another.
 
 import { useState, type FormEvent } from "react";
 
 import type { MintSource, PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
@@ -23,8 +31,39 @@ import { formatAda, shortHex } from "../format";
 
 const DESTINATIONS: Record<RemoveTo, string> = { account: "Public account", seedelf: "Private balance" };
 
-/** What sending the freed ADA to `to` links, for a Seedelf `paidBy` paid for; a warning where it links something new. */
-export function removeNote(to: RemoveTo | undefined, paidBy: MintSource | undefined): { tone: "privacy" | "warn"; text: string } {
+/**
+ * What sending the freed ADA to `to` links, for a Seedelf `paidBy` paid for;
+ * a warning where it links something new.
+ *
+ * `accounts`: which public account paid (`paidByAccount`) and which the
+ * wallet is on now (`active`), when there is more than one to tell apart.
+ * Where they differ, sending to the public account ties the two accounts
+ * together, which is the strongest warning here.
+ */
+export function removeNote(
+  to: RemoveTo | undefined,
+  paidBy: MintSource | undefined,
+  accounts?: { paidByAccount?: number; active: number; several: boolean },
+): { tone: "privacy" | "warn"; text: string } {
+  // Said before anything else: a different account's is the one case where
+  // removing to "the public account" ties two of the user's accounts
+  // together, in the open, and the default would have done it quietly.
+  if (
+    to === "account" &&
+    paidBy === "account" &&
+    accounts?.several &&
+    accounts.paidByAccount !== undefined &&
+    accounts.paidByAccount !== accounts.active
+  ) {
+    return {
+      tone: "warn",
+      text:
+        `Account ${accounts.paidByAccount + 1} paid for this Seedelf, and the wallet is on Account ${accounts.active + 1}. ` +
+        "The mint already links the Seedelf's name to the account that paid, so sending its ADA here links this account to " +
+        `that name as well — and anyone can tie your two accounts together through it. Switch to Account ${accounts.paidByAccount + 1} ` +
+        "first, or send it to your private balance instead.",
+    };
+  }
   if (to === undefined) {
     return {
       tone: "privacy",
@@ -38,7 +77,9 @@ export function removeNote(to: RemoveTo | undefined, paidBy: MintSource | undefi
       tone: "privacy",
       text:
         to === "account"
-          ? "Back where this Seedelf's ADA came from: your public account paid for it, so this links nothing new."
+          ? `Back where this Seedelf's ADA came from: ${
+              accounts?.several && accounts.paidByAccount !== undefined ? `Account ${accounts.paidByAccount + 1}` : "your public account"
+            } paid for it, so this links nothing new.`
           : "Back where this Seedelf's ADA came from: your private balance paid for it, so this links nothing new.",
     };
   }
@@ -87,7 +128,8 @@ export function RemoveSeedelf({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const name = seedelf.label ?? "a Seedelf";
-  const note = removeNote(to, seedelf.paidBy);
+  const { active, several } = useAccounts();
+  const note = removeNote(to, seedelf.paidBy, { paidByAccount: seedelf.paidByAccount, active, several });
 
   async function review(e: FormEvent) {
     e.preventDefault();

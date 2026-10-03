@@ -27,6 +27,7 @@ So money that sits stays staked in the public account, and is made private when 
 - **Public account** (the Cardano account): the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
 - **Make private** (a move-in): move funds from the public account into your private balance.
 - **Send** (public): pay any addresses or Seedelfs from the public account, in the open, as any Cardano wallet does.
+- **Several public accounts** (chunk 18): the recovery phrase's Cardano accounts, one at a time, with a picker in the top bar and names of your own. Each has its own addresses, staking and collateral; the private balance is one for the whole phrase, and money made private from different accounts is kept apart so a private payment doesn't tie them together.
 - **Staking** (chunk 13): stake the public account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
 - **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
 - **Create a Seedelf:** mint your named Seedelf so others can pay you. Minting links the Seedelf to whatever paid for it, so by default the public account pays for it, before any money is made private (see [privacy.md](docs/privacy.md#known-links)).
@@ -46,11 +47,11 @@ So money that sits stays staked in the public account, and is made private when 
 
 **After v1: the transaction view** ([plans/chunk-17-transaction-view.md](docs/plans/chunk-17-transaction-view.md)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
 
-**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): several Cardano accounts, not just the first; the wallet in Spanish and Japanese as well as English; NFT images, shown when you click one, downloaded to your own browser rather than through anything of ours. Then being your own DRep and voting on governance actions, and a pass over how all of it looks and reads.
+**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): the wallet in Spanish and Japanese as well as English; NFT images, shown when you click one, downloaded to your own browser rather than through anything of ours. Then being your own DRep and voting on governance actions, and a pass over how all of it looks and reads.
 
 **Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet.
 
-**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), other chains, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand.
+**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), folders or an account centre, other chains, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand.
 
 ## Relationship to the CLI
 
@@ -98,7 +99,7 @@ Every Lace path in these docs is relative to that checkout.
   - The unlocked key is kept in `chrome.storage.session` (memory-only, cleared when the browser closes).
   - So the wallet stays unlocked until auto-lock or browser close, instead of asking for the password after every restart.
   - See [architecture.md](docs/architecture.md#service-worker).
-- **Cardano account:** CIP-1852 account `0'` for v1. Every function takes the account index, so more accounts can come later. See [keys-and-accounts.md](docs/keys-and-accounts.md#the-cardano-account).
+- **Cardano accounts:** CIP-1852 accounts, one at a time (chunk 18). The wallet finds the ones the phrase has used, in order, stopping at the first never used, and asks about one at a time on purpose. The Seedelf key stays on account 0, so there is one private balance for the whole phrase. See [keys-and-accounts.md](docs/keys-and-accounts.md#the-cardano-account).
 - **One-time accounts:** a reserved account index that real wallets never reach. Each session's base address has its own payment and stake keys, shared with no other session. See [privacy.md](docs/privacy.md#known-links).
 - **Transaction building:** the CLI's Rust (Pallas) builders, separated from network calls and compiled to WebAssembly. See [architecture.md](docs/architecture.md#transaction-building).
 - **UI stack:** React + TypeScript + Vite, with plain CSS.

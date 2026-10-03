@@ -31,19 +31,34 @@ const SEEDELF = seedelfUtxo.asset_list![0]!.asset_name;
 describe("who paid for a Seedelf", () => {
   const nothing = { recorded: {}, owned: [seedelfUtxo], account: [], accountTxs: new Set<string>() };
 
-  it("is the record's, when the mint was sent from here", () => {
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, recorded: { [SEEDELF]: "seedelf" } })).toBe("seedelf");
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, recorded: { [SEEDELF]: "account" } })).toBe("account");
+  it("is the record's, when the mint was sent from here, and names the account that paid", () => {
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, recorded: { [SEEDELF]: "seedelf" } })).toEqual({ side: "seedelf" });
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, recorded: { [SEEDELF]: "account:2" } })).toEqual({
+      side: "account",
+      account: 2,
+    });
+    // The bare "account" wallets sealed before chunk 18 is account 0's: there was only one.
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, recorded: { [SEEDELF]: "account" } })).toEqual({
+      side: "account",
+      account: 0,
+    });
   });
 
   it("is the private balance when the mint's change is one of the wallet's contract UTxOs", () => {
     const change = { ...ownedUtxos[0]!, tx_hash: seedelfUtxo.tx_hash, tx_index: seedelfUtxo.tx_index + 1 };
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, owned: [seedelfUtxo, change] })).toBe("seedelf");
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, owned: [seedelfUtxo, change] })).toEqual({ side: "seedelf" });
   });
 
   it("is the public account when the mint's change is at the account, or its Activity lists the mint", () => {
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, account: [{ tx_hash: seedelfUtxo.tx_hash }] })).toBe("account");
-    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, accountTxs: new Set([seedelfUtxo.tx_hash]) })).toBe("account");
+    // What the wallet holds is the account it is working on, so the answer is that account's.
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, account: [{ tx_hash: seedelfUtxo.tx_hash }], activeAccount: 1 })).toEqual({
+      side: "account",
+      account: 1,
+    });
+    expect(paidByOf(seedelfUtxo, SEEDELF, { ...nothing, accountTxs: new Set([seedelfUtxo.tx_hash]) })).toEqual({
+      side: "account",
+      account: 0,
+    });
   });
 
   it("isn't known otherwise: the Seedelf's own UTxO says nothing", () => {
@@ -58,7 +73,7 @@ describe("a mint", () => {
     const summary = await t.mint.build("preprod", "first", "account");
     expect(await mintedBy(t.store, "preprod")).toEqual({});
     await t.mint.submit("preprod", summary.txHash);
-    expect(await mintedBy(t.store, "preprod")).toEqual({ [summary.tokenName]: "account" });
+    expect(await mintedBy(t.store, "preprod")).toEqual({ [summary.tokenName]: "account:0" });
     expect(await mintedBy(t.store, "mainnet")).toEqual({});
     // Sealed: the token name isn't on the device in the clear.
     expect(JSON.stringify(await t.local.get(`${PRIVATE_PREFIX}mintedBy.preprod`))).not.toContain(summary.tokenName);
@@ -101,7 +116,7 @@ describe("the balance reading", () => {
     const t = await unlocked();
     expect(await seedelfOf(t)).not.toHaveProperty("paidBy");
     const before = t.koios.calls.length;
-    await rememberMint(t.store, "preprod", SEEDELF, "seedelf");
+    await rememberMint(t.store, "preprod", SEEDELF, "seedelf", 0);
     expect(await seedelfOf(t)).toMatchObject({ paidBy: "seedelf" });
     // The same requests as any reading: nothing about the mint.
     expect(t.koios.calls.slice(before).map((c) => c.path)).not.toContain("tx_info");
@@ -156,5 +171,28 @@ describe("Remove a Seedelf", () => {
     expect(removeNote("seedelf", "account")).toMatchObject({ tone: "warn", text: expect.stringContaining("Your public account paid") });
     expect(removeNote("account", undefined).text).toContain("links nothing new only if your public account paid for this Seedelf");
     expect(removeNote("seedelf", undefined).text).toContain("ties the Seedelf's name to the new UTxO");
+  });
+
+  it("warns when another of the wallet's accounts paid for it (chunk 18)", () => {
+    // The mint already links the Seedelf's name to the account that paid, so
+    // sending the ADA to a different one lets anyone tie the two accounts
+    // together through the name. The default would have done it quietly.
+    const note = removeNote("account", "account", { paidByAccount: 1, active: 0, several: true });
+    expect(note.tone).toBe("warn");
+    expect(note.text).toContain("Account 2 paid for this Seedelf, and the wallet is on Account 1");
+    expect(note.text).toContain("tie your two accounts together");
+    expect(note.text).toContain("Switch to Account 2 first, or send it to your private balance instead");
+
+    // On the account that paid, it links nothing new — and says which account that is.
+    const same = removeNote("account", "account", { paidByAccount: 1, active: 1, several: true });
+    expect(same.tone).toBe("privacy");
+    expect(same.text).toContain("Account 2 paid for it, so this links nothing new");
+
+    // With one account there is nothing to tell apart, so the wording stays as it was.
+    expect(removeNote("account", "account", { paidByAccount: 0, active: 0, several: false }).text).toContain(
+      "your public account paid for it, so this links nothing new",
+    );
+    // And the private balance is unaffected either way.
+    expect(removeNote("seedelf", "seedelf", { paidByAccount: undefined, active: 1, several: true }).tone).toBe("privacy");
   });
 });

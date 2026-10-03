@@ -12,6 +12,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
@@ -68,9 +69,21 @@ export function CardanoSend({
   const maxed = max && !list.several;
   const amounts = recipientAmounts(network, cardano.tokens, list.drafts, maxed);
   // A field's read counts only for the text it read.
+  const { active } = useAccounts();
   const readOf = (d: Draft): DestinationRead =>
     reads[d.id]?.to === d.to.trim() ? reads[d.id]!.read : { state: "idle" };
   const found = list.drafts.every((d) => ["read", "seedelf"].includes(readOf(d).state));
+  // Another of the user's own public accounts: allowed, and said (the owner,
+  // 2026-10-02). A user may well want to move money between their own
+  // accounts, and accounts aren't necessarily unlinked in the first place —
+  // some of what the wallet already does links them. So the row says what the
+  // payment reveals and the user decides, as every other known link does
+  // (docs/privacy.md, *Known links*).
+  const otherAccount = (r: DestinationRead) =>
+    r.state === "read" && r.destination.ownAccount !== undefined && r.destination.ownAccount !== active
+      ? r.destination.ownAccount
+      : undefined;
+
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = !maxed && amounts.total > BigInt(cardano.lovelace);
   const ready = found && amounts.ok && !tooMuch;
@@ -201,8 +214,11 @@ export function CardanoSend({
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
               seedelfs
+              ownAccounts
             />
-            {read.state === "read" && read.destination.own && <OwnNote />}
+            {read.state === "read" &&
+              read.destination.own &&
+              (otherAccount(read) !== undefined ? <OtherAccountNote index={otherAccount(read)!} /> : <OwnNote />)}
 
             <div className="field">
               <label htmlFor={fieldId("send-amount", d, i)}>Amount</label>
@@ -323,6 +339,21 @@ function OwnNote() {
   return (
     <Callout tone="warn" testId="send-own">
       This is your own public account: the payment comes back to it, less the fee.
+    </Callout>
+  );
+}
+
+/**
+ * Another of the user's own public accounts: said, not refused (the owner,
+ * 2026-10-02). Moving money between your own accounts is a thing people want
+ * to do, and accounts aren't necessarily unlinked — so this is a known link
+ * like any other: the wallet makes it visible and the user decides.
+ */
+function OtherAccountNote({ index }: { index: number }) {
+  return (
+    <Callout tone="privacy" testId="send-other-account">
+      This is your own Account {index + 1}. It's an ordinary Cardano payment, so anyone can see your two accounts paying each
+      other and tell they're one wallet's. Sending from your private balance instead would avoid that.
     </Callout>
   );
 }

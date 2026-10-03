@@ -29,6 +29,8 @@ export interface DestinationDeps {
   koios: (network: NetworkName) => Koios;
   /** chrome.storage.session: the account's payment keys the last balance reading found. */
   session?: Area;
+  /** The public accounts the wallet knows of, by index (accounts.ts). The active one alone without it. */
+  knownAccounts?: () => Promise<number[]>;
 }
 
 /** A destination as typed: a bech32 address, or `$handle`. Throws the reason it can't be paid. */
@@ -37,7 +39,7 @@ export async function resolveDestination(
   network: NetworkName,
   to: string,
 ): Promise<WithdrawDestination> {
-  const { wasm, wallet } = deps;
+  const { wasm } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const text = to.trim();
   // Send pays a seedelf before it gets here; Withdraw can't.
@@ -58,11 +60,35 @@ export async function resolveDestination(
   }
   // Throws the reason: not an address, a script, a stake address, the other network.
   wasm.checkPayableAddress(address, net);
-  const own = await wallet.withKeys(async (keys) => {
+  const { own, account } = await ownAccount(deps, network, address);
+  const mine = { own, ...(account !== undefined ? { ownAccount: account } : {}) };
+  return handle ? { address, handle, ...mine } : { address, ...mine };
+}
+
+/**
+ * Whether `address` is one of this wallet's public accounts', and which: the
+ * active account first, then any other the wallet knows. Nothing is asked of
+ * anyone — the other accounts' keys are derived on the device.
+ */
+export async function ownAccount(
+  deps: DestinationDeps,
+  network: NetworkName,
+  address: string,
+): Promise<{ own: boolean; account?: number }> {
+  const { wallet } = deps;
+  const active = await wallet.withKeys(async (keys) => {
     const found = await deps.session?.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
-    return keys.cardano.isOwnAddress(address, found?.keys ?? []);
+    return { index: keys.account, own: keys.cardano.isOwnAddress(address, found?.keys ?? []) };
   });
-  return handle ? { address, handle, own } : { address, own };
+  if (active.own) return { own: true, account: active.index };
+  const known = (await deps.knownAccounts?.().catch(() => [])) ?? [];
+  for (const index of known) {
+    if (index === active.index) continue;
+    if (await wallet.withAccount(index, (keys) => keys.cardano.isOwnAddress(address, []))) {
+      return { own: true, account: index };
+    }
+  }
+  return { own: false };
 }
 
 /**

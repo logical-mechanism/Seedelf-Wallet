@@ -173,7 +173,7 @@ describe("locked UTxOs", () => {
     const { seedelf, cardano } = await t.coins.lists("preprod");
     expect(t.koios.calls).toHaveLength(asked);
     const of = (u: KoiosUtxo) => seedelf.find((x) => x.txHash === u.tx_hash)!;
-    expect(of(moved).history).toEqual({ id: "public", origin: "own" });
+    expect(of(moved).history).toEqual({ id: "public:0", origin: "own" });
     expect(of(ownedUtxos[1]!).history).toEqual({ id: `received:${ownedUtxos[1]!.tx_hash}`, origin: "received" });
     // A Seedelf's own UTxO is never spent by a payment, and the public side has no such history.
     expect(of(ownedUtxos[2]!)).not.toHaveProperty("history");

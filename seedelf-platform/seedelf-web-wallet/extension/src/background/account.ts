@@ -82,24 +82,33 @@ export function discoverAccount(keys: Keys, net: Wasm.Network, used: ReadonlySet
   return { paths, addresses, used: receive.used + change.used, usedAddresses: addresses.filter((a) => used.has(a)) };
 }
 
-/** The account's keys, and every unspent UTxO under them. */
+/**
+ * The account's keys, and every unspent UTxO under them.
+ *
+ * `account`: which public account to read, when it isn't the one the wallet
+ * is working on — the dApp connector reads the account **sites** use, which
+ * is chosen once and doesn't follow the picker (dapp.ts, chunk 18).
+ */
 export async function readAccountUtxos(
   deps: AccountDeps,
   network: NetworkName,
   spent: ReadonlySet<string>,
+  { account }: { account?: number } = {},
 ): Promise<{ account: Account; utxos: PathedUtxo[] }> {
   const { wasm, wallet } = deps;
   const koios = deps.koios(network);
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+  const withAccount = <T,>(task: (keys: Keys) => T | Promise<T>): Promise<T> =>
+    account === undefined ? wallet.withKeys(task) : wallet.withAccount(account, task);
   // Network calls happen outside withKeys, so they never hold up a lock.
-  const [stake, reserved] = await wallet.withKeys(
+  const [stake, reserved] = await withAccount(
     async ({ cardano }) => [cardano.stakeAddress(net), await reservedSet(deps.session, network, { sending: true })] as const,
   );
   const [found, rows] = await readFresh(
     spent,
     async () => {
       const used = await koios.accountAddresses(stake);
-      const found = await wallet.withKeys((keys) => discoverAccount(keys, net, new Set(used)));
+      const found = await withAccount((keys) => discoverAccount(keys, net, new Set(used)));
       return [found, await koios.credentialUtxos([...found.paths.keys()])] as const;
     },
     ([, rows]) => rows,

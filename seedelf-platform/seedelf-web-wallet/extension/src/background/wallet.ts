@@ -155,17 +155,40 @@ export interface WalletDeps {
   changed: () => void;
   /** Replaces a WebAssembly instance that trapped with a fresh one (wasm.ts `freshWasm`). */
   fresh?: () => void;
+  /**
+   * Which public account the wallet works on: the user's choice
+   * (preferences.ts `AccountChoice`). Read at every key use, so a switch
+   * needs nothing else — the next use re-derives (`load`). Account 0 without
+   * one, which is every wallet from before chunk 18.
+   */
+  activeAccount?: () => Promise<number>;
 }
 
 export interface Keys {
+  /**
+   * The Seedelf key, always on account 0: one private balance for the whole
+   * phrase, whichever public account is active (the owner, 2026-10-02).
+   * Stealth addressing is what unlinks money moved in from different
+   * accounts, so the key needs no index of its own.
+   */
   seedelf: Wasm.SeedelfKey;
+  /** The active public account's CIP-1852 keys (`account`). */
   cardano: Wasm.CardanoAccount;
+  /** Which CIP-1852 account `cardano` is. */
+  account: number;
   /** Private sessions' one-time accounts (account 24301'): never the public account's keys. */
   oneTime: Wasm.OneTimeAccounts;
 }
 
 export class Wallet {
   private keys: Keys | undefined;
+  /**
+   * Other public accounts' Cardano keys, derived on demand and kept while
+   * unlocked: a site stays connected to the account it connected to, so the
+   * connector signs with that account's keys whichever one is active
+   * (`withAccount`). Freed with the rest on lock.
+   */
+  private others = new Map<number, Wasm.CardanoAccount>();
   private queue: Promise<unknown> = Promise.resolve();
   /**
    * Why the wallet last locked itself, while this worker lives: its
@@ -401,9 +424,9 @@ export class Wallet {
     });
   }
 
-  /** The unlocked wallet's public identifiers. */
+  /** The unlocked wallet's public identifiers, for the account it is working on. */
   account(network: NetworkName): Promise<Account> {
-    return this.withKeys(({ seedelf, cardano }) => {
+    return this.withKeys(({ seedelf, cardano, account }) => {
       const net = network === "mainnet" ? this.deps.wasm.Network.Mainnet : this.deps.wasm.Network.Preprod;
       const base = seedelf.baseRegister();
       try {
@@ -411,6 +434,7 @@ export class Wallet {
           receiveAddress: cardano.receiveAddress(net, 0),
           stakeAddress: cardano.stakeAddress(net),
           seedelfPublicValue: base.publicValue,
+          account,
         };
       } finally {
         base.free();
@@ -427,6 +451,39 @@ export class Wallet {
     return this.serial(async () => {
       if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
       return task(this.keys!);
+    });
+  }
+
+  /**
+   * Runs `task` with the keys of public account `index`, whichever one is
+   * active: how a connected site keeps talking to the account it connected
+   * to (dapp.ts). A site that followed the active account would be handed a
+   * second account's addresses and learn the two are one wallet's **without
+   * the user choosing that** — which is the part that matters. A link the
+   * user makes on purpose is their business (a payment between their own
+   * accounts is allowed and merely said); one a site is handed behind their
+   * back is not.
+   *
+   * `keys.seedelf` and `keys.oneTime` are the wallet's own either way — the
+   * Seedelf key is on account 0 whichever public account is used. Derived
+   * once and kept while unlocked; freed on lock with the rest.
+   */
+  withAccount<T>(index: number, task: (keys: Keys) => T | Promise<T>): Promise<T> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
+      const keys = this.keys!;
+      if (index === keys.account) return task(keys);
+      let cardano = this.others.get(index);
+      if (!cardano) {
+        const entropy = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
+        try {
+          cardano = this.deps.wasm.CardanoAccount.fromEntropy(entropy, index);
+        } finally {
+          entropy.fill(0);
+        }
+        this.others.set(index, cardano);
+      }
+      return task({ ...keys, cardano, account: index });
     });
   }
 
@@ -510,10 +567,20 @@ export class Wallet {
       // tolerance counts as expired, or the wallet would stay unlocked for
       // as long as it moved.
       if (idle >= -CLOCK_STEP_TOLERANCE_MS && idle < lockAfter) {
-        if (!this.keys) {
+        // The active account is read here, not cached: a switch writes the
+        // choice and nothing else, and the next key use re-derives. Every
+        // one goes through this inside `serial`, so no request can sign with
+        // the account the user just left.
+        const account = await this.active();
+        if (!this.keys || this.keys.account !== account) {
           const entropy = fromBase64(stored);
           try {
-            this.keys = this.derive(entropy);
+            const keys = this.derive(entropy, account);
+            const left = this.keys;
+            this.keys = keys;
+            // A switch frees the account it left. Other accounts' keys stay:
+            // a connected site still talks to the one it connected to.
+            if (left) freeQuietly(left.seedelf, left.cardano, left.oneTime);
           } finally {
             entropy.fill(0);
           }
@@ -534,7 +601,7 @@ export class Wallet {
   private async open(entropy: Uint8Array): Promise<void> {
     this.lockedBy = undefined;
     this.free();
-    this.keys = this.derive(entropy);
+    this.keys = this.derive(entropy, await this.active());
     const now = this.deps.now();
     await this.deps.session.set(SESSION_ENTROPY, toBase64(entropy));
     await this.deps.session.set(SESSION_ACTIVITY, now);
@@ -542,17 +609,22 @@ export class Wallet {
     await this.deps.autoLock.start();
   }
 
-  private derive(entropy: Uint8Array): Keys {
+  private derive(entropy: Uint8Array, account: number): Keys {
     const { wasm } = this.deps;
     const seedelf = wasm.SeedelfKey.fromEntropy(entropy, 0);
     let cardano: Wasm.CardanoAccount | undefined;
     try {
-      cardano = wasm.CardanoAccount.fromEntropy(entropy, 0);
-      return { seedelf, cardano, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
+      cardano = wasm.CardanoAccount.fromEntropy(entropy, account);
+      return { seedelf, cardano, account, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
     } catch (e) {
       freeQuietly(seedelf, cardano);
       throw e;
     }
+  }
+
+  /** The public account the wallet works on, as the user's choice has it now. */
+  private active(): Promise<number> {
+    return this.deps.activeAccount?.() ?? Promise.resolve(0);
   }
 
   /**
@@ -588,9 +660,12 @@ export class Wallet {
   /** Drops the keys, freeing each one it can: never throws, and never keeps one. */
   private free(): void {
     const keys = this.keys;
+    const others = [...this.others.values()];
     // Dropped first: a key whose free() failed can't be freed again (its
     // pointer is already gone), so it's never kept to try.
     this.keys = undefined;
+    this.others.clear();
+    freeQuietly(...others);
     if (keys) freeQuietly(keys.seedelf, keys.cardano, keys.oneTime);
   }
 

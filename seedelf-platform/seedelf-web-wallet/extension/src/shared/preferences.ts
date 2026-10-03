@@ -14,6 +14,26 @@ export const LOCAL_PREFERENCES = "seedelf.preferences";
  */
 export const LOCAL_NETWORK = "seedelf.network";
 
+/**
+ * chrome.storage.local: which public account the wallet works on (chunk 18),
+ * as an index from 0. Kept beside the network and for the same reason — the
+ * worker reads it while deriving the keys, before anything is unlocked, so it
+ * can't live in a sealed record. One integer for the wallet, not one per
+ * network: the account's keys are the same on both.
+ *
+ * **What this leaks, said where it's chosen:** anyone reading the profile's
+ * local storage sees which account is active. They already see that a vault
+ * exists, which network it is on, every setting, and that sealed records
+ * exist. *How many* accounts the phrase has, and what they are called, stay
+ * sealed (background/accounts.ts). Anything else here, or nothing, is
+ * account 0.
+ */
+export const LOCAL_ACCOUNT = "seedelf.account";
+
+/** Whether `value` is a public account index a preference may hold (background/accounts.ts bounds it). */
+export const isAccountIndex = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0x7fff_ffff;
+
 /** How long without activity before the wallet locks, in minutes: Lace's choices, less "never". */
 export const LOCK_AFTER_MINUTES = [1, 5, 15, 30, 60] as const;
 export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number];
@@ -31,6 +51,20 @@ export const LOVEJOIN_DELAYS = ["1-6", "2-12", "6-24"] as const;
 export type LovejoinDelay = (typeof LOVEJOIN_DELAYS)[number];
 
 export interface Preferences {
+  /**
+   * Which public account connected sites use (chunk 18), as an index from 0.
+   *
+   * **One account is the dApp account, chosen on purpose, and it does not
+   * follow the picker** — Eternl's model (the owner, 2026-10-02). A site
+   * always talks to this one whichever account the wallet is working on, so
+   * switching accounts never hands a site a second account's addresses, and
+   * a site is never refused for being on the "wrong" one. Changing it is a
+   * deliberate act in Settings.
+   *
+   * Account 0 by default, which is the only account every wallet from before
+   * several accounts had — so nothing a site already sees changes.
+   */
+  dappAccount: number;
   /** Spend staking rewards whenever the Cardano account pays (a send, a move-in, a mint). */
   spendRewards: boolean;
   /** Amounts are hidden on the screens that show what the wallet holds; the forms and reviews still show them. */
@@ -70,6 +104,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   currency: "usd",
   dappConnector: false,
   dappPassword: true,
+  dappAccount: 0,
   lovejoinReturns: true,
   lovejoinDepth: 2,
   lovejoinDelay: "1-6",

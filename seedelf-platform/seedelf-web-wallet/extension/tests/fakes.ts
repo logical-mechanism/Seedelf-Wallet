@@ -30,6 +30,7 @@ import { SendService } from "../src/background/send";
 import { LovejoinService } from "../src/background/lovejoin";
 import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
+import { AccountsService, activeAccount } from "../src/background/accounts";
 import { PrivateStore } from "../src/background/private-store";
 import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
@@ -89,6 +90,9 @@ export function testWallet(shared?: { local: MemoryArea; session: MemoryArea; cl
       stop: async () => void (events.alarm = "stopped"),
     },
     changed: () => void events.changed++,
+    // As the worker wires it (sw.ts): the account to derive is read at every
+    // key use, so a test that switches sees the next one re-derive.
+    activeAccount: () => activeAccount(local),
   };
   return { wallet: new Wallet(deps), local, session, clock, events };
 }
@@ -427,7 +431,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
   let ids = 0;
   const koiosFor = () => new Koios("https://preprod.koios.rest/api/v1", koios.fetch, async () => undefined);
   const activity = new ActivityService({ wallet: t.wallet, session: t.session, store, koios: koiosFor, local: t.local, now: () => t.clock.now });
-  const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now, activity });
+  const coins = new CoinControlService({ wallet: t.wallet, session: t.session, store, now: () => t.clock.now, activity, activeAccount: () => activeAccount(t.local) });
   const preferences = new PreferencesService(t.local);
   // Preprod first, as the fakes answer; a test can switch to mainnet as Settings does.
   const networkChoice = new NetworkChoice(t.local, ["preprod", "mainnet"]);
@@ -447,7 +451,9 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coins,
     preferences,
     store,
+    knownAccounts: () => accounts.known().then((all) => all.map((a) => a.index)),
   };
+  const accounts = new AccountsService(deps);
   const sessions = new SessionService({
     ...deps,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
@@ -500,6 +506,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     coingecko,
     prices: new PriceService({ session: t.session, local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
+    accounts,
     dappWindow,
     dappChanged: () => dappChanged,
     networkChoice,
@@ -509,6 +516,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
       sessions,
       fundingPollMs: 1,
       network: () => networkChoice.get(),
+      activeAccount: () => activeAccount(t.local),
       window: dappWindow,
       changed: () => void dappChanged++,
     }),

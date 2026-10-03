@@ -13,7 +13,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Context {
-  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions, lovejoin } =
+  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions, lovejoin, accounts } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -35,6 +35,7 @@ function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Con
     dapp,
     sessions,
     lovejoin,
+    accounts,
     connector: async (on) => on,
     version: "1.0.0",
     network: "preprod",
@@ -79,6 +80,7 @@ describe("handlers", () => {
       receiveAddress: v.preprod.receive_0,
       stakeAddress: v.preprod.stake,
       seedelfPublicValue: key.public_value,
+      account: 0,
     } satisfies Account);
     expect(await handle({ type: "activity" }, ctx)).toBeNull();
 

@@ -18,7 +18,7 @@
 
 0. ✅ **[A clean dependabot report](#step-0--a-clean-dependabot-report)** — done 2026-10-02, all 25 cleared in `Cargo.lock` and the happy-path `requirements.txt`, no source change.
 1. **[Owed](#owed)** — promises the repo has already made.
-2. **[Feature parity: what's left](#feature-parity-whats-left)** — several accounts, language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
+2. **[Feature parity: what's left](#feature-parity-whats-left)** — ~~several accounts~~ (done, chunk 18), language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
 3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
 4. **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, once 2 and 3 have landed.
 5. **[The documentation review](#the-documentation-review)** — closes the sequence, because everything above rewrites parts of it.
@@ -47,7 +47,7 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | App lock, lock timeout, default open mode | All three; tab by default, side panel by choice, no popup | matched |
 | Fiat value | Eight currencies or nothing, mainnet only | matched |
 | Review a transaction before signing | **Transaction details** everywhere: the CBOR decoded by us, plus the raw bytes | ahead — Lace resolves and prices the transaction; what we add is **the bytes themselves**, decoded and raw |
-| Several accounts, folders, account center | Account `0'` only | **doing it — [P1](#feature-parity-whats-left)** |
+| Several accounts, folders, account center | **Several accounts, one at a time**, with a picker, names, and each account's own staking and collateral | matched in substance — **done, [P1](#p1--several-accounts)**; folders and an account centre are [not planned](#not-planned) |
 | Language (i18n) | English only | **doing it — [P2](#feature-parity-whats-left)**, Lace's way |
 | NFT images | Logos only | **doing it — [P3](#feature-parity-whats-left)**, click to show |
 | Notification center | None | **kept in mind, not this round** — it needs [the data layer](#the-data-layer) first |
@@ -106,11 +106,24 @@ Promises the repo has already made. These come before anything new.
 
 ## Feature parity: what's left
 
-Three items. At the end of them the wallet is feature-complete for Cardano, bar [dApp additions](#dapp-additions).
+Three items, one done. At the end of them the wallet is feature-complete for Cardano, bar [dApp additions](#dapp-additions).
 
 ### P1 · Several accounts
 
-**This is chunk 18** — the owner's first pick after the release (2026-10-02).
+**✅ Done, 2026-10-02: chunk 18**, the owner's first pick after the release. Branch `web-wallet/several-accounts`, plan [plans/chunk-18-several-accounts.md](plans/chunk-18-several-accounts.md), handoff note in [roadmap.md](roadmap.md#handoff-notes).
+
+**What landed.** A picker in the top bar, hidden with one account; Settings → Public accounts to switch, name and look for another; discovery on a restore and on demand, **one Koios `account_addresses` request per account probed**, stopping at the first never used; each account with its own staking, collateral and locked UTxOs; and the private side kept apart per account (`public:<n>` history classes). The two things that needed deciding and were decided in the building:
+
+- **A connected site stays bound to the account it connected to**, and is refused — not served from the active one — when the wallet moves off it. That settles the open question below with no new user choice: a site that had seen Account 1's addresses must not be handed Account 2's and learn the two are one wallet's **without the user choosing that**. Links the user makes themselves are a different matter — see the owner's correction below.
+- **Discovery asks about one account at a time on purpose.** `Koios.usedStakeAddresses` would answer for twenty in one request, and that request would tell Koios those twenty stake addresses are one wallet's. Separate requests are less linkage, not none — Koios still sees them from one IP seconds apart, and [privacy.md](privacy.md#known-links) says so in those words.
+
+**The owner's correction, 2026-10-02, and the rule it set:** *"a user may want to use the wallet to send between accounts too. We are making a lot of assumptions about accounts not being linked when they in fact can and in some cases that was encouraged."* So **the wallet never forbids a link the user chooses** — paying one of your own accounts from another goes through, with the form naming the account and saying what it reveals, as every other entry in [privacy.md](privacy.md#known-links)'s *Known links* is handled. What it avoids is making a link *for* them: coin selection keeping accounts' money apart where a choice that doesn't merge them pays, and a site never being handed a second account behind their back. A first attempt refused the send outright; that was over-reach and was removed. Privacy by default means the private option is the **default**, not the only one.
+
+**And accounts are reached by number, not only found** (the owner, 2026-10-02): sequential discovery stops at the first unused account, so a custom index like 1337 could never be found, and `use` refused what discovery hadn't seen, so one could never be *started* either. Settings → Public accounts takes an account number — **Check it** (one Koios request) and **Add it** (no request, used or not).
+
+**What is deliberately not in it:** folders and an account centre (a picker and a name are what the parity gap was), a Seedelf key per account (decided against), reading several accounts at once or showing a total across them (the wallet doesn't put them together on its own), and the connector *following* a switch rather than refusing it. The last is the one a later round could revisit — serving a site from the account it is bound to while another is active means threading a specific account's keys through `dapp.ts`, which `Wallet.withAccount` already supports but the 96 KB of `dapp.ts` does not yet use.
+
+**The original brief, kept for the reasoning:**
 
 **The owner's reason (2026-10-02):** a user restoring a phrase may hold funds on accounts other than `0'` and want to move them into Seedelf, and **some people run several accounts as a form of privacy in the first place** — so a wallet that can only see one is both losing their money and working against the habit they came with.
 
@@ -130,7 +143,7 @@ The machinery for this already exists (privacy review §2.3): each private UTxO 
 
 Treat that as a correctness-of-privacy item, not a nicety: without it, several accounts would quietly undo the separation the feature exists to respect.
 
-Also to settle: discovery cost against the Koios budget, and what the dApp connector offers a site when there are several accounts (chunk 15's connect window chooses nothing by design — Lace's default-account setting was declined in the privacy review).
+~~Also to settle: discovery cost against the Koios budget, and what the dApp connector offers a site when there are several accounts~~ — both settled in the building, above.
 
 ### P2 · Language
 
@@ -173,9 +186,9 @@ Also to settle: discovery cost against the Koios budget, and what the dApp conne
 
 | # | Item | |
 |---|---|---|
-| 1 | **[P1, several accounts](#p1--several-accounts)** | the owner's first pick |
+| 1 | **[P1, several accounts](#p1--several-accounts)** | ✅ done, chunk 18 |
 | 2 | **Be your own DRep, and vote on governance actions.** Register the account's DRep credential, then vote Yes, No or Abstain on a live action. Needs a list of open governance actions, which is a new read and so a new Koios cost to state. | ⬜ |
-| — | **Staking per account** needs no slot: it falls out of [P1](#p1--several-accounts) for free. Each account has its own stake key (`2/0` under its own index), so several accounts means stake spread across several pools. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching one-pool-per-account. | ✅ via P1 |
+| — | **Staking per account** needed no slot: it fell out of [P1](#p1--several-accounts) for free, as expected — each account has its own stake key (`2/0` under its own index), so several accounts means stake spread across several pools, with no change to `staking.ts`. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching one-pool-per-account. | ✅ done via P1 |
 
 **What doesn't change:** a vote or a registration is a public act by a public key. None of it reaches the private side, and none of it weakens the rule that money made private has no stake key behind it. A Seedelf address has no staking part, so the private balance has no voice to cast and never will.
 
@@ -233,7 +246,7 @@ The list is the owner's to write when parity lands. Carried candidates:
 
 - **About 150 plain note paragraphs could become ⓘ hints.** Chunk 17 built `components/Hint.tsx` and moved the transaction view's six paragraphs behind icons; the owner's wider point was that "a lot of the paragraphs we have could be like that". Which ones is theirs to pick. **Privacy callouts and warnings stay where they are** — those are decisions, not explanations. ❓
 - **The splash reaches its 8 s cap on mainnet.** That's Koios being slow, not the splash (chunk 17's note) — and possibly [the data layer](#the-data-layer)'s to fix rather than the splash's. Worth asking whether a first reading can show something sooner, a balance that fills in, rather than a cap that expires.
-- **Everything parity adds** — the account picker, the language picker, images on Tokens — reaches the pass having never been through a findings round. So does the transaction view.
+- **Everything parity adds** — the account picker and Settings → Public accounts (built, chunk 18), the language picker, images on Tokens — reaches the pass having never been through a findings round. So does the transaction view.
 
 ## dApp additions
 
@@ -267,7 +280,10 @@ The list is the owner's to write when parity lands. Carried candidates:
 
 Shorter than it was: the owner has reopened the governance items for the public side (see [above](#public-side-completeness)). What stays out:
 
-- **Several pools per account.** One pool per account is the model, not a limitation — and [public-side completeness](#public-side-completeness) reaches the same outcome without it.
+- **Several pools per account.** One pool per account is the model, not a limitation — and several accounts (chunk 18) reaches the same outcome without it.
+- **Folders, and an account centre** (Lace has both). A picker, a name, and each account's own staking and collateral are what the parity gap actually was; chunk 18 closed it.
+- **A Seedelf key per account.** One private balance for the whole phrase (the owner, 2026-10-02): stealth addressing already unlinks the move-ins, so a key per account would buy nothing and split the balance.
+- **Reading several accounts at once, or a total across them.** Either would link them at Koios and on screen, which is the opposite of what several accounts are for.
 - **Hardware wallets** — see [the proof](#why-hardware-wallets-cant-cover-seedelf).
 - **Earn / RealFi USDr staking, and CIP-99 claims:** likely AML/KYC, which doesn't align with Seedelf.
 - **Cardano only for now.** Other chains, and mobile, maybe much later; nothing is designed for them.
@@ -295,7 +311,7 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 
 ## Open questions for the owner
 
-**Settled on 2026-10-02:** [P1](#p1--several-accounts)'s key (account 0, one private balance) and that it's chunk 18; [P2](#p2--language)'s languages (English, Spanish, Japanese); [P3](#p3--nft-images)'s design (click to show); [the data layer](#the-data-layer)'s shape, and that it's **parked** until the sequence is done; [public-side completeness](#public-side-completeness) going after the accounts and before the UX pass; a [documentation review](#the-documentation-review) closing the sequence; dark only; one phrase; and no analytics, AML/KYC or on-ramp. The web wallet [README](../README.md) is tidied.
+**Settled on 2026-10-02:** [P1](#p1--several-accounts)'s key (account 0, one private balance), that it's chunk 18, and — in the building — that a connected site stays bound to its account and that discovery asks Koios about one account at a time; [P2](#p2--language)'s languages (English, Spanish, Japanese); [P3](#p3--nft-images)'s design (click to show); [the data layer](#the-data-layer)'s shape, and that it's **parked** until the sequence is done; [public-side completeness](#public-side-completeness) going after the accounts and before the UX pass; a [documentation review](#the-documentation-review) closing the sequence; dark only; one phrase; and no analytics, AML/KYC or on-ramp. The web wallet [README](../README.md) is tidied.
 
 What's left:
 

@@ -34,13 +34,33 @@ export type UnlockResult =
   /** `wrongPassword` is false when the attempt was refused for being too early. */
   | { unlocked: false; wrongPassword: boolean; retryAfterMs: number };
 
-/** The unlocked wallet's public identifiers. */
+/** The unlocked wallet's public identifiers, for the account it is working on. */
 export interface Account {
-  /** Cardano account 0, receive address 0/0. */
+  /** The active Cardano account's receive address 0/0. */
   receiveAddress: string;
   stakeAddress: string;
   /** The Seedelf base register's public value (compressed G1, hex). */
   seedelfPublicValue: string;
+  /** Which CIP-1852 account the two addresses are, as an index from 0. */
+  account: number;
+}
+
+/** The public accounts the wallet knows of, and which one it is working on. */
+export interface AccountList {
+  accounts: KnownAccount[];
+  active: number;
+}
+
+/**
+ * A public account the phrase is known to have used (chunk 18). Shown as
+ * "Account <index + 1>" with no name of its own, since people count from 1.
+ */
+export interface KnownAccount {
+  index: number;
+  /** What the user called it. */
+  name?: string;
+  /** When discovery first found it used (ms since the epoch); absent for account 0. */
+  foundAt?: number;
 }
 
 /** A native token amount. `quantity` is the raw integer, as a decimal string. */
@@ -134,6 +154,13 @@ export interface SeedelfInfo {
    * Remove sends its ADA back to that side by default, and asks otherwise.
    */
   paidBy?: MintSource;
+  /**
+   * Which public account paid, when `paidBy` is "account" and the wallet
+   * knows which (chunk 18). Removing to a *different* account links that one
+   * to the Seedelf's name as well, and the mint already links the paying
+   * one — so anyone can join them by the name. Remove warns.
+   */
+  paidByAccount?: number;
 }
 
 /** What's kept out of every payment on one side: locked UTxOs, and the Cardano account's collateral. */
@@ -437,8 +464,19 @@ export interface WithdrawDestination {
   address: string;
   /** The ADA Handle it was found by, without the "$". */
   handle?: string;
-  /** It carries this wallet's Cardano account's staking key: paying it re-links the money. */
+  /** It carries one of this wallet's Cardano accounts' keys: paying it re-links the money. */
   own: boolean;
+  /**
+   * Which of this wallet's public accounts it is, when `own` (chunk 18), so
+   * a screen can name it rather than only say it is one of yours.
+   *
+   * Paying it is **allowed either way** — people do move money between their
+   * own accounts, and accounts are not necessarily unlinked to begin with.
+   * It is an ordinary Cardano payment, so anyone can see the two accounts
+   * paying each other; the forms say that and the user decides, as every
+   * known link is handled (docs/privacy.md).
+   */
+  ownAccount?: number;
 }
 
 /** A finished withdrawal, waiting for the user to send it. Amounts are lovelace strings. */
@@ -1006,11 +1044,16 @@ export type DappAsk =
 /** Something a site asked for that waits for the user, in the connector's window. */
 export type DappApproval = { id: string; origin: string; title?: string } & DappAsk;
 
-/** A site connected to the public account. */
+/**
+ * A site connected to the wallet's **dApp account** (`Preferences.dappAccount`,
+ * chunk 18) or to a private session. No account is recorded per site: every
+ * public-account connection is to the one dApp account, which Settings
+ * chooses and which does not follow the account picker.
+ */
 export interface DappSite {
   origin: string;
   connectedAt: number;
-  /** Connected to this private session (private CIP-30), not the public account. */
+  /** Connected to this private session (private CIP-30), not a public account. */
   session?: number;
 }
 
@@ -1576,6 +1619,44 @@ export interface Requests {
    * network is declined.
    */
   "network-set": { payload: { network: NetworkName }; result: Status };
+  /** The public accounts the phrase has used, and which one the wallet works on. */
+  accounts: { payload: None; result: AccountList };
+  /**
+   * Puts the wallet on another of its public accounts: every page starts
+   * afresh on it, and what the account it left read is dropped. Refused while
+   * something of that account's is in flight — a payment Koios didn't answer,
+   * or a mix being sent — since switching under a watch is how a watch loses
+   * its account.
+   */
+  "account-use": { payload: { index: number }; result: AccountList };
+  /** Names an account, or clears the name with an empty one. */
+  "account-rename": { payload: { index: number; name: string }; result: AccountList };
+  /**
+   * Looks for accounts past the ones the wallet knows, in order, stopping at
+   * the first never used. One Koios `account_addresses` request per account
+   * probed, never a batch: see accounts.ts. `limit` bounds one run; the
+   * picker's own button passes 1, so it costs one request.
+   */
+  "account-discover": { payload: { limit?: number }; result: AccountList & { found: number[] } };
+  /**
+   * Looks up **one** account by number, whatever its index: the way to reach
+   * a custom or non-sequential account (1337, say), which the sequential look
+   * can never find because it stops at the first unused one. One Koios
+   * `account_addresses` request. It is added to the list if it has been used;
+   * if it hasn't, `used` is false and adding it is the user's call.
+   */
+  "account-check": { payload: { index: number }; result: AccountList & { index: number; used: boolean } };
+  /**
+   * Adds an account by number, **whether or not it has ever been used**: the
+   * way to start a custom-numbered account. Asks nobody anything.
+   */
+  "account-add": { payload: { index: number }; result: AccountList };
+  /**
+   * Each known account with its receive address `0/0`, so Send can offer
+   * them as recipients (chunk 18). Derived on the device; asks nobody
+   * anything.
+   */
+  "account-addresses": { payload: None; result: Array<KnownAccount & { address: string }> };
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /**
@@ -1780,6 +1861,13 @@ const REQUEST_LIST = [
   "preferences",
   "preferences-set",
   "network-set",
+  "accounts",
+  "account-use",
+  "account-rename",
+  "account-discover",
+  "account-check",
+  "account-add",
+  "account-addresses",
   "price",
   "tx-detail",
   "dapp-approvals",

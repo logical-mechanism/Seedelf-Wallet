@@ -9,6 +9,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
+import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
@@ -156,7 +157,7 @@ export function Withdraw({
           </p>
         )}
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
-        {summary.payments.some((p) => p.own) && <OwnWarning />}
+        {summary.payments.some((p) => p.own) && <OwnWarning account={summary.payments.find((p) => p.own)?.ownAccount} />}
         <p className="note">
           Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.
         </p>
@@ -205,8 +206,9 @@ export function Withdraw({
               onChange={(to) => list.update(d.id, { to })}
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
+              ownAccounts
             />
-            {read.state === "read" && read.destination.own && <OwnWarning />}
+            {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
 
             <div className="field">
               <label htmlFor={fieldId("withdraw-amount", d, i)}>Amount</label>
@@ -268,10 +270,17 @@ export function Withdraw({
   );
 }
 
-function OwnWarning() {
+/**
+ * `account`: which of the user's public accounts it is, when the wallet knows
+ * (chunk 18). It is named only where there is more than one to tell apart; a
+ * wallet with one account reads exactly as it did.
+ */
+function OwnWarning({ account }: { account?: number }) {
+  const { several } = useAccounts();
+  const whose = several && account !== undefined ? `Account ${account + 1}` : "public account";
   return (
     <Callout tone="warn" testId="withdraw-own">
-      This is your own public account. Making money public here links it back to it, and to whoever made it private.
+      This is your own {whose}. Making money public here links it back to it, and to whoever made it private.
     </Callout>
   );
 }

@@ -10,8 +10,9 @@ import {
   historiesNote,
   historyTags,
   isHistoryClass,
-  MADE_PRIVATE,
+  madePrivate,
   merged,
+  readClass,
   receivedIn,
   sessionClass,
   UNKNOWN,
@@ -21,11 +22,15 @@ import { HistoriesNote } from "../src/ui/components/HistoriesNote";
 import { historyOf } from "../src/ui/screens/Utxos";
 
 const box = (n: number) => boxFrom(String(n).padStart(2, "0").repeat(32));
+/** Money made private from the one public account a wallet had before chunk 18. */
+const MADE_PRIVATE = madePrivate(0);
+/** The id that wallet sealed it under. */
+const LEGACY = { id: "public", origin: "own" } as const;
 
 describe("merging histories", () => {
   it("names each history once, sorted, whatever order they're spent in", () => {
     const a = merged([sessionClass(1), MADE_PRIVATE]);
-    expect(a).toEqual({ id: "public+session:1", origin: "session" });
+    expect(a).toEqual({ id: "public:0+session:1", origin: "session" });
     expect(merged([MADE_PRIVATE, sessionClass(1), MADE_PRIVATE])).toEqual(a);
     // Merged again, it stays one history.
     expect(merged([a, MADE_PRIVATE])).toEqual(a);
@@ -40,9 +45,26 @@ describe("merging histories", () => {
     expect(merged([])).toEqual(UNKNOWN);
   });
 
+  it("reads the bare public of a wallet from before several accounts as account 0's", () => {
+    // Sealed history records written before chunk 18 hold "public", bare or
+    // inside a merged id. Read as two classes, the wallet would say a spend
+    // ties two accounts together when both are account 0 — a privacy note
+    // that is simply false.
+    expect(readClass(LEGACY)).toEqual(MADE_PRIVATE);
+    expect(readClass({ id: "public+session:1", origin: "session" })).toEqual({ id: "public:0+session:1", origin: "session" });
+    expect(merged([LEGACY, MADE_PRIVATE])).toEqual(MADE_PRIVATE);
+    expect(merged([LEGACY, madePrivate(1)]).id).toBe("public:0+public:1");
+    expect(historyTags(LEGACY)).toEqual(["Made private"]);
+    expect(historiesNote([LEGACY, MADE_PRIVATE])).toBeUndefined();
+    // A class canonical already comes back as it is, and anything that isn't one is still refused.
+    expect(readClass(MADE_PRIVATE)).toBe(MADE_PRIVATE);
+    expect(readClass({ id: "public", origin: "elsewhere" })).toBeUndefined();
+    expect(readClass(undefined)).toBeUndefined();
+  });
+
   it("reads only what it wrote", () => {
     expect(isHistoryClass(MADE_PRIVATE)).toBe(true);
-    expect(isHistoryClass({ id: "public", origin: "elsewhere" })).toBe(false);
+    expect(isHistoryClass({ id: "public:0", origin: "elsewhere" })).toBe(false);
     expect(isHistoryClass({ id: "", origin: "own" })).toBe(false);
     expect(isHistoryClass(undefined)).toBe(false);
   });
@@ -56,6 +78,15 @@ describe("the UTxOs screen's tags", () => {
     expect(historyTags(sessionClass(0))).toEqual(["Private session 1"]);
     expect(historyTags(UNKNOWN)).toEqual(["Unknown"]);
     expect(historyTags(merged([box(1), box(2), MADE_PRIVATE]))).toEqual(["Back from Lovejoin", "Made private"]);
+  });
+
+  it("name which public account money was made private from, once there is more than one", () => {
+    expect(historyTags(MADE_PRIVATE, 2)).toEqual(["Made private (account 1)"]);
+    expect(historyTags(madePrivate(1), 2)).toEqual(["Made private (account 2)"]);
+    expect(historyTags(merged([MADE_PRIVATE, madePrivate(1)]), 2)).toEqual(["Made private (account 1)", "Made private (account 2)"]);
+    // With one account there is nothing to tell apart, so the tag stays as it was.
+    expect(historyTags(MADE_PRIVATE, 1)).toEqual(["Made private"]);
+    expect(historyTags(box(1), 3)).toEqual(["Back from Lovejoin"]);
   });
 
   it("are on each private UTxO the worker listed with one", () => {
@@ -89,6 +120,20 @@ describe("a review's note", () => {
       "It spends money that Private session 2 left, so anyone can tie that session to this one.",
     );
     expect(historiesNote([sessionClass(4)], { session: 4 })).toBeUndefined();
+  });
+
+  it("names the public accounts a spend ties to each other", () => {
+    // What stealth addressing does not cover: the registers hid who the money
+    // went to, not where an input came from, so spending two accounts' move-ins
+    // together ties those accounts to one owner in the open.
+    expect(historiesNote([MADE_PRIVATE, madePrivate(1)])).toBe(
+      "This spends money you made private from accounts 1 and 2 together. Anyone can see they're one owner's, which ties them to each other. " +
+        "It spends money you made private from accounts 1 and 2, so anyone can tie those accounts to each other.",
+    );
+    // One account alone: account 0's reads as it always has, and another's says which.
+    expect(historiesNote([MADE_PRIVATE, receivedIn("ab")])).toContain("and money you made private together");
+    expect(historiesNote([madePrivate(2), receivedIn("ab")])).toContain("and money you made private from account 3 together");
+    expect(historiesNote([madePrivate(1)])).toBeUndefined();
   });
 
   it("is a plain note, with nothing to press", () => {

@@ -152,10 +152,17 @@ export class BalanceService {
     return this.deps.store ? await mintedBy(this.deps.store, network).catch(() => ({})) : {};
   }
 
-  /** The rest of `Held`, from session storage. Call it while unlocked. */
-  private async held(network: NetworkName, recorded: MintedBy, account: KoiosUtxo[]): Promise<Held> {
+  /**
+   * The rest of `Held`, from session storage. Call it inside `withKeys`,
+   * which is why `activeAccount` is passed in rather than read here: taking
+   * the wallet's lock again from under it would deadlock.
+   *
+   * `account` and the Activity are the account the wallet is working on, so a
+   * mint worked out from them is that account's (minted-by.ts).
+   */
+  private async held(network: NetworkName, recorded: MintedBy, account: KoiosUtxo[], activeAccount: number): Promise<Held> {
     const activity = await this.deps.session.get<{ entries: Array<{ txHash: string }> }>(SESSION_ACCOUNT_ACTIVITY_PREFIX + network);
-    return { recorded, account, accountTxs: new Set(activity?.entries.map((e) => e.txHash)) };
+    return { recorded, account, accountTxs: new Set(activity?.entries.map((e) => e.txHash)), activeAccount };
   }
 
   /**
@@ -167,12 +174,13 @@ export class BalanceService {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
     const view = await readContractView(this.deps, network);
     const recorded = await this.mintRecord(network);
-    const reading = await wallet.withKeys(async (): Promise<Reading> => {
+    const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
       const utxos = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
       const held = await this.held(
         network,
         recorded,
         utxos.map((p) => p.utxo),
+        keys.account,
       );
       const balances: Balances = { ...cached, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
       try {
@@ -215,11 +223,12 @@ export class BalanceService {
     const recorded = await this.mintRecord(network);
 
     // The result is cached only while still unlocked.
-    const reading = await wallet.withKeys(async (): Promise<Reading> => {
+    const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
       const held = await this.held(
         network,
         recorded,
         utxos.map((p) => p.utxo),
+        keys.account,
       );
       const balances: Balances = {
         network,
@@ -244,8 +253,14 @@ export class BalanceService {
     for (const utxo of owned) {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) {
-        const paidBy = paidByOf(utxo, name, { ...held, owned });
-        seedelfs.push({ assetName: name, label: seedelfLabel(name), lovelace: utxo.value, ...(paidBy ? { paidBy } : {}) });
+        const paid = paidByOf(utxo, name, { ...held, owned });
+        seedelfs.push({
+          assetName: name,
+          label: seedelfLabel(name),
+          lovelace: utxo.value,
+          ...(paid ? { paidBy: paid.side } : {}),
+          ...(paid?.account !== undefined ? { paidByAccount: paid.account } : {}),
+        });
       }
       // One carrying a reference script can't be spent yet: see script-spend.ts's spendable.
       else if (!utxo.reference_script) spendable.push(utxo);
