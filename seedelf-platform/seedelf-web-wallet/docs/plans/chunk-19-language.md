@@ -245,33 +245,113 @@ Then, per stage: `npm run typecheck`, `npm test`, `npm run e2e`, and a build
 whose size is recorded, because three locale bundles plus two dependencies is a
 real addition to a zip the store has to accept.
 
-## Stages
+## Stages, as built
 
-Each is a commit, in this order. English stays byte-identical throughout, so
-the wallet is shippable at every one of them.
+Each is a commit. English stayed byte-identical throughout, so the wallet was
+shippable at every one.
 
-| # | What | Why here |
+**The plan's order changed, on purpose.** Stages 5 and 6 said "`es.json`" and
+"`ja.json`" as if the locales came after the whole extraction. They did not:
+once the gate was in place, every area's keys went out of source **with their
+Spanish and Japanese in the same commit**, because the parity test refuses a
+locale that lags `en.json`. That makes each commit shippable in three languages
+rather than one, and it means no locale was ever translated from a list of keys
+without the screen in front of it.
+
+| # | What | Done |
 |---|---|---|
-| 1 | `src/i18n/` — i18next, sync init, `en.json`, `useT`, `Rich`, `getSystemLanguage`, the storage key, `main.tsx` reading it | Nothing else can start |
-| 2 | The seven tests, and the provenance/critical machinery, against a nearly empty `en.json` | The gate exists before there is anything to sneak past it |
-| 3 | The extractor and the English bundle: all 2,471 strings out of source, `en.json` filled, `critical-keys.json` generated | The bulk; English unchanged is the check |
-| 4 | The picker in Settings, the `lang` attribute, and the note saying translations aren't native-checked and where to report one | A picker with one language is still worth shipping |
-| 5 | `es.json` | |
-| 6 | `ja.json` | |
-| 7 | Back-translation of the critical set, `verified-critical-*.json`, and the docs | The gate from stage 2 goes green honestly |
+| 1 | `src/i18n/` — i18next, sync init, `useT`, `Rich`, `getSystemLanguage`, the storage key, `main.tsx` reading it | yes |
+| 2 | The seven tests, and the provenance/critical machinery | yes |
+| 3 | The picker in Settings, the `lang` attribute, and the note on who checked the translations | yes |
+| 4– | Every area out of source, en + es + ja + provenance together: components, screens, the worker, Lovejoin's page, the swap screens, the connector's window, the remainder | yes |
+| last | Back-translation of the critical set, `verified-critical-*.json`, these docs | yes |
 
-**Stage 4 is the honest shipping line.** With stages 1–4 the wallet is
-externalised, tested, and has a picker listing English alone — no worse than
-today and ready for a locale to drop in. Open question 2 in the roadmap ("who
-reads the Spanish and Japanese privacy strings") decides whether 5–7 ship, and
-the roadmap already names the fallback: English-only for those strings is
-better than a machine-translated warning.
+## What it cost, built
+
+**2,471 of 2,471 strings are out of source.** `en.json` holds 2,128 keys (fewer
+than the string count, because repeated sentences share one key and a
+`plural()` call became one key with two forms); `es.json` 2,128, `ja.json`
+1,940 — Japanese has one plural form where English has two.
+
+**195 keys are accuracy-critical**, derived from the source by
+`scripts/i18n-critical.mjs`, and every one is back-translated and recorded in
+`verified-critical-{es,ja}.json`.
+
+**Size, `npm run build:ext`, against `c72bb99`:**
+
+| | before | after |
+|---|---|---|
+| `sw.js` | 304.1 kB (gzip 89.1) | 289.8 kB (gzip 83.9) |
+| `shared-*.js` | 20.9 kB (gzip 8.4) | 643.6 kB (gzip 167.0) |
+| `index-*.js` | 793.0 kB (gzip 289.1) | 708.1 kB (gzip 256.8) |
+| **all JS** | **1,118 kB (gzip 387)** | **1,642 kB (gzip 508)** |
+
+**+524 kB raw, +121 kB gzip**, which is the three locale files (594 kB raw, 142
+kB gzip on disk) plus i18next, less what left `sw.js` and `index` as literals.
+The worker and the UI both import the bundles, so they moved into the shared
+chunk, which is why the other two shrank. The WebAssembly is unchanged at
+2,639 kB, so the whole extension is still dominated by it.
+
+**1,186 tests pass, and the English they assert did not move.** That was the
+acceptance test and it held: no behavioural test was edited for wording. The
+test files that changed did so because a constant they import became a function.
+
+## What this turned up
+
+Four things the extraction found that were wrong before it:
+
+- **Fourteen module-level `t()` constants were eager**, so they bound English at
+  import and never heard a language change. All of them are functions now. The
+  first audit found ten; four more had their `t()` on the following line and
+  needed a second pass with a multi-line pattern.
+- **`tokenText` compared a token's name against `"(no name)"`** — against what
+  `tokenName` returns, which is `t("format.noName")`. In Spanish that is "(sin
+  nombre)", the comparison would have passed, and a token with an empty asset
+  name would have been labelled "(sin nombre)" rather than by its fingerprint.
+  It tests the empty asset name itself now.
+- **The derived critical set cannot see a warning assembled above its JSX.**
+  `NotMixed` builds its sentences into `const` bindings and renders the joined
+  string, so the deriver — which walks `<Callout tone="warn">` subtrees — marked
+  none of them critical. Rather than teach it to follow local variables, those
+  keys moved under `lovejoin.warn.notMixed.*`, where the name rule catches them.
+  The lesson generalises: **a key whose sentence is built outside its callout
+  must carry `.warn.` or `.privacy.` in its name.**
+- **English word order was load-bearing in about twenty places** —
+  `many ? "They" : "It"`, `plural(n, "box", "boxes")`, `${what} isn't ready`.
+  Each became whole-sentence keys, with a pronoun count passed as `count` where
+  agreement was the only variable, so Spanish picks its form and Japanese needs
+  none.
+
+## What stays English on purpose
+
+Besides the Rust messages named above:
+
+- **`content/bridge.ts`**, injected into every page the user visits. Two strings
+  (a stale bridge, an unknown method) go to the site, not to a wallet surface,
+  and are not worth i18next in the content script.
+- **The two prefixes `dapp.ts` matches** to classify a WebAssembly failure
+  (`"The wallet can't read"`, `"bad request"`). They read Rust's words, not
+  keys, and the source now says so.
+- **`manifest.json`'s name and description**, which Chrome localises through
+  `_locales/`, not i18next. Translating the store listing is its own job (below).
+- **`secret-box/format.ts`'s `RangeError`s**, which fire only on a programming
+  mistake (a salt or nonce of the wrong length) and are never shown.
 
 ## Still open
 
 - **Who reads the Spanish and Japanese critical strings** (the roadmap's open
-  question 2). This plan builds the machinery that makes the answer cheap — a
-  short derived list, back-translated, with a gate — but it cannot answer it.
-- **Whether the store listing is translated too.** Separate from the extension,
-  a listing per locale in the dashboard, and it publishes nothing new about the
-  owner. Worth a look when 5–7 land, not before.
+  question 2). The machinery is built and green: 195 keys derived from the
+  source, each back-translated and compared for meaning, with a gate that fails
+  the build on an unchecked draft. **No native speaker has read any of it**, and
+  `verified-critical-{es,ja}.json` says so in the reviewer line rather than in a
+  footnote. That is the accepted risk, and a user who reports an error is the
+  feedback loop working — Settings says where to report one.
+- **Whether the store listing is translated too.** Separate from the extension:
+  a listing per locale in the dashboard, through `_locales/` for the manifest's
+  own name and description. It publishes nothing new about the owner. Worth a
+  look now that the extension itself speaks three languages.
+- **Whether the quality of a whole locale gets a pass of its own.** Each area
+  was translated with its screen in view, and the critical set was
+  back-translated, but nobody has read `es.json` or `ja.json` end to end looking
+  for a term that drifted between areas. `docs/i18n/glossary.md` is what such a
+  pass would check against.

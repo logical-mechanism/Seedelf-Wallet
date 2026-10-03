@@ -9,9 +9,9 @@
 // i18next and the picker then pick it up. `tests/i18n-parity.test.ts` holds
 // the key sets identical, so a half-finished file fails rather than ships.
 
-import en from "./en.json";
-import es from "./es.json";
-import ja from "./ja.json";
+import en from "./en.json" with { type: "json" };
+import es from "./es.json" with { type: "json" };
+import ja from "./ja.json" with { type: "json" };
 
 /** Every bundle we ship, by its fallback code. */
 export const bundles = { en, es, ja } as const;

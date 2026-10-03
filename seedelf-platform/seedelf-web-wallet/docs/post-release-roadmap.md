@@ -48,7 +48,7 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | Fiat value | Eight currencies or nothing, mainnet only | matched |
 | Review a transaction before signing | **Transaction details** everywhere: the CBOR decoded by us, plus the raw bytes | ahead — Lace resolves and prices the transaction; what we add is **the bytes themselves**, decoded and raw |
 | Several accounts, folders, account center | **Several accounts, one at a time**, with a picker, names, and each account's own staking and collateral | matched in substance — **done, [P1](#p1--several-accounts)**; folders and an account centre are [not planned](#not-planned) |
-| Language (i18n) | English only | **doing it — [P2](#feature-parity-whats-left)**, Lace's way |
+| Language (i18n) | English, Spanish, Japanese | **[P2](#p2--language) done**, chunk 19, Lace's way |
 | NFT images | Logos only | **doing it — [P3](#feature-parity-whats-left)**, click to show |
 | Notification center | None | **kept in mind, not this round** — it needs [the data layer](#the-data-layer) first |
 | Several pools per account | One pool | **one pool per account** is the model — and Lace is coming the same way: `migrate-multi-delegation` at tip is a *multi→single* migration |
@@ -146,6 +146,8 @@ Treat that as a correctness-of-privacy item, not a nicety: without it, several a
 ~~Also to settle: discovery cost against the Koios budget, and what the dApp connector offers a site when there are several accounts~~ — both settled in the building, above.
 
 ### P2 · Language
+
+**Built, chunk 19** ([plan](plans/chunk-19-language.md)): all 2,471 strings are out of source, `en.json` holds 2,128 keys, `es.json` 2,128 and `ja.json` 1,940, and 195 derived accuracy-critical keys are back-translated and recorded. It cost +524 kB raw / +121 kB gzip of bundle — the three locale files plus i18next, which has no dependencies of its own. English is byte-identical everywhere, which is how the 1,186 existing tests passed unchanged. Each of the costs this entry predicted is settled below; **what it did not settle is who reads the Spanish and Japanese** (open question 2), and the plan's *Still open* says plainly that nobody has.
 
 **Copy what Lace does, including its languages** (the owner, 2026-10-02): **English, Spanish and Japanese** — "probably a very large chunk of the Cardano user base". It's a good fit for our rules because **every locale is bundled — nothing is fetched, so no new host and nothing phones home**:
 
@@ -316,6 +318,6 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 What's left:
 
 1. **Confirm the DRep correction.** The owner's order was voting then DRep; registering is the *gate* on voting, so [the two are written as one chunk](#public-side-completeness) — *be your own DRep and vote*. Worth a yes, since it changes what gets built rather than only when.
-2. **Who reads the Spanish and Japanese privacy strings.** [P2](#p2--language) can be built before this is answered, but it can't ship without it — a machine-translated warning is a correctness bug, not a cosmetic one. If no fluent reader is available, shipping English-only for those strings is the honest fallback and the plan should say so.
+2. **Who reads the Spanish and Japanese privacy strings.** Still open after [P2](#p2--language) shipped, and now with the machinery to make the answer cheap: 195 critical keys derived from the source, each back-translated and compared for meaning, with a build that fails on an unchecked draft. The reviewer is Claude, and `docs/i18n/verified-critical-{es,ja}.json` says in its own reviewer line that **no native speaker has read them**. The fallback this entry named — English-only for those strings — stays available at any time, since the keys are an identified set. The decision to make is whether to find a reader, or to accept the risk as stated and let a user's report be the correction.
 3. **`rustls` instead of `native-tls`?** Raised in [step 0](#step-0--a-clean-dependabot-report): it would stop the eight `openssl` alerts recurring rather than patching them each release, and drop the CLI's OpenSSL build dependency. A feature-flag change, not a pre-step.
 4. **Should each file in [plans/](plans/) say whether it's a live spec or a finished record?** Raised under [the documentation review](#the-documentation-review). Seventeen plans sit there now, and a stale one read as current is the failure mode that costs real work.
