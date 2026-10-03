@@ -61,7 +61,7 @@ export function useDestination(to: string, { seedelfs = false, known }: { seedel
     const name = seedelfs ? seedelfName(destination) : undefined;
     // Part of a seedelf's name: say what a whole one is, rather than "not an address".
     if (seedelfs && !name && destination.replace(/\s+/g, "").toLowerCase().startsWith(SEEDELF_PREFIX)) {
-      setRead({ state: "error", message: SEEDELF_NAME_RULE });
+      setRead({ state: "error", message: SEEDELF_NAME_RULE() });
       return;
     }
     let current = true;
@@ -69,7 +69,7 @@ export function useDestination(to: string, { seedelfs = false, known }: { seedel
     const timer = setTimeout(() => {
       const reading: Promise<DestinationRead> = name
         ? call("seedelf-lookup", { to: name }).then((s) =>
-            s.own ? { state: "error", message: OWN_SEEDELF_FROM_ACCOUNT } : { state: "seedelf", seedelf: s },
+            s.own ? { state: "error", message: OWN_SEEDELF_FROM_ACCOUNT() } : { state: "seedelf", seedelf: s },
           )
         : call("resolve-destination", { to: destination }).then((d) => ({ state: "read", destination: d }));
       reading.then(

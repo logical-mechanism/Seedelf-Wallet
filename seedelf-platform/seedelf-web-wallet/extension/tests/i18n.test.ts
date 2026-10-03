@@ -34,9 +34,16 @@ const baseOf = (key: string) => key.replace(PLURAL, "");
 /** The plural categories a language actually has, from the browser's own CLDR data. */
 const categoriesOf = (code: string) => new Set<string>(new Intl.PluralRules(code).resolvedOptions().pluralCategories);
 
-/** `{{token}}` names, sorted, as one string. */
+/**
+ * `{{token}}` names, deduplicated and sorted, as one string.
+ *
+ * A *set*, not a multiset, on purpose: what matters is that every value English
+ * provides is still used and no unknown one is introduced. How many times a
+ * sentence repeats one is the translator's. English's "Unlock {{them}} … if you
+ * mean to spend {{them}}" is naturally one mention in Japanese.
+ */
 const tokensOf = (value: string) =>
-  [...value.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1]).sort().join("|");
+  [...new Set([...value.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1]))].sort().join("|");
 
 describe("the locale files", () => {
   it("are three, and not trivially small (so these checks can't pass on nothing)", () => {

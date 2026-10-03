@@ -1,14 +1,15 @@
 // A seedelf's personal tag. The worker's WebAssembly enforces the same rule
 // (seedelf-wasm `check_label`); this lets the form say so as the user types.
 
+import { t } from "../i18n";
 /** A tag fits the token name whole: prefix (4 bytes) ‖ tag ‖ index ‖ tx id, cut to 32 bytes. */
 export const LABEL_MAX = 15;
 
 /** Why `label` can't be a tag, or undefined if it can. Printable ASCII only, so it reads back as typed. */
 export function labelProblem(label: string): string | undefined {
   const bad = [...label].find((c) => c < " " || c > "~");
-  if (bad !== undefined) return `A tag can use letters, digits, spaces and ASCII punctuation, not “${bad}”.`;
-  if (label.length > LABEL_MAX) return `A tag is at most ${LABEL_MAX} characters.`;
+  if (bad !== undefined) return t("shared.label.badCharacter", { character: bad });
+  if (label.length > LABEL_MAX) return t("shared.label.tooLong", { max: LABEL_MAX });
   return undefined;
 }
 

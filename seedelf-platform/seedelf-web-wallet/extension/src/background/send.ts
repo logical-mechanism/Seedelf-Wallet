@@ -150,7 +150,7 @@ export class SendService {
 /** Someone else's seedelf, found in the wallet contract. Your own is a move-in, so it's refused. */
 function seedelf(view: ContractView, network: NetworkName, name: string): Destination {
   const recipient = seedelfUtxo(view, name, network);
-  if (holdsOwn(view, recipient)) throw new Error(OWN_SEEDELF_FROM_ACCOUNT);
+  if (holdsOwn(view, recipient)) throw new Error(OWN_SEEDELF_FROM_ACCOUNT());
   const label = seedelfLabel(name);
   return { address: recipient.address, own: false, seedelf: label ? { name, label } : { name }, recipient };
 }

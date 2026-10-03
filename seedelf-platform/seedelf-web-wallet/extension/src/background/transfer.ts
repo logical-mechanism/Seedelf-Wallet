@@ -140,6 +140,6 @@ export function holdsOwn(view: ContractView, utxo: KoiosUtxo): boolean {
 /** A pasted seedelf name, tidied; throws the rule when it isn't whole. */
 export function seedelfNameOf(to: string): string {
   const name = seedelfName(to);
-  if (!name) throw new Error(SEEDELF_NAME_RULE);
+  if (!name) throw new Error(SEEDELF_NAME_RULE());
   return name;
 }

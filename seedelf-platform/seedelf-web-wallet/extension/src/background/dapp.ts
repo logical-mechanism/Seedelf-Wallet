@@ -93,6 +93,7 @@
 // still connected to the account it asked of, and what Lovejoin and the
 // user's locks keep apart (independent review L33).
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import {
   APIError,
@@ -185,12 +186,12 @@ const PER_MINUTE = { fresh: 4, lookup: 6, submit: 10, unprompted: 20 } as const;
 const SUBMIT_CHECKS = 3;
 const SUBMIT_CHECK_MS = 5_000;
 /** What a site hears when the window's queue is full. */
-const BUSY = "Seedelf Wallet is busy with this site's other requests.";
+const BUSY = () => t("dapp.busy");
 
 /** A CIP-30 error, as the site sees it. */
 export class DappError extends Error {
   constructor(readonly failure: DappFailure) {
-    super("info" in failure ? failure.info : `page out of range (${failure.maxSize})`);
+    super("info" in failure ? failure.info : t("dapp.pageOutOfRange", { max: failure.maxSize }));
   }
 }
 
@@ -317,19 +318,19 @@ interface Unlocking {
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
 const ALREADY_CONNECTED =
-  "This site was connected meanwhile, by another of its requests. Disconnect it in Settings to give it a private session: it keeps what it already saw.";
+  t("dapp.connectedMeanwhile");
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
-const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable() first.";
+const NOT_CONNECTED = t("dapp.notConnected");
 /** What a site hears while the connector is off, and what it was waiting for hears once it's turned off. */
-const OFF = "Connecting sites is off in Seedelf Wallet's settings.";
+const OFF = t("dapp.connectorOff");
 /** What a site's request hears once the site is disconnected, or connected to another account, while it waited. */
-const DISCONNECTED = "This site was disconnected from Seedelf Wallet, so the request was declined.";
+const DISCONNECTED = t("dapp.disconnected");
 /** What a site hears when the user says no, or closed the window on it. */
-const DECLINED = "The user declined.";
+const DECLINED = t("dapp.userDeclined");
 /** What a site's call ends with once its page is gone: nobody hears it. */
-const PAGE_GONE = "The page went away.";
+const PAGE_GONE = t("dapp.pageGone");
 /** What a site asking on the network the wallet left hears, and the window says. */
-const NETWORK_LEFT = "Seedelf Wallet moved to another network in its settings, so this request was declined. Ask again.";
+const NETWORK_LEFT = t("dapp.networkMoved");
 
 export class DappService {
   private readonly waiting: Waiting[] = [];
@@ -373,7 +374,7 @@ export class DappService {
   async call(session: DappSession, method: DappMethod, args: unknown[]): Promise<unknown> {
     const { origin } = session;
     const running = this.running.get(origin) ?? 0;
-    if (running >= MAX_SITE_CALLS) throw refused(BUSY);
+    if (running >= MAX_SITE_CALLS) throw refused(BUSY());
     this.running.set(origin, running + 1);
     this.pageCalls.set(session.id, (this.pageCalls.get(session.id) ?? 0) + 1);
     try {
@@ -438,7 +439,7 @@ export class DappService {
       case "submitTx":
         return this.submitTx(origin, network, holder, args[0]);
     }
-    throw invalid("Seedelf Wallet doesn't know that method.");
+    throw invalid(t("dapp.unknownMethod"));
   }
 
   // --- The user --------------------------------------------------------------
@@ -476,7 +477,7 @@ export class DappService {
     // A signature, or a private session's funding, needs the password when the setting says so.
     const guarded = approval.kind === "connect" ? !!fund : true;
     if (approve && guarded && approval.password) {
-      if (!password) return { error: approval.kind === "connect" ? "Type your password to send." : "Type your password to sign." };
+      if (!password) return { error: t(approval.kind === "connect" ? "dapp.passwordToSend" : "dapp.passwordToSign") };
       try {
         await this.deps.wallet.checkPassword(password);
       } catch (e) {
@@ -857,7 +858,7 @@ export class DappService {
     try {
       return { index: site.session, ...(await this.deps.sessions.siteAccount(network, site.session)) };
     } catch {
-      throw refused("This site's private session is over. Disconnect it in Seedelf Wallet's settings, then connect it again.");
+      throw refused(t("dapp.sessionOver"));
     }
   }
 
@@ -896,7 +897,7 @@ export class DappService {
       w.resolve(true);
       this.deps.changed();
       return {
-        error: `Private session ${index + 1} is funded, but another of this site's requests connected it meanwhile, so the site won't use that session. Its money is on the dApps page, under Sites: bring it back from there.`,
+        error: t("dapp.fundedButConnected", { number: index + 1 }),
       };
     }
     w.approval = { ...w.approval, funding: { index, txHash } } as DappApproval;
@@ -928,7 +929,7 @@ export class DappService {
           return done(() => w.resolve(true));
         }
         if (now() - started > FUNDING_WAIT_MS) {
-          return done(() => w.reject(refused("The private session's funding never reached the chain.")));
+          return done(() => w.reject(refused(t("dapp.fundingNeverLanded"))));
         }
         await new Promise((r) => setTimeout(r, pause));
       }
@@ -960,7 +961,7 @@ export class DappService {
     const enable = method === "enable";
     const shares = enable && this.unlocking.some((u) => u.enable && u.session.origin === origin);
     if (!shares && (this.queued() >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING)) {
-      throw refused(enable || known ? BUSY : NOT_CONNECTED);
+      throw refused(enable || known ? BUSY() : NOT_CONNECTED);
     }
     let waiter: Unlocking | undefined;
     const unlocked = new Promise<void>((resolve, reject) => this.unlocking.push((waiter = { session, enable, resolve, reject })));
@@ -987,7 +988,7 @@ export class DappService {
   ): Promise<T> {
     // Its page went away while it was read: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
-    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY);
+    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY());
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
     const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
@@ -1141,8 +1142,8 @@ export class DappService {
   private readAmount(amount: unknown): Wanted {
     // CIP-30 passes CBOR; some dApps pass a plain number of lovelace.
     const text = typeof amount === "number" || typeof amount === "bigint" ? cborUint(BigInt(amount)) : amount;
-    if (typeof text !== "string") throw invalid("The amount isn't a CBOR value.");
-    if (text.length > MAX_AMOUNT_HEX) throw invalid("The amount is far longer than any Cardano value: Seedelf Wallet reads at most 8 KiB.");
+    if (typeof text !== "string") throw invalid(t("dapp.amountNotCbor"));
+    if (text.length > MAX_AMOUNT_HEX) throw invalid(t("dapp.amountTooLong"));
     try {
       const read = JSON.parse(this.deps.wasm.cip30ReadValue(text)) as { lovelace: string; tokens: Wanted["tokens"] };
       return { lovelace: BigInt(read.lovelace), tokens: read.tokens };
@@ -1218,7 +1219,7 @@ export class DappService {
       ({ found, missing } = find(view));
     }
     if (missing.length && !this.allow(origin, "lookup")) {
-      throw refused("This site asks Seedelf Wallet to look up UTxOs too often. Try again in a minute.");
+      throw refused(t("dapp.tooManyUtxoLookups"));
     }
     const others = missing.length ? await this.deps.koios(network).utxoInfo(missing) : [];
     return { view, rows: [...found, ...others] };
@@ -1253,16 +1254,19 @@ export class DappService {
     const used = [...new Set([...inputs, ...collateral])].filter((o) => locked.has(o));
     if (used.length) {
       const [first] = used;
-      const them = used.length === 1 ? "it" : "them";
+      const them = t(used.length === 1 ? "dapp.it" : "dapp.them");
       throw new DappError({
         code: TxSignError.ProofGeneration,
-        info: `This transaction uses ${used.length === 1 ? `a UTxO you locked (${first})` : `${used.length} UTxOs you locked (${first} and ${used.length - 1} more)`}. A lock keeps a UTxO out of every payment, so the wallet won't sign it. Unlock ${them} on the Public UTxOs screen first if you mean to spend ${them}.`,
+        info: t("dapp.usesLocked", {
+          what: t(used.length === 1 ? "dapp.lockedOne" : "dapp.lockedMany", { first, count: used.length, more: used.length - 1 }),
+          them,
+        }),
       });
     }
     if (kept && inputs.includes(outpoint(kept.utxo))) {
       throw new DappError({
         code: TxSignError.ProofGeneration,
-        info: `This transaction spends your collateral (${outpoint(kept.utxo)}) as an ordinary payment, so the wallet won't sign it. Reclaim it in Settings, under Collateral, first if you mean to spend it.`,
+        info: t("dapp.spendsCollateral", { utxo: outpoint(kept.utxo) }),
       });
     }
     return false;
@@ -1298,7 +1302,9 @@ export class DappService {
     const [first] = used;
     throw new DappError({
       code: TxSignError.ProofGeneration,
-      info: `This transaction uses ${used.length === 1 ? `a UTxO (${first})` : `${used.length} UTxOs (${first} and ${used.length - 1} more)`} that a chain still being sent through Lovejoin needs, or that one which stopped at a transaction that may have gone through still holds, so the wallet won't sign it. Wait for the chain to finish, or for the wallet to learn whether that transaction went (two hours at most), then try again.`,
+      info: t("dapp.usesChainHeld", {
+        what: t(used.length === 1 ? "dapp.utxoOne" : "dapp.utxoMany", { first, count: used.length, more: used.length - 1 }),
+      }),
     });
   }
 
@@ -1391,7 +1397,7 @@ export class DappService {
       return undefined;
     }
     if (!kinds.includes(1)) return undefined;
-    if (!this.allow(origin, "lookup")) throw refused("This site asks Seedelf Wallet to look things up too often. Try again in a minute.");
+    if (!this.allow(origin, "lookup")) throw refused(t("dapp.tooManyLookups"));
     const info = await this.deps.koios(network).accountInfo(stake).catch(() => undefined);
     return info?.status === "registered" && /^\d+$/.test(info.deposit ?? "") ? info.deposit : undefined;
   }
@@ -1431,9 +1437,9 @@ export class DappService {
     collateral: string[],
     partialSign: boolean,
   ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View; rows: KoiosUtxo[] }> {
-    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY);
+    if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY());
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
-      throw refused("This site asks too often for signatures Seedelf Wallet can't give. Try again in a minute.");
+      throw refused(t("dapp.tooManyRefusedSignatures"));
     }
     const { view, rows } = await this.resolve(network, holder, origin, [...new Set([...inputs, ...collateral])]);
     const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
@@ -1449,7 +1455,7 @@ export class DappService {
       ...(stakeDeposit === undefined ? {} : { stakeDeposit }),
     });
     const { wasm } = this.deps;
-    const whose = holder ? "this private session's" : "the public account's";
+    const whose = t(holder ? "dapp.whose.session" : "dapp.whose.account");
     const refuse = (failure: DappFailure) => {
       // Read, and refused without asking the user: it counts.
       this.lastMinute(origin, "unprompted").push(this.deps.now());
@@ -1471,12 +1477,12 @@ export class DappService {
       );
     }
     if (!summary.signs.length) {
-      throw refuse({ code: TxSignError.ProofGeneration, info: `Nothing in this transaction is ${whose} to sign.` });
+      throw refuse({ code: TxSignError.ProofGeneration, info: t("dapp.nothingToSign", { whose }) });
     }
     if (!partialSign && !summary.complete) {
       throw refuse({
         code: TxSignError.ProofGeneration,
-        info: `This transaction needs signatures the wallet can't give: it spends or is signed for by keys that aren't ${whose}.`,
+        info: t("dapp.needsOtherKeys", { whose }),
       });
     }
     // A session's stake key is never registered (privacy.md): its return and
@@ -1485,7 +1491,7 @@ export class DappService {
     if (holder && summary.certificates.some((c) => c.own && c.kind !== "unregister")) {
       throw refuse({
         code: TxSignError.ProofGeneration,
-        info: "This transaction registers or delegates this private session's stake key, which stays unregistered: its deposit and any rewards would be left behind when the session ends, so the wallet won't sign it. Stake, or delegate your vote, from your public account instead.",
+        info: t("dapp.sessionStakeKey"),
       });
     }
     return { request, summary, collateralSpent, view, rows };
@@ -1669,14 +1675,14 @@ export class DappService {
     payload: unknown,
     password: boolean,
   ): Promise<unknown> {
-    if (typeof address !== "string") throw invalid("The address to sign with isn't a string.");
+    if (typeof address !== "string") throw invalid(t("dapp.signerNotString"));
     // Refused unread, as a transaction over 64 KiB is (independent review M15).
-    if (address.length > MAX_ADDRESS_CHARS) throw invalid("The address to sign with is far longer than any Cardano address.");
+    if (address.length > MAX_ADDRESS_CHARS) throw invalid(t("dapp.signerTooLong"));
     if (typeof payload === "string" && payload.length > 2 * MAX_SITE_BYTES) {
-      throw invalid("The data to sign is too long: Seedelf Wallet signs at most 64 KiB.");
+      throw invalid(t("dapp.dataTooLong"));
     }
     const hex = typeof payload === "string" ? payload.trim() : "";
-    if (!/^([0-9a-fA-F]{2})*$/.test(hex)) throw invalid("The data to sign isn't hex.");
+    if (!/^([0-9a-fA-F]{2})*$/.test(hex)) throw invalid(t("dapp.dataNotHex"));
     const { wasm } = this.deps;
     const view = await this.view(network, holder);
     const request = JSON.stringify({ network, keys: view.keys, address, payload: hex, stakeIndex: holder?.index ?? 0 });
@@ -1691,8 +1697,8 @@ export class DappService {
       throw new DappError({ code: DataSignError.AddressNotPK, info: (e as Error).message });
     }
     if (!signer) {
-      const whose = holder ? "this private session's" : "the public account's";
-      throw new DappError({ code: DataSignError.ProofGeneration, info: `That address isn't ${whose}.` });
+      const whose = t(holder ? "dapp.whose.session" : "dapp.whose.account");
+      throw new DappError({ code: DataSignError.ProofGeneration, info: t("dapp.addressNotOurs", { whose }) });
     }
     const text = readableText(hex);
     return this.ask(
@@ -1741,7 +1747,7 @@ export class DappService {
       if (await this.sentFor(origin, network, holder, id)) return id;
       throw new DappError({
         code: TxSendError.Refused,
-        info: "This site sends transactions through Seedelf Wallet too often. Try again in a minute.",
+        info: t("dapp.tooManySubmits"),
       });
     }
     const run = this.send(origin, network, holder, bytes, id).finally(() => this.submitting.delete(key));
@@ -1869,7 +1875,7 @@ export class DappService {
 }
 
 /** What a site hears when WebAssembly trapped under its request: nothing of the lock that follows. */
-export const SITE_TRAPPED = "Seedelf Wallet couldn't answer this request.";
+export const SITE_TRAPPED = t("dapp.couldNotAnswer");
 
 /**
  * A site's call, as the worker answers it (sw.ts). WebAssembly that trapped
@@ -2017,14 +2023,14 @@ function hexOf(value: unknown, problem: string): Uint8Array<ArrayBuffer> {
  */
 function txBytes(value: unknown): Uint8Array<ArrayBuffer> {
   if (typeof value === "string" && value.length > 2 * MAX_SITE_BYTES) {
-    throw invalid("The wallet can't read this transaction: it's far larger than Cardano allows.");
+    throw invalid(t("dapp.txTooLarge"));
   }
-  return hexOf(value, "The transaction isn't hex.");
+  return hexOf(value, t("dapp.txNotHex"));
 }
 
 /** A whole number as CBOR, hex. */
 function cborUint(n: bigint): string {
-  if (n < 0n) throw invalid("The amount is negative.");
+  if (n < 0n) throw invalid(t("dapp.amountNegative"));
   const hex = (width: number) => n.toString(16).padStart(width, "0");
   if (n < 24n) return hex(2);
   if (n < 0x100n) return `18${hex(2)}`;
@@ -2086,7 +2092,7 @@ export function paginate<T>(items: T[], page: unknown): T[] {
   if (page === undefined || page === null) return items;
   const { page: n, limit } = page as { page?: unknown; limit?: unknown };
   if (!Number.isInteger(n) || !Number.isInteger(limit) || (n as number) < 0 || (limit as number) < 1) {
-    throw invalid("paginate needs a page from 0 and a limit from 1.");
+    throw invalid(t("dapp.paginate"));
   }
   const start = (n as number) * (limit as number);
   if (start > 0 && start >= items.length) throw new DappError({ maxSize: items.length });

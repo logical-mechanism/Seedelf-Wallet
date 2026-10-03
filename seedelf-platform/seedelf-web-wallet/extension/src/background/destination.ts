@@ -44,7 +44,7 @@ export async function resolveDestination(
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const text = to.trim();
   // Send pays a seedelf before it gets here; Withdraw can't.
-  if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS);
+  if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS());
   let address = text;
   let handle: string | undefined;
   if (text.startsWith("$")) {

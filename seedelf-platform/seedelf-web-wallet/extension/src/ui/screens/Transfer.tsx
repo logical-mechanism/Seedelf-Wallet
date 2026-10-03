@@ -266,7 +266,7 @@ function SeedelfNameInput({
   const name = seedelfName(value);
   const saved = name ? contacts?.find((c) => c.kind === "seedelf" && c.value === name) : undefined;
   const hasContacts = !!contacts?.some((c) => c.kind === "seedelf");
-  const nameProblem = value.trim() !== "" && !name ? SEEDELF_NAME_RULE : undefined;
+  const nameProblem = value.trim() !== "" && !name ? SEEDELF_NAME_RULE() : undefined;
 
   // Look the seedelf up once a whole name is pasted.
   useEffect(() => {

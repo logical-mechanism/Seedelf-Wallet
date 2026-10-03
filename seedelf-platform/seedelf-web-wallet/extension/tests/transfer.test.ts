@@ -65,7 +65,7 @@ describe("finding a Seedelf", () => {
   it("says when a name isn't whole or isn't on chain", async () => {
     const t = await unlocked();
     for (const bad of ["", "5eed0e1f", `${THEIRS}00`, `00${THEIRS.slice(2)}`, `${THEIRS.slice(0, 62)}zz`]) {
-      await expect(t.transfer.lookup("preprod", bad)).rejects.toThrow(SEEDELF_NAME_RULE);
+      await expect(t.transfer.lookup("preprod", bad)).rejects.toThrow(SEEDELF_NAME_RULE());
     }
     expect(t.koios.calls).toHaveLength(0);
     await expect(t.transfer.lookup("preprod", `5eed0e1f${"00".repeat(28)}`)).rejects.toThrow(
@@ -168,7 +168,7 @@ describe("transfer", () => {
 
   it("explains what stops a transfer", async () => {
     const t = await unlocked();
-    await expect(t.transfer.build("preprod", [{ to: "5eed0e1f", lovelace: "2000000", tokens: [] }])).rejects.toThrow(SEEDELF_NAME_RULE);
+    await expect(t.transfer.build("preprod", [{ to: "5eed0e1f", lovelace: "2000000", tokens: [] }])).rejects.toThrow(SEEDELF_NAME_RULE());
     await expect(t.transfer.build("preprod", [{ to: `5eed0e1f${"00".repeat(28)}`, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
       "No Seedelf with that name",
     );
