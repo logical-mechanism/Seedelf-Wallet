@@ -627,7 +627,20 @@ test("several accounts: find one, switch to it, and the screens follow", async (
     await page.getByRole("button", { name: "Add it" }).click();
     await expect(page.getByTestId("accounts-found")).toContainText(`Account ${n} is in the list now`);
   }
+  // The filter arrives once the list scrolls, and narrows by number or name.
+  await expect(page.getByTestId("accounts-filter")).toBeVisible();
   await snap(page, "settings-accounts-many");
+  await page.getByLabel("Find an account").fill("42");
+  await expect(page.getByTestId("accounts-list").getByRole("listitem")).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: /Accounts/ })).toContainText("1 of 10");
+  await page.getByLabel("Find an account").fill("nothing");
+  await expect(page.getByTestId("accounts-none")).toBeVisible();
+  await page.getByLabel("Find an account").fill("");
+
+  // The account sites use is chosen here, and doesn't follow the picker.
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("dapp-account-note")).toContainText("whichever one you're working on");
+  await expect(page.getByLabel("The account sites use")).toHaveValue("0");
 });
 
 test("contacts: save a Seedelf from Send, pick it again, and keep them in Settings", async ({ context, koios }) => {

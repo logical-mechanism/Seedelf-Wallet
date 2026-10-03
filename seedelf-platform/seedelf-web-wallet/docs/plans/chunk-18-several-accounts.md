@@ -430,9 +430,55 @@ decision above; all three were things only looking at it would catch.
     test locator that caught it. The existing × buttons label by action
     ("Take recipient 2 off"), and these now do too.
 
-**What a real user would still find.** This pass had one tester looking at a
-wallet with two or three accounts. The things most likely to come back:
-whether the Settings list needs a filter past a dozen accounts, whether
-*Check it* / *Add it* should be chips like the rest, and whether the dApp
-connector should ask rather than refuse when a site's account isn't the
-active one.
+## The owner's answers to what was left open (2026-10-02)
+
+Tested against a **real many-account wallet on preprod**, everything working.
+Their calls on the five things that were still mine to guess at:
+
+- **The dApp connector: Eternl's model, which is better than the refusal.**
+  *"Eternl does it by actually selecting what account is the dapp account.
+  Then no matter what it always uses that account even if you select another.
+  Then you can just manually change it later."* So there is now one
+  `dappAccount` setting (Settings → Sites) and sites always use it, whichever
+  account the picker is on.
+  - **This removes the refusal entirely**, and with it the per-site `account`
+    on `DappSite`: there is nothing to be on the wrong side of. Switching
+    accounts is invisible to a site; changing the dApp account is the
+    deliberate act, and Settings says it shows every connected site the new
+    account.
+  - It needed the `dapp.ts` threading the earlier plan deferred, but **one
+    value made it small**: `withDappKeys(holder, task)` resolves to the dApp
+    account's keys for every public-account path (seven call sites), and
+    `readAccountUtxos` takes an `account` so the connector reads that
+    account's UTxOs. Per-*site* accounts would have been the hard version.
+  - Default 0, the one account every wallet from before this had, so nothing
+    a site already sees changes.
+- **Make public gets the account picker too**, as Send has.
+- **A filter on the accounts list**, from eight accounts — the point the list
+  starts scrolling. By number or by the name the user gave it.
+- ***Check it* / *Add it* become chips**, matching *Switch to it* and *Name
+  it* above them: they sit inline with a field, not at the foot of a form.
+- **`MAX_KEPT`**: see [below](#how-many-accounts-to-keep).
+
+### How many accounts to keep
+
+The owner asked whether 100 is a good value. It is arbitrary, and worth
+saying what actually bounds it:
+
+- **Nothing in the derivation or the protocol.** CIP-1852's account index runs
+  to 2^31 - 1, and the wallet reaches any of them by number.
+- **The sealed record.** 100 accounts with names is a few KB, padded to the
+  next power of two — nothing next to the Seedelf history.
+- **The two lists.** The top bar is a native `select`, which handles hundreds
+  with type-ahead; Settings scrolls and, since this round, filters.
+
+So the cap is a guard against a runaway loop writing junk, not a considered
+limit on the user. 100 is well past any realistic wallet while keeping both
+lists usable. If anyone ever wants more, raising it is one constant and no
+other change.
+
+**What a real user would still find.** The things most likely to come back:
+whether the top-bar picker needs more than a native select past a dozen
+accounts, and whether the dApp account wants to be visible somewhere other
+than Settings — a site talking to an account the picker isn't on is correct
+but invisible.

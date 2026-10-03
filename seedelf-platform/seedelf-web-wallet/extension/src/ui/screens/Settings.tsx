@@ -34,6 +34,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   ExternalIcon,
+  SearchIcon,
   EyeIcon,
   LockIcon,
   PlugIcon,
@@ -149,6 +150,9 @@ export function Settings({
 }
 
 
+/** Past this many accounts the list gets a filter: it scrolls from about eight. */
+const FILTER_FROM = 8;
+
 /**
  * The phrase's public accounts: which one the wallet works on, what each is
  * called, and a look for one more.
@@ -172,6 +176,13 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   const [number, setNumber] = useState("");
   // Set when a checked account has never been used, so Add can be offered for it.
   const [unused, setUnused] = useState<number>();
+  // A filter, once the list is long enough to scroll past: by number or by
+  // the name the user gave it (the owner, 2026-10-02).
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? accounts.filter((a) => accountName(a).toLowerCase().includes(q) || String(a.index + 1).includes(q))
+    : accounts;
 
   const run = async (what: "switch" | "check" | "name" | "look", task: () => Promise<void>) => {
     setBusy(what);
@@ -233,10 +244,28 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             edge otherwise reads as clipped rather than as more below. */}
         <h2 id="accounts-list-title">
           Accounts
-          {accounts.length > 1 && <span className="section__count"> · {accounts.length}</span>}
+          {accounts.length > 1 && (
+            <span className="section__count">
+              {" · "}
+              {shown.length === accounts.length ? accounts.length : `${shown.length} of ${accounts.length}`}
+            </span>
+          )}
         </h2>
+        {accounts.length > FILTER_FROM && (
+          <label className="search" data-testid="accounts-filter">
+            <SearchIcon size={16} />
+            <input
+              type="search"
+              aria-label="Find an account"
+              placeholder="Number or name"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              spellCheck={false}
+            />
+          </label>
+        )}
         <ul className="list accounts-list" data-testid="accounts-list">
-          {accounts.map((a) => (
+          {shown.map((a) => (
             <li key={a.index} className={a.index === active ? "account-row account-row--active" : "account-row"}>
               {naming === a.index ? (
                 <form
@@ -307,6 +336,11 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             </li>
           ))}
         </ul>
+        {!shown.length && (
+          <p className="note center empty" data-testid="accounts-none">
+            No account matches “{query.trim()}”.
+          </p>
+        )}
         <p className="note" data-testid="accounts-note">
           Each account is a separate Cardano wallet from the same recovery phrase, with its own addresses, its own staking and
           its own collateral. Other wallets call these accounts too, and show the same ones for this phrase.
@@ -344,12 +378,14 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
               setFound(undefined);
             }}
           />
-          <button type="submit" className="secondary" disabled={busy !== undefined || typed() === undefined}>
+          {/* Chips, like Switch to it and Name it in the list above: these sit
+              inline with a field, not at the foot of a form. */}
+          <button type="submit" className="chip" disabled={busy !== undefined || typed() === undefined}>
             {busy === "check" ? "Looking…" : "Check it"}
           </button>
           <button
             type="button"
-            className="secondary"
+            className="chip"
             disabled={busy !== undefined || typed() === undefined}
             onClick={() => {
               const index = typed();
@@ -713,6 +749,7 @@ function LockAfter() {
  * and can't be turned on, and the note says why.
  */
 export function DappConnector({ blocked, onSites }: { blocked?: Status["connectorBlocked"]; onSites: () => void }) {
+  const accounts = useAccounts();
   const { prefs, loaded, set } = usePreferences();
   const [allowed, setAllowed] = useState<boolean>();
   const [error, setError] = useState<string>();
@@ -770,6 +807,40 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
           disabled={!!blocked || !loaded || allowed === undefined}
         />
       </div>
+      {/* Which account sites use, where there is more than one to choose
+          between: one account is the dApp account, and it does not follow the
+          picker (Eternl's model; the owner, 2026-10-02). */}
+      {accounts.several && (
+        <div className="stack-tight" data-testid="dapp-account">
+          {/* A select, not a segmented Choice: a wallet may hold a lot of
+              accounts, and ten buttons in a row would not fit. */}
+          <div className="field">
+            <label className="label" htmlFor="dapp-account-select">
+              The account sites use
+            </label>
+            <select
+              id="dapp-account-select"
+              value={String(loaded ? prefs.dappAccount : 0)}
+              disabled={!loaded}
+              onChange={(e) => {
+                setError(undefined);
+                set({ dappAccount: Number(e.target.value) }).catch((err: Error) => setError(err.message));
+              }}
+            >
+              {accounts.accounts.map((a) => (
+                <option key={a.index} value={a.index}>
+                  {accountName(a)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="note" data-testid="dapp-account-note">
+            Connected sites always use this account, whichever one you're working on, so switching accounts never shows a site a
+            second account of yours. Changing it here shows every connected site the new account instead — which anyone watching
+            both can see is the same wallet.
+          </p>
+        </div>
+      )}
       <div className="setting-row">
         <span className="stack-tight">
           <span id="dapp-password-label">Ask for your password to sign for a site</span>

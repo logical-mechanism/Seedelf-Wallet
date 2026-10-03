@@ -1044,19 +1044,17 @@ export type DappAsk =
 /** Something a site asked for that waits for the user, in the connector's window. */
 export type DappApproval = { id: string; origin: string; title?: string } & DappAsk;
 
-/** A site connected to one of the wallet's public accounts, or to a private session. */
+/**
+ * A site connected to the wallet's **dApp account** (`Preferences.dappAccount`,
+ * chunk 18) or to a private session. No account is recorded per site: every
+ * public-account connection is to the one dApp account, which Settings
+ * chooses and which does not follow the account picker.
+ */
 export interface DappSite {
   origin: string;
   connectedAt: number;
   /** Connected to this private session (private CIP-30), not a public account. */
   session?: number;
-  /**
-   * The public account it connected to, as an index from 0 (chunk 18). The
-   * site stays bound to it: a request made while the wallet is on another
-   * account is refused, never served from the active one. Absent on a site
-   * connected before chunk 18, which is account 0's.
-   */
-  account?: number;
 }
 
 /** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */

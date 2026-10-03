@@ -206,6 +206,7 @@ export function Withdraw({
               onChange={(to) => list.update(d.id, { to })}
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
+              ownAccounts
             />
             {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
 

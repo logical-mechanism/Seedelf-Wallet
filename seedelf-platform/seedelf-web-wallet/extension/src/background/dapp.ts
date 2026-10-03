@@ -116,7 +116,7 @@ import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WASM_BROKEN } from "./wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WASM_BROKEN, type Keys } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
@@ -324,10 +324,6 @@ const NOT_CONNECTED = "This site isn't connected to Seedelf Wallet. Call enable(
 const OFF = "Connecting sites is off in Seedelf Wallet's settings.";
 /** What a site's request hears once the site is disconnected, or connected to another account, while it waited. */
 const DISCONNECTED = "This site was disconnected from Seedelf Wallet, so the request was declined.";
-/** A site connected to a public account the wallet isn't working on now (chunk 18). */
-const otherAccount = (index: number) =>
-  `This site is connected to Account ${index + 1} of your wallet, and Seedelf Wallet is working on another account now. ` +
-  `Switch back to Account ${index + 1}, or disconnect the site and connect it again.`;
 /** What a site hears when the user says no, or closed the window on it. */
 const DECLINED = "The user declined.";
 /** What a site's call ends with once its page is gone: nobody hears it. */
@@ -661,14 +657,7 @@ export class DappService {
     this.keepSites(all);
     return all
       .filter((s) => s.network === network)
-      // `account` is carried, not dropped: it is what `holder` binds a site
-      // to, and the dApps page says which account a site talks to.
-      .map(({ origin, connectedAt, session, account }) => ({
-        origin,
-        connectedAt,
-        ...(session === undefined ? {} : { session }),
-        ...(account === undefined ? {} : { account }),
-      }))
+      .map(({ origin, connectedAt, session }) => ({ origin, connectedAt, ...(session === undefined ? {} : { session }) }))
       .sort((a, b) => a.origin.localeCompare(b.origin));
   }
 
@@ -727,16 +716,14 @@ export class DappService {
 
   /** Records a site as connected on `network`, to `session` if given; false when it's connected already. */
   private async connect(network: NetworkName, origin: string, session?: number): Promise<boolean> {
-    const account = session === undefined ? await this.activeAccount() : undefined;
     let added = false;
     await this.changeSites((all) => {
       if (all.some((s) => s.origin === origin && s.network === network)) return all;
       added = true;
       const site: Connected = { origin, network, connectedAt: this.deps.now() };
-      // A public-account connection records which account it is to: the site
-      // stays bound to it, so switching accounts never hands the site a
-      // second account's addresses and teaches it the two are one wallet's.
-      return [...all, session === undefined ? { ...site, account } : { ...site, session }];
+      // No account is recorded on a site: every public-account connection is
+      // to the one dApp account, which Settings chooses (`dappAccount`).
+      return [...all, session === undefined ? site : { ...site, session }];
     });
     return added;
   }
@@ -828,9 +815,28 @@ export class DappService {
     return state === "locked" && !!this.lastSites.get(network)?.has(origin);
   }
 
-  /** Which public account the wallet works on, for binding a site to one. */
-  private async activeAccount(): Promise<number> {
-    return (await this.deps.activeAccount?.()) ?? 0;
+  /**
+   * Which public account connected sites use: the **dApp account**, chosen in
+   * Settings, not the one the picker is on (Eternl's model; the owner,
+   * 2026-10-02).
+   */
+  private async dappAccount(): Promise<number> {
+    return (await this.deps.preferences.get()).dappAccount;
+  }
+
+  /**
+   * The keys a request is read and signed with: a private session's are the
+   * wallet's own one-time accounts, and everything else is the **dApp
+   * account's**, whichever account the wallet is working on.
+   *
+   * That is the whole point of having one: a site always talks to the same
+   * account, so switching accounts can never hand it a second account's
+   * addresses, and it is never refused for being on the "wrong" one. Changing
+   * which account that is, is a deliberate act in Settings.
+   */
+  private async withDappKeys<T>(holder: Holder, task: (keys: Keys) => T | Promise<T>): Promise<T> {
+    const { wallet } = this.deps;
+    return holder ? wallet.withKeys(task) : wallet.withAccount(await this.dappAccount(), task);
   }
 
   /**
@@ -847,13 +853,7 @@ export class DappService {
    * (chunk 15), and this keeps that true across a switch.
    */
   private async holder(network: NetworkName, site: DappSite): Promise<Holder> {
-    if (site.session === undefined) {
-      // No account recorded: a site connected before chunk 18, when there was
-      // only account 0.
-      const bound = site.account ?? 0;
-      if (bound !== (await this.activeAccount())) throw refused(otherAccount(bound));
-      return undefined;
-    }
+    if (site.session === undefined) return undefined;
     try {
       return { index: site.session, ...(await this.deps.sessions.siteAccount(network, site.session)) };
     } catch {
@@ -870,12 +870,6 @@ export class DappService {
     if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
     const site = await this.site(network, origin);
     if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
-    // And still to the public account the wallet is on: a switch between the
-    // request being read and its approval must not sign with another account.
-    if (site.session === undefined) {
-      const bound = site.account ?? 0;
-      if (bound !== (await this.activeAccount())) throw refused(otherAccount(bound));
-    }
   }
 
   /**
@@ -1061,7 +1055,7 @@ export class DappService {
         readAt: now(),
       };
     } else {
-      const { account, utxos } = await readAccountUtxos(this.deps, network, spent);
+      const { account, utxos } = await readAccountUtxos(this.deps, network, spent, { account: await this.dappAccount() });
       view = {
         keys: [...account.paths.values()],
         utxos,
@@ -1165,7 +1159,7 @@ export class DappService {
 
   private async receiveAddress(network: NetworkName, index: number): Promise<string> {
     const net = network === "mainnet" ? this.deps.wasm.Network.Mainnet : this.deps.wasm.Network.Preprod;
-    return this.deps.wallet.withKeys(({ cardano }) => cardano.receiveAddress(net, index));
+    return this.withDappKeys(undefined, ({ cardano }) => cardano.receiveAddress(net, index));
   }
 
   /** The used addresses, `0/0` first: it's the one the wallet shows, and where every change goes. A session has one. */
@@ -1350,10 +1344,12 @@ export class DappService {
    * view's), or its stake key, as every address it shows carries.
    */
   private async paysHolder(holder: Holder, view: View): Promise<(address: string) => boolean> {
-    const { wallet, wasm } = this.deps;
+    const { wasm } = this.deps;
     if (holder) return (address) => keysOf(wasm, address).payment === holder.keyHash;
     const stake = keysOf(wasm, view.stake).stake;
-    const payment = new Set(await wallet.withKeys(({ cardano }) => view.keys.map((k) => cardano.paymentKeyHash(k.role, k.index))));
+    const payment = new Set(
+      await this.withDappKeys(holder, ({ cardano }) => view.keys.map((k) => cardano.paymentKeyHash(k.role, k.index))),
+    );
     return (address) => {
       const keys = keysOf(wasm, address);
       return (keys.payment !== undefined && payment.has(keys.payment)) || (stake !== undefined && keys.stake === stake);
@@ -1452,7 +1448,7 @@ export class DappService {
       stakeIndex: holder?.index ?? 0,
       ...(stakeDeposit === undefined ? {} : { stakeDeposit }),
     });
-    const { wasm, wallet } = this.deps;
+    const { wasm } = this.deps;
     const whose = holder ? "this private session's" : "the public account's";
     const refuse = (failure: DappFailure) => {
       // Read, and refused without asking the user: it counts.
@@ -1461,7 +1457,8 @@ export class DappService {
     };
     let summary: DappTxSummary;
     try {
-      summary = await wallet.withKeys(
+      summary = await this.withDappKeys(
+        holder,
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.inspectSessionTx(oneTime, request) : wasm.inspectDappTx(cardano, request)) as DappTxSummary,
       );
@@ -1515,7 +1512,7 @@ export class DappService {
     const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
       this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
     );
-    const { wasm, wallet } = this.deps;
+    const { wasm } = this.deps;
     // For the prompt alone: never refused for it, which would tell the site.
     // Unchecked, the prompt promises nothing (independent review M12).
     const ties = await this.ties(network, holder, summary, rows).catch((e: unknown) => {
@@ -1544,7 +1541,8 @@ export class DappService {
         await this.stillConnected(network, session.origin, holder);
         await this.heldForLovejoin(network, holder, inputs, collateral);
         await this.keptApart(network, holder, view, inputs, collateral);
-        const signed = await wallet.withKeys(
+        const signed = await this.withDappKeys(
+          holder,
           ({ cardano, oneTime }) =>
             JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx,
         );
@@ -1590,7 +1588,7 @@ export class DappService {
     const { wasm, wallet, session, sessions } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const indices = (await sessions.indices(network)).filter((i) => i !== holder?.index);
-    const known = await wallet.withKeys(({ cardano, oneTime }) => ({
+    const known = await this.withDappKeys(holder, ({ cardano, oneTime }) => ({
       account: holder
         ? {
             payment: new Set(Array.from({ length: GAP_LIMIT }, (_, i) => [cardano.paymentKeyHash(0, i), cardano.paymentKeyHash(1, i)]).flat()),
@@ -1679,12 +1677,13 @@ export class DappService {
     }
     const hex = typeof payload === "string" ? payload.trim() : "";
     if (!/^([0-9a-fA-F]{2})*$/.test(hex)) throw invalid("The data to sign isn't hex.");
-    const { wasm, wallet } = this.deps;
+    const { wasm } = this.deps;
     const view = await this.view(network, holder);
     const request = JSON.stringify({ network, keys: view.keys, address, payload: hex, stakeIndex: holder?.index ?? 0 });
     let signer: { address: string; key: "payment" | "stake" } | null;
     try {
-      signer = await wallet.withKeys(
+      signer = await this.withDappKeys(
+        holder,
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.sessionDataSigner(oneTime, request) : wasm.dataSigner(cardano, request)) as typeof signer,
       );
@@ -1712,7 +1711,8 @@ export class DappService {
       async () => {
         // Still connected, to the same account, as it's approved (independent review L33).
         await this.stillConnected(network, session.origin, holder);
-        return wallet.withKeys(
+        return this.withDappKeys(
+          holder,
           ({ cardano, oneTime }) =>
             JSON.parse(holder ? wasm.signSessionData(oneTime, request) : wasm.signDappData(cardano, request)) as unknown,
         );

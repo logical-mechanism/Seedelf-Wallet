@@ -22,6 +22,7 @@ describe("preferences", () => {
       dappConnector: false,
       // A site's signature needs the password until the user says otherwise.
       dappPassword: true,
+      dappAccount: 0,
       // A session's spare ADA comes back through Lovejoin, fanned out two waves deep, and each box waits 1 to 6 hours.
       lovejoinReturns: true,
       lovejoinDepth: 2,
@@ -35,6 +36,7 @@ describe("preferences", () => {
       currency: "eur",
       dappConnector: false,
       dappPassword: true,
+      dappAccount: 0,
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",

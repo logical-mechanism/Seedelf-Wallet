@@ -268,6 +268,7 @@ describe("spending rewards", () => {
       currency: "usd",
       dappConnector: false,
       dappPassword: true,
+      dappAccount: 0,
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
