@@ -13,6 +13,7 @@
 // everyone reads it without asking.
 
 import { useId, useState } from "react";
+import { useT } from "../../i18n";
 
 import { InfoIcon } from "./Icons";
 
@@ -33,12 +34,13 @@ export function HintButton({
   controls: string;
   testId?: string;
 }) {
+  const t = useT();
   return (
     <button
       type="button"
       className="hint"
       title={text}
-      aria-label={open ? "Hide what this means" : "What this means"}
+      aria-label={open ? t("hint.hide") : t("hint.show")}
       aria-expanded={open}
       // Only while the text is there to point at: an `aria-controls` naming
       // nothing is worse than none.
