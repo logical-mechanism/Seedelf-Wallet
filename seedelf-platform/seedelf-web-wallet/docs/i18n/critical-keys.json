@@ -1,8 +1,12 @@
 [
   "accountRecipients.privacy.ownAccounts",
+  "create.phrase.warn.neverCopy",
   "handleWarning.note",
   "handleWarning.returning",
+  "network.privacy.preprod",
   "receive.privacy.publicAddress",
   "receive.privacy.seedelfName",
-  "settings.language.warn.unchecked"
+  "reset.warn.noPhrase",
+  "settings.language.warn.unchecked",
+  "unlock.warn.trap"
 ]

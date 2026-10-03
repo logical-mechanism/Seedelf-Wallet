@@ -7,19 +7,30 @@
 // top bar says its ADA has no value.
 
 import { useState } from "react";
+import { t, useT } from "../../i18n";
 
 import { NETWORKS, type NetworkName } from "../../networks";
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
 
-/** What each network is, said under the choice here and in Settings. */
+/**
+ * What each network is, said under the choice here and in Settings.
+ *
+ * Getters, not plain strings, so the shape stays `Record<NetworkName, string>`
+ * for everything that reads it while the words come from the current language
+ * at the moment they're read.
+ */
 export const NETWORK_NOTE: Record<NetworkName, string> = {
-  preprod:
-    "Preprod: Cardano's test network, for trying the wallet out with a recovery phrase you don't use on mainnet: the same phrase has the same keys on both networks, so anyone comparing them can tell they're one wallet's. ADA here is test ADA, with no value.",
-  mainnet: "Mainnet: Cardano's real network. ADA here is real money.",
+  get preprod() {
+    return t("network.privacy.preprod");
+  },
+  get mainnet() {
+    return t("network.mainnet");
+  },
 };
 
 export function NetworkPicker({ status, onChanged }: { status: Status; onChanged: (status: Status) => void }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   if (status.networks.length < 2) return null;
@@ -39,11 +50,11 @@ export function NetworkPicker({ status, onChanged }: { status: Status; onChanged
   return (
     <div className="network-picker" data-testid="onboarding-network">
       <label className="network-picker__label" htmlFor="onboarding-network-select">
-        Network
+        {t("network.label")}
       </label>
       <select
         id="onboarding-network-select"
-        aria-label="Cardano network"
+        aria-label={t("network.ariaLabel")}
         value={status.network}
         disabled={busy}
         onChange={(e) => {
@@ -79,12 +90,13 @@ export function OnNetwork({
   doing: "create" | "restore";
   onChange: () => void;
 }) {
+  const t = useT();
   if (status.networks.length < 2) return null;
   return (
     <p className="note onboarding-on-network" data-testid="onboarding-on-network">
-      {doing === "create" ? "Creating" : "Restoring"} a wallet on {NETWORKS[status.network].label}.{" "}
+      {t(doing === "create" ? "network.creatingOn" : "network.restoringOn", { network: NETWORKS[status.network].label })}{" "}
       <button type="button" className="link" onClick={onChange}>
-        Change network
+        {t("network.change")}
       </button>
     </p>
   );

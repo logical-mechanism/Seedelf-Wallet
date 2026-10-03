@@ -5,21 +5,21 @@
 // stopped working, it says so.
 
 import { useEffect, useState, type FormEvent } from "react";
+import { Rich, t, useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
 import { call, onDappChanged } from "../background";
 import { Callout } from "../components/Callout";
 import { PasswordField } from "../components/PasswordField";
 import { Screen } from "../components/Screen";
-import { plural } from "../format";
 import { connectorWindow } from "../view";
 
 /** Who the connector's window unlocks for: the sites waiting, by origin. Exported for its tests. */
 export function waitingText(origins: readonly string[]): string {
   const [first] = origins;
-  if (!first) return "A site is waiting for Seedelf Wallet. Unlock to see what it asks.";
-  if (origins.length === 1) return `${first} is asking for Seedelf Wallet. Unlock to see what it asks.`;
-  return `${first} and ${plural(origins.length - 1, "other site")} are asking for Seedelf Wallet. Unlock to see what they ask.`;
+  if (!first) return t("unlock.waiting.unknown");
+  if (origins.length === 1) return t("unlock.waiting.site", { origin: first });
+  return t("unlock.waiting.more", { origin: first, count: origins.length - 1 });
 }
 
 /** The sites the connector's window waits to unlock for, as the worker says, kept up to date. */
@@ -46,6 +46,7 @@ export function Unlock({
   onUnlocked: () => void;
   onForgot: () => void;
 }) {
+  const tr = useT();
   const [password, setPassword] = useState("");
   const [waitUntil, setWaitUntil] = useState(() => Date.now() + retryAfterMs);
   const [now, setNow] = useState(Date.now);
@@ -77,7 +78,7 @@ export function Unlock({
       setNow(Date.now());
       if (result.wrongPassword) {
         setPassword("");
-        setError("Wrong password.");
+        setError(t("unlock.wrongPassword"));
       }
     } catch (e) {
       setError((e as Error).message);
@@ -89,11 +90,9 @@ export function Unlock({
   return (
     <section className="unlock">
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
-      <h1>Welcome back</h1>
+      <h1>{tr("unlock.title")}</h1>
       {lockedBy === "trap" && (
-        <Callout tone="warn" testId="unlock-why">
-          The wallet's core stopped working, so the wallet locked itself and let go of your keys. Unlock it to carry on.
-        </Callout>
+        <Callout tone="warn" testId="unlock-why">{tr("unlock.warn.trap")}</Callout>
       )}
       {connectorWindow && (
         <p className="note center" data-testid="unlock-site">
@@ -109,15 +108,15 @@ export function Unlock({
         )}
         {waitMs > 0 && (
           <p className="note" data-testid="retry-after">
-            Try again in {Math.ceil(waitMs / 1000)} s.
+            {tr("unlock.retryAfter", { seconds: Math.ceil(waitMs / 1000) })}
           </p>
         )}
         <button type="submit" className="primary" disabled={busy || waitMs > 0 || !password}>
-          {busy ? "Unlocking…" : "Unlock"}
+          {busy ? tr("unlock.unlocking") : tr("unlock.unlock")}
         </button>
       </form>
       <button type="button" className="link" onClick={onForgot}>
-        Forgot password? Restore from your phrase
+        {tr("unlock.forgot")}
       </button>
     </section>
   );
@@ -127,6 +126,7 @@ const CONFIRM_TEXT = "delete wallet";
 
 /** Deletes the vault so the wallet can be restored from its phrase. */
 export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s: Status) => void }) {
+  const tr = useT();
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -144,7 +144,7 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
   const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
   return (
     <Screen
-      title="Restore from your phrase"
+      title={tr("reset.title")}
       titleId="reset-title"
       onBack={onCancel}
       backDisabled={busy}
@@ -152,27 +152,21 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
       foot={
         <div className="actions">
           <button className="secondary" onClick={onCancel} disabled={busy}>
-            Cancel
+            {tr("common.cancel")}
           </button>
           <button className="danger" onClick={reset} disabled={busy || !confirmed}>
-            Delete and restore
+            {tr("reset.deleteAndRestore")}
           </button>
         </div>
       }
     >
       <p className="note" data-testid="reset-note">
-        Without the password, the only way back in is your recovery phrase. This deletes the wallet from this browser,
-        then you restore it from the phrase and choose a new password. The phrase brings back your public account, your
-        private balance and your Lovejoin boxes. What private sessions' one-time accounts hold doesn't show after a
-        restore yet. If a payment may still go through, an encrypted record of it stays in this browser: restoring this
-        same phrase here watches it again, and making or restoring another wallet deletes that record.
+        {tr("reset.note")}
       </p>
-      <Callout tone="warn">
-        If you don't have your recovery phrase, stop here. Deleting the wallet without it loses your funds for good.
-      </Callout>
+      <Callout tone="warn">{tr("reset.warn.noPhrase")}</Callout>
       <div className="field">
         <label htmlFor="confirm-reset">
-          Type <strong>{CONFIRM_TEXT}</strong> to confirm
+          <Rich k="reset.confirmLabel" parts={{ text: <strong>{CONFIRM_TEXT}</strong> }} />
         </label>
         <input
           id="confirm-reset"

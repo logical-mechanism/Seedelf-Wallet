@@ -5,7 +5,7 @@
 // component rendered on its own — which is how the tests render them — has its
 // words already, in English, with nothing to wrap it in.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 
 import { i18n, t } from "./core";
 import type { I18nKey } from "./translations";
@@ -60,10 +60,12 @@ export function Rich({
   const text = translate(k, { ...values, ...marks });
   return (
     <>
-      {text.split(MARK).map((piece, i) =>
-        // Odd pieces are the placeholder names; even ones are the words around them.
-        i % 2 ? <span key={i}>{parts[piece] ?? ""}</span> : piece
-      )}
+      {text.split(MARK).map((piece, i) => (
+        // Odd pieces are the placeholder names; even ones are the words around
+        // them. A Fragment, never a <span>: the markup a screen renders has to
+        // come out exactly as it did before the sentence moved into a key.
+        <Fragment key={i}>{i % 2 ? (parts[piece] ?? "") : piece}</Fragment>
+      ))}
     </>
   );
 }
