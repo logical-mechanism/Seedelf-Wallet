@@ -13,6 +13,7 @@
 // money comes back from here (#43).
 
 import { useState, type FormEvent } from "react";
+import { t, useT } from "../../i18n";
 
 import type { Balances, DappSite, PendingTx, SessionBackSummary, SessionOutSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
@@ -41,7 +42,7 @@ import { TxDetailButton } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { formatAda, plural, shortHex, tokenKey, whenOf } from "../format";
+import { formatAda, shortHex, tokenKey, whenOf } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { tokenAmountText, tokenQuantity } from "../tokens";
@@ -80,25 +81,26 @@ const moving = (s: SessionView) =>
  * own check, which reads it.
  */
 export function disconnectWait(s: SessionView, { canRefresh = true }: { canRefresh?: boolean } = {}): string | undefined {
-  if (s.stage === "funding") return "Its funding is on its way: wait for it to land";
-  if (moving(s)) return "Its return is on its way: wait for it to land";
+  if (s.stage === "funding") return t("sites.wait.funding");
+  if (moving(s)) return t("sites.wait.returning");
   if (s.stage === "failed") return undefined;
-  if (!s.holding) return canRefresh ? "Refresh to read what it holds" : undefined;
-  if (s.holding.utxos > 0) return "Bring everything back first";
+  if (!s.holding) return canRefresh ? t("sites.wait.refresh") : undefined;
+  if (s.holding.utxos > 0) return t("sites.wait.bringBack");
   return undefined;
 }
 
 /** A site session's tag: connected, its funding or return on its way, a funding that never landed, or its site talking to something else. */
 function tagOf(s: SessionView, attached?: boolean): { tone: SwapTone; label: string } {
-  if (s.stage === "failed") return { tone: "bad", label: "Not funded" };
-  if (s.stage === "funding") return { tone: "live", label: "Funding" };
-  if (s.stage === "returning") return { tone: "live", label: "Coming back" };
-  if (attached === false) return { tone: "wait", label: "Not connected" };
-  return { tone: "done", label: "Connected" };
+  if (s.stage === "failed") return { tone: "bad", label: t("swaps.step.notFunded") };
+  if (s.stage === "funding") return { tone: "live", label: t("sites.tag.funding") };
+  if (s.stage === "returning") return { tone: "live", label: t("swaps.stage.returning") };
+  if (attached === false) return { tone: "wait", label: t("sites.tag.notConnected") };
+  return { tone: "done", label: t("sites.tag.connected") };
 }
 
 /** A site's private session in the dApps page's list: the site, the session, and its tag. */
 export function SiteRow({ session: s, attached, onOpen }: { session: SessionView; attached?: boolean; onOpen: () => void }) {
+  const tr = useT();
   return (
     <button type="button" className="token-row swap-row" onClick={onOpen}>
       <span className="swap-pair" aria-hidden="true">
@@ -108,7 +110,7 @@ export function SiteRow({ session: s, attached, onOpen }: { session: SessionView
       </span>
       <span className="token-row__label">{hostOf(s)}</span>
       <SwapTag {...tagOf(s, attached)} />
-      <span className="token-row__sub">Private session {s.index + 1}</span>
+      <span className="token-row__sub">{tr("lovejoin.privateSession", { number: s.index + 1 })}</span>
     </button>
   );
 }
@@ -139,6 +141,7 @@ export function SiteSession({
   onPending: (pending: PendingTx) => void;
   onDisconnected: () => void;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const amounts = useAmounts();
   const [page, setPage] = useState<Page>("main");
@@ -180,11 +183,11 @@ export function SiteSession({
   if (back) {
     return (
       <Screen
-        title="Review the return"
+        title={tr("swaps.back.title")}
         titleId="site-back-review"
         onBack={() => setBack(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={tr("review.nothingSent")}
         error={error}
         foot={
           <button
@@ -199,18 +202,25 @@ export function SiteSession({
               })
             }
           >
-            {busy ? backSending : "Send"}
+            {busy ? backSending : tr("common.send")}
           </button>
         }
       >
         <ReviewRows testId="site-back-review">
           <LovejoinRows back={back} />
-          <Row label={back.lovejoin ? "Back now" : "Into your private balance"} value={`${formatAda(back.lovelace)} ₳`} strong />
+          <Row
+            label={tr(back.lovejoin ? "swaps.back.backNow" : "swaps.back.intoPrivate")}
+            value={`${formatAda(back.lovelace)} ₳`}
+            strong
+          />
           {back.tokens.map((t) => (
             <TokenAmountRow key={tokenKey(t)} label="" token={t} amount={tokenQuantity(network, t)} />
           ))}
-          <Row label={back.lovejoin ? "Network fees" : "Network fee"} value={`${formatAda(back.fee)} ₳`} />
-          <Row label="From" value={`${plural(back.inputs, "UTxO")} at private session ${s.index + 1}`} />
+          <Row label={tr(back.lovejoin ? "lovejoin.review.fees" : "review.fee")} value={`${formatAda(back.fee)} ₳`} />
+          <Row
+            label={tr("swaps.back.from")}
+            value={tr("sites.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
+          />
           <IntoRow back={back} />
         </ReviewRows>
         <TxDetailButton txHash={back.txHash} testId="site-back-tx" />
@@ -221,10 +231,7 @@ export function SiteSession({
           busy={busy}
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
-        <p className="note">
-          The site stays connected, to an empty account: Top up fills it again, with a new 5 ₳ collateral when the account has
-          none left.
-        </p>
+        <p className="note">{tr("sites.back.staysConnected")}</p>
         <ReturnLinks back={back} />
       </Screen>
     );
@@ -251,23 +258,23 @@ export function SiteSession({
       title={hostOf(s)}
       titleId="site-session-title"
       onBack={onBack}
-      aside={`Private session ${s.index + 1}`}
+      aside={tr("lovejoin.privateSession", { number: s.index + 1 })}
       error={error}
       foot={
         <div className="stack">
           {!failed && (
             <div className="actions">
               <button type="button" className="secondary" onClick={() => setPage("top-up")} disabled={busy || s.stage === "funding"}>
-                Top up
+                {tr("sites.topUp")}
               </button>
               <button
                 type="button"
                 className="secondary"
                 disabled={busy || !holding || empty}
-                title={!holding ? "Refresh to read what it holds" : empty ? "It holds nothing" : undefined}
+                title={!holding ? tr("sites.wait.refresh") : empty ? tr("sites.holdsNothing") : undefined}
                 onClick={bringBack}
               >
-                {busy ? "…" : "Bring it back"}
+                {busy ? "…" : tr("swaps.foot.bringBack")}
               </button>
             </div>
           )}
@@ -279,7 +286,7 @@ export function SiteSession({
             title={wait}
             data-testid="site-disconnect"
           >
-            Disconnect
+            {tr("sites.disconnect")}
           </button>
         </div>
       }
@@ -289,36 +296,37 @@ export function SiteSession({
         <SwapTag {...tagOf(s, attached)} />
         {/* The account on Cardanoscan, where what the site did with it shows: the note goes under the row. */}
         <ExplorerLink network={network} address={s.address} private note={false}>
-          On Cardanoscan
+          {tr("sites.onCardanoscan")}
         </ExplorerLink>
       </div>
       <ExplorerNote what="account" />
       <ReviewRows testId="site-session-rows">
         {/* A balance: hidden while balances are (launch review #56). */}
-        <Row label="It holds" value={holding ? `${amounts.ada(holding.lovelace)} ₳` : "Refresh to read it"} strong />
+        <Row
+          label={tr("swaps.rows.itHolds")}
+          value={holding ? `${amounts.ada(holding.lovelace)} ₳` : tr("sites.refreshToRead")}
+          strong
+        />
         {holding?.tokens.map((t) => (
           <Row key={tokenKey(t)} label="" value={amounts.text(tokenAmountText(network, t))} />
         ))}
-        <Row label="Account" value={shortHex(s.address, 16, 8)} title={s.address} />
-        <Row label="Started" value={whenOf(s.createdAt, new Date())} />
+        <Row label={tr("lovejoin.review.account")} value={shortHex(s.address, 16, 8)} title={s.address} />
+        <Row label={tr("swaps.rows.started")} value={whenOf(s.createdAt, new Date())} />
         {s.chain && (s.chain.cut || s.chain.confirmed < s.chain.total) && (
-          <Row label="Through Lovejoin" value={chainText(s.chain, !s.auto)} />
+          <Row label={tr("sites.throughLovejoin")} value={chainText(s.chain, !s.auto)} />
         )}
       </ReviewRows>
       <div className="field-row">
-        <span className="note">The account's address, as the site sees it</span>
-        <CopyButton value={s.address} label="Copy the account's address" />
+        <span className="note">{tr("sites.addressNote")}</span>
+        <CopyButton value={s.address} label={tr("sites.copyAddress")} />
       </div>
       {detached && (
         <Callout tone="warn" testId="site-session-detached">
           <div className="stack-tight">
-            <span>
-              Not connected to its site: another of {hostOf(s)}'s requests connected it meanwhile, so the site won't use this
-              session. Bring its money back into your private balance, then disconnect it.
-            </span>
+            <span>{tr("sites.warn.detached", { host: hostOf(s) })}</span>
             {!empty && holding && (
               <button type="button" className="link align-start" onClick={bringBack} disabled={busy}>
-                Bring it back
+                {tr("swaps.foot.bringBack")}
               </button>
             )}
           </div>
@@ -326,51 +334,41 @@ export function SiteSession({
       )}
       {moving(s) && (
         <p className="note" data-testid="site-session-wait">
-          {s.stage === "funding" ? "Its funding" : "Its return"} is on its way, so Disconnect waits until it lands: nothing
-          reads a session once it's disconnected.
+          {tr(s.stage === "funding" ? "sites.movingFunding" : "sites.movingReturn")}
         </p>
       )}
       <LovejoinSkipped reason={s.lovejoinSkipped} />
       <LeftBehindNote leftBehind={s.leftBehind} />
       {failed ? (
         <p className="note" data-testid="site-session-failed">
-          {s.unsent
-            ? "Its funding never reached the chain, so the account is empty. Disconnect it: the site's next connect starts a new session."
-            : "The chain hasn't shown its funding in 20 minutes, so the account looks empty. Refresh to look again: it may still land. Disconnect it once you're sure it didn't go out, since nothing reads a disconnected session."}
+          {tr(s.unsent ? "sites.failed.neverSent" : "sites.failed.unseen")}
         </p>
       ) : (
-        <Callout tone="info" testId="site-session-positions">
-          Anything open on the site, like a listing, an order or a loan, is tied to this account. Close it on the site before
-          you disconnect: what it pays the account later isn't looked for once the session ends.
-        </Callout>
+        <Callout tone="info" testId="site-session-positions">{tr("sites.positions")}</Callout>
       )}
-      <Callout tone="privacy">
-        The wallet gives the site only this account. Topping it up links more of your private balance to it, and bringing it
-        back links it to new private UTxOs. The site still sees this browser: if it has seen your public account here, it
-        can tell the session is yours.
-      </Callout>
+      <Callout tone="privacy">{tr("sites.privacy.onlyThisAccount")}</Callout>
       {disconnecting && (
         <Modal
-          title={`Disconnect ${hostOf(s)}?`}
+          title={tr("sites.disconnectTitle", { host: hostOf(s) })}
           titleId="site-disconnect-title"
           onClose={() => setDisconnecting(false)}
           foot={
             <>
               <button type="button" className="secondary" onClick={() => setDisconnecting(false)} disabled={busy}>
-                Keep it
+                {tr("lovejoin.anyway.keep")}
               </button>
               <button type="button" className="danger" onClick={disconnect} disabled={busy} data-testid="site-disconnect-confirm">
-                Disconnect the site
+                {tr("sites.disconnectConfirm")}
               </button>
             </>
           }
         >
           <p className="note">
-            {attached === false
-              ? `Private session ${s.index + 1} ends; ${hostOf(s)} stays connected as it is now, since it doesn't use this session.`
-              : `Private session ${s.index + 1} ends, and the site's next connect asks again.`}{" "}
-            The wallet stops reading this account: anything the site pays it later, or leaves open on it, isn't looked for
-            again.
+            {tr(attached === false ? "sites.disconnect.detached" : "sites.disconnect.attached", {
+              number: s.index + 1,
+              host: hostOf(s),
+            })}{" "}
+            {tr("sites.disconnect.stopsReading")}
           </p>
         </Modal>
       )}
@@ -390,6 +388,7 @@ function TopUp({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const tr = useT();
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [review, setReview] = useState<SessionOutSummary>();
@@ -432,38 +431,34 @@ function TopUp({
     const [paid, collateral] = review.payments;
     return (
       <Screen
-        title="Review the top-up"
+        title={tr("sites.topUp.reviewTitle")}
         titleId="top-up-review"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={tr("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={() => void send()} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? tr("common.sending") : tr("common.send")}
           </button>
         }
       >
         <ReviewRows testId="top-up-review">
-          <Row label="To" value={`Private session ${review.index + 1}`} strong />
-          <PaidRows label="Amount" paid={paid} />
-          {collateral && <Row label="Its collateral" value={`${formatAda(collateral.lovelace)} ₳`} />}
-          <Row label="Network fee" value={`${formatAda(review.fee.total)} ₳`} />
-          <Row label="Back to your private balance" value={`${formatAda(review.changeLovelace)} ₳`} />
+          <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
+          <PaidRows label={tr("sites.topUp.amount")} paid={paid} />
+          {collateral && <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral.lovelace)} ₳`} />}
+          <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)} ₳`} />
+          <Row label={tr("review.backToPrivate")} value={`${formatAda(review.changeLovelace)} ₳`} />
         </ReviewRows>
         <TxDetailButton txHash={review.txHash} testId="top-up-tx" />
         {collateral && (
           <p className="note" data-testid="top-up-collateral">
-            The account has no collateral left: a return took it, or a site's transaction spent it. This puts back 5 ₳, which
-            the site puts up for its contracts and a return through Lovejoin needs for its mixes. It comes back with the
-            session's next return.
+            {tr("sites.topUp.collateral")}
           </p>
         )}
-        <Callout tone="privacy">
-          This payment links the private UTxOs it spends to the session's account, as its funding did.
-        </Callout>
+        <Callout tone="privacy">{tr("sites.topUp.privacy.links")}</Callout>
         <HistoriesNote histories={review.histories} session={review.index} testId="top-up-histories" />
-        <p className="note">Send asks giveme.my to lend the collateral, then submits.</p>
+        <p className="note">{tr("swaps.review.givemeNote")}</p>
       </Screen>
     );
   }
@@ -471,25 +466,32 @@ function TopUp({
   return (
     <Screen
       onSubmit={build}
-      title="Top up"
+      title={tr("sites.topUp")}
       titleId="top-up-title"
       onBack={onCancel}
-      aside={`${formatAda(seedelf.lovelace)} ₳ in your private balance`}
+      aside={tr("sites.topUp.aside", { ada: formatAda(seedelf.lovelace) })}
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!ready || busy}>
-          {busy ? "Building…" : "Review"}
+          {tr(busy ? "common.building" : "common.review")}
         </button>
       }
     >
       <div className="field">
-        <label htmlFor="top-up-amount">Amount</label>
-        <AdaInput id="top-up-amount" value={amount} onChange={setAmount} placeholder={withTokens ? "Minimum" : "0"} />
-        {tooMuch && <p className="field-note">That's more than the {formatAda(seedelf.lovelace)} ₳ in your private balance.</p>}
+        <label htmlFor="top-up-amount">{tr("sites.topUp.amount")}</label>
+        <AdaInput
+          id="top-up-amount"
+          value={amount}
+          onChange={setAmount}
+          placeholder={withTokens ? tr("sites.topUp.minimum") : "0"}
+        />
+        {tooMuch && (
+          <p className="field-note">{tr("sites.topUp.tooMuch", { held: formatAda(seedelf.lovelace) })}</p>
+        )}
       </div>
       {withTokens && <MinimumHint />}
       <TokenAmounts held={seedelf.tokens} typed={typed} onChange={setTyped} />
-      <p className="note">Into private session {s.index + 1}, for {hostOf(s)}.</p>
+      <p className="note">{tr("sites.topUp.into", { number: s.index + 1, host: hostOf(s) })}</p>
     </Screen>
   );
 }
