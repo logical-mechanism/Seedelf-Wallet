@@ -8,6 +8,7 @@
 // browser closes). A restarted worker re-derives the keys from there instead
 // of asking for the password again. See docs/architecture.md#service-worker.
 
+import { t } from "../i18n";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type * as Wasm from "@seedelf/wasm";
@@ -114,7 +115,7 @@ export const SESSION_PRIVATE_STALE_PREFIX = "seedelf.balancesPrivateStale.";
 export const UNLOCK_FAILURES = "seedelf.unlockFailures";
 
 /** What a request gets when WebAssembly trapped under it: the wallet locked itself (see `broken`). */
-export const WASM_BROKEN = "The wallet's core stopped working, so the wallet locked itself. Unlock it to carry on.";
+export const WASM_BROKEN = t("worker.wallet.trapped");
 
 /**
  * Whether session storage holds an unlocked wallet's entropy. Without it
@@ -223,7 +224,7 @@ export class Wallet {
       const problem = passwordProblem(password);
       if (problem) throw new Error(problem);
       if (await this.deps.local.get(VAULT_KEY)) {
-        throw new Error("A wallet already exists. Reset it before creating or restoring another.");
+        throw new Error(t("worker.wallet.exists"));
       }
       const entropy = this.deps.wasm.phraseToEntropy(phrase);
       try {
@@ -242,7 +243,7 @@ export class Wallet {
     return this.serial(async () => {
       const state = await this.load();
       if (state === "unlocked") return { unlocked: true };
-      if (state === "no-wallet") throw new Error("There is no wallet to unlock.");
+      if (state === "no-wallet") throw new Error(t("worker.wallet.none"));
 
       const wait = await this.remainingBackoff();
       if (wait > 0) return { unlocked: false, wrongPassword: false, retryAfterMs: wait };
@@ -676,7 +677,7 @@ export class Wallet {
   private async openWithPassword(password: string): Promise<Uint8Array> {
     if ((await this.load()) !== "unlocked") throw new Error("The wallet is locked.");
     const wait = await this.remainingBackoff();
-    if (wait > 0) throw new Error(`Too many wrong passwords. Try again in ${Math.ceil(wait / 1000)} s.`);
+    if (wait > 0) throw new Error(t("worker.wallet.backoff", { seconds: Math.ceil(wait / 1000) }));
     const record = (await this.deps.local.get<VaultRecord>(VAULT_KEY))!;
     try {
       const entropy = await openVault(record, password);
