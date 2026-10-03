@@ -396,3 +396,43 @@ So it works the way every other entry in [privacy.md](../privacy.md#known-links)
 **The lesson, for the rest of the chunk.** Privacy-by-default means the most private option is the *default*, with a control to turn it down — not that the wallet forbids what a user may legitimately want. Selection *preferring* to keep accounts apart and *saying* when it can't is the right shape; a refusal is not. The prose in `privacy.md` and `keys-and-accounts.md` was rewritten for the same reason: it had started claiming accounts were unlinked rather than that the wallet avoids linking them on its own.
 
 **Still a hard refusal, and worth the owner's call:** the dApp connector refuses a site bound to another account instead of serving it. That one is a different case — a third party silently learning two accounts are one wallet's, which the user never asked for, rather than a link the user chose — so it was left as it is. If it should ask instead of refuse, that is the `dapp.ts` threading noted under *Where it differs from the plan*.
+
+## After the owner looked at it (2026-10-02)
+
+Three rounds of their findings on the built wallet, in order. None changed a
+decision above; all three were things only looking at it would catch.
+
+- **"We need to make the switch to it button smaller."** It was a 48px
+  `.secondary` next to each account's name. `.chip` is the house small-button
+  style already used for Copy and Max, so it needed no new CSS and now matches
+  *Name it* beside it.
+- **"Needs proper spacing between. This is not going to scale well for
+  wallets with a lot of accounts."** `.list` is a bare flex column, so the
+  rows had no padding and no separation at all. They take the same vertical
+  rhythm as `.menu-row` and `.token-row` now, with a hairline between; the
+  list scrolls at about eight rows rather than pushing the number entry and
+  the notes off the screen; the active account is tinted; and the heading
+  carries the count, because a row cut off at the scroll edge otherwise reads
+  as clipped rather than as more below. The e2e adds eight accounts and
+  snapshots the list at that size, so the next change to it is looked at with
+  a wallet that has more than two.
+  - **Then: "now its not aligned."** The tint was drawn with a negative margin
+    and its own inline padding, which moved that one row out of line with the
+    others. Every row carries the same horizontal padding now and the tint
+    paints only the row's own box.
+- **"Can we get a clear button... right now you have to select all and
+  delete."** `Clearable` floats a × over the field's right edge on all three
+  destination fields, so the input keeps its own styling. It shows only when
+  there is something to clear and returns focus to the input.
+  - **Its label must not repeat the field's own.** "Clear the Seedelf name"
+    beside a field labelled *Seedelf name* makes that string match two
+    elements — for a screen reader looking for the field as much as for the
+    test locator that caught it. The existing × buttons label by action
+    ("Take recipient 2 off"), and these now do too.
+
+**What a real user would still find.** This pass had one tester looking at a
+wallet with two or three accounts. The things most likely to come back:
+whether the Settings list needs a filter past a dozen accounts, whether
+*Check it* / *Add it* should be chips like the rest, and whether the dApp
+connector should ask rather than refuse when a site's account isn't the
+active one.
