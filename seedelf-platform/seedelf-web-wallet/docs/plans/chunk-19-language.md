@@ -339,13 +339,12 @@ Besides the Rust messages named above:
 
 ## Still open
 
-- **Who reads the Spanish and Japanese critical strings** (the roadmap's open
-  question 2). The machinery is built and green: 195 keys derived from the
-  source, each back-translated and compared for meaning, with a gate that fails
-  the build on an unchecked draft. **No native speaker has read any of it**, and
-  `verified-critical-{es,ja}.json` says so in the reviewer line rather than in a
-  footnote. That is the accepted risk, and a user who reports an error is the
-  feedback loop working — Settings says where to report one.
+- **Who reads the Spanish and Japanese critical strings** — **settled: accepted
+  as recorded** (the owner, 2026-10-03). 195 derived keys, each back-translated,
+  with a build that fails on an unchecked draft; the reviewer line names Claude
+  and says no native speaker has read them. An ultrareview pass goes over the
+  translations next, and a fluent reader can come later, since there are no
+  users and no release is pending.
 - **Whether the store listing is translated too.** Separate from the extension:
   a listing per locale in the dashboard, through `_locales/` for the manifest's
   own name and description. It publishes nothing new about the owner. Worth a
