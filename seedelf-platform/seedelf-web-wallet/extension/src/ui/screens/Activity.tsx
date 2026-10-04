@@ -22,6 +22,7 @@ import { ExplorerLink } from "../components/ExplorerLink";
 import {
   ArrowUpRightIcon,
   DownloadIcon,
+  LandmarkIcon,
   MoveInIcon,
   PieIcon,
   ReceiveIcon,
@@ -55,6 +56,11 @@ function icon(e: ActivityEntry): ReactNode {
     case "withdraw-rewards":
     case "unstake":
       return <PieIcon size={16} />;
+    case "drep-register":
+    case "drep-update":
+    case "drep-retire":
+    case "drep-vote":
+      return <LandmarkIcon size={16} />;
     default:
       return e.direction === "in" ? <ReceiveIcon size={16} /> : <ArrowUpRightIcon size={16} />;
   }

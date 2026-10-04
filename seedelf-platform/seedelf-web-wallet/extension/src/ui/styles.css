@@ -449,6 +449,15 @@ main {
   gap: var(--s2);
 }
 
+/* A governance action's abstract: its own words, its own line breaks. */
+.gov-abstract {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
 .actions > * {
   flex: 1;
 }

@@ -2529,6 +2529,7 @@ mod staking {
             utxos: account_utxos(account),
             action,
             state,
+            drep: None,
             invalid_hereafter: None,
         }
     }
@@ -2536,6 +2537,8 @@ mod staking {
     struct Signed {
         certificates: Vec<Certificate>,
         withdrawals: Vec<(Vec<u8>, u64)>,
+        /// Each vote's voter, action and vote.
+        votes: Vec<(conway::Voter, conway::GovActionId, conway::Vote)>,
         /// Key hashes, hex, of every valid signature.
         signers: BTreeSet<String>,
         /// The spent UTxOs' payment keys, hex.
@@ -2580,6 +2583,16 @@ mod staking {
                 .withdrawals
                 .map(|w| w.iter().map(|(a, l)| (a.to_vec(), *l)).collect())
                 .unwrap_or_default(),
+            votes: body
+                .voting_procedures
+                .iter()
+                .flat_map(|v| v.iter())
+                .flat_map(|(voter, procedures)| {
+                    procedures
+                        .iter()
+                        .map(move |(a, p)| (voter.clone(), a.clone(), p.vote.clone()))
+                })
+                .collect(),
             signers,
             payment_keys,
         }
@@ -2852,6 +2865,236 @@ mod staking {
             "drep_always_no_confidence"
         );
         assert!(api::drep_id(LOGIC).is_err());
+    }
+
+    // ---- The account's own DRep (chunk 21) ----
+
+    /// Two of preprod's live governance actions on 2026-10-04.
+    const TREASURY: &str = "322066e8333d3338858a2d9fd4fdfa04d4ab5d79ef002b2296635143fac3ca79";
+    const INFO: &str = "139444b23543a9a836b2b01c0057ff4300f2d25b3d94812f138b89b22d2b780d";
+    /// `hashlib.blake2b(b"seedelf", digest_size=32).hexdigest()`.
+    const BLAKE2B_256_SEEDELF: &str =
+        "8456a35a704513f9b6cffdec05ac9ef39ebaf22ce2f882bd9fae358fda885d14";
+
+    fn drep_hash(account: &CardanoAccount) -> String {
+        hex::encode(account.key_hash(Role::Drep, 0).unwrap())
+    }
+
+    /// The account's UTxOs with enough in one of them for a DRep's deposit.
+    fn rich(account: &CardanoAccount) -> Vec<PathedUtxo> {
+        let mut utxos = account_utxos(account);
+        utxos[0].utxo.value = "600000000".into();
+        utxos
+    }
+
+    fn as_drep(
+        account: &CardanoAccount,
+        action: StakingAction,
+        drep: Option<api::DrepStateIn>,
+    ) -> api::StakingResult {
+        let mut request = request(account, action, recorded());
+        request.utxos = rich(account);
+        request.drep = drep;
+        api::stake(account, request).unwrap()
+    }
+
+    fn a_drep() -> Option<api::DrepStateIn> {
+        Some(api::DrepStateIn {
+            registered: true,
+            deposit: "500000000".into(),
+        })
+    }
+
+    #[test]
+    fn the_account_names_its_drep_as_cip_105_does() {
+        let account = CardanoAccount::from_phrase(
+            "test walk nut penalty hip pave soap entry language right filter choice",
+            0,
+        )
+        .unwrap();
+        let drep = api::drep_of(&account).unwrap();
+        assert_eq!(
+            drep.id,
+            "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a"
+        );
+        assert_eq!(
+            drep.hash,
+            "a5b45515a3ff8cb7c02ce351834da324eb6dfc41b5779cb5e6b832aa"
+        );
+        assert_eq!(
+            drep.public_key,
+            "f74d7ac30513ac1825715fd0196769761fca6e7f69de33d04ef09a0c417a752b"
+        );
+    }
+
+    #[test]
+    fn registering_signs_with_the_drep_key_and_the_stake_key() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let me = api::drep_of(&account).unwrap();
+        let result = as_drep(
+            &account,
+            StakingAction::DrepRegister {
+                anchor: None,
+                delegate: true,
+            },
+            None,
+        );
+        assert_eq!(result.drep.as_deref(), Some(me.id.as_str()));
+        assert_eq!(result.deposit, "500000000");
+        let tx = signed(&account, &result.tx_cbor, &result.tx_hash);
+        let drep = StakeCredential::AddrKeyhash(account.key_hash(Role::Drep, 0).unwrap());
+        assert_eq!(
+            tx.certificates,
+            vec![
+                Certificate::RegDRepCert(drep, 500_000_000, pallas_primitives::Nullable::Null),
+                Certificate::VoteDeleg(
+                    cred(&account),
+                    DRep::Key(account.key_hash(Role::Drep, 0).unwrap())
+                ),
+            ]
+        );
+        let mut expected = tx.payment_keys.clone();
+        expected.insert(stake_key(&account));
+        expected.insert(drep_hash(&account));
+        assert_eq!(tx.signers, expected);
+
+        // Kept apart: the DRep key alone signs, with the payment keys.
+        let alone = as_drep(
+            &account,
+            StakingAction::DrepRegister {
+                anchor: Some(api::AnchorIn {
+                    url: "https://example.com/drep.jsonld".into(),
+                    hash: "ab".repeat(32),
+                }),
+                delegate: false,
+            },
+            None,
+        );
+        let tx = signed(&account, &alone.tx_cbor, &alone.tx_hash);
+        assert_eq!(tx.certificates.len(), 1);
+        assert!(tx.signers.contains(&drep_hash(&account)));
+        assert!(!tx.signers.contains(&stake_key(&account)));
+    }
+
+    #[test]
+    fn a_vote_is_the_drep_keys_and_retiring_returns_the_deposit() {
+        let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+        let vote = as_drep(
+            &account,
+            StakingAction::DrepVote {
+                votes: vec![
+                    api::BallotIn {
+                        tx_hash: TREASURY.into(),
+                        index: 0,
+                        vote: "no".into(),
+                    },
+                    api::BallotIn {
+                        tx_hash: INFO.into(),
+                        index: 0,
+                        vote: "yes".into(),
+                    },
+                ],
+            },
+            a_drep(),
+        );
+        let tx = signed(&account, &vote.tx_cbor, &vote.tx_hash);
+        assert!(tx.certificates.is_empty());
+        let me = conway::Voter::DRepKey(account.key_hash(Role::Drep, 0).unwrap());
+        let id = |h: &str| seedelf_core::staking::gov_action_id(h, 0).unwrap();
+        assert_eq!(
+            tx.votes,
+            vec![
+                (me.clone(), id(INFO), conway::Vote::Yes),
+                (me, id(TREASURY), conway::Vote::No),
+            ]
+        );
+        let mut expected = tx.payment_keys.clone();
+        expected.insert(drep_hash(&account));
+        assert_eq!(tx.signers, expected);
+        assert_eq!(vote.deposit, "0");
+
+        let retire = as_drep(&account, StakingAction::DrepRetire, a_drep());
+        assert_eq!(retire.refund, "500000000");
+        let tx = signed(&account, &retire.tx_cbor, &retire.tx_hash);
+        assert!(matches!(
+            tx.certificates[..],
+            [Certificate::UnRegDRepCert(_, 500_000_000)]
+        ));
+
+        // A vote that isn't one, and a DRep that isn't, are refused in words.
+        let mut request = request(
+            &account,
+            StakingAction::DrepVote {
+                votes: vec![api::BallotIn {
+                    tx_hash: INFO.into(),
+                    index: 0,
+                    vote: "maybe".into(),
+                }],
+            },
+            recorded(),
+        );
+        request.drep = a_drep();
+        let err = api::stake(&account, request).unwrap_err().to_string();
+        assert!(err.contains("yes, no or abstain"), "{err}");
+        let not_one = request_for_retire(&account);
+        assert!(
+            api::stake(&account, not_one)
+                .unwrap_err()
+                .to_string()
+                .contains("isn't a DRep")
+        );
+    }
+
+    fn request_for_retire(account: &CardanoAccount) -> StakingRequest {
+        request(account, StakingAction::DrepRetire, recorded())
+    }
+
+    #[test]
+    fn a_profile_is_cip_119_and_hashed_as_written() {
+        let file = api::drep_profile(api::ProfileRequest {
+            given_name: "  Seedelf Tester ".into(),
+            objectives: Some("Vote my own stake.".into()),
+            motivations: Some("   ".into()),
+            qualifications: None,
+            do_not_list: true,
+        })
+        .unwrap();
+        let doc: Value = serde_json::from_str(&file.file).unwrap();
+        assert_eq!(doc["hashAlgorithm"], "blake2b-256");
+        assert_eq!(doc["body"]["givenName"], "Seedelf Tester");
+        assert_eq!(doc["body"]["objectives"], "Vote my own stake.");
+        assert!(
+            doc["body"].get("motivations").is_none(),
+            "blank is left out"
+        );
+        assert_eq!(doc["body"]["doNotList"], true);
+        assert_eq!(
+            doc["@context"]["CIP119"],
+            "https://github.com/cardano-foundation/CIPs/blob/master/CIP-0119/README.md#"
+        );
+        assert_eq!(
+            file.hash,
+            hex::encode(Hasher::<256>::hash(file.file.as_bytes()))
+        );
+        // blake2b-256 itself, against a value computed elsewhere (Python's hashlib).
+        assert_eq!(
+            hex::encode(Hasher::<256>::hash(b"seedelf")),
+            BLAKE2B_256_SEEDELF
+        );
+
+        let err = |name: &str| {
+            api::drep_profile(api::ProfileRequest {
+                given_name: name.into(),
+                objectives: None,
+                motivations: None,
+                qualifications: None,
+                do_not_list: false,
+            })
+            .unwrap_err()
+            .to_string()
+        };
+        assert!(err(" ").contains("needs a name"));
+        assert!(err(&"a".repeat(81)).contains("80 characters"));
     }
 }
 

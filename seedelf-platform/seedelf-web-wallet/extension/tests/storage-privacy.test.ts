@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_NETWORK } from "../src/background/preferences";
 import { LOCAL_PRICES } from "../src/background/prices";
 import { PAD_MIN_BYTES, PRIVATE_PREFIX, PrivateStore } from "../src/background/private-store";
+import { LOCAL_GOV_ACTIONS_PREFIX } from "../src/background/governance";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import { fromBase64, toBase64 } from "../src/background/storage";
 import { VAULT_KEY } from "../src/background/vault";
@@ -77,9 +78,17 @@ describe("the vault", () => {
 });
 
 describe("Remove wallet", () => {
-  it("deletes the pool list and a price kept on the disk before, and keeps where the wallet opens and its network", async () => {
+  it("deletes the pool list, the governance actions and a price kept on the disk before, and keeps where the wallet opens and its network", async () => {
     // The caches it names are the ones those modules keep.
-    expect([...LOCAL_CACHES].sort()).toEqual([`${LOCAL_POOLS_PREFIX}mainnet`, `${LOCAL_POOLS_PREFIX}preprod`, LOCAL_PRICES].sort());
+    expect([...LOCAL_CACHES].sort()).toEqual(
+      [
+        `${LOCAL_POOLS_PREFIX}mainnet`,
+        `${LOCAL_POOLS_PREFIX}preprod`,
+        `${LOCAL_GOV_ACTIONS_PREFIX}mainnet`,
+        `${LOCAL_GOV_ACTIONS_PREFIX}preprod`,
+        LOCAL_PRICES,
+      ].sort(),
+    );
     const t = await unlocked();
     for (const key of LOCAL_CACHES) await t.local.set(key, { updatedAt: 1 });
     await t.local.set(LOCAL_NETWORK, "mainnet");

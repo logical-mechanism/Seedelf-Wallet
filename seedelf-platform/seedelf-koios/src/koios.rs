@@ -888,6 +888,10 @@ pub struct ProtocolParameters {
     pub coins_per_utxo_size: u64,
     /// What registering a stake key locks up, returned when it's unregistered.
     pub key_deposit: u64,
+    /// What registering a DRep locks up, returned when it retires. `None`
+    /// when Koios leaves it out: only registering a DRep needs it, and that
+    /// refuses to guess.
+    pub drep_deposit: Option<u64>,
     pub price_mem: f64,
     pub price_step: f64,
     pub cost_model_v3: Vec<i64>,
@@ -961,14 +965,15 @@ impl std::fmt::Display for Ratio {
 
 /// The most [`ProtocolParameters::from_koios`] takes for each parameter,
 /// generously above mainnet's and preprod's in 2026 (44 and 155,381 lovelace,
-/// 4,310 a byte, a 2 ₳ deposit, prices of 0.0577 and 0.0000721, 15 lovelace a
-/// byte of reference script). The ledger takes any overpayment, so a wrong
+/// 4,310 a byte, a 2 ₳ deposit, a 500 ₳ DRep deposit, prices of 0.0577 and
+/// 0.0000721, 15 lovelace a byte of reference script). The ledger takes any overpayment, so a wrong
 /// answer from Koios would otherwise raise every fee, minimum and deposit the
 /// wallet pays, unseen.
 pub const MAX_MIN_FEE_A: u64 = 1_000;
 pub const MAX_MIN_FEE_B: u64 = 2_000_000;
 pub const MAX_COINS_PER_UTXO_SIZE: u64 = 20_000;
 pub const MAX_KEY_DEPOSIT: u64 = 10_000_000;
+pub const MAX_DREP_DEPOSIT: u64 = 5_000_000_000;
 pub const MAX_PRICE_MEM: f64 = 0.577;
 pub const MAX_PRICE_STEP: f64 = 0.000721;
 pub const MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE: u64 = 150;
@@ -1004,6 +1009,10 @@ impl ProtocolParameters {
         let min_fee_b: u64 = lovelace("min_fee_b", MAX_MIN_FEE_B)?;
         let coins_per_utxo_size: u64 = lovelace("coins_per_utxo_size", MAX_COINS_PER_UTXO_SIZE)?;
         let key_deposit: u64 = lovelace("key_deposit", MAX_KEY_DEPOSIT)?;
+        let drep_deposit = match &params["drep_deposit"] {
+            Value::Null => None,
+            _ => Some(lovelace("drep_deposit", MAX_DREP_DEPOSIT)?),
+        };
         let price_mem: f64 = price("price_mem", MAX_PRICE_MEM)?;
         let price_step: f64 = price("price_step", MAX_PRICE_STEP)?;
         let per_byte = "min_fee_ref_script_cost_per_byte";
@@ -1038,6 +1047,7 @@ impl ProtocolParameters {
             min_fee_b,
             coins_per_utxo_size,
             key_deposit,
+            drep_deposit,
             price_mem,
             price_step,
             cost_model_v3,

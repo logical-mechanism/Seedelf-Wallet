@@ -103,6 +103,7 @@ export const nftImagesPreprod: Array<{ policy_id: string; asset_name: string; an
 export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
 export const stakingPreprod = fixture("staking-preprod.json");
+export const governancePreprod = fixture("governance.json").proposal_list.preprod;
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
 /** Session 0 of the 12-word phrase and its UTxO (wasm/tests/session_test.rs). */
 export const sessionSwap = fixture("session-swap.json");
@@ -197,6 +198,10 @@ export interface KoiosFake {
   mainnetTokens: Map<string, { policy_id: string; asset_name: string; fingerprint: string; decimals?: number }>;
   /** `asset_info`'s answer for each token, by `policy.name`: the recorded NFTs' metadata (chunk 20). */
   assets: Map<string, unknown[]>;
+  /** More DReps for `drep_info`, by ID: the account's own, once registered, say (chunk 21). */
+  dreps: Map<string, Record<string, unknown>>;
+  /** Every DRep's votes, for `vote_list`. */
+  votes: Array<{ voter_id: string; proposal_id: string; vote: string; block_time: number }>;
   /** Requests a page made instead of the worker (`byWorker`): there must be none. */
   strays: string[];
 }
@@ -295,6 +300,16 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       const rows = [{ abs_slot: Math.floor(Date.now() / 1000) - since }];
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
+    if (path === "proposal_list" || path === "vote_list") {
+      // vote_list's filters, as the wallet uses them: `voter_id=eq.X&proposal_id=in.(a,b)`.
+      const query = new URL(request.url()).searchParams;
+      const voter = query.get("voter_id")?.replace(/^eq\./, "");
+      const rows =
+        path === "proposal_list"
+          ? governancePreprod
+          : koios.votes.filter((v) => v.voter_id === voter).map(({ voter_id: _voter, ...v }) => v);
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
     if (path === "pool_list" || path === "totals") {
       const rows = path === "pool_list" ? stakingPreprod.pool_list : stakingPreprod.totals;
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
@@ -337,7 +352,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const staking: Record<string, (b: any) => unknown[]> = {
       account_info: (b) => b._stake_addresses.flatMap((s: string) => koios.stakes.get(s) ?? []),
       pool_info: (b) => stakingPreprod.pool_info.filter((p: any) => b._pool_bech32_ids.includes(p.pool_id_bech32)),
-      drep_info: (b) => stakingPreprod.drep_info.filter((d: any) => b._drep_ids.includes(d.drep_id)),
+      drep_info: (b) => [...stakingPreprod.drep_info, ...koios.dreps.values()].filter((d: any) => b._drep_ids.includes(d.drep_id)),
       drep_metadata: (b) => stakingPreprod.drep_metadata.filter((d: any) => b._drep_ids.includes(d.drep_id)),
     };
     if (staking[path]) {
@@ -483,6 +498,8 @@ export const test = base.extend<{
       txSpends: new Map(),
       mainnetTokens: new Map(),
       assets: new Map(nftImagesPreprod.map((r) => [`${r.policy_id}.${r.asset_name}`, r.answer])),
+      dreps: new Map(),
+      votes: [],
       strays: [],
     });
   },

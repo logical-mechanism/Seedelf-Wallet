@@ -6,7 +6,8 @@
 //! master  = Icarus master key (CIP-3): PBKDF2-HMAC-SHA512(password = "",
 //!           salt = BIP39 entropy, 4096 rounds, 96 bytes), clamped
 //! account = master / 1852' / 1815' / account'
-//! keys    = account / role / index     role 0 = receive, 1 = change, 2 = staking
+//! keys    = account / role / index     role 0 = receive, 1 = change, 2 = staking,
+//!                                       3 = DRep (CIP-105)
 //! ```
 //!
 //! v1 of the web wallet uses account 0 only, but everything here takes the
@@ -45,6 +46,9 @@ pub enum Role {
     Change = 1,
     /// Staking key; the wallet only ever uses index 0.
     Staking = 2,
+    /// The account's DRep key (CIP-105), index 0 only, as Lace and the
+    /// other wallets derive it: the same phrase is the same DRep in each.
+    Drep = 3,
 }
 
 /// The account-level private key `m/1852'/1815'/account'`.
@@ -102,8 +106,8 @@ impl CardanoAccount {
     /// delegated to this account's staking key `2/0`. `network_flag` is
     /// `true` for preprod, as in the CLI.
     pub fn base_address(&self, network_flag: bool, role: Role, index: u32) -> Result<Address> {
-        if role == Role::Staking {
-            bail!("a base address needs a receive or change key, not the staking key");
+        if matches!(role, Role::Staking | Role::Drep) {
+            bail!("a base address needs a receive or change key, not the staking or DRep key");
         }
         Ok(ShelleyAddress::new(
             network(network_flag),

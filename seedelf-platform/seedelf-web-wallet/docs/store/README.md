@@ -48,6 +48,7 @@ What you can do:
 • Use its public accounts: normal Cardano accounts that any wallet can pay, and that pay any address, ADA Handle or Seedelf, several at once. A phrase from Lace or Eternl opens that wallet's accounts, and the wallet finds the ones the phrase has used.
 • Stake the public account with a pool, from a list of every live pool, and spend or withdraw the rewards.
 • Delegate its voting power: always abstain, always no confidence, or a DRep you find by name.
+• Be your own DRep: register the public account, vote on the open governance actions, and retire to get the deposit back. Governance sites such as GovTool can connect too, when you allow it.
 • Create a Seedelf: a name you give out so that anyone can pay you privately.
 • Make ADA and tokens private: move them from the public account into your private balance.
 • Send privately to any Seedelf by its name, several at once.

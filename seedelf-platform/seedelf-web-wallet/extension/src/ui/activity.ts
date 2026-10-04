@@ -41,6 +41,14 @@ export function activityTitle(e: ActivityEntry): string {
       return t("activity.title.withdrewRewards");
     case "unstake":
       return t("activity.title.unstake");
+    case "drep-register":
+      return t("activity.title.drepRegister");
+    case "drep-update":
+      return t("activity.title.drepUpdate");
+    case "drep-retire":
+      return t("activity.title.drepRetire");
+    case "drep-vote":
+      return t("activity.title.drepVote");
     case "session-out":
       return t("activity.title.sessionOut");
     case "session-swap":
@@ -85,10 +93,11 @@ export function voteOf(network: NetworkName, s: ActivityStaking): string | undef
   return s.drep ? voteLabel(s.drep, drepName(network, s.drep)) : undefined;
 }
 
-/** A staking entry's line under its title: "LOGIC", "Always abstain", "LOGIC · Always abstain". */
+/** A staking entry's line under its title: "LOGIC", "Always abstain", "LOGIC · Always abstain", "2 governance actions". */
 export function stakingLine(network: NetworkName, s: ActivityStaking | undefined): string | undefined {
   if (!s) return undefined;
-  const line = [poolOf(s), voteOf(network, s)].filter(Boolean).join(" · ");
+  const votes = s.votes ? t("activity.govActions", { count: s.votes }) : undefined;
+  const line = [poolOf(s), voteOf(network, s), votes].filter(Boolean).join(" · ");
   return line || undefined;
 }
 

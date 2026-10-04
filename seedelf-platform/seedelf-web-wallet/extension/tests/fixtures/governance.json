@@ -1,0 +1,187 @@
+{
+  "recorded": "2026-10-04",
+  "drep": "drep1yfzzwr8jznn02mzepvs6y9n4329eskzpgygjdh4ew28szpcd5hr4f",
+  "proposal_list": {
+    "preprod": [
+      {
+        "proposal_id": "gov_action120a77wpnq40fmj76jr70h23dh50m5vcuacxkdtz8k96raqnauptqq3rfyfe",
+        "proposal_tx_hash": "53fbef3833055e9dcbda90fcfbaa2dbd1fba331cee0d66ac47b1743e827de056",
+        "proposal_index": 0,
+        "proposal_type": "InfoAction",
+        "proposed_epoch": 314,
+        "expiration": 321,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://bafkreigzvg5nbyngh2hfxrptxmh2jturifcsq5v2gbaz7hfg6ccvhlzgxu",
+        "meta_hash": "06a43630e5ffec78c852353d1f0bfc1e4e1896c03a1bb0a6a893a3a30b0075dd",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      },
+      {
+        "proposal_id": "gov_action1tz88qvsnr6rjxfjgfmsw7k23mmdr4yzrqnek73t9fev4gd96nffqq77lzn0",
+        "proposal_tx_hash": "588e7032131e872326484ee0ef5951deda3a904304f36f45654e595434ba9a52",
+        "proposal_index": 0,
+        "proposal_type": "InfoAction",
+        "proposed_epoch": 314,
+        "expiration": 321,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://Qmb62wdJUruTNffcC28jCVgrfa3ENLM5E675nLb3D3vYWZ",
+        "meta_hash": "ff7c2ebf7ff20e343e34128f00434e12ba467173aa1884d7489c219bdaf2640a",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      },
+      {
+        "proposal_id": "gov_action1xgsxd6pn85en3pv29k0afl06qn22khteauqzkg5kvdg587krefusqpkquns",
+        "proposal_tx_hash": "322066e8333d3338858a2d9fd4fdfa04d4ab5d79ef002b2296635143fac3ca79",
+        "proposal_index": 0,
+        "proposal_type": "TreasuryWithdrawals",
+        "proposed_epoch": 314,
+        "expiration": 321,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://QmZeFpGYKhNaRjRKir5YV23n69k93x5K7Q5mydp9bt1Mto",
+        "meta_hash": "b15eab87975edd84a5cacea48d4a31f4d6e2d32c7e9adbaf4dfb4413d9c7c343",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      },
+      {
+        "proposal_id": "gov_action1zw2yfv34gw56sd4jkqwqq4llgvq095jm8k2gztcn3wymytft0qxsqhpp4x8",
+        "proposal_tx_hash": "139444b23543a9a836b2b01c0057ff4300f2d25b3d94812f138b89b22d2b780d",
+        "proposal_index": 0,
+        "proposal_type": "InfoAction",
+        "proposed_epoch": 314,
+        "expiration": 321,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://QmRkeiM8E4Si8xwrbC3uJdTjvfDnnTiV7L1j5YVJZWWG6P",
+        "meta_hash": "858bc6d39964b377818356f5068c6ab6c51ecf8467aa2894c453d2eba9afb74e",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      },
+      {
+        "proposal_id": "gov_action197dpq8xa49jntu8xjlw84wuzwndr5zyt50d8t9wn6x6m7j7kzg8sqyj282f",
+        "proposal_tx_hash": "2f9a101cdda96535f0e697dc7abb8274da3a088ba3da7595d3d1b5bf4bd6120f",
+        "proposal_index": 0,
+        "proposal_type": "TreasuryWithdrawals",
+        "proposed_epoch": 313,
+        "expiration": 320,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://bafkreih2vcpfd36rzh464cz34e2sat2zkoswm7spiteim2wxi26kua5l6y",
+        "meta_hash": "2d6668bf293e2f1c5884ce3cc4c00f49950789a383b1cca0348073a10edf4f07",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      },
+      {
+        "proposal_id": "gov_action1vpttu4mg8ek4ns9jfl833zpjdl8esg8dma49jgdcuj6d7p8qv84sqwfzufe",
+        "proposal_tx_hash": "6056be57683e6d59c0b24fcf1888326fcf9820eddf6a5921b8e4b4df04e061eb",
+        "proposal_index": 0,
+        "proposal_type": "InfoAction",
+        "proposed_epoch": 312,
+        "expiration": 319,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://bafkreihv7prqybt2mspmw5vbfh3lfirrnalnkcol2ti4ayawmzjboe3vi4",
+        "meta_hash": "069456b7666c000b14f02f611ba75d81aa09e5175c17f1fde1eac54e5247f62a",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      },
+      {
+        "proposal_id": "gov_action1xa0ha47m8wf75aw58mz5fs2gaudx0uh2huzhz040pgkmtuj8zfmqqy4th9a",
+        "proposal_tx_hash": "375f7ed7db3b93ea75d43ec544c148ef1a67f2eabf05713eaf0a2db5f2471276",
+        "proposal_index": 0,
+        "proposal_type": "InfoAction",
+        "proposed_epoch": 312,
+        "expiration": 319,
+        "deposit": "1000000000",
+        "meta_url": "ipfs://bafkreie3pquznzbcmxnfq5ybsqtpq7ispbtuhtpy6axgdo4xsc2n26346q",
+        "meta_hash": "c0023bbd0c979b237870a3b16e177a284db8496c826998c2b13559cae5c5c593",
+        "meta_is_valid": null,
+        "title": null,
+        "abstract": null
+      }
+    ],
+    "mainnet": [
+      {
+        "proposal_id": "gov_action17m7nv7839mw93hv889tqzj0umv9ckm780f0nq02fep78f50uedxqq6g5mt9",
+        "proposal_tx_hash": "f6fd3678f12edc58dd8739560149fcdb0b8b6fc77a5f303d49c87c74d1fccb4c",
+        "proposal_index": 0,
+        "proposal_type": "InfoAction",
+        "proposed_epoch": 656,
+        "expiration": 663,
+        "deposit": "100000000000",
+        "meta_url": "https://gateway.pinata.cloud/ipfs/bafkreia3u74dgyvg5v3u7wxwip44wwqzyhynqqm4wzyhkkwevaiynlihnm",
+        "meta_hash": "ab85aad06200d7d7ec79181b68d0651083ffdd9b9bcd15c54212d4d681a9b680",
+        "meta_is_valid": false,
+        "title": "Should stakePoolTargetNum (k) be raised from 500 to 1000? (SPO poll)",
+        "abstract": "This Info Action asks the Cardano community, and in particular Stake Pool Operators (SPOs), whether there is sufficient SPO support to proceed with a later Parameter Change Governance Action that would raise **`stakePoolTargetNum` (`k`)** from 500 to 1000. It follows the 2023 SPO poll but considers `stakePoolTargetNum` on its own.\n\nTo determine whether sufficient SPO support exists, votes shall be tallied according to the standard CIP-1694 voting semantics; this proposal introduces no alternative turnout-based formula. SPO voting power is stake-weighted. An explicit ABSTAIN vote is excluded from active voting stake, while registered stake that does not vote behaves like a NO vote. Sufficient support is established only if explicit SPO YES votes represent more than 50% of the applicable active SPO voting stake.\n\nThis majority-by-stake standard follows the existing Cardano governance model for actions requiring SPO approval. The Cardano Constitution requires more than 50% support by active block-production stake where SPO approval is required for security-critical parameter changes. DReps are invited to vote and submit rationales, but DRep votes are not included when determining whether this Info Action has established an SPO mandate.\n\nBecause this is an Info Action, the >50% standard is a declared interpretation of the poll result, not an on-chain ratification threshold for Info Actions themselves. CIP-1694 assigns Info Actions a 100% formal threshold so they remain polling mechanisms rather than enactable governance actions.\n\nIf more than 50% SPO support is reached under the normal CIP-1694 calculation, this Info Action establishes a clear SPO mandate to proceed with a separate Parameter Change Governance Action raising `stakePoolTargetNum` from 500 to 1000.\n\nIf the threshold is not reached, this Info Action has not established majority SPO support for `k=1000`. The result must not be interpreted as a mandate for any alternative increase in `stakePoolTargetNum`; a different value would require its own explicit SPO approval under the same CIP-1694 voting semantics. Because SPOs were already polled on increasing `k` in 2023, substantially similar proposals should not be repeatedly resubmitted absent materially changed economic, technical, or network conditions."
+      },
+      {
+        "proposal_id": "gov_action1gxxltxr02p28a398p8c6t08xhpg82wkkv9xgwvuxkly48lhgf20sqlkl2l8",
+        "proposal_tx_hash": "418df5986f50547ec4a709f1a5bce6b850753ad6614c873386b7c953fee84a9f",
+        "proposal_index": 0,
+        "proposal_type": "TreasuryWithdrawals",
+        "proposed_epoch": 654,
+        "expiration": 661,
+        "deposit": "100000000000",
+        "meta_url": "ipfs://bafkreih7qyzwndjjrltybe4ft3a5ryl56gqzof3d4u55jzv2zhatmrqape",
+        "meta_hash": "3f0173bf9af7f772002cb18283018e69d780be215c7ddaeafe2e7f9076fdc0fc",
+        "meta_is_valid": true,
+        "title": "Withdraw 11,787,063 ada for the OpenZeppelin Stack administered by Intersect",
+        "abstract": "This treasury withdrawal proposal requests funding for the design, implementation, security audit, and ecosystem adoption of a comprehensive open-source development stack for Cardano, delivered over an initial 12 months in quarterly milestones. The proposal bundles three tightly coupled workstreams into a single integrated engagement, led by the Reference Implementations and built around them:\n\n* OpenZeppelin Reference Implementations for Cardano: three production-ready, end-to-end blueprints targeting strategic DeFi and institutional use cases: a Cardano Liquid Staking Protocol, a Self-Repaying Loans Protocol, and a Tokenized Money Market Fund.\n* OpenZeppelin Contracts Library for Cardano: a secure, audited, standardized contracts library tailored for Cardano's eUTXO model and Plutus environment, including Contracts Wizard integration, AI development tools, and documentation.\n* Security Retainer: dedicated security capacity covering line-by-line audits of the library and full-stack security reviews and penetration testing of every Reference Implementation.\n\nOpenZeppelin also commits to a Developer Enablement and Co-Marketing program, included at no additional cost, to drive ecosystem and institutional adoption of the libraries and Reference Implementations.\n\nThis proposal requests a total treasury withdrawal of 11,787,063 ada. The full budget breakdown and disbursement mechanics are set out in the Rationale."
+      },
+      {
+        "proposal_id": "gov_action1whncs25w727rj5tml7lmv48gnaf9mm66sdjds8s3l306et7xmkdsqzqd7s2",
+        "proposal_tx_hash": "75e7882a8ef2bc39517bffbfb654e89f525def5a8364d81e11fc5facafc6dd9b",
+        "proposal_index": 0,
+        "proposal_type": "ParameterChange",
+        "proposed_epoch": 654,
+        "expiration": 661,
+        "deposit": "100000000000",
+        "meta_url": "https://gateway.pinata.cloud/ipfs/bafkreidy6ftyudcx6lwkualmjbgkurhlqo35s6jarq3phxendcr5el6n34",
+        "meta_hash": "e32f6117912d810c82f0f153e7bf787024870ddb82601113e580c7d86bd8f384",
+        "meta_is_valid": true,
+        "title": "Reduce minPoolCost to 75 ada",
+        "abstract": "This governance action proposes reducing `minPoolCost` from 170,000,000 Lovelace (170 ada) to 75,000,000 Lovelace (75 ada), a decrease of approximately 55.9%. No other protocol parameters are changed by this action."
+      }
+    ]
+  },
+  "drep_info": [
+    {
+      "drep_id": "drep1yfzzwr8jznn02mzepvs6y9n4329eskzpgygjdh4ew28szpcd5hr4f",
+      "drep_status": "registered",
+      "active": true,
+      "expires_epoch_no": 679,
+      "amount": "181911921423",
+      "live_delegator_count": 36,
+      "deposit": "500000000",
+      "meta_url": "https://most-brass-sun.quicknode-ipfs.com/ipfs/QmXuUE4akXVoE9L6uLR4suADywbJ2vFaBAEZVNnubhRx9C",
+      "meta_hash": "cfb6041529e8968f40a0deffa8a17dfe75a642f0489df1a04dd5ef28e6d5d094"
+    }
+  ],
+  "drep_metadata": [
+    {
+      "drep_id": "drep1yfzzwr8jznn02mzepvs6y9n4329eskzpgygjdh4ew28szpcd5hr4f",
+      "is_valid": true,
+      "givenName": "Farid_CZ"
+    }
+  ],
+  "vote_list": [
+    {
+      "proposal_id": "gov_action1gxxltxr02p28a398p8c6t08xhpg82wkkv9xgwvuxkly48lhgf20sqlkl2l8",
+      "vote": "No",
+      "block_time": 1791133340
+    },
+    {
+      "proposal_id": "gov_action1whncs25w727rj5tml7lmv48gnaf9mm66sdjds8s3l306et7xmkdsqzqd7s2",
+      "vote": "Yes",
+      "block_time": 1791133340
+    },
+    {
+      "proposal_id": "gov_action17m7nv7839mw93hv889tqzj0umv9ckm780f0nq02fep78f50uedxqq6g5mt9",
+      "vote": "No",
+      "block_time": 1791133340
+    }
+  ]
+}

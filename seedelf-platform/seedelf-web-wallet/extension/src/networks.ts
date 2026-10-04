@@ -84,6 +84,30 @@ export const IPFS_GATEWAY = "https://ipfs.blockfrost.dev";
 /** Chrome's host pattern for the gateway: what the first image asks Chrome for. */
 export const IPFS_GATEWAY_HOST = `${IPFS_GATEWAY}/*`;
 
+/** An epoch's length since Shelley, on both networks: 432,000 one-second slots, five days. */
+export const EPOCH_MS = 432_000_000;
+
+/**
+ * Shelley's first epoch and when it started: seedelf-core's `slot_config`
+ * (eval.rs) gives the same moments as slots.
+ */
+const SHELLEY: Record<NetworkName, { epoch: number; startMs: number }> = {
+  preprod: { epoch: 4, startMs: 1_655_769_600_000 },
+  mainnet: { epoch: 208, startMs: 1_596_059_091_000 },
+};
+
+/** When `epoch` starts on `network` (ms since 1970), counted from Shelley's start: no request. */
+export function epochStart(network: NetworkName, epoch: number): number {
+  const shelley = SHELLEY[network];
+  return shelley.startMs + (epoch - shelley.epoch) * EPOCH_MS;
+}
+
+/** The epoch `ms` (ms since 1970) falls in on `network`. */
+export function epochAt(network: NetworkName, ms: number): number {
+  const shelley = SHELLEY[network];
+  return shelley.epoch + Math.floor((ms - shelley.startMs) / EPOCH_MS);
+}
+
 /** Whether Lovejoin is deployed on `network`: the worker's gate and the UI's, one source. */
 export function lovejoinOn(network: NetworkName): boolean {
   return NETWORKS[network].lovejoin !== undefined;

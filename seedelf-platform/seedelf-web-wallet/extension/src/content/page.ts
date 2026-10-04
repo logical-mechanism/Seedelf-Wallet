@@ -43,6 +43,15 @@ if (!page.cardano?.seedelf) {
       window.postMessage({ [PAGE_CHANNEL]: "request", id, method, args }, location.origin);
     });
 
+  // CIP-95, for a site the user gave governance (chunk 21): the account's DRep key, to register and vote with.
+  const cip95 = Object.freeze({
+    getPubDRepKey: () => call("getPubDRepKey"),
+    getRegisteredPubStakeKeys: () => call("getRegisteredPubStakeKeys"),
+    getUnregisteredPubStakeKeys: () => call("getUnregisteredPubStakeKeys"),
+    // The same as the API's own: a DRep's ID, or its key's address, signs with the DRep key.
+    signData: (address: string, payload: string) => call("signData", address, payload),
+  });
+
   const api = Object.freeze({
     getNetworkId: () => call("getNetworkId"),
     getExtensions: () => call("getExtensions"),
@@ -62,15 +71,24 @@ if (!page.cardano?.seedelf) {
     }),
   });
 
+  /** The API, with CIP-95's namespace when `enable()` was given governance. */
+  const withCip95 = Object.freeze({ ...api, cip95 });
+
   const wallet = Object.freeze({
     name: WALLET_NAME,
     icon,
     apiVersion: "0.1.0",
-    supportedExtensions: Object.freeze([]),
+    supportedExtensions: Object.freeze([Object.freeze({ cip: 95 })]),
     isEnabled: () => call("isEnabled"),
-    enable: async () => {
-      await call("enable");
-      return api;
+    // CIP-30's `enable({ extensions: [{ cip: 95 }] })`: only the extensions asked for are passed on.
+    // What it was given, getExtensions() says, as CIP-30 has it.
+    enable: async (params?: { extensions?: Array<{ cip?: unknown }> }) => {
+      const asked = Array.isArray(params?.extensions) && params.extensions.some((e) => e?.cip === 95);
+      await call("enable", asked ? { extensions: [{ cip: 95 }] } : undefined);
+      if (!asked) return api;
+      const given = await call("getExtensions");
+      const governance = Array.isArray(given) && given.some((e: { cip?: unknown } | null) => e?.cip === 95);
+      return governance ? withCip95 : api;
     },
   });
 

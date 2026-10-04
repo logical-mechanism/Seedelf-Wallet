@@ -147,6 +147,10 @@ export interface ActivityStaking {
   rewards?: string;
   /** Unregistered: staking stopped. */
   stopped?: boolean;
+  /** What it did as the account's own DRep: registered it (`deposit` includes what that locked), updated, retired, or voted. */
+  drepAction?: "register" | "update" | "retire" | "vote";
+  /** How many governance actions the account's DRep voted on in it. */
+  votes?: number;
 }
 
 /** ADA's value in the currency chosen, on mainnet: CoinGecko's, kept on the device five minutes. */
@@ -242,6 +246,8 @@ export interface StakeInfo {
   rewards: string;
   /** The deposit paid to register it: stopping staking gets it back. */
   deposit: string;
+  /** Its vote goes to the account's own DRep (chunk 21): worked out from the key, asking no one. */
+  ownDrep?: boolean;
 }
 
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
@@ -316,7 +322,22 @@ export interface DrepDetails {
   delegators: number;
 }
 
-/** Something to do with the Cardano account's stake key. */
+/** Where a file is published, and the blake2b-256 hash of its exact bytes (hex). */
+export interface Anchor {
+  url: string;
+  hash: string;
+}
+
+/** One vote as the account's DRep: a governance action by the transaction that proposed it and its index there. */
+export interface Ballot {
+  txHash: string;
+  index: number;
+  vote: GovVote;
+}
+
+export type GovVote = "yes" | "no" | "abstain";
+
+/** Something to do with the Cardano account's stake key, or as its own DRep (CIP-105's key `3/0`). */
 export type StakingAction =
   /** Stake with a pool (`pool1…`), registering first when needed. */
   | { kind: "delegate"; pool: string }
@@ -324,7 +345,97 @@ export type StakingAction =
   | { kind: "vote"; drep: string }
   | { kind: "withdraw" }
   /** Withdraw the rewards, unregister, and get the deposit back. */
-  | { kind: "stop" };
+  | { kind: "stop" }
+  /** Register the account's own DRep, with its profile when there is one; `delegate` delegates the account's vote to it too. */
+  | { kind: "drep-register"; anchor?: Anchor; delegate: boolean }
+  /** Change the DRep's profile, or take it away. It keeps the DRep active, too. */
+  | { kind: "drep-update"; anchor?: Anchor }
+  /** Retire the DRep and get its deposit back; the account's own vote, if it was the DRep's, moves to always abstain. */
+  | { kind: "drep-retire" }
+  /** Vote as the DRep, with no rationale. */
+  | { kind: "drep-vote"; votes: Ballot[] };
+
+/** The account's own DRep: who it is (CIP-105's key `3/0`), and where it stands (Koios's `drep_info`). Lovelace amounts are decimal strings. */
+export interface OwnDrep {
+  /** CIP-129. */
+  id: string;
+  /** `none`: never registered. */
+  status: "none" | "registered" | "retired";
+  /** The deposit it paid: what retiring returns. "0" when not registered. */
+  deposit: string;
+  /** What registering locks up now (`drep_deposit`), when it isn't registered and Koios said. */
+  depositNow?: string;
+  /** Voted or updated recently enough to count. */
+  active: boolean;
+  /** The last epoch it stays active in without voting or updating. */
+  expiresEpoch: number | null;
+  /** The stake delegated to it. */
+  votingPower: string;
+  delegators: number;
+  /** Its profile, when it has one: where, and what Koios found there (`valid` null: Koios couldn't say). */
+  profile: { url: string; hash: string; name?: string; valid: boolean | null } | null;
+}
+
+/** What a governance action does, as the ledger names it. */
+export type GovActionType =
+  | "ParameterChange"
+  | "HardForkInitiation"
+  | "TreasuryWithdrawals"
+  | "NoConfidence"
+  | "NewCommittee"
+  | "NewConstitution"
+  | "InfoAction";
+
+/** A live governance action (Koios's `proposal_list`): its words are its own, from its anchor, as Koios read them. */
+export interface GovAction {
+  /** CIP-129 (`gov_action1…`). */
+  id: string;
+  txHash: string;
+  index: number;
+  /** A `GovActionType`, or a type the ledger added since, shown as Koios names it. */
+  type: GovActionType | (string & {});
+  title?: string;
+  abstract?: string;
+  proposedEpoch: number;
+  /** The last epoch it can be voted on in. */
+  expiresEpoch: number;
+  /** What its proposer locked up (lovelace). */
+  deposit: string;
+  anchor: Anchor | null;
+  /** Koios read the anchor and its hash matched (true), didn't (false), or couldn't say (null). */
+  anchorValid: boolean | null;
+}
+
+/** The live governance actions, kept on the device for an hour: they're the same for everyone. */
+export interface GovActionList {
+  actions: GovAction[];
+  /** When it was read (ms since the epoch). */
+  updatedAt: number;
+}
+
+/** The Governance actions screen: the live actions, the account's own DRep, and how it voted on each. */
+export interface GovernanceView {
+  list: GovActionList;
+  drep: OwnDrep;
+  /** This DRep's vote on each live action it voted on, by the action's ID. */
+  votes: Record<string, GovVote>;
+}
+
+/** A DRep's profile, as the user writes it: CIP-119's fields. */
+export interface DrepProfileRequest {
+  givenName: string;
+  objectives?: string;
+  motivations?: string;
+  qualifications?: string;
+  /** CIP-119's `doNotList`: asks DRep directories not to list it. */
+  doNotList: boolean;
+}
+
+/** The profile's file, to publish exactly as it is, and its hash (hex): what the registration's anchor carries. */
+export interface DrepProfileFile {
+  file: string;
+  hash: string;
+}
 
 /** A built and signed staking transaction, waiting for the user to send it. Amounts are lovelace strings. */
 export interface StakingSummary {
@@ -336,8 +447,10 @@ export interface StakingSummary {
   /** The vote, as Koios names it. */
   drep: string | null;
   fee: string;
-  /** Paid to register the stake key. */
+  /** Paid to register the stake key, and a DRep: all of it. */
   deposit: string;
+  /** Of `deposit`, what registering the account's DRep locks up: back when the DRep retires. Only for a DRep action. */
+  drepDeposit?: string;
   /** Returned by unregistering it. */
   refund: string;
   /** Rewards withdrawn. */
@@ -612,6 +725,10 @@ export interface PendingTx {
     | "vote"
     | "withdraw-rewards"
     | "unstake"
+    | "drep-register"
+    | "drep-update"
+    | "drep-retire"
+    | "drep-vote"
     | "session-out"
     | "session-swap"
     | "session-cancel"
@@ -743,12 +860,16 @@ export interface DappTxSummary {
     drep: string | null;
     deposit: string | null;
     refund: string | null;
+    /** A DRep's own certificate (kind "drep"): it registers the DRep, updates it, or retires it. `own` when it's the account's DRep (CIP-95). */
+    drepAction?: "register" | "update" | "retire" | null;
   }>;
   withdrawals: Array<{ address: string; lovelace: string; own: boolean }>;
   collateral: { own: number; lovelace: string; total: string | null; returnedLovelace: string | null; atRisk: string } | null;
   scripts: boolean;
   referenceInputs: number;
   votes: number;
+  /** Of `votes`, those cast by the account's own DRep (CIP-95). */
+  ownVotes?: number;
   proposals: number;
   donation: string | null;
   /** CIP-20's message lines. */
@@ -756,7 +877,7 @@ export interface DappTxSummary {
   metadata: boolean;
   validFrom: number | null;
   validUntil: number | null;
-  /** The account's keys that sign: `0/3`, `1/0`, `stake`. */
+  /** The account's keys that sign: `0/3`, `1/0`, `stake`, `drep` (CIP-95). */
   signs: string[];
   unknownInputs: string[];
   othersSign: number;
@@ -1060,7 +1181,15 @@ export interface TxView {
  * `collateralSpent`: it spends the session's collateral as an ordinary input.
  */
 export type DappAsk =
-  | { kind: "connect"; password: boolean; funding?: { index: number; txHash: string } }
+  | {
+      kind: "connect";
+      password: boolean;
+      funding?: { index: number; txHash: string };
+      /** It asks for governance too (CIP-95): the public account's DRep key, to register and vote with. */
+      governance?: boolean;
+      /** Connected already: it asks for governance alone. */
+      connected?: boolean;
+    }
   | {
       kind: "sign-tx";
       partial: boolean;
@@ -1080,9 +1209,9 @@ export type DappAsk =
   | {
       kind: "sign-data";
       session?: number;
-      /** Bech32. */
+      /** Bech32; the DRep's ID when it's the DRep key (CIP-95). */
       address: string;
-      key: "payment" | "stake";
+      key: "payment" | "stake" | "drep";
       payload: string;
       /** The payload as text, when it reads as UTF-8. */
       text?: string;
@@ -1103,6 +1232,10 @@ export interface DappSite {
   connectedAt: number;
   /** Connected to this private session (private CIP-30), not a public account. */
   session?: number;
+  /** Given governance (CIP-95, chunk 21): the dApp account's DRep key. Never with `session`. */
+  cip95?: true;
+  /** It asked for governance and the user said no: it isn't asked again until it connects anew. */
+  cip95Declined?: true;
 }
 
 /** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */
@@ -1674,6 +1807,12 @@ export interface Requests {
   pool: { payload: { id: string }; result: PoolDetails };
   /** A DRep by its ID (CIP-129 or CIP-105): its standing and name. */
   drep: { payload: { id: string }; result: DrepDetails };
+  /** The account's own DRep, read fresh. */
+  "drep-own": { payload: None; result: OwnDrep };
+  /** The live governance actions (kept on the device for an hour, or read again with `refresh`), with the account's DRep and its votes. */
+  governance: { payload: { refresh?: boolean }; result: GovernanceView };
+  /** Writes a DRep's profile as CIP-119 metadata and hashes it, asking no one. */
+  "drep-profile": { payload: { profile: DrepProfileRequest }; result: DrepProfileFile };
   /** Builds and signs a staking transaction without submitting it. */
   "stake-build": { payload: { action: StakingAction }; result: StakingSummary };
   /** Submits the staking transaction built last, if its hash matches. */
@@ -1751,7 +1890,8 @@ export interface Requests {
    * A signature that needs the password takes it here; a wrong one leaves it waiting.
    */
   "dapp-answer": {
-    payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string } };
+    /** `governance`: a connect that asked for CIP-95, connected with it (the window's switch, off by default). */
+    payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string }; governance?: boolean };
     result: { error?: string };
   };
   /** Ends a site's private session, once its account is empty, and disconnects the site that has it. */
@@ -1930,6 +2070,9 @@ const REQUEST_LIST = [
   "pools",
   "pool",
   "drep",
+  "drep-own",
+  "governance",
+  "drep-profile",
   "stake-build",
   "stake-submit",
   "preferences",

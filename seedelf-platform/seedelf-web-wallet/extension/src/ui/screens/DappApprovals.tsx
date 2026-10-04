@@ -100,7 +100,10 @@ export function DappApprovals() {
   }, [currentId]);
 
   /** Answers the request shown: `extra` carries a private session's funding and the password it needs. */
-  async function answer(approve: boolean, extra: { password?: string; fund?: { txHash: string } } = {}): Promise<boolean> {
+  async function answer(
+    approve: boolean,
+    extra: { password?: string; fund?: { txHash: string }; governance?: boolean } = {},
+  ): Promise<boolean> {
     if (!current || busy || held || (approve && needsPassword && !password)) return false;
     answered.current = current.id;
     setBusy(true);
@@ -301,11 +304,13 @@ export function ConnectRequest({
   change?: Change;
   error?: string;
   onError: (error?: string) => void;
-  onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string } }) => Promise<boolean>;
+  onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string }; governance?: boolean }) => Promise<boolean>;
 }) {
   const tr = useT();
   const network = useNetwork();
   const [connection, setConnection] = useState<Connection>();
+  // Asked for, governance goes with the public account only when switched on: off, as the most private choice is.
+  const [governance, setGovernance] = useState(false);
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -346,6 +351,37 @@ export function ConnectRequest({
             {tr("dappUi.fundingOnCardanoscan")}
           </ExplorerLink>
           <p className="note">{tr("dappUi.canClose")}</p>
+        </div>
+      </Screen>
+    );
+  }
+
+  // Connected already, it asks for governance alone (CIP-95): its account is the dApp account's, as before.
+  if (approval.connected) {
+    return (
+      <Screen
+        title={tr("dappUi.governanceTitle")}
+        titleId="dapp-title"
+        aside={`${tr("dappUi.nothingUntil", { action: tr("dappUi.allow") })}${more}`}
+        error={error}
+        foot={
+          <div className="actions">
+            <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy || held}>
+              {tr("dappUi.cancel")}
+            </button>
+            <button type="button" className="primary" onClick={() => void onAnswer(true)} disabled={busy || held}>
+              {busy ? "…" : tr("dappUi.allow")}
+            </button>
+          </div>
+        }
+      >
+        <div className="stack" data-testid="dapp-governance">
+          <Changed change={change} />
+          {site}
+          <p className="note">{tr("dappUi.governance.asks")}</p>
+          <Callout tone="privacy" testId="dapp-governance-privacy">
+            {tr("dappUi.privacy.governance")}
+          </Callout>
         </div>
       </Screen>
     );
@@ -463,7 +499,7 @@ export function ConnectRequest({
             <button
               type="button"
               className="primary"
-              onClick={() => void onAnswer(true)}
+              onClick={() => void onAnswer(true, approval.governance ? { governance } : {})}
               disabled={busy || held || connection !== "public"}
             >
               {busy ? "…" : tr("dappUi.connect")}
@@ -506,12 +542,38 @@ export function ConnectRequest({
             <Callout tone="privacy" testId="dapp-connect-privacy">
               {PUBLIC_PRIVACY()}
             </Callout>
+            {approval.governance && (
+              <>
+                <div className="setting-row" data-testid="dapp-governance-switch">
+                  <span className="stack-tight">
+                    <span id="dapp-governance-label">{tr("dappUi.governance.switch")}</span>
+                    <span className="note" id="dapp-governance-note">
+                      {tr(governance ? "dappUi.governance.on" : "dappUi.governance.off")}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    className="switch"
+                    aria-checked={governance}
+                    aria-labelledby="dapp-governance-label"
+                    aria-describedby="dapp-governance-note"
+                    onClick={() => setGovernance(!governance)}
+                    disabled={busy || held}
+                  />
+                </div>
+                <Callout tone="privacy" testId="dapp-governance-privacy">
+                  {tr("dappUi.privacy.governance")}
+                </Callout>
+              </>
+            )}
           </>
         ) : (
           <>
             <ul className="dapp-points" data-testid="dapp-private-points">
               <li>{tr("dappUi.private.account")}</li>
               <li>{tr("dappUi.private.stays")}</li>
+              {approval.governance && <li data-testid="dapp-private-no-governance">{tr("dappUi.private.noGovernance")}</li>}
             </ul>
             <div className="field">
               <label htmlFor="dapp-private-amount">{tr("dappUi.whatToPutIn")}</label>
@@ -574,9 +636,14 @@ export function SignTx({
     if (posesAs) lookalikes.set(`${t.policyId}.${t.assetName}`, posesAs);
   }
   const lookalikeNames = [...new Set(lookalikes.values())].join(tr("histories.list.and"));
-  const keys = s.signs.filter((k) => k !== "stake").length;
+  const keys = s.signs.filter((k) => k !== "stake" && k !== "drep").length;
   const stake = s.signs.includes("stake");
-  const signers = [keys ? tr("dappUi.paymentKeys", { count: keys }) : "", stake ? tr("dappUi.yourStakeKey") : ""]
+  const drep = s.signs.includes("drep");
+  const signers = [
+    keys ? tr("dappUi.paymentKeys", { count: keys }) : "",
+    stake ? tr("dappUi.yourStakeKey") : "",
+    drep ? tr("dappUi.yourDrepKey") : "",
+  ]
     .filter(Boolean)
     .join(tr("histories.list.and"));
   const whose = tr(session ? "dappUi.whose.warn.session" : "dappUi.whose.warn.account");
@@ -587,7 +654,7 @@ export function SignTx({
   const notes: ReactNode[] = [];
   if (s.scripts) notes.push(tr("dappUi.note.scripts"));
   if (s.referenceInputs) notes.push(tr("dappUi.note.reads", { count: s.referenceInputs }));
-  if (s.votes) notes.push(tr("dappUi.note.votes", { count: s.votes }));
+  if (s.votes && s.votes > (s.ownVotes ?? 0)) notes.push(tr("dappUi.note.votes", { count: s.votes - (s.ownVotes ?? 0) }));
   if (s.proposals) notes.push(tr("dappUi.note.proposals", { count: s.proposals }));
   if (s.donation) notes.push(tr("dappUi.note.donates", { ada: formatAda(s.donation) }));
   if (s.metadata && !s.note) notes.push(tr("dappUi.note.metadata"));
@@ -713,6 +780,12 @@ export function SignTx({
         </Callout>
       )}
 
+      {(s.ownVotes ?? 0) > 0 && (
+        <Callout tone="privacy" testId="dapp-own-votes">
+          {tr("dappUi.privacy.ownVotes", { count: s.ownVotes })}
+        </Callout>
+      )}
+
       {collateralSpent && (
         <Callout tone="warn" testId="dapp-collateral-spent">
           {tr("dappUi.warn.collateralSpent")}
@@ -774,7 +847,7 @@ export function SignData({
   text,
 }: {
   address: string;
-  signer: "payment" | "stake";
+  signer: "payment" | "stake" | "drep";
   payload: string;
   text?: string;
 }) {
@@ -782,11 +855,14 @@ export function SignData({
   return (
     <>
       <ReviewRows testId="dapp-data">
-        <Row label={tr("dappUi.with")} value={tr(signer === "stake" ? "dappUi.stakeKey" : "dappUi.paymentKey")} />
+        <Row
+          label={tr("dappUi.with")}
+          value={tr(signer === "stake" ? "dappUi.stakeKey" : signer === "drep" ? "dappUi.drepKey" : "dappUi.paymentKey")}
+        />
       </ReviewRows>
       {/* The whole address on its own line, as the Pays rows show it: shortened, a lookalike's could read the same. */}
       <div className="stack-tight">
-        <span className="note">{tr("dappUi.forTheAddress")}</span>
+        <span className="note">{tr(signer === "drep" ? "dappUi.forTheDrep" : "dappUi.forTheAddress")}</span>
         <span className="dapp-address" data-testid="dapp-data-address" data-value={address}>
           {address}
         </span>

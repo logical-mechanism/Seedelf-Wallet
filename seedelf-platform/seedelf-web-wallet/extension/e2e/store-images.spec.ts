@@ -183,7 +183,7 @@ test("the Web Store listing's images", async ({ context, koios }) => {
 
   await cardanoTab(popup);
   await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
-  await expect(popup.getByTestId("staking-row")).toContainText("Staking with LOGIC");
+  await expect(popup.getByTestId("staking-row-pool")).toContainText("LOGIC · ");
   await expect(popup.getByTestId("cardano-meta")).toHaveText("4 addresses used");
   await expect(popup.getByTestId("cardano-tokens")).toContainText("DJED");
   shots.push([

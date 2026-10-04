@@ -1,11 +1,12 @@
 // buildStaking, poolId and drepId through WebAssembly, on the 12-word
 // phrase's real preprod UTxOs and its recorded account_info (both in the
-// extension's test fixtures).
+// extension's test fixtures), and the account's own DRep: drepOf,
+// drepProfile and the DRep's transactions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { CardanoAccount, Network, buildAccountSend, buildStaking, drepId, poolId } from "./wasm.mjs";
+import { CardanoAccount, Network, buildAccountSend, buildStaking, drepId, drepProfile, poolId } from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const phrase = json("../../../seedelf-crypto/tests/vectors/cardano_account.json").vectors.find(
@@ -92,4 +93,41 @@ test("reads pool and DRep IDs the way Koios names them", () => {
   assert.equal(drepId(LOGIC_DREP), LOGIC_DREP);
   assert.equal(drepId("drep_always_abstain"), "drep_always_abstain");
   assert.throws(() => drepId(LOGIC), /DRep ID/);
+});
+
+test("the account's own DRep: who it is, and its transactions", () => {
+  const vector = CardanoAccount.fromPhrase("test walk nut penalty hip pave soap entry language right filter choice", 0);
+  assert.deepEqual(JSON.parse(vector.drepOf()), {
+    id: "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a",
+    hash: "a5b45515a3ff8cb7c02ce351834da324eb6dfc41b5779cb5e6b832aa",
+    publicKey: "f74d7ac30513ac1825715fd0196769761fca6e7f69de33d04ef09a0c417a752b",
+  });
+
+  const account = CardanoAccount.fromPhrase(phrase, 0);
+  const me = JSON.parse(account.drepOf()).id;
+  // One UTxO raised to 600 ADA, for the DRep's 500 ADA deposit.
+  const utxos = pathedUtxos(account).map((p, i) => (i === 0 ? { ...p, utxo: { ...p.utxo, value: "600000000" } } : p));
+  const build = (action, drep) =>
+    JSON.parse(buildStaking(account, JSON.stringify({ network: "preprod", params, utxos, action, state, drep })));
+
+  const register = build({ kind: "drep-register", delegate: true });
+  assert.equal(register.drep, me);
+  assert.equal(register.deposit, "500000000");
+  // The DRep's own deposit, apart from any stake key's: here the stake key is registered already.
+  assert.equal(register.drepDeposit, "500000000");
+  assert.equal(JSON.parse(buildStaking(account, JSON.stringify({ network: "preprod", params, utxos, action: { kind: "delegate", pool: LOGIC }, state: { registered: false, deposit: "0", rewards: "0", drep: null } }))).drepDeposit, undefined);
+  const registered = { registered: true, deposit: "500000000" };
+  const vote = build(
+    { kind: "drep-vote", votes: [{ txHash: "13".repeat(32), index: 0, vote: "abstain" }] },
+    registered,
+  );
+  assert.equal(vote.deposit, "0");
+  assert.equal(build({ kind: "drep-retire" }, registered).refund, "500000000");
+  assert.throws(() => build({ kind: "drep-retire" }), /isn't a DRep/);
+  assert.throws(() => build({ kind: "drep-register", delegate: false }, registered), /a DRep already/);
+
+  const profile = JSON.parse(drepProfile(JSON.stringify({ givenName: "Seedelf Tester", doNotList: true })));
+  assert.equal(JSON.parse(profile.file).body.givenName, "Seedelf Tester");
+  assert.match(profile.hash, /^[0-9a-f]{64}$/);
+  assert.throws(() => drepProfile(JSON.stringify({ givenName: "" })), /needs a name/);
 });

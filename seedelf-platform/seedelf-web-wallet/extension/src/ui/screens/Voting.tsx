@@ -10,10 +10,10 @@
 // one's name, and every row shows enough of the ID to tell them apart
 // (launch review #59).
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { type I18nKey, joinList, t, useT } from "../../i18n";
 
-import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails } from "../../shared/rpc";
+import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails, type OwnDrep } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CheckIcon, LandmarkIcon, SearchIcon } from "../components/Icons";
@@ -27,16 +27,25 @@ import { initials, tint } from "../tokens";
 /** DReps shown at a time; "Show more" adds as many again. */
 const PAGE = 20;
 
-type Pick = "abstain" | "no-confidence" | "drep";
+type Pick = "abstain" | "no-confidence" | "own" | "drep";
 
 const OPTIONS = [
   { value: "abstain", title: "vote.abstain.title", text: "vote.abstain.text" },
   { value: "no-confidence", title: "vote.noConfidence.title", text: "vote.noConfidence.text" },
+  // The account as its own DRep (chunk 21): whether it is one yet or not, so it never has to find itself.
+  { value: "own", title: "drep.yourOwn", text: "vote.own.text" },
   { value: "drep", title: "vote.drep.title", text: "vote.drep.text" },
 ] as const satisfies Array<{ value: Pick; title: I18nKey; text: I18nKey }>;
 
-const pickOf = (drep: string | null): Pick =>
-  drep === ALWAYS_NO_CONFIDENCE ? "no-confidence" : drep && drep !== ALWAYS_ABSTAIN ? "drep" : "abstain";
+/** Which choice the vote's delegation is now: the account's own DRep (`ownId`), when it goes there. */
+export const pickOf = (drep: string | null, ownId?: string): Pick =>
+  drep === ALWAYS_NO_CONFIDENCE
+    ? "no-confidence"
+    : ownId !== undefined && drep === ownId
+      ? "own"
+      : drep && drep !== ALWAYS_ABSTAIN
+        ? "drep"
+        : "abstain";
 
 export function Voting({
   current,
@@ -46,6 +55,9 @@ export function Voting({
   error,
   onBack,
   onVote,
+  own,
+  ownError,
+  onBecome,
 }: {
   /** Where the vote goes now, as Koios names it. */
   current: string | null;
@@ -57,22 +69,50 @@ export function Voting({
   onBack: () => void;
   /** The vote as Koios names it, the DRep's name, and how many DReps share that name (`drepSharing`). */
   onVote: (drep: string, name?: string, shared?: DrepShared) => void;
+  /** The account's own DRep, as the Staking page read it (no request here); undefined while it reads. */
+  own?: OwnDrep;
+  ownError?: string;
+  /** Opens Become a DRep: for "Your own DRep" before the account is one. */
+  onBecome: () => void;
 }) {
   const t = useT();
   const network = useNetwork();
   const { dreps } = drepList(network);
   const shared = useMemo(() => sharedNames(dreps, (d) => d.name), [dreps]);
-  const [pick, setPick] = useState<Pick>(pickOf(current));
+  const [pick, setPick] = useState<Pick>(pickOf(current, own?.id));
+  // The account's DRep read after this opened: a vote already on it is "Your own DRep".
+  const ownId = own?.id;
+  useEffect(() => {
+    if (ownId !== undefined && current === ownId) setPick((p) => (p === "drep" ? "own" : p));
+  }, [ownId, current]);
+  /** The account's own DRep, when it's registered: the only one a vote can go to. */
+  const registeredOwn = own?.status === "registered" ? own : undefined;
+  const ownRegistered = registeredOwn !== undefined;
   const [drep, setDrep] = useState<DrepDetails>();
   const [looking, setLooking] = useState(false);
   const [lookError, setLookError] = useState<string>();
 
   const chosen =
-    pick === "abstain" ? ALWAYS_ABSTAIN : pick === "no-confidence" ? ALWAYS_NO_CONFIDENCE : drep?.id;
+    pick === "abstain"
+      ? ALWAYS_ABSTAIN
+      : pick === "no-confidence"
+        ? ALWAYS_NO_CONFIDENCE
+        : pick === "own"
+          ? registeredOwn?.id
+          : drep?.id;
   const same = chosen !== undefined && chosen === current;
   const retired = pick === "drep" && drep?.status === "retired";
   const drepShared = drep ? drepSharing(dreps, shared, drep) : NOT_SHARED;
-  const why = blocked ?? (same ? t("vote.alreadyThere") : retired ? t("vote.drepRetired") : undefined);
+  const why =
+    blocked ??
+    (same
+      ? t("vote.alreadyThere")
+      : retired
+        ? t("vote.drepRetired")
+        : pick === "own" && own && !ownRegistered
+          ? t("vote.own.registerFirst")
+          : undefined);
+  const ownName = own && current === own.id ? t("drep.yourOwn") : undefined;
 
   async function lookUp(id: string) {
     if (!id || looking) return;
@@ -80,7 +120,13 @@ export function Voting({
     setLookError(undefined);
     setDrep(undefined);
     try {
-      setDrep(await call("drep", { id }));
+      const found = await call("drep", { id });
+      // The account's own DRep, found by its ID: it's the choice above.
+      if (registeredOwn && found.id === registeredOwn.id) {
+        setPick("own");
+        return;
+      }
+      setDrep(found);
     } catch (err) {
       setLookError((err as Error).message);
     } finally {
@@ -94,14 +140,19 @@ export function Voting({
       titleId="voting-title"
       onBack={onBack}
       backDisabled={busy}
-      aside={t("vote.now", { what: voteLabel(current) })}
+      aside={t("vote.now", { what: voteLabel(current, ownName) })}
       error={error}
       foot={
         <button
           type="button"
           className="primary"
           onClick={() =>
-            chosen && onVote(chosen, pick === "drep" && drep?.name ? plainName(drep.name) : undefined, pick === "drep" ? drepShared : undefined)
+            chosen &&
+            onVote(
+              chosen,
+              pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
+              pick === "drep" ? drepShared : undefined,
+            )
           }
           disabled={!chosen || !!why || busy}
           title={why}
@@ -136,6 +187,40 @@ export function Voting({
           );
         })}
       </ul>
+
+      {pick === "own" && (
+        <div className="stack-tight" data-testid="own-drep">
+          {!own ? (
+            <p className="note">{ownError ? t("drep.readFailed", { error: ownError }) : t("drep.reading")}</p>
+          ) : registeredOwn ? (
+            <>
+              <ReviewRows testId="own-drep-facts">
+                <Row
+                  label={t("vote.statusLabel")}
+                  value={registeredOwn.active ? t("vote.status.active") : t("vote.status.inactive")}
+                  strong
+                />
+                <Row label={t("activity.row.votingPower")} value={`${formatAda(registeredOwn.votingPower)} ₳`} />
+              </ReviewRows>
+              <p className="note mono-id" data-testid="own-drep-id">
+                {registeredOwn.id}
+              </p>
+              {!registeredOwn.active && <Callout tone="warn">{t("vote.warn.inactive")}</Callout>}
+            </>
+          ) : (
+            <>
+              <p className="note" data-testid="own-drep-not-yet">
+                {own.depositNow
+                  ? t("vote.own.notYet", { amount: formatAda(own.depositNow) })
+                  : t("vote.own.notYetUnknown")}
+              </p>
+              <button type="button" className="secondary align-start" onClick={onBecome} disabled={!!blocked || busy} title={blocked}>
+                {t("drep.become")}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {pick === "drep" &&
         (drep ? (

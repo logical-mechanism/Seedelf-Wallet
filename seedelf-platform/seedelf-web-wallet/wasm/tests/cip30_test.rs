@@ -142,6 +142,7 @@ fn request(tx: String, inputs: Vec<KoiosRow>, partial_sign: bool) -> TxRequest {
         partial_sign,
         stake_index: 0,
         stake_deposit: None,
+        governance: false,
     }
 }
 
@@ -1176,6 +1177,7 @@ fn data_request(address: &str) -> DataRequest {
         address: address.into(),
         payload: hex::encode("Sign in to example.com: nonce 42"),
         stake_index: 0,
+        governance: false,
     }
 }
 
@@ -1274,4 +1276,192 @@ fn someone_elses_address_has_no_signer() {
             .is_none()
     );
     assert!(cip30::data_signer(&account(), &data_request("not an address")).is_err());
+}
+
+// --- Governance (CIP-95, chunk 21) -------------------------------------------
+
+fn drep_hash() -> Hash<28> {
+    account().key_hash(Role::Drep, 0).unwrap()
+}
+
+fn drep_credential() -> StakeCredential {
+    StakeCredential::AddrKeyhash(drep_hash())
+}
+
+/// A transaction registering the account's DRep, delegating its vote to it,
+/// and voting with it on a governance action, paid from one of its UTxOs.
+fn governance_tx() -> (String, Vec<KoiosRow>) {
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 3_000_000, None)],
+    );
+    b.certificates = NonEmptySet::try_from(vec![
+        conway::Certificate::RegDRepCert(drep_credential(), 500_000_000, Nullable::Null),
+        conway::Certificate::VoteDeleg(stake_credential(), conway::DRep::Key(drep_hash())),
+    ])
+    .ok();
+    b.voting_procedures = NonEmptyKeyValuePairs::try_from(vec![(
+        conway::Voter::DRepKey(drep_hash()),
+        NonEmptyKeyValuePairs::try_from(vec![(
+            conway::GovActionId {
+                transaction_id: Hash::new([9; 32]),
+                action_index: 0,
+            },
+            conway::VotingProcedure {
+                vote: conway::Vote::Yes,
+                anchor: Nullable::Null,
+            },
+        )])
+        .unwrap(),
+    )])
+    .ok();
+    (tx_hex(b), rows)
+}
+
+#[test]
+fn a_site_given_governance_has_the_drep_key_sign_for_its_certificates_and_votes() {
+    let (tx, rows) = governance_tx();
+    let granted = TxRequest {
+        governance: true,
+        ..request(tx.clone(), rows.clone(), false)
+    };
+    let summary = cip30::inspect_tx(&account(), &granted).unwrap();
+    assert_eq!(summary.signs, vec!["0/2", "stake", "drep"]);
+    let drep = &summary.certificates[0];
+    assert!(drep.own);
+    assert_eq!(
+        (drep.kind.as_str(), drep.drep_action.as_deref()),
+        ("drep", Some("register"))
+    );
+    assert_eq!(drep.deposit.as_deref(), Some("500000000"));
+    assert!(drep.drep.as_deref().unwrap().starts_with("drep1y"));
+    assert_eq!((summary.votes, summary.own_votes), (1, 1));
+    assert!(summary.complete);
+
+    // Signed with the DRep key `3/0`, over the transaction's id.
+    let signed = cip30::sign_tx(&account(), &granted).unwrap();
+    let hash = build::tx_id(&hex::decode(&tx).unwrap()).unwrap();
+    let set: conway::WitnessSet =
+        minicbor::decode(&hex::decode(&signed.witness_set).unwrap()).unwrap();
+    let signers: Vec<Hash<28>> = set
+        .vkeywitness
+        .unwrap()
+        .iter()
+        .map(|w| {
+            let key = PublicKey::from(<[u8; 32]>::try_from(w.vkey.to_vec()).unwrap());
+            let signature = Signature::from(<[u8; 64]>::try_from(w.signature.to_vec()).unwrap());
+            assert!(key.verify(hash, &signature));
+            pallas_crypto::hash::Hasher::<224>::hash(key.as_ref())
+        })
+        .collect();
+    assert!(signers.contains(&drep_hash()));
+    assert!(signers.contains(&account().key_hash(Role::Staking, 0).unwrap()));
+}
+
+#[test]
+fn without_governance_the_drep_key_is_a_strangers() {
+    let (tx, rows) = governance_tx();
+    let summary = cip30::inspect_tx(&account(), &request(tx.clone(), rows.clone(), false)).unwrap();
+    assert_eq!(summary.signs, vec!["0/2", "stake"], "never the DRep key");
+    assert!(!summary.certificates[0].own);
+    assert_eq!(summary.own_votes, 0);
+    assert!(
+        !summary.complete,
+        "someone else's signature is still needed"
+    );
+    assert!(cip30::sign_tx(&account(), &request(tx, rows, false)).is_err());
+}
+
+#[test]
+fn retiring_the_accounts_drep_counts_its_deposit_back() {
+    let (_, rows) = swap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 503_000_000, None)],
+    );
+    b.certificates = NonEmptySet::try_from(vec![conway::Certificate::UnRegDRepCert(
+        drep_credential(),
+        500_000_000,
+    )])
+    .ok();
+    let granted = TxRequest {
+        governance: true,
+        ..request(tx_hex(b), rows, false)
+    };
+    let summary = cip30::inspect_tx(&account(), &granted).unwrap();
+    assert_eq!(
+        summary.certificates[0].drep_action.as_deref(),
+        Some("retire")
+    );
+    assert_eq!(summary.certificates[0].refund.as_deref(), Some("500000000"));
+    assert_eq!(summary.staking_lovelace, "500000000");
+    assert_eq!(summary.signs, vec!["0/2", "drep"]);
+}
+
+#[test]
+fn data_is_signed_as_the_drep_by_its_id_or_its_keys_address_only_with_governance() {
+    let hash = drep_hash();
+    let id = seedelf_core::staking::drep_id(&conway::DRep::Key(hash));
+    let enterprise: Address = ShelleyAddress::new(
+        Network::Testnet,
+        ShelleyPaymentPart::key_hash(hash),
+        ShelleyDelegationPart::Null,
+    )
+    .into();
+    for form in [
+        id.clone(),
+        hex::encode(hash),
+        enterprise.to_hex(),
+        enterprise.to_bech32().unwrap(),
+    ] {
+        let granted = DataRequest {
+            governance: true,
+            ..data_request(&form)
+        };
+        let signer = cip30::data_signer(&account(), &granted).unwrap().unwrap();
+        assert_eq!(
+            (signer.key.as_str(), signer.address.as_str()),
+            ("drep", id.as_str()),
+            "{form}"
+        );
+        let signed = cip30::sign_data(&account(), &granted).unwrap();
+        let (header_address, key) = verify_cose(&signed.signature, &signed.key);
+        assert_eq!(
+            header_address,
+            hash.to_vec(),
+            "the key hash, as Lace writes it"
+        );
+        assert_eq!(pallas_crypto::hash::Hasher::<224>::hash(&key), hash);
+        // Without governance, the DRep is no key of this account's.
+        assert!(
+            cip30::data_signer(&account(), &data_request(&form))
+                .unwrap()
+                .is_none(),
+            "{form}"
+        );
+    }
+    // Someone else's DRep isn't ours, granted or not.
+    let theirs = DataRequest {
+        governance: true,
+        ..data_request(&hex::encode([7u8; 28]))
+    };
+    assert!(cip30::data_signer(&account(), &theirs).unwrap().is_none());
+}
+
+#[test]
+fn the_drep_key_never_signs_over_an_input_the_wallet_cant_find() {
+    // Its witness spends what sits at its key's enterprise address, so a
+    // transaction naming it as a required signer, with an input nobody can
+    // find, is refused as a payment key's is.
+    let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 2_000_000, None)]);
+    b.required_signers = NonEmptySet::try_from(vec![drep_hash()]).ok();
+    let granted = TxRequest {
+        governance: true,
+        ..request(tx_hex(b), vec![], true)
+    };
+    let err = cip30::inspect_tx(&account(), &granted)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("can't find yet"), "{err}");
 }

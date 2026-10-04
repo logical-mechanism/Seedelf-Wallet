@@ -121,6 +121,17 @@ export function certificateLine(c: Certificate, back: boolean, whose: string): s
     if (c.kind === "committee") return t("dappUi.cert.warn.committee");
     return t("dappUi.cert.warn.otherStakeKey");
   }
+  // The account's own DRep (CIP-95): its registration, update or retirement.
+  if (c.kind === "drep") {
+    if (c.drepAction === "register") return t("dappUi.cert.warn.drepRegister", { amount: formatAda(c.deposit ?? "0") });
+    if (c.drepAction === "retire") {
+      return t(back ? "dappUi.cert.warn.drepRetireBack" : "dappUi.cert.warn.drepRetireNotAllBack", {
+        amount: formatAda(c.refund ?? "0"),
+        whose,
+      });
+    }
+    return t("dappUi.cert.warn.drepUpdate");
+  }
   const what = c.drep ? voteLabel(c.drep) : undefined;
   if (c.kind.startsWith("register") && c.deposit) {
     const amount = formatAda(c.deposit);

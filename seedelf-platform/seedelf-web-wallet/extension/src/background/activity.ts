@@ -43,6 +43,7 @@ import {
 import { entrySession, type ActivityEntry, type ActivityStaking, type PendingTx, type TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
+import { ownDrepId } from "./governance";
 import type { Koios, KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
 import { outpoint } from "./spent";
@@ -364,7 +365,9 @@ export class ActivityService {
     // What the private side noted as received says nothing of what the account did in it: after a restore,
     // that's also the account's own move-ins from before (independent review L38).
     const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
-    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake));
+    // The account's DRep, from its key: its certificates and votes are named for what they did.
+    const drep = await ownDrepId(this.deps).catch(() => undefined);
+    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake, drep));
 
     let pages: AccountPages;
     if (!kept) {
@@ -485,10 +488,22 @@ const field = (info: Record<string, unknown>, key: string): string | undefined =
 const plus = (a: string | undefined, b: string | undefined) => (b === undefined ? a : (BigInt(a ?? "0") + BigInt(b)).toString());
 
 /** What a transaction did with the account's stake key: its certificates naming it, and its withdrawal. */
-export function stakingOf(tx: KoiosTxInfo, stake: string): ActivityStaking | undefined {
+export function stakingOf(tx: KoiosTxInfo, stake: string, drep?: string): ActivityStaking | undefined {
   const s: ActivityStaking = {};
   for (const c of tx.certificates ?? []) {
     const info = c.info ?? {};
+    // The account's own DRep's certificates (chunk 21), named by its ID.
+    if (drep && info.drep_id === drep && c.type.startsWith("drep_")) {
+      if (c.type === "drep_registration") {
+        s.drepAction = "register";
+        s.deposit = plus(s.deposit, field(info, "deposit"));
+      } else if (c.type === "drep_retire" || c.type === "drep_deregistration") {
+        s.drepAction = "retire";
+      } else if (c.type === "drep_update") {
+        s.drepAction ??= "update";
+      }
+      continue;
+    }
     if (info.stake_address !== stake) continue;
     switch (c.type) {
       case "stake_registration":
@@ -511,8 +526,21 @@ export function stakingOf(tx: KoiosTxInfo, stake: string): ActivityStaking | und
   }
   const rewards = (tx.withdrawals ?? []).filter((w) => w.stake_addr === stake).reduce((sum, w) => sum + BigInt(w.amount), 0n);
   if (rewards > 0n) s.rewards = rewards.toString();
+  const votes = drep ? (tx.voting_procedures ?? []).filter((v) => v.voter === drep).length : 0;
+  if (votes > 0) {
+    s.votes = votes;
+    s.drepAction ??= "vote";
+  }
   return Object.keys(s).length ? s : undefined;
 }
+
+/** What each of the account's own DRep's transactions is called. */
+const DREP_KIND = {
+  register: "drep-register",
+  update: "drep-update",
+  retire: "drep-retire",
+  vote: "drep-vote",
+} as const satisfies Record<NonNullable<ActivityStaking["drepAction"]>, ActivityEntry["kind"]>;
 
 /**
  * What each transaction did to the account: its outputs to the account's
@@ -521,7 +549,8 @@ export function stakingOf(tx: KoiosTxInfo, stake: string): ActivityStaking | und
  * withdrawal to the account) is named as such; otherwise a transaction that
  * staked, delegated the vote, stopped staking, or only withdrew the rewards
  * is named for that, from its certificates and withdrawals (`stake`: the
- * account's stake address). A payment that also spent the rewards stays
+ * account's stake address), and one of its own DRep's (`drep`: its ID) for
+ * what that did. A payment that also spent the rewards stays
  * "Sent", with the rewards in its `staking`. A transaction with nothing of
  * the account's in it (someone paying their own key under our stake key) is
  * left out: it isn't the account's activity, and its note isn't to us.
@@ -531,6 +560,7 @@ export function describe(
   ours: (o: KoiosTxOut) => boolean,
   own: ReadonlyMap<string, ActivityEntry>,
   stake?: string,
+  drep?: string,
 ): ActivityEntry[] {
   return txs.flatMap((tx): ActivityEntry[] => {
     let net = 0n;
@@ -548,12 +578,14 @@ export function describe(
     const spent = tx.inputs.some(ours);
     const mine = own.get(tx.tx_hash);
     const direction = net > 0n ? "in" : net < 0n ? "out" : "none";
-    const staking = stake ? stakingOf(tx, stake) : undefined;
+    const staking = stake ? stakingOf(tx, stake, drep) : undefined;
     if (!spent && !tx.outputs.some(ours) && !staking && !mine) return [];
     const paysOthers = tx.outputs.some((o) => !ours(o));
     const kind: ActivityEntry["kind"] = mine
       ? mine.kind
-      : staking?.stopped
+      : staking?.drepAction
+        ? DREP_KIND[staking.drepAction]
+        : staking?.stopped
         ? "unstake"
         : staking?.pool
           ? "stake"

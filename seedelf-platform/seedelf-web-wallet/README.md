@@ -30,6 +30,7 @@ So money that sits stays staked in the public account, and is made private when 
 - **Several public accounts** (chunk 18): the recovery phrase's Cardano accounts, one at a time, with a picker in the top bar and names of your own. Each has its own addresses, staking and collateral; the private balance is one for the whole phrase, and money made private from different accounts is kept apart so a private payment doesn't tie them together.
 - **Staking** (chunk 13): stake the public account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
 - **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
+- **Be your own DRep** (chunk 21): register the public account as a DRep, with its own vote behind it, and vote Yes, No or Abstain on the live governance actions, in the wallet's own screens. A profile only if you want one: the wallet writes the file, you publish it, and the wallet never fetches it. Retiring returns the 500 ₳ deposit. A DRep is public and tied to the account, and the screens say so. Governance sites such as GovTool work too, through CIP-95 in the dApp connector, once you allow it for that site.
 - **Create a Seedelf:** mint your named Seedelf so others can pay you. Minting links the Seedelf to whatever paid for it, so by default the public account pays for it, before any money is made private (see [privacy.md](docs/privacy.md#known-links)).
 - **Send** (private, a transfer): send funds privately from your private balance to any Seedelfs, by their full names.
 - **Make public** (a withdrawal): send funds from your private balance to any Cardano addresses, or remove a Seedelf.
@@ -49,7 +50,7 @@ So money that sits stays staked in the public account, and is made private when 
 
 **After v1: several public accounts, three languages, and NFT images.** Several accounts are above (chunk 18). The wallet reads in English, Spanish and Japanese, every language bundled, so choosing one asks nobody anything ([plans/chunk-19-language.md](docs/plans/chunk-19-language.md)). And an NFT's image shows when you ask for it in its details, one NFT at a time: your browser fetches it from IPFS through Blockfrost's gateway, nothing of ours in between, and the details say first who sees what, more strongly for an NFT in your private balance ([plans/chunk-20-nft-images.md](docs/plans/chunk-20-nft-images.md)).
 
-**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): being your own DRep and voting on governance actions, then a pass over how all of it looks and reads.
+**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): a pass over how all of it looks and reads.
 
 **Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet.
 
@@ -71,7 +72,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 |---|---|
 | [architecture.md](docs/architecture.md) | How the extension is structured, crypto in WebAssembly, chain data, storage, and what we borrow from Lace |
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
-| [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, staking, contract round trip |
+| [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, staking, being your own DRep, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
 | [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |

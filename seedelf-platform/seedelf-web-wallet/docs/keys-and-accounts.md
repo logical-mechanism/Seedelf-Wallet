@@ -55,7 +55,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 | Account | What it is | Address | Lifetime |
 |---|---|---|---|
 | **Seedelf** | The scalar `x`. The base register is `(G1, G1^x)`. Each Seedelf's root UTxO holds a re-randomized copy that senders use. | Wallet contract (script address, no staking part) | Permanent |
-| **Cardano** | CIP-1852 account `n'`, one at a time (chunk 18; `0'` until then): receive keys `0/i`, change keys `1/i`, staking key `2/0` | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
+| **Cardano** | CIP-1852 account `n'`, one at a time (chunk 18; `0'` until then): receive keys `0/i`, change keys `1/i`, staking key `2/0`, DRep key `3/0` (chunk 21) | Standard base addresses | Permanent. See [The Cardano account](#the-cardano-account). |
 | **One-time** (private sessions, chunk 15) | Reserved CIP-1852 account `24301'` (`0x5EED`, `ONE_TIME_ACCOUNT`), payment `0/i` and staking `2/i`: session `i`, counting from 0 in order | Base address with the session's own stake key `2/i`, never registered (since chunk 15b; sessions from before keep the shared Seedelf staking part). See [privacy.md](privacy.md#known-links). | One session, then retired |
 
 - **The Cardano account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
@@ -104,8 +104,12 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
    - Delegation to one pool, the vote's delegation, and the rewards are the account's, as in Lace: a restored phrase shows the same pool and DRep, and a change made here shows there.
    - The stake key signs inside WebAssembly, only for a certificate or a withdrawal, and never leaves it. See [flows.md](flows.md#staking-and-voting-public-account).
    - Moving ADA into Seedelf lowers the stake behind that delegation, because Seedelf addresses have no staking part.
-5. **Using it alongside another wallet is fine.** Both wallets can spend the same UTxOs. If both try at once, one transaction simply fails.
-6. **It is not private.** For a restored wallet, this account is the user's public identity, and the UI never suggests otherwise.
+5. **The account can be its own DRep, with its DRep key `3/0` (chunk 21).**
+   - CIP-105's role 3, index 0, as Lace derives it (`KeyRole.DRep`): a phrase restored in Lace, Eternl or Yoroi is the same DRep, and one registered there shows here. CIP-105's test vector 1 pins it in `seedelf-crypto`'s `cardano_test.rs`. Adding the role changed nothing derived before it, and the Seedelf key's derivation is untouched.
+   - Each account has its own: several accounts are several DReps.
+   - The DRep key signs inside WebAssembly, only for a DRep certificate or a vote, and never leaves it. Its public key and ID can leave (`drepOf`), for Koios and for CIP-95. See [flows.md](flows.md#be-your-own-drep-and-vote-public-account).
+6. **Using it alongside another wallet is fine.** Both wallets can spend the same UTxOs. If both try at once, one transaction simply fails.
+7. **It is not private.** For a restored wallet, this account is the user's public identity, and the UI never suggests otherwise.
 
 **The Seedelf key is separate.** It stays on its own account 0 whichever Cardano account is used.
 

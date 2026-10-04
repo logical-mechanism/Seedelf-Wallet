@@ -9,16 +9,17 @@ use std::collections::BTreeSet;
 use pallas_addresses::Address;
 use pallas_crypto::hash::Hash;
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
-use pallas_primitives::conway::{self, Certificate, DRep};
-use pallas_primitives::{Fragment, StakeCredential};
+use pallas_primitives::conway::{self, Anchor, Certificate, DRep, GovActionId, Vote, Voter};
+use pallas_primitives::{Fragment, Nullable, StakeCredential};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::BuiltTransaction;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build::{self, AccountAmount, Chain, fake_signer, tx_id};
 use seedelf_core::constants::get_config;
 use seedelf_core::staking::{
-    ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, RewardsLocked, StakeAction, StakeKey, StakeState,
-    Staking, drep_id, parse_drep, parse_pool_id, pool_id,
+    ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, DrepAction, DrepKey, DrepState, MAX_ANCHOR_URL,
+    RewardsLocked, StakeAction, StakeKey, StakeState, Staking, anchor, drep_id, gov_action_id,
+    parse_drep, parse_pool_id, pool_id,
 };
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
@@ -34,6 +35,8 @@ const LOGIC_HEX: &str = "1e3105f23f2ac91b3fb4c35fa4fe301421028e356e114944e902005
 const LOGIC_DREP: &str = "drep1ydmraa6kv8cvmry059v608tehl50nfmg0z764lmsqkvwurs40sw2z";
 const LOGIC_DREP_HEX: &str = "763ef75661f0cd8c8fa159a79d79bfe8f9a76878bdaaff700598ee0e";
 const DEPOSIT: u64 = 2_000_000;
+/// What registering a DRep locks up on preprod (`drep_deposit`).
+const DREP_DEPOSIT: u64 = 500_000_000;
 
 fn params() -> ProtocolParameters {
     let rows: serde_json::Value =
@@ -100,6 +103,8 @@ fn staking(w: &World, action: StakeAction, state: StakeState) -> Staking {
 struct Decoded {
     certificates: Vec<Certificate>,
     withdrawals: Vec<(Vec<u8>, u64)>,
+    /// Each vote: who, on which action, and the vote.
+    votes: Vec<(Voter, GovActionId, Vote)>,
     inputs: Vec<String>,
     lovelace_out: u64,
     fee: u64,
@@ -120,6 +125,17 @@ fn decode(tx: &BuiltTransaction) -> Decoded {
             .clone()
             .map(|w| w.iter().map(|(a, l)| (a.to_vec(), *l)).collect())
             .unwrap_or_default(),
+        votes: body
+            .voting_procedures
+            .iter()
+            .flat_map(|v| v.iter())
+            .flat_map(|(voter, procedures)| {
+                procedures.iter().map(move |(action, procedure)| {
+                    assert_eq!(procedure.anchor, Nullable::Null, "no rationale");
+                    (voter.clone(), action.clone(), procedure.vote.clone())
+                })
+            })
+            .collect(),
         inputs: traversed
             .inputs()
             .iter()
@@ -189,6 +205,18 @@ fn assert_sound(
     if let Some((account, _)) = &staking.withdrawal {
         assert_eq!(account, &w.stake.to_vec(), "keyed by the reward address");
     }
+    assert_eq!(
+        tx.votes,
+        staking
+            .votes
+            .iter()
+            .flat_map(|(drep, ballots)| {
+                ballots
+                    .iter()
+                    .map(|(a, v)| (Voter::DRepKey(*drep), a.clone(), v.clone()))
+            })
+            .collect::<Vec<_>>()
+    );
 
     // Value: inputs + withdrawal + refund = outputs + fee + deposit.
     let lovelace_in: u64 = tx
@@ -462,7 +490,9 @@ fn a_staking_transaction_still_spends_a_utxo_and_explains_a_shortfall() {
     assert!(
         build::account_staking(&w.params, &small, &Staking::none(), &w.change, None)
             .err()
-            .is_some_and(|e| e.to_string().contains("certificate or a withdrawal"))
+            .is_some_and(|e| e
+                .to_string()
+                .contains("a certificate, a withdrawal or a vote"))
     );
 }
 
@@ -654,4 +684,337 @@ fn a_patch_happens_before_signing_and_nothing_to_patch_changes_nothing() {
     assert!(withdraw.patch(patched.clone()).is_err(), "only once");
     let signed = plain.tx.sign(fake_signer()).unwrap();
     assert!(withdraw.patch(signed).is_err(), "never after signing");
+}
+
+// ---- The account's own DRep (chunk 21) ----
+
+/// Two of preprod's live governance actions on 2026-10-04.
+const TREASURY: &str = "322066e8333d3338858a2d9fd4fdfa04d4ab5d79ef002b2296635143fac3ca79";
+const INFO: &str = "139444b23543a9a836b2b01c0057ff4300f2d25b3d94812f138b89b22d2b780d";
+
+fn drep_key(w: &World) -> DrepKey {
+    DrepKey::new(w.account.key_hash(Role::Drep, 0).unwrap())
+}
+
+fn a_drep(own_vote: bool) -> DrepState {
+    DrepState {
+        registered: true,
+        deposit: DREP_DEPOSIT,
+        own_vote,
+    }
+}
+
+fn as_drep(w: &World, action: DrepAction, stake: StakeState, drep: DrepState) -> Staking {
+    Staking::drep(&w.key, &stake, &drep_key(w), &drep, &action, &w.params).unwrap()
+}
+
+fn profile() -> Anchor {
+    anchor(
+        "ipfs://bafkreigzvg5nbyngh2hfxrptxmh2jturifcsq5v2gbaz7hfg6ccvhlzgxu",
+        &"ab".repeat(32),
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_drep_is_named_as_lace_names_it() {
+    // CIP-105's test vector 1: its key hash, as a CIP-129 ID.
+    let hash: [u8; 28] = hex::decode("a5b45515a3ff8cb7c02ce351834da324eb6dfc41b5779cb5e6b832aa")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let drep = DrepKey::new(Hash::new(hash));
+    assert_eq!(
+        drep.id(),
+        "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a"
+    );
+    assert_eq!(parse_drep(&drep.id()).unwrap(), drep.drep());
+}
+
+#[test]
+fn registering_pays_the_deposit_and_delegates_the_accounts_own_vote() {
+    let w = world();
+    let me = drep_key(&w);
+    let stake = StakeCredential::AddrKeyhash(w.account.key_hash(Role::Staking, 0).unwrap());
+    let drep = StakeCredential::AddrKeyhash(me.hash());
+    let register = |delegate, stake_state, drep_state| {
+        as_drep(
+            &w,
+            DrepAction::Register {
+                anchor: None,
+                delegate,
+            },
+            stake_state,
+            drep_state,
+        )
+    };
+
+    // The stake key is registered: the registration, then the delegation.
+    let both = register(true, registered(0, true), DrepState::default());
+    assert_eq!(
+        both.certificates,
+        vec![
+            Certificate::RegDRepCert(drep.clone(), DREP_DEPOSIT, Nullable::Null),
+            Certificate::VoteDeleg(stake.clone(), me.drep()),
+        ]
+    );
+    assert_eq!((both.deposit(), both.refund()), (DREP_DEPOSIT, 0));
+    assert_eq!(both.drep_deposit(), DREP_DEPOSIT);
+    assert!(both.stake_signs() && both.drep_signs());
+    assert_eq!(both.signers(), 2);
+
+    // It isn't: the delegation registers it too, and pays its deposit.
+    let first = register(true, StakeState::default(), DrepState::default());
+    assert_eq!(
+        first.certificates[1],
+        Certificate::VoteRegDeleg(stake.clone(), me.drep(), DEPOSIT)
+    );
+    assert_eq!(first.deposit(), DREP_DEPOSIT + DEPOSIT);
+    assert_eq!(
+        first.drep_deposit(),
+        DREP_DEPOSIT,
+        "the stake key's is apart"
+    );
+
+    // Kept apart, or already its own: the registration alone, the DRep key alone.
+    for alone in [
+        register(false, registered(0, true), DrepState::default()),
+        register(
+            true,
+            registered(0, true),
+            DrepState {
+                own_vote: true,
+                ..DrepState::default()
+            },
+        ),
+    ] {
+        assert_eq!(alone.certificates.len(), 1);
+        assert!(!alone.stake_signs() && alone.drep_signs());
+        assert_eq!(alone.signers(), 1);
+    }
+
+    // A profile rides in the registration.
+    let named = as_drep(
+        &w,
+        DrepAction::Register {
+            anchor: Some(profile()),
+            delegate: false,
+        },
+        registered(0, true),
+        DrepState::default(),
+    );
+    assert_eq!(
+        named.certificates,
+        vec![Certificate::RegDRepCert(
+            drep,
+            DREP_DEPOSIT,
+            Nullable::Some(profile())
+        )]
+    );
+}
+
+#[test]
+fn updating_retiring_and_voting_are_the_drep_keys() {
+    let w = world();
+    let me = drep_key(&w);
+    let stake = StakeCredential::AddrKeyhash(w.account.key_hash(Role::Staking, 0).unwrap());
+    let drep = StakeCredential::AddrKeyhash(me.hash());
+
+    let update = as_drep(
+        &w,
+        DrepAction::Update { anchor: None },
+        registered(0, true),
+        a_drep(true),
+    );
+    assert_eq!(
+        update.certificates,
+        vec![Certificate::UpdateDRepCert(drep.clone(), Nullable::Null)]
+    );
+    assert_eq!((update.deposit(), update.signers()), (0, 1));
+
+    // Retiring gets back what was paid, whatever it was.
+    let paid_more = DrepState {
+        deposit: 600_000_000,
+        ..a_drep(false)
+    };
+    let retire = as_drep(&w, DrepAction::Retire, registered(0, true), paid_more);
+    assert_eq!(
+        retire.certificates,
+        vec![Certificate::UnRegDRepCert(drep.clone(), 600_000_000)]
+    );
+    assert_eq!((retire.refund(), retire.signers()), (600_000_000, 1));
+
+    // Its own vote moves to always abstain, so the rewards stay withdrawable.
+    let retire_own = as_drep(&w, DrepAction::Retire, registered(0, true), a_drep(true));
+    assert_eq!(
+        retire_own.certificates,
+        vec![
+            Certificate::UnRegDRepCert(drep, DREP_DEPOSIT),
+            Certificate::VoteDeleg(stake, DRep::Abstain),
+        ]
+    );
+    assert_eq!(retire_own.signers(), 2);
+
+    // Votes, in a fixed order whatever order they were chosen in.
+    let treasury = gov_action_id(TREASURY, 0).unwrap();
+    let info = gov_action_id(INFO, 0).unwrap();
+    let vote = as_drep(
+        &w,
+        DrepAction::Vote(vec![
+            (treasury.clone(), Vote::No),
+            (info.clone(), Vote::Yes),
+        ]),
+        StakeState::default(),
+        a_drep(false),
+    );
+    assert!(vote.certificates.is_empty() && vote.withdrawal.is_none());
+    assert_eq!(
+        vote.votes,
+        Some((me.hash(), vec![(info, Vote::Yes), (treasury, Vote::No)]))
+    );
+    assert_eq!((vote.deposit(), vote.signers()), (0, 1));
+    assert!(!vote.stake_signs());
+}
+
+#[test]
+fn a_drep_refuses_what_the_ledger_would() {
+    let w = world();
+    let err = |action: DrepAction, drep: DrepState| {
+        Staking::drep(
+            &w.key,
+            &registered(0, true),
+            &drep_key(&w),
+            &drep,
+            &action,
+            &w.params,
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let register = DrepAction::Register {
+        anchor: None,
+        delegate: true,
+    };
+    let treasury = gov_action_id(TREASURY, 0).unwrap();
+    assert!(err(register.clone(), a_drep(true)).contains("a DRep already"));
+    for action in [
+        DrepAction::Update { anchor: None },
+        DrepAction::Retire,
+        DrepAction::Vote(vec![(treasury.clone(), Vote::Yes)]),
+    ] {
+        assert!(err(action, DrepState::default()).contains("isn't a DRep"));
+    }
+    assert!(err(DrepAction::Vote(vec![]), a_drep(false)).contains("at least one"));
+    // A registered DRep whose deposit Koios didn't give: its refund isn't guessed as none.
+    let unknown_deposit = DrepState {
+        deposit: 0,
+        ..a_drep(false)
+    };
+    assert!(err(DrepAction::Retire, unknown_deposit).contains("didn't say what deposit"));
+    assert!(
+        err(
+            DrepAction::Vote(vec![(treasury.clone(), Vote::Yes), (treasury, Vote::No)]),
+            a_drep(false)
+        )
+        .contains("only one vote")
+    );
+
+    // Without Koios's figure for the deposit, nothing is guessed.
+    let unknown = ProtocolParameters {
+        drep_deposit: None,
+        ..params()
+    };
+    let refused = Staking::drep(
+        &w.key,
+        &registered(0, true),
+        &drep_key(&w),
+        &DrepState::default(),
+        &register,
+        &unknown,
+    );
+    let refused = refused.unwrap_err().to_string();
+    assert!(refused.contains("registering a DRep locks up"), "{refused}");
+}
+
+#[test]
+fn an_anchor_is_an_address_and_a_hash() {
+    let a = profile();
+    assert_eq!(a.content_hash.as_ref(), &[0xab; 32]);
+    let err = |url: &str, hash: &str| anchor(url, hash).unwrap_err().to_string();
+    let hash = "ab".repeat(32);
+    assert!(err("", &hash).contains("address"));
+    assert!(err("https://example.com/a b.json", &hash).contains("spaces"));
+    let long = format!("https://example.com/{}", "a".repeat(MAX_ANCHOR_URL));
+    assert!(err(&long, &hash).contains("limit of 128"));
+    let most = format!("https://example.com/{}", "a".repeat(MAX_ANCHOR_URL - 20));
+    assert_eq!(anchor(&most, &hash).unwrap().url.len(), MAX_ANCHOR_URL);
+    assert!(err("https://example.com/d.json", "abcd").contains("64 hex"));
+    assert!(gov_action_id("abcd", 0).is_err());
+}
+
+#[test]
+fn every_drep_transaction_builds_soundly() {
+    let w = world();
+    let available = vec![
+        utxo(&w, 1, 0, 3_000_000, vec![]),
+        utxo(&w, 2, 1, 520_000_000, vec![]),
+    ];
+    let treasury = gov_action_id(TREASURY, 0).unwrap();
+    let info = gov_action_id(INFO, 0).unwrap();
+    for (action, stake, drep) in [
+        (
+            DrepAction::Register {
+                anchor: Some(profile()),
+                delegate: true,
+            },
+            StakeState::default(),
+            DrepState::default(),
+        ),
+        (
+            DrepAction::Update {
+                anchor: Some(profile()),
+            },
+            registered(0, true),
+            a_drep(true),
+        ),
+        (DrepAction::Retire, registered(0, true), a_drep(true)),
+        (
+            DrepAction::Vote(vec![
+                (treasury.clone(), Vote::Abstain),
+                (info.clone(), Vote::No),
+            ]),
+            registered(0, true),
+            a_drep(true),
+        ),
+    ] {
+        let staking = as_drep(&w, action.clone(), stake, drep);
+        let built =
+            build::account_staking(&w.params, &available, &staking, &w.change, None).unwrap();
+        let tx = assert_sound(&w, &available, &staking, &built);
+        assert_eq!(built.outputs, 0, "{action:?} pays nobody");
+        if let DrepAction::Retire = action {
+            assert_eq!(tx.inputs.len(), 1);
+            assert!(
+                built.change_lovelace > DREP_DEPOSIT,
+                "the deposit comes back"
+            );
+        }
+    }
+
+    // Not enough for the deposit: said in words, before the node would.
+    let small = vec![utxo(&w, 1, 0, 400_000_000, vec![])];
+    let register = as_drep(
+        &w,
+        DrepAction::Register {
+            anchor: None,
+            delegate: false,
+        },
+        registered(0, true),
+        DrepState::default(),
+    );
+    let err = build::account_staking(&w.params, &small, &register, &w.change, None)
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("Not enough ADA"), "{err}");
 }

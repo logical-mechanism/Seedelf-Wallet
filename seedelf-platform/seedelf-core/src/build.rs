@@ -685,7 +685,7 @@ pub fn account_staking(
     invalid_hereafter: Option<u64>,
 ) -> Result<AccountPayment> {
     if staking.is_empty() {
-        bail!("A staking transaction needs a certificate or a withdrawal");
+        bail!("A staking transaction needs a certificate, a withdrawal or a vote");
     }
     account_payment(
         params,

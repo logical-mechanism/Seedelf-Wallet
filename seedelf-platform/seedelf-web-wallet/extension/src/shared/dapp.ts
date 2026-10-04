@@ -42,6 +42,10 @@ export const DAPP_METHODS = [
   "signTx",
   "signData",
   "submitTx",
+  // CIP-95, for a site given governance (chunk 21).
+  "getPubDRepKey",
+  "getRegisteredPubStakeKeys",
+  "getUnregisteredPubStakeKeys",
 ] as const;
 export type DappMethod = (typeof DAPP_METHODS)[number];
 
@@ -57,6 +61,9 @@ export const READ_METHODS: ReadonlySet<DappMethod> = new Set<DappMethod>([
   "getUnusedAddresses",
   "getChangeAddress",
   "getRewardAddresses",
+  "getPubDRepKey",
+  "getRegisteredPubStakeKeys",
+  "getUnregisteredPubStakeKeys",
 ]);
 
 /**
