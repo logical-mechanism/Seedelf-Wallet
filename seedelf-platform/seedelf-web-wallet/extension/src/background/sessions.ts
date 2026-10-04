@@ -60,6 +60,7 @@ import type {
   LovejoinFunding,
   Paid,
   PendingTx,
+  RetryReason,
   SessionAuto,
   SessionBackSummary,
   SessionOrder,
@@ -79,8 +80,17 @@ import { merged, sessionClass, type HistoryClass } from "../shared/histories";
 import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
-import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosUtxo } from "./koios";
-import { builtOutputs, uncheckedProtocols, type BuiltOutput, type Estimate, type Minswap, type PendingOrder } from "./minswap";
+import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosTrouble, type KoiosUtxo } from "./koios";
+import {
+  builtOutputs,
+  MinswapError,
+  uncheckedProtocols,
+  type BuiltOutput,
+  type Estimate,
+  type Minswap,
+  type MinswapTrouble,
+  type PendingOrder,
+} from "./minswap";
 import {
   CHAIN_CUT,
   CHAIN_PUMP_MS,
@@ -120,7 +130,8 @@ import {
   type ScriptSpendDeps,
 } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
-import { SESSION_PRIVATE_STALE_PREFIX } from "./wallet";
+import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked } from "./wallet";
+import { isTrap } from "./wasm";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
 export const SESSION_OUT = "seedelf.session.out";
@@ -175,6 +186,24 @@ export const INDEX_PROBE = 20;
 
 export const retryAfterMs = (tries: number) => Math.min(30_000 * 2 ** (tries - 1), 5 * 60_000);
 
+const MINSWAP_REASON: Record<MinswapTrouble, RetryReason> = {
+  "rate-limited": "minswap-rate-limited",
+  silent: "minswap-silent",
+  "funding-unseen": "funding-unseen",
+};
+const KOIOS_REASON: Record<KoiosTrouble, RetryReason> = { "rate-limited": "koios-rate-limited", silent: "koios-silent" };
+
+/**
+ * Why a swap's step failed, as the code its retry line is worded from
+ * (Swaps.tsx): from what failed, never from what it said, which is in the
+ * language the worker had then, and the page may be in another by now.
+ */
+function retryReasonOf(e: unknown): RetryReason {
+  if (e instanceof MinswapError && e.trouble) return MINSWAP_REASON[e.trouble];
+  if (e instanceof KoiosError && e.trouble) return KOIOS_REASON[e.trouble];
+  return "other";
+}
+
 type RecordedTx = SessionTx & {
   /** Koios never took it: turned away, or never sent. One Koios didn't answer may have gone, and isn't marked. */
   unsent?: boolean;
@@ -221,7 +250,8 @@ interface AutoRecord {
   /** `aggregatorFee`: Minswap's, as quoted; none on sessions from before, which pay it no fee. */
   approved: { minAmountOut: string; fund: SwapQuote["fund"]; aggregatorFee?: string };
   paused?: SessionPause;
-  retry?: { at: number; error: string; tries: number };
+  /** The last failure, and why as a code (retryReasonOf): none on one recorded before the codes, whose words are English. */
+  retry?: { at: number; error: string; reason?: RetryReason; tries: number };
   /** When the user pressed Stop. */
   stopping?: number;
   /** When the runner saw the order filled (`partly`: part of it, the rest refunded). */
@@ -1130,7 +1160,7 @@ export class SessionService {
       // Looked for until it lands, as a funding is (runAll, final review F13).
       await this.deps.alarm?.start().catch(() => undefined);
       try {
-        return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "top-up");
+        return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "topUp");
       } catch (e) {
         await this.markUnsent(network, built.index, txHash, e);
         throw e;
@@ -1788,7 +1818,8 @@ export class SessionService {
           delete auto.retry;
         } else {
           const tries = (auto.retry?.tries ?? 0) + 1;
-          auto.retry = { at: at + retryAfterMs(tries), error: e instanceof Error ? e.message : String(e), tries };
+          const error = e instanceof Error ? e.message : String(e);
+          auto.retry = { at: at + retryAfterMs(tries), error, reason: retryReasonOf(e), tries };
         }
       });
     }
@@ -2182,10 +2213,11 @@ export class SessionService {
     try {
       summary = await wallet.withKeys((keys) => JSON.parse(wasm.inspectSessionTx(keys.oneTime, request)) as DappTxSummary);
     } catch (e) {
+      // A lock is tried again once unlocked, never a pause: told by its type, as its words are the user's language.
+      if (e instanceof WalletLocked) throw e;
       const message = e instanceof Error ? e.message : String(e);
-      if (/locked/i.test(message)) throw e;
       // What WebAssembly won't read (an output on another network, say) won't read any better later: pause.
-      throw new Refused(message.charAt(0).toLowerCase() + message.slice(1));
+      throw new Refused(clauseOf(message));
     }
     refuseOddities(summary, index);
     let orders: string[] | undefined;
@@ -2386,7 +2418,7 @@ export class SessionService {
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      if (/locked/i.test(message) || !TOO_LITTLE.test(message)) throw e;
+      if (e instanceof WalletLocked || !TOO_LITTLE.test(message)) throw e;
       // Even the session's own doesn't pay its way back (WebAssembly takes a stranger's token only when it pays
       // its own): it stays, rather than be tried for ever, and is tried again once more arrives (act, a top-up).
       await this.leaveBehind(network, index, rows, "fee");
@@ -2664,8 +2696,8 @@ export class SessionService {
       await this.update(network, index, (s) => {
         if (s.chain) s.chain.stopped = why;
       }).catch(() => undefined);
-      // Recorded as stopped before its progress goes: never taken for one a lock cut.
-      await this.deps.lovejoin?.chainEnded(network, id, why).catch(() => undefined);
+      // Recorded as stopped before its progress goes: never taken for one a lock cut, unless one did (ChainGone).
+      await this.deps.lovejoin?.chainEnded(network, id, why, undefined, e instanceof ChainGone).catch(() => undefined);
       await this.dropPending(network, index);
       await this.deps.lovejoin?.release(network, chainOwner(index)).catch(() => undefined);
       throw e;
@@ -3215,13 +3247,31 @@ async function clearKept(session: ScriptSpendDeps["session"], key: string, txHas
  * Lovejoin's own (the pool, the build, the network's measure) sends the rest
  * back directly, so no return is ever stuck on it. What another try may
  * mend is thrown as it is: Koios not answering, or behind (a stale pool
- * read), and a lock.
+ * read), and a lock, WebAssembly that trapped outside the wallet's queue
+ * among them (its request locks the wallet as it's answered). Each is told
+ * by its type: a lock's words are the user's language, and taken for a
+ * failure it would send the session's ADA back unmixed.
  */
 function leftOut(e: unknown): string {
   if (e instanceof LovejoinSkipped) return e.reason;
+  if (e instanceof KoiosError || e instanceof WalletLocked || isTrap(e)) throw e;
   const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof KoiosError || /locked/i.test(message)) throw e;
-  return t("sess.chainFailed", { reason: `${message.charAt(0).toLowerCase()}${message.slice(1).replace(/\.$/, "")}` });
+  return t("sess.chainFailed", { reason: clauseOf(message, true) });
+}
+
+/**
+ * A message made a clause of another sentence: a chain's failure inside
+ * sess.chainFailed, or what WebAssembly wouldn't read inside a pause. Where
+ * the language starts a clause in lowercase, as sess.chainFailed itself does
+ * in English and Spanish, the message's capital goes; Japanese has none to
+ * lose, and a name that starts its sentence (Koios, Lovejoin) keeps its own.
+ * `end`: its full stop goes too, a "." or a "。", for a sentence that ends
+ * with one of its own.
+ */
+function clauseOf(message: string, end = false): string {
+  const text = end ? message.replace(/[.。]$/, "") : message;
+  const start = t("sess.chainFailed", { reason: "" }).charAt(0);
+  return start === start.toUpperCase() ? text : `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 }
 
 /**
@@ -3308,7 +3358,9 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     approvedMinOut: auto.approved.minAmountOut,
     ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),
-    ...(auto.retry ? { retry: { at: auto.retry.at, error: auto.retry.error } } : {}),
+    ...(auto.retry
+      ? { retry: { at: auto.retry.at, error: auto.retry.error, ...(auto.retry.reason ? { reason: auto.retry.reason } : {}) } }
+      : {}),
     ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),
     ...(auto.direct !== undefined ? { direct: auto.direct } : {}),
   };

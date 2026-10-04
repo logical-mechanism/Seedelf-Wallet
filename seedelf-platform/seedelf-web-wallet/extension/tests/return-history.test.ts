@@ -127,7 +127,7 @@ describe("a session's return Koios didn't answer (independent review M7)", () =>
     const view = await t.sessions.advance("preprod", 0, true);
     expect(view.stage).toBe("closed");
     const entry = (await t.activity.seedelf("preprod")).find((e) => e.txHash === back);
-    expect(entry).toMatchObject({ kind: "session-back", direction: "in", detail: "Private session 1", origin: { id: "session:0", origin: "session" } });
+    expect(entry).toMatchObject({ kind: "session-back", direction: "in", session: 0, origin: { id: "session:0", origin: "session" } });
     expect(await classOf(t, back)).toEqual({ id: "session:0", origin: "session" });
     expect((await recorded(t, back))!.summary).toBeUndefined();
   });

@@ -12,7 +12,7 @@ import {
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import type { ActivityEntry, PendingTx } from "../src/shared/rpc";
-import { activityCsv, csvCell, tokenMoved } from "../src/ui/activity";
+import { activityCsv, activityDetail, csvCell, tokenMoved } from "../src/ui/activity";
 import { assetFingerprint } from "../src/ui/tokens";
 import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
 
@@ -84,7 +84,9 @@ describe("Seedelf activity", () => {
     };
     await t.activity.sent("preprod", pending, summary);
     const [entry] = await t.activity.seedelf("preprod");
-    expect(entry).toMatchObject({ kind: "transfer", direction: "out", lovelace: "8000000", tokens: 1, fee: "300000", detail: "alice and 2 more" });
+    // Kept as data, the first and how many more, and said in the page's words.
+    expect(entry).toMatchObject({ kind: "transfer", direction: "out", lovelace: "8000000", tokens: 1, fee: "300000", detail: "alice", more: 2 });
+    expect(activityDetail(entry!)).toBe("alice and 2 more");
     // Each token once, with what left in all: out, so negative.
     expect(entry!.assets).toEqual([{ ...TUSDM, quantity: "-3" }]);
   });

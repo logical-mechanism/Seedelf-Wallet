@@ -87,7 +87,28 @@ export interface SwapToken {
   is_verified: boolean | null;
 }
 
-export class MinswapError extends Error {}
+/**
+ * What went wrong at Minswap, for a page that says it in a few words (a
+ * swap's retry line): it asked the wallet to slow down, didn't answer, or
+ * hasn't seen the funding yet. Told where Minswap's answer is read, so the
+ * page never reads the message, which is in the user's language.
+ */
+export type MinswapTrouble = "rate-limited" | "silent" | "funding-unseen";
+
+export class MinswapError extends Error {
+  constructor(
+    message: string,
+    readonly trouble?: MinswapTrouble,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Minswap's own words, which stay English, for a build it refuses because it
+ * doesn't see the money to build from yet: a funding not on its backend yet.
+ */
+const FUNDING_UNSEEN = /no wallet utxos|insufficient balance/i;
 
 /**
  * DEXes that swap straight against their pools in the same transaction,
@@ -283,11 +304,11 @@ export class Minswap {
       });
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
-      throw new MinswapError(t("minswap.unreachable", { cause }));
+      throw new MinswapError(t("minswap.unreachable", { cause }), "silent");
     }
     if (response.ok) return (await response.json()) as T;
     const text = await response.text().catch(() => "");
-    if (response.status === 429) throw new MinswapError(t("minswap.rateLimited"));
+    if (response.status === 429) throw new MinswapError(t("minswap.rateLimited"), "rate-limited");
     let message = text.slice(0, 300);
     try {
       const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
@@ -295,7 +316,10 @@ export class Minswap {
     } catch {
       // Not JSON: keep the text.
     }
-    throw new MinswapError(t("minswap.refused", { status: response.status, why: message }));
+    throw new MinswapError(
+      t("minswap.refused", { status: response.status, why: message }),
+      FUNDING_UNSEEN.test(message) ? "funding-unseen" : undefined,
+    );
   }
 }
 

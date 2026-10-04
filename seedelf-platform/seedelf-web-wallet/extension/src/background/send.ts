@@ -91,7 +91,7 @@ export class SendService {
 
   /** Sends the collateral payment; its first output is the collateral from now on. */
   async submitCollateral(network: NetworkName, txHash: string): Promise<PendingTx> {
-    const pending = await send(this.deps, network, txHash, SESSION_COLLATERAL, "collateral", "collateral payment");
+    const pending = await send(this.deps, network, txHash, SESSION_COLLATERAL, "collateral", "collateral");
     await this.deps.coins.sent(network, `${txHash}#0`);
     return pending;
   }

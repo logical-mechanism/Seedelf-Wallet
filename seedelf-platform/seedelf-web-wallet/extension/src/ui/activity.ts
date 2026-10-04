@@ -3,9 +3,9 @@
 // come from what ships with the wallet (the token list, the DRep list) and
 // what the worker already knew (a pool's ticker): nothing here asks anyone.
 
-import { t } from "../i18n";
+import { type I18nKey, t } from "../i18n";
 import type { NetworkName } from "../networks";
-import type { ActivityEntry, ActivityStaking, TokenQuantity } from "../shared/rpc";
+import { entrySession, type ActivityEntry, type ActivityStaking, type TokenQuantity } from "../shared/rpc";
 import { drepList } from "./dreps";
 import { formatAda, formatQuantity, shortHex, voteLabel } from "./format";
 import { tokenDecimals, tokenMark, tokenText } from "./tokens";
@@ -54,6 +54,20 @@ export function activityTitle(e: ActivityEntry): string {
     case "lovejoin-mix":
       return t("activity.title.lovejoinMix");
   }
+}
+
+/**
+ * Who or where an entry names, in words: a private session by its number,
+ * whoever was paid (the first, and how many more beside), a Seedelf's label,
+ * an address. Said here, in the page's language, from what the worker kept:
+ * a session's entry from before it kept the number holds the English name
+ * instead, which is read for the number (entrySession) and said again.
+ */
+export function activityDetail(e: ActivityEntry): string | undefined {
+  const session = entrySession(e);
+  if (session !== undefined) return t("claim.session", { number: session + 1 });
+  if (e.detail !== undefined && e.more) return t("activity.andMore", { first: e.detail, count: e.more });
+  return e.detail;
 }
 
 /** A DRep's name, from the list that ships with the wallet. */
@@ -113,8 +127,9 @@ export function csvCell(value: string, text = false): string {
 }
 
 /**
- * The CSV's header. Translated, because the file is read by a person — the
- * rows themselves (dates, IDs, amounts) stay language-neutral.
+ * The CSV's header. Translated, because the file is read by a person, and so
+ * are the wallet's own words in the rows (an entry's type, its direction);
+ * the dates, IDs and amounts stay language-neutral.
  */
 const COLUMNS = (): string[] => [
   t("activity.csv.date"),
@@ -132,6 +147,13 @@ const COLUMNS = (): string[] => [
   t("activity.csv.rewards"),
   t("activity.csv.transaction"),
 ];
+
+/** The direction column's words: into the balance, out of it, or neither (a Seedelf's locked ADA). */
+const DIRECTION: Record<ActivityEntry["direction"], I18nKey> = {
+  in: "activity.csv.in",
+  out: "activity.csv.out",
+  none: "activity.csv.none",
+};
 
 /**
  * The entries as CSV, newest first, for a spreadsheet or a tax tool: amounts
@@ -151,11 +173,12 @@ export function activityCsv(network: NetworkName, entries: ActivityEntry[]): str
     return [
       csvCell(e.at ? new Date(e.at).toISOString() : ""),
       csvCell(activityTitle(e)),
-      csvCell(e.direction),
+      csvCell(t(DIRECTION[e.direction])),
       csvCell(`${sign}${ada(e.lovelace)}`),
       csvCell(ada(e.fee)),
-      csvCell(tokens || (e.tokens ? `${e.tokens} kinds` : ""), true),
-      csvCell(e.detail ?? "", true),
+      // An older Seedelf entry knows only how many kinds of token moved.
+      csvCell(tokens || (e.tokens ? t("activity.csv.tokenKinds", { count: e.tokens }) : ""), true),
+      csvCell(activityDetail(e) ?? "", true),
       csvCell(e.note ?? "", true),
       csvCell(s.pool ? `${s.ticker ? `${s.ticker} ` : ""}${s.pool}` : "", true),
       csvCell(s.drep ? (voteOf(network, s) ?? s.drep) : "", true),

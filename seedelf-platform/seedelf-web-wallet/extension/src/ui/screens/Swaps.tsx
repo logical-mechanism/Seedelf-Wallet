@@ -2066,8 +2066,25 @@ function retryText(at: number): string {
   return ms < 60_000 ? t("swaps.retry.soon") : t("swaps.retry.in", { count: Math.ceil(ms / 60_000) });
 }
 
-/** Why a step failed, in plain words, when the error is one that's known; else the error itself. */
-function retryReason(error: string): string {
+type Retry = NonNullable<SessionAuto["retry"]>;
+
+/** The plain words for each reason the worker gives a failed step (sessions.ts retryReasonOf). */
+const RETRY_REASONS: Record<Exclude<NonNullable<Retry["reason"]>, "other">, I18nKey> = {
+  "minswap-rate-limited": "swaps.retry.rateLimited",
+  "koios-rate-limited": "swaps.retry.koiosRateLimited",
+  "minswap-silent": "swaps.retry.minswapSilent",
+  "koios-silent": "swaps.retry.koiosSilent",
+  "funding-unseen": "swaps.retry.fundingUnseen",
+};
+
+/**
+ * Why a step failed, in plain words, when the worker knew why; else the error
+ * itself. A retry recorded before the worker gave a reason has only its
+ * error, written in English, the one language the worker had then: that one
+ * alone is still read by its words.
+ */
+export function retryReason({ error, reason }: Retry): string {
+  if (reason) return reason === "other" ? error : t(RETRY_REASONS[reason]);
   if (/limiting requests/i.test(error)) return t("swaps.retry.rateLimited");
   if (/no wallet utxos|insufficient balance/i.test(error)) return t("swaps.retry.fundingUnseen");
   if (/couldn't reach minswap/i.test(error)) return t("swaps.retry.minswapSilent");
@@ -2206,12 +2223,12 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       {auto.retry && !auto.paused ? (
         <div className="timeline__now timeline__now--retry" data-testid="session-retry" aria-live="polite">
           <p>
-            {tr("swaps.retry.line", { why: retryReason(auto.retry.error), when: retryText(auto.retry.at) })}{" "}
+            {tr("swaps.retry.line", { why: retryReason(auto.retry), when: retryText(auto.retry.at) })}{" "}
             <button type="button" className="link" disabled={busy} onClick={onRetry}>
               {tr("lovejoin.mixes.tryNow")}
             </button>
           </p>
-          {retryReason(auto.retry.error) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
+          {retryReason(auto.retry) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
         </div>
       ) : (
         // Paused, the callout above says why and what to do.

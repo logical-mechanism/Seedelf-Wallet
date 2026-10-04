@@ -239,7 +239,24 @@ export const REFS_PER_REQUEST = 60;
 /** Transactions in one `tx_info` request for their inputs alone, as Activity asks 20 at a time for the rest. */
 export const TXS_PER_REQUEST = 20;
 
-export class KoiosError extends Error {}
+/**
+ * What went wrong at Koios, for a page that says it in a few words (a swap's
+ * retry line): it asked the wallet to slow down, or gave no answer to read
+ * (none at all, a server error, a refused request, a row missing). The
+ * network refusing a transaction through it is none of these. Told where it
+ * happens, so the page never reads the message, which is in the user's
+ * language.
+ */
+export type KoiosTrouble = "rate-limited" | "silent";
+
+export class KoiosError extends Error {
+  constructor(
+    message: string,
+    readonly trouble?: KoiosTrouble,
+  ) {
+    super(message);
+  }
+}
 
 /** How long everything waits after a 429 that named no Retry-After. */
 export const BACK_OFF_MS = 10_000;
@@ -378,8 +395,9 @@ export class KoiosBusyError extends KoiosError {
   constructor(
     message: string,
     readonly maybeSent = true,
+    trouble: KoiosTrouble = "silent",
   ) {
-    super(message);
+    super(message, trouble);
   }
 }
 
@@ -589,7 +607,7 @@ export class Koios {
       undefined,
       "select=epoch_no,supply&order=epoch_no.desc&limit=1",
     );
-    if (!row) throw new KoiosError(t("koios.noTotals"));
+    if (!row) throw new KoiosError(t("koios.noTotals"), "silent");
     return row.supply;
   }
 
@@ -611,7 +629,7 @@ export class Koios {
   /** The current epoch's protocol parameters: one `epoch_params` row, passed to WebAssembly as is. */
   async epochParams(): Promise<Record<string, unknown>> {
     const [row] = await this.request<Record<string, unknown>>("GET", "epoch_params", undefined, "limit=1");
-    if (!row) throw new KoiosError(t("koios.noParams"));
+    if (!row) throw new KoiosError(t("koios.noParams"), "silent");
     return row;
   }
 
@@ -649,13 +667,13 @@ export class Koios {
           signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
         });
       } catch (e) {
-        if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED());
+        if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED(), "silent");
         throw new KoiosBusyError(unreachable(e));
       }
       // Koios's gateway answers a 429 before passing anything on, whatever its body.
       if (response.status === 429) {
         this.limit?.hold(retryAfterMs(response, Date.now()));
-        throw new KoiosBusyError(koiosTrouble(429, "submittx"), false);
+        throw new KoiosBusyError(koiosTrouble(429, "submittx"), false, "rate-limited");
       }
       if (response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
       try {
@@ -668,7 +686,7 @@ export class Koios {
       // and the gateway likely picks another backend.
       if (!text.includes("TxSubmitConnectionError")) break;
       if (attempt === RETRY_DELAYS_MS.length) {
-        throw new KoiosError(t("koios.nodeDown"));
+        throw new KoiosError(t("koios.nodeDown"), "silent");
       }
       await this.sleep(RETRY_DELAYS_MS[attempt]!);
     }
@@ -726,7 +744,7 @@ export class Koios {
   /** The slot of the newest block Koios has. */
   async tipSlot(): Promise<number> {
     const [row] = await this.request<{ abs_slot?: unknown }>("GET", "tip", undefined);
-    if (typeof row?.abs_slot !== "number") throw new KoiosError(t("koios.noTip"));
+    if (typeof row?.abs_slot !== "number") throw new KoiosError(t("koios.noTip"), "silent");
     return row.abs_slot;
   }
 
@@ -799,7 +817,7 @@ export class Koios {
         if (response.ok || (answer400 && response.status === 400)) return (await response.json()) as R;
         failure = koiosTrouble(response.status, path);
       } catch (e) {
-        if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED());
+        if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED(), "silent");
         slow = e instanceof DOMException && e.name === "TimeoutError";
         failure = unreachable(e);
       }
@@ -815,7 +833,9 @@ export class Koios {
       // those is over two minutes of a spinner, so it gets one retry, not two.
       const delays = slow ? RETRY_DELAYS_MS.slice(0, 1) : RETRY_DELAYS_MS;
       const delay = delays[attempt];
-      if (!retryable || delay === undefined) throw new KoiosError(failure);
+      if (!retryable || delay === undefined) {
+        throw new KoiosError(failure, response?.status === 429 ? "rate-limited" : "silent");
+      }
       // `take` waits the cooldown out at the top of the next attempt; sleeping
       // here too would only add to it. Without a limiter, the fixed delay stands.
       if (!cooling) await this.sleep(delay);

@@ -210,7 +210,7 @@ describe("Koios client", () => {
       new Response("", { status: 503 }),
     ]);
     await expect(koios.credentialUtxos(["94bc"])).rejects.toThrow(
-      new KoiosError("Koios is having trouble right now (503 for credential_utxos). Try again in a minute."),
+      new KoiosError("Koios is having trouble right now (503 for credential_utxos). Try again in a minute.", "silent"),
     );
     expect(calls).toHaveLength(3);
   });

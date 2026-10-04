@@ -11,10 +11,10 @@
 // on the chain (privacy review §2.21).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { t, useT } from "../../i18n";
+import { joinSentences, t, useT } from "../../i18n";
 
 import type { ActivityEntry } from "../../shared/rpc";
-import { activityCsv, activityTitle as title, poolOf, signedQuantity, stakingLine, voteOf } from "../activity";
+import { activityCsv, activityDetail, activityTitle as title, poolOf, signedQuantity, stakingLine, voteOf } from "../activity";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
@@ -77,13 +77,13 @@ function download(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Today, Yesterday, or the date; "Earlier" when the time isn't known. */
-function day(at: number, now: Date): string {
-  if (!at) return "Earlier";
+/** Today, Yesterday, or the date; Earlier when the time isn't known. Each heading in the page's language. */
+export function dayHeading(at: number, now: Date): string {
+  if (!at) return t("activity.day.earlier");
   const d = new Date(at);
   const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
+  if (days === 0) return t("activity.day.today");
+  if (days === 1) return t("activity.day.yesterday");
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
@@ -94,8 +94,10 @@ export function ExportNote({ of, listed, more }: { of: Of; listed: number; more:
   const t = useT();
   return (
     <p className="note" data-testid="export-note">
-      {of === "cardano" && more ? `${t("activity.export.readSoFar", { count: listed })} ` : ""}
-      {t(of === "seedelf" ? "activity.export.privacy.private" : "activity.export.privacy.public")}
+      {joinSentences([
+        of === "cardano" && more && t("activity.export.readSoFar", { count: listed }),
+        t(of === "seedelf" ? "activity.export.privacy.private" : "activity.export.privacy.public"),
+      ])}
     </p>
   );
 }
@@ -148,9 +150,10 @@ export function Activity({
   useEffect(() => void load("open"), [load]);
 
   const now = new Date();
+  const openDetail = open && activityDetail(open);
   const groups: Array<[string, ActivityEntry[]]> = [];
   for (const e of entries ?? []) {
-    const label = day(e.at, now);
+    const label = dayHeading(e.at, now);
     const last = groups.at(-1);
     if (last && last[0] === label) last[1].push(e);
     else groups.push([label, [e]]);
@@ -189,7 +192,7 @@ export function Activity({
                       </span>
                       <span className="token-row__sub">
                         {e.txHash === pendingHash ? `${t("activity.pending")} · ` : ""}
-                        {[time(e.at), e.detail ?? stakingLine(network, e.staking)].filter(Boolean).join(" · ")}
+                        {[time(e.at), activityDetail(e) ?? stakingLine(network, e.staking)].filter(Boolean).join(" · ")}
                       </span>
                     </button>
                   </li>
@@ -234,7 +237,7 @@ export function Activity({
               />
             ))}
             {open.fee && <Row label={t("activity.row.fee")} value={`${formatAda(open.fee)} ₳`} />}
-            {open.detail && <Row label={t(open.kind === "withdraw" || open.kind === "transfer" ? "activity.row.to" : "activity.row.seedelf")} value={open.detail} />}
+            {openDetail && <Row label={t(open.kind === "withdraw" || open.kind === "transfer" ? "activity.row.to" : "activity.row.seedelf")} value={openDetail} />}
             {open.staking && poolOf(open.staking) && (
               <Row label={t("activity.row.pool")} value={poolOf(open.staking)!} title={open.staking.pool} />
             )}

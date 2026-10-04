@@ -30,7 +30,7 @@ import { registerOf, seedelfTokenOf, type RegisterHex } from "./chain";
 import type { Koios, KoiosUtxo } from "./koios";
 import { outpoint, readFresh, spentSet, wait } from "./spent";
 import type { Area } from "./storage";
-import type { Keys, Wallet } from "./wallet";
+import { WalletLocked, type Keys, type Wallet } from "./wallet";
 
 export interface ScanDeps {
   wasm: typeof Wasm;
@@ -97,7 +97,7 @@ export async function readContractView(
   let started: Keys | undefined;
   const same = (keys: Keys) => {
     started ??= keys;
-    if (keys !== started) throw new Error(t("worker.locked"));
+    if (keys !== started) throw new WalletLocked(t("worker.locked"));
   };
   const [kept, spent] = await wallet.withKeys(async (keys) => {
     same(keys);

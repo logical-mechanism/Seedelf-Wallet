@@ -19,7 +19,7 @@
 // public account's send and staking) is kept without a seed, and Send only
 // submits it.
 
-import { t } from "../i18n";
+import { type I18nKey, t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -42,6 +42,47 @@ import type { Keys, Wallet } from "./wallet";
 
 /** A built transaction is only sent within this long; after that, build again. */
 const BUILT_TTL_MS = 10 * 60_000;
+
+/**
+ * What a kept transaction is, as `send` names it when it refuses to send it.
+ * Each refusal is a whole sentence per kind, never a noun put into one: each
+ * language words the noun itself, with the gender and the pronoun it takes
+ * ("Revísalo" for a payment, "Revísala" for a mix).
+ */
+export type SpendWhat = "payment" | "seedelf" | "staking" | "collateral" | "removal" | "mix" | "topUp";
+
+/** The one kept isn't the one reviewed, or none is. */
+const NOT_READY: Record<SpendWhat, I18nKey> = {
+  payment: "worker.spend.notReady.payment",
+  seedelf: "worker.spend.notReady.seedelf",
+  staking: "worker.spend.notReady.staking",
+  collateral: "worker.spend.notReady.collateral",
+  removal: "worker.spend.notReady.removal",
+  mix: "worker.spend.notReady.mix",
+  topUp: "worker.spend.notReady.topUp",
+};
+
+/** Built more than BUILT_TTL_MS ago. */
+const TOO_OLD: Record<SpendWhat, I18nKey> = {
+  payment: "worker.spend.tooOld.payment",
+  seedelf: "worker.spend.tooOld.seedelf",
+  staking: "worker.spend.tooOld.staking",
+  collateral: "worker.spend.tooOld.collateral",
+  removal: "worker.spend.tooOld.removal",
+  mix: "worker.spend.tooOld.mix",
+  topUp: "worker.spend.tooOld.topUp",
+};
+
+/** It spends what a chain through Lovejoin sent since will spend (refuseReserved). */
+const CHAIN_CONFLICT: Record<SpendWhat, I18nKey> = {
+  payment: "worker.spend.chainConflict.payment",
+  seedelf: "worker.spend.chainConflict.seedelf",
+  staking: "worker.spend.chainConflict.staking",
+  collateral: "worker.spend.chainConflict.collateral",
+  removal: "worker.spend.chainConflict.removal",
+  mix: "worker.spend.chainConflict.mix",
+  topUp: "worker.spend.chainConflict.topUp",
+};
 
 export interface ScriptSpendDeps {
   wasm: typeof Wasm;
@@ -245,9 +286,9 @@ export function keep(deps: ScriptSpendDeps, key: string, built: Omit<Kept, "buil
 
 /**
  * Sends the transaction kept under `key`, if it's the one reviewed (`txHash`
- * on `network`) and not too old. `what` names it in errors. One Koios didn't
- * answer comes back maybe sent (pending.ts), and stays kept: Send again sends
- * the same bytes, however old, and asks giveme.my nothing.
+ * on `network`) and not too old. `what` says what it is in errors. One Koios
+ * didn't answer comes back maybe sent (pending.ts), and stays kept: Send
+ * again sends the same bytes, however old, and asks giveme.my nothing.
  */
 export async function send(
   deps: ScriptSpendDeps,
@@ -255,17 +296,17 @@ export async function send(
   txHash: string,
   key: string,
   kind: PendingTx["kind"],
-  what: string,
+  what: SpendWhat,
 ): Promise<PendingTx> {
   const { wasm, wallet, session, now } = deps;
   const built = await wallet.withKeys(() => session.get<Kept>(key));
   if (!built || built.txHash !== txHash || built.network !== network) {
-    throw new Error(t("worker.spend.notReady", { what }));
+    throw new Error(t(NOT_READY[what]));
   }
   const again = built.sentCbor !== undefined;
   if (!again) {
     if (now() - built.builtAt > BUILT_TTL_MS) {
-      throw new Error(t("worker.spend.tooOld", { what }));
+      throw new Error(t(TOO_OLD[what]));
     }
     await settleMaybeSent(deps, network);
   }
@@ -318,10 +359,10 @@ export async function send(
  * account): readContract leaves those out, but only of what's built after
  * the chain started.
  */
-async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbor: string, what: string): Promise<void> {
+async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbor: string, what: SpendWhat): Promise<void> {
   const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
   const reserved = await deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true, now: deps.now() }));
   if (inputs.some((o) => reserved.inputs.has(o))) {
-    throw new Error(t("worker.spend.chainConflict", { what }));
+    throw new Error(t(CHAIN_CONFLICT[what]));
   }
 }

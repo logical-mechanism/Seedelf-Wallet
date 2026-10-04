@@ -86,7 +86,7 @@
 // isn't known yet: a box someone else's mix moved has no record (made,
 // independent review M14).
 
-import { t } from "../i18n";
+import { joinSentences, t } from "../i18n";
 import type { LovejoinDelay, LovejoinDepth } from "../shared/preferences";
 import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
 import type {
@@ -161,7 +161,12 @@ const publicMaybeWait = (left: number) => {
   const hours = Math.floor(minutes / 60);
   const hoursText = (n: number) => t("lj.hours", { count: n });
   const minutesText = (n: number) => t("lj.minutes", { count: n });
-  const about = hours ? `${hoursText(hours)}${minutes % 60 ? ` ${minutesText(minutes % 60)}` : ""}` : minutesText(minutes);
+  // Hours and minutes together in one key, which places both: Spanish joins them with "y".
+  const about = !hours
+    ? minutesText(minutes)
+    : minutes % 60
+      ? t("lj.hoursMinutes", { hours: hoursText(hours), minutes: minutesText(minutes % 60) })
+      : hoursText(hours);
   return t("lj.mixMaybeWait", { about });
 };
 
@@ -650,8 +655,14 @@ interface ChainRecord {
   scheduled?: boolean;
   /** All sent. */
   done?: boolean;
-  /** Why it stopped partway. */
+  /** Why it stopped partway, in the language the worker had then: for the page, never for a rule to read. */
   stopped?: string;
+  /**
+   * It stopped because its progress went (CHAIN_CUT): a lock, a closed
+   * browser or an update. A flag of its own, since `stopped` is words; a
+   * record from before it has the words alone, in English (wasCut).
+   */
+  cut?: true;
   /** When it was all sent, or stopped. */
   ended?: number;
   /**
@@ -703,6 +714,13 @@ const keptMaybeName = (network: NetworkName) => `lovejoinMaybe.${network}` as co
 
 /** Why a chain whose progress is gone stopped: nothing is sending the rest. */
 export const CHAIN_CUT = () => t("lj.chainCut");
+
+/**
+ * Whether chain `c` stopped because its progress went (CHAIN_CUT): its flag,
+ * or, on a record from before the flag, its words, which the worker wrote in
+ * English then. Never today's words: they're in whatever language is on now.
+ */
+const wasCut = (c: ChainRecord) => c.cut === true || c.stopped === t("lj.chainCut", { lng: "en" });
 
 /**
  * A chain's record is kept this long after it ended, even when the pool
@@ -1371,11 +1389,15 @@ export class LovejoinService {
   /**
    * Throws why, when the pool is below its floor (floorShort). `seedable`:
    * the public account could put boxes in instead, which needs no others, so
-   * the refusal says so rather than only "try again later".
+   * the refusal says so rather than only "try again later". The floor's
+   * reason is a sentence of its own here, ended as each language ends one,
+   * and the next is set after it as the language sets two.
    */
   private floor(network: NetworkName, others: number, seedable = false): void {
-    const short = this.floorShort(network, others);
-    if (short) throw new Error(`${short}. ${seedable ? POOL_SEEDABLE() : t("lj.tryLater")}`);
+    if (!this.floorShort(network, others)) return;
+    const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+    const why = t("lj.floorShortSentence", { count: others, floor });
+    throw new Error(joinSentences([why, seedable ? POOL_SEEDABLE() : t("lj.tryLater")]));
   }
 
   /** Whether `others` boxes in the pool mix `boxes` boxes at the set depth, or why not. */
@@ -2051,7 +2073,7 @@ export class LovejoinService {
       // A lock cut it: whatever holds its place now stays as it is, and its record says it was cut; its first
       // transaction's mark with it, unless that's known to have gone.
       if (e instanceof ChainGone) {
-        await this.chainEnded(network, id, CHAIN_CUT(), sending.next > 0 ? null : undefined).catch(() => undefined);
+        await this.chainEnded(network, id, CHAIN_CUT(), sending.next > 0 ? null : undefined, true).catch(() => undefined);
         throw e;
       }
       // Stopped at a transaction that may have gone through: what it spends counts as spent, and stays reserved,
@@ -2214,9 +2236,15 @@ export class LovejoinService {
    * times of the boxes it hadn't mixed all the way go (unschedule). `maybe`:
    * the transaction it stopped at may have gone through (ChainRecord
    * `maybe`); null, nothing it marked so may have; none, its mark stays as
-   * it is.
+   * it is. `cut`: it stopped because its progress went (ChainRecord `cut`).
    */
-  async chainEnded(network: NetworkName, id: string, stopped?: string, maybe?: ChainRecord["maybe"] | null): Promise<void> {
+  async chainEnded(
+    network: NetworkName,
+    id: string,
+    stopped?: string,
+    maybe?: ChainRecord["maybe"] | null,
+    cut = false,
+  ): Promise<void> {
     const now = this.deps.now();
     await this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
@@ -2227,6 +2255,7 @@ export class LovejoinService {
         delete c.maybe;
       } else {
         c.stopped = stopped;
+        if (cut) c.cut = true;
         if (maybe) c.maybe = maybe;
         else if (maybe === null) delete c.maybe;
         unschedule(s, c, unfinished(c));
@@ -2284,7 +2313,7 @@ export class LovejoinService {
     const what = c.deposit === m.txHash ? t("lj.step.deposit") : t("lj.step.transaction", { number: m.index + 1, total: c.total });
     const lead = m.unanswered
       ? t("lj.lead.unanswered", { what })
-      : c.stopped === CHAIN_CUT()
+      : wasCut(c)
         ? t("lj.lead.cut", { what })
         : t("lj.lead.stopped", { what });
     const why = {
@@ -2418,22 +2447,23 @@ export class LovejoinService {
     const { wallet, session, now } = this.deps;
     const live = (await this.read(network)).chains.filter((c) => !c.ended);
     if (!live.length) return;
-    const stopped = new Map<string, string>();
+    const stopped = new Map<string, { why: string; cut?: true }>();
     for (const c of live) {
       // Its progress is being put where it waits (recordChain): not cut.
       if (this.starting.has(c.id)) continue;
       const progress = await wallet.withKeys(() => session.get<ChainProgress & { stopped?: string }>(c.progress));
       // Another chain's in its place is this one's gone too.
-      if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, CHAIN_CUT());
-      else if (progress.stopped) stopped.set(c.id, progress.stopped);
+      if (progress?.txs?.at(-1)?.txHash !== c.id) stopped.set(c.id, { why: CHAIN_CUT(), cut: true });
+      else if (progress.stopped) stopped.set(c.id, { why: progress.stopped });
     }
     if (!stopped.size) return;
     const at = now();
     await this.update(network, (s) => {
       for (const c of s.chains) {
-        const why = stopped.get(c.id);
-        if (why === undefined || c.ended) continue;
-        c.stopped = why;
+        const end = stopped.get(c.id);
+        if (end === undefined || c.ended) continue;
+        c.stopped = end.why;
+        if (end.cut) c.cut = true;
         c.ended = at;
         unschedule(s, c, unfinished(c));
       }

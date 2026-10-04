@@ -276,6 +276,6 @@ export class StakingService {
   async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
     const built = await this.deps.wallet.withKeys(() => this.deps.session.get<StakingSummary>(SESSION_STAKE));
     const kind = built ? PENDING_KIND[built.action.kind] : "stake";
-    return send(this.deps, network, txHash, SESSION_STAKE, kind, "staking transaction");
+    return send(this.deps, network, txHash, SESSION_STAKE, kind, "staking");
   }
 }

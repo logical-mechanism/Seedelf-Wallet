@@ -25,7 +25,7 @@ import type { Area } from "./storage";
 import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
-import type { Wallet } from "./wallet";
+import { WalletLocked, type Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
@@ -383,7 +383,7 @@ export const RESET_AT_STAKE = () => t("worker.remove.stillOpen");
 export const SWITCH_AT_STAKE = () => t("worker.account.onItsWay");
 
 async function atStake(ctx: Context): Promise<AtStake[]> {
-  if ((await ctx.wallet.state()) !== "unlocked") throw new Error(t("worker.locked"));
+  if ((await ctx.wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
   const found: AtStake[] = [];
   for (const network of ctx.networks) {
     try {

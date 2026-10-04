@@ -48,10 +48,13 @@ export class Collateral {
       answer = undefined;
     }
     if (!response.ok) {
+      // giveme.my's own words, as they come, or its status when it gave none: each sentence places them, so a
+      // language sets its own brackets and colon around them.
       const detail = (answer as { detail?: unknown } | undefined)?.detail;
-      const why = typeof detail === "string" ? `: ${detail}` : ` (${response.status})`;
       throw new CollateralRefusedError(
-        t("worker.collateral.refused", { why }),
+        typeof detail === "string"
+          ? t("worker.collateral.refused.detail", { detail })
+          : t("worker.collateral.refused.status", { status: response.status }),
       );
     }
     if (answer === undefined) throw new CollateralError(t("worker.collateral.notJson"));

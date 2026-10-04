@@ -153,6 +153,6 @@ export class MintService {
     if (built?.txHash === txHash && built.network === network) {
       await rememberMint(store, network, built.tokenName, built.from, account);
     }
-    return send(this.deps, network, txHash, SESSION_MINT, "mint", "Seedelf");
+    return send(this.deps, network, txHash, SESSION_MINT, "mint", "seedelf");
   }
 }
