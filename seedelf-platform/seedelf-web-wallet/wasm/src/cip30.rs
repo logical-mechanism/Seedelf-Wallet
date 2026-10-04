@@ -425,14 +425,23 @@ pub fn read_value(value_hex: &str) -> Result<(u64, Vec<Token>)> {
 // The account's keys
 // ---------------------------------------------------------------------------
 
-/// The account's key hashes: every payment key in range, and the stake key
-/// (`2/0` for the public account, `2/i` for private session `i`).
+/// The account's key hashes: every payment key in range, the stake key
+/// (`2/0` for the public account, `2/i` for private session `i`), and the
+/// DRep key (`3/0`) when the site was given governance (CIP-95, chunk 21).
+/// Without that grant the DRep key is a stranger's, as any key is: a site
+/// that wasn't given it learns nothing of whose it is.
 struct Keys {
     payment: HashMap<Hash<28>, KeyPath>,
     stake: Hash<28>,
+    drep: Option<Hash<28>>,
 }
 
-fn keys_of(account: &CardanoAccount, paths: &[KeyPath], stake_index: u32) -> Result<Keys> {
+fn keys_of(
+    account: &CardanoAccount,
+    paths: &[KeyPath],
+    stake_index: u32,
+    governance: bool,
+) -> Result<Keys> {
     let mut payment = HashMap::new();
     for p in paths {
         let role = match p.role {
@@ -445,6 +454,11 @@ fn keys_of(account: &CardanoAccount, paths: &[KeyPath], stake_index: u32) -> Res
     Ok(Keys {
         payment,
         stake: account.key_hash(Role::Staking, stake_index)?,
+        drep: if governance {
+            Some(account.key_hash(Role::Drep, 0)?)
+        } else {
+            None
+        },
     })
 }
 
@@ -453,12 +467,17 @@ fn keys_of(account: &CardanoAccount, paths: &[KeyPath], stake_index: u32) -> Res
 enum Signer {
     Payment(KeyPath),
     Stake,
+    /// The DRep key `3/0`, only with governance granted.
+    Drep,
 }
 
 impl Keys {
     fn of_hash(&self, hash: &Hash<28>) -> Option<Signer> {
         if *hash == self.stake {
             return Some(Signer::Stake);
+        }
+        if self.drep == Some(*hash) {
+            return Some(Signer::Drep);
         }
         self.payment.get(hash).copied().map(Signer::Payment)
     }
@@ -686,6 +705,10 @@ pub struct TxRequest {
     /// Without it, the account's own is refused.
     #[serde(default, deserialize_with = "lovelace_or_none")]
     pub stake_deposit: Option<u64>,
+    /// The site was given governance (CIP-95): the account's DRep key `3/0`
+    /// signs its DRep certificates and votes. Never for a private session.
+    #[serde(default)]
+    pub governance: bool,
 }
 
 /// An amount of lovelace a request may give as a JSON number or a decimal
@@ -761,6 +784,9 @@ pub struct Cert {
     pub drep: Option<String>,
     pub deposit: Option<String>,
     pub refund: Option<String>,
+    /// A DRep's own certificate (kind "drep"): "register", "update" or
+    /// "retire". `own` when the DRep is the account's (governance granted).
+    pub drep_action: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -821,6 +847,8 @@ pub struct TxSummary {
     pub scripts: bool,
     pub reference_inputs: usize,
     pub votes: usize,
+    /// Of `votes`, the ones cast by the account's own DRep (governance granted).
+    pub own_votes: usize,
     pub proposals: usize,
     pub donation: Option<String>,
     /// CIP-20's message (label 674), when there is one.
@@ -851,6 +879,7 @@ fn signer_name(s: &Signer) -> String {
     match s {
         Signer::Payment(p) => format!("{}/{}", p.role, p.index),
         Signer::Stake => "stake".to_string(),
+        Signer::Drep => "drep".to_string(),
     }
 }
 
@@ -977,7 +1006,12 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         .map_err(|e| anyhow!("The wallet can't read this transaction: {e}"))?;
     let tx_hash = build::tx_id(&bytes)?;
     let body = &tx.transaction_body;
-    let keys = keys_of(account, &request.keys, request.stake_index)?;
+    let keys = keys_of(
+        account,
+        &request.keys,
+        request.stake_index,
+        request.governance,
+    )?;
 
     if body
         .network_id
@@ -1309,7 +1343,42 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 (None, cert_kind("committee"), true)
             }
             C::RegDRepCert(..) | C::UnRegDRepCert(..) | C::UpdateDRepCert(..) => {
-                (None, cert_kind("drep"), true)
+                // A DRep's own: the account's, when governance was granted and
+                // it's the account's DRep key (`3/0`), or someone else's.
+                let (drep_cred, action, deposit, refund) = match cert {
+                    C::RegDRepCert(cred, deposit, _) => (cred, "register", Some(*deposit), None),
+                    C::UnRegDRepCert(cred, refund) => (cred, "retire", None, Some(*refund)),
+                    C::UpdateDRepCert(cred, _) => (cred, "update", None, None),
+                    _ => unreachable!("matched above"),
+                };
+                let key = match drep_cred {
+                    StakeCredential::AddrKeyhash(h) => Some(*h),
+                    StakeCredential::ScriptHash(_) => None,
+                };
+                let mut c = Cert {
+                    drep_action: Some(action.into()),
+                    drep: Some(drep_of_credential(drep_cred)),
+                    deposit: deposit.map(|d| d.to_string()),
+                    refund: refund.map(|r| r.to_string()),
+                    ..cert_kind("drep")
+                };
+                match key {
+                    Some(h) if keys.drep == Some(h) => {
+                        c.own = true;
+                        signers.insert(Signer::Drep);
+                        // Retiring returns the deposit to the account, as an
+                        // unregistration's does.
+                        if let Some(refund) = refund {
+                            staking = add_staking(staking, refund)?;
+                        }
+                    }
+                    Some(h) => {
+                        foreign_keys.insert(h);
+                    }
+                    None => {}
+                }
+                certificates.push(c);
+                continue;
             }
         };
         match cred.and_then(stake_hash) {
@@ -1389,10 +1458,16 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
     }
 
     let mut votes = 0;
+    let mut own_votes = 0;
     for (voter, procedures) in body.voting_procedures.iter().flat_map(|v| v.iter()) {
         votes += procedures.len();
         match voter {
             conway::Voter::ConstitutionalCommitteeScript(_) | conway::Voter::DRepScript(_) => {}
+            // The account's own DRep, when governance was granted.
+            conway::Voter::DRepKey(h) if keys.drep == Some(*h) => {
+                own_votes += procedures.len();
+                signers.insert(Signer::Drep);
+            }
             conway::Voter::ConstitutionalCommitteeKey(h)
             | conway::Voter::DRepKey(h)
             | conway::Voter::StakePoolKey(h) => {
@@ -1463,6 +1538,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         scripts,
         reference_inputs: body.reference_inputs.as_ref().map_or(0, |r| r.len()),
         votes,
+        own_votes,
         proposals: body.proposal_procedures.as_ref().map_or(0, |p| p.len()),
         donation: body.donation.map(|d| u64::from(d).to_string()),
         note,
@@ -1478,6 +1554,14 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         summary,
         signers,
         tx_hash,
+    })
+}
+
+/// A DRep's ID, from the credential it registers under.
+fn drep_of_credential(cred: &StakeCredential) -> String {
+    drep_id(&match cred {
+        StakeCredential::AddrKeyhash(h) => conway::DRep::Key(*h),
+        StakeCredential::ScriptHash(h) => conway::DRep::Script(*h),
     })
 }
 
@@ -1537,6 +1621,7 @@ pub fn sign_tx(account: &CardanoAccount, request: &TxRequest) -> Result<Signed> 
                 account.private_key(role, p.index)?
             }
             Signer::Stake => account.private_key(Role::Staking, request.stake_index)?,
+            Signer::Drep => account.private_key(Role::Drep, 0)?,
         }
         .to_ed25519_private_key();
         let signature = key.sign(tx_hash);
@@ -1733,6 +1818,11 @@ pub struct DataRequest {
     /// The stake key's index, as `TxRequest`'s.
     #[serde(default)]
     pub stake_index: u32,
+    /// The site was given governance (CIP-95): it may name the account's
+    /// DRep, as its ID or as the enterprise address of its key, to sign with
+    /// the DRep key `3/0`.
+    #[serde(default)]
+    pub governance: bool,
 }
 
 /// Which of the account's keys an address signs data with.
@@ -1741,7 +1831,7 @@ pub struct DataRequest {
 pub struct DataSigner {
     /// The address, in bech32.
     pub address: String,
-    /// "payment" (then `role` and `index`) or "stake".
+    /// "payment" (then `role` and `index`), "stake" or "drep".
     pub key: String,
     pub role: Option<u32>,
     pub index: Option<u32>,
@@ -1754,8 +1844,57 @@ fn parse_address(text: &str) -> Result<Address> {
         .map_err(|_| anyhow!("That isn't an address."))
 }
 
-fn data_key(account: &CardanoAccount, request: &DataRequest) -> Result<Option<(Address, Signer)>> {
+/// What data is signed for: an address, or (with governance) the
+/// account's DRep, by its key hash.
+enum DataFor {
+    Address(Address),
+    Drep(Hash<28>),
+}
+
+impl DataFor {
+    /// The bytes the COSE header's `address` carries: the address's, or for
+    /// a DRep its key hash, as Lace writes it.
+    fn header_bytes(&self) -> Vec<u8> {
+        match self {
+            DataFor::Address(a) => a.to_vec(),
+            DataFor::Drep(h) => h.to_vec(),
+        }
+    }
+
+    fn shown(&self) -> String {
+        match self {
+            DataFor::Address(a) => a.to_bech32().unwrap_or_else(|_| a.to_hex()),
+            DataFor::Drep(h) => drep_id(&conway::DRep::Key(*h)),
+        }
+    }
+}
+
+/// A DRep ID as a site may give it to `signData` (CIP-95): its key hash in
+/// hex, or CIP-129's or CIP-105's `drep1…`. A script DRep is no key's.
+fn drep_key_of(text: &str) -> Option<Hash<28>> {
+    let text = text.trim();
+    if text.len() == 56 && text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let bytes: [u8; 28] = hex::decode(text).ok()?.try_into().ok()?;
+        return Some(Hash::new(bytes));
+    }
+    match seedelf_core::staking::parse_drep(text).ok()? {
+        conway::DRep::Key(h) => Some(h),
+        _ => None,
+    }
+}
+
+fn data_key(account: &CardanoAccount, request: &DataRequest) -> Result<Option<(DataFor, Signer)>> {
     let flag = network_flag(&request.network)?;
+    let keys = keys_of(
+        account,
+        &request.keys,
+        request.stake_index,
+        request.governance,
+    )?;
+    // The account's DRep, by its ID (CIP-95): only with governance granted.
+    if let Some(h) = drep_key_of(&request.address) {
+        return Ok((keys.drep == Some(h)).then_some((DataFor::Drep(h), Signer::Drep)));
+    }
     let address = parse_address(&request.address)?;
     if address
         .network()
@@ -1763,8 +1902,18 @@ fn data_key(account: &CardanoAccount, request: &DataRequest) -> Result<Option<(A
     {
         return Ok(None);
     }
-    let keys = keys_of(account, &request.keys, request.stake_index)?;
     let signer = match &address {
+        // The enterprise address of the DRep key, as Lace and GovTool name
+        // the DRep to sign with (CIP-95): the key hash is what's signed for.
+        Address::Shelley(s)
+            if matches!(s.delegation(), ShelleyDelegationPart::Null)
+                && matches!(s.payment(), ShelleyPaymentPart::Key(h) if keys.drep == Some(*h)) =>
+        {
+            let ShelleyPaymentPart::Key(h) = s.payment() else {
+                unreachable!("matched above")
+            };
+            return Ok(Some((DataFor::Drep(*h), Signer::Drep)));
+        }
         Address::Shelley(s) => match s.payment() {
             ShelleyPaymentPart::Key(h) => keys.payment.get(h).copied().map(Signer::Payment),
             ShelleyPaymentPart::Script(_) => None,
@@ -1775,14 +1924,14 @@ fn data_key(account: &CardanoAccount, request: &DataRequest) -> Result<Option<(A
         },
         Address::Byron(_) => None,
     };
-    Ok(signer.map(|s| (address, s)))
+    Ok(signer.map(|s| (DataFor::Address(address), s)))
 }
 
 /// Which key signs data for `address`: `None` when it isn't one of the
 /// account's (CIP-30's `AddressNotPK`).
 pub fn data_signer(account: &CardanoAccount, request: &DataRequest) -> Result<Option<DataSigner>> {
-    Ok(data_key(account, request)?.map(|(address, signer)| {
-        let bech32 = address.to_bech32().unwrap_or_else(|_| address.to_hex());
+    Ok(data_key(account, request)?.map(|(target, signer)| {
+        let bech32 = target.shown();
         match signer {
             Signer::Payment(p) => DataSigner {
                 address: bech32,
@@ -1793,6 +1942,12 @@ pub fn data_signer(account: &CardanoAccount, request: &DataRequest) -> Result<Op
             Signer::Stake => DataSigner {
                 address: bech32,
                 key: "stake".into(),
+                role: None,
+                index: None,
+            },
+            Signer::Drep => DataSigner {
+                address: bech32,
+                key: "drep".into(),
                 role: None,
                 index: None,
             },
@@ -1811,7 +1966,7 @@ pub struct DataSignature {
 /// protected header names EdDSA and the address, over the payload as given
 /// (not hashed).
 pub fn sign_data(account: &CardanoAccount, request: &DataRequest) -> Result<DataSignature> {
-    let (address, signer) =
+    let (target, signer) =
         data_key(account, request)?.ok_or_else(|| anyhow!("That address isn't this account's."))?;
     let payload =
         hex::decode(request.payload.trim()).map_err(|_| anyhow!("The data to sign isn't hex."))?;
@@ -1825,16 +1980,17 @@ pub fn sign_data(account: &CardanoAccount, request: &DataRequest) -> Result<Data
             account.private_key(role, p.index)?
         }
         Signer::Stake => account.private_key(Role::Staking, request.stake_index)?,
+        Signer::Drep => account.private_key(Role::Drep, 0)?,
     }
     .to_ed25519_private_key();
 
-    // { 1 (alg): -8 (EdDSA), "address": bytes }
+    // { 1 (alg): -8 (EdDSA), "address": bytes }: an address's, or a DRep's key hash.
     let protected = cbor(|e| {
         e.map(2)?
             .u8(1)?
             .i8(-8)?
             .str("address")?
-            .bytes(&address.to_vec())?;
+            .bytes(&target.header_bytes())?;
         Ok(())
     });
     let to_sign = cbor(|e| {

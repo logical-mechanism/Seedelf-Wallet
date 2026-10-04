@@ -25,11 +25,18 @@ import { openVault, sealVault, VAULT_KEY, WrongPasswordError, type VaultRecord }
 /**
  * What chrome.storage.local caches beside the wallet, which Remove wallet
  * deletes too: the pool list (staking.ts LOCAL_POOLS_PREFIX), which says when
- * staking was last browsed, and ADA's price as it was kept before it moved to
- * session storage (prices.ts LOCAL_PRICES). Named here, not imported: those
- * modules import this one.
+ * staking was last browsed; the live governance actions (governance.ts
+ * LOCAL_GOV_ACTIONS_PREFIX), which say when they were; and ADA's price as it
+ * was kept before it moved to session storage (prices.ts LOCAL_PRICES). Named
+ * here, not imported: those modules import this one.
  */
-export const LOCAL_CACHES = ["seedelf.pools.preprod", "seedelf.pools.mainnet", "seedelf.prices"] as const;
+export const LOCAL_CACHES = [
+  "seedelf.pools.preprod",
+  "seedelf.pools.mainnet",
+  "seedelf.govActions.preprod",
+  "seedelf.govActions.mainnet",
+  "seedelf.prices",
+] as const;
 import { isTrap } from "./wasm";
 
 /** HKDF salt of the key that seals private records on the device, v1. */

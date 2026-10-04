@@ -71,6 +71,7 @@ fn rejects_bad_input() {
 
     let acct = CardanoAccount::from_phrase(&phrase, 0).unwrap();
     assert!(acct.base_address(true, Role::Staking, 0).is_err());
+    assert!(acct.base_address(true, Role::Drep, 0).is_err());
     assert!(acct.base_address(true, Role::Receive, HARDENED).is_err());
 }
 
@@ -81,7 +82,7 @@ fn cardano_keys_are_independent_of_the_seedelf_key() {
     let phrase = vectors()[0]["phrase"].as_str().unwrap().to_string();
     let seedelf = seedelf_key_v1(&phrase, 0).unwrap().to_bytes_be();
     let acct = CardanoAccount::from_phrase(&phrase, 0).unwrap();
-    for role in [Role::Receive, Role::Change, Role::Staking] {
+    for role in [Role::Receive, Role::Change, Role::Staking, Role::Drep] {
         let key = acct.private_key(role, 0).unwrap().as_bytes();
         assert!(key.windows(32).all(|w| w != seedelf));
     }
@@ -101,7 +102,7 @@ fn master_key_is_pallas_icarus_key() {
             .derive(HARDENED | 1815)
             .derive(HARDENED | account);
         let acct = CardanoAccount::from_phrase(phrase, account).unwrap();
-        for role in [Role::Receive, Role::Change, Role::Staking] {
+        for role in [Role::Receive, Role::Change, Role::Staking, Role::Drep] {
             assert_eq!(
                 acct.private_key(role, 0).unwrap().as_bytes(),
                 pallas.derive(role as u32).derive(0).as_bytes()
@@ -132,4 +133,27 @@ fn accounts_from_entropy_match_cardano_sdk() {
     for len in [0, 15, 24, 64] {
         assert!(CardanoAccount::from_entropy(&vec![0u8; len], 0).is_err());
     }
+}
+
+#[test]
+fn drep_key_matches_cip_105() {
+    // CIP-105's test vector 1 (CIP-0105/test-vectors/test-vector-1.md):
+    // account 0's DRep key `3/0`, its hash, and its CIP-129 ID's payload.
+    let phrase = "test walk nut penalty hip pave soap entry language right filter choice";
+    let acct = CardanoAccount::from_phrase(phrase, 0).unwrap();
+    let key = acct.private_key(Role::Drep, 0).unwrap();
+    assert_eq!(
+        hex::encode(key.as_bytes()),
+        "a8e57a8e0a68b7ab50c6cd13e8e0811718f506d34fca674e12740fdf73e1a45e\
+         612fa30b7e4bbe9883958dcf365de1e6c1607c33172c5d3d7754f3294e450925\
+         1d8411029969123371cde99fb075730f1da4fd41ee7acefba7e211f0e20c91ca"
+    );
+    assert_eq!(
+        hex::encode(key.to_public().to_ed25519_pubkey().as_ref()),
+        "f74d7ac30513ac1825715fd0196769761fca6e7f69de33d04ef09a0c417a752b"
+    );
+    assert_eq!(
+        hex::encode(acct.key_hash(Role::Drep, 0).unwrap()),
+        "a5b45515a3ff8cb7c02ce351834da324eb6dfc41b5779cb5e6b832aa"
+    );
 }

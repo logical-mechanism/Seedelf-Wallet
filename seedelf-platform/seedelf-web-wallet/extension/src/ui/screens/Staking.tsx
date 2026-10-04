@@ -1,15 +1,27 @@
 // Staking, from the Cardano tab's staking row, after Lace's staking page: the
 // pool the Cardano account stakes with (and why it may earn less), the
 // rewards with Withdraw, where the voting power goes, Change pool and Stop
-// staking. Choosing a pool opens the browser (Pools.tsx); the vote, Voting.tsx.
-// Every change is built and signed by the worker and reviewed here: nothing
-// is sent until the user presses Send. Opening the page reads the pool's
-// details, fresh: one request.
+// staking, and the account as its own DRep (Governance.tsx). Choosing a pool
+// opens the browser (Pools.tsx); the vote, Voting.tsx. Every change is built
+// and signed by the worker and reviewed here: nothing is sent until the user
+// presses Send. Opening the page reads the pool's details and the account's
+// DRep, fresh: two requests, or three (the DRep deposit, or its profile's
+// check).
 
 import { useEffect, useState } from "react";
 import { type I18nKey, t, useT } from "../../i18n";
 
-import type { PendingTx, PoolDetails, PoolRef, StakeInfo, StakingAction, StakingSummary } from "../../shared/rpc";
+import type {
+  GovAction,
+  GovVote,
+  OwnDrep,
+  PendingTx,
+  PoolDetails,
+  PoolRef,
+  StakeInfo,
+  StakingAction,
+  StakingSummary,
+} from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ChevronRightIcon, TrashIcon } from "../components/Icons";
@@ -18,6 +30,7 @@ import { Screen } from "../components/Screen";
 import { TxDetailButton } from "../components/TxDetail";
 import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, shortId, voteLabel } from "../format";
 import { useAmounts } from "../preferences";
+import { BecomeDrep, DrepCard, DrepProfileEdit, GovActions, useActionType, useVoteLabel } from "./Governance";
 import { Pools, SharedTicker } from "./Pools";
 import { sharedDrepName, Voting } from "./Voting";
 
@@ -29,9 +42,14 @@ interface Chosen {
   shared?: number;
   /** The list has the DRep under that name; when it doesn't, `shared` counts it too. */
   drepListed?: boolean;
+  /** A vote's governance action, and the DRep's vote on it before, if any. */
+  govAction?: GovAction;
+  before?: GovVote;
+  /** Retiring moves the account's own vote, which was the DRep's, to always abstain. */
+  ownVoteMoves?: boolean;
 }
 
-type Page = "overview" | "pools" | "vote";
+type Page = "overview" | "pools" | "vote" | "drep-register" | "drep-profile" | "governance";
 
 export function Staking({
   staking,
@@ -59,6 +77,8 @@ export function Staking({
   const [review, setReview] = useState<{ summary: StakingSummary } & Chosen>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [drep, setDrep] = useState<OwnDrep>();
+  const [drepError, setDrepError] = useState<string>();
 
   // The pool's details, fresh each time the page opens.
   const poolId = staking.pool?.id;
@@ -66,6 +86,12 @@ export function Staking({
     if (!poolId) return;
     call("pool", { id: poolId }).then(setPool, (e: Error) => setPoolError(e.message));
   }, [poolId]);
+
+  // The account's own DRep, fresh too.
+  useEffect(() => {
+    call("drep-own", {}).then(setDrep, (e: Error) => setDrepError(e.message));
+  }, []);
+  const ownDrepName = drep && staking.drep === drep.id ? t("drep.yourOwn") : undefined;
 
   async function build(action: StakingAction, chosen: Chosen = {}) {
     if (busy) return;
@@ -121,6 +147,48 @@ export function Staking({
         error={error}
         onBack={back("overview")}
         onStake={(p, shared) => void build({ kind: "delegate", pool: p.id }, { pool: p, shared })}
+      />
+    );
+  }
+  if (page === "drep-register" && drep) {
+    return (
+      <BecomeDrep
+        drep={drep}
+        staking={staking}
+        blocked={blocked}
+        busy={busy}
+        error={error}
+        onBack={back("overview")}
+        onReview={(delegate, anchor) => void build({ kind: "drep-register", delegate, ...(anchor ? { anchor } : {}) })}
+      />
+    );
+  }
+  if (page === "drep-profile" && drep) {
+    return (
+      <DrepProfileEdit
+        drep={drep}
+        blocked={blocked}
+        busy={busy}
+        error={error}
+        onBack={back("overview")}
+        onReview={(anchor) => void build({ kind: "drep-update", ...(anchor ? { anchor } : {}) })}
+      />
+    );
+  }
+  if (page === "governance") {
+    return (
+      <GovActions
+        busy={busy}
+        blocked={blocked}
+        error={error}
+        onBack={back("overview")}
+        onBecome={back("drep-register")}
+        onVote={(action, vote, before) =>
+          void build(
+            { kind: "drep-vote", votes: [{ txHash: action.txHash, index: action.index, vote }] },
+            { govAction: action, ...(before ? { before } : {}) },
+          )
+        }
       />
     );
   }
@@ -193,7 +261,7 @@ export function Staking({
       <section className="section" aria-labelledby="vote-title">
         <h2 id="vote-title">{t("activity.row.votingPower")}</h2>
         <ReviewRows testId="vote-now">
-          <Row label={t("staking.delegatedTo")} value={voteLabel(staking.drep)} title={staking.drep ?? undefined} strong />
+          <Row label={t("staking.delegatedTo")} value={voteLabel(staking.drep, ownDrepName)} title={staking.drep ?? undefined} strong />
         </ReviewRows>
         {locked && (
           <Callout tone="warn" testId="rewards-locked">
@@ -205,6 +273,18 @@ export function Staking({
           {t(staking.drep ? "staking.change" : "staking.delegate")}
         </button>
       </section>
+
+      <DrepCard
+        drep={drep}
+        error={drepError}
+        staking={staking}
+        blocked={blocked}
+        busy={busy}
+        onBecome={back("drep-register")}
+        onActions={back("governance")}
+        onProfile={back("drep-profile")}
+        onRetire={() => void build({ kind: "drep-retire" }, { ownVoteMoves: !!drep && staking.drep === drep.id })}
+      />
 
       {staking.registered && (
         <ul className="list">
@@ -306,6 +386,10 @@ const TITLES = {
   vote: "staking.review.vote",
   withdraw: "staking.review.withdraw",
   stop: "staking.review.stop",
+  "drep-register": "staking.review.drepRegister",
+  "drep-update": "staking.review.drepUpdate",
+  "drep-retire": "staking.review.drepRetire",
+  "drep-vote": "staking.review.drepVote",
 } as const satisfies Record<StakingAction["kind"], I18nKey>;
 
 export function StakingReview({
@@ -314,14 +398,20 @@ export function StakingReview({
   drepName,
   shared = 0,
   drepListed = true,
+  govAction,
+  before,
+  ownVoteMoves = false,
   busy,
   error,
   onBack,
   onSend,
 }: { summary: StakingSummary; busy: boolean; error?: string; onBack: () => void; onSend: () => void } & Chosen) {
   const t = useT();
+  const typeOf = useActionType();
+  const voteOf = useVoteLabel();
   const { action } = summary;
   const nonzero = (l: string) => BigInt(l) > 0n;
+  const drepAction = action.kind.startsWith("drep-");
   return (
     <Screen
       title={t(TITLES[action.kind])}
@@ -344,6 +434,23 @@ export function StakingReview({
           <Row label={t("staking.review.voteTo")} value={voteLabel(summary.drep, drepName)} title={summary.drep ?? undefined} strong />
         )}
         {action.kind === "stop" && <Row label={t("staking.title")} value={t("staking.stops")} strong />}
+        {drepAction && summary.drep && <Row label={t("staking.review.drep")} value={shortId(summary.drep)} title={summary.drep} />}
+        {action.kind === "drep-register" && (
+          <Row
+            label={t("staking.review.ownVote")}
+            value={action.delegate ? t("staking.review.ownVoteToDrep") : t("staking.review.ownVoteStays")}
+            strong
+          />
+        )}
+        {(action.kind === "drep-register" || action.kind === "drep-update") && (
+          <Row label={t("drep.profile")} value={action.anchor ? shortId(action.anchor.url) : t("drep.profile.none")} title={action.anchor?.url} />
+        )}
+        {action.kind === "drep-vote" && govAction && (
+          <Row label={t("staking.review.govAction")} value={govAction.title ?? typeOf(govAction.type)} title={govAction.id} />
+        )}
+        {action.kind === "drep-vote" &&
+          action.votes.map((b) => <Row key={`${b.txHash}#${b.index}`} label={t("staking.review.voteIs")} value={voteOf(b.vote)} strong />)}
+        {action.kind === "drep-vote" && before && <Row label={t("staking.review.voteBefore")} value={voteOf(before)} />}
         {nonzero(summary.withdrawal) && (
           <Row label={t("activity.row.rewardsWithdrawn")} value={`${formatAda(summary.withdrawal)} ₳`} strong={action.kind === "withdraw"} />
         )}
@@ -373,7 +480,14 @@ export function StakingReview({
       {action.kind === "stop" && (
         <p className="note">{t("staking.review.stopNote")}</p>
       )}
-      <Callout tone="privacy">{t("staking.privacy.namesAccount")}</Callout>
+      {action.kind === "drep-register" && <p className="note">{t("staking.review.drepDepositNote")}</p>}
+      {action.kind === "drep-retire" && ownVoteMoves && (
+        <Callout tone="warn" testId="drep-retire-vote">
+          {t("staking.warn.retireOwnVote")}
+        </Callout>
+      )}
+      {action.kind === "drep-vote" && <Callout tone="privacy">{t("gov.privacy.vote")}</Callout>}
+      <Callout tone="privacy">{t(drepAction ? "drep.privacy.public" : "staking.privacy.namesAccount")}</Callout>
       <p className="note">{t("send.review.confirmTime")}</p>
     </Screen>
   );

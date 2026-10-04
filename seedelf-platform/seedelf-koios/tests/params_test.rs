@@ -3,7 +3,7 @@
 //! a parameter far off the network's is refused.
 
 use seedelf_koios::koios::{
-    MAX_COINS_PER_UTXO_SIZE, MAX_KEY_DEPOSIT, MAX_MIN_FEE_A, MAX_MIN_FEE_B,
+    MAX_COINS_PER_UTXO_SIZE, MAX_DREP_DEPOSIT, MAX_KEY_DEPOSIT, MAX_MIN_FEE_A, MAX_MIN_FEE_B,
     MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE, MAX_PRICE_MEM, MAX_PRICE_STEP, ProtocolParameters, Ratio,
 };
 use serde_json::{Value, json};
@@ -23,6 +23,7 @@ fn the_networks_parameters_read_as_they_are() {
     assert_eq!((params.min_fee_a, params.min_fee_b), (44, 155_381));
     assert_eq!(params.coins_per_utxo_size, 4_310);
     assert_eq!(params.key_deposit, 2_000_000);
+    assert_eq!(params.drep_deposit, Some(500_000_000));
     assert_eq!((params.price_mem, params.price_step), (0.0577, 0.0000721));
     assert_eq!(params.min_fee_ref_script_cost_per_byte, Ratio::whole(15));
 
@@ -32,6 +33,7 @@ fn the_networks_parameters_read_as_they_are() {
     most["min_fee_b"] = json!(MAX_MIN_FEE_B.to_string());
     most["coins_per_utxo_size"] = json!(MAX_COINS_PER_UTXO_SIZE.to_string());
     most["key_deposit"] = json!(MAX_KEY_DEPOSIT.to_string());
+    most["drep_deposit"] = json!(MAX_DREP_DEPOSIT.to_string());
     most["price_mem"] = json!(MAX_PRICE_MEM);
     most["price_step"] = json!(MAX_PRICE_STEP);
     most["min_fee_ref_script_cost_per_byte"] = json!(MAX_MIN_FEE_REF_SCRIPT_COST_PER_BYTE);
@@ -87,6 +89,7 @@ fn a_parameter_far_off_the_networks_is_refused() {
             json!((MAX_COINS_PER_UTXO_SIZE + 1).to_string()),
         ),
         ("key_deposit", json!((MAX_KEY_DEPOSIT + 1).to_string())),
+        ("drep_deposit", json!((MAX_DREP_DEPOSIT + 1).to_string())),
         ("price_mem", json!(0.6)),
         ("price_mem", json!(-0.0577)),
         ("price_step", json!(0.001)),
@@ -107,4 +110,20 @@ fn a_parameter_far_off_the_networks_is_refused() {
             "{field} {wrong}: {err}"
         );
     }
+}
+
+#[test]
+fn a_missing_drep_deposit_is_none_not_a_guess() {
+    // Only registering a DRep needs it, and that refuses without it.
+    let mut params = recorded();
+    params.as_object_mut().unwrap().remove("drep_deposit");
+    assert_eq!(
+        ProtocolParameters::from_koios(&params)
+            .unwrap()
+            .drep_deposit,
+        None
+    );
+    // Written but not a number is refused, not read as missing.
+    params["drep_deposit"] = json!("five hundred");
+    assert!(ProtocolParameters::from_koios(&params).is_err());
 }

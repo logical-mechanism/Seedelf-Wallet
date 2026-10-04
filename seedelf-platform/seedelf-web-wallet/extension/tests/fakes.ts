@@ -18,6 +18,10 @@ import {
   type KoiosAccountInfo,
   type KoiosDrepInfo,
   type KoiosDrepName,
+  type KoiosDrepProfile,
+  type KoiosDrepStanding,
+  type KoiosProposal,
+  type KoiosVote,
   type KoiosPool,
   type KoiosPoolInfo,
   type KoiosTxInfo,
@@ -156,6 +160,15 @@ export const stakingPreprod = fixture("staking-preprod.json") as {
   drep_metadata: KoiosDrepName[];
 };
 
+/** Live governance actions on both networks, and a mainnet DRep with a profile and votes (tests/fixtures/record-governance.mjs). */
+export const governanceFixture = fixture("governance.json") as {
+  drep: string;
+  proposal_list: { preprod: KoiosProposal[]; mainnet: KoiosProposal[] };
+  drep_info: KoiosDrepStanding[];
+  drep_metadata: KoiosDrepProfile[];
+  vote_list: KoiosVote[];
+};
+
 /** A real mint round trip on preprod (tests/fixtures/record-mint.mjs). */
 /** Minswap's recorded preprod quote: 10 ADA to MIN. */
 export const minswapEstimate = fixture("minswap-estimate-preprod.json") as { ask: SwapAsk; estimate: Estimate };
@@ -205,6 +218,14 @@ export interface FakeKoios {
   usedStakes: Set<string>;
   /** The slot of the newest block, as `tip` answers. */
   tip: number;
+  /** More DReps for `drep_info`, by ID: the account's own, registered, say. */
+  dreps: Map<string, KoiosDrepStanding>;
+  /** What `drep_metadata` found at each DRep's profile, by ID, when the wallet asks whether it's valid. */
+  drepProfiles: Map<string, KoiosDrepProfile>;
+  /** The live governance actions `proposal_list` answers with: preprod's, as recorded. */
+  proposals: KoiosProposal[];
+  /** Every DRep's votes, for `vote_list`. */
+  votes: Array<KoiosVote & { voter_id: string }>;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -239,6 +260,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     txSpends: new Map(),
     usedStakes: new Set(),
     tip: 0,
+    dreps: new Map(),
+    drepProfiles: new Map(),
+    proposals: governanceFixture.proposal_list.preprod,
+    votes: [],
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -321,9 +346,22 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       } else if (path === "pool_info") {
         rows = stakingPreprod.pool_info.filter((p) => body._pool_bech32_ids.includes(p.pool_id_bech32));
       } else if (path === "drep_info") {
-        rows = stakingPreprod.drep_info.filter((d) => body._drep_ids.includes(d.drep_id));
+        rows = [...stakingPreprod.drep_info, ...fake.dreps.values()].filter((d) => body._drep_ids.includes(d.drep_id));
       } else if (path === "drep_metadata") {
-        rows = stakingPreprod.drep_metadata.filter((d) => body._drep_ids.includes(d.drep_id));
+        // Asked whether a profile is valid (the account's own DRep), or for names alone (any DRep's).
+        rows = searchParams.get("select")?.includes("is_valid")
+          ? [...fake.drepProfiles.values()].filter((d) => body._drep_ids.includes(d.drep_id))
+          : stakingPreprod.drep_metadata.filter((d) => body._drep_ids.includes(d.drep_id));
+      } else if (path === "proposal_list") {
+        rows = fake.proposals;
+      } else if (path === "vote_list") {
+        // PostgREST's filters, as the wallet uses them: `voter_id=eq.X&proposal_id=in.(a,b)`.
+        const voter = searchParams.get("voter_id")?.replace(/^eq\./, "");
+        const ids = /^in\.\((.*)\)$/.exec(searchParams.get("proposal_id") ?? "")?.[1]?.split(",") ?? [];
+        rows = fake.votes
+          .filter((v) => v.voter_id === voter && ids.includes(v.proposal_id))
+          .sort((a, b) => b.block_time - a.block_time)
+          .map(({ voter_id: _voter, ...v }) => v);
       } else {
         return new Response("not found", { status: 404 });
       }

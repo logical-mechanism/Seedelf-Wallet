@@ -55,7 +55,9 @@ pub mod api {
     };
     use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
     use seedelf_core::note::Note;
-    use seedelf_core::staking::{self, StakeAction, StakeKey, StakeState, Staking};
+    use seedelf_core::staking::{
+        self, DrepAction, DrepKey, DrepState, StakeAction, StakeKey, StakeState, Staking,
+    };
     use seedelf_core::utxos::assets_of as utxo_assets;
     use seedelf_crypto::cardano::{CardanoAccount, Role};
     use seedelf_crypto::register::Register;
@@ -372,19 +374,155 @@ pub mod api {
         StakeKey::new(&account.stake_address(network_flag)?)
     }
 
-    /// Signs with the stake key (`2/0`) when `staking` does anything, inside
-    /// this module.
+    /// Signs with the stake key (`2/0`) for a stake certificate or a
+    /// withdrawal, and with the DRep key (`3/0`) for a DRep certificate or a
+    /// vote, inside this module.
     fn sign_staking(
         tx: BuiltTransaction,
         account: &CardanoAccount,
         staking: &Staking,
     ) -> Result<BuiltTransaction> {
-        if staking.is_empty() {
-            return Ok(tx);
+        let mut tx = tx;
+        if staking.stake_signs() {
+            let key = account.private_key(Role::Staking, 0)?;
+            tx = tx
+                .sign(key.to_ed25519_private_key())
+                .map_err(|e| anyhow!("failed to sign with the stake key: {e:?}"))?;
         }
-        let key = account.private_key(Role::Staking, 0)?;
-        tx.sign(key.to_ed25519_private_key())
-            .map_err(|e| anyhow!("failed to sign with the stake key: {e:?}"))
+        if staking.drep_signs() {
+            let key = account.private_key(Role::Drep, 0)?;
+            tx = tx
+                .sign(key.to_ed25519_private_key())
+                .map_err(|e| anyhow!("failed to sign with the DRep key: {e:?}"))?;
+        }
+        Ok(tx)
+    }
+
+    /// The account's own DRep key (`3/0`).
+    fn drep_key(account: &CardanoAccount) -> Result<DrepKey> {
+        Ok(DrepKey::new(account.key_hash(Role::Drep, 0)?))
+    }
+
+    /// The account's own DRep, as Koios and CIP-95 name it. Amounts none: it's
+    /// only who the DRep is, not where it stands.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DrepOf {
+        /// CIP-129 (`drep1…`).
+        pub id: String,
+        /// The key hash, hex.
+        pub hash: String,
+        /// The Ed25519 public key, hex: what CIP-95's `getPubDRepKey` gives.
+        pub public_key: String,
+    }
+
+    pub fn drep_of(account: &CardanoAccount) -> Result<DrepOf> {
+        let key = account.private_key(Role::Drep, 0)?.to_public();
+        let me = drep_key(account)?;
+        Ok(DrepOf {
+            id: me.id(),
+            hash: hex::encode(me.hash()),
+            public_key: hex::encode(key.to_ed25519_pubkey().as_ref()),
+        })
+    }
+
+    /// A DRep's profile, as the user writes it, for [`drep_profile`].
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ProfileRequest {
+        pub given_name: String,
+        #[serde(default)]
+        pub objectives: Option<String>,
+        #[serde(default)]
+        pub motivations: Option<String>,
+        #[serde(default)]
+        pub qualifications: Option<String>,
+        /// CIP-119's `doNotList`: asks DRep directories not to list it.
+        #[serde(default)]
+        pub do_not_list: bool,
+    }
+
+    /// The profile's file, to be published exactly as it is, and its
+    /// blake2b-256 hash, hex: what the registration's anchor carries.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ProfileFile {
+        pub file: String,
+        pub hash: String,
+    }
+
+    /// CIP-119's limits, in characters.
+    pub const MAX_GIVEN_NAME: usize = 80;
+    pub const MAX_PROFILE_TEXT: usize = 1000;
+
+    /// Writes a DRep's profile as CIP-119 metadata (JSON-LD, its common
+    /// context as the CIP publishes it, `doNotList` added to it), and hashes
+    /// the bytes. The wallet never publishes or fetches it: the user does.
+    pub fn drep_profile(request: ProfileRequest) -> Result<ProfileFile> {
+        let name = request.given_name.trim();
+        if name.is_empty() {
+            bail!("A profile needs a name");
+        }
+        if name.chars().count() > MAX_GIVEN_NAME {
+            bail!("A name is at most {MAX_GIVEN_NAME} characters");
+        }
+        let mut body = serde_json::Map::new();
+        body.insert("givenName".into(), name.into());
+        for (field, text) in [
+            ("objectives", &request.objectives),
+            ("motivations", &request.motivations),
+            ("qualifications", &request.qualifications),
+        ] {
+            let Some(text) = text.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+                continue;
+            };
+            if text.chars().count() > MAX_PROFILE_TEXT {
+                bail!("Each part of a profile is at most {MAX_PROFILE_TEXT} characters");
+            }
+            body.insert(field.into(), text.into());
+        }
+        if request.do_not_list {
+            body.insert("doNotList".into(), true.into());
+        }
+        let document = serde_json::json!({
+            "@context": {
+                "CIP100": "https://github.com/cardano-foundation/CIPs/blob/master/CIP-0100/README.md#",
+                "CIP119": "https://github.com/cardano-foundation/CIPs/blob/master/CIP-0119/README.md#",
+                "hashAlgorithm": "CIP100:hashAlgorithm",
+                "body": {
+                    "@id": "CIP119:body",
+                    "@context": {
+                        "references": {
+                            "@id": "CIP119:references",
+                            "@container": "@set",
+                            "@context": {
+                                "GovernanceMetadata": "CIP100:GovernanceMetadataReference",
+                                "Other": "CIP100:OtherReference",
+                                "label": "CIP100:reference-label",
+                                "uri": "CIP100:reference-uri"
+                            }
+                        },
+                        "paymentAddress": "CIP119:paymentAddress",
+                        "givenName": "CIP119:givenName",
+                        "image": {
+                            "@id": "CIP119:image",
+                            "@context": { "ImageObject": "https://schema.org/ImageObject" }
+                        },
+                        "objectives": "CIP119:objectives",
+                        "motivations": "CIP119:motivations",
+                        "qualifications": "CIP119:qualifications",
+                        "doNotList": "CIP119:doNotList"
+                    }
+                }
+            },
+            "hashAlgorithm": "blake2b-256",
+            "body": body,
+        });
+        let file = serde_json::to_string_pretty(&document)? + "\n";
+        Ok(ProfileFile {
+            hash: hex::encode(Hasher::<256>::hash(file.as_bytes())),
+            file,
+        })
     }
 
     /// Builds and signs a move-in: the Cardano account pays into the wallet
@@ -1279,6 +1417,10 @@ pub mod api {
         pub action: StakingAction,
         /// Fresh from Koios's `account_info`.
         pub state: StakeStateIn,
+        /// The account's own DRep, fresh from Koios's `drep_info`: needed
+        /// for a DRep action, and nothing (never registered) by default.
+        #[serde(default)]
+        pub drep: Option<DrepStateIn>,
         /// As for a move-in: see [`MoveInRequest::invalid_hereafter`].
         #[serde(default)]
         pub invalid_hereafter: Option<u64>,
@@ -1297,6 +1439,56 @@ pub mod api {
         Withdraw,
         /// Withdraw the rewards, unregister, and get the deposit back.
         Stop,
+        /// Register the account's own DRep, with its profile's anchor when
+        /// there is one, and (`delegate`) delegate the account's vote to it.
+        DrepRegister {
+            #[serde(default)]
+            anchor: Option<AnchorIn>,
+            delegate: bool,
+        },
+        /// Change the DRep's profile anchor, or take it away.
+        DrepUpdate {
+            #[serde(default)]
+            anchor: Option<AnchorIn>,
+        },
+        /// Retire the DRep and get its deposit back.
+        DrepRetire,
+        /// Vote as the DRep on governance actions.
+        DrepVote { votes: Vec<BallotIn> },
+    }
+
+    /// An anchor: where a file is published, and its blake2b-256 hash, hex.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct AnchorIn {
+        pub url: String,
+        pub hash: String,
+    }
+
+    /// One vote: the governance action by the transaction that proposed it
+    /// and its index there, and `yes`, `no` or `abstain`.
+    #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct BallotIn {
+        pub tx_hash: String,
+        pub index: u32,
+        pub vote: String,
+    }
+
+    /// The account's DRep as Koios's `drep_info` gives it.
+    #[derive(Deserialize, Clone, Debug, Default)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DrepStateIn {
+        pub registered: bool,
+        /// The deposit paid, in lovelace (a decimal string).
+        pub deposit: String,
+    }
+
+    fn anchor_of(anchor: &Option<AnchorIn>) -> Result<Option<pallas_primitives::conway::Anchor>> {
+        anchor
+            .as_ref()
+            .map(|a| staking::anchor(&a.url, &a.hash))
+            .transpose()
     }
 
     /// The stake key's standing as Koios's `account_info` gives it.
@@ -1378,6 +1570,12 @@ pub mod api {
             }
             StakingAction::Withdraw => (StakeAction::Withdraw, None, None),
             StakingAction::Stop => (StakeAction::Stop, None, None),
+            StakingAction::DrepRegister { .. }
+            | StakingAction::DrepUpdate { .. }
+            | StakingAction::DrepRetire
+            | StakingAction::DrepVote { .. } => {
+                return drep_transaction(account, request, network_flag, params, paths, state);
+            }
         };
         let staking = Staking::of(
             &stake_key(account, network_flag)?,
@@ -1406,6 +1604,89 @@ pub mod api {
             action: request.action,
             pool,
             drep,
+            fee: built.fee.to_string(),
+            deposit: staking.deposit().to_string(),
+            refund: staking.refund().to_string(),
+            withdrawal: staking.withdrawn().to_string(),
+            change_lovelace: built.change_lovelace.to_string(),
+            change_tokens: built.change_tokens.items.len(),
+            inputs: built.inputs.len(),
+        })
+    }
+
+    /// A DRep action of [`stake`]'s: the account's own DRep's certificates
+    /// or votes, signed with the DRep key (and the stake key, for the vote
+    /// delegation that can ride along).
+    fn drep_transaction(
+        account: &CardanoAccount,
+        request: StakingRequest,
+        network_flag: bool,
+        params: ProtocolParameters,
+        paths: HashMap<(String, u64), (Role, u32)>,
+        stake_state: StakeState,
+    ) -> Result<StakingResult> {
+        let me = drep_key(account)?;
+        let drep_in = request.drep.clone().unwrap_or_default();
+        let drep_state = DrepState {
+            registered: drep_in.registered,
+            deposit: if drep_in.registered {
+                lovelace_of(&drep_in.deposit)?
+            } else {
+                0
+            },
+            own_vote: request.state.drep.as_deref() == Some(me.id().as_str()),
+        };
+        let action = match &request.action {
+            StakingAction::DrepRegister { anchor, delegate } => DrepAction::Register {
+                anchor: anchor_of(anchor)?,
+                delegate: *delegate,
+            },
+            StakingAction::DrepUpdate { anchor } => DrepAction::Update {
+                anchor: anchor_of(anchor)?,
+            },
+            StakingAction::DrepRetire => DrepAction::Retire,
+            StakingAction::DrepVote { votes } => DrepAction::Vote(
+                votes
+                    .iter()
+                    .map(|b| {
+                        let vote = match b.vote.as_str() {
+                            "yes" => pallas_primitives::conway::Vote::Yes,
+                            "no" => pallas_primitives::conway::Vote::No,
+                            "abstain" => pallas_primitives::conway::Vote::Abstain,
+                            other => bail!("A vote is yes, no or abstain, not {other}"),
+                        };
+                        Ok((staking::gov_action_id(&b.tx_hash, b.index)?, vote))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            _ => bail!("not a DRep action"),
+        };
+        let staking = Staking::drep(
+            &stake_key(account, network_flag)?,
+            &stake_state,
+            &me,
+            &drep_state,
+            &action,
+            &params,
+        )?;
+        let change = account.base_address(network_flag, Role::Receive, 0)?;
+        let available: Vec<UtxoResponse> = request.utxos.into_iter().map(|p| p.utxo).collect();
+        let built = build::account_staking(
+            &params,
+            &available,
+            &staking,
+            &change,
+            request.invalid_hereafter,
+        )?;
+        let spent: Vec<&UtxoResponse> = built.inputs.iter().collect();
+        let signed = sign_with_paths(&built.tx, account, &paths, &spent)?;
+        let signed = sign_staking(signed, account, &staking)?;
+        Ok(StakingResult {
+            tx_cbor: hex::encode(&signed.tx_bytes.0),
+            tx_hash: hex::encode(signed.tx_hash.0),
+            action: request.action,
+            pool: None,
+            drep: Some(me.id()),
             fee: built.fee.to_string(),
             deposit: staking.deposit().to_string(),
             refund: staking.refund().to_string(),
@@ -2927,6 +3208,28 @@ impl WasmCardanoAccount {
             .map_err(js_error)
     }
 
+    /// The account's own DRep (CIP-105's key `3/0`), as JSON
+    /// (`api::DrepOf`): its CIP-129 ID, key hash and public key. Never the
+    /// private key, which stays in this module.
+    #[wasm_bindgen(js_name = drepOf)]
+    pub fn drep_of(&self) -> Result<String, JsError> {
+        let drep = api::drep_of(&self.inner).map_err(js_error)?;
+        serde_json::to_string(&drep).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// The account's stake key `2/0`, its Ed25519 public key in hex: what
+    /// CIP-95's `getRegisteredPubStakeKeys` and `getUnregisteredPubStakeKeys`
+    /// give. Never the private key.
+    #[wasm_bindgen(js_name = stakePublicKey)]
+    pub fn stake_public_key(&self) -> Result<String, JsError> {
+        let key = self
+            .inner
+            .private_key(cardano::Role::Staking, 0)
+            .map_err(js_error)?
+            .to_public();
+        Ok(hex::encode(key.to_ed25519_pubkey().as_ref()))
+    }
+
     /// The account's reward (stake) address.
     #[wasm_bindgen(js_name = stakeAddress)]
     pub fn stake_address(&self, network: Network) -> Result<String, JsError> {
@@ -3142,7 +3445,11 @@ pub fn inspect_session_tx(
     accounts: &WasmOneTimeAccounts,
     request: &str,
 ) -> Result<String, JsError> {
-    let request: cip30::TxRequest = from_json(request)?;
+    let request = cip30::TxRequest {
+        // A session has no DRep: governance is the public account's alone.
+        governance: false,
+        ..from_json(request)?
+    };
     to_json(&cip30::inspect_tx(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -3150,7 +3457,11 @@ pub fn inspect_session_tx(
 /// `{ witnessSet, summary }`, as `signDappTx`.
 #[wasm_bindgen(js_name = signSessionTx)]
 pub fn sign_session_tx(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
-    let request: cip30::TxRequest = from_json(request)?;
+    let request = cip30::TxRequest {
+        // A session has no DRep: governance is the public account's alone.
+        governance: false,
+        ..from_json(request)?
+    };
     to_json(&cip30::sign_tx(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -3162,7 +3473,11 @@ pub fn session_data_signer(
     accounts: &WasmOneTimeAccounts,
     request: &str,
 ) -> Result<String, JsError> {
-    let request: cip30::DataRequest = from_json(request)?;
+    let request = cip30::DataRequest {
+        // A session has no DRep: governance is the public account's alone.
+        governance: false,
+        ..from_json(request)?
+    };
     to_json(&cip30::data_signer(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -3170,7 +3485,11 @@ pub fn session_data_signer(
 /// `{ signature, key }`, as `signDappData`.
 #[wasm_bindgen(js_name = signSessionData)]
 pub fn sign_session_data(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
-    let request: cip30::DataRequest = from_json(request)?;
+    let request = cip30::DataRequest {
+        // A session has no DRep: governance is the public account's alone.
+        governance: false,
+        ..from_json(request)?
+    };
     to_json(&cip30::sign_data(&accounts.inner, &request).map_err(js_error)?)
 }
 
@@ -3272,6 +3591,18 @@ pub fn build_staking(account: &WasmCardanoAccount, request: &str) -> Result<Stri
         .map_err(|e| JsError::new(&format!("bad staking request: {e}")))?;
     let result = api::stake(&account.inner, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A DRep's profile as CIP-119 metadata: `request` is JSON
+/// (`api::ProfileRequest`), the result JSON (`api::ProfileFile`), the file to
+/// publish exactly as it is and its blake2b-256 hash. Throws the reason to
+/// show the user.
+#[wasm_bindgen(js_name = drepProfile)]
+pub fn drep_profile(request: &str) -> Result<String, JsError> {
+    let request: api::ProfileRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad profile request: {e}")))?;
+    let file = api::drep_profile(request).map_err(js_error)?;
+    serde_json::to_string(&file).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// A stake pool's ID as `pool1…`, from bech32 or hex. Throws the reason to

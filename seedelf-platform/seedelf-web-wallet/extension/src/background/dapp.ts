@@ -56,6 +56,15 @@
 //             (`heldForLovejoin`): the public account's, or the session's.
 //             Another's is left to the stranger's path, never named.
 //             `signData` is CIP-8, with the address's key.
+// Governance  CIP-95 (chunk 21): a site asks for it in `enable()`, and the
+//             window says what it gives before the user agrees: the dApp
+//             account's DRep key, to register its DRep and vote with it.
+//             Granted, it's on the site's record (`cip95`): `getPubDRepKey`,
+//             the stake key's public key (registered or not, one
+//             `account_info`), and the DRep key signing the account's own
+//             DRep certificates and votes, and data for the DRep. A site
+//             without it is never told the DRep key, and WebAssembly treats
+//             that key as a stranger's for it. A private session has no DRep.
 // Sending     `submitTx` goes through Koios, as the wallet's own sends do,
 //             and what it spends is remembered (spent.ts), apart from what
 //             the wallet spent itself. One already on chain, sent again, is
@@ -254,6 +263,21 @@ type Tie = "account" | number;
 /** A connected site, as the sealed record keeps it. */
 type Connected = DappSite & { network: NetworkName };
 
+/** A CIP-30 extension, as `enable()` and `getExtensions()` name it. */
+type DappExtension = { cip: number };
+
+/** Whether `params`, `enable()`'s argument, asks for CIP-95: CIP-30's `{ extensions: [{ cip: 95 }] }`. */
+export function wantsGovernance(params: unknown): boolean {
+  const extensions = (params as { extensions?: unknown } | null | undefined)?.extensions;
+  return Array.isArray(extensions) && extensions.some((e) => (e as { cip?: unknown } | null)?.cip === 95);
+}
+
+/** Whether a site was given governance (CIP-95): only ever on the public account. */
+const governed = (site: DappSite) => site.cip95 === true && site.session === undefined;
+
+/** The extensions a site was given, as `getExtensions()` answers. */
+const extensionsOf = (site: DappSite): DappExtension[] => (governed(site) ? [{ cip: 95 }] : []);
+
 /** The account as the connector read it. */
 interface View {
   keys: KeyPath[];
@@ -330,6 +354,8 @@ const DECLINED = () => t("dapp.userDeclined");
 const PAGE_GONE = () => t("dapp.pageGone");
 /** What a site asking on the network the wallet left hears, and the window says. */
 const NETWORK_LEFT = () => t("dapp.networkMoved");
+/** What a site that wasn't given governance hears when it asks for CIP-95's keys. */
+const NO_GOVERNANCE = () => t("dapp.noGovernance");
 
 export class DappService {
   private readonly waiting: Waiting[] = [];
@@ -408,15 +434,22 @@ export class DappService {
     // The network the wallet is on as this call goes on: a site connected on
     // one isn't on the other, and what it asks is answered, and signed, there.
     const network = await this.deps.network();
-    if (method === "enable") return this.enable(session, network);
+    if (method === "enable") return this.enable(session, network, args[0]);
     const site = await this.site(network, origin);
     if (!site) throw refused(NOT_CONNECTED());
     const holder = await this.holder(network, site);
+    const governance = governed(site);
     switch (method) {
       case "getNetworkId":
         return network === "mainnet" ? 1 : 0;
       case "getExtensions":
-        return [];
+        return extensionsOf(site);
+      case "getPubDRepKey":
+        return this.drepKey(holder, governance);
+      case "getRegisteredPubStakeKeys":
+        return this.stakeKeys(origin, network, holder, governance, true);
+      case "getUnregisteredPubStakeKeys":
+        return this.stakeKeys(origin, network, holder, governance, false);
       case "getBalance":
         return this.balance(network, holder);
       case "getUtxos":
@@ -432,9 +465,9 @@ export class DappService {
       case "getRewardAddresses":
         return [this.hexAddress(holder ? holder.reward : (await this.view(network, undefined)).stake)];
       case "signTx":
-        return this.signTx(session, network, holder, args[0], args[1] === true, await this.needsPassword());
+        return this.signTx(session, network, holder, args[0], args[1] === true, await this.needsPassword(), governance);
       case "signData":
-        return this.signData(session, network, holder, args[0], args[1], await this.needsPassword());
+        return this.signData(session, network, holder, args[0], args[1], await this.needsPassword(), governance);
       case "submitTx":
         return this.submitTx(origin, network, holder, args[0]);
     }
@@ -657,7 +690,12 @@ export class DappService {
     this.keepSites(all);
     return all
       .filter((s) => s.network === network)
-      .map(({ origin, connectedAt, session }) => ({ origin, connectedAt, ...(session === undefined ? {} : { session }) }))
+      .map(({ origin, connectedAt, session, cip95 }) => ({
+        origin,
+        connectedAt,
+        ...(session === undefined ? {} : { session }),
+        ...(cip95 === true && session === undefined ? { cip95 } : {}),
+      }))
       .sort((a, b) => a.origin.localeCompare(b.origin));
   }
 
@@ -714,8 +752,12 @@ export class DappService {
     return (await this.site(network, origin)) !== undefined;
   }
 
-  /** Records a site as connected on `network`, to `session` if given; false when it's connected already. */
-  private async connect(network: NetworkName, origin: string, session?: number): Promise<boolean> {
+  /**
+   * Records a site as connected on `network`, to `session` if given, and
+   * given governance (`cip95`) when it asked and the user agreed: never for
+   * a session. False when it's connected already.
+   */
+  private async connect(network: NetworkName, origin: string, session?: number, cip95 = false): Promise<boolean> {
     let added = false;
     await this.changeSites((all) => {
       if (all.some((s) => s.origin === origin && s.network === network)) return all;
@@ -723,9 +765,19 @@ export class DappService {
       const site: Connected = { origin, network, connectedAt: this.deps.now() };
       // No account is recorded on a site: every public-account connection is
       // to the one dApp account, which Settings chooses (`dappAccount`).
-      return [...all, session === undefined ? site : { ...site, session }];
+      if (session !== undefined) return [...all, { ...site, session }];
+      return [...all, cip95 ? { ...site, cip95: true } : site];
     });
     return added;
+  }
+
+  /** Gives a site connected to the public account governance (CIP-95), when the user agreed to it. */
+  private async grantGovernance(network: NetworkName, origin: string): Promise<void> {
+    await this.changeSites((all) => {
+      const i = all.findIndex((s) => s.origin === origin && s.network === network && s.session === undefined);
+      if (i < 0 || all[i]!.cip95) return all;
+      return all.map((s, j) => (j === i ? { ...s, cip95: true } : s));
+    });
   }
 
   /**
@@ -759,22 +811,38 @@ export class DappService {
    * itself only if that page went away first. A site the user declined, or
    * closed the window on, isn't asked again for a minute.
    */
-  private async enable(session: DappSession, network: NetworkName): Promise<true> {
+  /**
+   * Connects `origin`, asking the user, with governance (CIP-95) when it
+   * asks for it (`params`, CIP-30's `{ extensions: [{ cip: 95 }] }`) and the
+   * user agrees. A site connected already that asks for governance now is
+   * asked about that alone. What it was given, `getExtensions()` says.
+   */
+  private async enable(session: DappSession, network: NetworkName, params: unknown): Promise<true> {
     const { origin } = session;
     const password = await this.needsPassword();
-    if (await this.connected(network, origin)) return true;
+    const wants = wantsGovernance(params);
+    const site = await this.site(network, origin);
+    // A private session has no DRep: governance isn't asked about for one.
+    if (site && (!wants || governed(site) || site.session !== undefined)) return true;
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
       const settled = await asking.settled;
       // This page went away too: nothing is asked for it.
       if (this.gonePages.has(session.id)) throw refused(PAGE_GONE());
-      if (settled === "gone") return this.run(session, "enable", []) as Promise<true>;
+      if (settled === "gone") return this.run(session, "enable", [params]) as Promise<true>;
       if (settled) throw settled;
+      // Answered for another of its pages, which may not have asked for governance: this one asks for it then.
+      const now = await this.site(network, origin);
+      if (now && wants && !governed(now) && now.session === undefined) return this.run(session, "enable", [params]) as Promise<true>;
       return true;
     }
     if (this.refusing(origin)) throw refused(DECLINED());
-    await this.ask(session, network, { kind: "connect", password }, APIError.Refused, () => this.connect(network, origin));
+    const ask: DappAsk = { kind: "connect", password, ...(wants ? { governance: true } : {}), ...(site ? { connected: true } : {}) };
+    await this.ask(session, network, ask, APIError.Refused, async () => {
+      if (site) await this.grantGovernance(network, origin);
+      else await this.connect(network, origin, undefined, wants);
+    });
     return true;
   }
 
@@ -1435,6 +1503,7 @@ export class DappService {
     inputs: string[],
     collateral: string[],
     partialSign: boolean,
+    governance = false,
   ): Promise<{ request: string; summary: DappTxSummary; collateralSpent: boolean; view: View; rows: KoiosUtxo[] }> {
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(origin) >= MAX_SITE_WAITING) throw refused(BUSY());
     if (this.lastMinute(origin, "unprompted").length >= PER_MINUTE.unprompted) {
@@ -1452,6 +1521,8 @@ export class DappService {
       partialSign,
       stakeIndex: holder?.index ?? 0,
       ...(stakeDeposit === undefined ? {} : { stakeDeposit }),
+      // The DRep key signs only for a site given governance, and never a session's.
+      governance: governance && !holder,
     });
     const { wasm } = this.deps;
     const whose = t(holder ? "dapp.whose.session" : "dapp.whose.account");
@@ -1498,6 +1569,28 @@ export class DappService {
     return { request, summary, collateralSpent, view, rows };
   }
 
+  /** CIP-95's `getPubDRepKey`: the dApp account's DRep key, its public key in hex, for a site given governance. */
+  private async drepKey(holder: Holder, governance: boolean): Promise<string> {
+    if (!governance || holder) throw refused(NO_GOVERNANCE());
+    return this.withDappKeys(holder, ({ cardano }) => (JSON.parse(cardano.drepOf()) as { publicKey: string }).publicKey);
+  }
+
+  /**
+   * CIP-95's `getRegisteredPubStakeKeys` (`registered`) and
+   * `getUnregisteredPubStakeKeys`: the dApp account's one stake key, in the
+   * list its standing puts it in (one `account_info`, counted as a lookup).
+   */
+  private async stakeKeys(origin: string, network: NetworkName, holder: Holder, governance: boolean, registered: boolean): Promise<string[]> {
+    if (!governance || holder) throw refused(NO_GOVERNANCE());
+    if (!this.allow(origin, "lookup")) throw refused(t("dapp.tooManyLookups"));
+    const { key, stake } = await this.withDappKeys(holder, ({ cardano }) => ({
+      key: cardano.stakePublicKey(),
+      stake: cardano.stakeAddress(network === "mainnet" ? this.deps.wasm.Network.Mainnet : this.deps.wasm.Network.Preprod),
+    }));
+    const info = await this.deps.koios(network).accountInfo(stake);
+    return (info?.status === "registered") === registered ? [key] : [];
+  }
+
   private async signTx(
     session: DappSession,
     network: NetworkName,
@@ -1505,6 +1598,7 @@ export class DappService {
     tx: unknown,
     partialSign: boolean,
     password: boolean,
+    governance = false,
   ): Promise<string> {
     const bytes = txBytes(tx);
     let inputs: string[];
@@ -1517,7 +1611,7 @@ export class DappService {
     }
     await this.heldForLovejoin(network, holder, inputs, collateral);
     const { request, summary, collateralSpent, view, rows } = await this.readInTurn(session.origin, () =>
-      this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign),
+      this.readTx(session.origin, network, holder, tx, bytes, inputs, collateral, partialSign, governance),
     );
     const { wasm } = this.deps;
     // For the prompt alone: never refused for it, which would tell the site.
@@ -1675,6 +1769,7 @@ export class DappService {
     address: unknown,
     payload: unknown,
     password: boolean,
+    governance = false,
   ): Promise<unknown> {
     if (typeof address !== "string") throw invalid(t("dapp.signerNotString"));
     // Refused unread, as a transaction over 64 KiB is (independent review M15).
@@ -1686,8 +1781,15 @@ export class DappService {
     if (!/^([0-9a-fA-F]{2})*$/.test(hex)) throw invalid(t("dapp.dataNotHex"));
     const { wasm } = this.deps;
     const view = await this.view(network, holder);
-    const request = JSON.stringify({ network, keys: view.keys, address, payload: hex, stakeIndex: holder?.index ?? 0 });
-    let signer: { address: string; key: "payment" | "stake" } | null;
+    const request = JSON.stringify({
+      network,
+      keys: view.keys,
+      address,
+      payload: hex,
+      stakeIndex: holder?.index ?? 0,
+      governance: governance && !holder,
+    });
+    let signer: { address: string; key: "payment" | "stake" | "drep" } | null;
     try {
       signer = await this.withDappKeys(
         holder,

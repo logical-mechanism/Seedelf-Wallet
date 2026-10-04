@@ -2,6 +2,7 @@
 // strings and are handled as bigint, so nothing is rounded on the way.
 
 import { t } from "../i18n";
+import { epochStart, type NetworkName } from "../networks";
 import {
   ALWAYS_ABSTAIN,
   ALWAYS_NO_CONFIDENCE,
@@ -109,6 +110,15 @@ export function whenOf(at: number, now: Date): string {
   if (days === 1) return t("format.yesterday", { time });
   const year = d.getFullYear() === now.getFullYear() ? {} : ({ year: "numeric" } as const);
   return t("format.dateAndTime", { date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year }), time });
+}
+
+/**
+ * The day epoch `epoch` ends on `network`, when the next starts: "9 Oct 2026".
+ * Counted from Shelley's start (networks.ts), so no request. Pinned to en-GB
+ * as every date in the wallet is, for now (a known gap, chunk 19's plan).
+ */
+export function epochEnds(network: NetworkName, epoch: number): string {
+  return new Date(epochStart(network, epoch + 1)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */

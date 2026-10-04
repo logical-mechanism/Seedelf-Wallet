@@ -17,6 +17,8 @@
 // Building  like a send (send.ts): the account and its `account_info` read
 //           fresh, then built and signed in WebAssembly with the payment keys
 //           and the stake key, and kept until Send, which only submits it.
+//           The account's own DRep (governance.ts) builds here too: its
+//           `drep_info` read fresh as well, and signed with the DRep key.
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
@@ -24,6 +26,10 @@ import {
   ALWAYS_ABSTAIN,
   ALWAYS_NO_CONFIDENCE,
   type DrepDetails,
+  type DrepProfileFile,
+  type DrepProfileRequest,
+  type GovernanceView,
+  type OwnDrep,
   type PendingTx,
   type PoolDetails,
   type PoolList,
@@ -34,6 +40,7 @@ import {
   type StakingSummary,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
+import { governance, ownDrepId, profileFile, readOwnDrep } from "./governance";
 import type { Koios, KoiosAccountInfo, KoiosPoolInfo } from "./koios";
 import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
@@ -157,7 +164,14 @@ const PENDING_KIND: Record<StakingAction["kind"], PendingTx["kind"]> = {
   vote: "vote",
   withdraw: "withdraw-rewards",
   stop: "unstake",
+  "drep-register": "drep-register",
+  "drep-update": "drep-update",
+  "drep-retire": "drep-retire",
+  "drep-vote": "drep-vote",
 };
+
+/** Whether `action` is the account's own DRep's, signed with the DRep key. */
+const isDrepAction = (action: StakingAction) => action.kind.startsWith("drep-");
 
 export class StakingService {
   constructor(private readonly deps: StakingDeps) {}
@@ -232,18 +246,40 @@ export class StakingService {
     };
   }
 
+  /** The account's own DRep, read fresh, for Staking. */
+  ownDrep(network: NetworkName): Promise<OwnDrep> {
+    return readOwnDrep(this.deps, network);
+  }
+
+  /** The live governance actions, the account's DRep and its votes. */
+  governance(network: NetworkName, refresh = false): Promise<GovernanceView> {
+    return governance(this.deps, network, refresh);
+  }
+
+  /** A DRep's profile as CIP-119 metadata, and its hash. */
+  drepProfile(profile: DrepProfileRequest): DrepProfileFile {
+    return profileFile(this.deps, profile);
+  }
+
   /**
    * Builds and signs `action` from the Cardano account, reading it and its
-   * stake key fresh. The same pool or vote again is refused: it would only
-   * cost a fee.
+   * stake key fresh, and the account's DRep for a DRep action. The same pool
+   * or vote delegation again is refused: it would only cost a fee.
    */
   async build(network: NetworkName, action: StakingAction): Promise<StakingSummary> {
     const { wasm, wallet } = this.deps;
     await settleMaybeSent(this.deps, network);
-    const [{ params, utxos, held, stake }, invalidHereafter] = await Promise.all([
+    const koios = this.deps.koios(network);
+    const [{ params, utxos, held, stake }, invalidHereafter, drepRow] = await Promise.all([
       readAccount(this.deps, network, { stake: true }),
-      validUntil(this.deps.koios(network)),
+      validUntil(koios),
+      isDrepAction(action) ? ownDrepId(this.deps).then((id) => koios.drepStanding(id)) : undefined,
     ]);
+    const drepRegistered = drepRow?.drep_status === "registered";
+    if (action.kind === "drep-register" && drepRegistered) throw new Error(t("worker.governance.alreadyDrep"));
+    if (isDrepAction(action) && action.kind !== "drep-register" && !drepRegistered) {
+      throw new Error(t("worker.governance.notDrep"));
+    }
     if (utxos.length === 0) {
       throw nothingInAccount(held, t("worker.staking.accountEmpty"));
     }
@@ -261,6 +297,7 @@ export class StakingService {
       utxos,
       action,
       state: { registered: state.registered, deposit: state.deposit, rewards: state.rewards, drep: state.drep },
+      ...(isDrepAction(action) ? { drep: { registered: drepRegistered, deposit: drepRow?.deposit ?? "0" } } : {}),
       invalidHereafter,
     };
     const result = await wallet.withKeys(

@@ -113,6 +113,8 @@ export interface KoiosTxInfo {
   withdrawals?: Array<{ amount: string; stake_addr: string }> | null;
   /** Its certificates: `type` is Koios's name (`stake_registration`, `pool_delegation`, `vote_delegation`, …), `info` what each names. */
   certificates?: Array<{ index: number | null; type: string; info: Record<string, unknown> | null }> | null;
+  /** Its votes: `voter` is a DRep's ID (CIP-129) when a DRep cast it. */
+  voting_procedures?: Array<{ vote: string; voter: string; voter_role: string }> | null;
 }
 
 export interface KoiosTxOut {
@@ -183,6 +185,46 @@ export interface KoiosDrepInfo {
   live_delegator_count: number | null;
 }
 
+/** The account's own DRep: `drep_info`, with what retiring needs and its profile's anchor. */
+export interface KoiosDrepStanding extends KoiosDrepInfo {
+  /** The deposit it paid (lovelace): what retiring returns. */
+  deposit: string | null;
+  meta_url: string | null;
+  meta_hash: string | null;
+}
+
+/** What Koios found at a DRep's profile: `drep_metadata`, its validity and name. */
+export interface KoiosDrepProfile {
+  drep_id: string;
+  /** The file was read and matched its hash (true), didn't (false), or Koios couldn't say (null). */
+  is_valid: boolean | null;
+  givenName: unknown;
+}
+
+/** A live governance action: `proposal_list`, the columns the wallet shows, its title and abstract from the anchor as Koios read it. */
+export interface KoiosProposal {
+  proposal_id: string;
+  proposal_tx_hash: string;
+  proposal_index: number;
+  proposal_type: string;
+  proposed_epoch: number;
+  /** The last epoch it can be voted on in. */
+  expiration: number;
+  deposit: string;
+  meta_url: string | null;
+  meta_hash: string | null;
+  meta_is_valid: boolean | null;
+  title: string | null;
+  abstract: string | null;
+}
+
+/** One vote: `vote_list`. */
+export interface KoiosVote {
+  proposal_id: string;
+  vote: "Yes" | "No" | "Abstain";
+  block_time: number;
+}
+
 /** A DRep's name from its CIP-119 metadata: `drep_metadata`, the name only. */
 export interface KoiosDrepName {
   drep_id: string;
@@ -222,6 +264,19 @@ const POOL_INFO_COLUMNS =
 const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
 /** CIP-119's name only: a DRep's image would be fetched from anywhere its author chose. */
 const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
+const DREP_STANDING_COLUMNS = `${DREP_INFO_COLUMNS},deposit,meta_url,meta_hash`;
+const DREP_PROFILE_COLUMNS = "drep_id,is_valid,meta_json->body->givenName";
+/**
+ * A live governance action is one not yet ratified, enacted, dropped or
+ * expired. Its metadata's text is most of a row (70 KB for mainnet's three on
+ * 2026-10-04), so only the title and abstract are taken from it (5.7 KB).
+ */
+const LIVE_PROPOSALS =
+  "ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null&expired_epoch=is.null";
+const PROPOSAL_COLUMNS =
+  "proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json->body->>title,abstract:meta_json->body->>abstract";
+/** How many live actions a vote_list request asks about at once, so its address stays short. */
+const VOTES_PER_REQUEST = 40;
 /** What an NFT's image is read from: its CIP-25 and CIP-68 metadata, nothing else. */
 const ASSET_INFO_COLUMNS = "minting_tx_metadata,cip68_metadata";
 const RETRY_DELAYS_MS = [1000, 3000];
@@ -555,7 +610,8 @@ export class Koios {
   /** Inputs, outputs and fee of up to 20 transactions, in one request; nothing else. */
   txInfo(txHashes: string[]): Promise<KoiosTxInfo[]> {
     if (!txHashes.length) return Promise.resolve([]);
-    // Metadata, withdrawals and certificates cost no extra request: they're what Activity shows of notes and staking.
+    // Metadata, withdrawals, certificates and votes cost no extra request: they're what Activity shows of notes,
+    // staking and the account's own DRep.
     return this.post<KoiosTxInfo>("tx_info", {
       _tx_hashes: txHashes,
       _inputs: true,
@@ -565,6 +621,7 @@ export class Koios {
       _certs: true,
       _scripts: false,
       _bytecode: false,
+      _governance: true,
     });
   }
 
@@ -633,6 +690,58 @@ export class Koios {
   /** The DReps asked for (CIP-129 IDs); ones Koios doesn't know are left out. */
   drepInfo(drepIds: string[]): Promise<KoiosDrepInfo[]> {
     return this.post<KoiosDrepInfo>("drep_info", { _drep_ids: drepIds }, `select=${DREP_INFO_COLUMNS}`);
+  }
+
+  /** The account's own DRep, with its deposit and profile's anchor; undefined when it was never registered. */
+  async drepStanding(drepId: string): Promise<KoiosDrepStanding | undefined> {
+    const [row] = await this.post<KoiosDrepStanding>(
+      "drep_info",
+      { _drep_ids: [drepId] },
+      `select=${DREP_STANDING_COLUMNS}`,
+    );
+    return row;
+  }
+
+  /** What Koios found at a DRep's profile; undefined when it has none. */
+  async drepProfile(drepId: string): Promise<KoiosDrepProfile | undefined> {
+    const [row] = await this.post<KoiosDrepProfile>(
+      "drep_metadata",
+      { _drep_ids: [drepId] },
+      `select=${DREP_PROFILE_COLUMNS}`,
+    );
+    return row;
+  }
+
+  /** Every live governance action, the newest proposed first, 1,000 a request. */
+  async proposalList(): Promise<KoiosProposal[]> {
+    const rows: KoiosProposal[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await this.request<KoiosProposal>(
+        "GET",
+        "proposal_list",
+        undefined,
+        `${LIVE_PROPOSALS}&select=${PROPOSAL_COLUMNS}&order=proposed_epoch.desc,proposal_id.asc&offset=${offset}&limit=${PAGE_SIZE}`,
+      );
+      rows.push(...page);
+      if (page.length < PAGE_SIZE) return rows;
+    }
+  }
+
+  /** `drepId`'s votes on the actions asked for (`gov_action1…`), newest first: a vote cast again replaces the one before. */
+  async drepVotes(drepId: string, proposalIds: string[]): Promise<KoiosVote[]> {
+    const votes: KoiosVote[] = [];
+    for (let i = 0; i < proposalIds.length; i += VOTES_PER_REQUEST) {
+      const ids = proposalIds.slice(i, i + VOTES_PER_REQUEST).map(encodeURIComponent).join(",");
+      votes.push(
+        ...(await this.request<KoiosVote>(
+          "GET",
+          "vote_list",
+          undefined,
+          `voter_id=eq.${encodeURIComponent(drepId)}&proposal_id=in.(${ids})&select=proposal_id,vote,block_time&order=block_time.desc`,
+        )),
+      );
+    }
+    return votes;
   }
 
   /** The DReps' names from their metadata; ones with none are left out. */

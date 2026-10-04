@@ -1028,6 +1028,11 @@ export function SiteRows({
                 {s.session === undefined ? t("collateral.yourPublicAccount") : t("claim.session", { number: s.session + 1 })} ·{" "}
                 {t("sites.since", { date: new Date(s.connectedAt).toLocaleDateString() })}
               </span>
+              {s.cip95 && (
+                <span className="note" data-testid="site-governance">
+                  {t("sites.governance")}
+                </span>
+              )}
               {wait && (
                 <span className="note" data-testid="site-wait">
                   {/* The button's own title elsewhere, a sentence here: its full stop is the language's. */}

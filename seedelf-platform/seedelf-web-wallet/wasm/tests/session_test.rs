@@ -774,6 +774,7 @@ fn the_connector_reads_and_signs_a_swap_for_a_session_with_its_key_alone() {
         partial_sign: false,
         stake_index: 5,
         stake_deposit: None,
+        governance: false,
     };
     let summary = cip30::inspect_tx(&accounts, &request).unwrap();
     assert_eq!(summary.own_inputs, 1);
@@ -851,6 +852,7 @@ fn a_site_connected_to_a_session_signs_in_with_its_payment_key_or_its_own_stake_
         address: address.to_bech32().unwrap(),
         payload: hex::encode("Sign in to example.com"),
         stake_index,
+        governance: false,
     };
 
     // Its address signs with its payment key.
@@ -907,6 +909,7 @@ fn a_withdrawal_from_a_sessions_reward_account_is_signed_by_its_own_stake_key() 
         partial_sign: false,
         stake_index: index,
         stake_deposit: None,
+        governance: false,
     };
     let summary = cip30::inspect_tx(&accounts, &request).unwrap();
     assert_eq!(summary.signs, vec!["0/5".to_string(), "stake".to_string()]);
@@ -953,6 +956,7 @@ fn a_real_aggregator_swap_is_read_signed_and_assembled_byte_for_byte() {
         partial_sign: false,
         stake_index: 0,
         stake_deposit: None,
+        governance: false,
     };
     let summary = cip30::inspect_tx(&public, &request).unwrap();
     assert!(summary.complete);
