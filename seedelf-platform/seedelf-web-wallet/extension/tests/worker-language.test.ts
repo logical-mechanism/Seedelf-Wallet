@@ -133,6 +133,11 @@ describe("the worker's language", () => {
   });
 
   it("follows the one a page chooses after", async () => {
+    // On its own (-t, an editor's single run, the test above skipped or failing early), the held-back read is
+    // released here; it does nothing once the test above has. And the stored language is in first, so the choice
+    // below is one made after the worker started, never its first read.
+    open();
+    await vi.waitFor(() => expect(i18n.language).toBe("es"));
     // Settings' picker writes the choice; Chrome tells the worker.
     local.set(LOCAL_LANGUAGE, "ja");
     for (const l of heard.local) l({ [LOCAL_LANGUAGE]: { oldValue: "es", newValue: "ja" } });

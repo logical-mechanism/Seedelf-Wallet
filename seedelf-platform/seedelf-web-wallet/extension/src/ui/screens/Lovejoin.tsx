@@ -134,10 +134,13 @@ export function subOf(s: SessionView, now: number): string {
  */
 export function detailOf(s: SessionView): string | undefined {
   const lines: string[] = [];
+  // Each line a whole sentence, ended by its own key: a reason as it came (the network's refusal ends in the
+  // node's raw words, with no stop) would run into the next line in Japanese, which sets nothing between them.
   if (s.mix?.skipped) lines.push(t("lj.leftOut", { reason: withoutStop(s.mix.skipped) }));
-  if (s.chain?.stopped) lines.push(t("lovejoin.detail.whyStopped", { why: s.chain.stopped }));
+  if (s.chain?.stopped) lines.push(t("lovejoin.detail.whyStopped", { why: withoutStop(s.chain.stopped) }));
   if (s.auto?.retry && !isOver(s)) {
-    lines.push(t("lovejoin.detail.triesAgain", { at: new Date(s.auto.retry.at).toLocaleTimeString(), error: s.auto.retry.error }));
+    const at = new Date(s.auto.retry.at).toLocaleTimeString();
+    lines.push(t("lovejoin.detail.triesAgain", { at, error: withoutStop(s.auto.retry.error) }));
   }
   if (unseen(s)) lines.push(t("lovejoin.detail.mayLand"));
   if (s.leftBehind?.length) lines.push(t("lovejoin.detail.leftBehind", { count: s.leftBehind.length }));
@@ -713,7 +716,7 @@ export function Lovejoin({
               : tr("lovejoin.sending.sent", { sent: sending.sent, total: sending.total })}
           </p>
           {sending.stopped && (
-            <p className="token-row__detail">{tr("lovejoin.detail.whyStopped", { why: sending.stopped })}</p>
+            <p className="token-row__detail">{tr("lovejoin.detail.whyStopped", { why: withoutStop(sending.stopped) })}</p>
           )}
         </div>
       )}

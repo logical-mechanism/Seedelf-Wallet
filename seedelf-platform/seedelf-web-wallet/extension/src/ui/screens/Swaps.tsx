@@ -2235,7 +2235,10 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       {auto.retry && !auto.paused ? (
         <div className="timeline__now timeline__now--retry" data-testid="session-retry" aria-live="polite">
           <p>
-            {tr("swaps.retry.line", { why: retryReason(auto.retry), when: retryText(auto.retry.at) })}
+            {/* Why, then when. An error with no code is shown as it came, often with no stop of its own (the node's
+                raw refusal): it takes one, and Japanese, which sets nothing between sentences, still sets a space
+                after a Latin one, so the time never runs into it. */}
+            {joinSentences([withStop(retryReason(auto.retry)), retryText(auto.retry.at)])}
             {sentenceGap()}
             <button type="button" className="link" disabled={busy} onClick={onRetry}>
               {tr("lovejoin.mixes.tryNow")}

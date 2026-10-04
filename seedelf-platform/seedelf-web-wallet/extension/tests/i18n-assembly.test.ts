@@ -6,7 +6,10 @@
 // with an ASCII full stop. The helpers are src/i18n's joinSentences,
 // sentenceGap and joinList, and src/ui/sentence.ts. This holds the screens to
 // them, reading the source as words.test.ts does, then says what the screens
-// say, in Japanese and in English, which stays as it was.
+// say, in Japanese and in English, which stays as it was. The worker too,
+// since it writes its messages in the user's language (sw.ts): its old
+// leftOut stripped English's full stop from a translated reason ("…。。"),
+// which this check, reading the screens alone, never saw.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -15,9 +18,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parseAst } from "vite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { i18n, t } from "../src/i18n/core";
+import { i18n, joinSentences, t } from "../src/i18n/core";
 import { historiesNote, madePrivate } from "../src/shared/histories";
-import type { DappSite, DappTxSummary, SessionBackSummary, SessionView, TokenAmount, UtxoInfo } from "../src/shared/rpc";
+import type { DappSite, DappTxSummary, SessionAuto, SessionBackSummary, SessionView, TokenAmount, UtxoInfo } from "../src/shared/rpc";
 import { HandleWarning } from "../src/ui/components/HandleWarning";
 import { LovejoinNote, ReturnLinks } from "../src/ui/components/LovejoinReturn";
 import { OnNetwork } from "../src/ui/components/NetworkPicker";
@@ -27,6 +30,7 @@ import { NetworkContext } from "../src/ui/network";
 import { ClaimReview } from "../src/ui/screens/ClaimAll";
 import { handleWarning } from "../src/ui/screens/Home";
 import { detailOf, NotMixed, WayBack } from "../src/ui/screens/Lovejoin";
+import { Session } from "../src/ui/screens/Swaps";
 import { historyOf, UtxoDetails } from "../src/ui/screens/Utxos";
 import { DrepRow } from "../src/ui/screens/Voting";
 import { asSentence, withoutStop, withStop } from "../src/ui/sentence";
@@ -39,12 +43,19 @@ const EN: Record<string, string> = JSON.parse(readFileSync(`${SRC}/i18n/translat
 // The source
 // ---------------------------------------------------------------------------
 
-/** The CSV writer: its commas are the file format's, between columns, not a list a person reads. */
-const ELSEWHERE = ["ui/activity.ts"];
+/**
+ * Where words a person reads are written: the screens, what they share with the worker, and the worker, which
+ * speaks the user's language too. Not src/manifest.ts, whose " " joins the CSP's sources, nobody's sentences.
+ */
+const WRITERS = ["ui", "shared", "background"];
 /** Where an ASCII full stop is added on purpose: to the Rust core's English fragments. */
 const ENGLISH_FRAGMENTS = "ui/sentence.ts";
-/** A recovery phrase's words: BIP39's English list, joined as the Rust core reads them. */
-const PHRASE = new Set(["words", "phrase"]);
+/**
+ * Words a space joins that aren't the wallet's sentences, so no language's gap applies: a recovery phrase's
+ * (BIP39's English list, joined as the Rust core reads them), and a CIP-20 note's lines (the sender's own, in
+ * whatever language they wrote, joined as other wallets show them: background/activity.ts noteOf).
+ */
+const NOT_SENTENCES = new Set(["words", "phrase", "noteLines"]);
 /** What `t()` is called in the screens. */
 const TRANSLATE = new Set(["t", "tr"]);
 /** Functions that give a whole sentence, beside `t()` and the SHOUTED constants (LOVEJOIN_SEEN()). */
@@ -101,8 +112,11 @@ function assembledIn(file: string): string[] {
       const arg = (n.arguments as Node[])[0];
       if (method === "join" && arg?.type === "Literal" && typeof arg.value === "string") {
         const object = member.object as Node;
-        if (/,/.test(arg.value)) at(n, "a list joined with English's comma: joinList");
-        if (arg.value === " " && !(object.type === "Identifier" && PHRASE.has(object.name as string))) at(n, "sentences joined with a space: joinSentences");
+        // ", " is a list a person reads; a bare "," is a machine's format: the CSV's columns, a URL's query.
+        if (/, /.test(arg.value)) at(n, "a list joined with English's comma: joinList");
+        if (arg.value === " " && !(object.type === "Identifier" && NOT_SENTENCES.has(object.name as string))) {
+          at(n, "sentences joined with a space: joinSentences");
+        }
       }
       const pattern = (arg?.regex as { pattern?: string } | undefined)?.pattern;
       if (method === "replace" && pattern === "\\.$") at(n, "an English full stop stripped: withoutStop");
@@ -151,11 +165,26 @@ function assembledIn(file: string): string[] {
   return found;
 }
 
-describe("the screens' sentences, lists and full stops, in the source", () => {
-  it("are joined the language's way everywhere in src/ui", () => {
-    const files = [...sources(`${SRC}/ui`), `${SRC}/shared/histories.ts`].filter((f) => !ELSEWHERE.some((e) => f.endsWith(e)));
-    expect(files.length).toBeGreaterThan(50);
+describe("the screens' and the worker's sentences, lists and full stops, in the source", () => {
+  it("are joined the language's way everywhere in src/ui, src/shared and src/background", () => {
+    const files = WRITERS.flatMap((dir) => sources(`${SRC}/${dir}`));
+    expect(files.length).toBeGreaterThan(100);
+    // Once only the screens and histories.ts: the worker, the rest of what it shares with them, and the words
+    // Activity shows beside its CSV went unread.
+    for (const file of ["background/sessions.ts", "background/koios.ts", "shared/recipients.ts", "ui/activity.ts"]) {
+      expect(files).toContain(`${SRC}/${file}`);
+    }
     expect(files.flatMap((file) => assembledIn(file).map((line) => `${file.slice(SRC.length + 1)}:${line}`))).toEqual([]);
+  });
+
+  it("would catch the worker's kinds, its old leftOut among them, and leave a machine's format and a note's lines alone", () => {
+    const probe = fileURLToPath(new URL("./fixtures/assembly-probe.ts", import.meta.url));
+    expect(assembledIn(probe).map((line) => line.replace(/^\d+: /, ""))).toEqual([
+      "sentences joined with a space: joinSentences",
+      "two sentences with a space between: joinSentences",
+      "a list joined with English's comma: joinList",
+      "an English full stop stripped: withoutStop",
+    ]);
   });
 
   it("never run t() as a module loads, where it would keep the language that was on then", () => {
@@ -188,11 +217,13 @@ describe("the screens' sentences, lists and full stops, in the source", () => {
 // ---------------------------------------------------------------------------
 
 let Settings: typeof import("../src/ui/screens/Settings");
+let App: typeof import("../src/ui/App");
 
 beforeAll(async () => {
-  // Settings reads the page's URL when it loads (ui/view.ts).
+  // Settings and the app shell read the page's URL when they load (ui/view.ts).
   vi.stubGlobal("location", { search: "?view=tab", hash: "" });
   Settings = await import("../src/ui/screens/Settings");
+  App = await import("../src/ui/App");
 });
 
 afterEach(async () => {
@@ -222,6 +253,18 @@ describe("whole sentences, one after another", () => {
       expect(line).not.toContain("。 ");
     }
     expect(signingTies([], true)).toBe(`${t("dappUi.privacy.tiesToSession")}${t("dappUi.privacy.notAccountNorPrivate")}`);
+  });
+
+  it("keep a space after a Latin sentence among Japanese ones, which a raw English message can be", async () => {
+    // English and Spanish set a space anyway: nothing changes for them.
+    expect(joinSentences(["The node said BadInputsUTxO.", "It tries again."])).toBe("The node said BadInputsUTxO. It tries again.");
+    await japanese();
+    expect(joinSentences(["insufficient funds.", "3 分後にもう一度試します。"])).toBe("insufficient funds. 3 分後にもう一度試します。");
+    expect(joinSentences(['bad request: "x".', "Why?", "もう一度お試しください。"])).toBe('bad request: "x". Why? もう一度お試しください。');
+    // After Japanese's own 。, nothing, as ever. Nor after a raw fragment with no stop: ending it is its caller's
+    // (withStop), since only a sentence's end says the next sentence needs the space.
+    expect(joinSentences(["一つ。", "二つ。"])).toBe("一つ。二つ。");
+    expect(joinSentences(["BadInputsUTxO", "二つ。"])).toBe("BadInputsUTxO二つ。");
   });
 
   it("run on in Lovejoin's notes and reviews", async () => {
@@ -308,6 +351,82 @@ describe("whole sentences, one after another", () => {
     expect(review).toContain("app.example: ボックスが足りません。");
     expect(review).not.toContain("。.");
     expect(review).not.toContain("。。");
+  });
+});
+
+describe("a reason as it came, set before the next sentence", () => {
+  // The network's refusal ends in the node's own words, with no full stop of its own (koios.rejected). Before
+  // another sentence in Japanese, which sets nothing between two, it ran on: "…TxSubmitFail"}3 分後に…".
+  const refusal = () => t("koios.rejected", { why: '{"tag":"TxSubmitFail"}' });
+
+  it("is ended by its line's own stop in a mix's detail, and a stop it brought isn't doubled", async () => {
+    const at = Date.UTC(2026, 9, 4, 3);
+    const time = new Date(at).toLocaleTimeString();
+    const mix = (why: string): SessionView => ({
+      index: 3,
+      network: "preprod",
+      address: "addr_test1mix",
+      createdAt: 0,
+      stage: "open",
+      txs: [],
+      holding: null,
+      mix: { boxes: 2 },
+      chain: { total: 9, sent: 4, confirmed: 3, cut: false, stopped: why },
+      auto: { step: "returning", stopping: false, filled: false, approvedMinOut: "0", retry: { at, error: why, reason: "other" } },
+    });
+    // English gains the full stop the node's words never had; a reason that ends in one reads as it did.
+    expect(detailOf(mix(refusal()))).toBe(`Why it stopped: ${refusal()}. It tries again at ${time}. What went wrong: ${refusal()}.`);
+    const cut = t("lj.chainCut");
+    expect(detailOf(mix(cut))).toBe(`Why it stopped: ${cut} It tries again at ${time}. What went wrong: ${cut}`);
+    await japanese();
+    expect(detailOf(mix(refusal()))).toBe(`停止した理由: ${refusal()}。${time} にもう一度試します。問題の内容: ${refusal()}。`);
+    expect(detailOf(mix(t("lj.chainCut")))).not.toContain("。。");
+  });
+
+  it("takes a stop of its own in a swap's retry line, and Japanese keeps a space after it", async () => {
+    const swap = (retry: NonNullable<SessionAuto["retry"]>): SessionView => ({
+      index: 2,
+      network: "preprod",
+      address: "addr_test1" + "q".repeat(50),
+      createdAt: 0,
+      stage: "open",
+      txs: [{ kind: "out", txHash: "ab".repeat(32), at: 0, confirmed: true }],
+      swap: {
+        amount: "10000000",
+        tokenIn: "lovelace",
+        tokenOut: "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde0014df10745553444d",
+        slippage: 1,
+        amountOut: "4200000",
+        minAmountOut: "4158000",
+        display: { in: { label: "₳", decimals: 6 }, out: { label: "tUSDM", decimals: 6 } },
+      },
+      holding: { lovelace: "14000000", tokens: [], utxos: 2 },
+      auto: { step: "ordering", stopping: false, filled: false, approvedMinOut: "4158000", retry },
+    });
+    const page = (retry: NonNullable<SessionAuto["retry"]>) =>
+      words(createElement(Session, { session: swap(retry), reading: false, onRefresh: noop, onBack: noop, onChanged: noop }));
+    // Two and a half minutes off: "in 3 minutes" for as long as the test takes.
+    const at = Date.now() + 150_000;
+    expect(page({ at, error: refusal(), reason: "other" })).toContain(`${refusal()}. Trying again in 3 minutes. Try now`);
+    // A reason the worker gave a code reads as it did.
+    expect(page({ at, error: "Koios", reason: "koios-silent" })).toContain("Koios didn't answer. Trying again in 3 minutes. Try now");
+    await japanese();
+    expect(page({ at, error: refusal(), reason: "other" })).toContain(`${refusal()}. 3 分後にもう一度試します。今すぐ試す`);
+    expect(page({ at, error: "Koios", reason: "koios-silent" })).toContain("Koios が応答しませんでした。3 分後にもう一度試します。今すぐ試す");
+  });
+
+  it("ends with the language's own stop in Lock's warning, before Try again", async () => {
+    const warning = (message: string) => words(createElement(App.LockFailed, { message, onRetry: noop }));
+    // As it read with a message that ends in a full stop; one without (the browser's, often) gains one.
+    expect(warning("Storage refused.")).toContain("The wallet couldn't lock: Storage refused. Try again.");
+    expect(warning("Extension context invalidated")).toContain("The wallet couldn't lock: Extension context invalidated. Try again.");
+    await japanese();
+    expect(warning("Extension context invalidated")).toContain(
+      "ウォレットをロックできませんでした: Extension context invalidated。もう一度お試しください。",
+    );
+    const locked = t("worker.wallet.locked");
+    expect(warning(locked)).toContain(`ウォレットをロックできませんでした: ${locked}もう一度お試しください。`);
+    expect(warning(locked)).not.toContain("。。");
   });
 });
 

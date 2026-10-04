@@ -1464,7 +1464,6 @@
   "swaps.retry.in_other": "machine",
   "swaps.retry.koiosRateLimited": "machine",
   "swaps.retry.koiosSilent": "machine",
-  "swaps.retry.line": "machine",
   "swaps.retry.minswapSilent": "machine",
   "swaps.retry.now": "machine",
   "swaps.retry.rateLimited": "machine",

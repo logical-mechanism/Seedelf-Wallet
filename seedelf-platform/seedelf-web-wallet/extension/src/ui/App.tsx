@@ -21,6 +21,7 @@ import { Reset, Unlock } from "./screens/Unlock";
 import { AccountsProvider, useAccounts } from "./accounts";
 import { NetworkContext } from "./network";
 import { PreferencesProvider } from "./preferences";
+import { withoutStop } from "./sentence";
 import { connectorWindow, openInTab, startFromHash, view } from "./view";
 
 export function App() {
@@ -265,12 +266,16 @@ function ServiceAccess() {
   );
 }
 
-/** Lock didn't finish: say why, and how to be sure the wallet locks. */
+/**
+ * Lock didn't finish: say why, and how to be sure the wallet locks. The reason comes as it was thrown, the
+ * browser's English as often as the worker's words: its sentence ends with the language's own stop, so it never
+ * runs into "Try again" in Japanese, nor doubles one it brought.
+ */
 export function LockFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
   const t = useT();
   return (
     <div className="stack service-access" role="alert" data-testid="lock-error">
-      <Callout tone="warn">{t("lockFailed.warn.message", { message })}</Callout>
+      <Callout tone="warn">{t("lockFailed.warn.message", { message: withoutStop(message) })}</Callout>
       <button className="primary" onClick={onRetry}>
         {t("app.lock")}
       </button>

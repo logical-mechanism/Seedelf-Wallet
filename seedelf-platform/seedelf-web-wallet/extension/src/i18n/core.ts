@@ -148,9 +148,28 @@ export const t: Translate = (key, values) => i18next.t(key as never, values as n
  */
 export const sentenceGap = (): string => t("common.sentencePair", { first: "", next: "" });
 
-/** Whole sentences, one after another, set the way the language sets them. Empty parts are left out. */
-export const joinSentences = (parts: ReadonlyArray<string | false | null | undefined>): string =>
-  parts.filter((part): part is string => Boolean(part)).join(sentenceGap());
+/**
+ * A sentence that ends the Latin way, a closing quote or bracket after its stop allowed. A raw message in English
+ * (the Rust core's, the browser's, or a service's words at the end of one of ours) can sit among Japanese
+ * sentences, and its full stop keeps the space after it there: "…BadInputsUTxO. 3 分後に…", never
+ * "…BadInputsUTxO.3 分後に…", which reads as a number. No Japanese value in the bundle ends this way.
+ */
+const LATIN_END = /[.!?]["'”’)\]]*$/;
+
+/**
+ * Whole sentences, one after another, set the way the language sets them. Empty parts are left out. Where the
+ * language sets nothing between two, a part that ends the Latin way still takes a space after it (LATIN_END);
+ * English and Spanish set a space anyway.
+ */
+export function joinSentences(parts: ReadonlyArray<string | false | null | undefined>): string {
+  const gap = sentenceGap();
+  let text = "";
+  for (const part of parts) {
+    if (!part) continue;
+    text = text ? `${text}${gap || (LATIN_END.test(text) ? " " : "")}${part}` : part;
+  }
+  return text;
+}
 
 /** The items of a list, with the language's own comma: ", " in English, "、" in Japanese. */
 export const joinList = (items: readonly string[]): string => items.join(t("histories.list.comma"));

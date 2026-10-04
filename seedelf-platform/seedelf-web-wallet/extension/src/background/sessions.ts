@@ -130,7 +130,7 @@ import {
   type ScriptSpendDeps,
 } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
-import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked } from "./wallet";
+import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
@@ -1601,6 +1601,10 @@ export class SessionService {
         if (!rows.length) throw new Error(t("sess.holdsNothing"));
         returns.push(await this.buildBack(network, index, rows, params, direct));
       } catch (e) {
+        // WebAssembly that trapped outside the wallet's queue (a chain's cross-check) is broken for good: no other
+        // session is built on it, and the request locks the wallet as it's answered (sw.ts answerUi), as Send's
+        // return does. Listed as left out, it would show the trap's raw word, and nothing would lock.
+        if (isTrap(e)) throw e;
         skipped.push({ index, reason: (e as Error).message });
       }
     }
@@ -1808,6 +1812,14 @@ export class SessionService {
         });
       }
     } catch (e) {
+      // WebAssembly that trapped outside the wallet's queue (a chain's cross-check) is broken for good: lock, as a
+      // page's request does (sw.ts answerUi), rather than try again on it every 30 s with the wallet open and the
+      // trap's raw word for the reason. Before the record is touched, which a locked wallet can't write; the next
+      // unlock's run takes the step afresh, on a new instance. A page that asked for the step hears why.
+      if (isTrap(e)) {
+        await this.deps.wallet.trapped();
+        throw new WalletLocked(WASM_BROKEN());
+      }
       await this.update(network, index, (r) => {
         const auto = r.auto!;
         if (e instanceof PriceMoved) {
@@ -3247,10 +3259,12 @@ async function clearKept(session: ScriptSpendDeps["session"], key: string, txHas
  * Lovejoin's own (the pool, the build, the network's measure) sends the rest
  * back directly, so no return is ever stuck on it. What another try may
  * mend is thrown as it is: Koios not answering, or behind (a stale pool
- * read), and a lock, WebAssembly that trapped outside the wallet's queue
- * among them (its request locks the wallet as it's answered). Each is told
- * by its type: a lock's words are the user's language, and taken for a
- * failure it would send the session's ADA back unmixed.
+ * read), and a lock. So is WebAssembly that trapped outside the wallet's
+ * queue, which its caller turns into a lock: a page's request as it's
+ * answered (sw.ts answerUi), Send's return and Bring everything back alike,
+ * and a swap or a mix that runs itself in `step`. Each is told by its type:
+ * a lock's words are the user's language, and taken for a failure it would
+ * send the session's ADA back unmixed.
  */
 function leftOut(e: unknown): string {
   if (e instanceof LovejoinSkipped) return e.reason;

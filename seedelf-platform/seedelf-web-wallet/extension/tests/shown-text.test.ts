@@ -13,12 +13,20 @@
 //
 // A translation key passes, and so does what reads the same in every
 // language: the names in ALLOWED, and anything without a letter (₳, ·, 10).
+//
+// The worker is read too, and what it shares with the screens: it writes its
+// messages in the user's language (sw.ts), so a word written into one of its
+// sentences reaches a Spanish or a Japanese screen as it was written. Only a
+// literal at the t() call is seen: a word passed in through a parameter, as
+// send()'s "payment" once was, needs a test of its own.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseAst } from "vite";
 import { describe, expect, it } from "vitest";
 
-const UI = fileURLToPath(new URL("../src/ui", import.meta.url));
+const SRC = fileURLToPath(new URL("../src", import.meta.url));
+/** Where words a person reads are written: the screens, what they share with the worker, and the worker. */
+const WRITERS = ["ui", "shared", "background"];
 const EN: Record<string, string> = JSON.parse(readFileSync(new URL("../src/i18n/translations/en.json", import.meta.url), "utf8"));
 /** Every key, a plural by its base: what a call site writes. */
 const KEYS = new Set(Object.keys(EN).map((k) => k.replace(/_(few|many|one|other|two|zero)$/, "")));
@@ -95,7 +103,7 @@ function elementName(name: Node): string {
   return "";
 }
 
-/** The English in one file of src/ui a person would read, each with its line. */
+/** The English in one file a person would read, each with its line. */
 function englishIn(file: string): Found[] {
   const source = readFileSync(file, "utf8");
   const ast = parseAst(source, { lang: file.endsWith(".tsx") ? "tsx" : "ts" }) as unknown as Node;
@@ -147,11 +155,15 @@ function englishIn(file: string): Found[] {
   return found;
 }
 
-describe("the screens' words", () => {
-  it("all come from the translations, in every file of src/ui", () => {
-    const files = sources(UI);
-    expect(files.length).toBeGreaterThan(50);
-    const left = files.flatMap((file) => englishIn(file).map(({ line, text }) => `${file.slice(UI.length + 1)}:${line}: ${text}`));
+describe("the screens' and the worker's words", () => {
+  it("all come from the translations, in every file of src/ui, src/shared and src/background", () => {
+    const files = WRITERS.flatMap((dir) => sources(`${SRC}/${dir}`));
+    expect(files.length).toBeGreaterThan(100);
+    // Once src/ui alone: the worker's sentences, and the shared code's, went unread.
+    for (const file of ["background/send.ts", "background/sessions.ts", "shared/histories.ts"]) {
+      expect(files).toContain(`${SRC}/${file}`);
+    }
+    const left = files.flatMap((file) => englishIn(file).map(({ line, text }) => `${file.slice(SRC.length + 1)}:${line}: ${text}`));
     expect(left).toEqual([]);
   });
 

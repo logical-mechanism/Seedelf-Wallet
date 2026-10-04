@@ -469,10 +469,10 @@ export function noteOf(metadata: KoiosTxInfo["metadata"]): string | undefined {
   const message = metadata?.["674"] as { msg?: unknown } | undefined;
   const msg = message?.msg;
   const lines = Array.isArray(msg) ? msg : typeof msg === "string" ? [msg] : [];
-  const text = lines
-    .filter((l): l is string => typeof l === "string")
-    .join(" ")
-    .trim();
+  // The sender's words, in whatever language they wrote, cut into CIP-20's lines: never the wallet's sentences,
+  // so a space joins them in every language (tests/i18n-assembly.test.ts lets this name through).
+  const noteLines = lines.filter((l): l is string => typeof l === "string");
+  const text = noteLines.join(" ").trim();
   if (!text) return undefined;
   return text.length > NOTE_MAX ? `${text.slice(0, NOTE_MAX)}…` : text;
 }
