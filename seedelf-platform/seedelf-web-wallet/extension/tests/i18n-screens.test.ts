@@ -66,7 +66,7 @@ describe("Settings' own heading", () => {
   it("is the language's, as the button that opens it is", async () => {
     expect(heading()).toBe("Settings");
     await speak("es");
-    expect(heading()).toBe("Ajustes");
+    expect(heading()).toBe("Configuración");
     await speak("ja");
     expect(heading()).toBe("設定");
   });
@@ -100,7 +100,7 @@ describe("a transaction's view", () => {
     await speak("es");
     const spanish = words(view({ votes }));
     expect(spanish).toContain("Vota sí como DRep");
-    expect(spanish).toContain("Vota no como stake pool");
+    expect(spanish).toContain("Vota no como pool de staking");
     // Abstaining changes the verb in Spanish.
     expect(spanish).toContain("Se abstiene como miembro del comité");
     expect(spanish).not.toMatch(/\b(yes|abstain)\b/);
@@ -119,11 +119,11 @@ describe("a transaction's view", () => {
     expect(words(view({ datums }))).toContain("0 key");
     expect(words(view({ datums }))).toContain("0 value");
     await speak("es");
-    expect(words(view({ datums }))).toContain("0 clave");
-    expect(words(view({ datums }))).toContain("0 valor");
+    expect(words(view({ datums }))).toContain("clave 0");
+    expect(words(view({ datums }))).toContain("valor 0");
     await speak("ja");
-    expect(words(view({ datums }))).toContain("0 キー");
-    expect(words(view({ datums }))).toContain("0 値");
+    expect(words(view({ datums }))).toContain("0 のキー");
+    expect(words(view({ datums }))).toContain("0 の値");
   });
 
   it("names a datum's copy buttons in sentences of their own, where the lowercased label read “Copy the the datum”", async () => {
@@ -134,7 +134,7 @@ describe("a transaction's view", () => {
     await speak("es");
     expect(markup(view({ datums }))).toContain('aria-label="Copiar el datum como CBOR"');
     await speak("ja");
-    expect(markup(view({ datums }))).toContain('aria-label="datum を JSON としてコピー"');
+    expect(markup(view({ datums }))).toContain('aria-label="データムを JSON としてコピー"');
   });
 
   const keyHash = "ab".repeat(28);
@@ -212,7 +212,7 @@ describe("the phrase that deletes the wallet", () => {
     await speak("es");
     expect(remove()).toContain("Escribe <strong>eliminar billetera</strong> para confirmar");
     await speak("ja");
-    expect(reset()).toContain("<strong>ウォレットを削除</strong> と入力して確認してください");
+    expect(reset()).toContain("<strong>ウォレットを削除</strong>と入力して確認してください");
   });
 });
 

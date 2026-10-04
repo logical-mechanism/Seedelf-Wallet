@@ -386,7 +386,7 @@ describe("a full stop where a clause is said as a sentence", () => {
     const wait = () => words(createElement(Settings.SiteRows, { sites, sessions, busy: false, onDisconnect: noop }));
     expect(wait()).toContain("Its funding is on its way: wait for it to land.");
     await japanese();
-    expect(mark()).toBe("500 FOOウォレットのリストに含まれていません、asset1foo。");
+    expect(mark()).toBe("500 FOOウォレットのリストに含まれていません: asset1foo。");
     expect(wait()).toContain("資金提供が送信中です。届くまでお待ちください。");
     expect(wait()).not.toContain("ください.");
   });

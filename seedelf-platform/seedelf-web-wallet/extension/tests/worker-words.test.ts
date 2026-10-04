@@ -157,7 +157,7 @@ describe("a mix from the public account a lock cut", CHAINS, () => {
 
     // Half an hour on, the wallet can only be sure in an hour and a half: hours and minutes joined with "y".
     await busyFor(t, 30 * 60_000);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("dentro de unos 1 hora y 30 minutos.");
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("dentro de aproximadamente 1 hora y 30 minutos.");
 
     // The user switched to English since. Its deposit lands, and the mix says a lock cut it, not that it stopped.
     await i18n.changeLanguage("en");
@@ -250,7 +250,7 @@ describe("the private history", () => {
     const yesterday = now.getTime() - 86_400_000;
     expect([dayHeading(now.getTime(), now), dayHeading(yesterday, now), dayHeading(0, now)]).toEqual(["Today", "Yesterday", "Earlier"]);
     await i18n.changeLanguage("es");
-    expect([dayHeading(now.getTime(), now), dayHeading(yesterday, now), dayHeading(0, now)]).toEqual(["Hoy", "Ayer", "Antes"]);
+    expect([dayHeading(now.getTime(), now), dayHeading(yesterday, now), dayHeading(0, now)]).toEqual(["Hoy", "Ayer", "Anteriores"]);
     await i18n.changeLanguage("ja");
     expect([dayHeading(now.getTime(), now), dayHeading(yesterday, now), dayHeading(0, now)]).toEqual(["今日", "昨日", "以前"]);
   });
@@ -286,7 +286,7 @@ describe("the private history", () => {
     expect(cells()).toEqual([
       ["entrada", "1 tipo", ""],
       ["salida", "3 tipos", "Sesión privada 1"],
-      ["ninguna", "", "seedling"],
+      ["ninguno", "", "seedling"],
     ]);
   });
 });
