@@ -8,8 +8,8 @@ export const LABEL_MAX = 15;
 /** Why `label` can't be a tag, or undefined if it can. Printable ASCII only, so it reads back as typed. */
 export function labelProblem(label: string): string | undefined {
   const bad = [...label].find((c) => c < " " || c > "~");
-  if (bad !== undefined) return t("shared.label.badCharacter", { character: bad });
-  if (label.length > LABEL_MAX) return t("shared.label.tooLong", { max: LABEL_MAX });
+  if (bad !== undefined) return t("shared.label.warn.badCharacter", { character: bad });
+  if (label.length > LABEL_MAX) return t("shared.label.warn.tooLong", { max: LABEL_MAX });
   return undefined;
 }
 

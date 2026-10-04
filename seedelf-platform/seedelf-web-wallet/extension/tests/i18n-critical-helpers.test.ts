@@ -46,23 +46,10 @@ const SHARED_WORDS: Record<string, string> = {
   "histories.list.comma": "a list's punctuation: joinList's own comma",
 };
 
-/**
- * A warning's own words that keep their old names for now: renaming them
- * touches tests/i18n-assembly.test.ts and src/shared/label.ts, which this
- * change leaves to the work under way there. Unlike the shared words, each is
- * to be named `.warn.`; listed, nothing new can hide among them.
- */
-const NOT_YET_NAMED: Record<string, string> = {
-  "dappUi.whose.account": "where a dApp's staking money goes back to, in its staking warning",
-  "dappUi.whose.session": "the same, for a private session",
-  "shared.label.badCharacter": "a Seedelf tag's error, in the form's alert",
-  "shared.label.tooLong": "the same, for its length",
-};
-
 /** What the guard fails on: a key from outside a critical element's JSX, neither in the set nor listed. */
 const unnamed = (reached: HelperKey[], critical: Set<string>) =>
   reached
-    .filter(({ key }) => !critical.has(key) && !(key in SHARED_WORDS) && !(key in NOT_YET_NAMED))
+    .filter(({ key }) => !critical.has(key) && !(key in SHARED_WORDS))
     .map(({ key, at, via }) => `${key}: ${at}, through ${via.join(" → ")}`)
     .sort();
 
@@ -95,7 +82,7 @@ describe("a warning's words from outside its own JSX", () => {
     expect(CRITICAL.has(key)).toBe(true);
   });
 
-  it.each([...Object.keys(SHARED_WORDS), ...Object.keys(NOT_YET_NAMED)])(
+  it.each(Object.keys(SHARED_WORDS))(
     "%s, listed, is still shown that way and still not critical",
     (key) => {
       expect(en[key] ?? en[`${key}_other`], "no such key: take it off the list").toBeDefined();

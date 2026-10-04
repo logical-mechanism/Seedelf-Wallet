@@ -579,7 +579,7 @@ export function SignTx({
   const signers = [keys ? tr("dappUi.paymentKeys", { count: keys }) : "", stake ? tr("dappUi.yourStakeKey") : ""]
     .filter(Boolean)
     .join(tr("histories.list.and"));
-  const whose = tr(session ? "dappUi.whose.session" : "dappUi.whose.account");
+  const whose = tr(session ? "dappUi.whose.warn.session" : "dappUi.whose.warn.account");
   const staking = BigInt(s.stakingLovelace);
   const back = stakingComesBack(s);
   const ownKey = s.paid.filter((p) => p.ownPaymentKey).length;

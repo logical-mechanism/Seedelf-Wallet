@@ -462,7 +462,7 @@ describe("a dApp's staking, in a sentence", () => {
 
   it("is whole Japanese sentences, its clauses joined as Japanese joins them, with Japanese's full stop", async () => {
     await japanese();
-    const line = (c: Partial<Certificate>, back = true) => certificateLine(own(c), back, t("dappUi.whose.account"));
+    const line = (c: Partial<Certificate>, back = true) => certificateLine(own(c), back, t("dappUi.whose.warn.account"));
     expect(line({ kind: "register-delegate-vote", deposit: "2000000", pool, drep })).toBe(
       "あなたのステーク鍵を登録し（2 ₳ のデポジット）、pool1abc にステーキングし、投票権を委任します（委任先: 常に棄権）。",
     );
