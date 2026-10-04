@@ -70,7 +70,7 @@ of them is the owner's to overrule.
 | cost | costo | Lace's; "coste" is Spain's |
 | withdrawal | retiro | Lace's; the verb stays "retirar" |
 | treasury | tesoro | Lace's |
-| no confidence | una moción de desconfianza | Lace's |
+| no confidence (a governance action) | una moción de desconfianza | Lace's; the DRep vote option stays "Siempre sin confianza", as Lace's |
 | fill an order, place an order | ejecutar, enviar la orden | |
 | Max (the button) | Máx | Lace's, no period; sentences name it the same way |
 | ticker | ticker | Lace's; never "símbolo" |

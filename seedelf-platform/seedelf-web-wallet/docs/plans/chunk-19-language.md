@@ -392,22 +392,81 @@ Besides the Rust messages named above:
 - **`secret-box/format.ts`'s `RangeError`s**, which fire only on a programming
   mistake (a salt or nonce of the wrong length) and are never shown.
 
+## The whole-locale review (2026-10-03)
+
+The pass *Still open* asked for. One reviewer per language read all 1,967
+entries of its locale against the English and back-translated the critical
+keys blind; the code they pointed at was fixed in worktrees and merged; a
+translator per language applied the findings and unified the vocabulary; a
+second, fresh reader checked every value that changed; and two cross-area
+reviews, each finding checked by a skeptic, went over the code. Five things
+it found are worth remembering:
+
+- **The worker never switched language.** `startI18n()` ran only in the page,
+  so every message the worker writes (about 300 keys: Koios, the connector's
+  refusals, sessions, Lovejoin) was English for everyone, and no test noticed.
+  It starts in the worker now, and `getContext()` waits for it. **Making it
+  switch would have broken code that read its own English**: three
+  `/locked/i` tests on the lock error (in Spanish or Japanese a lock while a
+  session's chain was built would have sent its ADA back unmixed), a stored
+  "Private session N" parsed back by regex, and swap retries classified by
+  their words. Each is a typed error, a stored number or a reason code now.
+  **Never compare, parse or persist translated text.**
+- **English was still on screen**, in the shapes the whitespace scan couldn't
+  see: the Settings heading (a component's `title` prop), Activity's
+  Today/Yesterday/Earlier, a vote's raw `yes`/`abstain`, the Plutus view's
+  "0 key", the CSV's "3 kinds", "retires in epoch soon", and the delete
+  phrase, which a Japanese input method types full-width so it never matched.
+  `tests/shown-text.test.ts` now fails on a literal left in JSX text, in a
+  shown attribute or prop, or passed into a sentence as a value.
+- **Japanese was assembled the English way in source**: about 25 places joined
+  sentences with a space, ten joined lists with ", ", and several appended an
+  ASCII full stop. `joinSentences`, `joinList`, `withStop` and `withoutStop`
+  set them the language's way, and `tests/i18n-assembly.test.ts` scans
+  `src/ui`, `src/shared` and `src/background` for the old shapes.
+- **The critical set had more blind spots than the one *What this turned up*
+  names**: a warning whose words come from a helper (`withdrawalLine`,
+  `atStakeLines`, `pauseText`), a prop or a state value (`ReturnLinks`'
+  `after`, Destination's alert), the words a privacy note is built from
+  (`histories.kind.*` inside `histories.privacy.together`), keys named
+  `.warning.`, and the worker's own refusals and skip reasons, which fill a
+  paused swap's or a return's warning. Each was renamed `.warn.`/`.privacy.`
+  and back-translated blind; those passes corrected 11 values. **298 keys
+  are critical** (195 when the chunk was built). `tests/i18n-critical-helpers.test.ts`
+  follows helpers, props, state and modules from every critical element, and
+  `tests/i18n-worker-reasons.test.ts` follows the worker's reasons to the
+  fields warnings show; what they still can't see is listed in
+  `scripts/i18n-critical.mjs`. The rest of the worker's messages, the errors
+  a screen's alert can show, were all read in the review but are outside the
+  set.
+- **Machine drafts say confident wrong things.** `mint.privacy.fromPrivate`
+  told both languages a stealth mint stays private when the balance came from
+  payments *to other people's* Seedelfs — the opposite direction. The Spanish
+  banner after almost every send read "Delegación enviado". The corrections
+  made errors of their own too (a total fee read as a fee per box), which only
+  the second reader caught.
+
+The vocabulary each locale settled on is a section of
+[the glossary](../i18n/glossary.md), marked as the review's choices rather
+than the owner's; Spanish "Configuración" for Settings (Lace's and Chrome's
+word, replacing "Ajustes") is the one most worth the owner's look. Now
+`en.json` holds 2,128 keys (2,023 base), `es.json` 2,233 and `ja.json` 2,023,
+and `npm test` runs 1,343 tests. Still English on purpose or by gap: dates and
+numbers (below), Rust's messages, and reasons the worker stored before a
+language switch, which stay in the language they were written in.
+
 ## Still open
 
 - **Who reads the Spanish and Japanese critical strings** — **settled: accepted
-  as recorded** (the owner, 2026-10-03). 195 derived keys, each back-translated,
-  with a build that fails on an unchecked draft; the reviewer line names Claude
-  and says no native speaker has read them. An ultrareview pass goes over the
-  translations next, and a fluent reader can come later, since there are no
-  users and no release is pending.
+  as recorded** (the owner, 2026-10-03). The review pass above went over every
+  translation and back-translated the critical keys again; the reviewer line
+  still names Claude and says no native speaker has read them. A fluent reader
+  can come later, since there are no users and no release is pending.
 - **Whether the store listing is translated too.** Separate from the extension:
   a listing per locale in the dashboard, through `_locales/` for the manifest's
   own name and description. It publishes nothing new about the owner. Worth a
   look now that the extension itself speaks three languages.
 - **Dates and numbers** (above): 19 calls with `en-GB`/`en-US` pinned. The
   smallest honest fix is a locale map threaded through them.
-- **Whether the quality of a whole locale gets a pass of its own.** Each area
-  was translated with its screen in view, and the critical set was
-  back-translated, but nobody has read `es.json` or `ja.json` end to end looking
-  for a term that drifted between areas. `docs/i18n/glossary.md` is what such a
-  pass would check against.
+- ~~Whether the quality of a whole locale gets a pass of its own.~~ Done:
+  [the whole-locale review](#the-whole-locale-review-2026-10-03).
