@@ -290,7 +290,9 @@ export function poolWarnings(p: PoolDetails): string[] {
   const warnings: string[] = [];
   if (p.status === "retired") warnings.push(t("pool.warn.retired"));
   if (p.status === "retiring") {
-    warnings.push(t("pool.warn.retiring", { epoch: p.retiringEpoch ?? t("pool.soon") }));
+    // An epoch unknown is its own sentence: "soon" put where the epoch goes read "retires in epoch soon".
+    const epoch = p.retiringEpoch;
+    warnings.push(epoch === null || epoch === undefined ? t("pool.warn.retiringSoon") : t("pool.warn.retiring", { epoch }));
   }
   if (p.saturation > 100) warnings.push(t("pool.warn.oversaturated"));
   if (BigInt(p.livePledge) < BigInt(p.pledge)) {

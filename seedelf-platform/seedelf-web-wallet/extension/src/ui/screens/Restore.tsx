@@ -10,6 +10,7 @@ import { call } from "../background";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
+import { asSentence } from "../sentence";
 
 const blank = (n: number) => Array<string>(n).fill("");
 
@@ -34,7 +35,7 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
       await call("validate-phrase", { phrase: words.join(" ") });
       setStep("password");
     } catch (e) {
-      setError(sentence((e as Error).message));
+      setError(asSentence((e as Error).message));
     } finally {
       setBusy(false);
     }
@@ -48,7 +49,7 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
       setWords(blank(count));
       onDone(status);
     } catch (e) {
-      setError(sentence((e as Error).message));
+      setError(asSentence((e as Error).message));
       setBusy(false);
     }
   }
@@ -93,10 +94,4 @@ export function Restore({ onBack, onDone }: { onBack: () => void; onDone: (s: St
       <p className="note">{t("restore.pasteTip")}</p>
     </Screen>
   );
-}
-
-/** The Rust core's reasons are lower-case fragments; show them as sentences. */
-function sentence(message: string): string {
-  const text = message.charAt(0).toUpperCase() + message.slice(1);
-  return /[.!?]$/.test(text) ? text : `${text}.`;
 }

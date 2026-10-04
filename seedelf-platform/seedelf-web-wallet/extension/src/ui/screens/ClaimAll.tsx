@@ -14,7 +14,7 @@
 // review §4.1).
 
 import { useEffect, useState } from "react";
-import { t, useT } from "../../i18n";
+import { joinSentences, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
@@ -29,6 +29,7 @@ import { Screen } from "../components/Screen";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda } from "../format";
 import { useNetwork } from "../network";
+import { withoutStop } from "../sentence";
 import { pairOf } from "./Swaps";
 
 /** A session Bring everything back can take: it holds something, and nothing of it is on its way or runs by itself. */
@@ -297,7 +298,7 @@ export function ClaimReview({
               .filter((r) => r.lovejoinSkipped)
               .map((r) => (
                 <li key={r.index}>
-                  {nameOf(network, byIndex.get(r.index))}: {r.lovejoinSkipped!.trim().replace(/\.$/, "")}.
+                  {t("claim.warn.skippedItem", { name: nameOf(network, byIndex.get(r.index)), why: withoutStop(r.lovejoinSkipped!) })}
                 </li>
               ))}
           </ul>
@@ -331,9 +332,11 @@ export function ClaimReview({
         />
       ))}
       <Callout tone="privacy">
-        {t("claim.privacy.ownTransactions")}
-        {boxes > 0 && ` ${t("claim.privacy.throughLovejoin")}`}
-        {direct && ` ${t("claim.privacy.directly")}`}
+        {joinSentences([
+          t("claim.privacy.ownTransactions"),
+          boxes > 0 && t("claim.privacy.throughLovejoin"),
+          direct && t("claim.privacy.directly"),
+        ])}
       </Callout>
       {boxes > 0 && (
         <>

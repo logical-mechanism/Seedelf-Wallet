@@ -20,7 +20,7 @@
 // wallet asks Minswap for; Minswap builds the order (#21).
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { type I18nKey, t, useT } from "../../i18n";
+import { type I18nKey, joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type {
@@ -1227,12 +1227,15 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} />
       </ReviewRows>
       <p className="note" data-testid="swap-lovejoin">
-        {tr(adaOut ? "swaps.cost.wayBackAda" : "swaps.cost.wayBackToken", {
-          boxes: boxesText(l),
-          mixes: tr("amount.mixes", { count: l.mixes }),
-          mixFees: formatAda(l.mixFees),
-        })}{" "}
-        {lovejoinHides(l.depth)} {tr("swaps.cost.eachBack", { delay: delayText(l.delay), backFees: formatAda(l.withdrawFees) })}
+        {joinSentences([
+          tr(adaOut ? "swaps.cost.wayBackAda" : "swaps.cost.wayBackToken", {
+            boxes: boxesText(l),
+            mixes: tr("amount.mixes", { count: l.mixes }),
+            mixFees: formatAda(l.mixFees),
+          }),
+          lovejoinHides(l.depth),
+          tr("swaps.cost.eachBack", { delay: delayText(l.delay), backFees: formatAda(l.withdrawFees) }),
+        ])}
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
@@ -1797,25 +1800,7 @@ export function Session({
     });
   const forget = () => (s.unsent || !s.auto ? forgetNow() : setForgetting(true));
   const lookAgain = () => void act(async () => setS(await call("session-resume", { index: s.index })));
-  const forgetModal = forgetting && (
-    <Modal
-      title={tr("swaps.forget.title")}
-      titleId="session-forget-title"
-      onClose={() => setForgetting(false)}
-      foot={
-        <>
-          <button type="button" className="secondary" onClick={() => setForgetting(false)} disabled={busy}>
-            {tr("lovejoin.anyway.keep")}
-          </button>
-          <button type="button" className="danger" onClick={forgetNow} disabled={busy}>
-            {tr(busy ? "swaps.forget.working" : "swaps.forget.confirm")}
-          </button>
-        </>
-      }
-    >
-      <p className="note">{tr("swaps.forget.note")}</p>
-    </Modal>
-  );
+  const forgetModal = forgetting && <ForgetSwap busy={busy} onKeep={() => setForgetting(false)} onForget={forgetNow} />;
 
   if (s.auto) {
     const auto = s.auto;
@@ -1958,6 +1943,34 @@ export function Session({
   );
 }
 
+/**
+ * Forget asks first where the funding may still land: the account isn't
+ * looked at again (launch review #11). Exported for its test.
+ */
+export function ForgetSwap({ busy, onKeep, onForget }: { busy: boolean; onKeep: () => void; onForget: () => void }) {
+  const tr = useT();
+  return (
+    <Modal
+      title={tr("swaps.forget.title")}
+      titleId="session-forget-title"
+      onClose={onKeep}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={onKeep} disabled={busy}>
+            {/* Its own words, not the unmixed box's: Spanish needs the swap's gender, as "Olvidarlo" beside it has. */}
+            {tr("swaps.forget.keep")}
+          </button>
+          <button type="button" className="danger" onClick={onForget} disabled={busy}>
+            {tr(busy ? "swaps.forget.working" : "swaps.forget.confirm")}
+          </button>
+        </>
+      }
+    >
+      <p className="note">{tr("swaps.forget.note")}</p>
+    </Modal>
+  );
+}
+
 /** Stop's words for an order the runner may be placing as the dialog shows (independent review L22). */
 const IF_ORDERED = () => t("swaps.stop.ifOrdered");
 
@@ -2000,9 +2013,9 @@ export function StopDialog({
     >
       <p className="note" data-testid="session-stop-what">
         {mixes
-          ? [
+          ? joinSentences([
               tr(placed ? "swaps.stop.cancelled" : "swaps.stop.notPlaced"),
-              placed ? "" : IF_ORDERED(),
+              !placed && IF_ORDERED(),
               tr("swaps.stop.throughCost", {
                 boxes: boxesText(cost),
                 mixes: tr("amount.mixes", { count: cost.mixes }),
@@ -2010,13 +2023,11 @@ export function StopDialog({
                 backFees: formatAda(cost.withdrawFees),
                 delay: delayText(cost.delay),
               }),
-              placed ? tr("swaps.stop.cancelFeeToo") : "",
-            ]
-              .filter(Boolean)
-              .join(" ")
+              placed && tr("swaps.stop.cancelFeeToo"),
+            ])
           : placed
             ? tr("swaps.stop.cancelledDirect")
-            : `${tr("swaps.stop.notPlacedDirect")} ${IF_ORDERED()}`}
+            : joinSentences([tr("swaps.stop.notPlacedDirect"), IF_ORDERED()])}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
@@ -2223,7 +2234,8 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       {auto.retry && !auto.paused ? (
         <div className="timeline__now timeline__now--retry" data-testid="session-retry" aria-live="polite">
           <p>
-            {tr("swaps.retry.line", { why: retryReason(auto.retry), when: retryText(auto.retry.at) })}{" "}
+            {tr("swaps.retry.line", { why: retryReason(auto.retry), when: retryText(auto.retry.at) })}
+            {sentenceGap()}
             <button type="button" className="link" disabled={busy} onClick={onRetry}>
               {tr("lovejoin.mixes.tryNow")}
             </button>

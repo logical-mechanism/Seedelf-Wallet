@@ -6,7 +6,7 @@
 // the UI and it's dropped when the flow ends.
 
 import { useEffect, useState } from "react";
-import { useT } from "../../i18n";
+import { joinList, useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
@@ -127,7 +127,7 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
           </button>
         }
       >
-        <p className="note">{t("create.confirm.enterWords", { words: positions.join(", ") })}</p>
+        <p className="note">{t("create.confirm.enterWords", { words: joinList(positions.map(String)) })}</p>
         <PhraseInput words={answers} onChange={setAnswers} positions={positions} />
       </Screen>
     );

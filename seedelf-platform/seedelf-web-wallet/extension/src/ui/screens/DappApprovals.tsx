@@ -12,7 +12,7 @@
 // waits for the network; closing it then doesn't undo the payment.
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { t, useT } from "../../i18n";
+import { joinSentences, t, useT } from "../../i18n";
 
 import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
 import { call, onDappChanged } from "../background";
@@ -657,8 +657,10 @@ export function SignTx({
 
       {lookalikes.size > 0 && (
         <Callout tone="warn" testId="dapp-lookalike">
-          {tr(lookalikes.size === 1 ? "dappUi.warn.lookalike" : "dappUi.warn.lookalikes", { names: lookalikeNames })}{" "}
-          {tr("dappUi.warn.anyName")}
+          {joinSentences([
+            tr(lookalikes.size === 1 ? "dappUi.warn.lookalike" : "dappUi.warn.lookalikes", { names: lookalikeNames }),
+            tr("dappUi.warn.anyName"),
+          ])}
         </Callout>
       )}
       {ownKey > 0 && (

@@ -13,7 +13,7 @@
 // money comes back from here (#43).
 
 import { useState, type FormEvent } from "react";
-import { t, useT } from "../../i18n";
+import { joinSentences, t, useT } from "../../i18n";
 
 import type { Balances, DappSite, PendingTx, SessionBackSummary, SessionOutSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
@@ -348,31 +348,51 @@ export function SiteSession({
       )}
       <Callout tone="privacy">{tr("sites.privacy.onlyThisAccount")}</Callout>
       {disconnecting && (
-        <Modal
-          title={tr("sites.disconnectTitle", { host: hostOf(s) })}
-          titleId="site-disconnect-title"
-          onClose={() => setDisconnecting(false)}
-          foot={
-            <>
-              <button type="button" className="secondary" onClick={() => setDisconnecting(false)} disabled={busy}>
-                {tr("lovejoin.anyway.keep")}
-              </button>
-              <button type="button" className="danger" onClick={disconnect} disabled={busy} data-testid="site-disconnect-confirm">
-                {tr("sites.disconnectConfirm")}
-              </button>
-            </>
-          }
-        >
-          <p className="note">
-            {tr(attached === false ? "sites.disconnect.detached" : "sites.disconnect.attached", {
-              number: s.index + 1,
-              host: hostOf(s),
-            })}{" "}
-            {tr("sites.disconnect.stopsReading")}
-          </p>
-        </Modal>
+        <DisconnectSession session={s} attached={attached} busy={busy} onKeep={() => setDisconnecting(false)} onDisconnect={disconnect} />
       )}
     </Screen>
+  );
+}
+
+/** Disconnect asks first: what ends, and that the wallet stops reading the account. Exported for its test. */
+export function DisconnectSession({
+  session: s,
+  attached,
+  busy,
+  onKeep,
+  onDisconnect,
+}: {
+  session: SessionView;
+  attached?: boolean;
+  busy: boolean;
+  onKeep: () => void;
+  onDisconnect: () => void;
+}) {
+  const tr = useT();
+  return (
+    <Modal
+      title={tr("sites.disconnectTitle", { host: hostOf(s) })}
+      titleId="site-disconnect-title"
+      onClose={onKeep}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={onKeep} disabled={busy}>
+            {/* Settings' own disconnect asks the same, and Spanish needs the site's gender, not a box's. */}
+            {tr("sites.keepIt")}
+          </button>
+          <button type="button" className="danger" onClick={onDisconnect} disabled={busy} data-testid="site-disconnect-confirm">
+            {tr("sites.disconnectConfirm")}
+          </button>
+        </>
+      }
+    >
+      <p className="note">
+        {joinSentences([
+          tr(attached === false ? "sites.disconnect.detached" : "sites.disconnect.attached", { number: s.index + 1, host: hostOf(s) }),
+          tr("sites.disconnect.stopsReading"),
+        ])}
+      </p>
+    </Modal>
   );
 }
 

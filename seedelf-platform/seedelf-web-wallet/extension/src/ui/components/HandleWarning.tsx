@@ -10,7 +10,7 @@
 // "and this return brings them in" sits in the sentence is the translator's
 // choice, not English's.
 
-import { useT } from "../../i18n";
+import { joinList, useT } from "../../i18n";
 import { handlesIn } from "../../shared/handles";
 import type { TokenRef } from "../../shared/rpc";
 import { Callout } from "./Callout";
@@ -19,7 +19,7 @@ export function HandleWarning({ tokens, returning = false }: { tokens: TokenRef[
   const t = useT();
   const handles = handlesIn(tokens);
   if (!handles.length) return null;
-  const names = handles.map((h) => `$${h}`).join(", ");
+  const names = joinList(handles.map((h) => `$${h}`));
   return (
     <Callout tone="warn" testId="handle-into-seedelf">
       {t(returning ? "handleWarning.returning" : "handleWarning.note", { names, count: handles.length })}

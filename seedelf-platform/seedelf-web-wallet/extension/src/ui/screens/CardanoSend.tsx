@@ -10,7 +10,7 @@
 // reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
-import { useT } from "../../i18n";
+import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
@@ -171,9 +171,10 @@ export function CardanoSend({
         {summary.payments.some((p) => p.own) && <OwnNote />}
         <LeftOutNote leftOut={summary.leftOut} testId="send-left-out" />
         <p className="note">
-          {summary.payments.some((p) => p.seedelf) &&
-            `${t(several ? "send.review.onlyOwnerEach" : "send.review.onlyOwnerThis")} `}
-          {t("send.review.confirmTime")}
+          {joinSentences([
+            summary.payments.some((p) => p.seedelf) && t(several ? "send.review.onlyOwnerEach" : "send.review.onlyOwnerThis"),
+            t("send.review.confirmTime"),
+          ])}
         </p>
       </Screen>
     );

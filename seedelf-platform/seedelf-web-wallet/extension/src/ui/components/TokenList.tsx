@@ -3,7 +3,7 @@
 // few and a way to all of them (screens/Tokens.tsx).
 
 import { useMemo, useState } from "react";
-import { useT } from "../../i18n";
+import { joinList, useT } from "../../i18n";
 
 import type { TokenAmount, TokenRef } from "../../shared/rpc";
 import { tokenKey } from "../format";
@@ -36,7 +36,7 @@ export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: Tok
         type="button"
         className="token-row"
         onClick={() => onOpen(view)}
-        aria-label={`${view.label}, ${amount}`}
+        aria-label={joinList([view.label, amount])}
         title={tr("tokenList.details", { label: view.label })}
       >
         <TokenAvatar view={view} />
@@ -112,14 +112,20 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
             {tr("tokenList.notListed")}
           </p>
         )}
-        <CopyField label={tr("tokenList.policyId")} value={t.policyId} testId="token-policy" />
+        <CopyField label={tr("tokenList.policyId")} copyLabel={tr("tokenList.copyPolicyId")} value={t.policyId} testId="token-policy" />
         <CopyField
           label={tr("tokenList.assetName")}
+          copyLabel={tr("tokenList.copyAssetName")}
           value={t.assetName}
           display={t.assetName || tr("tokenList.empty")}
           testId="token-asset-name"
         />
-        <CopyField label={tr("tokenList.fingerprint")} value={t.fingerprint} testId="token-fingerprint" />
+        <CopyField
+          label={tr("tokenList.fingerprint")}
+          copyLabel={tr("tokenList.copyFingerprint")}
+          value={t.fingerprint}
+          testId="token-fingerprint"
+        />
         <p className="note">
           {tr(view.nft ? "tokenList.nft" : "tokenList.fungible")} · {tr("tokenList.decimals", { number: view.decimals })}
         </p>
@@ -137,6 +143,7 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
  * (`tokenQuantity`), with any sign.
  */
 export function TokenAmountText({ token, amount }: { token: TokenRef & { fingerprint?: string }; amount: string }) {
+  const tr = useT();
   const text = tokenText(useNetwork(), token);
   const mark = tokenMark(text);
   return (
@@ -144,7 +151,8 @@ export function TokenAmountText({ token, amount }: { token: TokenRef & { fingerp
       {`${amount} ${text.label}`}
       {mark && (
         <span className={text.posesAs ? "token-mark token-mark--warn" : "token-mark"} data-testid="token-mark">
-          {mark.charAt(0).toUpperCase() + mark.slice(1)}.
+          {/* The mark is a clause, said here as a sentence: its full stop is the language's, not an ASCII one. */}
+          {tr("common.sentence", { text: mark.charAt(0).toUpperCase() + mark.slice(1) })}
         </span>
       )}
     </>

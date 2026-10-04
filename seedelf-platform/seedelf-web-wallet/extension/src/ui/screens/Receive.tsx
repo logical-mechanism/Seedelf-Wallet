@@ -36,7 +36,12 @@ export function Receive({ account, handles, onBack }: { account: Account; handle
       <div className="qr-wrap">
         <QrCode text={account.receiveAddress} maxSize={200} label={t("receive.qr.label")} />
       </div>
-      <CopyField label={t("receive.address.label")} value={account.receiveAddress} testId="receive-address" />
+      <CopyField
+        label={t("receive.address.label")}
+        copyLabel={t("receive.address.copy")}
+        value={account.receiveAddress}
+        testId="receive-address"
+      />
       <p className="note">{t("receive.note.fund")}</p>
       <Callout tone="privacy">{t("receive.privacy.publicAddress")}</Callout>
       {handles.length > 0 && (
@@ -58,7 +63,12 @@ export function Receive({ account, handles, onBack }: { account: Account; handle
           <p className="note">{t("receive.handles.note", { count: handles.length })}</p>
         </section>
       )}
-      <CopyField label={t("receive.stake.label")} value={account.stakeAddress} testId="stake-address" />
+      <CopyField
+        label={t("receive.stake.label")}
+        copyLabel={t("receive.stake.copy")}
+        value={account.stakeAddress}
+        testId="stake-address"
+      />
     </Screen>
   );
 }

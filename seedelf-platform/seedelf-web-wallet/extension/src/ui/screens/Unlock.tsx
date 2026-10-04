@@ -12,6 +12,7 @@ import { call, onDappChanged } from "../background";
 import { Callout } from "../components/Callout";
 import { PasswordField } from "../components/PasswordField";
 import { Screen } from "../components/Screen";
+import { confirmsDelete, deletePhrase } from "../delete-phrase";
 import { connectorWindow } from "../view";
 
 /** Who the connector's window unlocks for: the sites waiting, by origin. Exported for its tests. */
@@ -122,8 +123,6 @@ export function Unlock({
   );
 }
 
-const CONFIRM_TEXT = "delete wallet";
-
 /** Deletes the vault so the wallet can be restored from its phrase. */
 export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s: Status) => void }) {
   const tr = useT();
@@ -141,7 +140,7 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
     }
   }
 
-  const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
+  const confirmed = confirmsDelete(typed);
   return (
     <Screen
       title={tr("reset.title")}
@@ -166,7 +165,7 @@ export function Reset({ onCancel, onReset }: { onCancel: () => void; onReset: (s
       <Callout tone="warn">{tr("reset.warn.noPhrase")}</Callout>
       <div className="field">
         <label htmlFor="confirm-reset">
-          <Rich k="reset.confirmLabel" parts={{ text: <strong>{CONFIRM_TEXT}</strong> }} />
+          <Rich k="reset.confirmLabel" parts={{ text: <strong>{deletePhrase()}</strong> }} />
         </label>
         <input
           id="confirm-reset"

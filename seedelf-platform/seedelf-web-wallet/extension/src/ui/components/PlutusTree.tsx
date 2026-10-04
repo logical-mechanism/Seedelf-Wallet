@@ -121,8 +121,8 @@ function Node({ value, depth, name }: { value: TxPlutus; depth: number; name?: s
           {value.type === "map"
             ? value.entries.map((entry, i) => (
                 <div key={i} className="plutus__pair">
-                  <Node value={entry.key} depth={depth + 1} name={`${i} key`} />
-                  <Node value={entry.value} depth={depth + 1} name={`${i} value`} />
+                  <Node value={entry.key} depth={depth + 1} name={t("tx.plutus.mapKey", { index: i })} />
+                  <Node value={entry.value} depth={depth + 1} name={t("tx.plutus.mapValue", { index: i })} />
                 </div>
               ))
             : children.map((child, i) => <Node key={i} value={child} depth={depth + 1} name={String(i)} />)}
@@ -177,15 +177,19 @@ export function plutusNodes(value: TxPlutus): number {
 
 /**
  * A datum or a redeemer's argument: what it is, how to take it away, and the
- * tree. `hex` is the bytes it was read from.
+ * tree. `hex` is the bytes it was read from. `copyLabels` name the two copy
+ * buttons, each a sentence of its own: the label put into one, lowercased,
+ * read "Copy the its argument as CBOR".
  */
 export function PlutusTree({
   label,
+  copyLabels,
   hex,
   value,
   testId,
 }: {
   label: string;
+  copyLabels: { cbor: string; json: string };
   hex: string;
   value: TxPlutus;
   testId?: string;
@@ -212,12 +216,8 @@ export function PlutusTree({
           >
             {tr(all.open ? "tx.collapseAll" : "tx.expandAll")}
           </button>
-          <CopyButton value={hex} label={tr("tx.copyAsCbor", { what: label.toLowerCase() })} what="CBOR" />
-          <CopyButton
-            value={JSON.stringify(plutusJson(value), null, 2)}
-            label={tr("tx.copyAsJson", { what: label.toLowerCase() })}
-            what="JSON"
-          />
+          <CopyButton value={hex} label={copyLabels.cbor} what="CBOR" />
+          <CopyButton value={JSON.stringify(plutusJson(value), null, 2)} label={copyLabels.json} what="JSON" />
         </span>
       </div>
       <AllContext.Provider value={all}>

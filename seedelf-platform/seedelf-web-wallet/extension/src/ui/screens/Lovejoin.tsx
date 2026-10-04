@@ -39,7 +39,7 @@
 // form and the reviews show what's being sent. The page says Lovejoin has
 // had no third-party audit.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { t, useT } from "../../i18n";
+import { joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type {
   LovejoinChainView,
@@ -63,6 +63,7 @@ import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { Tabs } from "../components/Tabs";
 import { formatAda, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
+import { withoutStop } from "../sentence";
 import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
@@ -94,6 +95,9 @@ const unseen = (s: SessionView) => s.stage === "failed" && !s.unsent;
 
 /** A mix that runs and hasn't started its chain: Stop brings it back directly, with no box going in. */
 const stoppable = (s: SessionView) => !isOver(s) && !s.chain && !s.auto?.stopping;
+
+/** A mix whose next try can be had now: one waiting to retry, or a funding to look for again. */
+const retryable = (s: SessionView) => (!!s.auto?.retry && !isOver(s) && !s.chain?.stopped) || unseen(s);
 
 /** A mix's tag. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
@@ -130,14 +134,14 @@ export function subOf(s: SessionView, now: number): string {
  */
 export function detailOf(s: SessionView): string | undefined {
   const lines: string[] = [];
-  if (s.mix?.skipped) lines.push(t("lj.leftOut", { reason: s.mix.skipped.trim().replace(/\.$/, "") }));
+  if (s.mix?.skipped) lines.push(t("lj.leftOut", { reason: withoutStop(s.mix.skipped) }));
   if (s.chain?.stopped) lines.push(t("lovejoin.detail.whyStopped", { why: s.chain.stopped }));
   if (s.auto?.retry && !isOver(s)) {
     lines.push(t("lovejoin.detail.triesAgain", { at: new Date(s.auto.retry.at).toLocaleTimeString(), error: s.auto.retry.error }));
   }
   if (unseen(s)) lines.push(t("lovejoin.detail.mayLand"));
   if (s.leftBehind?.length) lines.push(t("lovejoin.detail.leftBehind", { count: s.leftBehind.length }));
-  return lines.length ? lines.join(" ") : undefined;
+  return lines.length ? joinSentences(lines) : undefined;
 }
 
 /** Whose a chain is: a session's, or the public account's mix. */
@@ -180,7 +184,7 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
             </span>
             <p className="token-row__detail" data-testid="lovejoin-chain-detail">
               {c.stopped
-                ? tr("lovejoin.chains.whyStopped", { why: c.stopped.trim().replace(/\.$/, "") })
+                ? tr("lovejoin.chains.whyStopped", { why: withoutStop(c.stopped) })
                 : tr("lovejoin.chains.waitAll")}
             </p>
           </li>
@@ -283,9 +287,7 @@ export function NotMixed({
   return (
     <Callout tone="warn" testId="lovejoin-not-mixed">
       <div className="stack-tight">
-        <span>
-          {!known ? `${lead} ${asks}` : `${lead} ${takes}${unsure > 0 ? ` ${tail} ${asks}` : ""}`}
-        </span>
+        <span>{!known ? joinSentences([lead, asks]) : joinSentences([lead, takes, unsure > 0 && tail, unsure > 0 && asks])}</span>
         <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
           {tr("lovejoin.notMixed.anyway")}
         </button>
@@ -608,8 +610,10 @@ export function Lovejoin({
             {tr("lovejoin.seed.warn.floor", { count: status!.others, floor: status!.floor })}
           </Callout>
           <Callout tone="privacy">
-            {tr("lovejoin.seed.privacy.hidesNothing")}{" "}
-            {tr(source === "private" ? "lovejoin.seed.privacy.fromPrivate" : "lovejoin.seed.privacy.fromPublic")}
+            {joinSentences([
+              tr("lovejoin.seed.privacy.hidesNothing"),
+              tr(source === "private" ? "lovejoin.seed.privacy.fromPrivate" : "lovejoin.seed.privacy.fromPublic"),
+            ])}
           </Callout>
           <div className="field">
             <label htmlFor="lovejoin-seed-boxes">{tr("lovejoin.seed.boxesLabel")}</label>
@@ -626,11 +630,14 @@ export function Lovejoin({
               data-testid="lovejoin-seed-boxes"
             />
             <p className="note" data-testid="lovejoin-seed-cost">
-              {tr(source === "private" ? "lovejoin.seed.costPrivate" : "lovejoin.seed.costPublic", {
-                count: seeding,
-                ada: formatAda((BigInt(seeding) * 10_000_000n).toString()),
-              })}{" "}
-              {tr("lovejoin.seed.needs", { count: needed })} {tr("lovejoin.seed.atMost", { most: MAX_SEED_BOXES })}
+              {joinSentences([
+                tr(source === "private" ? "lovejoin.seed.costPrivate" : "lovejoin.seed.costPublic", {
+                  count: seeding,
+                  ada: formatAda((BigInt(seeding) * 10_000_000n).toString()),
+                }),
+                tr("lovejoin.seed.needs", { count: needed }),
+                tr("lovejoin.seed.atMost", { most: MAX_SEED_BOXES }),
+              ])}
             </p>
           </div>
           <button type="button" className="secondary" disabled={busy} onClick={() => void seed()} data-testid="lovejoin-seed">
@@ -789,9 +796,10 @@ export function Lovejoin({
                 {(detailOf(m) || stoppable(m)) && (
                   <p className="token-row__detail" data-testid="lovejoin-mix-detail">
                     {detailOf(m)}
-                    {((m.auto?.retry && !isOver(m) && !m.chain?.stopped) || unseen(m)) && (
+                    {/* After the detail's sentences, the language's gap; between two links, a space. */}
+                    {retryable(m) && (
                       <>
-                        {" "}
+                        {sentenceGap()}
                         <button type="button" className="link" disabled={busy} onClick={() => void retry(m.index)}>
                           {tr(unseen(m) ? "common.tryAgain" : "lovejoin.mixes.tryNow")}
                         </button>
@@ -799,7 +807,7 @@ export function Lovejoin({
                     )}
                     {stoppable(m) && (
                       <>
-                        {" "}
+                        {retryable(m) ? " " : sentenceGap()}
                         <button
                           type="button"
                           className="link"
@@ -896,7 +904,7 @@ export function WayBack() {
   const tr = useT();
   return (
     <Callout tone="privacy" testId="lovejoin-way-back">
-      {tr("lovejoin.privacy.wayBack")} {LOVEJOIN_SEEN()}
+      {joinSentences([tr("lovejoin.privacy.wayBack"), LOVEJOIN_SEEN()])}
     </Callout>
   );
 }
@@ -940,9 +948,7 @@ export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix:
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} />
       </ReviewRows>
       <p className="note">{tr("lovejoin.review.privateNote")}</p>
-      <Callout tone="privacy">
-        {tr("lovejoin.review.privacy.private")} {lovejoinHides(mix.depth)}
-      </Callout>
+      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <p className="note">{tr("lovejoin.review.givemeNote")}</p>
     </>
@@ -993,8 +999,11 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
         </p>
       )}
       <Callout tone="privacy">
-        {tr("lovejoin.review.privacy.again")} {lovejoinHides(mix.depth)}
-        {mix.publicToo && ` ${tr("lovejoin.review.privacy.publicToo")}`}
+        {joinSentences([
+          tr("lovejoin.review.privacy.again"),
+          lovejoinHides(mix.depth),
+          mix.publicToo && tr("lovejoin.review.privacy.publicToo"),
+        ])}
       </Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />
       <p className="note">{tr("lovejoin.review.givemeNote")}</p>
@@ -1021,9 +1030,7 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} />
       </ReviewRows>
       <p className="note">{tr("lovejoin.review.publicNote")}</p>
-      <Callout tone="privacy">
-        {tr("lovejoin.review.privacy.public")} {PUBLIC_MIX_WAY_BACK()}
-      </Callout>
+      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.public"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );
 }
@@ -1069,9 +1076,7 @@ function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} />
       </ReviewRows>
       <p className="note">{tr("lovejoin.review.publicAgainNote")}</p>
-      <Callout tone="privacy">
-        {tr("lovejoin.review.privacy.publicAgain")} {PUBLIC_MIX_WAY_BACK()}
-      </Callout>
+      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );
 }

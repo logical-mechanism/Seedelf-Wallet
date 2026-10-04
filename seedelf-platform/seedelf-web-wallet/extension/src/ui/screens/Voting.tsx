@@ -11,7 +11,7 @@
 // (launch review #59).
 
 import { useMemo, useState, type FormEvent } from "react";
-import { type I18nKey, t, useT } from "../../i18n";
+import { type I18nKey, joinList, t, useT } from "../../i18n";
 
 import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails } from "../../shared/rpc";
 import { call } from "../background";
@@ -259,7 +259,7 @@ export function DrepRow({
         className="token-row"
         onClick={() => onPick(drep.id)}
         disabled={disabled}
-        aria-label={`${name}${shared ? t("vote.row.sharedName") : ""}, ${shortId(drep.id)}`}
+        aria-label={joinList([`${name}${shared ? t("vote.row.sharedName") : ""}`, shortId(drep.id)])}
       >
         <span className={`avatar avatar--tint-${tint(drep.id)}`} aria-hidden="true">
           {initials(name)}

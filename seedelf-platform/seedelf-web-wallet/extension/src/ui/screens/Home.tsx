@@ -21,7 +21,7 @@
 // datum, which anyone can take.
 
 import { useCallback, useEffect, useState } from "react";
-import { t, useT } from "../../i18n";
+import { joinList, joinSentences, t, useT } from "../../i18n";
 
 import { handlesIn } from "../../shared/handles";
 import type { Account, AdaPrice, Balances, LovejoinHeld, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
@@ -435,7 +435,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
 
             {balances && handlesIn(balances.seedelf.tokens).length > 0 && (
               <Callout tone="warn" testId="private-handle">
-                {handleWarning(handlesIn(balances.seedelf.tokens))} {t("home.handles.makePublic")}
+                {joinSentences([handleWarning(handlesIn(balances.seedelf.tokens)), t("home.handles.makePublic")])}
               </Callout>
             )}
 
@@ -559,7 +559,7 @@ function lockedMeta(side: Balances["seedelf" | "cardano"], ada: (lovelace: strin
 
 /** Why an ADA Handle doesn't belong in Seedelf: what's paid to it can be taken by anyone. */
 export function handleWarning(handles: string[]): string {
-  return t("home.handles.warn.inPrivate", { names: handles.map((h) => `$${h}`).join(", "), count: handles.length });
+  return t("home.handles.warn.inPrivate", { names: joinList(handles.map((h) => `$${h}`)), count: handles.length });
 }
 
 /** The eye beside a balance: hides every amount on the screens that show what the wallet holds, or shows them again. */

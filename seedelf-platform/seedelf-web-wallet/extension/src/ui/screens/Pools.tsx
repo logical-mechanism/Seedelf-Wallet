@@ -9,7 +9,7 @@
 // enough of the pool ID to tell them apart (launch review #59).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { type I18nKey, useT } from "../../i18n";
+import { type I18nKey, joinList, useT } from "../../i18n";
 
 import type { PoolDetails, PoolList, PoolRow } from "../../shared/rpc";
 import { call } from "../background";
@@ -195,9 +195,11 @@ export function PoolListRow({
         type="button"
         className="token-row"
         onClick={() => onOpen(pool)}
-        aria-label={`${label}${shared ? t("pools.row.sharedTicker") : ""}, ${shortId(pool.id)}, ${t("pools.row.saturated", {
-          percent: formatPercent(pool.saturation),
-        })}${current ? t("pools.row.yours") : ""}`}
+        aria-label={joinList([
+          `${label}${shared ? t("pools.row.sharedTicker") : ""}`,
+          shortId(pool.id),
+          `${t("pools.row.saturated", { percent: formatPercent(pool.saturation) })}${current ? t("pools.row.yours") : ""}`,
+        ])}
       >
         <span className={`avatar avatar--tint-${tint(pool.id)}`} aria-hidden="true">
           {initials(ticker ?? "?")}

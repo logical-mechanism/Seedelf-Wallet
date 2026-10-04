@@ -19,10 +19,10 @@
 // all. Copying the hash costs nothing and goes nowhere.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { type I18nKey, t, useT } from "../../i18n";
+import { type I18nKey, joinList, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView } from "../../shared/rpc";
+import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView, TxVote } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
@@ -390,7 +390,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
             {d.votes.map((v, i) => (
               <li key={`v${i}`} className="list__row tx-detail__stack">
                 <span className="tx-detail__name">
-                  {tr("tx.votesAs", { vote: v.vote, voter: tr(v.voter === "drep" ? "tx.voter.drep" : v.voter === "pool" ? "tx.voter.pool" : "tx.voter.committee") })}
+                  {tr(VOTES[v.vote], { voter: tr(v.voter === "drep" ? "tx.voter.drep" : v.voter === "pool" ? "tx.voter.pool" : "tx.voter.committee") })}
                 </span>
                 <span className="tx-detail__line">
                   <code
@@ -444,6 +444,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   {r.argument ? (
                     <PlutusTree
                       label={tr("tx.itsArgument")}
+                      copyLabels={{ cbor: tr("tx.copyArgumentCbor"), json: tr("tx.copyArgumentJson") }}
                       hex={r.data}
                       value={r.argument}
                       testId={`${testId}-redeemer-${i}`}
@@ -491,7 +492,13 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                     </code>
                     <CopyButton value={datum.hash} label={tr("tx.copyDatumHash")} />
                   </span>
-                  <PlutusTree label={tr("tx.theDatum")} hex={datum.hex} value={datum.data} testId={`${testId}-datum-${i}`} />
+                  <PlutusTree
+                    label={tr("tx.theDatum")}
+                    copyLabels={{ cbor: tr("tx.copyDatumCbor"), json: tr("tx.copyDatumJson") }}
+                    hex={datum.hex}
+                    value={datum.data}
+                    testId={`${testId}-datum-${i}`}
+                  />
                 </li>
               ))}
             </ul>
@@ -610,7 +617,14 @@ function Output({
         ))}
       </span>
       {/* Whatever contract it is for: the shape is all that can be shown of it. */}
-      {o.datum && o.inlineDatum && <PlutusTree label={tr("tx.itsDatum")} hex={o.inlineDatum} value={o.datum} />}
+      {o.datum && o.inlineDatum && (
+        <PlutusTree
+          label={tr("tx.itsDatum")}
+          copyLabels={{ cbor: tr("tx.copyItsDatumCbor"), json: tr("tx.copyItsDatumJson") }}
+          hex={o.inlineDatum}
+          value={o.datum}
+        />
+      )}
     </li>
   );
 }
@@ -639,16 +653,31 @@ function Fields({ of, skip, labels }: { of: object; skip: string[]; labels: Reco
   );
 }
 
+/**
+ * A vote as a whole sentence, one for each: in Spanish an abstention changes
+ * the verb ("Se abstiene como…"), so the vote can't be a word put into one.
+ */
+const VOTES = {
+  yes: "tx.vote.yes",
+  no: "tx.vote.no",
+  abstain: "tx.vote.abstain",
+} as const satisfies Record<TxVote["vote"], I18nKey>;
+
 /** One of those fields as text: an amount, a list, an anchor, a nested thing. */
 function fieldText(value: unknown): string {
-  if (Array.isArray(value)) return value.map(fieldText).join(", ");
+  if (Array.isArray(value)) return joinList(value.map(fieldText));
   if (value && typeof value === "object") {
     const o = value as Record<string, unknown>;
     // An anchor, a credential, an action id: the shapes the decoder makes.
     if (typeof o.url === "string") return `${o.url} (${String(o.contentHash)})`;
-    if (typeof o.hash === "string") return `${String(o.kind)} ${String(o.hash)}`;
+    if (typeof o.hash === "string") {
+      // A credential is a key's or a script's; any other kind is shown as it came, as an unknown certificate is.
+      if (o.kind === "key") return t("tx.credential.key", { hash: o.hash });
+      if (o.kind === "script") return t("tx.credential.script", { hash: o.hash });
+      return `${String(o.kind)} ${o.hash}`;
+    }
     if (typeof o.txHash === "string") return `${String(o.txHash)}#${String(o.index)}`;
-    if (typeof o.field === "string") return `field ${String(o.field)}: ${String(o.hex)}`;
+    if (typeof o.field === "string") return t("tx.numberedField", { field: o.field, hex: String(o.hex) });
     if (typeof o.address === "string") return `${String(o.address)} ${formatAda(String(o.lovelace))} ₳`;
     return JSON.stringify(value);
   }

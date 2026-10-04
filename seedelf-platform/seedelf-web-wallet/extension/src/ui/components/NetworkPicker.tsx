@@ -7,7 +7,7 @@
 // top bar says its ADA has no value.
 
 import { useState } from "react";
-import { t, useT } from "../../i18n";
+import { sentenceGap, t, useT } from "../../i18n";
 
 import { NETWORKS, type NetworkName } from "../../networks";
 import type { Status } from "../../shared/rpc";
@@ -94,7 +94,8 @@ export function OnNetwork({
   if (status.networks.length < 2) return null;
   return (
     <p className="note onboarding-on-network" data-testid="onboarding-on-network">
-      {t(doing === "create" ? "network.creatingOn" : "network.restoringOn", { network: NETWORKS[status.network].label })}{" "}
+      {t(doing === "create" ? "network.creatingOn" : "network.restoringOn", { network: NETWORKS[status.network].label })}
+      {sentenceGap()}
       <button type="button" className="link" onClick={onChange}>
         {t("network.change")}
       </button>

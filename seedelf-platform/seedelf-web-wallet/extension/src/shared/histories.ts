@@ -23,7 +23,7 @@
 //                  any other money's history is known (independent review L40)
 // Money whose histories were merged names each, sorted, joined by "+".
 
-import { t } from "../i18n";
+import { joinSentences, t } from "../i18n";
 /** Where a UTxO's money came from, as WebAssembly reads it. */
 export type Origin = "own" | "received" | "session" | "lovejoin" | "unknown";
 
@@ -206,5 +206,5 @@ export function historiesNote(
   if (session !== undefined && others.length) {
     said.push(t("histories.privacy.sessions", { sessions: sessionNames(others), count: others.length }));
   }
-  return said.length ? said.join(" ") : undefined;
+  return said.length ? joinSentences(said) : undefined;
 }

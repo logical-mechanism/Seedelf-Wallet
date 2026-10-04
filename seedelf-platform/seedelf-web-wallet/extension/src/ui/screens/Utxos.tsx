@@ -11,7 +11,7 @@
 // (privacy review §2.3).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Rich, t, useT } from "../../i18n";
+import { joinList, joinSentences, Rich, sentenceGap, t, useT } from "../../i18n";
 
 import { historyTags } from "../../shared/histories";
 import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
@@ -43,7 +43,7 @@ const tag = utxoTag;
 
 /** Where a private UTxO's money came from: Back from Lovejoin, Received, Made private, Private session N, Unknown. */
 export function historyOf(u: UtxoInfo, accounts = 1): string | undefined {
-  return u.history ? historyTags(u.history, accounts).join(", ") : undefined;
+  return u.history ? joinList(historyTags(u.history, accounts)) : undefined;
 }
 
 /** A seedelf's UTxO, the collateral and one no payment can take aren't locked or unlocked by hand. */
@@ -153,8 +153,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
       error={shown ? undefined : error}
     >
       <p className="note" data-testid="utxos-lock-note">
-        {t("utxos.lockNote")}
-        {of === "cardano" && ` ${t("utxos.lockNoteSite")}`}
+        {joinSentences([t("utxos.lockNote"), of === "cardano" && t("utxos.lockNoteSite")])}
       </p>
       {of === "cardano" && <MixHolding progress={mix} />}
       {stuck > 0 && (
@@ -174,7 +173,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         <section className="section" aria-label={t("utxos.listLabel")}>
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
-              const name = `${amounts.ada(u.lovelace)} ₳, ${shortHex(u.txHash)}#${u.index}`;
+              const name = joinList([`${amounts.ada(u.lovelace)} ₳`, `${shortHex(u.txHash)}#${u.index}`]);
               const history = historyOf(u, accounts.length);
               return (
                 <li key={ref(u)} className="utxo-row">
@@ -182,7 +181,9 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                     type="button"
                     className="token-row"
                     onClick={() => setOpen(ref(u))}
-                    aria-label={`${amounts.ada(u.lovelace)} ₳${tag(u) ? `, ${tag(u)}` : ""}${history ? `, ${history}` : ""}, ${shortHex(u.txHash)}#${u.index}`}
+                    aria-label={joinList(
+                      [`${amounts.ada(u.lovelace)} ₳`, tag(u), history, `${shortHex(u.txHash)}#${u.index}`].filter((x): x is string => !!x),
+                    )}
                   >
                     <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
                       <Icon u={u} />
@@ -277,11 +278,13 @@ export function UtxoDetails({
                 <Rich k="utxos.holdsSeedelfNamed" parts={{ name: <strong>{utxo.seedelf.label}</strong> }} />
               ) : (
                 t("utxos.holdsSeedelf")
-              )}{" "}
+              )}
+              {sentenceGap()}
               {t("utxos.onlyRemoveSpends")}
             </Callout>
             <CopyField
               label={t("utxos.seedelfName")}
+              copyLabel={t("utxos.copySeedelfName")}
               value={utxo.seedelf.name}
               display={shortHex(utxo.seedelf.name, 14, 8)}
               testId="utxo-seedelf-name"
@@ -301,7 +304,13 @@ export function UtxoDetails({
           </p>
         )}
         <UtxoTokens tokens={utxo.tokens} />
-        <CopyField label={t("utxos.transaction")} value={utxo.txHash} display={shortHex(utxo.txHash, 14, 8)} testId="utxo-tx" />
+        <CopyField
+          label={t("utxos.transaction")}
+          copyLabel={t("utxos.copyTransaction")}
+          value={utxo.txHash}
+          display={shortHex(utxo.txHash, 14, 8)}
+          testId="utxo-tx"
+        />
         {utxo.history && (
           <p className="note" data-testid="utxo-history-note">
             {t("utxos.privacy.cameFrom", { history: historyOf(utxo) })}
@@ -312,7 +321,13 @@ export function UtxoDetails({
           {utxo.blockHeight !== undefined && <Row label={t("utxos.block")} value={utxo.blockHeight.toLocaleString("en-GB")} />}
         </ReviewRows>
         {utxo.address && (
-          <CopyField label={t("utxos.address")} value={utxo.address} display={shortHex(utxo.address, 16, 8)} testId="utxo-address" />
+          <CopyField
+            label={t("utxos.address")}
+            copyLabel={t("utxos.copyAddress")}
+            value={utxo.address}
+            display={shortHex(utxo.address, 16, 8)}
+            testId="utxo-address"
+          />
         )}
       </div>
     </Modal>

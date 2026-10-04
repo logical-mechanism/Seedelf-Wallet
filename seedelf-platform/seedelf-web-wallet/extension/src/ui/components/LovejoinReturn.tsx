@@ -7,11 +7,12 @@
 // user chooses Lovejoin, it says Lovejoin has had no third-party audit:
 // Lovejoin's own docs say so, and no copy here may say otherwise.
 import { useEffect, useRef, useState } from "react";
-import { t, useT } from "../../i18n";
+import { joinSentences, t, useT } from "../../i18n";
 
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { formatAda } from "../format";
+import { withoutStop } from "../sentence";
 import { Callout } from "./Callout";
 import { Row } from "./ReviewRows";
 
@@ -115,9 +116,6 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
   );
 }
 
-/** A reason from the worker as part of a sentence: without its full stop. */
-const clause = (reason: string) => reason.trim().replace(/\.$/, "");
-
 /** Why, and the way out: `onDirect` rebuilds the return without Lovejoin. Or why Lovejoin was left out this time. */
 export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummary; busy: boolean; onDirect: () => void }) {
   const tr = useT();
@@ -125,7 +123,7 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
   if (back.lovejoinSkipped) {
     return (
       <Callout tone="warn" testId="lovejoin-skipped">
-        {tr("lovejoin.warn.skippedThis", { why: clause(back.lovejoinSkipped) })}
+        {tr("lovejoin.warn.skippedThis", { why: withoutStop(back.lovejoinSkipped) })}
       </Callout>
     );
   }
@@ -162,7 +160,7 @@ export function LovejoinSkipped({ reason }: { reason?: string }) {
   if (!reason) return null;
   return (
     <Callout tone="warn" testId="session-lovejoin-skipped">
-      {tr("lovejoin.warn.skippedIts", { why: clause(reason) })}
+      {tr("lovejoin.warn.skippedIts", { why: withoutStop(reason) })}
     </Callout>
   );
 }
@@ -177,9 +175,6 @@ export function IntoRow({ back }: { back: SessionBackSummary }) {
 export function ReturnLinks({ back, after }: { back: SessionBackSummary; after?: string }) {
   const tr = useT();
   return (
-    <Callout tone="privacy">
-      {tr(back.merged ? "lovejoin.privacy.merged" : "lovejoin.privacy.newUtxos")}
-      {after ? ` ${after}` : ""}
-    </Callout>
+    <Callout tone="privacy">{joinSentences([tr(back.merged ? "lovejoin.privacy.merged" : "lovejoin.privacy.newUtxos"), after])}</Callout>
   );
 }

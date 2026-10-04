@@ -11,7 +11,19 @@
 // first.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { availableLanguages, currentLanguage, type I18nKey, type LanguageCode, Rich, setLanguage, t, useT } from "../../i18n";
+import {
+  availableLanguages,
+  currentLanguage,
+  type I18nKey,
+  joinList,
+  joinSentences,
+  type LanguageCode,
+  Rich,
+  sentenceGap,
+  setLanguage,
+  t,
+  useT,
+} from "../../i18n";
 
 import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
 import { DAPP_ORIGINS } from "../../shared/dapp";
@@ -55,7 +67,9 @@ import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 import {  } from "../format";
 import { accountName, useAccounts } from "../accounts";
+import { confirmsDelete, deletePhrase } from "../delete-phrase";
 import { usePreferences } from "../preferences";
+import { asSentence } from "../sentence";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
 import { disconnectWait } from "./SiteSessions";
@@ -109,7 +123,7 @@ export function Settings({
   if (page === "remove") return <RemoveWallet onBack={menu} onRemoved={onRemoved} />;
 
   return (
-    <Screen title="Settings" titleId="settings-title" onBack={onBack}>
+    <Screen title={t("app.settings")} titleId="settings-title" onBack={onBack}>
       <NetworkSection status={status} onMoved={onNetwork} />
       <section className="section" aria-labelledby="wallet-title">
         <h2 id="wallet-title">{t("settings.wallet")}</h2>
@@ -438,12 +452,12 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
  * every transaction from the IP address that reads the public account.
  */
 export function talksTo(prices: boolean, lovejoin: boolean): string {
-  return [
+  return joinSentences([
     t(prices ? "settings.privacy.talksToPrices" : "settings.privacy.talksTo"),
     t("settings.privacy.eachSeesIp"),
     t("settings.privacy.giveme"),
-    ...(lovejoin ? [LOVEJOIN_SEEN()] : []),
-  ].join(" ");
+    lovejoin && LOVEJOIN_SEEN(),
+  ]);
 }
 
 /** What moving to each network says first, before the wallet moves. */
@@ -567,7 +581,8 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
           ))}
         </select>
         <p className="note" data-testid="language-note">
-          {t("settings.language.warn.unchecked")}{" "}
+          {t("settings.language.warn.unchecked")}
+          {sentenceGap()}
           <a className="link" href={ISSUES} target="_blank" rel="noreferrer">
             {t("settings.language.report")}
           </a>
@@ -586,8 +601,10 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
             onChange={chooseOpenIn}
           />
           <p className="note" data-testid="open-in-note">
-            {t(openIn === "panel" ? "settings.openIn.panelNote" : "settings.openIn.tabNote")}
-            {openIn === "panel" && view === "tab" ? ` ${t("settings.openIn.useButton")}` : ""}
+            {joinSentences([
+              t(openIn === "panel" ? "settings.openIn.panelNote" : "settings.openIn.tabNote"),
+              openIn === "panel" && view === "tab" && t("settings.openIn.useButton"),
+            ])}
           </p>
         </div>
       )}
@@ -653,9 +670,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
     <section className="section" aria-labelledby="lovejoin-settings-title">
       <h2 id="lovejoin-settings-title">{t("settings.lovejoin")}</h2>
       <p className="note">
-        {t("settings.lovejoin.note")}
-        {floor > 0 && ` ${t("settings.lovejoin.floor", { count: floor })}`}{" "}
-        {LOVEJOIN_SEEN()}
+        {joinSentences([t("settings.lovejoin.note"), floor > 0 && t("settings.lovejoin.floor", { count: floor }), LOVEJOIN_SEEN()])}
       </p>
       <Callout tone="warn" testId="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
@@ -1010,7 +1025,8 @@ export function SiteRows({
               </span>
               {wait && (
                 <span className="note" data-testid="site-wait">
-                  {wait}.
+                  {/* The button's own title elsewhere, a sentence here: its full stop is the language's. */}
+                  {t("common.sentence", { text: wait })}
                 </span>
               )}
             </span>
@@ -1206,8 +1222,7 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
       setResult(matches);
       if (matches) setWords(blank(count));
     } catch (e) {
-      const text = (e as Error).message;
-      setError(`${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`);
+      setError(asSentence((e as Error).message));
     } finally {
       setBusy(false);
     }
@@ -1317,8 +1332,6 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
   );
 }
 
-const CONFIRM_TEXT = "delete wallet";
-
 /** A private session as Remove wallet's list names it: by its number, from 1, and a site's by its host. */
 function sessionName(s: AtStake["sessions"][number]): string {
   const name = t("claim.sessionLower", { number: s.index + 1 });
@@ -1348,11 +1361,11 @@ export function atStakeLines(stake: AtStake[]): string[] {
     }
     const open = s.sessions.filter((x) => !x.leftBehind);
     if (open.length) {
-      lines.push(t("settings.remove.sessionsOpen", { network: on, count: open.length, names: open.map(sessionName).join(", ") }));
+      lines.push(t("settings.remove.sessionsOpen", { network: on, count: open.length, names: joinList(open.map(sessionName)) }));
     }
     const left = s.sessions.filter((x) => x.leftBehind);
     if (left.length) {
-      lines.push(t("settings.remove.leftBehind", { network: on, names: left.map(sessionName).join(", ") }));
+      lines.push(t("settings.remove.leftBehind", { network: on, names: joinList(left.map(sessionName)) }));
     }
     if (s.chainSending) {
       lines.push(t("settings.remove.chainSending", { network: on }));
@@ -1371,7 +1384,7 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
   // What removing it would leave behind, as the worker reads it: undefined while it reads, null when it couldn't.
   const [stake, setStake] = useState<AtStake[] | null>();
   const [anyway, setAnyway] = useState(false);
-  const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
+  const confirmed = confirmsDelete(typed);
   const held = stake === null || !!stake?.length;
 
   const check = () => {
@@ -1450,7 +1463,7 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
       </Callout>
       <div className="field">
         <label htmlFor="confirm-remove">
-          <Rich k="reset.confirmLabel" parts={{ text: <strong>{CONFIRM_TEXT}</strong> }} />
+          <Rich k="reset.confirmLabel" parts={{ text: <strong>{deletePhrase()}</strong> }} />
         </label>
         <input
           id="confirm-remove"

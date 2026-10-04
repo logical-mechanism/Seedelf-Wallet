@@ -4,7 +4,7 @@
 // UTxOs are, and the headline counts them in what it sends; these say
 // whether they come back to it.
 
-import { t } from "../i18n";
+import { joinSentences, t } from "../i18n";
 import type { DappTxSummary } from "../shared/rpc";
 import { formatAda, voteLabel } from "./format";
 
@@ -64,10 +64,12 @@ export function tiesLine(ties: Array<"account" | number>, session: boolean): str
 export function signingTies(ties: Array<"account" | number> | undefined, session: boolean, seedelf = false): string {
   const checked = ties !== undefined && ties.length === 0;
   if (session) {
-    const out = !checked ? "" : ` ${t(seedelf ? "dappUi.privacy.notAccount" : "dappUi.privacy.notAccountNorPrivate")}`;
-    return `${t("dappUi.privacy.tiesToSession")}${out}`;
+    return joinSentences([
+      t("dappUi.privacy.tiesToSession"),
+      checked && t(seedelf ? "dappUi.privacy.notAccount" : "dappUi.privacy.notAccountNorPrivate"),
+    ]);
   }
-  return `${t("dappUi.privacy.tiesToAccount")}${checked && !seedelf ? ` ${t("dappUi.privacy.notPrivate")}` : ""}`;
+  return joinSentences([t("dappUi.privacy.tiesToAccount"), checked && !seedelf && t("dappUi.privacy.notPrivate")]);
 }
 
 /**
@@ -80,7 +82,17 @@ export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): str
   return t(back ? "dappUi.withdrawal.into" : "dappUi.withdrawal.notAllBack", { amount: formatAda(w.lovelace), whose });
 }
 
-/** A certificate in a sentence: the account's own staking, or someone else's. `back` and `whose` as for a withdrawal. */
+/**
+ * A certificate in a sentence: the account's own staking, or someone else's.
+ * `back` and `whose` as for a withdrawal.
+ *
+ * The account's own is a whole sentence for each thing a certificate does, or
+ * does together (WebAssembly's kinds: register, delegate, vote and their
+ * combinations, unregister), so each language joins the clauses its own way.
+ * Pieced together from fragments, with a capital and a full stop added here,
+ * Japanese read "…登録します（…）、…にステーキングします、投票権を委任します:
+ * 常に棄権.": finished sentences comma-spliced, then an ASCII full stop.
+ */
 export function certificateLine(c: Certificate, back: boolean, whose: string): string {
   if (!c.own) {
     if (c.kind === "pool") {
@@ -92,18 +104,34 @@ export function certificateLine(c: Certificate, back: boolean, whose: string): s
     if (c.kind === "committee") return t("dappUi.cert.committee");
     return t("dappUi.cert.otherStakeKey");
   }
-  const parts: string[] = [];
-  if (c.kind.startsWith("register")) {
-    parts.push(c.deposit ? t("dappUi.cert.registersWithDeposit", { amount: formatAda(c.deposit) }) : t("dappUi.cert.registers"));
+  const what = c.drep ? voteLabel(c.drep) : undefined;
+  if (c.kind.startsWith("register") && c.deposit) {
+    const amount = formatAda(c.deposit);
+    if (c.pool && what) return t("dappUi.cert.warn.registersStakesVotes", { amount, pool: c.pool, what });
+    if (c.pool) return t("dappUi.cert.warn.registersStakes", { amount, pool: c.pool });
+    if (what) return t("dappUi.cert.warn.registersVotes", { amount, what });
+    return t("dappUi.cert.warn.registersDeposit", { amount });
   }
-  if (c.kind === "unregister") {
-    const deposit = c.refund ? t("dappUi.cert.andItsDeposit", { amount: formatAda(c.refund) }) : "";
-    if (!c.refund) parts.push(t("dappUi.cert.stops"));
-    else if (back) parts.push(t("dappUi.cert.stopsBack", { deposit, whose }));
-    else parts.push(t("dappUi.cert.stopsNotAllBack", { deposit, whose }));
-  }
-  if (c.pool) parts.push(t("dappUi.cert.stakesWith", { pool: c.pool }));
-  if (c.drep) parts.push(t("dappUi.cert.delegatesVote", { what: voteLabel(c.drep) }));
-  const sentence = parts.join(t("histories.list.comma"));
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
+  // A registration with no deposit is WebAssembly's plain "register", and a
+  // stop is "unregister": neither comes with a delegation. Were one to, each
+  // part would still be said, as a sentence of its own.
+  return joinSentences([
+    c.kind.startsWith("register") && t("dappUi.cert.warn.registers"),
+    c.kind === "unregister" && stopsLine(c, back, whose),
+    delegationLine(c.pool, what),
+  ]);
+}
+
+/** The account's staking stopped, and whether the deposit it gets back comes back to it. */
+function stopsLine(c: Certificate, back: boolean, whose: string): string {
+  if (!c.refund) return t("dappUi.cert.warn.stops");
+  return t(back ? "dappUi.cert.warn.stopsBack" : "dappUi.cert.warn.stopsNotAllBack", { amount: formatAda(c.refund), whose });
+}
+
+/** Where the account's stake goes, or its vote, or both, as one sentence. */
+function delegationLine(pool: string | null, what: string | undefined): string | undefined {
+  if (pool && what) return t("dappUi.cert.warn.stakesVotes", { pool, what });
+  if (pool) return t("dappUi.cert.warn.stakes", { pool });
+  if (what) return t("dappUi.cert.warn.votes", { what });
+  return undefined;
 }

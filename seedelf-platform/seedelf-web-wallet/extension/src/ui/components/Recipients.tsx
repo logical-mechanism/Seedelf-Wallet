@@ -93,7 +93,7 @@ export function RecipientCard({
         <button
           type="button"
           className="icon-button icon-button--small"
-          aria-label={t("recipients.takeOffWhat", { what: title.toLowerCase() })}
+          aria-label={t("recipients.takeOffNumbered", { number: index + 1 })}
           title={t("recipients.takeOff")}
           onClick={onRemove}
         >
