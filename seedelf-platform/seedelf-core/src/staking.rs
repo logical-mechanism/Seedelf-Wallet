@@ -299,6 +299,13 @@ impl Staking {
                 certificates.push(Certificate::UpdateDRepCert(cred, nullable(anchor)));
             }
             DrepAction::Retire => {
+                // The ledger returns exactly what was paid, and refuses any
+                // other refund: an unknown deposit isn't guessed at as none.
+                if drep_state.deposit == 0 {
+                    bail!(
+                        "Koios didn't say what deposit this DRep paid, so its retirement can't be built. Nothing was built; try again later"
+                    );
+                }
                 certificates.push(Certificate::UnRegDRepCert(cred, drep_state.deposit));
                 if drep_state.own_vote && stake_state.registered {
                     certificates.push(Certificate::VoteDeleg(
@@ -358,6 +365,18 @@ impl Staking {
                 | Certificate::VoteRegDeleg(_, _, d)
                 | Certificate::StakeVoteRegDeleg(_, _, _, d)
                 | Certificate::RegDRepCert(_, d, _) => *d,
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Of [`Self::deposit`], what registering a DRep locks up: it comes back
+    /// when the DRep retires, not when the stake key does.
+    pub fn drep_deposit(&self) -> u64 {
+        self.certificates
+            .iter()
+            .map(|c| match c {
+                Certificate::RegDRepCert(_, d, _) => *d,
                 _ => 0,
             })
             .sum()

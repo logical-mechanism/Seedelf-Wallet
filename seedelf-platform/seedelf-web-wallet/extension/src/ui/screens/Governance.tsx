@@ -92,6 +92,7 @@ export function DrepCard({
   onActions,
   onProfile,
   onRetire,
+  onDelegateOwn,
 }: {
   drep?: OwnDrep;
   error?: string;
@@ -102,6 +103,8 @@ export function DrepCard({
   onActions: () => void;
   onProfile: () => void;
   onRetire: () => void;
+  /** Delegates the account's voting power to its own DRep, when it goes elsewhere. */
+  onDelegateOwn: () => void;
 }) {
   const t = useT();
   const network = useNetwork();
@@ -141,9 +144,12 @@ export function DrepCard({
             </Callout>
           )}
           {staking.drep !== drep.id && (
-            <p className="note" data-testid="drep-not-own-vote">
-              {t("drep.notOwnVote", { current: voteLabel(staking.drep) })}
-            </p>
+            <div className="stack-tight" data-testid="drep-not-own-vote">
+              <p className="note">{t("drep.notOwnVote", { current: voteLabel(staking.drep) })}</p>
+              <button type="button" className="secondary align-start" onClick={onDelegateOwn} disabled={!!blocked || busy} title={blocked}>
+                {busy ? t("common.building") : t("drep.delegateOwn")}
+              </button>
+            </div>
           )}
           <button type="button" className="primary" onClick={onActions} disabled={busy}>
             {t("drep.actions")}
@@ -396,6 +402,7 @@ function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; 
     setWriting(true);
     setError(undefined);
     try {
+      // The fields are locked meanwhile, so the file is the text on screen.
       setFile(await call("drep-profile", { profile }));
     } catch (e) {
       setError((e as Error).message);
@@ -424,7 +431,7 @@ function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; 
         onChange={(e) => edit({ [key]: e.target.value })}
         autoComplete="off"
         spellCheck={false}
-        disabled={busy}
+        disabled={busy || writing}
       />
     </div>
   );
@@ -440,7 +447,7 @@ function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; 
           autoComplete="off"
           // As every field in the wallet: Chrome's enhanced spell check would send it to Google.
           spellCheck={false}
-          disabled={busy}
+          disabled={busy || writing}
         />
       </div>
       {text("objectives", "drep.form.objectives")}
@@ -461,7 +468,7 @@ function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; 
           aria-labelledby="drep-do-not-list-label"
           aria-describedby="drep-do-not-list-note"
           onClick={() => edit({ doNotList: !profile.doNotList })}
-          disabled={busy}
+          disabled={busy || writing}
         />
       </div>
       {problem && profile !== EMPTY_PROFILE && <p className="field-note">{t(problem, { most: problem === "drep.form.nameTooLong" ? MAX_GIVEN_NAME : MAX_PROFILE_TEXT })}</p>}
@@ -514,6 +521,10 @@ export function GovActions({
   onBack,
   onBecome,
   onVote,
+  view,
+  onView,
+  open,
+  onOpen,
 }: {
   busy: boolean;
   blocked?: string;
@@ -521,22 +532,26 @@ export function GovActions({
   onBack: () => void;
   onBecome: () => void;
   onVote: (action: GovAction, vote: GovVote, before?: GovVote) => void;
+  /** What was read, and the action open, kept by the Staking page: back from a vote's review, both are as they were. */
+  view?: GovernanceView;
+  onView: (view: GovernanceView) => void;
+  open?: GovAction;
+  onOpen: (action?: GovAction) => void;
 }) {
   const t = useT();
   const network = useNetwork();
   const typeOf = useActionType();
   const voteOf = useVoteLabel();
-  const [view, setView] = useState<GovernanceView>();
-  const [reading, setReading] = useState(true);
+  const [reading, setReading] = useState(view === undefined);
   const [readError, setReadError] = useState<string>();
-  const [open, setOpen] = useState<GovAction>();
+  const setOpen = onOpen;
 
   function read(refresh: boolean) {
     setReading(true);
     setReadError(undefined);
     call("governance", { refresh }).then(
       (v) => {
-        setView(v);
+        onView(v);
         setReading(false);
       },
       (e: Error) => {
@@ -545,13 +560,18 @@ export function GovActions({
       },
     );
   }
-  useEffect(() => read(false), []);
+  // Read once: a view kept from before (back from a vote's review) is shown as it was, with Refresh.
+  useEffect(() => {
+    if (!view) read(false);
+  }, []);
 
   const registered = view?.drep.status === "registered";
   const now = epochAt(network, Date.now());
 
   if (open) {
     const mine = view?.votes[open.id];
+    // Read up to an hour ago, it may have closed since: the ledger would refuse a vote.
+    const closed = open.expiresEpoch < now;
     return (
       <Screen
         title={open.title ?? typeOf(open.type)}
@@ -597,8 +617,8 @@ export function GovActions({
                   type="button"
                   className={v === mine ? "secondary" : "primary"}
                   onClick={() => onVote(open, v, mine)}
-                  disabled={v === mine || !!blocked || busy}
-                  title={blocked ?? (v === mine ? t("gov.vote.already") : undefined)}
+                  disabled={closed || v === mine || !!blocked || busy}
+                  title={blocked ?? (closed ? t("gov.closed") : v === mine ? t("gov.vote.already") : undefined)}
                 >
                   {voteOf(v)}
                 </button>
@@ -653,7 +673,8 @@ export function GovActions({
 
 /** When an action closes, against the epoch it is now: no request. */
 function closes(t: ReturnType<typeof useT>, network: Parameters<typeof epochEnds>[0], epoch: number, now: number): string {
-  if (epoch <= now) return t("gov.closesThisEpoch", { date: epochEnds(network, now) });
+  if (epoch < now) return t("gov.closed");
+  if (epoch === now) return t("gov.closesThisEpoch", { date: epochEnds(network, now) });
   return t("gov.closes", { epoch, date: epochEnds(network, epoch) });
 }
 

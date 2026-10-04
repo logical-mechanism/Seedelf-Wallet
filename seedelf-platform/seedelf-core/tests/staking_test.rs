@@ -759,6 +759,7 @@ fn registering_pays_the_deposit_and_delegates_the_accounts_own_vote() {
         ]
     );
     assert_eq!((both.deposit(), both.refund()), (DREP_DEPOSIT, 0));
+    assert_eq!(both.drep_deposit(), DREP_DEPOSIT);
     assert!(both.stake_signs() && both.drep_signs());
     assert_eq!(both.signers(), 2);
 
@@ -769,6 +770,11 @@ fn registering_pays_the_deposit_and_delegates_the_accounts_own_vote() {
         Certificate::VoteRegDeleg(stake.clone(), me.drep(), DEPOSIT)
     );
     assert_eq!(first.deposit(), DREP_DEPOSIT + DEPOSIT);
+    assert_eq!(
+        first.drep_deposit(),
+        DREP_DEPOSIT,
+        "the stake key's is apart"
+    );
 
     // Kept apart, or already its own: the registration alone, the DRep key alone.
     for alone in [
@@ -899,6 +905,12 @@ fn a_drep_refuses_what_the_ledger_would() {
         assert!(err(action, DrepState::default()).contains("isn't a DRep"));
     }
     assert!(err(DrepAction::Vote(vec![]), a_drep(false)).contains("at least one"));
+    // A registered DRep whose deposit Koios didn't give: its refund isn't guessed as none.
+    let unknown_deposit = DrepState {
+        deposit: 0,
+        ..a_drep(false)
+    };
+    assert!(err(DrepAction::Retire, unknown_deposit).contains("didn't say what deposit"));
     assert!(
         err(
             DrepAction::Vote(vec![(treasury.clone(), Vote::Yes), (treasury, Vote::No)]),

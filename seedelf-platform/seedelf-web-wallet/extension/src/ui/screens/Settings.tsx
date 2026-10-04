@@ -1033,6 +1033,11 @@ export function SiteRows({
                   {t("sites.governance")}
                 </span>
               )}
+              {s.cip95Declined && (
+                <span className="note" data-testid="site-governance-declined">
+                  {t("sites.governanceDeclined")}
+                </span>
+              )}
               {wait && (
                 <span className="note" data-testid="site-wait">
                   {/* The button's own title elsewhere, a sentence here: its full stop is the language's. */}

@@ -2,7 +2,7 @@
 
 The public account registers its own DRep, votes Yes, No or Abstain on live governance actions, keeps an optional profile, and retires to get its deposit back. Then the dApp connector learns CIP-95, so GovTool and the other governance sites work too. [post-release-roadmap.md](../post-release-roadmap.md#public-side-completeness)'s item 2, the last of public-side completeness, and the last chunk before [the UX pass](../post-release-roadmap.md#the-ux-and-ui-pass).
 
-**Status: built, 21a and 21b (2026-10-04).** Branch `web-wallet/governance`, from `main` at `3a3deed` (chunk 20 merged). What landed, and where it went differently from this plan, is under [*What was built*](#what-was-built). **Not done, and the owner's:** the live preprod run (500 tADA registered, a vote, retired), and GovTool by hand on preprod.
+**Status: built, 21a and 21b (2026-10-04).** Branch `web-wallet/governance`, from `main` at `3a3deed` (chunk 20 merged). What landed, and where it went differently from this plan, is under [*What was built*](#what-was-built). **The owner ran it on preprod (2026-10-04):** a DRep registered with its own vote, and a vote on an info action. **Not done, and the owner's:** retiring live (and its move of the account's own vote to Always abstain), and GovTool by hand.
 
 ## Why
 
@@ -15,6 +15,9 @@ Chunk 13 delegated the vote and stopped there: Always abstain, Always no confide
 | Native screens, CIP-95, or both? | **Native first, then CIP-95.** The wallet's own screens are the default, since no site sees the DRep key; CIP-95 in the connector is the route a user chooses, and it's how Lace does it (Lace has no screens of its own; GovTool builds and Lace signs). May land as two PRs, 21a and 21b. |
 | The DRep's profile (CIP-119 metadata) | **None by default, optional.** No anchor is all that voting your own stake needs. An optional name and bio make the wallet write the CIP-119 file and its hash, for the user to host; they paste its address. **The wallet never fetches it**, so no new host. |
 | Delegate the account's own vote on registering? | **Yes, in the same transaction, by default**, with a switch to keep the current delegation. Without it the account's own stake doesn't count toward its own votes. |
+| Where governance lives on the public side (the owner, 2026-10-04) | **One row and one page, renamed "Staking and governance".** Home's row says the pool and its rewards, and "Voting power: …" ("Your own DRep" when it's the account's). |
+| Governance at connect, for a site that asks for it | **A switch on *Your public account*, off by default**, by the owner's standing rule that the most private option is the default. Declined, a site isn't asked again until it connects anew, and keeps its connection. |
+| Moving a vote that's on another DRep to your own (the owner's review, 2026-10-04: "I have to search for me basically") | **Voting power gets a "Your own DRep" choice, always shown,** between the two Always options and A DRep. A DRep already: it delegates there, review and Send. Not one yet: it says what registering costs and that it moves the vote in the same transaction, and opens Become a DRep. **And the DRep card gets "Delegate your voting power to it"** when the vote goes elsewhere. Both build the same vote delegation, from the DRep the Staking page already read: no request. |
 
 ## Found before building (2026-10-04)
 
@@ -150,4 +153,15 @@ privacy.md (*Known links*: the DRep and its votes tie to the account), flows.md 
 - **A session's WebAssembly entry points force `governance` off,** whatever the request says, so a private session can never sign with a DRep key, even one derived under its own account.
 - **The sign window counted every signer that wasn't the stake key as a payment key**, which would have called the DRep key a payment key. It names the DRep key now, and the account's own votes get a privacy callout of their own instead of the plain note.
 - **Two Spanish fixes from the blind back-translation:** the retirement sentences say "Da de baja tu DRep", where "Retira" read as withdrawing it, the verb withdrawing rewards uses; and the update sentence says "y así lo mantiene activo", so it's the update that keeps the DRep active.
+
+**The fix round (2026-10-04),** after the owner's own test (a DRep registered with its own vote, and a vote on an info action, on preprod) and an independent review of the whole diff:
+
+- **The owner's:** *Your own DRep* on Voting power and *Delegate your voting power to it* on the DRep card; the row and the page renamed **Staking and governance**, Home's row saying the pool and the vote ("Your own DRep" from the key, asking no one).
+- **Voting closed an epoch earlier than the screens said.** Koios's `expiration` is the epoch an action is expired in (`expired_epoch`, on every expired mainnet action checked): the ledger takes votes through the epoch before. The screens said "open until" `expiration`; they say the one before now, and an action read since it closed says so and takes no vote.
+- **Declining governance broke a connected site:** its `enable()` was refused. It's answered now, the site keeps its connection, and the refusal is kept so it isn't asked on every page load. And **a public connect always handed governance over** when asked: it's a switch now, off by default.
+- **A DRep registration's review said the stake key's deposit note**, and summed a stake key's 2 ₳ into the DRep's 500. Each deposit is its own row now, with its own note (`drepDeposit` in the build's result).
+- **The DRep key could sign over inputs the wallet can't find** (at its key's enterprise address, through `required_signers`): refused as a payment key's is.
+- **A retirement with no deposit from Koios** would have been built with a refund of 0, which the node refuses: refused in words, in the worker and in core.
+- **The profile form** stays locked while its file is written, so the file is the text on screen. **Back from a vote's review** keeps the list and the open action, with no new requests. **A site on a private session** asking for CIP-95's keys hears that a session has no DRep.
+- Checked: Rust 511 passed; Vitest 1,412; Playwright 71 (two new: moving a vote to the account's own DRep from the card and from Voting power, and Your own DRep before the account is one). The store's public-tab screenshot is regenerated.
 

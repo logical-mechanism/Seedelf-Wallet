@@ -246,6 +246,8 @@ export interface StakeInfo {
   rewards: string;
   /** The deposit paid to register it: stopping staking gets it back. */
   deposit: string;
+  /** Its vote goes to the account's own DRep (chunk 21): worked out from the key, asking no one. */
+  ownDrep?: boolean;
 }
 
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
@@ -445,8 +447,10 @@ export interface StakingSummary {
   /** The vote, as Koios names it. */
   drep: string | null;
   fee: string;
-  /** Paid to register the stake key. */
+  /** Paid to register the stake key, and a DRep: all of it. */
   deposit: string;
+  /** Of `deposit`, what registering the account's DRep locks up: back when the DRep retires. Only for a DRep action. */
+  drepDeposit?: string;
   /** Returned by unregistering it. */
   refund: string;
   /** Rewards withdrawn. */
@@ -1230,6 +1234,8 @@ export interface DappSite {
   session?: number;
   /** Given governance (CIP-95, chunk 21): the dApp account's DRep key. Never with `session`. */
   cip95?: true;
+  /** It asked for governance and the user said no: it isn't asked again until it connects anew. */
+  cip95Declined?: true;
 }
 
 /** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */
@@ -1884,7 +1890,8 @@ export interface Requests {
    * A signature that needs the password takes it here; a wrong one leaves it waiting.
    */
   "dapp-answer": {
-    payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string } };
+    /** `governance`: a connect that asked for CIP-95, connected with it (the window's switch, off by default). */
+    payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string }; governance?: boolean };
     result: { error?: string };
   };
   /** Ends a site's private session, once its account is empty, and disconnects the site that has it. */

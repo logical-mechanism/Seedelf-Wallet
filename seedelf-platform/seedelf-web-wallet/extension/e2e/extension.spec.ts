@@ -277,7 +277,9 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${ada(BigInt(lovelaceOf(account.account_utxos)) + rewards)} ₳`);
   await expect(page.getByText("4 addresses used")).toBeVisible();
   await expect(page.getByTestId("cardano-tokens")).toContainText("LINK");
-  await expect(page.getByTestId("staking-row")).toHaveText(`Staking with LOGIC${ada(rewards)} ₳ rewards`);
+  await expect(page.getByTestId("staking-row")).toHaveText(
+    `Staking and governanceLOGIC · ${ada(rewards)} ₳ rewardsVoting power: Always abstain`,
+  );
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
   // The account, the contract and the stake key; the pool's ticker the first
   // time; and the one `account_addresses` a restore spends looking for a
@@ -2385,12 +2387,12 @@ test("staking: the page, the pool browser, a change of pool reviewed and sent, t
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await cardanoTab(page);
-  await expect(page.getByTestId("staking-row")).toContainText("Staking with LOGIC");
+  await expect(page.getByTestId("staking-row-pool")).toContainText("LOGIC · ");
 
   // The page reads the pool's details and the account's DRep, fresh: never registered, so what registering costs too.
   let reads = koios.calls.length;
   await page.getByTestId("staking-row").click();
-  await expect(page.getByRole("heading", { name: "Staking" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Staking and governance" })).toBeVisible();
   const pool = page.getByTestId("your-pool");
   await expect(pool).toContainText("LOGIC · Logical Mechanism");
   await expect(page.getByTestId("your-pool-facts")).toContainText("Saturation18.8%");
@@ -2486,7 +2488,8 @@ test("governance: the live actions, then be your own DRep, with the account's ow
   await page.getByRole("button", { name: "Review" }).click();
   const review = page.getByTestId("staking-review");
   await expect(review).toContainText("Your voting powerDelegated to your DRep");
-  await expect(review).toContainText("Deposit500 ₳");
+  await expect(review).toContainText("DRep deposit500 ₳");
+  await expect(review).not.toContainText("Stake key deposit");
   expect(koios.calls.slice(reads).sort()).toEqual(["account_addresses", "account_info", "credential_utxos", "drep_info", "epoch_params", "tip"]);
   await snap(page, "drep-register-review");
   expect(koios.submitted).toHaveLength(0);
@@ -2542,6 +2545,66 @@ test("governance: a DRep votes on a live action, and the vote is its own pending
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByTestId("pending-tx")).toContainText("Vote sent");
   expect(koios.submitted).toHaveLength(1);
+});
+
+test("governance: a DRep whose vote is elsewhere moves it to itself, from Voting power or the DRep card", async ({ context, koios }) => {
+  // This account's own DRep, registered, with its voting power on Logical Mechanism's DRep.
+  koios.dreps.set(OWN_DREP, {
+    drep_id: OWN_DREP,
+    drep_status: "registered",
+    active: true,
+    expires_epoch_no: 340,
+    amount: "0",
+    live_delegator_count: 0,
+    deposit: "500000000",
+    meta_url: null,
+    meta_hash: null,
+  });
+  const info = stakingPreprod.account_info[0];
+  koios.stakes.set(info.stake_address, { ...info, delegated_drep: "drep1ydmraa6kv8cvmry059v608tehl50nfmg0z764lmsqkvwurs40sw2z" });
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByTestId("staking-row").click();
+
+  // The DRep card says the vote goes elsewhere, and moves it in one tap.
+  const card = page.getByTestId("drep-not-own-vote");
+  await expect(card).toContainText("not to its DRep, so your own stake isn't behind your votes");
+  await card.getByRole("button", { name: "Delegate your voting power to it" }).click();
+  await expect(page.getByTestId("staking-review")).toContainText("Your own DRep");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Or from Voting power: Your own DRep, between the pinned two and A DRep, no search.
+  await page.getByRole("button", { name: "Change", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Voting power" })).toBeVisible();
+  const own = page.getByRole("radio", { name: /^Your own DRep/ });
+  await expect(own).toHaveAttribute("aria-checked", "false");
+  await own.click();
+  await expect(page.getByTestId("own-drep-facts")).toContainText("Active");
+  await expect(page.getByTestId("own-drep-id")).toHaveText(OWN_DREP);
+  await snap(page, "voting-own-drep");
+  await page.getByRole("button", { name: "Review" }).click();
+  const review = page.getByTestId("staking-review");
+  await expect(review).toContainText("Your own DRep");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Vote delegation sent");
+  expect(koios.submitted).toHaveLength(1);
+});
+
+test("governance: Your own DRep, before the account is one, says what it costs and opens Become a DRep", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByTestId("drep-card")).toContainText("Be your own DRep");
+  await page.getByRole("button", { name: "Change", exact: true }).click();
+  await page.getByRole("radio", { name: /^Your own DRep/ }).click();
+  await expect(page.getByTestId("own-drep-not-yet")).toContainText("Registering locks up 500 ₳");
+  await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
+  await page.getByTestId("own-drep").getByRole("button", { name: "Become a DRep" }).click();
+  await expect(page.getByRole("heading", { name: "Become a DRep" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Delegate this account's voting power to it" })).toHaveAttribute("aria-checked", "true");
+  expect(koios.submitted).toHaveLength(0);
 });
 
 test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {
@@ -3477,6 +3540,10 @@ test.describe("the dApp connector", () => {
     await expect(connect.getByTestId("dapp-private-no-governance")).toContainText("a private session has no DRep");
     await connect.getByRole("button", { name: "Your public account" }).click();
     await expect(connect.getByTestId("dapp-governance-privacy")).toContainText("lets the site use your public account's DRep key");
+    // Off by default, as the most private choice is: the user switches it on.
+    const governance = connect.getByRole("switch", { name: "Give it governance too (CIP-95)" });
+    await expect(governance).toHaveAttribute("aria-checked", "false");
+    await governance.click();
     await snap(connect, "dapp-connect-governance");
     await connect.getByRole("button", { name: "Connect", exact: true }).click();
     const given = await enabling;

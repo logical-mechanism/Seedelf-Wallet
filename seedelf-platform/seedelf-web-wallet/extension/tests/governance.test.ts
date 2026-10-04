@@ -152,6 +152,9 @@ describe("governance actions", () => {
     const { list } = await t.staking.governance("mainnet");
     const treasury = list.actions.find((a) => a.type === "TreasuryWithdrawals")!;
     expect(treasury.title).toMatch(/OpenZeppelin/);
+    // The last epoch it takes votes in: the one before Koios's `expiration`, which is the epoch it's expired in.
+    const row = governanceFixture.proposal_list.mainnet.find((p) => p.proposal_id === treasury.id)!;
+    expect(treasury.expiresEpoch).toBe(row.expiration - 1);
     expect(treasury.abstract!.length).toBeLessThanOrEqual(2_001);
     expect(treasury.anchor).toMatchObject({ url: expect.stringMatching(/^ipfs:\/\//) });
     expect(list.actions.some((a) => a.anchorValid === false)).toBe(true);

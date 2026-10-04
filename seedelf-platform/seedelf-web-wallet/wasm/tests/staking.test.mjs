@@ -113,6 +113,9 @@ test("the account's own DRep: who it is, and its transactions", () => {
   const register = build({ kind: "drep-register", delegate: true });
   assert.equal(register.drep, me);
   assert.equal(register.deposit, "500000000");
+  // The DRep's own deposit, apart from any stake key's: here the stake key is registered already.
+  assert.equal(register.drepDeposit, "500000000");
+  assert.equal(JSON.parse(buildStaking(account, JSON.stringify({ network: "preprod", params, utxos, action: { kind: "delegate", pool: LOGIC }, state: { registered: false, deposit: "0", rewards: "0", drep: null } }))).drepDeposit, undefined);
   const registered = { registered: true, deposit: "500000000" };
   const vote = build(
     { kind: "drep-vote", votes: [{ txHash: "13".repeat(32), index: 0, vote: "abstain" }] },

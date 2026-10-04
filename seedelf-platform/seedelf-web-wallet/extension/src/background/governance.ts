@@ -135,7 +135,10 @@ function actionOf(row: KoiosProposal): GovAction {
     ...(title ? { title } : {}),
     ...(abstract ? { abstract } : {}),
     proposedEpoch: row.proposed_epoch,
-    expiresEpoch: row.expiration,
+    // Koios's `expiration` is the epoch an action is expired in (its `expired_epoch`, checked on
+    // mainnet 2026-10-04): the ledger takes votes through the one before, its proposal's epoch
+    // plus `gov_action_lifetime`.
+    expiresEpoch: row.expiration - 1,
     deposit: row.deposit ?? "0",
     anchor: row.meta_url && row.meta_hash ? { url: row.meta_url, hash: row.meta_hash } : null,
     anchorValid: row.meta_is_valid ?? null,

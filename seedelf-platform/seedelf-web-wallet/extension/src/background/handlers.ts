@@ -298,7 +298,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "dapp-close":
       return ctx.dapp.closeWindow();
     case "dapp-answer":
-      return ctx.dapp.answer(message.id, message.approve, message.password, message.fund);
+      return ctx.dapp.answer(message.id, message.approve, message.password, message.fund, message.governance);
     case "dapp-private-build":
       return ctx.dapp.privateBuild(message.id, message.lovelace, message.tokens);
     case "dapp-disconnect-session":

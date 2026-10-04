@@ -13,6 +13,7 @@ import { type I18nKey, t, useT } from "../../i18n";
 
 import type {
   GovAction,
+  GovernanceView,
   GovVote,
   OwnDrep,
   PendingTx,
@@ -79,6 +80,9 @@ export function Staking({
   const [error, setError] = useState<string>();
   const [drep, setDrep] = useState<OwnDrep>();
   const [drepError, setDrepError] = useState<string>();
+  // Governance actions as last read, and the one open: kept here, so a vote's review doesn't lose them.
+  const [govView, setGovView] = useState<GovernanceView>();
+  const [govOpen, setGovOpen] = useState<GovAction>();
 
   // The pool's details, fresh each time the page opens.
   const poolId = staking.pool?.id;
@@ -183,6 +187,10 @@ export function Staking({
         error={error}
         onBack={back("overview")}
         onBecome={back("drep-register")}
+        view={govView}
+        onView={setGovView}
+        open={govOpen}
+        onOpen={setGovOpen}
         onVote={(action, vote, before) =>
           void build(
             { kind: "drep-vote", votes: [{ txHash: action.txHash, index: action.index, vote }] },
@@ -204,6 +212,9 @@ export function Staking({
         onVote={(drep, drepName, shared) =>
           void build({ kind: "vote", drep }, { drepName, shared: shared?.shared, drepListed: shared?.listed })
         }
+        own={drep}
+        ownError={drepError}
+        onBecome={back("drep-register")}
       />
     );
   }
@@ -212,7 +223,7 @@ export function Staking({
   const rewards = BigInt(staking.rewards);
   const withdrawTitle = blocked ?? (locked ? t("staking.delegateFirst") : rewards === 0n ? t("staking.noRewards") : undefined);
   return (
-    <Screen title={t("staking.title")} titleId="staking-title" onBack={onBack} backDisabled={busy} error={error}>
+    <Screen title={t("staking.pageTitle")} titleId="staking-title" onBack={onBack} backDisabled={busy} error={error}>
       {staking.pool ? (
         <section className="section" aria-labelledby="pool-title">
           <h2 id="pool-title">{t("staking.yourPool")}</h2>
@@ -284,6 +295,7 @@ export function Staking({
         onActions={back("governance")}
         onProfile={back("drep-profile")}
         onRetire={() => void build({ kind: "drep-retire" }, { ownVoteMoves: !!drep && staking.drep === drep.id })}
+        onDelegateOwn={() => drep && void build({ kind: "vote", drep: drep.id }, { drepName: t("drep.yourOwn") })}
       />
 
       {staking.registered && (
@@ -412,6 +424,9 @@ export function StakingReview({
   const { action } = summary;
   const nonzero = (l: string) => BigInt(l) > 0n;
   const drepAction = action.kind.startsWith("drep-");
+  // A DRep's deposit comes back when it retires, the stake key's when staking stops: shown apart.
+  const drepDeposit = BigInt(summary.drepDeposit ?? "0");
+  const stakeDeposit = BigInt(summary.deposit) - drepDeposit;
   return (
     <Screen
       title={t(TITLES[action.kind])}
@@ -454,7 +469,13 @@ export function StakingReview({
         {nonzero(summary.withdrawal) && (
           <Row label={t("activity.row.rewardsWithdrawn")} value={`${formatAda(summary.withdrawal)} ₳`} strong={action.kind === "withdraw"} />
         )}
-        {nonzero(summary.deposit) && <Row label={t("activity.row.deposit")} value={`${formatAda(summary.deposit)} ₳`} />}
+        {drepDeposit > 0n && <Row label={t("staking.review.drepDeposit")} value={`${formatAda(drepDeposit.toString())} ₳`} />}
+        {stakeDeposit > 0n && (
+          <Row
+            label={t(drepDeposit > 0n ? "staking.review.stakeDeposit" : "activity.row.deposit")}
+            value={`${formatAda(stakeDeposit.toString())} ₳`}
+          />
+        )}
         {nonzero(summary.refund) && <Row label={t("activity.row.depositBack")} value={`${formatAda(summary.refund)} ₳`} />}
         <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
         <Row label={t("review.backToPublic")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
@@ -469,7 +490,7 @@ export function StakingReview({
           {t("staking.warn.sharedDrepName", { shared: sharedDrepName({ shared, listed: drepListed }) })}
         </Callout>
       )}
-      {nonzero(summary.deposit) && (
+      {stakeDeposit > 0n && (
         <p className="note">{t("staking.review.depositNote")}</p>
       )}
       {action.kind === "delegate" && (
@@ -480,7 +501,7 @@ export function StakingReview({
       {action.kind === "stop" && (
         <p className="note">{t("staking.review.stopNote")}</p>
       )}
-      {action.kind === "drep-register" && <p className="note">{t("staking.review.drepDepositNote")}</p>}
+      {drepDeposit > 0n && <p className="note">{t("staking.review.drepDepositNote")}</p>}
       {action.kind === "drep-retire" && ownVoteMoves && (
         <Callout tone="warn" testId="drep-retire-vote">
           {t("staking.warn.retireOwnVote")}

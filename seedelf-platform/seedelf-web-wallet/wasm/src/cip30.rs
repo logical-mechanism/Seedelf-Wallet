@@ -1498,9 +1498,13 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
 
     // A payment key's signature spends every UTxO under that key, one the
     // wallet couldn't find too, whatever partialSign says: the account's own
-    // that isn't on chain yet (a Send's change, a top-up) is one. A stake
-    // key's signature spends nothing.
-    let payment_signs = signers.iter().any(|s| matches!(s, Signer::Payment(_)));
+    // that isn't on chain yet (a Send's change, a top-up) is one. So does
+    // the DRep key's, for anything at its key's own enterprise address,
+    // which `signData` names it by (CIP-95). A stake key's signature spends
+    // nothing.
+    let payment_signs = signers
+        .iter()
+        .any(|s| matches!(s, Signer::Payment(_) | Signer::Drep));
     if let (Some(first), true) = (unknown.first(), payment_signs) {
         bail!(match unknown.len() {
             1 => format!(

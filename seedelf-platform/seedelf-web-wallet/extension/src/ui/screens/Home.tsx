@@ -49,7 +49,7 @@ import {
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
 import { TokenList } from "../components/TokenList";
-import { formatFiat, poolLabel, rewardsLocked, spentRewards, unlocked, whenOf, withRewards } from "../format";
+import { formatFiat, poolLabel, rewardsLocked, spentRewards, unlocked, voteLabel, whenOf, withRewards } from "../format";
 import { useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { Activity } from "./Activity";
@@ -602,9 +602,16 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
               <PieIcon size={16} />
             </span>
             <span className="menu-row__text">
-              <span>{staking.pool ? t("home.staking.with", { pool: poolLabel(staking.pool) }) : t("home.staking.not")}</span>
-              <span className="menu-row__sub">
-                {staking.pool || rewards ? t("home.staking.rewards", { amount: amounts.ada(staking.rewards) }) : t("home.staking.earn")}
+              <span>{t("staking.pageTitle")}</span>
+              <span className="menu-row__sub" data-testid="staking-row-pool">
+                {staking.pool
+                  ? t("home.staking.pool", { pool: poolLabel(staking.pool), amount: amounts.ada(staking.rewards) })
+                  : rewards
+                    ? t("home.staking.rewards", { amount: amounts.ada(staking.rewards) })
+                    : t("home.staking.notEarn")}
+              </span>
+              <span className="menu-row__sub" data-testid="staking-row-vote">
+                {t("home.votingPower", { what: voteLabel(staking.drep, staking.ownDrep ? t("drep.yourOwn") : undefined) })}
               </span>
             </span>
             <ChevronRightIcon size={16} />

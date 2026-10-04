@@ -75,7 +75,10 @@ export async function readStake(deps: StakeDeps, network: NetworkName, stake: st
   const info = await deps.koios(network).accountInfo(stake);
   if (!info) return NOT_STAKING;
   const pool = info.delegated_pool ? await poolRef(deps, network, info.delegated_pool) : null;
-  return stakeInfoOf(info, pool);
+  const read = stakeInfoOf(info, pool);
+  // Whether the vote goes to the account's own DRep: its ID comes from the key, so nobody is asked.
+  const own = read.drep ? await ownDrepId(deps).catch(() => undefined) : undefined;
+  return own !== undefined && read.drep === own ? { ...read, ownDrep: true } : read;
 }
 
 function stakeInfoOf(info: KoiosAccountInfo | undefined, pool: PoolRef | null): StakeInfo {
@@ -279,6 +282,10 @@ export class StakingService {
     if (action.kind === "drep-register" && drepRegistered) throw new Error(t("worker.governance.alreadyDrep"));
     if (isDrepAction(action) && action.kind !== "drep-register" && !drepRegistered) {
       throw new Error(t("worker.governance.notDrep"));
+    }
+    // Retiring returns exactly what was paid: without Koios's figure, nothing is guessed.
+    if (action.kind === "drep-retire" && !/^[1-9]\d*$/.test(drepRow?.deposit ?? "")) {
+      throw new Error(t("worker.governance.noDeposit"));
     }
     if (utxos.length === 0) {
       throw nothingInAccount(held, t("worker.staking.accountEmpty"));

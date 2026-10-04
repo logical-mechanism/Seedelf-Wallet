@@ -263,6 +263,11 @@ type Tie = "account" | number;
 /** A connected site, as the sealed record keeps it. */
 type Connected = DappSite & { network: NetworkName };
 
+/** What the window answers beside Approve: for a connect that asked for it, whether governance goes with it. */
+interface Answer {
+  governance?: boolean;
+}
+
 /** A CIP-30 extension, as `enable()` and `getExtensions()` name it. */
 type DappExtension = { cip: number };
 
@@ -310,7 +315,8 @@ interface Waiting {
   session: DappSession;
   /** The network it was asked on: declined once the wallet moves to another (`networkChanged`). */
   network: NetworkName;
-  approve: () => Promise<unknown>;
+  /** Runs on Approve, with what the window chose beside it: governance for a connect (CIP-95). */
+  approve: (answer: Answer) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: DappError) => void;
   /** What the site hears when the user says no. */
@@ -356,6 +362,8 @@ const PAGE_GONE = () => t("dapp.pageGone");
 const NETWORK_LEFT = () => t("dapp.networkMoved");
 /** What a site that wasn't given governance hears when it asks for CIP-95's keys. */
 const NO_GOVERNANCE = () => t("dapp.noGovernance");
+/** What a site on a private session hears: a session has no DRep, so there's nothing to ask for. */
+const NO_GOVERNANCE_SESSION = () => t("dapp.noGovernanceSession");
 
 export class DappService {
   private readonly waiting: Waiting[] = [];
@@ -491,6 +499,7 @@ export class DappService {
     approve: boolean,
     password?: string,
     fund?: { txHash: string },
+    governance?: boolean,
   ): Promise<{ error?: string }> {
     const asked = this.waiting.find((w) => w.approval.id === id);
     if (!asked) return { error: t("dapp.stoppedWaiting") };
@@ -523,13 +532,19 @@ export class DappService {
     const [w] = this.waiting.splice(i, 1);
     this.deps.changed();
     if (!approve) {
+      // A connected site the user won't give governance stays connected, and isn't asked again.
+      if (approval.kind === "connect" && approval.connected) {
+        await this.declineGovernance(w!.network, approval.origin);
+        w!.resolve(true);
+        return {};
+      }
       // A site the user won't connect doesn't ask again for a minute (independent review L35).
       if (approval.kind === "connect") this.refuseFor(approval.origin);
       w!.reject(new DappError(w!.declined));
       return {};
     }
     try {
-      w!.resolve(await w!.approve());
+      w!.resolve(await w!.approve({ governance: governance === true }));
       return {};
     } catch (e) {
       // WebAssembly that trapped under it outside the wallet's queue (reading
@@ -610,6 +625,12 @@ export class DappService {
     // A private session's funding is sent: it isn't undone, and the site connects once it arrives.
     for (const w of this.waiting.filter((x) => !funding(x))) {
       remove(this.waiting, (x) => x === w);
+      // Governance asked of a connected site, closed on: declined, and the site keeps its connection.
+      if (w.approval.kind === "connect" && w.approval.connected) {
+        await this.declineGovernance(w.network, w.session.origin).catch(() => undefined);
+        w.resolve(true);
+        continue;
+      }
       // A connect the window closed on isn't asked again for a minute either (independent review L35).
       if (w.approval.kind === "connect") this.refuseFor(w.session.origin);
       w.reject(new DappError(w.declined));
@@ -690,11 +711,12 @@ export class DappService {
     this.keepSites(all);
     return all
       .filter((s) => s.network === network)
-      .map(({ origin, connectedAt, session, cip95 }) => ({
+      .map(({ origin, connectedAt, session, cip95, cip95Declined }) => ({
         origin,
         connectedAt,
         ...(session === undefined ? {} : { session }),
         ...(cip95 === true && session === undefined ? { cip95 } : {}),
+        ...(cip95Declined === true && session === undefined && cip95 !== true ? { cip95Declined } : {}),
       }))
       .sort((a, b) => a.origin.localeCompare(b.origin));
   }
@@ -753,11 +775,17 @@ export class DappService {
   }
 
   /**
-   * Records a site as connected on `network`, to `session` if given, and
-   * given governance (`cip95`) when it asked and the user agreed: never for
-   * a session. False when it's connected already.
+   * Records a site as connected on `network`, to `session` if given; with
+   * governance (`cip95`) when it asked and the user switched it on, or its
+   * refusal kept (`cip95Declined`) when they left it off: never for a
+   * session. False when it's connected already.
    */
-  private async connect(network: NetworkName, origin: string, session?: number, cip95 = false): Promise<boolean> {
+  private async connect(
+    network: NetworkName,
+    origin: string,
+    session?: number,
+    governance?: "granted" | "declined",
+  ): Promise<boolean> {
     let added = false;
     await this.changeSites((all) => {
       if (all.some((s) => s.origin === origin && s.network === network)) return all;
@@ -766,7 +794,9 @@ export class DappService {
       // No account is recorded on a site: every public-account connection is
       // to the one dApp account, which Settings chooses (`dappAccount`).
       if (session !== undefined) return [...all, { ...site, session }];
-      return [...all, cip95 ? { ...site, cip95: true } : site];
+      if (governance === "granted") return [...all, { ...site, cip95: true }];
+      if (governance === "declined") return [...all, { ...site, cip95Declined: true }];
+      return [...all, site];
     });
     return added;
   }
@@ -776,7 +806,24 @@ export class DappService {
     await this.changeSites((all) => {
       const i = all.findIndex((s) => s.origin === origin && s.network === network && s.session === undefined);
       if (i < 0 || all[i]!.cip95) return all;
-      return all.map((s, j) => (j === i ? { ...s, cip95: true } : s));
+      return all.map((s, j) => {
+        if (j !== i) return s;
+        const { cip95Declined: _declined, ...rest } = s;
+        return { ...rest, cip95: true as const };
+      });
+    });
+  }
+
+  /**
+   * Keeps that the user declined governance for a connected site: it stays
+   * connected without it, and isn't asked again until it's disconnected and
+   * connects anew.
+   */
+  private async declineGovernance(network: NetworkName, origin: string): Promise<void> {
+    await this.changeSites((all) => {
+      const i = all.findIndex((s) => s.origin === origin && s.network === network && s.session === undefined);
+      if (i < 0 || all[i]!.cip95 || all[i]!.cip95Declined) return all;
+      return all.map((s, j) => (j === i ? { ...s, cip95Declined: true as const } : s));
     });
   }
 
@@ -822,8 +869,8 @@ export class DappService {
     const password = await this.needsPassword();
     const wants = wantsGovernance(params);
     const site = await this.site(network, origin);
-    // A private session has no DRep: governance isn't asked about for one.
-    if (site && (!wants || governed(site) || site.session !== undefined)) return true;
+    // A private session has no DRep: governance isn't asked about for one. Nor is it asked again once declined.
+    if (site && (!wants || governed(site) || site.session !== undefined || site.cip95Declined)) return true;
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
@@ -834,14 +881,17 @@ export class DappService {
       if (settled) throw settled;
       // Answered for another of its pages, which may not have asked for governance: this one asks for it then.
       const now = await this.site(network, origin);
-      if (now && wants && !governed(now) && now.session === undefined) return this.run(session, "enable", [params]) as Promise<true>;
+      if (now && wants && !governed(now) && now.session === undefined && !now.cip95Declined) {
+        return this.run(session, "enable", [params]) as Promise<true>;
+      }
       return true;
     }
     if (this.refusing(origin)) throw refused(DECLINED());
     const ask: DappAsk = { kind: "connect", password, ...(wants ? { governance: true } : {}), ...(site ? { connected: true } : {}) };
-    await this.ask(session, network, ask, APIError.Refused, async () => {
+    await this.ask(session, network, ask, APIError.Refused, async ({ governance }) => {
       if (site) await this.grantGovernance(network, origin);
-      else await this.connect(network, origin, undefined, wants);
+      // Asked for, governance goes with the connection only when the window's switch says so (off by default).
+      else await this.connect(network, origin, undefined, wants ? (governance ? "granted" : "declined") : undefined);
     });
     return true;
   }
@@ -1049,7 +1099,7 @@ export class DappService {
     network: NetworkName,
     request: DappAsk,
     declined: number,
-    approve: () => Promise<T>,
+    approve: (answer: Answer) => Promise<T>,
     /** A signature's transaction, hex, for the transaction view. */
     txCbor?: string,
   ): Promise<T> {
@@ -1571,7 +1621,8 @@ export class DappService {
 
   /** CIP-95's `getPubDRepKey`: the dApp account's DRep key, its public key in hex, for a site given governance. */
   private async drepKey(holder: Holder, governance: boolean): Promise<string> {
-    if (!governance || holder) throw refused(NO_GOVERNANCE());
+    if (holder) throw refused(NO_GOVERNANCE_SESSION());
+    if (!governance) throw refused(NO_GOVERNANCE());
     return this.withDappKeys(holder, ({ cardano }) => (JSON.parse(cardano.drepOf()) as { publicKey: string }).publicKey);
   }
 
@@ -1581,7 +1632,8 @@ export class DappService {
    * list its standing puts it in (one `account_info`, counted as a lookup).
    */
   private async stakeKeys(origin: string, network: NetworkName, holder: Holder, governance: boolean, registered: boolean): Promise<string[]> {
-    if (!governance || holder) throw refused(NO_GOVERNANCE());
+    if (holder) throw refused(NO_GOVERNANCE_SESSION());
+    if (!governance) throw refused(NO_GOVERNANCE());
     if (!this.allow(origin, "lookup")) throw refused(t("dapp.tooManyLookups"));
     const { key, stake } = await this.withDappKeys(holder, ({ cardano }) => ({
       key: cardano.stakePublicKey(),

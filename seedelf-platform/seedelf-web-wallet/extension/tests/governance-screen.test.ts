@@ -9,6 +9,7 @@ import { i18n } from "../src/i18n/core";
 import type { OwnDrep, StakeInfo, StakingSummary } from "../src/shared/rpc";
 import { anchorUrlProblem, BecomeDrep, DrepCard } from "../src/ui/screens/Governance";
 import { StakingReview } from "../src/ui/screens/Staking";
+import { pickOf, Voting } from "../src/ui/screens/Voting";
 import { epochEnds } from "../src/ui/format";
 import { NetworkContext } from "../src/ui/network";
 
@@ -56,6 +57,7 @@ const card = (drep: OwnDrep | undefined, stake = staking) =>
         onActions: noop,
         onProfile: noop,
         onRetire: noop,
+        onDelegateOwn: noop,
       }),
     ),
   );
@@ -84,6 +86,7 @@ describe("the DRep card", () => {
     expect(shown).toContain("Governance actions");
     expect(shown).toContain("Retire as a DRep");
     expect(shown).not.toContain("not to its DRep");
+    expect(shown).not.toContain("Delegate your voting power to it");
   });
 
   it("says when the account's own vote isn't behind its DRep, and when the DRep is inactive or its profile invalid", () => {
@@ -95,7 +98,10 @@ describe("the DRep card", () => {
       },
       staking,
     );
-    expect(shown).toContain("This account's own voting power goes to Always abstain, not to its DRep.");
+    expect(shown).toContain(
+      "This account's voting power goes to Always abstain, not to its DRep, so your own stake isn't behind your votes.",
+    );
+    expect(shown).toContain("Delegate your voting power to it");
     expect(shown).toContain("Your DRep is inactive");
     expect(shown).toContain("doesn't match the hash on chain");
   });
@@ -152,12 +158,23 @@ describe("a DRep transaction's review", () => {
     text(markup(createElement(StakingReview, { summary: s, busy: false, onBack: noop, onSend: noop, ...chosen })));
 
   it("registering: the deposit, where the account's vote goes, and that it's public", () => {
-    const shown = review(summary({ kind: "drep-register", delegate: true }, { deposit: "500000000" }));
+    const shown = review(summary({ kind: "drep-register", delegate: true }, { deposit: "500000000", drepDeposit: "500000000" }));
     expect(shown).toContain("Review becoming a DRep");
     expect(shown).toContain("Delegated to your DRep");
-    expect(shown).toContain("500 ₳");
+    expect(shown).toContain("DRep deposit 500 ₳");
     expect(shown).toContain("The deposit comes back when you retire your DRep.");
+    // Nothing of the stake key's deposit, which comes back another way.
+    expect(shown).not.toContain("Stopping staking gives it back");
+    expect(shown).not.toContain("Stake key deposit");
     expect(shown).toContain("so anyone can tie the DRep, and every vote it casts, to that account.");
+  });
+
+  it("registering with the stake key too: each deposit apart, each with how it comes back", () => {
+    const shown = review(summary({ kind: "drep-register", delegate: true }, { deposit: "502000000", drepDeposit: "500000000" }));
+    expect(shown).toContain("DRep deposit 500 ₳");
+    expect(shown).toContain("Stake key deposit 2 ₳");
+    expect(shown).toContain("The deposit comes back when you retire your DRep.");
+    expect(shown).toContain("Stopping staking gives it back.");
   });
 
   it("voting: the action, the vote, and that every vote is public and permanent", () => {
@@ -187,5 +204,40 @@ describe("a DRep transaction's review", () => {
     expect(shown).toContain("Review retiring");
     expect(shown).toContain("Deposit back");
     expect(shown).toContain("retiring moves it to Always abstain, and your rewards stay withdrawable.");
+  });
+});
+
+describe("Voting power, for an account that may be its own DRep", () => {
+  const voting = (current: string | null, own?: OwnDrep) =>
+    markup(
+      createElement(Voting, {
+        current,
+        registered: true,
+        busy: false,
+        onBack: noop,
+        onVote: noop,
+        onBecome: noop,
+        ...(own ? { own } : {}),
+      }),
+    );
+
+  it("offers Your own DRep beside the pinned two and A DRep, so the account never has to search for itself", () => {
+    const html = voting("drep1ytah77nvma8someoneelse", registered);
+    const shown = text(html);
+    expect(shown).toContain("Your own DRep");
+    expect(shown).toContain("Your stake behind your own votes, as this account's DRep.");
+    // It sits between the pinned two and A DRep.
+    expect(shown.indexOf("Always no confidence")).toBeLessThan(shown.indexOf("Your own DRep"));
+    expect(shown.indexOf("Your own DRep")).toBeLessThan(shown.indexOf("A DRep Someone who votes for you"));
+  });
+
+  it("is the choice already made when the vote is on it, and says so", () => {
+    expect(pickOf(ID, ID)).toBe("own");
+    expect(pickOf(ID)).toBe("drep");
+    expect(pickOf("drep_always_abstain", ID)).toBe("abstain");
+    expect(pickOf(null, ID)).toBe("abstain");
+    const html = voting(ID, registered);
+    expect(text(html)).toContain("Now: Your own DRep");
+    expect(html).toMatch(/aria-checked="true"[^>]*>(?:(?!<\/button>).)*Your own DRep/s);
   });
 });

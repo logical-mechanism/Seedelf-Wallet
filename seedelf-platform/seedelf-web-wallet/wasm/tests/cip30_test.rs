@@ -1448,3 +1448,20 @@ fn data_is_signed_as_the_drep_by_its_id_or_its_keys_address_only_with_governance
     };
     assert!(cip30::data_signer(&account(), &theirs).unwrap().is_none());
 }
+
+#[test]
+fn the_drep_key_never_signs_over_an_input_the_wallet_cant_find() {
+    // Its witness spends what sits at its key's enterprise address, so a
+    // transaction naming it as a required signer, with an input nobody can
+    // find, is refused as a payment key's is.
+    let mut b = body(vec![input(TX_B, 7)], vec![out(&theirs(), 2_000_000, None)]);
+    b.required_signers = NonEmptySet::try_from(vec![drep_hash()]).ok();
+    let granted = TxRequest {
+        governance: true,
+        ..request(tx_hex(b), vec![], true)
+    };
+    let err = cip30::inspect_tx(&account(), &granted)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("can't find yet"), "{err}");
+}

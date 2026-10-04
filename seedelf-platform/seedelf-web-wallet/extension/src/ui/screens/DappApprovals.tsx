@@ -100,7 +100,10 @@ export function DappApprovals() {
   }, [currentId]);
 
   /** Answers the request shown: `extra` carries a private session's funding and the password it needs. */
-  async function answer(approve: boolean, extra: { password?: string; fund?: { txHash: string } } = {}): Promise<boolean> {
+  async function answer(
+    approve: boolean,
+    extra: { password?: string; fund?: { txHash: string }; governance?: boolean } = {},
+  ): Promise<boolean> {
     if (!current || busy || held || (approve && needsPassword && !password)) return false;
     answered.current = current.id;
     setBusy(true);
@@ -301,11 +304,13 @@ export function ConnectRequest({
   change?: Change;
   error?: string;
   onError: (error?: string) => void;
-  onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string } }) => Promise<boolean>;
+  onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string }; governance?: boolean }) => Promise<boolean>;
 }) {
   const tr = useT();
   const network = useNetwork();
   const [connection, setConnection] = useState<Connection>();
+  // Asked for, governance goes with the public account only when switched on: off, as the most private choice is.
+  const [governance, setGovernance] = useState(false);
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -494,7 +499,7 @@ export function ConnectRequest({
             <button
               type="button"
               className="primary"
-              onClick={() => void onAnswer(true)}
+              onClick={() => void onAnswer(true, approval.governance ? { governance } : {})}
               disabled={busy || held || connection !== "public"}
             >
               {busy ? "…" : tr("dappUi.connect")}
@@ -538,9 +543,29 @@ export function ConnectRequest({
               {PUBLIC_PRIVACY()}
             </Callout>
             {approval.governance && (
-              <Callout tone="privacy" testId="dapp-governance-privacy">
-                {tr("dappUi.privacy.governance")}
-              </Callout>
+              <>
+                <div className="setting-row" data-testid="dapp-governance-switch">
+                  <span className="stack-tight">
+                    <span id="dapp-governance-label">{tr("dappUi.governance.switch")}</span>
+                    <span className="note" id="dapp-governance-note">
+                      {tr(governance ? "dappUi.governance.on" : "dappUi.governance.off")}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    className="switch"
+                    aria-checked={governance}
+                    aria-labelledby="dapp-governance-label"
+                    aria-describedby="dapp-governance-note"
+                    onClick={() => setGovernance(!governance)}
+                    disabled={busy || held}
+                  />
+                </div>
+                <Callout tone="privacy" testId="dapp-governance-privacy">
+                  {tr("dappUi.privacy.governance")}
+                </Callout>
+              </>
             )}
           </>
         ) : (

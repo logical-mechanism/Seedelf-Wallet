@@ -1516,8 +1516,12 @@ pub mod api {
         pub pool: Option<String>,
         pub drep: Option<String>,
         pub fee: String,
-        /// Locked by registering the key.
+        /// Locked by registering the key, and a DRep: all of it.
         pub deposit: String,
+        /// Of `deposit`, what registering the account's DRep locks up, back
+        /// when the DRep retires: only for a DRep action.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub drep_deposit: Option<String>,
         /// Returned by unregistering it.
         pub refund: String,
         /// Rewards withdrawn.
@@ -1606,6 +1610,7 @@ pub mod api {
             drep,
             fee: built.fee.to_string(),
             deposit: staking.deposit().to_string(),
+            drep_deposit: None,
             refund: staking.refund().to_string(),
             withdrawal: staking.withdrawn().to_string(),
             change_lovelace: built.change_lovelace.to_string(),
@@ -1689,6 +1694,7 @@ pub mod api {
             drep: Some(me.id()),
             fee: built.fee.to_string(),
             deposit: staking.deposit().to_string(),
+            drep_deposit: Some(staking.drep_deposit().to_string()),
             refund: staking.refund().to_string(),
             withdrawal: staking.withdrawn().to_string(),
             change_lovelace: built.change_lovelace.to_string(),

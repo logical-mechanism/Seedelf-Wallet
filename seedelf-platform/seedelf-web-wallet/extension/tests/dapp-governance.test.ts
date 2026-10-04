@@ -34,12 +34,16 @@ async function on() {
   return t;
 }
 
-/** `s` connected, asking for governance when `params` says so, and the user saying yes or no. */
-async function enable(t: Awaited<ReturnType<typeof on>>, s: DappSession, params?: unknown, yes = true) {
+/**
+ * `s` connected, asking for governance when `params` says so, and the user
+ * saying yes or no, with the window's governance switch on (`governance`) or
+ * left off, as it is by default.
+ */
+async function enable(t: Awaited<ReturnType<typeof on>>, s: DappSession, params?: unknown, yes = true, governance = true) {
   const enabling = t.dapp.call(s, "enable", params === undefined ? [] : [params]);
   await until(() => t.dapp.approvals().length === 1);
   const approval = t.dapp.approvals()[0]!;
-  await t.dapp.answer(approval.id, yes);
+  await t.dapp.answer(approval.id, yes, undefined, undefined, governance);
   return { approval, enabled: enabling };
 }
 
@@ -86,12 +90,33 @@ describe("governance (CIP-95) for a site", () => {
     await expect(t.dapp.call(s, "getPubDRepKey", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
     await expect(t.dapp.call(s, "getRegisteredPubStakeKeys", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
 
-    // Declined: still connected, still without it.
+    // Declined: still connected, its enable() answered, still without it, and not asked again.
     const declined = await enable(t, s, GOVERNANCE, false);
     expect(declined.approval).toMatchObject({ kind: "connect", governance: true, connected: true });
-    await expect(declined.enabled).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+    expect(await declined.enabled).toBe(true);
     expect(await t.dapp.call(s, "isEnabled", [])).toBe(true);
     expect(await t.dapp.call(s, "getExtensions", [])).toEqual([]);
+    expect(await t.dapp.call(s, "enable", [GOVERNANCE])).toBe(true);
+    expect(t.dapp.approvals()).toHaveLength(0);
+    expect(await t.dapp.sites()).toEqual([expect.objectContaining({ origin: s.origin, cip95Declined: true })]);
+  });
+
+  it("connects without it when the window's switch is left off, as it is by default, and doesn't ask again", async () => {
+    const t = await on();
+    const s = site();
+    const { approval, enabled } = await enable(t, s, GOVERNANCE, true, false);
+    expect(approval).toMatchObject({ kind: "connect", governance: true });
+    expect(await enabled).toBe(true);
+    expect(await t.dapp.call(s, "getExtensions", [])).toEqual([]);
+    await expect(t.dapp.call(s, "getPubDRepKey", [])).rejects.toMatchObject({ failure: { code: APIError.Refused } });
+    expect(await t.dapp.call(s, "enable", [GOVERNANCE])).toBe(true);
+    expect(t.dapp.approvals()).toHaveLength(0);
+    // Disconnected and connected anew, it's asked again.
+    await t.dapp.forget(s.origin);
+    const again = await enable(t, s, GOVERNANCE);
+    expect(again.approval).toMatchObject({ kind: "connect", governance: true });
+    expect(again.approval).not.toHaveProperty("connected");
+    expect(await t.dapp.call(s, "getExtensions", [])).toEqual([{ cip: 95 }]);
   });
 
   it("is given to a connected site that asks for it later, and not asked about again once it has it", async () => {
