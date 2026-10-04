@@ -19,7 +19,7 @@
 0. ✅ **[A clean dependabot report](#step-0--a-clean-dependabot-report)** — done 2026-10-02, all 25 cleared in `Cargo.lock` and the happy-path `requirements.txt`, no source change.
 1. **[Owed](#owed)** — promises the repo has already made.
 2. ✅ **[Feature parity: what's left](#feature-parity-whats-left)** — ~~several accounts~~ (chunk 18), ~~language~~ (chunk 19), ~~NFT images~~ (chunk 20, 2026-10-04). The wallet is feature-complete for Cardano.
-3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
+3. ✅ **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at. Built 2026-10-04, chunk 21: *be your own DRep and vote*, in the wallet's own screens and through CIP-95 for sites such as GovTool. The live preprod run and GovTool by hand are the owner's.
 4. **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, once 2 and 3 have landed.
 5. **[The documentation review](#the-documentation-review)** — closes the sequence, because everything above rewrites parts of it.
 
@@ -38,7 +38,7 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | Receive, QR, your ADA Handles | All three, plus the handle-in-Seedelf warning | matched |
 | Activity, detail per transaction | Activity on both sides, with CSV (after Eternl's) | matched |
 | Staking: one pool, pool browser, rewards, stop | All four; Stop staking returns the 2 ₳ deposit | matched |
-| Governance: DRep delegation, DRep browser | Both, from a DRep list that ships with the wallet | matched — voting on proposals and DRep registration are [reopened for the public side](#public-side-completeness) |
+| Governance: DRep delegation, DRep browser | Both, from a DRep list that ships with the wallet; and **be your own DRep**: register, vote on live actions, a profile, retire (chunk 21) | matched, and ahead — Lace leaves registering and voting to GovTool over CIP-95, which the connector here offers too |
 | dApp connector (CIP-30), authorized dApps, sign tx, sign data | All, **off until turned on**, nothing injected before that | matched — and it has **private CIP-30** too |
 | dApp explorer | The dApps page; a small catalogue | matched in kind; see [dApp additions](#dapp-additions) |
 | Swap center | Minswap's aggregator | matched — and swaps can run **privately**, through a one-time account |
@@ -190,12 +190,12 @@ Treat that as a correctness-of-privacy item, not a nicety: without it, several a
 - **Vote delegation really is required for staking rewards** — Conway pays none until voting power is delegated, and the wallet already does this and says so (chunk 13). **So nothing about rewards waits on anything here.** That box is ticked.
 - **But registering as a DRep is the gate on voting, not a sibling of it.** A plain delegator doesn't cast a vote on a governance action; votes come from DReps, SPOs and the constitutional committee. To vote with your own stake you register as a DRep — for yourself, if nobody else delegates to you. So voting-before-registering isn't an order, it's a dependency the wrong way round.
 
-**Which makes them one chunk, not two:** *be your own DRep and vote.* Registration on its own is a half-feature (a credential nobody uses), and voting on its own can't be built. ⬜
+**Which makes them one chunk, not two:** *be your own DRep and vote.* Registration on its own is a half-feature (a credential nobody uses), and voting on its own can't be built. ✅ **Chunk 21** (2026-10-04), branch `web-wallet/governance`, plan [plans/chunk-21-governance.md](plans/chunk-21-governance.md).
 
 | # | Item | |
 |---|---|---|
 | 1 | **[P1, several accounts](#p1--several-accounts)** | ✅ done, chunk 18 |
-| 2 | **Be your own DRep, and vote on governance actions.** Register the account's DRep credential, then vote Yes, No or Abstain on a live action. Needs a list of open governance actions, which is a new read and so a new Koios cost to state. | ⬜ |
+| 2 | **Be your own DRep, and vote on governance actions.** Register the account's DRep credential, then vote Yes, No or Abstain on a live action. Needs a list of open governance actions, which is a new read and so a new Koios cost to state. **The owner's calls (2026-10-04):** the wallet's own screens first, then CIP-95 in the connector so GovTool works too; no profile unless one is asked for; the account delegates its vote to itself on registering, by default. | ✅ [chunk 21](plans/chunk-21-governance.md) |
 | — | **Staking per account** needed no slot: it fell out of [P1](#p1--several-accounts) for free, as expected — each account has its own stake key (`2/0` under its own index), so several accounts means stake spread across several pools, with no change to `staking.ts`. **That is exactly Lace's model after its multi→single migration** — the outcome people wanted from multi-delegation, without multi-delegation, and without touching one-pool-per-account. | ✅ done via P1 |
 
 **What doesn't change:** a vote or a registration is a public act by a public key. None of it reaches the private side, and none of it weakens the rule that money made private has no stake key behind it. A Seedelf address has no staking part, so the private balance has no voice to cast and never will.
@@ -323,7 +323,7 @@ The same argument rules out air-gapped QR signing for the private side, for the 
 
 What's left:
 
-1. **Confirm the DRep correction.** The owner's order was voting then DRep; registering is the *gate* on voting, so [the two are written as one chunk](#public-side-completeness) — *be your own DRep and vote*. Worth a yes, since it changes what gets built rather than only when.
+1. **Confirm the DRep correction.** ~~The owner's order was voting then DRep; registering is the *gate* on voting, so [the two are written as one chunk](#public-side-completeness) — *be your own DRep and vote*.~~ **Settled on 2026-10-04: yes**, by the owner picking it up as one chunk ([chunk 21](plans/chunk-21-governance.md)).
 2. **Who reads the Spanish and Japanese privacy strings.** **Settled on 2026-10-03, after [P2](#p2--language) shipped: accepted as recorded** (the owner). The 195 critical keys are back-translated and `docs/i18n/verified-critical-{es,ja}.json` says in its own reviewer line that no native speaker has read them. The review pass that was to come next ran on 2026-10-03 and went over every translation (Claude again, no native speaker), and a fluent reader can be found later — there are no users and no release is pending. The fallback this entry named (English-only for those strings) stays available, since the keys are an identified set.
 3. **`rustls` instead of `native-tls`?** Raised in [step 0](#step-0--a-clean-dependabot-report): it would stop the eight `openssl` alerts recurring rather than patching them each release, and drop the CLI's OpenSSL build dependency. A feature-flag change, not a pre-step.
 4. **Should each file in [plans/](plans/) say whether it's a live spec or a finished record?** Raised under [the documentation review](#the-documentation-review). Seventeen plans sit there now, and a stale one read as current is the failure mode that costs real work.
