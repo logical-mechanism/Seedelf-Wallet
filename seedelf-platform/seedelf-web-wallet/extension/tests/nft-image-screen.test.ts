@@ -1,0 +1,116 @@
+// An NFT's details, as the page renders them (chunk 20): Show image is offered
+// for an NFT and nothing else, with what the click reveals said beside it,
+// more strongly for one in the private balance; what came back is shown there
+// and as the NFT's avatar in the lists, until the wallet locks.
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it } from "vitest";
+
+import type { TokenAmount } from "../src/shared/rpc";
+import { TokenDetails, TokenRow } from "../src/ui/components/TokenList";
+import { NetworkContext } from "../src/ui/network";
+import { forgetImages, rememberImage } from "../src/ui/nft-images";
+import { viewToken } from "../src/ui/tokens";
+
+const markup = (element: ReactElement) =>
+  renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, element));
+/** What a person reads. */
+const text = (html: string) =>
+  html
+    .replace(/<[^>]+>/g, " ")
+    .replaceAll("&#x27;", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const noop = () => undefined;
+const nft: TokenAmount = {
+  policyId: "1606863d520f318bc4b79aeab706706c7d0e08a59cd46170fd5a12fa",
+  assetName: "48414e4f493135313032303234",
+  quantity: "1",
+  decimals: 0,
+  fingerprint: "asset1hanoi",
+};
+const details = (token: TokenAmount, of: "seedelf" | "cardano") =>
+  markup(createElement(TokenDetails, { view: viewToken("preprod", token), of, onClose: noop }));
+const IMAGE = "data:image/png;base64,iVBORw0KGgo=";
+
+afterEach(() => forgetImages());
+
+describe("an NFT's details before anything is asked", () => {
+  it("offers Show image on the public side, saying who sees what, and that nothing is asked until then", () => {
+    const html = details(nft, "cardano");
+    expect(html).toContain(">Show image</button>");
+    expect(html).not.toContain("<img");
+    const shown = text(html);
+    expect(shown).toContain(
+      "Showing its image asks Koios for this NFT's metadata, then fetches the image from ipfs.blockfrost.dev, an IPFS gateway Blockfrost runs.",
+    );
+    expect(shown).toContain("Both see your IP address asking about this NFT. Nothing is asked until you choose.");
+    expect(shown).toContain("The first time, Chrome asks you to let the wallet reach ipfs.blockfrost.dev.");
+    expect(shown).not.toContain("private balance");
+  });
+
+  it("says on the private side that the click can tie this IP address to the UTxO holding it", () => {
+    const shown = text(details(nft, "seedelf"));
+    expect(shown).toContain("This NFT is in your private balance.");
+    expect(shown).toContain(
+      "the chain shows which UTxO holds it, so either of them could tie your IP address to that part of your private balance.",
+    );
+    expect(shown).toContain("Nothing is asked until you choose.");
+  });
+
+  it("offers nothing for a fungible token, or for a Seedelf, which has no image and mustn't be asked about", () => {
+    const fungible: TokenAmount = { ...nft, assetName: "464f4f", quantity: "500", decimals: 0 };
+    expect(details(fungible, "cardano")).not.toContain("Show image");
+    const seedelf: TokenAmount = { ...nft, assetName: `5eed0e1f${"00".repeat(28)}` };
+    expect(details(seedelf, "cardano")).not.toContain("Show image");
+  });
+});
+
+describe("an NFT's details once its image was asked for", () => {
+  it("shows the image, where it came from, and that nothing keeps it past the lock; and it's the NFT's avatar in the lists", () => {
+    rememberImage("preprod", nft, { image: IMAGE, from: "ipfs" });
+    const html = details(nft, "cardano");
+    expect(html).toContain(`<img class="nft-image" src="${IMAGE}"`);
+    expect(html).not.toContain("Show image");
+    expect(text(html)).toContain(
+      "From IPFS, through ipfs.blockfrost.dev. It stays in this window until the wallet locks, and isn't saved on this device.",
+    );
+    const row = markup(createElement(TokenRow, { view: viewToken("preprod", nft), onOpen: noop }));
+    expect(row).toContain(`class="avatar avatar--nft avatar--image" src="${IMAGE}"`);
+  });
+
+  it("is per network: the same token on mainnet hasn't been asked for", () => {
+    rememberImage("mainnet", nft, { image: IMAGE, from: "ipfs" });
+    expect(details(nft, "cardano")).toContain(">Show image</button>");
+  });
+
+  it("is forgotten when the wallet locks", () => {
+    rememberImage("preprod", nft, { image: IMAGE, from: "chain" });
+    expect(text(details(nft, "cardano"))).toContain("Written on chain in its metadata, so only Koios was asked.");
+    forgetImages();
+    expect(details(nft, "cardano")).toContain(">Show image</button>");
+  });
+
+  it("gives an address off IPFS to copy, never to open, and says what opening it tells that server", () => {
+    rememberImage("preprod", nft, { elsewhere: "https://tracker.example/1.png" });
+    const html = details(nft, "cardano");
+    expect(html).not.toContain("<a ");
+    expect(html).toContain('data-value="https://tracker.example/1.png"');
+    expect(text(html)).toContain("Its image isn't on IPFS, so the wallet doesn't fetch it.");
+    expect(text(html)).toContain("opening it yourself tells that server your IP address.");
+  });
+
+  it("says why there's no image", () => {
+    const cases = [
+      [{ none: "metadata" }, "Koios has no metadata for this NFT, so there's no image to show."],
+      [{ none: "image" }, "This NFT's metadata names no image the wallet can show."],
+      [{ tooLarge: 10 * 1024 * 1024 }, "Its image is over 10 MB, more than the wallet shows."],
+      [{ notImage: true }, "What came for it isn't an image this browser can show."],
+    ] as const;
+    for (const [found, words] of cases) {
+      rememberImage("preprod", nft, found);
+      expect(text(details(nft, "cardano"))).toContain(words);
+    }
+  });
+});

@@ -25,6 +25,7 @@ import {
 } from "../src/background/koios";
 import { PendingService } from "../src/background/pending";
 import { NetworkChoice, PreferencesService } from "../src/background/preferences";
+import { NftImageService } from "../src/background/nft-image";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
 import { LovejoinService } from "../src/background/lovejoin";
@@ -505,6 +506,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     preferences,
     coingecko,
     prices: new PriceService({ session: t.session, local: t.local, preferences, now: () => t.clock.now, fetch: coingecko.fetch }),
+    nftImages: new NftImageService({ koios: koiosFor, allowed: async () => true }),
     contacts: new ContactsService({ wasm: deps.wasm, store, random: () => `c${++ids}` }),
     accounts,
     dappWindow,

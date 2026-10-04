@@ -24,6 +24,7 @@ import { MoveInService } from "./move-in";
 import { PendingService } from "./pending";
 import { AccountsService, activeAccount } from "./accounts";
 import { LOCAL_NETWORK, NetworkChoice, PreferencesService } from "./preferences";
+import { NftImageService } from "./nft-image";
 import { PriceService } from "./prices";
 import { runNetworks, type Runner } from "./runs";
 import { PrivateStore } from "./private-store";
@@ -173,6 +174,7 @@ function getContext(): Promise<Worker> {
     const store = new PrivateStore({ wallet, local });
     const accounts = new AccountsService({ wasm, wallet, store, local, session, koios, now: Date.now });
     const prices = new PriceService({ session, local, preferences, now: Date.now });
+    const nftImages = new NftImageService({ koios });
     const activity = new ActivityService({ wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity, activeAccount: () => activeAccount(local) });
@@ -238,6 +240,7 @@ function getContext(): Promise<Worker> {
       staking,
       preferences,
       prices,
+      nftImages,
       accounts,
       dapp,
       sessions,

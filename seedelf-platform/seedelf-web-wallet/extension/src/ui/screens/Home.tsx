@@ -444,6 +444,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 <h2 id="seedelf-tokens-title">{t("home.tokens")}</h2>
                 <TokenList
                   tokens={balances.seedelf.tokens}
+                  of="seedelf"
                   testId="seedelf-tokens"
                   onViewAll={() => setTokensOf("seedelf")}
                 />
@@ -538,6 +539,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 <h2 id="cardano-tokens-title">{t("home.tokens")}</h2>
                 <TokenList
                   tokens={balances.cardano.tokens}
+                  of="cardano"
                   testId="cardano-tokens"
                   onViewAll={() => setTokensOf("cardano")}
                 />

@@ -80,6 +80,7 @@ of them is the owner's to overrule.
 | transaction ID | ID de transacción | always a capital "ID" |
 | quotation marks | “ ” | never « » |
 | about (an amount) | (aprox.) in a label, aproximadamente in a sentence | a label can't end in "unos" |
+| IPFS gateway; metadata (chunk 20) | pasarela IPFS; metadatos | "gestionada por Blockfrost", never "que gestiona Blockfrost", which reads as the gateway managing Blockfrost |
 
 ### Japanese
 
@@ -111,6 +112,7 @@ of them is the owner's to overrule.
 | not mixed yet | 未ミックス | not known to be mixed: ミックス未確認 |
 | Keep it (a modal's cancel) | そのままにする | |
 | your | あなたの, only where it says whose | dropped before 公開アカウント / プライベート残高 |
+| IPFS gateway; metadata; Show image (chunk 20) | IPFS ゲートウェイ; メタデータ; 画像を表示 | "either of them could" is どちらか一方だけでも: どちらも can read as the two together |
 
 ## How a translation is recorded
 

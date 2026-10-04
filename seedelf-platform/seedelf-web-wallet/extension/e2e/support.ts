@@ -98,6 +98,8 @@ export const ownedUtxos = fixture("owned-utxos.json").owned_utxos;
 export const mintPreprod = fixture("mint-preprod.json");
 export const accountMintPreprod = fixture("account-mint-preprod.json");
 export const transferPreprod = fixture("transfer-preprod.json");
+/** Koios's `asset_info` for the 24-word account's NFTs, as recorded (chunk 20, record-nft-images.mjs). */
+export const nftImagesPreprod: Array<{ policy_id: string; asset_name: string; answer: unknown[] }> = fixture("nft-images.json").preprod;
 export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
 export const stakingPreprod = fixture("staking-preprod.json");
@@ -193,6 +195,8 @@ export interface KoiosFake {
    * named keep their preprod units.
    */
   mainnetTokens: Map<string, { policy_id: string; asset_name: string; fingerprint: string; decimals?: number }>;
+  /** `asset_info`'s answer for each token, by `policy.name`: the recorded NFTs' metadata (chunk 20). */
+  assets: Map<string, unknown[]>;
   /** Requests a page made instead of the worker (`byWorker`): there must be none. */
   strays: string[];
 }
@@ -339,6 +343,10 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     if (staking[path]) {
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(staking[path]!(body)) });
     }
+    if (path === "asset_info") {
+      const rows = (body._asset_list as string[][]).flatMap(([policy, name]) => koios.assets.get(`${policy}.${name}`) ?? []);
+      return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
     if (path === "utxo_info") {
       // Any UTxO the fixtures know, spent or not, as Koios answers; one known only as spent, by its outpoint alone.
       const refs: string[] = body._utxo_refs;
@@ -474,6 +482,7 @@ export const test = base.extend<{
       unlistedSpent: false,
       txSpends: new Map(),
       mainnetTokens: new Map(),
+      assets: new Map(nftImagesPreprod.map((r) => [`${r.policy_id}.${r.asset_name}`, r.answer])),
       strays: [],
     });
   },
@@ -510,6 +519,22 @@ export const test = base.extend<{
     expect([...koios.strays, ...swaps.strays], "only the worker asks Koios, giveme.my and Minswap").toEqual([]);
   },
 });
+
+/**
+ * The IPFS gateway an NFT's image comes from (chunk 20), answering every file
+ * with `file`. Keeps each request: its path, and the headers it went out with.
+ * Only the worker may ask it, as every service.
+ */
+export async function fakeGateway(context: BrowserContext, file: Buffer, contentType = "image/png") {
+  const asked: Array<{ path: string; headers: Record<string, string> }> = [];
+  const strays: string[] = [];
+  await context.route("https://ipfs.blockfrost.dev/**", async (route) => {
+    const request = route.request();
+    if (byWorker(request, strays)) asked.push({ path: new URL(request.url()).pathname, headers: await request.allHeaders() });
+    return route.fulfill({ status: 200, contentType, body: file });
+  });
+  return { asked, strays };
+}
 
 /** A dApp's page, served at https://dapp.example/ (the only site the tests reach). */
 export async function openDapp(context: BrowserContext): Promise<Page> {

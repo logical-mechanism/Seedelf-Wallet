@@ -14,6 +14,7 @@ import type { ContactsService } from "./contacts";
 import type { DappService } from "./dapp";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
+import type { NftImageService } from "./nft-image";
 import type { PendingService } from "./pending";
 import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
@@ -45,6 +46,8 @@ export interface Context {
   staking: StakingService;
   preferences: PreferencesService;
   prices: PriceService;
+  /** An NFT's image, when the user asks to see it (nft-image.ts). */
+  nftImages: NftImageService;
   dapp: DappService;
   /** Private sessions: swaps from one-time accounts (sessions.ts). */
   sessions: SessionService;
@@ -274,6 +277,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     }
     case "price":
       return ctx.prices.get(ctx.network);
+    // Only for a wallet that's open: a locked one shows no tokens to ask about.
+    case "nft-image":
+      if ((await wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
+      return ctx.nftImages.show(ctx.network, message.policyId, message.assetName);
     // The transaction the review or the site's prompt is about, decoded from
     // its own bytes (tx-view.ts): no Koios request, nothing kept.
     case "tx-detail":

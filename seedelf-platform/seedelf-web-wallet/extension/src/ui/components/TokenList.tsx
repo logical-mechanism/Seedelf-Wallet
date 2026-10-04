@@ -1,6 +1,8 @@
 // Tokens as rows: the logo (or two letters), the ticker or name with a second
 // line, and the amount. Tapping one opens its details. Home shows the first
-// few and a way to all of them (screens/Tokens.tsx).
+// few and a way to all of them (screens/Tokens.tsx). An NFT's image is shown
+// only once the user asks for it in its details (NftImage.tsx), and from then
+// until the wallet locks it's its avatar too.
 
 import { useMemo, useState } from "react";
 import { joinList, useT } from "../../i18n";
@@ -8,17 +10,22 @@ import { joinList, useT } from "../../i18n";
 import type { TokenAmount, TokenRef } from "../../shared/rpc";
 import { tokenKey } from "../format";
 import { useNetwork } from "../network";
+import { imageIn, useShownImage } from "../nft-images";
 import { useAmounts } from "../preferences";
 import { initials, sortTokens, tint, tokenMark, tokenText, type TokenView, viewToken } from "../tokens";
 import { CopyField } from "./CopyField";
 import { CheckIcon, ChevronRightIcon } from "./Icons";
 import { Modal } from "./Modal";
+import { NftImageShow, NftPicture } from "./NftImage";
 
 /** How many tokens Home shows before "View all". */
 const PREVIEW = 5;
 
 export function TokenAvatar({ view, large }: { view: TokenView; large?: boolean }) {
   const shape = `avatar${large ? " avatar--large" : ""}${view.nft ? " avatar--nft" : ""}`;
+  // An NFT's image, once the user has asked to see it: never fetched for a list.
+  const image = imageIn(useShownImage(view.token));
+  if (view.nft && image) return <img className={`${shape} avatar--image`} src={image} alt="" />;
   if (view.info?.logo) return <img className={`${shape} avatar--logo`} src={view.info.logo} alt="" />;
   return (
     <span className={`${shape} avatar--tint-${tint(view.token.policyId)}`} aria-hidden="true">
@@ -51,10 +58,13 @@ export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: Tok
 /** Home's tokens: fungible ones first, by name, then NFTs; the first five, and View all. */
 export function TokenList({
   tokens,
+  of,
   testId,
   onViewAll,
 }: {
   tokens: TokenAmount[];
+  /** Whose tokens: what showing an NFT's image reveals depends on it. */
+  of: "seedelf" | "cardano";
   testId: string;
   onViewAll: () => void;
 }) {
@@ -82,13 +92,17 @@ export function TokenList({
           <ChevronRightIcon size={16} />
         </button>
       )}
-      {open && <TokenDetails view={open} onClose={() => setOpen(undefined)} />}
+      {open && <TokenDetails view={open} of={of} onClose={() => setOpen(undefined)} />}
     </div>
   );
 }
 
-/** A token's details, in a modal: what it is, how much, and the ids that identify it, each with Copy. */
-export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () => void }) {
+/**
+ * A token's details, in a modal: what it is, how much, and the ids that
+ * identify it, each with Copy. An NFT's image is offered here, and only here.
+ * `of`: whose token it is, the private balance's or the public account's.
+ */
+export function TokenDetails({ view, of, onClose }: { view: TokenView; of: "seedelf" | "cardano"; onClose: () => void }) {
   const tr = useT();
   const t = view.token;
   const amounts = useAmounts();
@@ -96,12 +110,15 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
     <Modal title={view.label} titleId="token-details-title" onClose={onClose}>
       <div className="token-details" data-testid="token-details">
         <div className="token-details__top">
-          <TokenAvatar view={view} large />
+          <NftPicture view={view}>
+            <TokenAvatar view={view} large />
+          </NftPicture>
           <p className="token-details__amount" data-testid="token-amount">
             {amounts.text(view.amount)}
           </p>
           {view.info && <p className="note">{view.info.name}</p>}
         </div>
+        <NftImageShow view={view} of={of} />
         {view.info ? (
           <p className="token-details__listed">
             <CheckIcon size={14} />

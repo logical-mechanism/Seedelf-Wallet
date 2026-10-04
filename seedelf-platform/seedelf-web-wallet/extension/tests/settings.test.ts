@@ -62,8 +62,12 @@ describe("Settings' About (privacy review §2.4, §2.5)", () => {
       expect(shown).toContain("Koios sends every transaction, from the same IP address that reads your public account.");
       expect(shown).not.toContain("third-party");
     }
-    expect(Settings.talksTo(true, true)).toContain("Koios and giveme.my, to CoinGecko for ADA's price, and to Minswap when you swap.");
-    expect(Settings.talksTo(false, true)).toContain("Koios and giveme.my, and to Minswap when you swap. It has");
+    expect(Settings.talksTo(true, true)).toContain(
+      "Koios and giveme.my, to CoinGecko for ADA's price, to Minswap when you swap, and to Blockfrost's IPFS gateway when you show an NFT's image.",
+    );
+    expect(Settings.talksTo(false, true)).toContain(
+      "Koios and giveme.my, to Minswap when you swap, and to Blockfrost's IPFS gateway when you show an NFT's image. It has",
+    );
   });
 
   it("says Lovejoin hides boxes from the chain's readers, not from Koios or giveme.my, where Lovejoin is", () => {

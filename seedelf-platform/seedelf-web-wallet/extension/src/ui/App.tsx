@@ -20,6 +20,7 @@ import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
 import { AccountsProvider, useAccounts } from "./accounts";
 import { NetworkContext } from "./network";
+import { forgetImages } from "./nft-images";
 import { PreferencesProvider } from "./preferences";
 import { withoutStop } from "./sentence";
 import { connectorWindow, openInTab, startFromHash, view } from "./view";
@@ -54,9 +55,13 @@ export function App() {
 
   // While unlocked, user input pushes auto-lock back.
   const unlocked = status?.state === "unlocked";
-  // Once it's locked, however that came about, a Lock that failed before is past.
+  // Once it's locked, however that came about, a Lock that failed before is
+  // past, and the NFT images the user asked to see are forgotten: a locked
+  // wallet shows nothing of what it holds.
   useEffect(() => {
-    if (!unlocked) setLockError(undefined);
+    if (unlocked) return;
+    setLockError(undefined);
+    forgetImages();
   }, [unlocked]);
   useEffect(() => {
     if (!unlocked) return;

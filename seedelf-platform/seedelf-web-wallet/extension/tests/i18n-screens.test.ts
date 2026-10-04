@@ -250,7 +250,7 @@ describe("a copy button's name", () => {
   };
   const utxo = () => markup(createElement(UtxoDetails, { of: "seedelf", utxo: seedelfUtxo, busy: false, onLock: noop, onClose: noop }));
   const foo: TokenAmount = { policyId: "ab".repeat(28), assetName: "464f4f", quantity: "5", decimals: 0, fingerprint: "asset1foo" };
-  const token = () => markup(createElement(TokenDetails, { view: viewToken("preprod", foo), onClose: noop }));
+  const token = () => markup(createElement(TokenDetails, { view: viewToken("preprod", foo), of: "cardano", onClose: noop }));
   const account = { receiveAddress: "addr_test1receive", stakeAddress: "stake_test1stake", seedelfPublicValue: "00", account: 0 };
   const receive = () => markup(createElement(Receive, { account, handles: [], onBack: noop }));
 

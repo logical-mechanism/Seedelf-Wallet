@@ -111,7 +111,7 @@ export function Tokens({
           {t("tokens.showMore", { number: Math.min(PAGE, found.length - limit) })}
         </button>
       )}
-      {open && <TokenDetails view={open} onClose={() => setOpen(undefined)} />}
+      {open && <TokenDetails view={open} of={of} onClose={() => setOpen(undefined)} />}
     </Screen>
   );
 }
