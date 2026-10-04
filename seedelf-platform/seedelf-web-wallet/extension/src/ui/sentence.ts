@@ -21,3 +21,13 @@ export function asSentence(message: string): string {
 
 /** A reason from the worker put inside another sentence, which brings its own full stop. */
 export const withoutStop = (reason: string): string => reason.trim().replace(FULL_STOP, "");
+
+/**
+ * A reason set mid-sentence that must end in a full stop of its own: the Rust
+ * core's English fragment gets a ".", and one that already ends a sentence, in
+ * any language, keeps its own — never "。.".
+ */
+export function withStop(reason: string): string {
+  const text = reason.trim();
+  return SENTENCE_END.test(text) ? text : `${text}.`;
+}

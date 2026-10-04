@@ -96,6 +96,7 @@ import {
 } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
+import { withStop } from "../sentence";
 import {
   adaShort,
   halfOf,
@@ -2064,7 +2065,7 @@ function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): strin
  */
 export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick): string {
   if (p.why === "refused") {
-    return t("swaps.pause.refused", { detail: p.detail.trim().replace(/\.?$/, ".") });
+    return t("swaps.pause.refused", { detail: withStop(p.detail) });
   }
   const amount = (q: string) => (out ? amountOf(q, out) : q);
   return t("swaps.pause.price", { now: amount(p.amountOut), approved: amount(approvedMinOut) });

@@ -29,7 +29,7 @@ import { handleWarning } from "../src/ui/screens/Home";
 import { detailOf, NotMixed, WayBack } from "../src/ui/screens/Lovejoin";
 import { historyOf, UtxoDetails } from "../src/ui/screens/Utxos";
 import { DrepRow } from "../src/ui/screens/Voting";
-import { asSentence, withoutStop } from "../src/ui/sentence";
+import { asSentence, withoutStop, withStop } from "../src/ui/sentence";
 import { viewToken } from "../src/ui/tokens";
 
 const SRC = fileURLToPath(new URL("../src", import.meta.url));
@@ -104,9 +104,9 @@ function assembledIn(file: string): string[] {
         if (/,/.test(arg.value)) at(n, "a list joined with English's comma: joinList");
         if (arg.value === " " && !(object.type === "Identifier" && PHRASE.has(object.name as string))) at(n, "sentences joined with a space: joinSentences");
       }
-      if (method === "replace" && (arg?.regex as { pattern?: string } | undefined)?.pattern === "\\.$") {
-        at(n, "an English full stop stripped: withoutStop");
-      }
+      const pattern = (arg?.regex as { pattern?: string } | undefined)?.pattern;
+      if (method === "replace" && pattern === "\\.$") at(n, "an English full stop stripped: withoutStop");
+      if (method === "replace" && pattern === "\\.?$") at(n, "an English full stop added: withStop");
     }
     if (n.type === "TemplateLiteral") {
       const quasis = (n.quasis as Array<{ value: { cooked: string | null } }>).map((q) => q.value.cooked ?? "");
@@ -369,6 +369,10 @@ describe("a full stop where a clause is said as a sentence", () => {
     expect(withoutStop("  the pool is short. ")).toBe("the pool is short");
     expect(withoutStop("プールが足りません。")).toBe("プールが足りません");
     expect(withoutStop("Why?")).toBe("Why?");
+    expect(withStop("it places no order")).toBe("it places no order.");
+    expect(withStop(" it places no order. ")).toBe("it places no order.");
+    expect(withStop("注文を出しません。")).toBe("注文を出しません。");
+    expect(withStop("Why?")).toBe("Why?");
   });
 
   it("ends a token's mark, and a site's wait, with Japanese's 。", async () => {
