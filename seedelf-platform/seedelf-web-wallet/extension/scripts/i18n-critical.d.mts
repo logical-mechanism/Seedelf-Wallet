@@ -15,26 +15,36 @@ export declare function criticalKeys(allKeys?: string[]): string[];
 /** Where the checked-in list lives. */
 export declare const CRITICAL_FILE: string;
 
-/** A key a critical element shows from outside its own JSX. */
+/** A key a critical element, or a call of a key critical by name, shows from outside its own JSX. */
 export interface HelperKey {
   /** The key, by its base. */
   key: string;
-  /** The critical element, as `ui/screens/X.tsx:12`. */
+  /** Where the walk began, the critical element or the call, as `ui/screens/X.tsx:12`. */
   at: string;
-  /** The names followed to it, outermost first: a function, a const, `<Component>`. */
+  /**
+   * The names followed to it, outermost first: a function, a const,
+   * `<Component>`, a prop and `<Component> at` each use that hands it, a
+   * setter. For a call, its key first: `t("x.privacy.y")`.
+   */
   via: string[];
 }
 
 /**
  * Every key a critical element shows through a function it calls, a name it
- * reads or a component it renders, followed through src/ui and src/shared:
- * what `criticalKeys`, reading the element's own JSX, can't see. One entry
- * per key per element, by its shortest route. For `tests/i18n-critical-helpers.test.ts`.
+ * reads, a component it renders, a prop it is handed or a state it keeps, and
+ * every key a call of a key critical by name (`t()`, `<Rich k>`) is handed,
+ * followed through src/ui and src/shared: what `criticalKeys`, reading the
+ * element's own JSX, can't see. One entry per key per start, by its shortest
+ * route. For `tests/i18n-critical-helpers.test.ts`.
  */
 export declare function keysThroughHelpers(options: {
   /** The real keys, en.json's: a literal counts when it names one. */
   keys: string[];
-  /** The .tsx files to look for critical elements in; every one under src/ui by default. */
+  /**
+   * The files to look in, for where the walks start and for where each
+   * component and function is used; every .ts and .tsx under src/ui and
+   * src/shared by default.
+   */
   files?: string[];
   /** The directories a name may be followed into; src/ui and src/shared by default. */
   follow?: string[];

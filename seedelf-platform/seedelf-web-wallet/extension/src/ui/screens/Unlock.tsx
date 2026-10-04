@@ -79,7 +79,7 @@ export function Unlock({
       setNow(Date.now());
       if (result.wrongPassword) {
         setPassword("");
-        setError(t("unlock.wrongPassword"));
+        setError(t("unlock.warn.wrongPassword"));
       }
     } catch (e) {
       setError((e as Error).message);

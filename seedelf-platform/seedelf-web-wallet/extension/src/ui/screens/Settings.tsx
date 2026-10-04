@@ -815,7 +815,7 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
       async (granted) => {
         setAllowed(granted);
         if (!granted) {
-          setError(t("settings.sites.notGranted"));
+          setError(t("settings.sites.warn.notGranted"));
           return;
         }
         await set({ dappConnector: true });
@@ -1294,7 +1294,7 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
   async function change(next: string) {
     if (busy) return;
     if (!current) {
-      setError(t("settings.password.currentFirst"));
+      setError(t("settings.password.warn.currentFirst"));
       return;
     }
     setBusy(true);

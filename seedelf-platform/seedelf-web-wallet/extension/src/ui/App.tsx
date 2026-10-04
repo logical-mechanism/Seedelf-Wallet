@@ -249,7 +249,7 @@ function ServiceAccess() {
     try {
       // Called before anything is awaited: Chrome asks only straight from a click.
       const granted = await chrome.permissions.request({ origins: SERVICE_HOSTS });
-      if (!granted) setError(t("serviceAccess.stillRefused"));
+      if (!granted) setError(t("serviceAccess.warn.stillRefused"));
     } catch (e) {
       setError((e as Error).message);
     }

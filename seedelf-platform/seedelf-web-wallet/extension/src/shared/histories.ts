@@ -146,12 +146,22 @@ function listed(items: string[]): string {
   const and = last.includes(t("histories.list.and")) ? t("histories.list.andAnd") : t("histories.list.and");
   return `${items.slice(0, -1).join(t("histories.list.comma"))}${and}${last}`;
 }
+
+// The names and kinds below are `.privacy.`: they say which histories a
+// note's spend ties together, so each is part of that privacy note.
+
 /** Private session numbers, as a person counts them. */
 const sessionNames = (indexes: number[]) =>
-  t("histories.sessions", { count: indexes.length, list: listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1))) });
+  t("histories.privacy.sessionNames", {
+    count: indexes.length,
+    list: listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1))),
+  });
 /** Public account numbers, as a person counts them (from 1). */
 const accountNames = (indexes: number[]) =>
-  t("histories.accounts", { count: indexes.length, list: listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1))) });
+  t("histories.privacy.accountNames", {
+    count: indexes.length,
+    list: listed(indexes.sort((a, b) => a - b).map((i) => String(i + 1))),
+  });
 
 /**
  * What a review says of the histories a spend's inputs have (`spent`, each
@@ -182,18 +192,18 @@ export function historiesNote(
   const said: string[] = [];
   if (classes.length > 1) {
     const kinds = [
-      ...(boxes ? [t("histories.kind.boxes", { count: boxes })] : []),
-      ...(received ? [t("histories.kind.received", { count: received })] : []),
+      ...(boxes ? [t("histories.kind.privacy.boxes", { count: boxes })] : []),
+      ...(received ? [t("histories.kind.privacy.received", { count: received })] : []),
       ...(accounts.length
         ? [
             accounts.length > 1 || accounts[0] !== 0
-              ? t("histories.kind.madePrivateFrom", { accounts: accountNames(accounts) })
-              : t("histories.kind.madePrivate"),
+              ? t("histories.kind.privacy.madePrivateFrom", { accounts: accountNames(accounts) })
+              : t("histories.kind.privacy.madePrivate"),
           ]
         : []),
-      ...(unknown === 1 ? [t("histories.kind.unknownOne")] : []),
-      ...(unknown > 1 ? [t("histories.kind.unknownMany", { count: unknown })] : []),
-      ...(sessions.length ? [t("histories.kind.sessions", { sessions: sessionNames(sessions) })] : []),
+      ...(unknown === 1 ? [t("histories.kind.privacy.unknownOne")] : []),
+      ...(unknown > 1 ? [t("histories.kind.privacy.unknownMany", { count: unknown })] : []),
+      ...(sessions.length ? [t("histories.kind.privacy.sessions", { sessions: sessionNames(sessions) })] : []),
     ];
     // What's spent together, as a fact: another choice might have paid, merging other histories (independent review L39).
     const lead = t(max ? "histories.privacy.leadMax" : "histories.privacy.lead");

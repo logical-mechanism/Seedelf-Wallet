@@ -59,7 +59,7 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
   function checkConfirm() {
     const wrong = positions.find((p) => answers[p - 1] !== phrase[p - 1]);
     if (wrong) {
-      setError(t("create.wordMismatch", { number: wrong }));
+      setError(t("create.warn.wordMismatch", { number: wrong }));
       return;
     }
     setError(undefined);

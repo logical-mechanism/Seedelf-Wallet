@@ -258,7 +258,7 @@ export function Activity({
             <div className="stack-tight" data-testid="activity-note">
               <span className="label">{t("activity.row.note")}</span>
               <p className="note activity__note">{open.note}</p>
-              <p className="note">{t("activity.noteWarning")}</p>
+              <p className="note">{t("activity.privacy.note")}</p>
             </div>
           )}
           <div className="field-row">

@@ -35,6 +35,13 @@ const baseOf = (key: string) => key.replace(PLURAL, "");
 const categoriesOf = (code: string) => new Set<string>(new Intl.PluralRules(code).resolvedOptions().pluralCategories);
 
 /**
+ * The English a value is held to: the same key's, or for a plural form English
+ * hasn't (Spanish's `_many`), English's `_other`, as the token and negation
+ * checks below read it.
+ */
+const englishOf = (key: string): string | undefined => en[key] ?? (PLURAL.test(key) ? en[`${baseOf(key)}_other`] : undefined);
+
+/**
  * `{{token}}` names, deduplicated and sorted, as one string.
  *
  * A *set*, not a multiset, on purpose: what matters is that every value English
@@ -154,12 +161,20 @@ describe("a translation that quietly says the opposite", () => {
 });
 
 describe("a value that is still English", () => {
+  // English has no `_many`, so this check used to skip every Spanish one: a
+  // `_many` copied straight from English passed it, and nothing else looked.
+  it("holds a plural form English hasn't to English's _other", () => {
+    expect(englishOf("tokens.count_many")).toBe(en["tokens.count_other"]);
+    expect(englishOf("tokens.count_one")).toBe(en["tokens.count_one"]);
+    expect(englishOf("not.a.key_many")).toBeUndefined();
+  });
+
   it.each(others)("%s only repeats English where its provenance says so", (file) => {
     const code = codeOf(file);
     const prov: Record<string, string> = read(join(DOCS, `${code}-provenance.json`));
     const got = locale(file);
     const unexplained = Object.entries(got)
-      .filter(([k, v]) => en[k] !== undefined && en[k] === v)
+      .filter(([k, v]) => englishOf(k) === v)
       .filter(([k]) => !["exact-reuse", "verbatim", "human"].includes(prov[k] ?? ""))
       .map(([k]) => k);
     expect(unexplained.sort(), `identical to English with no reason recorded in ${code}-provenance.json`).toEqual([]);

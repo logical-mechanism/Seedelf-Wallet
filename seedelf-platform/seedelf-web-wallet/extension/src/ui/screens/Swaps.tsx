@@ -1764,7 +1764,7 @@ export function Session({
           busy={busy}
           onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
         />
-        <ReturnLinks back={back} after={back.leftOut?.length ? undefined : tr("swaps.back.neverAgain")} />
+        <ReturnLinks back={back} after={back.leftOut?.length ? undefined : tr("swaps.back.privacy.neverAgain")} />
       </Screen>
     );
   }

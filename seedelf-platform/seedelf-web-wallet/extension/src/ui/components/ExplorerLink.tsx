@@ -19,8 +19,8 @@ import { ExternalIcon } from "./Icons";
  * "this transaction"/"this account" doesn't decline the same way everywhere.
  */
 export function explorerWarningKey(what: "transaction" | "transactions" | "account"): I18nKey {
-  if (what === "transactions") return "explorer.warning.transactions";
-  return what === "account" ? "explorer.warning.account" : "explorer.warning.transaction";
+  if (what === "transactions") return "explorer.privacy.transactions";
+  return what === "account" ? "explorer.privacy.account" : "explorer.privacy.transaction";
 }
 
 /** The warning on its own: under a group of private links, each shown with `note={false}`. */

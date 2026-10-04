@@ -296,7 +296,7 @@ describe("whole sentences, one after another", () => {
     const settings = () => words(createElement(Settings.Settings, { status, onBack: noop, onRemoved: noop, onNetwork: noop }));
     const onNetwork = () => words(createElement(OnNetwork, { status, doing: "restore", onChange: noop }));
     const back: SessionBackSummary = { network: "preprod", index: 2, txHash: "cd".repeat(32), fee: "1", lovelace: "1", tokens: [], depositOutputs: 1, inputs: 1 };
-    const links = () => words(createElement(ReturnLinks, { back, after: t("swaps.back.neverAgain") }));
+    const links = () => words(createElement(ReturnLinks, { back, after: t("swaps.back.privacy.neverAgain") }));
     const seedelf: UtxoInfo = { txHash: "34".repeat(32), index: 0, lovelace: "2000000", tokens: [], locked: false, seedelf: { name: "5eed0e1f00", label: "web-wallet" } };
     const holds = () => words(createElement(UtxoDetails, { of: "seedelf", utxo: seedelf, busy: false, onLock: noop, onClose: noop }));
     expect(settings()).toContain("to compare against. Report a translation error");
