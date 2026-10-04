@@ -72,7 +72,7 @@ describe("a session's chain through Lovejoin that fails, in Spanish or Japanese"
     };
     const review = await sessionsOf(t, undefined, lovejoin).backBuild("preprod", 0);
     // Its 。 goes, as English's "." does, since lovejoin.warn.skippedIts ends with its own; "Lovejoin" keeps its capital.
-    expect(review.lovejoinSkipped).toBe(tr("sess.chainFailed", { reason: failure.slice(0, -1) }));
+    expect(review.lovejoinSkipped).toBe(tr("sess.skip.warn.chainFailed", { reason: failure.slice(0, -1) }));
     expect(tr("lovejoin.warn.skippedIts", { why: review.lovejoinSkipped })).not.toContain("。。");
   });
 });

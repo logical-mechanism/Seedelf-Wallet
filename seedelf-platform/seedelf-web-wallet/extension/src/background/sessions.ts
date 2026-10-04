@@ -439,10 +439,17 @@ export interface SessionDeps extends ScriptSpendDeps {
   random?: () => number;
 }
 
-/** What Minswap built failed a check: the swap pauses for the user instead of trying again. */
+/**
+ * What Minswap built failed a check: the swap pauses for the user instead of
+ * trying again. `detail` says which check, and a paused swap's warning shows
+ * it, as the review's alert shows the whole message. The worker writes both,
+ * where the critical-set deriver can't see, so each is named
+ * `sess.refuse.warn.*`: the name is what keeps them checked
+ * (tests/i18n-worker-reasons.test.ts).
+ */
 export class Refused extends Error {
   constructor(readonly detail: string) {
-    super(t("sess.refused", { detail }));
+    super(t("sess.refuse.warn.wontSign", { detail }));
   }
 }
 
@@ -466,10 +473,10 @@ const PENDING_KIND = {
 } as const satisfies Record<SessionTx["kind"], PendingTx["kind"]>;
 
 /** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
-const NO_COLLATERAL = () => t("sess.noCollateral");
+const NO_COLLATERAL = () => t("sess.skip.warn.noCollateral");
 
 /** Why a return leaves Lovejoin out while its last chain's rest, sent back directly, isn't on chain (independent review L17). */
-const REST_NOT_BACK = () => t("sess.restNotBack");
+const REST_NOT_BACK = () => t("sess.skip.warn.restNotBack");
 
 /** The most funding changes one return merges into (WebAssembly's MAX_MERGE). */
 const MAX_MERGE = 4;
@@ -2125,7 +2132,7 @@ export class SessionService {
 
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
   private async order(network: NetworkName, s: SessionRecord, address: string, rows: KoiosUtxo[]): Promise<void> {
-    if (!s.swap) throw new Refused(t("sess.refuse.notSwap"));
+    if (!s.swap) throw new Refused(t("sess.refuse.warn.notSwap"));
     const approved = s.auto!.approved;
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
@@ -2134,7 +2141,7 @@ export class SessionService {
     // through. It pauses, as the quote would have refused it (independent review M17).
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
-      throw new Refused(t("sess.refuse.nowRoutes", { protocols: unchecked.join(t("histories.list.and")) }));
+      throw new Refused(t("sess.refuse.warn.nowRoutes", { protocols: unchecked.join(t("histories.list.and")) }));
     }
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
@@ -2159,8 +2166,8 @@ export class SessionService {
     const txCbor = await this.deps.minswap(network).cancelTx(address, orders.slice(0, 6));
     const built = await this.inspect(network, s, "cancel", txCbor, rows);
     // A cancel only brings the orders' funds back to the session: it pays nothing out but its fee, and that's small.
-    if (paidOut(built.summary, address).length) throw new Refused(t("sess.refuse.cancelPaysOther"));
-    if (BigInt(built.summary.fee) > MAX_CANCEL_FEE) throw new Refused(t("sess.refuse.cancelFee"));
+    if (paidOut(built.summary, address).length) throw new Refused(t("sess.refuse.warn.cancelPaysOther"));
+    if (BigInt(built.summary.fee) > MAX_CANCEL_FEE) throw new Refused(t("sess.refuse.warn.cancelFee"));
     await this.signAndSend(network, built);
   }
 
@@ -2210,7 +2217,7 @@ export class SessionService {
     const own = new Map(rows.map((r) => [outpoint(r), r]));
     const others = refs.filter((r) => !own.has(r));
     // A swap spends only the session's UTxOs; a cancel also spends its orders, at the DEXes' contracts.
-    if (kind === "swap" && others.length) throw new Refused(t("sess.refuse.spendsOther"));
+    if (kind === "swap" && others.length) throw new Refused(t("sess.refuse.warn.spendsOther"));
     const foreign = others.length ? await this.deps.koios(network).utxoInfo(others) : [];
     const request = JSON.stringify({
       network,
@@ -2332,6 +2339,8 @@ export class SessionService {
     const siteTxs = (record?.siteOuts ?? []).map((o) => o.split("#")[0]!);
     const own = [...new Set([...(record?.txs.map((t) => t.txHash) ?? []), ...siteTxs])];
     const lovejoin = this.deps.lovejoin;
+    // Why Lovejoin is left out, which the return's warning shows (lovejoinSkipped): each reason is named
+    // `.skip.warn.`, as the name is what keeps it checked (tests/i18n-worker-reasons.test.ts).
     let skipped: string | undefined;
     // What that chain left was sent back directly, and isn't on chain yet: this return comes back directly too,
     // and says why when it would have gone through Lovejoin (independent review L17).
@@ -2370,7 +2379,7 @@ export class SessionService {
         }
       }
       // A mix that can't pay for its boxes anymore (the fees went up) says so too.
-      if (!chain && !skipped && record?.mix) skipped = t("sess.mixCannotPay");
+      if (!chain && !skipped && record?.mix) skipped = t("sess.skip.warn.mixCannotPay");
       if (skipped && record?.mix) {
         await this.update(network, index, (r) => {
           r.mix!.skipped = skipped;
@@ -2413,7 +2422,7 @@ export class SessionService {
     }
     // A mix stopped before its boxes went in: it's all coming back, unmixed.
     if (direct && !started && record?.mix && !record.mix.skipped) {
-      skipped = t("sess.mixStopped");
+      skipped = t("sess.skip.warn.mixStopped");
       await this.update(network, index, (r) => {
         r.mix!.skipped = skipped;
       });
@@ -3270,21 +3279,21 @@ function leftOut(e: unknown): string {
   if (e instanceof LovejoinSkipped) return e.reason;
   if (e instanceof KoiosError || e instanceof WalletLocked || isTrap(e)) throw e;
   const message = e instanceof Error ? e.message : String(e);
-  return t("sess.chainFailed", { reason: clauseOf(message, true) });
+  return t("sess.skip.warn.chainFailed", { reason: clauseOf(message, true) });
 }
 
 /**
  * A message made a clause of another sentence: a chain's failure inside
- * sess.chainFailed, or what WebAssembly wouldn't read inside a pause. Where
- * the language starts a clause in lowercase, as sess.chainFailed itself does
- * in English and Spanish, the message's capital goes; Japanese has none to
- * lose, and a name that starts its sentence (Koios, Lovejoin) keeps its own.
- * `end`: its full stop goes too, a "." or a "。", for a sentence that ends
- * with one of its own.
+ * sess.skip.warn.chainFailed, or what WebAssembly wouldn't read inside a
+ * pause. Where the language starts a clause in lowercase, as
+ * sess.skip.warn.chainFailed itself does in English and Spanish, the
+ * message's capital goes; Japanese has none to lose, and a name that starts
+ * its sentence (Koios, Lovejoin) keeps its own. `end`: its full stop goes
+ * too, a "." or a "。", for a sentence that ends with one of its own.
  */
 function clauseOf(message: string, end = false): string {
   const text = end ? message.replace(/[.。]$/, "") : message;
-  const start = t("sess.chainFailed", { reason: "" }).charAt(0);
+  const start = t("sess.skip.warn.chainFailed", { reason: "" }).charAt(0);
   return start === start.toUpperCase() ? text : `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 }
 
@@ -3295,10 +3304,10 @@ function clauseOf(message: string, end = false): string {
  */
 function poolShort(network: NetworkName, room: { others: number; free: number }, depth: number): string | undefined {
   const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
-  if (room.others < floor) return t("sess.poolFloor", { count: room.others, floor });
+  if (room.others < floor) return t("sess.skip.warn.poolFloor", { count: room.others, floor });
   const needs = mixesPerBox(depth) * 2;
   if (room.free < needs) {
-    return t("sess.poolFree", { count: room.free, deep: t("sess.deep", { count: depth }), needs });
+    return t("sess.skip.warn.poolFree", { count: room.free, deep: t("sess.skip.warn.deep", { count: depth }), needs });
   }
   return undefined;
 }
@@ -3427,10 +3436,10 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
     lovelace += BigInt(p.lovelace);
     for (const t of p.tokens) tokens.set(t.policyId + t.assetName, (tokens.get(t.policyId + t.assetName) ?? 0n) + BigInt(t.quantity));
   }
-  if (lovelace > BigInt(fund.lovelace)) throw new Refused(t("sess.refuse.moreAda"));
+  if (lovelace > BigInt(fund.lovelace)) throw new Refused(t("sess.refuse.warn.moreAda"));
   for (const [id, quantity] of tokens) {
     const funded = fund.tokens.find((t) => t.policyId + t.assetName === id);
-    if (!funded || quantity > BigInt(funded.quantity)) throw new Refused(t("sess.refuse.moreTokens"));
+    if (!funded || quantity > BigInt(funded.quantity)) throw new Refused(t("sess.refuse.warn.moreTokens"));
   }
 }
 
@@ -3464,7 +3473,7 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
     const type = Number.parseInt(o.address.charAt(0), 16);
     const script = type <= 7 && type % 2 === 1;
     if (!script && o.address.slice(2, 58) === session.keyHash) {
-      throw new Refused(t("sess.refuse.otherStake"));
+      throw new Refused(t("sess.refuse.warn.otherStake"));
     }
     const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
     if (script && staked && o.datum && names(o.datum, session.keyHash)) {
@@ -3475,12 +3484,12 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
       fee = true;
       return;
     }
-    if (!script) throw new Refused(t("sess.refuse.otherAddress"));
-    if (!staked) throw new Refused(t("sess.refuse.contractOtherStake"));
-    if (!o.datum) throw new Refused(t("sess.refuse.contractNoOwner"));
-    throw new Refused(t("sess.refuse.orderNotOurs"));
+    if (!script) throw new Refused(t("sess.refuse.warn.otherAddress"));
+    if (!staked) throw new Refused(t("sess.refuse.warn.contractOtherStake"));
+    if (!o.datum) throw new Refused(t("sess.refuse.warn.contractNoOwner"));
+    throw new Refused(t("sess.refuse.warn.orderNotOurs"));
   });
-  if (!orders.length) throw new Refused(t("sess.refuse.noOrder"));
+  if (!orders.length) throw new Refused(t("sess.refuse.warn.noOrder"));
   return orders;
 }
 
@@ -3498,12 +3507,12 @@ function names(cbor: string, keyHash: string): boolean {
  * wouldn't count.
  */
 function refuseOddities(s: DappTxSummary, index: number): void {
-  if (!s.complete || s.othersSign) throw new Refused(t("sess.refuse.otherSignature"));
-  if (s.signs.length !== 1 || s.signs[0] !== `0/${index}`) throw new Refused(t("sess.refuse.notOnlyKey"));
-  if (s.unknownInputs.length) throw new Refused(t("sess.refuse.unknownInputs"));
+  if (!s.complete || s.othersSign) throw new Refused(t("sess.refuse.warn.otherSignature"));
+  if (s.signs.length !== 1 || s.signs[0] !== `0/${index}`) throw new Refused(t("sess.refuse.warn.notOnlyKey"));
+  if (s.unknownInputs.length) throw new Refused(t("sess.refuse.warn.unknownInputs"));
   if (s.certificates.length || s.withdrawals.length || s.votes || s.proposals) {
-    throw new Refused(t("sess.refuse.staking"));
+    throw new Refused(t("sess.refuse.warn.staking"));
   }
-  if (s.mint.length) throw new Refused(t("sess.refuse.mints"));
-  if (s.donation && BigInt(s.donation) > 0n) throw new Refused(t("sess.refuse.treasury"));
+  if (s.mint.length) throw new Refused(t("sess.refuse.warn.mints"));
+  if (s.donation && BigInt(s.donation) > 0n) throw new Refused(t("sess.refuse.warn.treasury"));
 }

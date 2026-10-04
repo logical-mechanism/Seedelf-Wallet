@@ -112,10 +112,13 @@ const WHAT: Record<RecordName, I18nKey> = {
  * A record that's there but won't open: another wallet's, damaged, or sealed
  * in a way this version can't read. It never reads as empty, so nothing is
  * written over it: what it holds may still come back (launch review #45).
+ * Its words are named `.warn.`: when Lovejoin's record won't open as a
+ * session's chain is built, they are the reason the return's warning gives
+ * (sessions.ts leftOut).
  */
 export class UnreadableRecordError extends Error {
   constructor(readonly record: RecordName) {
-    super(t("worker.record.unreadable", { what: t(WHAT[record]) }));
+    super(t("worker.record.warn.unreadable", { what: t(WHAT[record]) }));
   }
 }
 

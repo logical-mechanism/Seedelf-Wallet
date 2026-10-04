@@ -417,7 +417,13 @@ export class ChainGone extends Error {
   }
 }
 
-/** The network measured a chain's scripts differently from the wallet: the chain doesn't start. */
+/**
+ * Why a chain doesn't start: the pool under its floor or too thin, the
+ * wallet's boxes gone, the network measuring its scripts differently. A
+ * session's return then comes back directly, and its warning shows `reason`
+ * (sessions.ts leftOut), so each is named `lj.skip.warn.*`: the name is what
+ * keeps it checked (tests/i18n-worker-reasons.test.ts).
+ */
 export class LovejoinSkipped extends Error {
   constructor(readonly reason: string) {
     super(t("lj.leftOut", { reason }));
@@ -1383,7 +1389,7 @@ export class LovejoinService {
   private floorShort(network: NetworkName, others: number): string | undefined {
     const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
     if (others >= floor) return undefined;
-    return t("lj.floorShort", { count: others, floor });
+    return t("lj.skip.warn.floorShort", { count: others, floor });
   }
 
   /**
@@ -1502,8 +1508,8 @@ export class LovejoinService {
       if (!owned.length) {
         throw new LovejoinSkipped(
           untold.length
-            ? t("lj.untoldAll")
-            : t("lj.noneLeft"),
+            ? t("lj.skip.warn.untoldAll")
+            : t("lj.skip.warn.noneLeft"),
         );
       }
       count = Math.min(count, owned.length);
@@ -1511,7 +1517,7 @@ export class LovejoinService {
     // Each mix takes two boxes from the pool, never one twice, and never one of ours.
     const perBox = mixesPerBox(depth);
     if (others.length < perBox * 2) {
-      throw new LovejoinSkipped(t("lj.needsMore", { others: others.length, needed: perBox * 2 }));
+      throw new LovejoinSkipped(t("lj.skip.warn.needsMore", { others: others.length, needed: perBox * 2 }));
     }
     // One chain is at most MAX_CHAIN_MIXES long, and one deposit makes at most MAX_DEPOSIT_BOXES,
     // whatever the spare ADA pays for: what's left comes back with the return.
@@ -1683,7 +1689,7 @@ export class LovejoinService {
     const unknown = unknownInputs(answer);
     if (unknown) throw new StalePool(unknown);
     const checked = JSON.parse(wasm.declaredCovers(first.txCbor, JSON.stringify(answer))) as { covers: boolean; reason?: string };
-    if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? t("lj.measuredDifferently"));
+    if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? t("lj.skip.warn.measuredDifferently"));
   }
 
   /**
