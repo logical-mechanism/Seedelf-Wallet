@@ -1722,6 +1722,7 @@
   "tokens.theListed": "the listed {{token}}",
   "tokens.titlePrivate": "Private tokens",
   "tokens.titlePublic": "Public tokens",
+  "tokens.withMark": "{{amount}} ({{mark}})",
   "transfer.lookingUp": "Looking it up…",
   "transfer.pasteName": "Paste the whole name the recipient gave you. Tags aren't unique, so the name is what counts.",
   "transfer.privacy.timing": "Sending right after making money private is easy to match by timing: the two sit close together on chain.",

@@ -1829,7 +1829,7 @@ export function Session({
         foot={
           done ? (
             <button type="button" className="primary" onClick={onBack}>
-              {tr("swaps.stage.done")}
+              {tr("common.done")}
             </button>
           ) : s.stage === "failed" ? (
             <div className="actions">

@@ -1637,6 +1637,7 @@
   "tokens.theListed": "リストにある {{token}}",
   "tokens.titlePrivate": "プライベートトークン",
   "tokens.titlePublic": "公開トークン",
+  "tokens.withMark": "{{amount}}（{{mark}}）",
   "transfer.lookingUp": "照会中…",
   "transfer.pasteName": "相手から教えられた名前を全体そのまま貼り付けてください。タグは一意ではないため、重要なのは名前です。",
   "transfer.privacy.timing": "お金をプライベートにした直後に送ると、時間から対応づけられやすくなります。二つがチェーン上で近くに並ぶためです。",

@@ -137,10 +137,15 @@ export function tokenMark(text: TokenText, whole = false): string | undefined {
  * "500 FOO (not on the wallet's list, asset1qz8h…x7k3pd)". The quantity is
  * as given (with `tokenDecimals`); a sign is the caller's.
  */
-export function tokenAmountText(network: NetworkName, t: TokenRef & { quantity: string; decimals?: number; fingerprint?: string }): string {
-  const text = tokenText(network, t);
+export function tokenAmountText(
+  network: NetworkName,
+  token: TokenRef & { quantity: string; decimals?: number; fingerprint?: string },
+): string {
+  const text = tokenText(network, token);
   const mark = tokenMark(text);
-  return `${tokenQuantity(network, t)} ${text.label}${mark ? ` (${mark})` : ""}`;
+  const amount = `${tokenQuantity(network, token)} ${text.label}`;
+  // The mark's brackets are the language's: full-width around Japanese.
+  return mark ? t("tokens.withMark", { amount, mark }) : amount;
 }
 
 const ADA = "ADA";
