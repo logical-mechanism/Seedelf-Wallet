@@ -186,6 +186,7 @@
   "common.review": "machine",
   "common.send": "machine",
   "common.sending": "machine",
+  "common.sentencePair": "machine",
   "common.show": "machine",
   "common.tryAgain": "machine",
   "contacts.add": "machine",

@@ -198,6 +198,7 @@
   "common.review": "Review",
   "common.send": "Send",
   "common.sending": "Sending…",
+  "common.sentencePair": "{{first}} {{next}}",
   "common.show": "Show",
   "common.tryAgain": "Try again",
   "contacts.add": "Add a contact",

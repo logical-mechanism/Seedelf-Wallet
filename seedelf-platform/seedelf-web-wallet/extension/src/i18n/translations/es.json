@@ -212,6 +212,7 @@
   "common.review": "Revisar",
   "common.send": "Enviar",
   "common.sending": "Enviando…",
+  "common.sentencePair": "{{first}} {{next}}",
   "common.show": "Mostrar",
   "common.tryAgain": "Volver a intentarlo",
   "contacts.add": "Añadir un contacto",

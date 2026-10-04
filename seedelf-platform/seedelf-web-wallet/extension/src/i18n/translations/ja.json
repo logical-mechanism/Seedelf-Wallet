@@ -188,6 +188,7 @@
   "common.review": "確認",
   "common.send": "送信",
   "common.sending": "送信中…",
+  "common.sentencePair": "{{first}}{{next}}",
   "common.show": "表示",
   "common.tryAgain": "もう一度試す",
   "contacts.add": "連絡先を追加",

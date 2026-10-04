@@ -139,3 +139,18 @@ export type Translate = (key: I18nKey, values?: Record<string, unknown>) => stri
  * site writes, and the cast is here — once — instead of at every call.
  */
 export const t: Translate = (key, values) => i18next.t(key as never, values as never) as unknown as string;
+
+/**
+ * What goes between two whole sentences: a space in English and Spanish,
+ * nothing in Japanese, where `.join(" ")` leaves "。 " in the middle of a
+ * paragraph. Read from the bundle — `common.sentencePair` with both halves
+ * empty — so a language added later brings its own and no code has to know it.
+ */
+export const sentenceGap = (): string => t("common.sentencePair", { first: "", next: "" });
+
+/** Whole sentences, one after another, set the way the language sets them. Empty parts are left out. */
+export const joinSentences = (parts: ReadonlyArray<string | false | null | undefined>): string =>
+  parts.filter((part): part is string => Boolean(part)).join(sentenceGap());
+
+/** The items of a list, with the language's own comma: ", " in English, "、" in Japanese. */
+export const joinList = (items: readonly string[]): string => items.join(t("histories.list.comma"));
