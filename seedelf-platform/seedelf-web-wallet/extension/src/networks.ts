@@ -68,6 +68,22 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
   },
 };
 
+/**
+ * The IPFS gateway an NFT's image is fetched through, when the user asks to
+ * see it (chunk 20): Blockfrost's, the one Lace uses, and the only one of
+ * about twenty public gateways tried on 2026-10-04 that still served files
+ * (ipfs.io and dweb.link have moved to a service-worker gateway, and answer
+ * 429). IPFS is the same on both networks, so one gateway
+ * serves both. It sends no CORS headers, so the worker reads it through
+ * Chrome's grant for this one host, asked for at the first image shown: a
+ * part of the optional access to https sites the manifest already declares
+ * for the dApp connector (shared/dapp.ts), so installing asks for nothing new.
+ */
+export const IPFS_GATEWAY = "https://ipfs.blockfrost.dev";
+
+/** Chrome's host pattern for the gateway: what the first image asks Chrome for. */
+export const IPFS_GATEWAY_HOST = `${IPFS_GATEWAY}/*`;
+
 /** Whether Lovejoin is deployed on `network`: the worker's gate and the UI's, one source. */
 export function lovejoinOn(network: NetworkName): boolean {
   return NETWORKS[network].lovejoin !== undefined;
@@ -97,6 +113,16 @@ export function networkOrigins(networks: NetworkName[]): string[] {
 /** Origins the pages may reach without a host permission: services that answer with CORS headers. */
 export function corsOrigins(networks: NetworkName[]): string[] {
   return [...new Set(networks.map((n) => new URL(NETWORKS[n].swaps).origin))];
+}
+
+/**
+ * Origins the CSP lets the worker reach only once the user grants Chrome's
+ * access to them: the IPFS gateway, for an NFT's image (chunk 20). Not a
+ * host permission in the manifest, so installing the wallet asks for nothing
+ * more.
+ */
+export function grantedOrigins(): string[] {
+  return [IPFS_GATEWAY];
 }
 
 /**

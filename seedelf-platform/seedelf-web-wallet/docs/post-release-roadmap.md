@@ -18,7 +18,7 @@
 
 0. ✅ **[A clean dependabot report](#step-0--a-clean-dependabot-report)** — done 2026-10-02, all 25 cleared in `Cargo.lock` and the happy-path `requirements.txt`, no source change.
 1. **[Owed](#owed)** — promises the repo has already made.
-2. **[Feature parity: what's left](#feature-parity-whats-left)** — ~~several accounts~~ (done, chunk 18), language, NFT images. At the end of this, the wallet is feature-complete for Cardano.
+2. ✅ **[Feature parity: what's left](#feature-parity-whats-left)** — ~~several accounts~~ (chunk 18), ~~language~~ (chunk 19), ~~NFT images~~ (chunk 20, 2026-10-04). The wallet is feature-complete for Cardano.
 3. **[Public-side completeness](#public-side-completeness)** — the governance items, reopened for the public account. **Before the UX pass** (the owner, 2026-10-02), so the pass gets a finished wallet to look at.
 4. **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, once 2 and 3 have landed.
 5. **[The documentation review](#the-documentation-review)** — closes the sequence, because everything above rewrites parts of it.
@@ -33,7 +33,7 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 
 | Lace's surface | Seedelf Wallet | |
 |---|---|---|
-| Portfolio: tokens, NFTs, search, sort | Tokens, with search, sort, NFTs split out, logos from the bundled registry | matched — **bar NFT images** |
+| Portfolio: tokens, NFTs, search, sort | Tokens, with search, sort, NFTs split out, logos from the bundled registry, and an NFT's image when asked for | matched |
 | Send, several recipients, a note | Send on both sides, up to 20 recipients, CIP-20 note on a public send | matched — and it pays **Seedelfs** as well as addresses |
 | Receive, QR, your ADA Handles | All three, plus the handle-in-Seedelf warning | matched |
 | Activity, detail per transaction | Activity on both sides, with CSV (after Eternl's) | matched |
@@ -49,7 +49,7 @@ Measured against **Lace 2.4.2** (`_reference/lace` at `e431933`, pulled 2026-10-
 | Review a transaction before signing | **Transaction details** everywhere: the CBOR decoded by us, plus the raw bytes | ahead — Lace resolves and prices the transaction; what we add is **the bytes themselves**, decoded and raw |
 | Several accounts, folders, account center | **Several accounts, one at a time**, with a picker, names, and each account's own staking and collateral | matched in substance — **done, [P1](#p1--several-accounts)**; folders and an account centre are [not planned](#not-planned) |
 | Language (i18n) | English, Spanish, Japanese | **[P2](#p2--language) done**, chunk 19, Lace's way |
-| NFT images | Logos only | **doing it — [P3](#feature-parity-whats-left)**, click to show |
+| NFT images | **Show image** in an NFT's details, one at a time, from IPFS through Blockfrost's gateway; then its avatar too, until the lock | matched — **done, [P3](#p3--nft-images)**, chunk 20. Lace loads every NFT's image unasked; ours is asked for, and says first who sees it |
 | Notification center | None | **kept in mind, not this round** — it needs [the data layer](#the-data-layer) first |
 | Several pools per account | One pool | **one pool per account** is the model — and Lace is coming the same way: `migrate-multi-delegation` at tip is a *multi→single* migration |
 | Hardware wallets | None | **can't be done** — see [the proof](#why-hardware-wallets-cant-cover-seedelf) |
@@ -106,7 +106,7 @@ Promises the repo has already made. These come before anything new.
 
 ## Feature parity: what's left
 
-Three items, one done. At the end of them the wallet is feature-complete for Cardano, bar [dApp additions](#dapp-additions).
+Three items, all done (2026-10-04). The wallet is feature-complete for Cardano, bar [dApp additions](#dapp-additions).
 
 ### P1 · Several accounts
 
@@ -168,6 +168,12 @@ Treat that as a correctness-of-privacy item, not a nicety: without it, several a
   - **English stays reachable** — the picker can always go back, and the docs are English — so a user who distrusts a translated warning has somewhere to check it.
 
 ### P3 · NFT images
+
+**✅ Done, 2026-10-04: chunk 20.** Branch `web-wallet/nft-images`, plan [plans/chunk-20-nft-images.md](plans/chunk-20-nft-images.md), handoff note in [roadmap.md](roadmap.md#handoff-notes).
+
+**What landed.** **Show image** in an NFT's details, and nowhere else. One Koios `asset_info` request for its metadata (CIP-68's datum, or CIP-25's label 721), then one fetch from IPFS through **Blockfrost's gateway, `ipfs.blockfrost.dev`**, the only one of about twenty public gateways that still served files (ipfs.io has gone service-worker-only). Before the click, the details say who sees what, and on the private side that either party could tie this IP address to the UTxO holding the NFT. The first click asks Chrome for that one host, a part of the dApp connector's optional `https://*/*`, so installing asks for nothing new. The image comes as data, with no cookies and no cache, and stays in the page's memory until the wallet locks, as the NFT's avatar too. **Only IPFS is fetched:** an image on any other server is an address to copy, because anyone can send you an NFT whose image is on their server. A Seedelf's token is never asked about.
+
+**The original brief, kept for the reasoning:**
 
 **The owner's design (2026-10-02): click to show, and the image downloads to that browser.** No image host or proxy of ours — serving image data for every asset needs serious hardware, and a proxy would be one more service that sees what a wallet holds.
 

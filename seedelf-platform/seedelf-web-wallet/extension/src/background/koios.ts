@@ -190,6 +190,18 @@ export interface KoiosDrepName {
   givenName: unknown;
 }
 
+/**
+ * A token's metadata: `asset_info`, its two metadata columns only. Both are
+ * whatever the token's minter wrote, so they're read as `unknown`
+ * (nft-image.ts).
+ */
+export interface KoiosAssetInfo {
+  /** The latest minting transaction's metadata, by label: CIP-25's is "721". */
+  minting_tx_metadata?: unknown;
+  /** The reference token's datum (CIP-68), as detailed-schema JSON, keyed by the user token's label: "222" for an NFT. */
+  cip68_metadata?: unknown;
+}
+
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
@@ -210,6 +222,8 @@ const POOL_INFO_COLUMNS =
 const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
 /** CIP-119's name only: a DRep's image would be fetched from anywhere its author chose. */
 const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
+/** What an NFT's image is read from: its CIP-25 and CIP-68 metadata, nothing else. */
+const ASSET_INFO_COLUMNS = "minting_tx_metadata,cip68_metadata";
 const RETRY_DELAYS_MS = [1000, 3000];
 
 /**
@@ -642,6 +656,21 @@ export class Koios {
     const query = `_asset_policy=${encodeURIComponent(policyId)}&_asset_name=${encodeURIComponent(assetName)}`;
     const [row] = await this.request<{ payment_address?: string }>("GET", "asset_nft_address", undefined, query);
     return row?.payment_address ?? undefined;
+  }
+
+  /**
+   * One token's metadata, for its image (chunk 20): CIP-25's, from the
+   * transaction that minted it, and CIP-68's, from its reference token's
+   * datum. Nothing else is asked for. Undefined when Koios knows no such
+   * token. Koios sees which token is asked about.
+   */
+  async assetInfo(policyId: string, assetName: string): Promise<KoiosAssetInfo | undefined> {
+    const [row] = await this.post<KoiosAssetInfo>(
+      "asset_info",
+      { _asset_list: [[policyId, assetName]] },
+      `select=${ASSET_INFO_COLUMNS}`,
+    );
+    return row;
   }
 
   /**

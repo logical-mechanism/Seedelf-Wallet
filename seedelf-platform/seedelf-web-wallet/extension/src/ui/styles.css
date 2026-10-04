@@ -1321,6 +1321,23 @@ main {
   background: #e9edf2;
 }
 
+/* An NFT's image the user asked to see, as its avatar: cropped to the square. */
+.avatar--image {
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+/* An NFT's image at the top of its details: whole, never wider than the sheet. */
+.nft-image {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  max-height: 280px;
+  object-fit: contain;
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+}
+
 /* Activity (screens/Activity.tsx): what came in, went out, or neither. */
 /* Someone's note on a transaction: their words, wrapped wherever they need. */
 .activity__note {

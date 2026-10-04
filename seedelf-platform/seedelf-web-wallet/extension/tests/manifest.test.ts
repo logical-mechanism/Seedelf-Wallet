@@ -72,7 +72,7 @@ describe("manifest", () => {
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org",
+        "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org https://ipfs.blockfrost.dev",
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",
@@ -91,7 +91,7 @@ describe("manifest", () => {
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my https://aggr.monorepo-testnet-preprod.minswap.org",
+        "connect-src 'self' https://preprod.koios.rest https://www.giveme.my https://aggr.monorepo-testnet-preprod.minswap.org https://ipfs.blockfrost.dev",
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",
@@ -99,6 +99,20 @@ describe("manifest", () => {
     );
     // The description is the store's summary line.
     expect(m.description.length).toBeLessThanOrEqual(132);
+  });
+
+  it("reaches the IPFS gateway for an NFT's image through the CSP alone: no host permission, no remote image", () => {
+    // Chunk 20. The worker reads the gateway with Chrome's grant for that one
+    // host, asked for at the first image shown, a part of the optional
+    // https://*/* already declared: installing asks for nothing new. The page
+    // shows what came as data, so img-src stays the extension and data.
+    for (const mainnetEnabled of [true, false]) {
+      const m = buildManifest({ version: "1.0.0", mainnetEnabled, storeBuild: true });
+      expect(m.content_security_policy.extension_pages).toMatch(/connect-src [^;]*https:\/\/ipfs\.blockfrost\.dev/);
+      expect(m.content_security_policy.extension_pages).toContain("img-src 'self' data:;");
+      expect(m.host_permissions.join(" ")).not.toContain("blockfrost");
+      expect(m.optional_host_permissions).toContain("https://*/*");
+    }
   });
 
   it("dev key maps to the documented extension ID", async () => {

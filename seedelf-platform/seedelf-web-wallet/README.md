@@ -47,7 +47,9 @@ So money that sits stays staked in the public account, and is made private when 
 
 **After v1: the transaction view** ([plans/chunk-17-transaction-view.md](docs/plans/chunk-17-transaction-view.md)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
 
-**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): the wallet in Spanish and Japanese as well as English; NFT images, shown when you click one, downloaded to your own browser rather than through anything of ours. Then being your own DRep and voting on governance actions, and a pass over how all of it looks and reads.
+**After v1: several public accounts, three languages, and NFT images.** Several accounts are above (chunk 18). The wallet reads in English, Spanish and Japanese, every language bundled, so choosing one asks nobody anything ([plans/chunk-19-language.md](docs/plans/chunk-19-language.md)). And an NFT's image shows when you ask for it in its details, one NFT at a time: your browser fetches it from IPFS through Blockfrost's gateway, nothing of ours in between, and the details say first who sees what, more strongly for an NFT in your private balance ([plans/chunk-20-nft-images.md](docs/plans/chunk-20-nft-images.md)).
+
+**Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): being your own DRep and voting on governance actions, then a pass over how all of it looks and reads.
 
 **Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet.
 

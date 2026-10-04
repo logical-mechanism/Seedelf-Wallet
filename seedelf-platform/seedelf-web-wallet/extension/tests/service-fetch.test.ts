@@ -1,5 +1,6 @@
 // Every request to a service goes out without the browser's cookies or a
-// referrer (privacy review §2.14): Koios, giveme.my, CoinGecko and Minswap.
+// referrer (privacy review §2.14): Koios, giveme.my, CoinGecko, Minswap and
+// the IPFS gateway for an NFT's image.
 // The worker holds a host permission for most of them, and a fetch with it
 // would carry any cookie the browser has for that host; one of giveme.my's
 // would tie every private payment to this browser.
@@ -8,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import { Koios, type FetchLike } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
+import { NftImageService } from "../src/background/nft-image";
 import { PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
 import { memoryArea } from "./fakes";
@@ -61,6 +63,21 @@ describe("a service request", () => {
     expect(await prices.get("mainnet")).toMatchObject({ rate: 0.25 });
     expect(inits).toHaveLength(1);
     privately(inits[0]!);
+  });
+
+  it("to the IPFS gateway, for an NFT's image, carries none, and leaves nothing in Chrome's cache", async () => {
+    const koios = recording([{ minting_tx_metadata: { "721": { ["ab".repeat(28)]: { "01": { image: `ipfs://Qm${"a".repeat(44)}` } } } } }]);
+    const gateway = recording({});
+    const images = new NftImageService({
+      koios: () => new Koios("https://preprod.koios.rest/api/v1", koios.fetchFn, async () => undefined),
+      fetch: gateway.fetchFn,
+      allowed: async () => true,
+    });
+    await images.show("preprod", "ab".repeat(28), "01");
+    expect(gateway.inits).toHaveLength(1);
+    [...koios.inits, ...gateway.inits].forEach(privately);
+    // The disk never says which NFTs this wallet looked at (privacy.md).
+    expect(gateway.inits[0]!.cache).toBe("no-store");
   });
 
   it("to Minswap carries none", async () => {

@@ -1,6 +1,7 @@
 import { cpSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 
 import type { BrowserContext, Page } from "@playwright/test";
 
@@ -14,6 +15,7 @@ import {
   dist,
   expect,
   extensionId,
+  fakeGateway,
   koiosPreprod,
   type KoiosFake,
   launch,
@@ -453,6 +455,119 @@ test("tokens: Home shows five, View all has tokens and NFTs, a search, a sort an
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("cardano-tokens")).toBeVisible();
+});
+
+/**
+ * A real PNG, `size` pixels square, teal fading to navy: an image for the
+ * page to decode and the screenshot to show, as the gateway would send one.
+ */
+function png(size: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const out = Buffer.alloc(8 + body.length);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc32(body), 4 + body.length);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8; // bits per sample
+  header[9] = 2; // RGB
+  const rows: Buffer[] = [];
+  for (let y = 0; y < size; y++) {
+    const row = Buffer.alloc(1 + size * 3);
+    for (let x = 0; x < size; x++) {
+      const f = (x + y) / (2 * size);
+      row[1 + x * 3] = Math.round(0x01 * f);
+      row[2 + x * 3] = Math.round(0xc4 * (1 - f) + 0x18 * f);
+      row[3 + x * 3] = Math.round(0xbc * (1 - f) + 0x33 * f);
+    }
+    rows.push(row);
+  }
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return Buffer.concat([signature, chunk("IHDR", header), chunk("IDAT", deflateSync(Buffer.concat(rows))), chunk("IEND", Buffer.alloc(0))]);
+}
+
+test.describe("an NFT's image", () => {
+  // The first Show image asks Chrome for the gateway, in a dialog of its own
+  // that automation can't answer, so this build has Chrome's access to sites
+  // from install (support.ts `withSiteAccess`): the grant that dialog gives.
+  test.use({ siteAccess: true });
+
+  test("is asked for only from its details: one Koios request, one fetch from the gateway, and it's gone once the wallet locks", async ({
+    context,
+    koios,
+  }) => {
+    const gateway = await fakeGateway(context, png(160));
+    const page = await openApp(context);
+    await restore(page, vector(24).phrase);
+    await cardanoTab(page);
+    await page.getByRole("button", { name: "View all 13 tokens" }).click();
+    await page.getByRole("tab", { name: "NFTs (5)" }).click();
+    const rows = page.getByTestId("token-results").getByRole("listitem");
+    await expect(rows).toHaveCount(5);
+
+    // HANOI15102024: CIP-25, its image on IPFS. Opening its details asks nothing.
+    const assetInfo = () => koios.calls.filter((c) => c === "asset_info").length;
+    await page.getByRole("button", { name: "HANOI15102024, 1" }).click();
+    const sheet = page.getByRole("dialog", { name: "HANOI15102024" });
+    await expect(sheet.getByTestId("nft-image-privacy")).toContainText("Both see your IP address asking about this NFT.");
+    await expect(sheet.getByTestId("nft-image-privacy")).toContainText("Nothing is asked until you choose.");
+    expect(assetInfo()).toBe(0);
+    expect(gateway.asked).toEqual([]);
+    await snap(page, "nft-image-ask");
+
+    await sheet.getByRole("button", { name: "Show image" }).click();
+    const image = sheet.getByTestId("nft-image");
+    await expect(image).toBeVisible();
+    // Decoded, not a broken icon: the page shows what came, as data.
+    expect(await image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(160);
+    expect(await image.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    await expect(sheet.getByTestId("nft-image-from")).toHaveText(
+      "From IPFS, through ipfs.blockfrost.dev. It stays in this window until the wallet locks, and isn't saved on this device.",
+    );
+    expect(assetInfo()).toBe(1);
+    expect(gateway.asked.map((a) => a.path)).toEqual(["/ipfs/QmQ6C7C5V5ghPHqLLvsr7r27GTmbUeae9QwhUL2ZDUC4dE"]);
+    // No cookie and no referrer go with it.
+    expect(gateway.asked[0]!.headers).not.toHaveProperty("cookie");
+    expect(gateway.asked[0]!.headers).not.toHaveProperty("referer");
+    await snap(page, "nft-image");
+
+    // Closed and opened again, it's there, and it's the NFT's avatar in the list: nothing more is asked.
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "HANOI15102024, 1" }).locator("img.avatar--image")).toBeVisible();
+    await page.getByRole("button", { name: "HANOI15102024, 1" }).click();
+    await expect(sheet.getByTestId("nft-image")).toBeVisible();
+    expect(assetInfo()).toBe(1);
+    expect(gateway.asked).toHaveLength(1);
+    await page.keyboard.press("Escape");
+
+    // A CIP-68 NFT with no metadata at all: Koios is asked, the gateway isn't.
+    await page.getByTestId("token-results").getByRole("button").filter({ hasText: "HANOI001" }).click();
+    const bare = page.getByRole("dialog");
+    await bare.getByRole("button", { name: "Show image" }).click();
+    await expect(bare.getByTestId("nft-image-none")).toHaveText("Koios has no metadata for this NFT, so there's no image to show.");
+    expect(assetInfo()).toBe(2);
+    expect(gateway.asked).toHaveLength(1);
+    await page.keyboard.press("Escape");
+
+    // Locked and unlocked, it's forgotten: Show image again, and nothing was asked meanwhile.
+    await page.getByRole("button", { name: "Lock" }).click();
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Unlock" }).click();
+    await cardanoTab(page);
+    await page.getByRole("button", { name: "View all 13 tokens" }).click();
+    await page.getByRole("tab", { name: "NFTs (5)" }).click();
+    await page.getByRole("button", { name: "HANOI15102024, 1" }).click();
+    await expect(sheet.getByRole("button", { name: "Show image" })).toBeVisible();
+    await expect(sheet.getByTestId("nft-image")).toHaveCount(0);
+    expect(assetInfo()).toBe(2);
+    expect(gateway.asked).toHaveLength(1);
+    expect(gateway.strays, "only the worker asks the gateway").toEqual([]);
+  });
 });
 
 /**
@@ -2497,7 +2612,9 @@ test("settings: the wallet opens in a tab until the side panel is chosen, and Ch
   await tab.getByRole("button", { name: "Settings" }).click();
   await expect(tab.getByTestId("currency-note")).toContainText("mainnet only");
   await expect(tab.getByLabel("Show ADA's value in")).toHaveValue("usd");
-  await expect(tab.getByTestId("talks-to")).toHaveText(/only ever talks to Koios and giveme\.my, and to Minswap when you swap\. It has/);
+  await expect(tab.getByTestId("talks-to")).toHaveText(
+    /only ever talks to Koios and giveme\.my, to Minswap when you swap, and to Blockfrost's IPFS gateway when you show an NFT's image\. It has/,
+  );
 });
 
 test("hide balances: the eye masks what the wallet holds, but not what a form sends, and stays", async ({ context, koios }) => {

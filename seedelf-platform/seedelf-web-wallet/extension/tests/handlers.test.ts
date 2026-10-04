@@ -13,7 +13,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Context {
-  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, dapp, sessions, lovejoin, accounts } =
+  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, accounts } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -32,6 +32,7 @@ function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Con
     staking,
     preferences,
     prices,
+    nftImages,
     dapp,
     sessions,
     lovejoin,
@@ -86,6 +87,11 @@ describe("handlers", () => {
 
     expect(((await handle({ type: "lock" }, ctx)) as Status).state).toBe("locked");
     await expect(handle({ type: "account" }, ctx)).rejects.toThrow("locked");
+    // A locked wallet shows no tokens, so it asks nobody about one's image (chunk 20).
+    const nft = { type: "nft-image", policyId: "ab".repeat(28), assetName: "01" } as const;
+    await expect(handle(nft, { ...ctx, nftImages: { show: () => Promise.reject(new Error("asked")) } as never })).rejects.toThrow(
+      "The wallet is locked.",
+    );
 
     const wrong = (await handle({ type: "unlock", password: "not the password" }, ctx)) as UnlockResult;
     expect(wrong).toEqual({ unlocked: false, wrongPassword: true, retryAfterMs: 1000 });

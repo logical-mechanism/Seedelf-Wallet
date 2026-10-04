@@ -158,6 +158,27 @@ export interface AdaPrice {
   updatedAt: number;
 }
 
+/**
+ * What showing an NFT's image found (chunk 20, background/nft-image.ts),
+ * asked for by the user one NFT at a time. A failure to reach Koios or the
+ * gateway is an error instead, in words.
+ */
+export type NftImage =
+  /** The image, as a `data:` URI for the page to show: from IPFS through the gateway, or written on chain in its metadata. */
+  | { image: string; from: "ipfs" | "chain" }
+  /**
+   * Nothing to show: Koios knows no metadata for it (`metadata`), its
+   * metadata names no image the wallet can read (`image`), or it's a
+   * Seedelf, which has none and is never asked about (`seedelf`).
+   */
+  | { none: "metadata" | "image" | "seedelf" }
+  /** Its image is somewhere other than IPFS, at this address, which the wallet doesn't fetch. */
+  | { elsewhere: string }
+  /** The image is larger than the wallet shows: this many bytes at most. */
+  | { tooLarge: number }
+  /** The gateway answered with something that isn't an image. */
+  | { notImage: true };
+
 /** A name for a seedelf or an address this wallet pays, kept sealed on the device. */
 export interface Contact {
   id: string;
@@ -1706,6 +1727,13 @@ export interface Requests {
   /** ADA's value in the chosen currency, read again once it's five minutes old. Null off mainnet, with the currency off, or when CoinGecko can't be read. */
   price: { payload: None; result: AdaPrice | null };
   /**
+   * One NFT's image, which the user asked to see (chunk 20): one Koios
+   * `asset_info` request for its metadata, then one fetch from the IPFS
+   * gateway, unless the image is written on chain. Nothing is kept: the page
+   * holds what it shows until the wallet locks.
+   */
+  "nft-image": { payload: { policyId: string; assetName: string }; result: NftImage };
+  /**
    * The transaction with this hash, decoded, for the transaction view: one the
    * wallet built and is holding for Send, or one a site is waiting for a
    * signature on. It reads nothing but those bytes — no Koios request, no
@@ -1915,6 +1943,7 @@ const REQUEST_LIST = [
   "account-add",
   "account-addresses",
   "price",
+  "nft-image",
   "tx-detail",
   "dapp-approvals",
   "dapp-unlocking",
