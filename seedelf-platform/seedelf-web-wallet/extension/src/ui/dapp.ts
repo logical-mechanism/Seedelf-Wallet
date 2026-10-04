@@ -43,14 +43,24 @@ export function paidTo(p: Paid): string {
  * which signing ties together on chain for anyone to see (independent review
  * M12): `ties` as the worker found them; `session`, the site is on a private
  * session, not the public account.
+ *
+ * Its keys, and those of the staking lines below, are named `.privacy.` and
+ * `.warn.` because they show in a warning the critical-set deriver can't see
+ * into: it reads only the JSX, and these are built here, so a key's own name
+ * is what keeps it checked (tests/i18n-critical-helpers.test.ts holds them to it).
  */
 export function tiesLine(ties: Array<"account" | number>, session: boolean): string {
-  const names = ties.map((x) => (x === "account" ? t("dappUi.ties.account") : t("dappUi.ties.session", { number: x + 1 })));
+  const names = ties.map((x) =>
+    x === "account" ? t("dappUi.ties.privacy.account") : t("dappUi.ties.privacy.session", { number: x + 1 }),
+  );
   const list =
     names.length > 1
-      ? t("dappUi.ties.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
+      ? t("dappUi.ties.privacy.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
       : names[0];
-  return t("dappUi.ties.moves", { from: t(session ? "dappUi.ties.thisSession" : "dappUi.ties.yourAccount"), list });
+  return t("dappUi.ties.privacy.moves", {
+    from: t(session ? "dappUi.ties.privacy.thisSession" : "dappUi.ties.privacy.yourAccount"),
+    list,
+  });
 }
 
 /**
@@ -75,11 +85,15 @@ export function signingTies(ties: Array<"account" | number> | undefined, session
 /**
  * A withdrawal in a sentence. `back`: the account's staking money comes back
  * to it (`stakingComesBack`); `whose`: "your public account" or "your
- * private session".
+ * private session". All three are `.warn.`: they share the staking callout,
+ * which is a warning whenever the account's own staking or money is in it.
  */
 export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): string {
-  if (!w.own) return t("dappUi.withdrawal.notYours", { amount: formatAda(w.lovelace) });
-  return t(back ? "dappUi.withdrawal.into" : "dappUi.withdrawal.notAllBack", { amount: formatAda(w.lovelace), whose });
+  if (!w.own) return t("dappUi.withdrawal.warn.notYours", { amount: formatAda(w.lovelace) });
+  return t(back ? "dappUi.withdrawal.warn.into" : "dappUi.withdrawal.warn.notAllBack", {
+    amount: formatAda(w.lovelace),
+    whose,
+  });
 }
 
 /**
@@ -94,15 +108,18 @@ export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): str
  * 常に棄権.": finished sentences comma-spliced, then an ASCII full stop.
  */
 export function certificateLine(c: Certificate, back: boolean, whose: string): string {
+  // Someone else's are `.warn.` too: they sit in the same callout as the
+  // account's own, and "a stake key that isn't yours" read as "your stake key"
+  // is the error a check is there to catch.
   if (!c.own) {
     if (c.kind === "pool") {
-      if (c.pool && c.poolAction === "retire") return t("dappUi.cert.retirePool", { pool: c.pool });
-      if (c.pool && c.poolAction === "register") return t("dappUi.cert.registerPool", { pool: c.pool });
-      return t("dappUi.cert.pool");
+      if (c.pool && c.poolAction === "retire") return t("dappUi.cert.warn.retirePool", { pool: c.pool });
+      if (c.pool && c.poolAction === "register") return t("dappUi.cert.warn.registerPool", { pool: c.pool });
+      return t("dappUi.cert.warn.pool");
     }
-    if (c.kind === "drep") return t("dappUi.cert.drep");
-    if (c.kind === "committee") return t("dappUi.cert.committee");
-    return t("dappUi.cert.otherStakeKey");
+    if (c.kind === "drep") return t("dappUi.cert.warn.drep");
+    if (c.kind === "committee") return t("dappUi.cert.warn.committee");
+    return t("dappUi.cert.warn.otherStakeKey");
   }
   const what = c.drep ? voteLabel(c.drep) : undefined;
   if (c.kind.startsWith("register") && c.deposit) {

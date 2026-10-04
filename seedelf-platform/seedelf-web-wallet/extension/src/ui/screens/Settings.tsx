@@ -460,7 +460,12 @@ export function talksTo(prices: boolean, lovejoin: boolean): string {
   ]);
 }
 
-/** What moving to each network says first, before the wallet moves. */
+/**
+ * What moving to each network says first, before the wallet moves, in a
+ * warning callout. Both keys say so in their names (`.privacy.`, `.warn.`):
+ * the callout shows `MOVE_TO[asking]`, which the critical-set deriver can't
+ * read through.
+ */
 export const MOVE_TO: Record<NetworkName, string> = {
   // Getters, as NETWORK_NOTE's are, so the shape everything reads stays a
   // Record<NetworkName, string> while the words come from the current language.
@@ -468,7 +473,7 @@ export const MOVE_TO: Record<NetworkName, string> = {
     return t("settings.privacy.moveToPreprod");
   },
   get mainnet() {
-    return t("settings.moveToMainnet");
+    return t("settings.warn.moveToMainnet");
   },
 };
 
@@ -1335,9 +1340,11 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
 /** A private session as Remove wallet's list names it: by its number, from 1, and a site's by its host. */
 function sessionName(s: AtStake["sessions"][number]): string {
   const name = t("claim.sessionLower", { number: s.index + 1 });
-  if (s.kind === "site" && s.origin) return t("settings.remove.sessionNamed", { name, host: new URL(s.origin).host });
-  if (s.kind === "mix") return t("settings.remove.sessionNamed", { name, host: t("settings.remove.aMix") });
-  if (s.kind === "swap") return t("settings.remove.sessionNamed", { name, host: t("settings.remove.aSwap") });
+  if (s.kind === "site" && s.origin) {
+    return t("settings.remove.warn.sessionNamed", { name, host: new URL(s.origin).host });
+  }
+  if (s.kind === "mix") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aMix") });
+  if (s.kind === "swap") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aSwap") });
   return name;
 }
 
@@ -1350,28 +1357,33 @@ function sessionName(s: AtStake["sessions"][number]): string {
  * account that may have, until the same phrase is restored here, before any
  * other wallet is made here: that deletes its record (pending.ts and
  * lovejoin.ts adoptKept).
+ *
+ * Each line shows in the warning callout, built here rather than in its JSX,
+ * so its key is named `.warn.`, and so are sessionName's: the critical-set
+ * deriver reads only the JSX, and the name is what keeps them checked.
  */
 export function atStakeLines(stake: AtStake[]): string[] {
   return stake.flatMap((s) => {
     const on = NETWORKS[s.network].label;
     const lines: string[] = [];
-    if (s.unreadable) lines.push(t("settings.remove.unreadable", { network: on }));
+    if (s.unreadable) lines.push(t("settings.remove.warn.unreadable", { network: on }));
     if (s.maybeSent) {
-      lines.push(t("settings.remove.maybeSent", { network: on }));
+      lines.push(t("settings.remove.warn.maybeSent", { network: on }));
     }
     const open = s.sessions.filter((x) => !x.leftBehind);
     if (open.length) {
-      lines.push(t("settings.remove.sessionsOpen", { network: on, count: open.length, names: joinList(open.map(sessionName)) }));
+      const names = joinList(open.map(sessionName));
+      lines.push(t("settings.remove.warn.sessionsOpen", { network: on, count: open.length, names }));
     }
     const left = s.sessions.filter((x) => x.leftBehind);
     if (left.length) {
-      lines.push(t("settings.remove.leftBehind", { network: on, names: joinList(left.map(sessionName)) }));
+      lines.push(t("settings.remove.warn.leftBehind", { network: on, names: joinList(left.map(sessionName)) }));
     }
     if (s.chainSending) {
-      lines.push(t("settings.remove.chainSending", { network: on }));
+      lines.push(t("settings.remove.warn.chainSending", { network: on }));
     }
     if (s.mixMaybeSent) {
-      lines.push(t("settings.remove.mixMaybeSent", { network: on }));
+      lines.push(t("settings.remove.warn.mixMaybeSent", { network: on }));
     }
     return lines;
   });

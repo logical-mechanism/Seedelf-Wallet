@@ -74,10 +74,12 @@ export function removeNote(
       text:
         to === "account"
           ? t("remove.privacy.backToAccount", {
+              // `.privacy.` as the note is: the screen shows `note.text`, so
+              // the critical-set deriver never sees this key in the JSX.
               whose:
                 accounts?.several && accounts.paidByAccount !== undefined
                   ? t("accountPicker.numbered", { number: accounts.paidByAccount + 1 })
-                  : t("remove.yourPublicAccount"),
+                  : t("remove.privacy.yourPublicAccount"),
             })
           : t("remove.privacy.backToPrivate"),
     };

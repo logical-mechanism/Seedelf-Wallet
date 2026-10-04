@@ -298,11 +298,15 @@ export function drepSharing(dreps: DrepEntry[], shared: Map<string, number>, dre
   return { shared: sharing(shared, drep.name) + (listed ? 0 : 1), listed };
 }
 
-/** Who else uses a DRep's name, for its card's and review's warning: "2 DReps on the wallet's list use this name…". */
+/**
+ * Who else uses a DRep's name, for its card's and review's warning: "2 DReps on
+ * the wallet's list use this name…". Named `.warn.`: the warning puts it in from
+ * here, where the critical-set deriver, which reads only the JSX, can't see it.
+ */
 export function sharedDrepName({ shared, listed }: DrepShared): string {
-  if (listed) return t("vote.sharedName.listed", { count: shared });
+  if (listed) return t("vote.sharedName.warn.listed", { count: shared });
   const others = shared - 1;
-  return t("vote.sharedName.unlisted", { count: others });
+  return t("vote.sharedName.warn.unlisted", { count: others });
 }
 
 /** The DRep picked, looked up live; `shared` and `listed`: `drepSharing`'s. */

@@ -271,12 +271,17 @@ export function Withdraw({
 /**
  * `account`: which of the user's public accounts it is, when the wallet knows
  * (chunk 18). It is named only where there is more than one to tell apart; a
- * wallet with one account reads exactly as it did.
+ * wallet with one account reads exactly as it did. `whose` is put together
+ * above the callout, out of the critical-set deriver's sight, so its key is
+ * named `.warn.`; an account's number is its name, as the account picker says it.
  */
 function OwnWarning({ account }: { account?: number }) {
   const t = useT();
   const { several } = useAccounts();
-  const whose = several && account !== undefined ? t("accountPicker.numbered", { number: account + 1 }) : t("withdraw.publicAccount");
+  const whose =
+    several && account !== undefined
+      ? t("accountPicker.numbered", { number: account + 1 })
+      : t("withdraw.warn.publicAccount");
   return (
     <Callout tone="warn" testId="withdraw-own">
       {t("withdraw.warn.ownAccount", { whose })}

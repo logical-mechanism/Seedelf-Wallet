@@ -2061,14 +2061,15 @@ function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): strin
 /**
  * Why a swap that runs itself waits for the user, in words: the price, or
  * which of the wallet's checks what Minswap built failed (`detail`, launch
- * review #21).
+ * review #21). It shows in the paused warning, built here rather than in its
+ * JSX, so its keys are named `.warn.`: the name is what keeps them checked.
  */
 export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick): string {
   if (p.why === "refused") {
-    return t("swaps.pause.refused", { detail: withStop(p.detail) });
+    return t("swaps.pause.warn.refused", { detail: withStop(p.detail) });
   }
   const amount = (q: string) => (out ? amountOf(q, out) : q);
-  return t("swaps.pause.price", { now: amount(p.amountOut), approved: amount(approvedMinOut) });
+  return t("swaps.pause.warn.price", { now: amount(p.amountOut), approved: amount(approvedMinOut) });
 }
 
 /** When a failed step is tried again. */
