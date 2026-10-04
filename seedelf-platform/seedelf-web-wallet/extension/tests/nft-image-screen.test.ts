@@ -2,9 +2,13 @@
 // for an NFT and nothing else, with what the click reveals said beside it,
 // more strongly for one in the private balance; what came back is shown there
 // and as the NFT's avatar in the lists, until the wallet locks.
+import { readFileSync } from "node:fs";
+
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { i18n } from "../src/i18n/core";
 
 import type { TokenAmount } from "../src/shared/rpc";
 import { TokenDetails, TokenRow } from "../src/ui/components/TokenList";
@@ -34,7 +38,10 @@ const details = (token: TokenAmount, of: "seedelf" | "cardano") =>
   markup(createElement(TokenDetails, { view: viewToken("preprod", token), of, onClose: noop }));
 const IMAGE = "data:image/png;base64,iVBORw0KGgo=";
 
-afterEach(() => forgetImages());
+afterEach(async () => {
+  forgetImages();
+  await i18n.changeLanguage("en");
+});
 
 describe("an NFT's details before anything is asked", () => {
   it("offers Show image on the public side, saying who sees what, and that nothing is asked until then", () => {
@@ -113,4 +120,42 @@ describe("an NFT's details once its image was asked for", () => {
       expect(text(details(nft, "cardano"))).toContain(words);
     }
   });
+});
+
+describe("an NFT's details in Spanish and Japanese", () => {
+  const strings = (code: string): Record<string, string> =>
+    JSON.parse(readFileSync(new URL(`../src/i18n/translations/${code}.json`, import.meta.url), "utf8"));
+  const say = (words: Record<string, string>, key: string, values: Record<string, string> = {}) =>
+    Object.entries(values).reduce((v, [name, value]) => v.replaceAll(`{{${name}}}`, value), words[key]!);
+  const host = { host: "ipfs.blockfrost.dev" };
+  /** English the screen must never show once it speaks another language. */
+  const ENGLISH = [/Show image/, /Nothing is asked/, /IP address/, /The first time/, /From IPFS/, /isn't saved/, /Copy the/, /Koios has no/];
+  /** How the language joins two sentences: a space in Spanish, nothing in Japanese. */
+  const GAP: Record<string, string> = { es: " ", ja: "" };
+
+  for (const code of ["es", "ja"] as const) {
+    it(`says it all in ${code}, the callout's sentences joined as ${code} joins them`, async () => {
+      const words = strings(code);
+      await i18n.changeLanguage(code);
+      for (const of of ["cardano", "seedelf"] as const) {
+        const html = details(nft, of);
+        const shown = html.replace(/<[^>]+>/g, "").replaceAll("&#x27;", "'");
+        const note = say(words, of === "seedelf" ? "nftImage.privacy.private" : "nftImage.privacy.public", host);
+        expect(shown).toContain(`${note}${GAP[code]}${say(words, "nftImage.privacy.chromeAsks", host)}`);
+        expect(html).toContain(`>${words["nftImage.show"]}</button>`);
+        for (const english of ENGLISH) expect(shown, `${of}: ${english}`).not.toMatch(english);
+      }
+      rememberImage("preprod", nft, { image: IMAGE, from: "ipfs" });
+      const after = details(nft, "cardano").replace(/<[^>]+>/g, "");
+      expect(after).toContain(`${say(words, "nftImage.fromIpfs", host)}${GAP[code]}${words["nftImage.held"]}`);
+      expect(details(nft, "cardano")).toContain(`alt="${say(words, "nftImage.alt", { label: "HANOI15102024" })}"`);
+      rememberImage("preprod", nft, { elsewhere: "https://tracker.example/1.png" });
+      const elsewhere = details(nft, "cardano");
+      expect(elsewhere.replace(/<[^>]+>/g, "").replaceAll("&#x27;", "'")).toContain(words["nftImage.privacy.elsewhere"]!);
+      expect(elsewhere).toContain(`aria-label="${words["nftImage.copyAddress"]}"`);
+      rememberImage("preprod", nft, { tooLarge: 10 * 1024 * 1024 });
+      expect(details(nft, "cardano").replace(/<[^>]+>/g, "")).toContain(say(words, "nftImage.tooLarge", { megabytes: "10" }));
+      for (const english of ENGLISH) expect(elsewhere, String(english)).not.toMatch(english);
+    });
+  }
 });

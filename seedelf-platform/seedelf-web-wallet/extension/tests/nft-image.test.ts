@@ -3,7 +3,9 @@
 // The metadata is Koios's real answers (fixtures/record-nft-images.mjs).
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { i18n } from "../src/i18n/core";
 
 import { CONTRACT_V1 } from "../src/background/balances";
 import { Koios, type FetchLike, type KoiosAssetInfo } from "../src/background/koios";
@@ -210,6 +212,8 @@ function services(row: KoiosAssetInfo | undefined, file: () => Response = () => 
 }
 
 describe("showing an NFT's image", () => {
+  afterEach(() => i18n.changeLanguage("en"));
+
   it("asks Koios once, for two columns of one token, then the gateway once, with no cookies, referrer or cache", async () => {
     const s = services(info(HANOI));
     const shown = await s.service().show("preprod", HANOI.policy_id, HANOI.asset_name);
@@ -290,6 +294,17 @@ describe("showing an NFT's image", () => {
       allowed: async () => true,
     });
     await expect(down.show("preprod", HANOI.policy_id, HANOI.asset_name)).rejects.toThrow("Couldn't reach ipfs.blockfrost.dev (Failed to fetch)");
+  });
+
+  it("says it in the wallet's language, as every worker message does", async () => {
+    const s = services(info(HANOI));
+    await i18n.changeLanguage("es");
+    await expect(s.service(false).show("preprod", HANOI.policy_id, HANOI.asset_name)).rejects.toThrow(
+      "Chrome no permite a la billetera acceder a ipfs.blockfrost.dev",
+    );
+    await i18n.changeLanguage("ja");
+    const busy = services(info(HANOI), () => new Response("", { status: 429 }));
+    await expect(busy.service().show("preprod", HANOI.policy_id, HANOI.asset_name)).rejects.toThrow("ipfs.blockfrost.dev は混雑しています。");
   });
 
   it("refuses anything that isn't a policy ID and an asset name, before asking", async () => {
