@@ -7,6 +7,7 @@
 // reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
+import { useT } from "../../i18n";
 
 import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
@@ -33,7 +34,7 @@ import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { adaWithTokens, formatAda, lockedAside, plural, shortHex, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, lockedAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { tokenQuantity } from "../tokens";
 
@@ -49,6 +50,7 @@ export function Withdraw({
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
+  const t = useT();
   const network = useNetwork();
   const list = useRecipients();
   const [reads, setReads] = useState<Record<number, KnownRead>>({});
@@ -66,7 +68,7 @@ export function Withdraw({
   // The builder decides exactly (fee, change); this catches the obvious case early.
   const tooMuch = !maxed && amounts.total > BigInt(seedelf.lovelace);
   const ready = list.drafts.every((d) => readOf(d).state === "read") && amounts.ok && !tooMuch;
-  const available = seedelf.locked.utxos ? "available" : "in your private balance";
+  const available = t(seedelf.locked.utxos ? "withdraw.available" : "withdraw.inPrivate");
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -105,9 +107,9 @@ export function Withdraw({
       const p = summary.payments[i]!;
       return (
         <>
-          <Row label="To" value={p.handle ? `$${p.handle}` : shortHex(p.address, 16, 8)} title={p.address} strong />
-          {p.handle && <Row label="Address" value={shortHex(p.address, 16, 8)} title={p.address} />}
-          <Row label={summary.max ? "Everything" : "Amount"} value={`${formatAda(p.lovelace)} ₳`} strong />
+          <Row label={t("destination.to")} value={p.handle ? `$${p.handle}` : shortHex(p.address, 16, 8)} title={p.address} strong />
+          {p.handle && <Row label={t("utxos.address")} value={shortHex(p.address, 16, 8)} title={p.address} />}
+          <Row label={t(summary.max ? "withdraw.everything" : "common.amount")} value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
             return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
@@ -117,24 +119,24 @@ export function Withdraw({
     };
     return (
       <Screen
-        title="Review the payment"
+        title={t("withdraw.review.title")}
         titleId="withdraw-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={t("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? t("common.sending") : t("common.send")}
           </button>
         }
       >
         <ReviewRecipients testId="withdraw-review" payments={summary.payments} rows={recipientRows}>
-          <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
           {!summary.max && (
-            <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+            <Row label={t("review.backToPrivate")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
           )}
-          <Row label="Private UTxOs spent" value={String(summary.inputs)} />
+          <Row label={t("withdraw.review.spent")} value={String(summary.inputs)} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="withdraw-tx" />
         <HistoriesNote histories={summary.histories} max={summary.max} testId="withdraw-histories" />
@@ -145,22 +147,20 @@ export function Withdraw({
             minimum={p.minimum}
             asked={amounts.each[i]?.lovelace ?? "0"}
             tokens={p.tokens.length}
-            who={several ? `Recipient ${i + 1}` : undefined}
+            who={several ? t("recipients.nth", { number: i + 1 }) : undefined}
           />
         ))}
         {summary.left > 0 && (
           <p className="note" data-testid="withdraw-left">
-            {plural(summary.left, "private UTxO")} {summary.left === 1 ? "stays" : "stay"} for another payment:{" "}
+            {t("withdraw.left", { count: summary.left })}{" "}
             {summary.inputs < MAX_UTXOS
-              ? `${summary.left === 1 ? "it holds" : "each holds"} a token that would add up to more with the rest than one output can hold.`
-              : `a transaction takes ${MAX_UTXOS} at most, and never a token adding up to more than one output can hold.`}
+              ? t("withdraw.leftTokens", { count: summary.left })
+              : t("withdraw.leftLimit", { max: MAX_UTXOS })}
           </p>
         )}
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {summary.payments.some((p) => p.own) && <OwnWarning account={summary.payments.find((p) => p.own)?.ownAccount} />}
-        <p className="note">
-          Send asks giveme.my to lend the collateral, then submits. It takes about a minute for the network to confirm.
-        </p>
+        <p className="note">{t("withdraw.review.note")}</p>
       </Screen>
     );
   }
@@ -168,19 +168,19 @@ export function Withdraw({
   return (
     <Screen
       onSubmit={review}
-      title="Make public"
+      title={t("home.action.makePublic")}
       titleId="withdraw-title"
       onBack={onCancel}
       aside={
         seedelf.locked.utxos
-          ? `${formatAda(seedelf.lovelace)} ₳ available${lockedAside(seedelf)}`
-          : `${formatAda(seedelf.lovelace)} ₳ in your private balance`
+          ? `${t("withdraw.asideAvailable", { amount: formatAda(seedelf.lovelace) })}${lockedAside(seedelf)}`
+          : t("withdraw.asidePrivate", { amount: formatAda(seedelf.lovelace) })
       }
       error={error}
       foot={
         <>
           <button type="submit" className="primary" disabled={!ready || busy}>
-            {busy ? "Building…" : "Review"}
+            {busy ? t("common.building") : t("common.review")}
           </button>
           <BuildStage busy={busy} />
         </>
@@ -211,32 +211,31 @@ export function Withdraw({
             {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
 
             <div className="field">
-              <label htmlFor={fieldId("withdraw-amount", d, i)}>Amount</label>
+              <label htmlFor={fieldId("withdraw-amount", d, i)}>{t("common.amount")}</label>
               <AdaInput
                 id={fieldId("withdraw-amount", d, i)}
                 value={d.amount}
                 onChange={(amount) => list.update(d.id, { amount })}
                 disabled={maxed}
-                shown="Max"
-                placeholder={withTokens ? "Minimum" : "0"}
+                shown={t("common.max")}
+                placeholder={withTokens ? t("common.minimum") : "0"}
                 autoFocus={false}
               >
                 {!list.several && (
                   <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
-                    Max
+                    {t("common.max")}
                   </button>
                 )}
               </AdaInput>
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="withdraw-too-much">
-                  That's more than the {formatAda(seedelf.lovelace)} ₳ {available}.
+                  {t("withdraw.tooMuch", { amount: formatAda(seedelf.lovelace), available })}
                 </p>
               )}
             </div>
             {maxed ? (
               <p className="note" data-testid="withdraw-max-note">
-                Everything in your private balance, up to 20 UTxOs at once, with every token, less the fee. Spending them
-                together ties them to each other.{seedelf.locked.utxos ? " UTxOs you locked stay put." : ""}
+                {t(seedelf.locked.utxos ? "withdraw.maxNoteLocked" : "withdraw.maxNote")}
               </p>
             ) : (
               <>
@@ -263,8 +262,7 @@ export function Withdraw({
       )}
 
       <Callout tone="privacy">
-        Making money public where it came from links it back. Send it somewhere else, or keep it private.
-        {list.several && " Addresses paid in one payment can be seen to be paid together."}
+        {t(list.several ? "withdraw.privacy.linksBackSeveral" : "withdraw.privacy.linksBack")}
       </Callout>
     </Screen>
   );
@@ -273,14 +271,20 @@ export function Withdraw({
 /**
  * `account`: which of the user's public accounts it is, when the wallet knows
  * (chunk 18). It is named only where there is more than one to tell apart; a
- * wallet with one account reads exactly as it did.
+ * wallet with one account reads exactly as it did. `whose` is put together
+ * above the callout, out of the critical-set deriver's sight, so its key is
+ * named `.warn.`; an account's number is its name, as the account picker says it.
  */
 function OwnWarning({ account }: { account?: number }) {
+  const t = useT();
   const { several } = useAccounts();
-  const whose = several && account !== undefined ? `Account ${account + 1}` : "public account";
+  const whose =
+    several && account !== undefined
+      ? t("accountPicker.numbered", { number: account + 1 })
+      : t("withdraw.warn.publicAccount");
   return (
     <Callout tone="warn" testId="withdraw-own">
-      This is your own {whose}. Making money public here links it back to it, and to whoever made it private.
+      {t("withdraw.warn.ownAccount", { whose })}
     </Callout>
   );
 }

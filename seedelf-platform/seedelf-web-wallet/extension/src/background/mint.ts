@@ -17,6 +17,7 @@
 // session storage until Send: signed for the account, unsigned with its
 // one-time key's seed for a stealth mint, which giveme.my witnesses at Send.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import { madePrivate, type HistoryClass } from "../shared/histories";
 import type { MintSource, MintSummary, PendingTx, BuildStage } from "../shared/rpc";
@@ -78,7 +79,7 @@ export class MintService {
     // The draft Ogmios measures and the finish hold the same slot.
     const request = { network, params, label, utxos, collateral, withdrawal, invalidHereafter };
     if (request.utxos.length === 0) {
-      throw nothingInAccount(held, "Your public account is empty. Fund it first; the Seedelf is paid from there.");
+      throw nothingInAccount(held, t("worker.mint.accountEmpty"));
     }
 
     // Ogmios measures this draft, so it's a request out, not a local measure.
@@ -110,7 +111,7 @@ export class MintService {
       throw nothingToSpend(
         this.deps,
         view,
-        "Your private balance is empty. Make some ADA private first; the Seedelf is paid from there.",
+        t("worker.mint.privateEmpty"),
         returning,
       );
     }
@@ -152,6 +153,6 @@ export class MintService {
     if (built?.txHash === txHash && built.network === network) {
       await rememberMint(store, network, built.tokenName, built.from, account);
     }
-    return send(this.deps, network, txHash, SESSION_MINT, "mint", "Seedelf");
+    return send(this.deps, network, txHash, SESSION_MINT, "mint", "seedelf");
   }
 }

@@ -7,6 +7,7 @@
 // own field (`DestinationInput`), which reports what it read.
 
 import { useEffect, useRef, useState } from "react";
+import { useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { SeedelfLookup, WithdrawDestination } from "../../shared/rpc";
@@ -60,7 +61,7 @@ export function useDestination(to: string, { seedelfs = false, known }: { seedel
     const name = seedelfs ? seedelfName(destination) : undefined;
     // Part of a seedelf's name: say what a whole one is, rather than "not an address".
     if (seedelfs && !name && destination.replace(/\s+/g, "").toLowerCase().startsWith(SEEDELF_PREFIX)) {
-      setRead({ state: "error", message: SEEDELF_NAME_RULE });
+      setRead({ state: "error", message: SEEDELF_NAME_RULE() });
       return;
     }
     let current = true;
@@ -68,7 +69,7 @@ export function useDestination(to: string, { seedelfs = false, known }: { seedel
     const timer = setTimeout(() => {
       const reading: Promise<DestinationRead> = name
         ? call("seedelf-lookup", { to: name }).then((s) =>
-            s.own ? { state: "error", message: OWN_SEEDELF_FROM_ACCOUNT } : { state: "seedelf", seedelf: s },
+            s.own ? { state: "error", message: OWN_SEEDELF_FROM_ACCOUNT() } : { state: "seedelf", seedelf: s },
           )
         : call("resolve-destination", { to: destination }).then((d) => ({ state: "read", destination: d }));
       reading.then(
@@ -135,6 +136,7 @@ export function DestinationField({
    */
   ownAccounts?: boolean;
 }) {
+  const t = useT();
   const [contacts, reloadContacts] = useContacts();
   const [contactModal, setContactModal] = useState<"pick" | "save">();
   const [accountModal, setAccountModal] = useState(false);
@@ -153,13 +155,13 @@ export function DestinationField({
         : undefined;
   const savedAs = saveable ? contacts?.find((c) => c.value === saveable) : undefined;
   const saveLink = savedAs ? (
-    <> · your contact {savedAs.name}</>
+    <>{" · "}{t("destination.yourContact", { name: savedAs.name })}</>
   ) : (
     contacts && (
       <>
         {" · "}
         <button type="button" className="link" onClick={() => setContactModal("save")}>
-          Save to contacts
+          {t("destination.saveToContacts")}
         </button>
       </>
     )
@@ -168,26 +170,26 @@ export function DestinationField({
   return (
     <div className="field">
       <div className="field-row">
-        <label htmlFor={id}>To</label>
+        <label htmlFor={id}>{t("destination.to")}</label>
         {hasContacts && (
           <button type="button" className="link" onClick={() => setContactModal("pick")}>
-            Contacts
+            {t("destination.contacts")}
           </button>
         )}
         {/* Only with another account to offer: with one, there is nothing to pick. */}
         {ownAccounts && several && (
           <button type="button" className="link" onClick={() => setAccountModal(true)}>
-            Your accounts
+            {t("destination.yourAccounts")}
           </button>
         )}
       </div>
-      <Clearable id={id} value={value} onClear={() => onChange("")} what={seedelfs ? "recipient" : "address"}>
+      <Clearable id={id} value={value} onClear={() => onChange("")} what={t(seedelfs ? "destination.what.recipient" : "destination.what.address")}>
         <input
           id={id}
           className="seedelf-name"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={seedelfs ? `${address}, $handle or 5eed0e1f…` : `${address} or $handle`}
+          placeholder={t(seedelfs ? "destination.placeholderSeedelf" : "destination.placeholder", { address })}
           autoComplete="off"
           spellCheck={false}
           autoFocus
@@ -197,30 +199,30 @@ export function DestinationField({
       </Clearable>
       <div id={`${id}-note`} data-testid={`${id}-note`}>
         {read.state === "reading" ? (
-          <p className="note">Reading it…</p>
+          <p className="note">{t("destination.reading")}</p>
         ) : read.state === "error" ? (
           <p className="field-note" role="alert">
             {read.message}
           </p>
         ) : read.state === "seedelf" ? (
           <p className="note">
-            Found: {read.seedelf.label && <><strong>{read.seedelf.label}</strong> · </>}
+            {t("destination.found")}{" "}
+            {read.seedelf.label && <><strong>{read.seedelf.label}</strong> · </>}
             <code title={read.seedelf.name}>{shortHex(read.seedelf.name, 12, 6)}</code>
             {saveLink}
           </p>
         ) : read.state === "read" ? (
           <p className="note">
-            {read.destination.handle ? `$${read.destination.handle} is ` : "Sends to "}
+            {`${read.destination.handle ? t("destination.handleIs", { handle: read.destination.handle }) : t("destination.sendsTo")} `}
             <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
             {(savedAs || !read.destination.own) && saveLink}
           </p>
         ) : seedelfs ? (
           <p className="note">
-            A Cardano address, an ADA Handle like $name, or a Seedelf's whole name. Looking up a handle tells Koios which
-            one.
+            {t("destination.privacy.hintSeedelf")}
           </p>
         ) : (
-          <p className="note">A Cardano address, or an ADA Handle like $name. Looking up a handle tells Koios which one.</p>
+          <p className="note">{t("destination.privacy.hint")}</p>
         )}
       </div>
       {contactModal === "pick" && (

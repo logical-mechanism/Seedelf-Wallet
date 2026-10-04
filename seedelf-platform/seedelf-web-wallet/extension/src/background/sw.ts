@@ -2,8 +2,11 @@
 // await, so the event that woke the worker is never lost.
 
 import { enabledNetworks, NETWORKS } from "../networks";
+// The engine alone: `../i18n` is the screens' half too, React and all.
+import { startI18n, t } from "../i18n/core";
 import { APIError, DAPP_ORIGINS, DAPP_PORT, isDappMethod, type DappAnswer, type DappCall } from "../shared/dapp";
 import { applyOpenIn, readOpenIn, showWalletTab } from "../shared/open-in";
+import { LOCAL_LANGUAGE } from "../shared/preferences";
 import { DAPP_CHANGED, STATE_CHANGED, type BuildStage, type Message } from "../shared/rpc";
 import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
@@ -33,10 +36,18 @@ import { LovejoinService } from "./lovejoin";
 import { chromeArea } from "./storage";
 import { guardedConnector, keepStorageFromSites } from "./storage-access";
 import { serveUi } from "./ui-port";
-import { hasEntropy, noteStart, Wallet, WASM_BROKEN } from "./wallet";
+import { hasEntropy, noteStart, Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
 import { freshWasm, isTrap, loadWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
+
+// The worker speaks the user's language, as the pages do (i18n/core.ts): the
+// one stored, else the system's, and each change a page makes after. What it
+// says goes out as finished words (ui-port.ts, a site's answers, what a
+// session records), so every path that says anything waits for this first:
+// getContext, which each request, each site's call and the sessions alarm go
+// through, and the one answer to a site that comes before it.
+const language = startI18n().catch(() => undefined);
 
 // Storage is kept from content scripts at every start (storage-access.ts).
 // Where Chrome won't do it for local storage, the dApp connector stays off.
@@ -125,7 +136,10 @@ const broadcast = (message: object) => void chrome.runtime.sendMessage(message).
 
 function getContext(): Promise<Worker> {
   if (context) return context;
-  context = Promise.all([loadWasm(), storageProtected]).then(([wasm, protectedStorage]) => {
+  // The language first, so a worker whose WebAssembly won't load says so in
+  // the user's words too (wasm.ts). It was asked for as the worker started,
+  // so by now it's there, or a storage read away.
+  context = language.then(() => Promise.all([loadWasm(), storageProtected])).then(([wasm, protectedStorage]) => {
     const session = chromeArea(chrome.storage.session);
     const local = chromeArea(chrome.storage.local);
     const preferences = new PreferencesService(local);
@@ -263,6 +277,10 @@ chrome.runtime.onStartup.addListener(applyKept);
 // the wallet left is declined. Local storage's own event: session storage's,
 // which carries the entropy, never reaches this listener.
 chrome.storage.local.onChanged.addListener((changes) => {
+  // The language a page chose. core.ts follows it once it has started; one
+  // chosen while it was still reading the last is caught here, where Chrome
+  // hands every change (a listener added after an await may miss one).
+  if (LOCAL_LANGUAGE in changes) void language.then(startI18n).catch(() => undefined);
   if (!(LOCAL_NETWORK in changes)) return;
   broadcast(STATE_CHANGED);
   void context?.then((ctx) => ctx.dapp.networkChanged()).catch(() => undefined);
@@ -303,7 +321,7 @@ async function answerUi(message: Message, report: (stage: BuildStage) => void): 
   } catch (e) {
     if (!isTrap(e)) throw e;
     await ctx.wallet.trapped();
-    throw new Error(WASM_BROKEN);
+    throw new WalletLocked(WASM_BROKEN());
   }
 }
 
@@ -330,7 +348,9 @@ chrome.runtime.onConnect.addListener((port) => {
     if (call.ping || typeof call.id !== "string") return;
     const id = call.id;
     if (!isDappMethod(call.method) || !Array.isArray(call.args)) {
-      answer({ id, error: { code: APIError.InvalidRequest, info: "Seedelf Wallet doesn't know that method." } });
+      // Said before getContext, so it waits for the language itself: a site
+      // hears this in the words the rest of its answers come in.
+      void language.then(() => answer({ id, error: { code: APIError.InvalidRequest, info: t("dapp.unknownMethod") } }));
       return;
     }
     const method = call.method;

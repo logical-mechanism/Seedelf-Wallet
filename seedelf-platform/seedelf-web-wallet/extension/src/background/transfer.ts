@@ -18,6 +18,7 @@
 // submit  giveme.my witnesses the collateral, then Koios submits exactly the
 //         reviewed transaction.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { PaymentAsk, PendingTx, SeedelfLookup, SeedelfPaid, TransferSummary, BuildStage } from "../shared/rpc";
 import { checkRecipients } from "../shared/recipients";
@@ -95,7 +96,7 @@ export class TransferService {
       throw nothingToSpend(
         this.deps,
         view,
-        "Your private balance is empty. Make some ADA private first: private payments are paid from there.",
+        t("worker.transfer.empty"),
         returning,
       );
     }
@@ -127,7 +128,7 @@ export class TransferService {
 /** The contract UTxO holding the seedelf `name`, found locally. Send from the Cardano account pays it too. */
 export function seedelfUtxo(view: ContractView, name: string, network: NetworkName): KoiosUtxo {
   const utxo = view.seedelfs[name];
-  if (!utxo) throw new Error(`No Seedelf with that name on ${network}.`);
+  if (!utxo) throw new Error(t("worker.seedelf.notFound", { network }));
   return utxo;
 }
 
@@ -139,6 +140,6 @@ export function holdsOwn(view: ContractView, utxo: KoiosUtxo): boolean {
 /** A pasted seedelf name, tidied; throws the rule when it isn't whole. */
 export function seedelfNameOf(to: string): string {
   const name = seedelfName(to);
-  if (!name) throw new Error(SEEDELF_NAME_RULE);
+  if (!name) throw new Error(SEEDELF_NAME_RULE());
   return name;
 }

@@ -26,6 +26,7 @@
 // its transaction left in the private balance (`origin`), and coin selection
 // keeps different ones apart. It's read from the device alone.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import {
   boxFrom,
@@ -39,7 +40,7 @@ import {
   unknownIn,
   type HistoryClass,
 } from "../shared/histories";
-import type { ActivityEntry, ActivityStaking, PendingTx, TokenQuantity } from "../shared/rpc";
+import { entrySession, type ActivityEntry, type ActivityStaking, type PendingTx, type TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
 import type { Koios, KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "./koios";
@@ -135,8 +136,13 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
 
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
-/** Who was paid: the one, or the first and how many more. */
-const several = (names: string[]) => (names.length > 1 ? `${names[0]} and ${names.length - 1} more` : names[0]);
+/**
+ * Who was paid: the one, or the first and how many more. A count, not "and
+ * 2 more": the history is sealed for good, and the page says it in whatever
+ * language it's in by then (ui/activity.ts activityDetail).
+ */
+const several = (names: string[]): Pick<ActivityEntry, "detail" | "more"> =>
+  names.length > 1 ? { detail: names[0], more: names.length - 1 } : { detail: names[0] };
 const feeOf = (fee: unknown) => (typeof fee === "string" ? fee : (fee as { total?: string } | undefined)?.total);
 
 export interface ActivityDeps {
@@ -198,8 +204,10 @@ export class ActivityService {
       fee: feeOf(s.fee),
       ...(assets.length ? { assets } : {}),
     };
-    // A session is shown by its number, from 1; its address says nothing to the user.
-    const session = typeof s.index === "number" ? `Private session ${s.index + 1}` : undefined;
+    // A session is shown by its number, from 1; its address says nothing to the user. Kept as its index: the
+    // page names it, in its own language (entrySession).
+    const session = typeof s.index === "number" ? s.index : undefined;
+    const ofSession = session !== undefined ? { session } : {};
     // What it leaves in the private balance: the history its review worked out (the inputs' own; a session's
     // funding's, with the session's), or a session's funding change and return, which are that session's.
     const origin: HistoryClass | undefined =
@@ -211,19 +219,19 @@ export class ActivityService {
       pending.kind === "move-in"
         ? { ...shared, kind: "move-in", direction: "in" }
         : pending.kind === "session-out"
-          ? { ...shared, kind: "session-out", direction: "out", detail: session }
+          ? { ...shared, kind: "session-out", direction: "out", ...ofSession }
           : pending.kind === "session-back"
-            ? { ...shared, kind: "session-back", direction: "in", detail: session }
+            ? { ...shared, kind: "session-back", direction: "in", ...ofSession }
             : pending.kind === "lovejoin-withdraw"
               ? { ...shared, kind: "lovejoin-withdraw", direction: "in", detail: "Lovejoin" }
             : pending.kind === "transfer"
-              ? { ...shared, kind: "transfer", direction: "out", detail: several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
+              ? { ...shared, kind: "transfer", direction: "out", ...several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
               : pending.kind === "withdraw"
                 ? {
                     ...shared,
                     kind: "withdraw",
                     direction: "out",
-                    detail: several(paid.map((p) => (p.handle ? `$${p.handle}` : shortHex(String(p.address))))),
+                    ...several(paid.map((p) => (p.handle ? `$${p.handle}` : shortHex(String(p.address))))),
                   }
                 : pending.kind === "mint"
                   ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
@@ -233,8 +241,10 @@ export class ActivityService {
       // spent, as their change does, and keeps it should their entries age out. `classes` reads all of a
       // session's entries as one history (independent review L41).
       const back =
-        pending.kind === "session-back" && !isHistoryClass(s.origin) && session
-          ? h.entries.filter((e) => e.kind === "session-out" && e.detail === session && isHistoryClass(e.origin)).map((e) => e.origin!)
+        pending.kind === "session-back" && !isHistoryClass(s.origin) && session !== undefined
+          ? h.entries
+              .filter((e) => e.kind === "session-out" && entrySession(e) === session && isHistoryClass(e.origin))
+              .map((e) => e.origin!)
           : [];
       const o = back.length && origin ? merged([origin, ...back]) : origin;
       if (o) entry.origin = o;
@@ -262,7 +272,7 @@ export class ActivityService {
     // merges anything else (independent review L41).
     const bySession = new Map<number, HistoryClass[]>();
     for (const e of entries) {
-      const n = sessionOf(e);
+      const n = entrySession(e);
       if (n === undefined) continue;
       const classes = bySession.get(n) ?? [];
       classes.push(classOf(e));
@@ -270,7 +280,7 @@ export class ActivityService {
     }
     const sessions = new Map([...bySession].map(([n, classes]) => [n, merged(classes)]));
     const of = (e: ActivityEntry | undefined) => {
-      const n = e && sessionOf(e);
+      const n = e && entrySession(e);
       return n !== undefined ? sessions.get(n)! : classOf(e);
     };
     const found = utxos.map((u) => [u, of(byTx.get(u.tx_hash))] as const);
@@ -347,7 +357,7 @@ export class ActivityService {
           await session.get<AccountPages>(key),
         ] as const,
     );
-    if (!account) throw new Error("Read the balances first: open Home, then Activity.");
+    if (!account) throw new Error(t("worker.activity.readFirst"));
     const { stake } = account;
     const koios = this.deps.koios(network);
     const ours = accountMatcher(account);
@@ -414,13 +424,6 @@ export class ActivityService {
   }
 }
 
-/** The private session (from 0) whose funding, top-up or return `entry` records, if it's one: its detail names it. */
-function sessionOf(entry: ActivityEntry): number | undefined {
-  if (entry.kind !== "session-out" && entry.kind !== "session-back") return undefined;
-  const n = /^Private session (\d+)$/.exec(entry.detail ?? "")?.[1];
-  return n ? Number(n) - 1 : undefined;
-}
-
 /** The history of what the transaction `entry` records made, if any. */
 function classOf(entry: ActivityEntry | undefined): HistoryClass {
   if (!entry) return UNKNOWN;
@@ -438,8 +441,8 @@ function classOf(entry: ActivityEntry | undefined): HistoryClass {
       return boxFrom(entry.txHash);
     case "session-out":
     case "session-back": {
-      // Written before `origin` was: the session is in its detail.
-      const n = sessionOf(entry);
+      // Written before `origin` was: the session is its number, or, older still, the name in its detail.
+      const n = entrySession(entry);
       return n !== undefined ? sessionClass(n) : UNKNOWN;
     }
     default:
@@ -466,10 +469,10 @@ export function noteOf(metadata: KoiosTxInfo["metadata"]): string | undefined {
   const message = metadata?.["674"] as { msg?: unknown } | undefined;
   const msg = message?.msg;
   const lines = Array.isArray(msg) ? msg : typeof msg === "string" ? [msg] : [];
-  const text = lines
-    .filter((l): l is string => typeof l === "string")
-    .join(" ")
-    .trim();
+  // The sender's words, in whatever language they wrote, cut into CIP-20's lines: never the wallet's sentences,
+  // so a space joins them in every language (tests/i18n-assembly.test.ts lets this name through).
+  const noteLines = lines.filter((l): l is string => typeof l === "string");
+  const text = noteLines.join(" ").trim();
   if (!text) return undefined;
   return text.length > NOTE_MAX ? `${text.slice(0, NOTE_MAX)}…` : text;
 }
@@ -572,6 +575,8 @@ export function describe(
       tokens: moved.length,
       ...(spent ? { fee: tx.fee } : {}),
       ...(mine?.detail ? { detail: mine.detail } : {}),
+      ...(mine?.more ? { more: mine.more } : {}),
+      ...(mine?.session !== undefined ? { session: mine.session } : {}),
       ...(moved.length
         ? {
             assets: moved.map(([key, q]) => {

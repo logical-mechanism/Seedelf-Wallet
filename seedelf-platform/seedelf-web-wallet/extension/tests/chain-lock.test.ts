@@ -35,7 +35,7 @@ describe("a mix from the public account and a lock (independent review L14)", CH
     // Unlocked again, its record says a lock cut it, and that its deposit, sent unanswered, may have gone through
     // (independent review L5).
     await t.wallet.unlock(PASSWORD);
-    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT, maybeSent: true });
+    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 0, stopped: CHAIN_CUT(), maybeSent: true });
   });
 
   it("never tries it again, nor writes its progress back, after a lock and an unlock while it waited", async () => {
@@ -48,13 +48,13 @@ describe("a mix from the public account and a lock (independent review L14)", CH
     });
     const summary = await lovejoin.publicBuild("preprod", 1);
     const seen = busyOnce(t, 2);
-    await expect(lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow(CHAIN_CUT);
+    await expect(lovejoin.publicSubmit("preprod", summary.txHash)).rejects.toThrow(CHAIN_CUT());
     // The deposit went; its first mix got a 503, and wasn't tried again after the lock.
     expect(seen.submits).toBe(2);
     expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_SENDING + "preprod"))).toBeUndefined();
     expect(await lovejoin.pumpPublic("preprod")).toBe(false);
     expect(seen.submits).toBe(2);
-    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 1, stopped: CHAIN_CUT });
+    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 1, stopped: CHAIN_CUT() });
   });
 });
 
@@ -67,15 +67,15 @@ describe("a session's chain and a lock (independent review L14)", CHAINS, () => 
     });
     const review = await sessions.backBuild("preprod", 0);
     const seen = busyOnce(t, 3);
-    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow(CHAIN_CUT);
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow(CHAIN_CUT());
     // The deposit and a mix went; the next got a 503, and wasn't tried again after the lock.
     expect(seen.submits).toBe(3);
     expect(await t.wallet.withKeys(() => t.session.get(`${SESSION_CHAIN_PREFIX}preprod.0`))).toBeUndefined();
     await sessions.runAll("preprod");
     expect(seen.submits).toBe(3);
-    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, stopped: CHAIN_CUT });
+    expect((await sessions.list("preprod"))[0]!.chain).toMatchObject({ total: 10, stopped: CHAIN_CUT() });
     expect((await t.lovejoin.status("preprod")).chains).toEqual([
-      { session: 0, boxes: 2, total: 10, sent: 2, at: expect.any(Number), stopped: CHAIN_CUT },
+      { session: 0, boxes: 2, total: 10, sent: 2, at: expect.any(Number), stopped: CHAIN_CUT() },
     ]);
   });
 });

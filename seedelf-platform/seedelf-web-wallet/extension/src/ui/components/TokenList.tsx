@@ -3,6 +3,7 @@
 // few and a way to all of them (screens/Tokens.tsx).
 
 import { useMemo, useState } from "react";
+import { joinList, useT } from "../../i18n";
 
 import type { TokenAmount, TokenRef } from "../../shared/rpc";
 import { tokenKey } from "../format";
@@ -27,6 +28,7 @@ export function TokenAvatar({ view, large }: { view: TokenView; large?: boolean 
 }
 
 export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: TokenView) => void }) {
+  const tr = useT();
   const amount = useAmounts().text(view.amount);
   return (
     <li>
@@ -34,8 +36,8 @@ export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: Tok
         type="button"
         className="token-row"
         onClick={() => onOpen(view)}
-        aria-label={`${view.label}, ${amount}`}
-        title={`${view.label}: details`}
+        aria-label={joinList([view.label, amount])}
+        title={tr("tokenList.details", { label: view.label })}
       >
         <TokenAvatar view={view} />
         <span className="token-row__label">{view.label}</span>
@@ -56,6 +58,7 @@ export function TokenList({
   testId: string;
   onViewAll: () => void;
 }) {
+  const tr = useT();
   const network = useNetwork();
   const [open, setOpen] = useState<TokenView>();
   const views = useMemo(() => {
@@ -75,7 +78,7 @@ export function TokenList({
       </ul>
       {views.length > PREVIEW && (
         <button type="button" className="view-all" onClick={onViewAll}>
-          View all {views.length} tokens
+          {tr("tokenList.viewAll", { number: views.length })}
           <ChevronRightIcon size={16} />
         </button>
       )}
@@ -86,6 +89,7 @@ export function TokenList({
 
 /** A token's details, in a modal: what it is, how much, and the ids that identify it, each with Copy. */
 export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () => void }) {
+  const tr = useT();
   const t = view.token;
   const amounts = useAmounts();
   return (
@@ -101,24 +105,29 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
         {view.info ? (
           <p className="token-details__listed">
             <CheckIcon size={14} />
-            In the wallet's token list
+            {tr("tokenList.listed")}
           </p>
         ) : (
           <p className="note">
-            Not in the wallet's token list, so its name is only what the token calls itself. Its policy ID is what
-            identifies it.
+            {tr("tokenList.notListed")}
           </p>
         )}
-        <CopyField label="Policy ID" value={t.policyId} testId="token-policy" />
+        <CopyField label={tr("tokenList.policyId")} copyLabel={tr("tokenList.copyPolicyId")} value={t.policyId} testId="token-policy" />
         <CopyField
-          label="Asset name (hex)"
+          label={tr("tokenList.assetName")}
+          copyLabel={tr("tokenList.copyAssetName")}
           value={t.assetName}
-          display={t.assetName || "(empty)"}
+          display={t.assetName || tr("tokenList.empty")}
           testId="token-asset-name"
         />
-        <CopyField label="Fingerprint" value={t.fingerprint} testId="token-fingerprint" />
+        <CopyField
+          label={tr("tokenList.fingerprint")}
+          copyLabel={tr("tokenList.copyFingerprint")}
+          value={t.fingerprint}
+          testId="token-fingerprint"
+        />
         <p className="note">
-          {view.nft ? "NFT" : "Fungible token"} · {view.decimals} decimal places
+          {tr(view.nft ? "tokenList.nft" : "tokenList.fungible")} · {tr("tokenList.decimals", { number: view.decimals })}
         </p>
       </div>
     </Modal>
@@ -134,6 +143,7 @@ export function TokenDetails({ view, onClose }: { view: TokenView; onClose: () =
  * (`tokenQuantity`), with any sign.
  */
 export function TokenAmountText({ token, amount }: { token: TokenRef & { fingerprint?: string }; amount: string }) {
+  const tr = useT();
   const text = tokenText(useNetwork(), token);
   const mark = tokenMark(text);
   return (
@@ -141,7 +151,8 @@ export function TokenAmountText({ token, amount }: { token: TokenRef & { fingerp
       {`${amount} ${text.label}`}
       {mark && (
         <span className={text.posesAs ? "token-mark token-mark--warn" : "token-mark"} data-testid="token-mark">
-          {mark.charAt(0).toUpperCase() + mark.slice(1)}.
+          {/* The mark is a clause, said here as a sentence: its full stop is the language's, not an ASCII one. */}
+          {tr("common.sentence", { text: mark.charAt(0).toUpperCase() + mark.slice(1) })}
         </span>
       )}
     </>

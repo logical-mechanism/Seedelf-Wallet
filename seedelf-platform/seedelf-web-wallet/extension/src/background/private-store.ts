@@ -12,6 +12,7 @@
 // little of what it holds: how many Lovejoin boxes, how long a history
 // (privacy review §3.13). Whether a record exists still shows.
 
+import { type I18nKey, t } from "../i18n";
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 
@@ -87,34 +88,37 @@ function padded(value: unknown): Uint8Array {
 const aad = (name: RecordName) => new TextEncoder().encode(PRIVATE_PREFIX + name);
 
 /** What each record keeps, in the wallet's words. */
-const WHAT: Record<RecordName, string> = {
-  accounts: "your public accounts",
-  contacts: "your contacts",
-  "history.preprod": "your private history",
-  "history.mainnet": "your private history",
-  "coins.preprod": "your locked UTxOs",
-  "coins.mainnet": "your locked UTxOs",
-  dapps: "your connected sites",
-  "sessions.preprod": "your private sessions",
-  "sessions.mainnet": "your private sessions",
-  "lovejoin.preprod": "your Lovejoin boxes",
-  "lovejoin.mainnet": "your Lovejoin boxes",
-  "lovejoinMaybe.preprod": "a mix that may have gone through",
-  "lovejoinMaybe.mainnet": "a mix that may have gone through",
-  "maybeSent.preprod": "a payment that may still go through",
-  "maybeSent.mainnet": "a payment that may still go through",
-  "mintedBy.preprod": "who paid for your Seedelfs",
-  "mintedBy.mainnet": "who paid for your Seedelfs",
+const WHAT: Record<RecordName, I18nKey> = {
+  accounts: "worker.record.accounts",
+  contacts: "worker.record.contacts",
+  "history.preprod": "worker.record.history",
+  "history.mainnet": "worker.record.history",
+  "coins.preprod": "worker.record.coins",
+  "coins.mainnet": "worker.record.coins",
+  dapps: "worker.record.dapps",
+  "sessions.preprod": "worker.record.sessions",
+  "sessions.mainnet": "worker.record.sessions",
+  "lovejoin.preprod": "worker.record.lovejoin",
+  "lovejoin.mainnet": "worker.record.lovejoin",
+  "lovejoinMaybe.preprod": "worker.record.lovejoinMaybe",
+  "lovejoinMaybe.mainnet": "worker.record.lovejoinMaybe",
+  "maybeSent.preprod": "worker.record.maybeSent",
+  "maybeSent.mainnet": "worker.record.maybeSent",
+  "mintedBy.preprod": "worker.record.mintedBy",
+  "mintedBy.mainnet": "worker.record.mintedBy",
 };
 
 /**
  * A record that's there but won't open: another wallet's, damaged, or sealed
  * in a way this version can't read. It never reads as empty, so nothing is
  * written over it: what it holds may still come back (launch review #45).
+ * Its words are named `.warn.`: when Lovejoin's record won't open as a
+ * session's chain is built, they are the reason the return's warning gives
+ * (sessions.ts leftOut).
  */
 export class UnreadableRecordError extends Error {
   constructor(readonly record: RecordName) {
-    super(`Seedelf Wallet couldn't open its record of ${WHAT[record]} on this device, so it won't write over it.`);
+    super(t("worker.record.warn.unreadable", { what: t(WHAT[record]) }));
   }
 }
 

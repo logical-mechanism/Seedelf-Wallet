@@ -1,6 +1,7 @@
 // Request handlers for the service worker. The WebAssembly module and the
 // wallet are passed in, so the same code runs under Vitest (Node) and in Chrome.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -24,7 +25,7 @@ import type { Area } from "./storage";
 import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
-import type { Wallet } from "./wallet";
+import { WalletLocked, type Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
@@ -157,7 +158,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // nothing can be read: a payment that may still go through is kept all
       // the same (wallet.ts reset, independent review M2, M5).
       if (message.force !== true && (await wallet.state()) === "unlocked" && (await atStake(ctx)).length) {
-        throw new Error(RESET_AT_STAKE);
+        throw new Error(RESET_AT_STAKE());
       }
       // A wallet from before the switch has no network kept, only worked out
       // from its vault: kept now, it outlives the vault, so the next restore
@@ -243,7 +244,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // wallet makes, and for the same reason — a watch must not lose its
       // account halfway through (accounts.ts `use`).
       const open = (await atStake(ctx)).filter((a) => a.maybeSent || a.mixMaybeSent || a.chainSending);
-      if (open.length) throw new Error(SWITCH_AT_STAKE);
+      if (open.length) throw new Error(SWITCH_AT_STAKE());
       await ctx.accounts.use(message.index, ctx.networks);
       // Sites keep talking to the account they connected to (dapp.ts), so
       // nothing is declined here, unlike a network switch.
@@ -367,8 +368,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
 }
 
 /** Remove wallet's refusal, when something opened since its list was read. */
-export const RESET_AT_STAKE =
-  "Something is still open that removing the wallet would leave behind. Look at the list again before you remove it.";
+export const RESET_AT_STAKE = () => t("worker.remove.stillOpen");
 
 /**
  * What removing the wallet would leave behind, each of the build's networks
@@ -380,12 +380,10 @@ export const RESET_AT_STAKE =
  * Throws if locked.
  */
 /** Why a switch between public accounts waits: something of this one's is still going out. */
-export const SWITCH_AT_STAKE =
-  "Something of this account's is still on its way: a payment Seedelf Wallet is waiting on, or a mix still being sent. " +
-  "Wait for it to settle, then switch accounts.";
+export const SWITCH_AT_STAKE = () => t("worker.account.onItsWay");
 
 async function atStake(ctx: Context): Promise<AtStake[]> {
-  if ((await ctx.wallet.state()) !== "unlocked") throw new Error("The wallet is locked.");
+  if ((await ctx.wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
   const found: AtStake[] = [];
   for (const network of ctx.networks) {
     try {

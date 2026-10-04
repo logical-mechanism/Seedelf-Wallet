@@ -4,6 +4,7 @@
 // key's signature. WebAssembly checks that signature before adding it, so
 // this client only carries the request and explains failures.
 
+import { t } from "../i18n";
 import { SERVICE_FETCH, type FetchLike } from "./koios";
 
 const TIMEOUT_MS = 20_000;
@@ -36,8 +37,7 @@ export class Collateral {
     } catch (e) {
       const cause = e instanceof Error ? e.message : String(e);
       throw new CollateralError(
-        `Couldn't reach giveme.my, the service that lends private payments their collateral (${cause}). ` +
-          "Check your internet connection, and any VPN or ad blocker that might block giveme.my.",
+        t("worker.collateral.unreachable", { cause }),
       );
     }
     const text = await response.text();
@@ -48,14 +48,16 @@ export class Collateral {
       answer = undefined;
     }
     if (!response.ok) {
+      // giveme.my's own words, as they come, or its status when it gave none: each sentence places them, so a
+      // language sets its own brackets and colon around them.
       const detail = (answer as { detail?: unknown } | undefined)?.detail;
-      const why = typeof detail === "string" ? `: ${detail}` : ` (${response.status})`;
       throw new CollateralRefusedError(
-        `giveme.my, which lends the collateral, refused this transaction${why}. ` +
-          "Its UTxOs may have been spent since the review: refresh, then review it again.",
+        typeof detail === "string"
+          ? t("worker.collateral.refused.detail", { detail })
+          : t("worker.collateral.refused.status", { status: response.status }),
       );
     }
-    if (answer === undefined) throw new CollateralError("giveme.my answered with something that isn't JSON.");
+    if (answer === undefined) throw new CollateralError(t("worker.collateral.notJson"));
     return answer;
   }
 }

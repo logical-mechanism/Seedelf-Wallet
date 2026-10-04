@@ -39,6 +39,7 @@
 // form and the reviews show what's being sent. The page says Lovejoin has
 // had no third-party audit.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type {
   LovejoinChainView,
@@ -60,8 +61,9 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { Tabs } from "../components/Tabs";
-import { formatAda, plural, shortHex, whenOf } from "../format";
+import { formatAda, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
+import { withoutStop } from "../sentence";
 import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
@@ -81,7 +83,6 @@ type Review =
   | { source: "public"; summary: LovejoinPublicSummary };
 
 
-const waves = (depth: number) => `${depth} ${depth === 1 ? "wave" : "waves"} deep`;
 
 /** A mix that's over: back, or never funded. */
 const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
@@ -95,28 +96,35 @@ const unseen = (s: SessionView) => s.stage === "failed" && !s.unsent;
 /** A mix that runs and hasn't started its chain: Stop brings it back directly, with no box going in. */
 const stoppable = (s: SessionView) => !isOver(s) && !s.chain && !s.auto?.stopping;
 
+/** A mix whose next try can be had now: one waiting to retry, or a funding to look for again. */
+const retryable = (s: SessionView) => (!!s.auto?.retry && !isOver(s) && !s.chain?.stopped) || unseen(s);
+
 /** A mix's tag. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
-  if (s.stage === "failed") return unseen(s) ? { tone: "wait", label: "Not seen" } : { tone: "bad", label: "Not funded" };
-  if (s.stage === "closed") return s.mix?.skipped ? { tone: "off", label: "Not mixed" } : { tone: "done", label: "Done" };
-  if (s.auto?.stopping) return { tone: "live", label: "Stopping" };
-  if (s.auto?.retry) return { tone: "wait", label: "Retrying" };
-  return { tone: "live", label: "Running" };
+  if (s.stage === "failed") {
+    return unseen(s) ? { tone: "wait", label: t("lovejoin.tag.notSeen") } : { tone: "bad", label: t("lovejoin.tag.notFunded") };
+  }
+  if (s.stage === "closed") {
+    return s.mix?.skipped ? { tone: "off", label: t("lovejoin.tag.notMixed") } : { tone: "done", label: t("lovejoin.tag.done") };
+  }
+  if (s.auto?.stopping) return { tone: "live", label: t("lovejoin.tag.stopping") };
+  if (s.auto?.retry) return { tone: "wait", label: t("lovejoin.tag.retrying") };
+  return { tone: "live", label: t("lovejoin.tag.running") };
 }
 
 /** What a mix is doing, in a line: its chain sent, then on chain. A reason in full goes under it (detailOf). */
 export function subOf(s: SessionView, now: number): string {
-  if (s.stage === "failed") return unseen(s) ? "The chain hasn't shown its funding yet" : "Its funding didn't go through";
-  if (s.stage === "funding") return "Its one-time account is being funded";
-  if (s.mix?.skipped) return "Came back without going into Lovejoin";
+  if (s.stage === "failed") return t(unseen(s) ? "lovejoin.sub.fundingUnseen" : "lovejoin.sub.fundingFailed");
+  if (s.stage === "funding") return t("lovejoin.sub.funding");
+  if (s.mix?.skipped) return t("lovejoin.sub.skipped");
   if (s.chain?.cut || s.chain?.stopped) return chainText(s.chain, !s.auto);
-  if (s.stage === "closed") return `In Lovejoin since ${whenOf(s.createdAt, new Date(now))}`;
+  if (s.stage === "closed") return t("lovejoin.sub.since", { when: whenOf(s.createdAt, new Date(now)) });
   if (s.chain) return chainText(s.chain, !s.auto);
-  if (s.auto?.stopping) return "Stopping: it all comes back directly";
-  if (s.auto?.retry) return "Something went wrong: it tries again by itself";
+  if (s.auto?.stopping) return t("lovejoin.sub.stopping");
+  if (s.auto?.retry) return t("lovejoin.sub.retrying");
   // Found as the wallet unlocked, its next step waits a fresh draw of up to 20 minutes (privacy review §3.1).
-  if (s.auto?.waitsUntil !== undefined && s.auto.waitsUntil > now) return "Funded: it goes on within 20 minutes of the unlock";
-  return "Funded: the mixes are built and sent next";
+  if (s.auto?.waitsUntil !== undefined && s.auto.waitsUntil > now) return t("lovejoin.sub.waiting");
+  return t("lovejoin.sub.next");
 }
 
 /**
@@ -126,21 +134,22 @@ export function subOf(s: SessionView, now: number): string {
  */
 export function detailOf(s: SessionView): string | undefined {
   const lines: string[] = [];
-  if (s.mix?.skipped) lines.push(`Lovejoin was left out: ${s.mix.skipped.trim().replace(/\.$/, "")}.`);
-  if (s.chain?.stopped) lines.push(`Why it stopped: ${s.chain.stopped}`);
+  // Each line a whole sentence, ended by its own key: a reason as it came (the network's refusal ends in the
+  // node's raw words, with no stop) would run into the next line in Japanese, which sets nothing between them.
+  if (s.mix?.skipped) lines.push(t("lj.leftOut", { reason: withoutStop(s.mix.skipped) }));
+  if (s.chain?.stopped) lines.push(t("lovejoin.detail.whyStopped", { why: withoutStop(s.chain.stopped) }));
   if (s.auto?.retry && !isOver(s)) {
-    lines.push(`It tries again at ${new Date(s.auto.retry.at).toLocaleTimeString()}. What went wrong: ${s.auto.retry.error}`);
+    const at = new Date(s.auto.retry.at).toLocaleTimeString();
+    lines.push(t("lovejoin.detail.triesAgain", { at, error: withoutStop(s.auto.retry.error) }));
   }
-  if (unseen(s)) lines.push("Koios may have taken it, and it may still land: Try again looks for it again.");
-  if (s.leftBehind?.length) {
-    const n = s.leftBehind.length;
-    lines.push(`${n === 1 ? "One UTxO stays" : `${n} UTxOs stay`} at its account: no return takes ${n === 1 ? "it" : "them"}.`);
-  }
-  return lines.length ? lines.join(" ") : undefined;
+  if (unseen(s)) lines.push(t("lovejoin.detail.mayLand"));
+  if (s.leftBehind?.length) lines.push(t("lovejoin.detail.leftBehind", { count: s.leftBehind.length }));
+  return lines.length ? joinSentences(lines) : undefined;
 }
 
 /** Whose a chain is: a session's, or the public account's mix. */
-const chainName = (c: LovejoinChainView) => (c.session === undefined ? "From your public account" : `Private session ${c.session + 1}`);
+const chainName = (c: LovejoinChainView) =>
+  c.session === undefined ? t("lovejoin.chain.fromPublic") : t("lovejoin.privateSession", { number: c.session + 1 });
 
 /**
  * The wallet's chains through Lovejoin that aren't all sent: one being sent
@@ -151,10 +160,11 @@ const chainName = (c: LovejoinChainView) => (c.session === undefined ? "From you
  */
 export function Chains({ chains }: { chains: LovejoinChainView[] }) {
   const amounts = useAmounts();
+  const tr = useT();
   if (!chains.length) return null;
   return (
     <section className="section" aria-labelledby="lovejoin-chains-title">
-      <h2 id="lovejoin-chains-title">Chains</h2>
+      <h2 id="lovejoin-chains-title">{tr("lovejoin.chains.title")}</h2>
       <ul className="list" data-testid="lovejoin-chains">
         {chains.map((c) => (
           <li key={`${c.session ?? "public"}.${c.at}`} className="token-row swap-row">
@@ -162,19 +172,23 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
               <ShieldIcon size={16} />
             </span>
             <span className="token-row__label">
-              {chainName(c)}, {amounts.count(c.boxes, "box", "boxes")}
+              {tr("lovejoin.chains.label", { whose: chainName(c), boxes: amounts.count(c.boxes, "amount.boxes") })}
             </span>
-            <SwapTag {...(c.stopped ? { tone: "off" as const, label: "Stopped" } : { tone: "live" as const, label: "Sending" })} />
+            <SwapTag
+              {...(c.stopped
+                ? { tone: "off" as const, label: tr("lovejoin.chains.stopped") }
+                : { tone: "live" as const, label: tr("lovejoin.chains.sending") })}
+            />
             {/* One stopped at a transaction that may have gone through says so (independent review L5). */}
             <span className="token-row__sub">
               {c.stopped
-                ? `Stopped after ${c.sent} of ${c.total} transactions${c.maybeSent ? ", and the next may have gone through" : ""}`
-                : `${c.sent} of ${c.total} transactions sent`}
+                ? tr(c.maybeSent ? "lovejoin.chains.afterMaybe" : "lovejoin.chains.after", { sent: c.sent, total: c.total })
+                : tr("lovejoin.chains.sent", { sent: c.sent, total: c.total })}
             </span>
             <p className="token-row__detail" data-testid="lovejoin-chain-detail">
               {c.stopped
-                ? `Why it stopped: ${c.stopped.trim().replace(/\.$/, "")}. The boxes it didn't mix wait, not mixed yet, for Mix my boxes again.`
-                : "Withdraws wait until it's all sent."}
+                ? tr("lovejoin.chains.whyStopped", { why: withoutStop(c.stopped) })
+                : tr("lovejoin.chains.waitAll")}
             </p>
           </li>
         ))}
@@ -201,17 +215,11 @@ export function anywayWarning(status?: Pick<LovejoinStatus, "notMixed" | "unsure
   const has = (list?: Array<{ txHash: string; txIndex: number }>) =>
     !!box && !!list?.some((b) => b.txHash === box.txHash && b.txIndex === box.txIndex);
   const found = has(status?.deposits);
-  if (has(status?.unsure)) {
-    return "Koios hasn't said how it went into the pool, so the wallet can't tell whether it was mixed. If a deposit made it, bringing it back now shows where it went in: anyone can tie that deposit to your private balance. Refresh in a minute to ask Koios again.";
-  }
+  if (has(status?.unsure)) return t("lovejoin.anyway.privacy.untold");
   if (has(status?.fromPublic)) {
-    return found
-      ? "Koios says your public account paid the deposit that put it into the pool, and no mix has moved it since. Brought back now, it shows where it went in: anyone can tie your public account to your private balance. Mix again from my public account hides it first, and ties nothing new."
-      : "Its mix from your public account stopped before mixing it, so it's still the box that deposit made. Brought back now, it shows where it went in: anyone can tie your public account to your private balance. Mix again from my public account hides it first, and ties nothing new.";
+    return t(found ? "lovejoin.anyway.privacy.publicDeposit" : "lovejoin.anyway.privacy.publicStopped");
   }
-  return found
-    ? "Koios says a deposit put it into the pool, and no mix has moved it since, so it's still that deposit's box. Brought back now, it shows where it went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first."
-    : "Its chain stopped before mixing it, so it's still the box your deposit made. Brought back now, it shows where it went in: anyone can tie that deposit to your private balance. Mix my boxes again hides it first.";
+  return t(found ? "lovejoin.anyway.privacy.deposit" : "lovejoin.anyway.privacy.stopped");
 }
 
 /**
@@ -242,44 +250,49 @@ export function NotMixed({
   onAnyway: () => void;
 }) {
   const amounts = useAmounts();
+  const tr = useT();
   if (!count) return null;
   // Those known not to be mixed, said first; the others (`unsure`) may be, and are said apart (independent review M14).
   const known = count - Math.min(unsure, count);
   const first = known || count;
   // How many is an amount too: while balances are hidden, it's "some" (privacy review §2.16).
   const many = amounts.hidden || first > 1;
-  const which = amounts.hidden ? "Some of your boxes aren't" : first === 1 ? "One of your boxes isn't" : `${first} of your boxes aren't`;
-  const them = many ? "them" : "it";
+  // What the sentences agree with: a hidden amount reads as several, however many it is.
+  const agree = many ? 2 : 1;
   // After a restore, those a deposit made: as Koios said, never a stopped chain's or the user's deposit (M14).
   const found = Math.min(deposits, known);
   const stopped = known - found;
   const why = !found
-    ? `a chain stopped before mixing ${them}`
+    ? tr("lovejoin.warn.notMixed.why.stopped", { count: agree })
     : !stopped
-      ? `Koios says a deposit put ${them} into the pool, and no mix has moved ${them} since`
-      : `a chain stopped before mixing ${amounts.hidden ? "some" : stopped === 1 ? "one" : stopped}, and Koios says a deposit put ${amounts.hidden || found > 1 ? "the others" : "the other"} into the pool, with no mix since`;
+      ? tr("lovejoin.warn.notMixed.why.deposit", { count: agree })
+      : tr("lovejoin.warn.notMixed.why.both", {
+          stopped: amounts.hidden ? tr("lovejoin.warn.notMixed.some") : tr("lovejoin.warn.notMixed.number", { count: stopped }),
+          others: tr("lovejoin.warn.notMixed.theOther", { count: amounts.hidden || found > 1 ? 2 : 1 }),
+        });
   // A mix from the public account made them: the account pays to mix them again, and the private balance stays out of it (§2.10).
   const takes =
     fromPublic >= known
-      ? `${many ? "They" : "It"} came from your public account, so Mix again from my public account takes ${them} first: paid by the account, which ties nothing new.`
+      ? tr("lovejoin.warn.notMixed.takes.public", { count: agree })
       : fromPublic > 0
-        ? "Mix again from my public account takes those your public account put in first, and Mix my boxes again the others."
-        : `Mix my boxes again takes ${them} first.`;
-  const asks = "The wallet asks Koios again at the next read, and Mix my boxes again can't be used until it has.";
+        ? tr("lovejoin.warn.notMixed.takes.both")
+        : tr("lovejoin.warn.notMixed.takes.private", { count: agree });
+  const asks = tr("lovejoin.warn.notMixed.asks");
   // Koios hasn't said how these went in: said as they are, without the number while balances are hidden.
-  const unsureMany = amounts.hidden || unsure > 1;
-  const more = amounts.hidden ? "some more" : unsure === 1 ? "one more" : `${unsure} more`;
-  const waits = `${unsureMany ? "they don't come" : "it doesn't come"} back by ${unsureMany ? "themselves" : "itself"} meanwhile.`;
+  const tail = amounts.hidden ? tr("lovejoin.warn.notMixed.unsureTailHidden") : tr("lovejoin.warn.notMixed.unsureTail", { count: unsure });
+  const lead = !known
+    ? amounts.hidden
+      ? tr("lovejoin.warn.notMixed.unsureAllHidden")
+      : tr("lovejoin.warn.notMixed.unsureAll", { count: first })
+    : amounts.hidden
+      ? tr("lovejoin.warn.notMixed.leadHidden", { why })
+      : tr("lovejoin.warn.notMixed.lead", { count: first, why });
   return (
     <Callout tone="warn" testId="lovejoin-not-mixed">
       <div className="stack-tight">
-        <span>
-          {!known
-            ? `${which} known to be mixed yet: Koios hasn't said how ${many ? "they" : "it"} went into the pool. ${many ? "They don't come" : "It doesn't come"} back by ${many ? "themselves" : "itself"} meanwhile. ${asks}`
-            : `${which} mixed yet: ${why}. ${many ? "They never come" : "It never comes"} back by ${many ? "themselves" : "itself"}, since each still shows where it went in. ${takes}${unsure > 0 ? ` Koios hasn't said yet how ${more} went in: ${waits} ${asks}` : ""}`}
-        </span>
+        <span>{!known ? joinSentences([lead, asks]) : joinSentences([lead, takes, unsure > 0 && tail, unsure > 0 && asks])}</span>
         <button type="button" className="link align-start" onClick={onAnyway} disabled={busy} data-testid="lovejoin-anyway">
-          Bring one back anyway
+          {tr("lovejoin.notMixed.anyway")}
         </button>
       </div>
     </Callout>
@@ -297,6 +310,7 @@ export function Lovejoin({
   onPending: (pending: PendingTx) => void;
 }) {
   const amounts = useAmounts();
+  const tr = useT();
   const [status, setStatus] = useState<LovejoinStatus>();
   const [mixes, setMixes] = useState<SessionView[]>([]);
   // Asked first: bringing back a box not mixed yet, stopping a mix, or mixing a public mix's boxes again from the private balance.
@@ -444,8 +458,8 @@ export function Lovejoin({
     });
 
   const reviewTitle = (r: Review) => {
-    if (r.source === "public" && r.summary.seed) return "Review the seed";
-    return (r.source === "private" ? r.summary.mix.again : r.summary.again) ? "Review mixing again" : "Review the mix";
+    if (r.source === "public" && r.summary.seed) return tr("lovejoin.review.seed");
+    return tr((r.source === "private" ? r.summary.mix.again : r.summary.again) ? "lovejoin.review.again" : "lovejoin.review.mix");
   };
 
   const build = () =>
@@ -500,11 +514,15 @@ export function Lovejoin({
         titleId="lovejoin-review-title"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={tr("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" disabled={busy} onClick={() => void send()} data-testid="lovejoin-send">
-            {!busy ? "Send" : sending ? `Sending ${sending.sent} of ${sending.total}…` : "Sending…"}
+            {!busy
+              ? tr("common.send")
+              : sending
+                ? tr("lovejoin.sendingOf", { sent: sending.sent, total: sending.total })
+                : tr("common.sending")}
           </button>
         }
       >
@@ -525,7 +543,7 @@ export function Lovejoin({
           />
         )}
         <p className="note" data-testid="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED}
+          {LOVEJOIN_UNAUDITED()}
         </p>
       </Screen>
     );
@@ -554,39 +572,54 @@ export function Lovejoin({
   const needed = short ? Math.min(status!.floor - status!.others, MAX_SEED_BOXES) : 0;
   const seeding = Math.min(Math.max(seedBoxes ?? needed, 1), MAX_SEED_BOXES);
   return (
-    <Screen title="Lovejoin" titleId="lovejoin-title" onBack={onBack} backDisabled={busy} aside="A mixer for ADA, in 10 ₳ boxes" error={error}>
+    <Screen
+      title="Lovejoin"
+      titleId="lovejoin-title"
+      onBack={onBack}
+      backDisabled={busy}
+      aside={tr("lovejoin.aside")}
+      error={error}
+    >
       {banner}
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load()} />
-      {status && !status.available && <p className="note">Lovejoin isn't on this network yet.</p>}
+      {status && !status.available && <p className="note">{tr("lj.notOnNetwork")}</p>}
       {status?.available && (
         <ReviewRows testId="lovejoin-status">
           {/* What the wallet has in the pool is a balance, and so is how many boxes: hidden while balances are (launch review #56, privacy review §2.16). */}
-          <Row label="Your boxes in the pool" value={owned ? `${amounts.count(owned, "box", "boxes")}, ${amounts.ada(status.lovelace)} ₳` : "None"} strong />
-          {notMixed > unsure.size && <Row label="Not mixed yet" value={amounts.count(notMixed - unsure.size, "box", "boxes")} />}
-          {unsure.size > 0 && <Row label="Not known to be mixed yet" value={amounts.count(unsure.size, "box", "boxes")} />}
+          <Row
+            label={tr("lovejoin.row.yours")}
+            value={
+              owned
+                ? tr("lovejoin.row.yoursValue", { boxes: amounts.count(owned, "amount.boxes"), ada: amounts.ada(status.lovelace) })
+                : tr("lovejoin.row.none")
+            }
+            strong
+          />
+          {notMixed > unsure.size && (
+            <Row label={tr("lovejoin.row.notMixed")} value={amounts.count(notMixed - unsure.size, "amount.boxes")} />
+          )}
+          {unsure.size > 0 && <Row label={tr("lovejoin.row.notKnown")} value={amounts.count(unsure.size, "amount.boxes")} />}
           {owned > notMixed && next !== undefined && (
-            <Row label="Next one back" value={next <= Date.now() ? "In a few minutes" : whenOf(next, new Date())} />
+            <Row
+              label={tr("lovejoin.row.nextBack")}
+              value={next <= Date.now() ? tr("lovejoin.row.soon") : whenOf(next, new Date())}
+            />
           )}
         </ReviewRows>
       )}
       {short && (
         <div className="stack" data-testid="lovejoin-seed-offer">
           <Callout tone="warn">
-            Lovejoin's pool holds {plural(status!.others, "box", "boxes")} that aren't yours, and the wallet mixes only
-            once it holds {status!.floor}, so there's enough to mix with. Nothing can be mixed until then, and a mix is
-            what puts boxes in — so the pool has to be started by someone putting boxes in for nothing.
+            {tr("lovejoin.seed.warn.floor", { count: status!.others, floor: status!.floor })}
           </Callout>
           <Callout tone="privacy">
-            Seeding hides nothing of yours: the boxes go in and come back unmixed, and anyone reading the chain can
-            follow both. It gives other people boxes to mix with. Yours stay in the pool, with no wait set, until you
-            bring one back. Your own boxes never count towards the floor, so seeding from this wallet won't let this
-            wallet mix.{" "}
-            {source === "private"
-              ? "It's paid from your private balance, through a one-time account: that spends private UTxOs and links them to the boxes, for nothing you gain. The public account is the cheaper side to seed from."
-              : "It's paid from your public account, in one transaction that spends no script."}
+            {joinSentences([
+              tr("lovejoin.seed.privacy.hidesNothing"),
+              tr(source === "private" ? "lovejoin.seed.privacy.fromPrivate" : "lovejoin.seed.privacy.fromPublic"),
+            ])}
           </Callout>
           <div className="field">
-            <label htmlFor="lovejoin-seed-boxes">Boxes of 10 ₳ to put in</label>
+            <label htmlFor="lovejoin-seed-boxes">{tr("lovejoin.seed.boxesLabel")}</label>
             <input
               id="lovejoin-seed-boxes"
               type="number"
@@ -600,15 +633,18 @@ export function Lovejoin({
               data-testid="lovejoin-seed-boxes"
             />
             <p className="note" data-testid="lovejoin-seed-cost">
-              {plural(seeding, "box", "boxes")}, {formatAda((BigInt(seeding) * 10_000_000n).toString())} ₳ from your{" "}
-              {source === "private" ? "private balance" : "public account"}. It comes back when you bring the boxes back.
-              The pool needs{" "}
-              {plural(needed, "more box", "more boxes")} before this wallet's own mixes run, and they have to come from
-              somewhere else. At most {MAX_SEED_BOXES} fit in one.
+              {joinSentences([
+                tr(source === "private" ? "lovejoin.seed.costPrivate" : "lovejoin.seed.costPublic", {
+                  count: seeding,
+                  ada: formatAda((BigInt(seeding) * 10_000_000n).toString()),
+                }),
+                tr("lovejoin.seed.needs", { count: needed }),
+                tr("lovejoin.seed.atMost", { most: MAX_SEED_BOXES }),
+              ])}
             </p>
           </div>
           <button type="button" className="secondary" disabled={busy} onClick={() => void seed()} data-testid="lovejoin-seed">
-            Seed the pool with {plural(seeding, "box", "boxes")}
+            {tr("lovejoin.seed.button", { count: seeding })}
           </button>
         </div>
       )}
@@ -630,7 +666,7 @@ export function Lovejoin({
               onClick={() => void againPublic()}
               data-testid="lovejoin-again-public"
             >
-              {pressed === "again-public" ? "Building…" : "Mix again from my public account"}
+              {pressed === "again-public" ? tr("common.building") : tr("lovejoin.againPublic")}
             </button>
           )}
           {owned > publicBoxes && (
@@ -641,11 +677,11 @@ export function Lovejoin({
               onClick={() => void again()}
               data-testid="lovejoin-again"
             >
-              {pressed === "again" ? "Building…" : "Mix my boxes again"}
+              {pressed === "again" ? tr("common.building") : tr("lovejoin.again")}
             </button>
           )}
           <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={() => void now()} data-testid="lovejoin-now">
-            {pressed === "now" ? "Working…" : "Bring one back now"}
+            {pressed === "now" ? tr("lovejoin.working") : tr("lovejoin.bringBackNow")}
           </button>
           {publicBoxes > 0 && (
             <button
@@ -655,12 +691,12 @@ export function Lovejoin({
               onClick={() => setAsking({ privateAnyway: true })}
               data-testid="lovejoin-again-anyway"
             >
-              Pay from my private balance anyway
+              {tr("lovejoin.payPrivateAnyway")}
             </button>
           )}
           {mixingAgain && (
             <p className="note" data-testid="lovejoin-again-running">
-              Your boxes are being mixed again. None comes back until that's sent; then each waits again.
+              {tr("lovejoin.againRunning")}
             </p>
           )}
         </div>
@@ -671,41 +707,46 @@ export function Lovejoin({
       {sending && (
         <div className="stack" data-testid="lovejoin-public-sending">
           <p className="note">
-            Your mix from the public account:{" "}
+            {tr("lovejoin.sending.lead")}{" "}
             {sending.stopped
-              ? `stopped after ${sending.sent} of ${sending.total} transactions${sending.maybeSent ? ", and the next may have gone through" : ""}.`
-              : `${sending.sent} of ${sending.total} transactions sent. The rest go as blocks make room.`}
+              ? tr(sending.maybeSent ? "lovejoin.sending.stoppedMaybe" : "lovejoin.sending.stopped", {
+                  sent: sending.sent,
+                  total: sending.total,
+                })
+              : tr("lovejoin.sending.sent", { sent: sending.sent, total: sending.total })}
           </p>
-          {sending.stopped && <p className="token-row__detail">Why it stopped: {sending.stopped}</p>}
+          {sending.stopped && (
+            <p className="token-row__detail">{tr("lovejoin.detail.whyStopped", { why: withoutStop(sending.stopped) })}</p>
+          )}
         </div>
       )}
 
       {status?.available && (
         <section className="section stack" aria-labelledby="lovejoin-mix-title">
-          <h2 id="lovejoin-mix-title">Mix</h2>
+          <h2 id="lovejoin-mix-title">{tr("lovejoin.mix.title")}</h2>
           <Tabs
-            label="Mix from"
+            label={tr("lovejoin.mix.from")}
             prefix="lovejoin-"
             tabs={[
-              { value: "private", label: "Private balance" },
-              { value: "public", label: "Public account" },
+              { value: "private", label: tr("lovejoin.mix.private") },
+              { value: "public", label: tr("lovejoin.mix.public") },
             ]}
             value={source}
             onChange={setSource}
           />
           <div className="field" role="tabpanel" id={`lovejoin-panel-${source}`} aria-labelledby={`lovejoin-tab-${source}`}>
-            <label htmlFor="lovejoin-boxes">Boxes of 10 ₳</label>
+            <label htmlFor="lovejoin-boxes">{tr("lovejoin.mix.boxesLabel")}</label>
             <div className="stepper">
-              <button type="button" className="icon-button" aria-label="One box fewer" disabled={boxes <= 1} onClick={() => setBoxes((b) => b - 1)}>
+              <button type="button" className="icon-button" aria-label={tr("lovejoin.mix.fewer")} disabled={boxes <= 1} onClick={() => setBoxes((b) => b - 1)}>
                 −
               </button>
               <output id="lovejoin-boxes" className="stepper__value" data-testid="lovejoin-boxes">
-                {plural(boxes, "box", "boxes")}, {formatAda((BigInt(boxes) * 10_000_000n).toString())} ₳
+                {tr("lovejoin.mix.boxesAda", { count: boxes, ada: formatAda((BigInt(boxes) * 10_000_000n).toString()) })}
               </output>
               <button
                 type="button"
                 className="icon-button"
-                aria-label="One box more"
+                aria-label={tr("lovejoin.mix.more")}
                 disabled={boxes >= MAX_BOXES}
                 onClick={() => setBoxes((b) => b + 1)}
               >
@@ -715,23 +756,33 @@ export function Lovejoin({
           </div>
           {funding && (
             <ReviewRows testId="lovejoin-mix-cost">
-              <Row label="Mixed" value={`${waves(funding.depth)}, ${plural(funding.mixes, "mix", "mixes")}`} />
-              <Row label="Mix fees, about" value={`${formatAda(funding.mixFees)} ₳`} />
-              {source === "private" && <Row label="Into a one-time account" value={`${formatAda(funding.lovelace)} ₳, and 5 ₳ of collateral`} />}
-              {source === "public" && <Row label="From your public account" value={`${formatAda(funding.lovelace)} ₳, its collateral backing the mixes`} />}
-              <Row label="Back later" value={`Each box on its own, after ${delayText(funding.delay)}`} />
+              <Row
+                label={tr("lovejoin.mixedLabel")}
+                value={tr("lovejoin.mix.depthAndMixes", {
+                  count: funding.depth,
+                  mixes: tr("amount.mixes", { count: funding.mixes }),
+                })}
+              />
+              <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(funding.mixFees)} ₳`} />
+              {source === "private" && (
+                <Row label={tr("lovejoin.mix.intoOneTime")} value={tr("lovejoin.mix.andCollateral", { ada: formatAda(funding.lovelace) })} />
+              )}
+              {source === "public" && (
+                <Row label={tr("lovejoin.mix.fromPublic")} value={tr("lovejoin.mix.collateralBacks", { ada: formatAda(funding.lovelace) })} />
+              )}
+              <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(funding.delay) })} />
             </ReviewRows>
           )}
-          <p className="note">What the mixes don't use comes back{source === "private" ? " into your private balance" : " to your public account"}.</p>
+          <p className="note">{tr(source === "private" ? "lovejoin.mix.restPrivate" : "lovejoin.mix.restPublic")}</p>
           <button type="button" className="primary" disabled={busy || !funding} onClick={() => void build()} data-testid="lovejoin-mix">
-            {busy ? "Building…" : "Review"}
+            {busy ? tr("common.building") : tr("common.review")}
           </button>
         </section>
       )}
 
       {shown.length > 0 && (
         <section className="section" aria-labelledby="lovejoin-mixes-title">
-          <h2 id="lovejoin-mixes-title">Mixes from your private balance</h2>
+          <h2 id="lovejoin-mixes-title">{tr("lovejoin.mixes.title")}</h2>
           <ul className="list" data-testid="lovejoin-mixes">
             {shown.map((m) => (
               <li key={m.index} className="token-row swap-row">
@@ -739,24 +790,27 @@ export function Lovejoin({
                   <ShieldIcon size={16} />
                 </span>
                 <span className="token-row__label">
-                  {amounts.count(m.mix!.boxes, "box", "boxes")} {m.mix!.again ? "mixed again" : "of 10 ₳"}
+                  {tr(m.mix!.again ? "lovejoin.mixes.again" : "lovejoin.mixes.ofTen", {
+                    boxes: amounts.count(m.mix!.boxes, "amount.boxes"),
+                  })}
                 </span>
                 <SwapTag {...tagOf(m)} />
                 <span className="token-row__sub">{subOf(m, Date.now())}</span>
                 {(detailOf(m) || stoppable(m)) && (
                   <p className="token-row__detail" data-testid="lovejoin-mix-detail">
                     {detailOf(m)}
-                    {((m.auto?.retry && !isOver(m) && !m.chain?.stopped) || unseen(m)) && (
+                    {/* After the detail's sentences, the language's gap; between two links, a space. */}
+                    {retryable(m) && (
                       <>
-                        {" "}
+                        {sentenceGap()}
                         <button type="button" className="link" disabled={busy} onClick={() => void retry(m.index)}>
-                          {unseen(m) ? "Try again" : "Try now"}
+                          {tr(unseen(m) ? "common.tryAgain" : "lovejoin.mixes.tryNow")}
                         </button>
                       </>
                     )}
                     {stoppable(m) && (
                       <>
-                        {" "}
+                        {retryable(m) ? " " : sentenceGap()}
                         <button
                           type="button"
                           className="link"
@@ -764,7 +818,7 @@ export function Lovejoin({
                           onClick={() => setAsking({ stop: m.index })}
                           data-testid="lovejoin-mix-stop"
                         >
-                          Stop
+                          {tr("lovejoin.mixes.stop")}
                         </button>
                       </>
                     )}
@@ -779,21 +833,21 @@ export function Lovejoin({
       <WayBack />
       {status?.available && (
         <Callout tone="warn" testId="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED}
+          {LOVEJOIN_UNAUDITED()}
         </Callout>
       )}
       {asking && "anyway" in asking && (
         <Modal
-          title={firstUnsure ? "Bring back a box that may not be mixed?" : "Bring back a box that wasn't mixed?"}
+          title={tr(firstUnsure ? "lovejoin.anyway.titleUnsure" : "lovejoin.anyway.title")}
           titleId="lovejoin-anyway-title"
           onClose={() => setAsking(undefined)}
           foot={
             <>
               <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                Keep it
+                {tr("lovejoin.anyway.keep")}
               </button>
               <button type="button" className="danger" onClick={anyway} data-testid="lovejoin-anyway-confirm">
-                Bring it back anyway
+                {tr("lovejoin.anyway.confirm")}
               </button>
             </>
           }
@@ -803,47 +857,40 @@ export function Lovejoin({
       )}
       {asking && "privateAnyway" in asking && (
         <Modal
-          title="Pay from your private balance?"
+          title={tr("lovejoin.privateAnyway.title")}
           titleId="lovejoin-again-anyway-title"
           onClose={() => setAsking(undefined)}
           foot={
             <>
               <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                Keep them apart
+                {tr("lovejoin.privateAnyway.keep")}
               </button>
               <button type="button" className="danger" onClick={() => void again(true)} data-testid="lovejoin-again-anyway-confirm">
-                Pay from my private balance anyway
+                {tr("lovejoin.payPrivateAnyway")}
               </button>
             </>
           }
         >
-          <p className="note">
-            Some of your boxes came from a mix from your public account, which paid for it in the open. Paying for their mixes
-            from your private balance ties the private UTxOs it spends to your public account. Mix again from my public
-            account mixes them without that.
-          </p>
+          <p className="note">{tr("lovejoin.privateAnyway.privacy.ties")}</p>
         </Modal>
       )}
       {asking && "stop" in asking && (
         <Modal
-          title="Stop this mix?"
+          title={tr("lovejoin.stop.title")}
           titleId="lovejoin-stop-title"
           onClose={() => setAsking(undefined)}
           foot={
             <>
               <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                Keep going
+                {tr("lovejoin.stop.keep")}
               </button>
               <button type="button" className="danger" onClick={() => stop(asking.stop)} data-testid="lovejoin-stop-confirm">
-                Stop the mix
+                {tr("lovejoin.stop.confirm")}
               </button>
             </>
           }
         >
-          <p className="note">
-            Its boxes don't go into Lovejoin: everything at its one-time account comes back directly into your private
-            balance, less the return's network fee. A mix whose chain has begun goes on.
-          </p>
+          <p className="note">{tr("lovejoin.stop.note")}</p>
         </Modal>
       )}
     </Screen>
@@ -857,11 +904,10 @@ export function Lovejoin({
  * that carry both ends. Exported for its test.
  */
 export function WayBack() {
+  const tr = useT();
   return (
     <Callout tone="privacy" testId="lovejoin-way-back">
-      A box waits in the pool while other people's mixes move it, and comes back into your private balance on its own,
-      paid from itself, with giveme.my's collateral: nothing on its way back names a session or an account. Bringing one
-      back early shortens that wait, which makes it easier to match by its timing. {LOVEJOIN_SEEN}
+      {joinSentences([tr("lovejoin.privacy.wayBack"), LOVEJOIN_SEEN()])}
     </Callout>
   );
 }
@@ -872,118 +918,122 @@ export function WayBack() {
  * boxes back into a Seedelf, the wallet's way back stands out among the
  * boxes those mixes made.
  */
-const PUBLIC_MIX_WAY_BACK =
-  "Each box comes back into a new private UTxO of its own, but while few people bring Lovejoin boxes into a Seedelf, the box coming back can be picked out among those your account's mixes made.";
+const PUBLIC_MIX_WAY_BACK = () => t("lovejoin.privacy.publicWayBack");
 
 /** A mix from the private balance: the one-time account's funding, then what runs by itself. */
 export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
+  const tr = useT();
   const [boxesPart, collateral] = summary.payments;
   const { mix } = summary;
   if (mix.again) return <AgainReview summary={summary} />;
   return (
     <>
-      <h2>First, a one-time account is funded</h2>
+      <h2>{tr("lovejoin.review.firstFunded")}</h2>
       <ReviewRows testId="lovejoin-private-review">
-        <Row label="To" value={`Private session ${summary.index + 1}`} strong />
-        <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label="For the boxes and their mixes" value={`${formatAda(boxesPart!.lovelace)} ₳`} strong />
-        <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
-        <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-        <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
+        <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
+        <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
+        <Row label={tr("lovejoin.review.forBoxes")} value={`${formatAda(boxesPart!.lovelace)} ₳`} strong />
+        <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral!.lovelace)} ₳`} />
+        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
+        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)} ₳`} />
       </ReviewRows>
-      <h2>Then it runs by itself</h2>
+      <h2>{tr("lovejoin.review.thenItself")}</h2>
       <ReviewRows testId="lovejoin-private-then">
-        <Row label="Into Lovejoin" value={`${plural(mix.boxes, "box", "boxes")} of 10 ₳`} strong />
-        <Row label="Mixed" value={`${waves(mix.depth)}, ${plural(mix.mixes, "mix", "mixes")}, about ${formatAda(mix.mixFees)} ₳`} />
-        <Row label="Back later" value={`Each box on its own, after ${delayText(mix.delay)}`} />
+        <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: mix.boxes })} strong />
+        <Row
+          label={tr("lovejoin.mixedLabel")}
+          value={tr("lovejoin.review.depthMixesCost", {
+            count: mix.depth,
+            mixes: tr("amount.mixes", { count: mix.mixes }),
+            ada: formatAda(mix.mixFees),
+          })}
+        />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} />
       </ReviewRows>
-      <p className="note">
-        Once the funding lands, the account deposits the boxes and pays every mix, all in one go, and what the mixes
-        don't use comes back with its collateral into the private UTxO this payment leaves. Each box comes back a few
-        minutes into the first time the wallet is unlocked after its wait.
-      </p>
-      <Callout tone="privacy">
-        This payment links the private UTxOs it spends to the one-time account, and the account to the boxes going in.
-        Each box comes back into a new private UTxO of its own. {lovejoinHides(mix.depth)}
-      </Callout>
+      <p className="note">{tr("lovejoin.review.privateNote")}</p>
+      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
-      <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
+      <p className="note">{tr("lovejoin.review.givemeNote")}</p>
     </>
   );
 }
 
 /** Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. */
 function AgainReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
+  const tr = useT();
   const [mixesPart, collateral] = summary.payments;
   const { mix } = summary;
   return (
     <>
-      <h2>First, a one-time account is funded</h2>
+      <h2>{tr("lovejoin.review.firstFunded")}</h2>
       <ReviewRows testId="lovejoin-again-review">
-        <Row label="To" value={`Private session ${summary.index + 1}`} strong />
-        <Row label="Account" value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label="For the mixes" value={`${formatAda(mixesPart!.lovelace)} ₳`} strong />
-        <Row label="Its collateral" value={`${formatAda(collateral!.lovelace)} ₳`} />
-        <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-        <Row label="Back to your private balance" value={`${formatAda(summary.changeLovelace)} ₳`} />
+        <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
+        <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
+        <Row label={tr("lovejoin.review.forMixes")} value={`${formatAda(mixesPart!.lovelace)} ₳`} strong />
+        <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral!.lovelace)} ₳`} />
+        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
+        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)} ₳`} />
       </ReviewRows>
-      <h2>Then it runs by itself</h2>
+      <h2>{tr("lovejoin.review.thenItself")}</h2>
       <ReviewRows testId="lovejoin-again-then">
         <Row
-          label="Mixed again"
-          value={mix.owned && mix.owned > mix.boxes ? `${mix.boxes} of your ${mix.owned} boxes in the pool` : `${plural(mix.boxes, "box", "boxes")} of yours in the pool`}
+          label={tr("lovejoin.review.mixedAgain")}
+          value={
+            mix.owned && mix.owned > mix.boxes
+              ? tr("lovejoin.review.someOfYours", { boxes: mix.boxes, owned: mix.owned })
+              : tr("lovejoin.review.allOfYours", { count: mix.boxes })
+          }
           strong
         />
-        <Row label="Mixed" value={`${waves(mix.depth)}, ${plural(mix.mixes, "mix", "mixes")}, about ${formatAda(mix.mixFees)} ₳`} />
-        <Row label="Back later" value={`Each box on its own, after ${delayText(mix.delay)} from the mixes`} />
+        <Row
+          label={tr("lovejoin.mixedLabel")}
+          value={tr("lovejoin.review.depthMixesCost", {
+            count: mix.depth,
+            mixes: tr("amount.mixes", { count: mix.mixes }),
+            ada: formatAda(mix.mixFees),
+          })}
+        />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(mix.delay) })} />
       </ReviewRows>
-      <p className="note">
-        Once the funding lands, the account pays for every mix, all in one go: each box of yours is mixed with two others,
-        and every box coming out is mixed again, as deep as Settings says. What the mixes don't use comes back with the
-        collateral into the private UTxO this payment leaves. Until then no box comes back; after, each waits again.
-      </p>
+      <p className="note">{tr("lovejoin.review.againNote")}</p>
       {mix.owned && mix.owned > mix.boxes && (
         <p className="note" data-testid="lovejoin-again-rest">
-          That's as many as one go mixes now: the pool has enough other boxes for {plural(mix.boxes, "box", "boxes")} at this depth.
-          Mix the rest again once this is done.
+          {tr("lovejoin.review.asManyAsOneGo", { count: mix.boxes })}
         </p>
       )}
       <Callout tone="privacy">
-        This payment links the private UTxOs it spends to the one-time account, and the account to the mixes it pays for:
-        one of the three boxes going into each first mix is likely yours. Each still comes back into a new private UTxO of
-        its own. {lovejoinHides(mix.depth)}
-        {mix.publicToo &&
-          " Some of these boxes came from a mix from your public account: paying for their mixes from here ties the private UTxOs this payment spends to your public account."}
+        {joinSentences([
+          tr("lovejoin.review.privacy.again"),
+          lovejoinHides(mix.depth),
+          mix.publicToo && tr("lovejoin.review.privacy.publicToo"),
+        ])}
       </Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />
-      <p className="note">Send asks giveme.my to lend the funding's collateral, then submits.</p>
+      <p className="note">{tr("lovejoin.review.givemeNote")}</p>
     </>
   );
 }
 
 /** A mix from the public account: the deposit and every mix, sent now. */
 export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
+  const tr = useT();
   if (summary.again) return <PublicAgainReview summary={summary} />;
   if (summary.seed) return <PublicSeedReview summary={summary} />;
   return (
     <>
       <ReviewRows testId="lovejoin-public-review">
-        <Row label="Into Lovejoin" value={`${plural(summary.boxes, "box", "boxes")} of 10 ₳`} strong />
-        <Row label="Mixed" value={`${waves(summary.depth)}, ${plural(summary.mixes, "mix", "mixes")}`} />
-        <Row label="Network fees" value={`${formatAda(summary.fees)} ₳`} />
-        <Row label="Transactions" value={String(summary.txs)} />
-        <Row label="Stays in your public account" value={`${formatAda(summary.change)} ₳`} />
-        <Row label="Back later" value={`Each box on its own, after ${delayText(summary.delay)}`} />
+        <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: summary.boxes })} strong />
+        <Row
+          label={tr("lovejoin.mixedLabel")}
+          value={tr("lovejoin.mix.depthAndMixes", { count: summary.depth, mixes: tr("amount.mixes", { count: summary.mixes }) })}
+        />
+        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)} ₳`} />
+        <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
+        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} />
       </ReviewRows>
-      <p className="note">
-        Send sends the deposit and every mix, one after another, each on the one before's change. Your public account
-        pays them, and its collateral backs every mix. Each box comes back into your private balance some minutes into
-        the first time the wallet is unlocked after its wait.
-      </p>
-      <Callout tone="privacy">
-        The deposit comes from your public account, so the boxes going in are tied to it, and anyone can see your account
-        paid for these mixes. {PUBLIC_MIX_WAY_BACK}
-      </Callout>
+      <p className="note">{tr("lovejoin.review.publicNote")}</p>
+      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.public"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );
 }
@@ -993,24 +1043,20 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
  * the review says that plainly rather than borrowing the mix's words.
  */
 function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
+  const tr = useT();
   return (
     <>
       <ReviewRows testId="lovejoin-seed-review">
-        <Row label="Into Lovejoin" value={`${plural(summary.boxes, "box", "boxes")} of 10 ₳`} strong />
-        <Row label="Mixed" value="Not at all: this is a seed" />
-        <Row label="Network fees" value={`${formatAda(summary.fees)} ₳`} />
-        <Row label="Transactions" value={String(summary.txs)} />
-        <Row label="Stays in your public account" value={`${formatAda(summary.change)} ₳`} />
-        <Row label="Back later" value="Only when you bring one back" />
+        <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: summary.boxes })} strong />
+        <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.review.notAtAll")} />
+        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)} ₳`} />
+        <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
+        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} />
       </ReviewRows>
-      <p className="note">
-        Send sends the deposit. Your public account pays it, and the boxes wait in the pool with no time set: bring one
-        back whenever you want it.
-      </p>
+      <p className="note">{tr("lovejoin.review.seedNote")}</p>
       <Callout tone="warn" testId="lovejoin-seed-warning">
-        This hides nothing of yours. The boxes go in from your public account and come back to it unmixed, and anyone
-        reading the chain can follow both. It gives other people boxes to mix with, which is the only way a pool can
-        start, and the wallet mixes for you only once the pool holds enough boxes that aren't yours.
+        {tr("lovejoin.review.warn.seed")}
       </Callout>
     </>
   );
@@ -1018,25 +1064,22 @@ function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
 
 /** Mix again from my public account: the boxes a mix from it put in, each mix paid by it, sent now (§2.10). */
 function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
+  const tr = useT();
   return (
     <>
       <ReviewRows testId="lovejoin-public-again-review">
-        <Row label="Mixed again" value={`${plural(summary.boxes, "box", "boxes")} your public account put in`} strong />
-        <Row label="Mixed" value={`${waves(summary.depth)}, ${plural(summary.mixes, "mix", "mixes")}`} />
-        <Row label="Network fees" value={`${formatAda(summary.fees)} ₳`} />
-        <Row label="Transactions" value={String(summary.txs)} />
-        <Row label="Stays in your public account" value={`${formatAda(summary.change)} ₳`} />
-        <Row label="Back later" value={`Each box on its own, after ${delayText(summary.delay)} from the mixes`} />
+        <Row label={tr("lovejoin.review.mixedAgain")} value={tr("lovejoin.review.publicPutIn", { count: summary.boxes })} strong />
+        <Row
+          label={tr("lovejoin.mixedLabel")}
+          value={tr("lovejoin.mix.depthAndMixes", { count: summary.depth, mixes: tr("amount.mixes", { count: summary.mixes }) })}
+        />
+        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)} ₳`} />
+        <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
+        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} />
       </ReviewRows>
-      <p className="note">
-        Send sends every mix, one after another, each on the one before's change: each box of yours is mixed with two
-        others, and every box coming out is mixed again, as deep as Settings says. Your public account pays them, and its
-        collateral backs every mix. Until they're all sent no box comes back; after, each waits again.
-      </p>
-      <Callout tone="privacy">
-        These boxes came from a mix from your public account, which paid for it in the open, so paying for their mixes from
-        it ties nothing new, and your private balance stays out of it. {PUBLIC_MIX_WAY_BACK}
-      </Callout>
+      <p className="note">{tr("lovejoin.review.publicAgainNote")}</p>
+      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );
 }

@@ -6,6 +6,7 @@
 // the UI and it's dropped when the flow ends.
 
 import { useEffect, useState } from "react";
+import { joinList, useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
 import { call } from "../background";
@@ -32,6 +33,7 @@ function randomPositions(count: number, n: number): number[] {
 type Step = "reveal" | "confirm" | "password";
 
 export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Status) => void }) {
+  const t = useT();
   const [step, setStep] = useState<Step>("reveal");
   const [phrase, setPhrase] = useState<string[]>([]);
   const [revealed, setRevealed] = useState(false);
@@ -57,7 +59,7 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
   function checkConfirm() {
     const wrong = positions.find((p) => answers[p - 1] !== phrase[p - 1]);
     if (wrong) {
-      setError(`Word ${wrong} doesn't match. Check your written copy.`);
+      setError(t("create.warn.wordMismatch", { number: wrong }));
       return;
     }
     setError(undefined);
@@ -78,42 +80,35 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
   }
 
   const steps: Step[] = ["reveal", "confirm", "password"];
-  const aside = `Step ${steps.indexOf(step) + 1} of ${steps.length}`;
+  const aside = t("create.stepOf", { step: steps.indexOf(step) + 1, total: steps.length });
   const back = step === "reveal" ? onBack : () => setStep(step === "password" ? "confirm" : "reveal");
 
   if (step === "reveal") {
     return (
       <Screen
-        title="Your recovery phrase"
+        title={t("create.phrase.title")}
         titleId="create-title"
         onBack={back}
         aside={aside}
         error={error}
         foot={
           <button className="primary" disabled={!revealed} onClick={startConfirm}>
-            I've written it down
+            {t("create.phrase.written")}
           </button>
         }
       >
-        <p className="note">
-          Write these 24 words on paper, in order, and keep it somewhere safe. They are the only way to restore this
-          wallet. Anyone who has them can take your funds.
-        </p>
-        <Callout tone="warn">
-          Don't copy the phrase into a screenshot, a chat, an email or a cloud note, and never type it into a website.
-        </Callout>
+        <p className="note">{t("create.phrase.note")}</p>
+        <Callout tone="warn">{t("create.phrase.warn.neverCopy")}</Callout>
         <div className={revealed ? "phrase-reveal" : "phrase-reveal phrase-reveal--hidden"}>
           <PhraseGrid words={phrase} revealed={revealed} />
           {!revealed && (
             <button className="secondary phrase-reveal__button" onClick={() => setRevealed(true)} disabled={!phrase.length}>
               <EyeIcon />
-              Reveal phrase
+              {t("create.phrase.reveal")}
             </button>
           )}
         </div>
-        <Callout>
-          This phrase restores your Seedelfs only in Seedelf Wallet. Other Cardano wallets will show your public account and nothing else.
-        </Callout>
+        <Callout>{t("create.phrase.onlyHere")}</Callout>
       </Screen>
     );
   }
@@ -121,26 +116,26 @@ export function Create({ onBack, onDone }: { onBack: () => void; onDone: (s: Sta
   if (step === "confirm") {
     return (
       <Screen
-        title="Confirm your phrase"
+        title={t("create.confirm.title")}
         titleId="create-title"
         onBack={back}
         aside={aside}
         error={error}
         foot={
           <button className="primary" disabled={positions.some((p) => !answers[p - 1])} onClick={checkConfirm}>
-            Confirm
+            {t("create.confirm.button")}
           </button>
         }
       >
-        <p className="note">Enter words {positions.join(", ")} from your written copy.</p>
+        <p className="note">{t("create.confirm.enterWords", { words: joinList(positions.map(String)) })}</p>
         <PhraseInput words={answers} onChange={setAnswers} positions={positions} />
       </Screen>
     );
   }
 
   return (
-    <Screen title="Set a password" titleId="create-title" onBack={back} aside={aside} error={error}>
-      <SetPassword submitLabel="Create wallet" busy={busy} onSubmit={create} />
+    <Screen title={t("password.setTitle")} titleId="create-title" onBack={back} aside={aside} error={error}>
+      <SetPassword submitLabel={t("create.createWallet")} busy={busy} onSubmit={create} />
     </Screen>
   );
 }

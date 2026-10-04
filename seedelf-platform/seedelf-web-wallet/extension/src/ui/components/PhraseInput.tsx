@@ -3,6 +3,7 @@
 // screens are the reference for the behaviour, not the code.
 
 import { useEffect, useId, useRef, useState } from "react";
+import { useT } from "../../i18n";
 
 import { wordlist } from "../background";
 
@@ -109,6 +110,7 @@ interface WordBoxProps {
 }
 
 function WordBox({ position, value, list, inputRef, onChange, onAccept, onPaste }: WordBoxProps) {
+  const t = useT();
   const [focused, setFocused] = useState(false);
   const [touched, setTouched] = useState(false);
   const [active, setActive] = useState(0);
@@ -133,7 +135,7 @@ function WordBox({ position, value, list, inputRef, onChange, onAccept, onPaste 
       <input
         ref={inputRef}
         className="word__input"
-        aria-label={`Word ${position}`}
+        aria-label={t("phrase.wordNumber", { number: position })}
         aria-invalid={invalid || undefined}
         role="combobox"
         aria-autocomplete="list"
@@ -178,7 +180,7 @@ function WordBox({ position, value, list, inputRef, onChange, onAccept, onPaste 
         }}
       />
       {open && (
-        <ul className="suggestions" role="listbox" id={listId} aria-label={`Suggestions for word ${position}`}>
+        <ul className="suggestions" role="listbox" id={listId} aria-label={t("phrase.suggestions", { number: position })}>
           {suggestions.map((word, i) => (
             <li
               key={word}

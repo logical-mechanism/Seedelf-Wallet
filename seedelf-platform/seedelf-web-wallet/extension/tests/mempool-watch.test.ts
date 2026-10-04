@@ -78,7 +78,7 @@ describe("a maybe-sent private payment the network says it has", () => {
       expect(pending).not.toHaveProperty("dropped");
     }
     expect(await spentSet(t.session)).toEqual(new Set(inputs));
-    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     // It lands at last: into the history, and new payments go ahead.
     t.koios.confirmations = 1;
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: 1 });
@@ -149,7 +149,7 @@ describe("a maybe-sent private payment the network says it has, but not for good
     await t.wallet.reset();
     await t.wallet.create(account(12).phrase, PASSWORD);
     await t.pending.adoptKept(["preprod", "mainnet"]);
-    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT);
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
     await busyFor(t, UNSEEN_AFTER_MS);
     // Put back within its 20 minutes, it goes again first, refused as spent again; then it's let go.
     const sent = t.koios.submitted.length;

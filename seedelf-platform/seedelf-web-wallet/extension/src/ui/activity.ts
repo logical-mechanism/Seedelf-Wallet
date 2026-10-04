@@ -3,8 +3,9 @@
 // come from what ships with the wallet (the token list, the DRep list) and
 // what the worker already knew (a pool's ticker): nothing here asks anyone.
 
+import { type I18nKey, t } from "../i18n";
 import type { NetworkName } from "../networks";
-import type { ActivityEntry, ActivityStaking, TokenQuantity } from "../shared/rpc";
+import { entrySession, type ActivityEntry, type ActivityStaking, type TokenQuantity } from "../shared/rpc";
 import { drepList } from "./dreps";
 import { formatAda, formatQuantity, shortHex, voteLabel } from "./format";
 import { tokenDecimals, tokenMark, tokenText } from "./tokens";
@@ -15,44 +16,58 @@ export function activityTitle(e: ActivityEntry): string {
     case "received":
       // Found by the private history's first reading (a restore, another profile): who paid isn't known
       // (independent review L38).
-      return e.origin?.origin === "unknown" ? "Already in your private balance" : "Received";
+      return t(e.origin?.origin === "unknown" ? "activity.title.alreadyPrivate" : "activity.title.received");
     case "sent":
-      return "Sent";
+      return t("activity.title.sent");
     case "move-in":
-      return "Made private";
+      return t("activity.title.madePrivate");
     case "mint":
-      return "Created a Seedelf";
+      return t("activity.title.mint");
     case "transfer":
-      return "Sent to a Seedelf";
+      return t("activity.title.transfer");
     case "withdraw":
-      return "Made public";
+      return t("activity.title.madePublic");
     case "remove":
-      return "Removed a Seedelf";
+      return t("activity.title.remove");
     case "send":
-      return "Sent";
+      return t("activity.title.sent");
     case "collateral":
-      return "Set collateral";
+      return t("activity.title.collateral");
     case "stake":
-      return "Staked";
+      return t("activity.title.staked");
     case "vote":
-      return "Delegated voting power";
+      return t("activity.title.vote");
     case "withdraw-rewards":
-      return "Withdrew rewards";
+      return t("activity.title.withdrewRewards");
     case "unstake":
-      return "Stopped staking";
+      return t("activity.title.unstake");
     case "session-out":
-      return "Into a private session";
+      return t("activity.title.sessionOut");
     case "session-swap":
-      return "Placed a swap order";
+      return t("activity.title.sessionSwap");
     case "session-cancel":
-      return "Cancelled an order";
+      return t("activity.title.sessionCancel");
     case "session-back":
-      return "Back from a private session";
+      return t("activity.title.sessionBack");
     case "lovejoin-withdraw":
-      return "Back from Lovejoin";
+      return t("activity.title.lovejoinWithdraw");
     case "lovejoin-mix":
-      return "Into Lovejoin";
+      return t("activity.title.lovejoinMix");
   }
+}
+
+/**
+ * Who or where an entry names, in words: a private session by its number,
+ * whoever was paid (the first, and how many more beside), a Seedelf's label,
+ * an address. Said here, in the page's language, from what the worker kept:
+ * a session's entry from before it kept the number holds the English name
+ * instead, which is read for the number (entrySession) and said again.
+ */
+export function activityDetail(e: ActivityEntry): string | undefined {
+  const session = entrySession(e);
+  if (session !== undefined) return t("claim.session", { number: session + 1 });
+  if (e.detail !== undefined && e.more) return t("activity.andMore", { first: e.detail, count: e.more });
+  return e.detail;
 }
 
 /** A DRep's name, from the list that ships with the wallet. */
@@ -111,22 +126,34 @@ export function csvCell(value: string, text = false): string {
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
-const COLUMNS = [
-  "Date (UTC)",
-  "Type",
-  "Direction",
-  "ADA",
-  "Network fee (ADA)",
-  "Tokens",
-  "To or from",
-  "Note",
-  "Pool",
-  "Vote",
-  "Deposit (ADA)",
-  "Deposit back (ADA)",
-  "Rewards withdrawn (ADA)",
-  "Transaction",
+/**
+ * The CSV's header. Translated, because the file is read by a person, and so
+ * are the wallet's own words in the rows (an entry's type, its direction);
+ * the dates, IDs and amounts stay language-neutral.
+ */
+const COLUMNS = (): string[] => [
+  t("activity.csv.date"),
+  t("activity.csv.type"),
+  t("activity.csv.direction"),
+  t("activity.csv.ada"),
+  t("activity.csv.fee"),
+  t("activity.csv.tokens"),
+  t("activity.csv.toFrom"),
+  t("activity.csv.note"),
+  t("activity.csv.pool"),
+  t("activity.csv.vote"),
+  t("activity.csv.deposit"),
+  t("activity.csv.depositBack"),
+  t("activity.csv.rewards"),
+  t("activity.csv.transaction"),
 ];
+
+/** The direction column's words: into the balance, out of it, or neither (a Seedelf's locked ADA). */
+const DIRECTION: Record<ActivityEntry["direction"], I18nKey> = {
+  in: "activity.csv.in",
+  out: "activity.csv.out",
+  none: "activity.csv.none",
+};
 
 /**
  * The entries as CSV, newest first, for a spreadsheet or a tax tool: amounts
@@ -146,11 +173,12 @@ export function activityCsv(network: NetworkName, entries: ActivityEntry[]): str
     return [
       csvCell(e.at ? new Date(e.at).toISOString() : ""),
       csvCell(activityTitle(e)),
-      csvCell(e.direction),
+      csvCell(t(DIRECTION[e.direction])),
       csvCell(`${sign}${ada(e.lovelace)}`),
       csvCell(ada(e.fee)),
-      csvCell(tokens || (e.tokens ? `${e.tokens} kinds` : ""), true),
-      csvCell(e.detail ?? "", true),
+      // An older Seedelf entry knows only how many kinds of token moved.
+      csvCell(tokens || (e.tokens ? t("activity.csv.tokenKinds", { count: e.tokens }) : ""), true),
+      csvCell(activityDetail(e) ?? "", true),
       csvCell(e.note ?? "", true),
       csvCell(s.pool ? `${s.ticker ? `${s.ticker} ` : ""}${s.pool}` : "", true),
       csvCell(s.drep ? (voteOf(network, s) ?? s.drep) : "", true),
@@ -160,5 +188,5 @@ export function activityCsv(network: NetworkName, entries: ActivityEntry[]): str
       csvCell(e.txHash),
     ].join(",");
   });
-  return `\uFEFF${[COLUMNS.join(","), ...rows].join("\r\n")}\r\n`;
+  return `\uFEFF${[COLUMNS().join(","), ...rows].join("\r\n")}\r\n`;
 }

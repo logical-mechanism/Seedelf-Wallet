@@ -16,6 +16,7 @@
 // asks nobody anything.
 
 import { useEffect, useState } from "react";
+import { useT } from "../../i18n";
 
 import type { KnownAccount } from "../../shared/rpc";
 import { accountName, useAccounts } from "../accounts";
@@ -33,6 +34,7 @@ type WithAddress = KnownAccount & { address: string };
  */
 export function AccountRecipients({ onPick, onClose }: { onPick: (address: string) => void; onClose: () => void }) {
   const { active } = useAccounts();
+  const t = useT();
   const [accounts, setAccounts] = useState<WithAddress[]>();
   const [error, setError] = useState<string>();
 
@@ -48,7 +50,7 @@ export function AccountRecipients({ onPick, onClose }: { onPick: (address: strin
   }, [active]);
 
   return (
-    <Modal title="Your accounts" titleId="account-recipients-title" onClose={onClose}>
+    <Modal title={t("accountRecipients.title")} titleId="account-recipients-title" onClose={onClose}>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -63,18 +65,15 @@ export function AccountRecipients({ onPick, onClose }: { onPick: (address: strin
                   <WalletIcon size={14} />
                 </span>
                 <span className="token-row__label">{accountName(a)}</span>
-                <span className="token-row__amount note">Your account</span>
+                <span className="token-row__amount note">{t("accountRecipients.yours")}</span>
                 <code className="token-row__sub">{shortHex(a.address, 12, 6)}</code>
               </button>
             </li>
           ))}
         </ul>
       )}
-      {accounts?.length === 0 && <p className="note center empty">This is your only account.</p>}
-      <p className="note">
-        Paying one of your own accounts is an ordinary Cardano payment: anyone can see the two accounts paying each other and
-        tell they're one wallet's. Sending from your private balance instead would avoid that.
-      </p>
+      {accounts?.length === 0 && <p className="note center empty">{t("accountRecipients.only")}</p>}
+      <p className="note">{t("accountRecipients.privacy.ownAccounts")}</p>
     </Modal>
   );
 }

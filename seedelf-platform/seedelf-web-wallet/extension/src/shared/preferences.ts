@@ -30,6 +30,24 @@ export const LOCAL_NETWORK = "seedelf.network";
  */
 export const LOCAL_ACCOUNT = "seedelf.account";
 
+/**
+ * chrome.storage.local: which language the wallet is in (chunk 19), as a code
+ * one of the bundled locales declares ("en", "es", "ja"). Kept beside the
+ * network and the account, and for the same reason: onboarding, Unlock and
+ * Reset are all read before anything is unlocked, so the worker can't be
+ * asked for it, and `PreferencesProvider` only reads the settings once the
+ * wallet is open.
+ *
+ * **What this leaks, said where it's chosen:** anyone reading the profile's
+ * local storage sees which language the wallet is in. They already see that a
+ * vault exists, which network it's on, which account is active and every
+ * setting. Removing the wallet keeps it, as it keeps the network: a user who
+ * starts again shouldn't find the wallet back in English. Anything else here,
+ * or nothing, is the system's language when we ship it and English otherwise
+ * (i18n/core.ts).
+ */
+export const LOCAL_LANGUAGE = "seedelf.language";
+
 /** Whether `value` is a public account index a preference may hold (background/accounts.ts bounds it). */
 export const isAccountIndex = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0x7fff_ffff;

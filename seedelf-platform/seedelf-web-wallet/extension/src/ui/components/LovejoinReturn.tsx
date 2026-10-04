@@ -7,10 +7,12 @@
 // user chooses Lovejoin, it says Lovejoin has had no third-party audit:
 // Lovejoin's own docs say so, and no copy here may say otherwise.
 import { useEffect, useRef, useState } from "react";
+import { joinSentences, t, useT } from "../../i18n";
 
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
-import { formatAda, plural } from "../format";
+import { formatAda } from "../format";
+import { withoutStop } from "../sentence";
 import { Callout } from "./Callout";
 import { Row } from "./ReviewRows";
 
@@ -22,8 +24,7 @@ import { Row } from "./ReviewRows";
  * protocol's own review is the only one it has had: Lovejoin's own words
  * (its README and SECURITY.md); no copy may say otherwise.
  */
-export const LOVEJOIN_UNAUDITED =
-  "Lovejoin hasn't had a third-party audit: its makers' own review is the only one it has had. Use it knowing that.";
+export const LOVEJOIN_UNAUDITED = () => t("lovejoin.warn.unaudited");
 
 /**
  * Whom Lovejoin hides a box from (privacy review §2.4, §5.1, §5.2): people
@@ -32,8 +33,7 @@ export const LOVEJOIN_UNAUDITED =
  * device's IP address, so each sees a box go in and come back. Said in
  * Settings (About, and Lovejoin's section) and on Lovejoin's page.
  */
-export const LOVEJOIN_SEEN =
-  "Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my, which see your device send both ends.";
+export const LOVEJOIN_SEEN = () => t("lovejoin.privacy.seen");
 
 /**
  * How well Lovejoin hides a box at `depth`, said wherever the user chooses
@@ -42,7 +42,7 @@ export const LOVEJOIN_SEEN =
  * returned boxes together, or with the session's funding change, narrows it.
  */
 export function lovejoinHides(depth: number): string {
-  return `Which box coming out is yours stays one of up to ${3 ** depth} (at ${depth} ${depth === 1 ? "wave" : "waves"} deep), fewer while few people use Lovejoin. Spending boxes that came back together, or with the change the session's funding left, narrows it.`;
+  return t("lovejoin.privacy.hides", { count: depth, one: 3 ** depth });
 }
 
 /**
@@ -52,14 +52,12 @@ export function lovejoinHides(depth: number): string {
  * account until the user brings it back (independent review L23).
  */
 export function chainText(c: NonNullable<SessionView["chain"]>, byHand = false): string {
-  if (c.cut) return `Stopped after ${c.sent} of ${c.total} transactions; what was left came back directly`;
-  if (c.stopped && byHand) {
-    return `Stopped after ${c.sent} of ${c.total} transactions; once those are on chain, what's left stays at the account until you bring it back`;
-  }
-  if (c.stopped) return `Stopped after ${c.sent} of ${c.total} transactions; once those are on chain, what's left comes back directly`;
-  if (c.sent < c.total) return `Sending ${c.sent} of ${c.total} transactions`;
-  if (c.confirmed < c.total) return `${c.confirmed} of ${c.total} transactions on chain`;
-  return `All ${c.total} transactions on chain`;
+  if (c.cut) return t("lovejoin.chain.cut", { sent: c.sent, total: c.total });
+  if (c.stopped && byHand) return t("lovejoin.chain.stoppedByHand", { sent: c.sent, total: c.total });
+  if (c.stopped) return t("lovejoin.chain.stopped", { sent: c.sent, total: c.total });
+  if (c.sent < c.total) return t("lovejoin.chain.sending", { sent: c.sent, total: c.total });
+  if (c.confirmed < c.total) return t("lovejoin.chain.onChain", { confirmed: c.confirmed, total: c.total });
+  return t("lovejoin.chain.allOnChain", { total: c.total });
 }
 
 /** How often a page reads a chain's progress: the device's record alone, no Koios. */
@@ -93,39 +91,39 @@ export function useSendingLabel(index: number, active: boolean): string {
   useEffect(() => {
     if (!active) setChain(undefined);
   }, [active]);
-  return active && chain && !chain.cut && chain.sent < chain.total ? `Sending ${chain.sent} of ${chain.total}…` : "Sending…";
+  return active && chain && !chain.cut && chain.sent < chain.total
+    ? t("lovejoin.sendingOf", { sent: chain.sent, total: chain.total })
+    : t("common.sending");
 }
 
 /** "1-6" as "1 to 6 hours". */
 export function delayText(delay: string): string {
   const [low, high] = delay.split("-");
-  return `${low} to ${high} hours`;
+  return t("lovejoin.delayHours", { low, high });
 }
 
 /** The review's rows for the part that goes through Lovejoin; nothing for a plain return. */
 export function LovejoinRows({ back }: { back: SessionBackSummary }) {
+  const tr = useT();
   const l = back.lovejoin;
   if (!l) return null;
   return (
     <>
-      <Row label="Through Lovejoin" value={`${plural(l.boxes, "box", "boxes")} of 10 ₳`} strong />
-      <Row label="Mixed" value={`${l.depth} ${l.depth === 1 ? "wave" : "waves"} deep, ${plural(l.mixes, "mix", "mixes")}`} />
-      <Row label="Back later" value={`Each on its own, after ${delayText(l.delay)}`} />
+      <Row label={tr("claim.throughLovejoin")} value={tr("lovejoin.boxesOfTen", { count: l.boxes })} strong />
+      <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.mixedValue", { count: l.depth, mixes: l.mixes })} />
+      <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachAfter", { delay: delayText(l.delay) })} />
     </>
   );
 }
 
-/** A reason from the worker as part of a sentence: without its full stop. */
-const clause = (reason: string) => reason.trim().replace(/\.$/, "");
-
 /** Why, and the way out: `onDirect` rebuilds the return without Lovejoin. Or why Lovejoin was left out this time. */
 export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummary; busy: boolean; onDirect: () => void }) {
+  const tr = useT();
   const l = back.lovejoin;
   if (back.lovejoinSkipped) {
     return (
       <Callout tone="warn" testId="lovejoin-skipped">
-        Lovejoin is left out of this return: {clause(back.lovejoinSkipped)}. So the chain doesn't start, and everything comes
-        back directly, as it would without Lovejoin.
+        {tr("lovejoin.warn.skippedThis", { why: withoutStop(back.lovejoinSkipped) })}
       </Callout>
     );
   }
@@ -133,17 +131,20 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
   return (
     <>
       <Callout tone="privacy">
-        The spare ADA goes through Lovejoin first, so what comes back is harder to tie to this session on chain:{" "}
-        {plural(l.boxes, "box", "boxes")} of 10 ₳, each mixed with other people's, {l.depth}{" "}
-        {l.depth === 1 ? "wave" : "waves"} deep. {lovejoinHides(l.depth)} This session pays every mix ({formatAda(l.fees)} ₳
-        over {l.txs} transactions). Each box comes back on its own after a random {delayText(l.delay)}, at the first unlock
-        after that. The rest comes back now.
+        {tr("lovejoin.privacy.spare", {
+          count: l.depth,
+          boxes: tr("lovejoin.boxesOfTen", { count: l.boxes }),
+          hides: lovejoinHides(l.depth),
+          fees: formatAda(l.fees),
+          txs: l.txs,
+          delay: delayText(l.delay),
+        })}
       </Callout>
       <p className="note" data-testid="lovejoin-unaudited">
-        {LOVEJOIN_UNAUDITED}
+        {LOVEJOIN_UNAUDITED()}
       </p>
       <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="lovejoin-direct">
-        Bring it back directly instead
+        {tr("lovejoin.directInstead")}
       </button>
     </>
   );
@@ -155,28 +156,25 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
  * few boxes free, or a chain the wallet couldn't build (launch review #23).
  */
 export function LovejoinSkipped({ reason }: { reason?: string }) {
+  const tr = useT();
   if (!reason) return null;
   return (
     <Callout tone="warn" testId="session-lovejoin-skipped">
-      Lovejoin was left out of its return: {clause(reason)}. So it comes back directly, without mixing: what comes back is
-      tied to the session on chain.
+      {tr("lovejoin.warn.skippedIts", { why: withoutStop(reason) })}
     </Callout>
   );
 }
 
 /** Where what comes back lands: the private UTxO the session's funding made, or new ones. */
 export function IntoRow({ back }: { back: SessionBackSummary }) {
-  return <Row label="Into" value={back.merged ? "The private UTxO its funding made" : "New private UTxOs"} />;
+  const tr = useT();
+  return <Row label={tr("lovejoin.intoLabel")} value={tr(back.merged ? "lovejoin.intoMerged" : "lovejoin.intoNew")} />;
 }
 
 /** What the return ties to the session on chain. `after` follows it, for the page's own words. */
 export function ReturnLinks({ back, after }: { back: SessionBackSummary; after?: string }) {
+  const tr = useT();
   return (
-    <Callout tone="privacy">
-      {back.merged
-        ? "What comes back joins the private UTxO this session's funding made, which is tied to the session on chain already, so no new private UTxO is."
-        : "This links the one-time account to the new private UTxOs, as Make private does."}
-      {after ? ` ${after}` : ""}
-    </Callout>
+    <Callout tone="privacy">{joinSentences([tr(back.merged ? "lovejoin.privacy.merged" : "lovejoin.privacy.newUtxos"), after])}</Callout>
   );
 }

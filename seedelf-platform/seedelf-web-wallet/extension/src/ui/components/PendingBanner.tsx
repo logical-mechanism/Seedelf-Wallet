@@ -8,6 +8,7 @@
 // (pending.ts).
 
 import type { PendingTx } from "../../shared/rpc";
+import { type I18nKey, t, useT } from "../../i18n";
 import { TxBanner } from "./TxBanner";
 
 /**
@@ -31,65 +32,61 @@ export const PRIVATE_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
 ]);
 
 /** How the banner names a sent transaction, and says it's confirmed. */
-export const SENT: Record<PendingTx["kind"], string> = {
-  "move-in": "Payment into your private balance",
-  mint: "Seedelf mint",
-  transfer: "Private payment",
-  withdraw: "Payment from your private balance",
-  remove: "Seedelf removal",
-  send: "Payment",
-  collateral: "Collateral payment",
-  stake: "Delegation",
-  vote: "Vote delegation",
-  "withdraw-rewards": "Reward withdrawal",
-  unstake: "Stop staking",
-  "session-out": "Payment into a private session",
-  "session-swap": "Swap order",
-  "session-cancel": "Order cancel",
-  "session-back": "Return from a private session",
-  "lovejoin-withdraw": "A box back from Lovejoin",
-  "lovejoin-mix": "Mixes into Lovejoin",
+export const SENT: Record<PendingTx["kind"], I18nKey> = {
+  "move-in": "pending.sent.move_in",
+  mint: "pending.sent.mint",
+  transfer: "pending.sent.transfer",
+  withdraw: "pending.sent.withdraw",
+  remove: "pending.sent.remove",
+  send: "pending.sent.send",
+  collateral: "pending.sent.collateral",
+  stake: "pending.sent.stake",
+  vote: "pending.sent.vote",
+  "withdraw-rewards": "pending.sent.withdraw_rewards",
+  unstake: "pending.sent.unstake",
+  "session-out": "pending.sent.session_out",
+  "session-swap": "pending.sent.session_swap",
+  "session-cancel": "pending.sent.session_cancel",
+  "session-back": "pending.sent.session_back",
+  "lovejoin-withdraw": "pending.sent.lovejoin_withdraw",
+  "lovejoin-mix": "pending.sent.lovejoin_mix",
 };
-export const CONFIRMED: Record<PendingTx["kind"], string> = {
-  "move-in": "Made private",
-  mint: "Seedelf created",
-  transfer: "Private payment confirmed",
-  withdraw: "Made public",
-  remove: "Seedelf removed",
-  send: "Payment confirmed",
-  collateral: "Collateral set",
-  stake: "Now staking",
-  vote: "Voting power delegated",
-  "withdraw-rewards": "Rewards withdrawn",
-  unstake: "Staking stopped",
-  "session-out": "Private session funded",
-  "session-swap": "Swap order placed",
-  "session-cancel": "Order cancelled",
-  "session-back": "Back in your private balance",
-  "lovejoin-withdraw": "Back in your private balance",
-  "lovejoin-mix": "In Lovejoin, on their way to your private balance",
+export const CONFIRMED: Record<PendingTx["kind"], I18nKey> = {
+  "move-in": "pending.confirmed.move_in",
+  mint: "pending.confirmed.mint",
+  transfer: "pending.confirmed.transfer",
+  withdraw: "pending.confirmed.withdraw",
+  remove: "pending.confirmed.remove",
+  send: "pending.confirmed.send",
+  collateral: "pending.confirmed.collateral",
+  stake: "pending.confirmed.stake",
+  vote: "pending.confirmed.vote",
+  "withdraw-rewards": "pending.confirmed.withdraw_rewards",
+  unstake: "pending.confirmed.unstake",
+  "session-out": "pending.confirmed.session_out",
+  "session-swap": "pending.confirmed.session_swap",
+  "session-cancel": "pending.confirmed.session_cancel",
+  "session-back": "pending.confirmed.session_back",
+  "lovejoin-withdraw": "pending.confirmed.lovejoin_withdraw",
+  "lovejoin-mix": "pending.confirmed.lovejoin_mix",
 };
 
 /** What the banner says of a transaction that never landed, by why it was let go. */
-const DROPPED: Record<NonNullable<PendingTx["dropped"]>, { title: (what: string) => string; detail: string }> = {
+const DROPPED: Record<NonNullable<PendingTx["dropped"]>, { title: (what: string) => string; detail: () => string }> = {
   expired: {
-    title: (what) => `${what} expired: nothing was sent`,
-    detail: "The network didn't take it in the time it was valid for, so it can't go through any more. Its UTxOs are back in your balance.",
+    title: (what) => t("pending.dropped.expiredTitle", { what }),
+    detail: () => t("pending.dropped.expired"),
   },
   unseen: {
-    title: (what) => `${what} not seen on the network`,
-    detail:
-      "Koios didn't answer when it was sent, and 20 minutes on the network still hasn't shown it, so it most likely never went out. " +
-      "Its UTxOs count in your balance again: check Activity before you send it again.",
+    title: (what) => t("pending.dropped.unseenTitle", { what }),
+    detail: () => t("pending.dropped.unseen"),
   },
 };
 
 /** What the banner says of one the network said it had (`inMempool`), let go when it was held as long as it could be. */
 const HELD_TOO_LONG = {
   title: DROPPED.unseen.title,
-  detail:
-    "Koios didn't answer when it was sent. Sent again, the network said it had it already, yet two and a half hours on the chain still hasn't shown it, " +
-    "so the wallet stopped waiting for it. Its UTxOs count in your balance again: check Activity before you send it again.",
+  detail: () => t("pending.dropped.heldTooLong"),
 };
 
 /**
@@ -124,19 +121,13 @@ function maybeSentDetail(pending: PendingTx): string {
   const until = validUntil(pending);
   if (pending.inMempool) {
     const held = new Date(pending.submittedAt + HELD_IN_MEMPOOL_MS).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    return (
-      "Koios didn't answer when it was sent. Sent again, the network says it has it already, and what it spends isn't spent on chain yet: " +
-      "it's waiting to go into a block, and may still land. New payments wait until it lands, or until it can't any more" +
-      (until ? `: it can land until about ${until}.` : `: the wallet waits for it until about ${held} at most.`)
-    );
+    return until
+      ? t("pending.maybeSent.inMempoolUntil", { until })
+      : t("pending.maybeSent.inMempoolHeld", { held });
   }
-  return (
-    "Koios didn't answer when it was sent. The wallet sends it again now and then, which is safe: the network takes it only once. " +
-    "New payments wait until it lands, or until it can't any more: " +
-    (until
-      ? `it can land until about ${until}, and the wallet waits half an hour past that to be sure.`
-      : "if the network still hasn't shown it 20 minutes after it was sent, the wallet lets it go.")
-  );
+  return until
+    ? t("pending.maybeSent.resentUntil", { until })
+    : t("pending.maybeSent.resentNoSlot");
 }
 
 /**
@@ -146,7 +137,8 @@ function maybeSentDetail(pending: PendingTx): string {
  * payment that may still land.
  */
 export function PendingBanner({ pending, watching, onDismiss }: { pending: PendingTx; watching: boolean; onDismiss: () => void }) {
-  const what = SENT[pending.kind];
+  const tr = useT();
+  const what = tr(SENT[pending.kind]);
   const shared = {
     network: pending.network,
     txHash: pending.txHash,
@@ -154,18 +146,18 @@ export function PendingBanner({ pending, watching, onDismiss }: { pending: Pendi
     private: PRIVATE_KINDS.has(pending.kind),
   };
   if (pending.confirmations !== null) {
-    return <TxBanner {...shared} state="done" title={CONFIRMED[pending.kind]} onDismiss={watching ? undefined : onDismiss} />;
+    return <TxBanner {...shared} state="done" title={tr(CONFIRMED[pending.kind])} onDismiss={watching ? undefined : onDismiss} />;
   }
   if (pending.dropped) {
     const dropped = pending.dropped === "unseen" && pending.inMempool ? HELD_TOO_LONG : DROPPED[pending.dropped];
-    return <TxBanner {...shared} state="stale" title={dropped.title(what)} detail={dropped.detail} onDismiss={onDismiss} />;
+    return <TxBanner {...shared} state="stale" title={dropped.title(what)} detail={dropped.detail()} onDismiss={onDismiss} />;
   }
   if (pending.maybeSent) {
     return (
       <TxBanner
         {...shared}
         state="waiting"
-        title={`${what} may have gone through. Waiting for the network…`}
+        title={tr("pending.maybeSentTitle", { what })}
         detail={maybeSentDetail(pending)}
       />
     );
@@ -175,10 +167,10 @@ export function PendingBanner({ pending, watching, onDismiss }: { pending: Pendi
     <TxBanner
       {...shared}
       state={watching ? "waiting" : "stale"}
-      title={watching ? `${what} sent. Waiting for the network…` : `${what} not confirmed yet`}
+      title={watching ? tr("pending.sentWaiting", { what }) : tr("pending.notConfirmed", { what })}
       detail={
         !watching && until
-          ? `The network hasn't shown it yet. It can land until about ${until}, and the wallet keeps watching: if it hasn't landed by then, nothing was sent, and its UTxOs count in your balance again.`
+          ? tr("pending.notShownYet", { until })
           : undefined
       }
       onDismiss={watching ? undefined : onDismiss}

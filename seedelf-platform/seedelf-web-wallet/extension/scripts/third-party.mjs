@@ -11,7 +11,7 @@
 //   node scripts/third-party.mjs <out-file>
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -65,6 +65,11 @@ function npmPackages() {
   const lock = JSON.parse(readFileSync(join(extension, "package-lock.json"), "utf8"));
   return Object.entries(lock.packages)
     .filter(([path, p]) => path.startsWith("node_modules/") && !p.dev)
+    // An optional dependency for another platform isn't installed here and so
+    // ships nothing: TypeScript 7 lists one binary per platform, 19 of which
+    // this machine never fetches. A non-optional one that's missing is a broken
+    // install, and licenceFiles() still fails loudly on it.
+    .filter(([path, p]) => !p.optional || existsSync(join(extension, path)))
     .map(([path, p]) => ({
       name: `${path.slice("node_modules/".length)} v${p.version}`,
       licence: p.license,

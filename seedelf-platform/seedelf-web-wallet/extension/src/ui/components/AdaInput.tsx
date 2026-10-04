@@ -5,6 +5,7 @@
 // network accepts with them, and the review says so (MinimumNote).
 
 import { useState, type ReactNode } from "react";
+import { useT } from "../../i18n";
 
 import { formatAda, parseAda, sanitizeAda } from "../format";
 import { AmountField } from "./AmountField";
@@ -71,10 +72,9 @@ export function AdaInput({
 
 /** Under the amount, once tokens go too: it can stay empty. */
 export function MinimumHint() {
+  const t = useT();
   return (
-    <p className="note" data-testid="minimum-hint">
-      Leave it empty and the tokens go with only the ADA they need. The review shows how much.
-    </p>
+    <p className="note" data-testid="minimum-hint">{t("adaInput.minimumHint")}</p>
   );
 }
 
@@ -97,13 +97,14 @@ export function MinimumNote({
   /** Which recipient, when there are several. */
   who?: string;
 }) {
+  const t = useT();
   if (minimum === null || lovelace !== minimum) return null;
-  const least = `${formatAda(minimum)} ₳ is the least ADA the network accepts ${tokens ? "with these tokens" : "in a payment"}.`;
+  const least = t(tokens ? "adaInput.leastWithTokens" : "adaInput.leastInPayment", { amount: formatAda(minimum) });
   const raised = BigInt(asked) > 0n && BigInt(asked) < BigInt(minimum);
-  const note = raised ? `Raised from ${formatAda(asked)} ₳: ${least}` : least;
+  const note = raised ? t("adaInput.raisedFrom", { amount: formatAda(asked), least }) : least;
   return (
     <p className="note" data-testid="minimum-note">
-      {who ? `${who}: ${note}` : note}
+      {who ? t("adaInput.forWho", { who, note }) : note}
     </p>
   );
 }

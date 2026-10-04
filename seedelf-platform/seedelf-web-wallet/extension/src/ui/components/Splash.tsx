@@ -5,6 +5,7 @@
 // enough to be seen, then fades out into the wallet.
 
 import { useEffect, useRef, useState } from "react";
+import { useT } from "../../i18n";
 
 /** wait: not shown yet; show; leave: fading out; done. */
 export type SplashPhase = "wait" | "show" | "leave" | "done";
@@ -52,12 +53,13 @@ export function useSplash(ready: boolean): SplashPhase {
 }
 
 export function Splash({ phase }: { phase: SplashPhase }) {
+  const t = useT();
   if (phase !== "show" && phase !== "leave") return null;
   return (
     <div
       className={phase === "leave" ? "splash splash--leave" : "splash"}
       role="status"
-      aria-label="Loading your wallet"
+      aria-label={t("splash.loading")}
       data-testid="splash"
     >
       <div className="splash__mark">

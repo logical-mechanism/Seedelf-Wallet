@@ -26,6 +26,7 @@
 // alongside too, and the whole reward balance rides along, if the account's
 // vote is delegated: Conway pays out nothing otherwise.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -125,7 +126,7 @@ export async function readAccountUtxos(
 export function nothingInAccount(held: number, empty: string): Error {
   return new Error(
     held
-      ? "Everything in your public account is locked or is its collateral. Unlock a UTxO on its UTxOs screen first."
+      ? t("worker.account.allLocked")
       : empty,
   );
 }

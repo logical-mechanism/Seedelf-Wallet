@@ -7,6 +7,7 @@
 // user has reviewed it and pressed Send.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useT } from "../../i18n";
 
 import type { Balances, PendingTx, SeedelfLookup, TransferSummary } from "../../shared/rpc";
 import { SEEDELF_NAME_RULE, seedelfName } from "../../shared/seedelf-name";
@@ -49,6 +50,7 @@ export function Transfer({
   onSent: (pending: PendingTx) => void;
 }) {
   const network = useNetwork();
+  const t = useT();
   const list = useRecipients();
   const [found, setFound] = useState<Record<number, Found>>({});
   const [summary, setSummary] = useState<TransferSummary>();
@@ -60,7 +62,7 @@ export function Transfer({
   // The builder decides exactly (fee, change); this catches the obvious case early.
   const tooMuch = amounts.total > BigInt(seedelf.lovelace);
   const ready = list.drafts.every((d) => foundOf(d.id).state === "found") && amounts.ok && !tooMuch;
-  const available = seedelf.locked.utxos ? "available" : "in your private balance";
+  const available = t(seedelf.locked.utxos ? "withdraw.available" : "withdraw.inPrivate");
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -100,13 +102,13 @@ export function Transfer({
         <>
           {p.label ? (
             <>
-              <Row label="To" value={p.label} strong />
-              <Row label="Seedelf name" value={shortHex(p.to, 16, 8)} title={p.to} />
+              <Row label={t("destination.to")} value={p.label} strong />
+              <Row label={t("utxos.seedelfName")} value={shortHex(p.to, 16, 8)} title={p.to} />
             </>
           ) : (
-            <Row label="To" value={shortHex(p.to, 16, 8)} title={p.to} strong />
+            <Row label={t("destination.to")} value={shortHex(p.to, 16, 8)} title={p.to} strong />
           )}
-          <Row label="Amount" value={`${formatAda(p.lovelace)} ₳`} strong />
+          <Row label={t("common.amount")} value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = seedelf.tokens.find((h) => key(h) === key(t));
             return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
@@ -116,22 +118,22 @@ export function Transfer({
     };
     return (
       <Screen
-        title="Review the payment"
+        title={t("withdraw.review.title")}
         titleId="transfer-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={t("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? t("common.sending") : t("common.send")}
           </button>
         }
       >
         <ReviewRecipients testId="transfer-review" payments={summary.payments} rows={recipientRows}>
-          <Row label="Network fee" value={`${formatAda(summary.fee.total)} ₳`} />
-          <Row label="Back to your private balance" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label="Private UTxOs spent" value={String(summary.inputs)} />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
+          <Row label={t("review.backToPrivate")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label={t("withdraw.review.spent")} value={String(summary.inputs)} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="transfer-tx" />
         <HistoriesNote histories={summary.histories} testId="transfer-histories" />
@@ -142,19 +144,16 @@ export function Transfer({
             minimum={p.minimum}
             asked={amounts.each[i]?.lovelace ?? "0"}
             tokens={p.tokens.length}
-            who={several ? `Recipient ${i + 1}` : undefined}
+            who={several ? t("recipients.nth", { number: i + 1 }) : undefined}
           />
         ))}
         {summary.payments.some((p) => p.toSelf) && (
           <Callout tone="warn" testId="transfer-to-self">
-            {several ? "One of these Seedelfs is yours: its payment comes" : "This Seedelf is yours: the payment comes"} back
-            to your private balance, less the fee.
+            {t(several ? "transfer.warn.toSelfSeveral" : "transfer.warn.toSelf")}
           </Callout>
         )}
         <p className="note">
-          Only the owner of {several ? "each" : "this"} Seedelf can spend the payment, and it can't be linked to their
-          Seedelf by looking at the chain. Send asks giveme.my to lend the collateral, then submits. It takes about a
-          minute for the network to confirm.
+          {t(several ? "transfer.review.noteEach" : "transfer.review.noteThis")}
         </p>
       </Screen>
     );
@@ -163,19 +162,19 @@ export function Transfer({
   return (
     <Screen
       onSubmit={review}
-      title="Send"
+      title={t("home.action.send")}
       titleId="transfer-title"
       onBack={onCancel}
       aside={
         seedelf.locked.utxos
-          ? `${formatAda(seedelf.lovelace)} ₳ available${lockedAside(seedelf)}`
-          : `${formatAda(seedelf.lovelace)} ₳ in your private balance`
+          ? `${t("withdraw.asideAvailable", { amount: formatAda(seedelf.lovelace) })}${lockedAside(seedelf)}`
+          : t("withdraw.asidePrivate", { amount: formatAda(seedelf.lovelace) })
       }
       error={error}
       foot={
         <>
           <button type="submit" className="primary" disabled={!ready || busy}>
-            {busy ? "Building…" : "Review"}
+            {busy ? t("common.building") : t("common.review")}
           </button>
           <BuildStage busy={busy} />
         </>
@@ -203,22 +202,22 @@ export function Transfer({
             />
             {f.state === "found" && f.seedelf.own && (
               <Callout tone="warn" testId="transfer-own">
-                This Seedelf is yours. Paying it moves money in a circle and costs a fee.
+                {t("transfer.warn.ownSeedelf")}
               </Callout>
             )}
 
             <div className="field">
-              <label htmlFor={fieldId("transfer-amount", d, i)}>Amount</label>
+              <label htmlFor={fieldId("transfer-amount", d, i)}>{t("common.amount")}</label>
               <AdaInput
                 id={fieldId("transfer-amount", d, i)}
                 value={d.amount}
                 onChange={(amount) => list.update(d.id, { amount })}
-                placeholder={withTokens ? "Minimum" : "0"}
+                placeholder={withTokens ? t("common.minimum") : "0"}
                 autoFocus={false}
               />
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="transfer-too-much">
-                  That's more than the {formatAda(seedelf.lovelace)} ₳ in your private balance.
+                  {t("transfer.tooMuch", { amount: formatAda(seedelf.lovelace) })}
                 </p>
               )}
             </div>
@@ -239,7 +238,7 @@ export function Transfer({
       )}
 
       <Callout tone="privacy">
-        Sending right after making money private is easy to match by timing: the two sit close together on chain.
+        {t("transfer.privacy.timing")}
       </Callout>
     </Screen>
   );
@@ -257,6 +256,7 @@ function SeedelfNameInput({
   onChange: (to: string) => void;
   onFound: (found: Found) => void;
 }) {
+  const t = useT();
   const [found, setFound] = useState<Found>({ state: "idle" });
   const [contacts, reloadContacts] = useContacts();
   const [contactModal, setContactModal] = useState<"pick" | "save">();
@@ -266,7 +266,7 @@ function SeedelfNameInput({
   const name = seedelfName(value);
   const saved = name ? contacts?.find((c) => c.kind === "seedelf" && c.value === name) : undefined;
   const hasContacts = !!contacts?.some((c) => c.kind === "seedelf");
-  const nameProblem = value.trim() !== "" && !name ? SEEDELF_NAME_RULE : undefined;
+  const nameProblem = value.trim() !== "" && !name ? SEEDELF_NAME_RULE() : undefined;
 
   // Look the seedelf up once a whole name is pasted.
   useEffect(() => {
@@ -289,16 +289,16 @@ function SeedelfNameInput({
   return (
     <div className="field">
       <div className="field-row">
-        <label htmlFor={id}>Seedelf name</label>
+        <label htmlFor={id}>{t("utxos.seedelfName")}</label>
         {hasContacts && (
           <button type="button" className="link" onClick={() => setContactModal("pick")}>
-            Contacts
+            {t("destination.contacts")}
           </button>
         )}
       </div>
       {/* A seedelf's name is 68 characters: the hardest field in the wallet to
           clear by hand (the owner, 2026-10-02). */}
-      <Clearable id={id} value={value} onClear={() => onChange("")} what="recipient">
+      <Clearable id={id} value={value} onClear={() => onChange("")} what={t("destination.what.recipient")}>
         <textarea
           id={id}
           className="seedelf-name"
@@ -317,31 +317,32 @@ function SeedelfNameInput({
         {nameProblem ? (
           <p className="field-note">{nameProblem}</p>
         ) : found.state === "looking" ? (
-          <p className="note">Looking it up…</p>
+          <p className="note">{t("transfer.lookingUp")}</p>
         ) : found.state === "error" ? (
           <p className="field-note" role="alert">
             {found.message}
           </p>
         ) : found.state === "found" ? (
           <p className="note">
-            Found: {found.seedelf.label && <><strong>{found.seedelf.label}</strong> · </>}
+            {t("destination.found")}{" "}
+            {found.seedelf.label && <><strong>{found.seedelf.label}</strong> · </>}
             <code>{shortHex(found.seedelf.name, 12, 6)}</code>
             {saved ? (
-              <> · your contact {saved.name}</>
+              <>{" · "}{t("destination.yourContact", { name: saved.name })}</>
             ) : (
               !found.seedelf.own &&
               contacts && (
                 <>
                   {" · "}
                   <button type="button" className="link" onClick={() => setContactModal("save")}>
-                    Save to contacts
+                    {t("destination.saveToContacts")}
                   </button>
                 </>
               )
             )}
           </p>
         ) : (
-          <p className="note">Paste the whole name the recipient gave you. Tags aren't unique, so the name is what counts.</p>
+          <p className="note">{t("transfer.pasteName")}</p>
         )}
       </div>
       {contactModal === "pick" && (

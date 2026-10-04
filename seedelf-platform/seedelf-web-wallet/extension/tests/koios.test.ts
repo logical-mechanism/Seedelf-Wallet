@@ -163,8 +163,8 @@ describe("Koios client", () => {
     };
     const asked: string[] = [];
     const withheld = new Koios(BASE, blocked(), async () => undefined, async (url) => (asked.push(url), false));
-    await expect(withheld.credentialUtxos(["x"])).rejects.toThrow(KOIOS_NOT_ALLOWED);
-    await expect(withheld.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KOIOS_NOT_ALLOWED);
+    await expect(withheld.credentialUtxos(["x"])).rejects.toThrow(KOIOS_NOT_ALLOWED());
+    await expect(withheld.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KOIOS_NOT_ALLOWED());
     expect(tries).toBe(2);
     expect(asked.map((u) => new URL(u).origin)).toEqual(["https://preprod.koios.rest", "https://preprod.koios.rest"]);
 
@@ -210,7 +210,7 @@ describe("Koios client", () => {
       new Response("", { status: 503 }),
     ]);
     await expect(koios.credentialUtxos(["94bc"])).rejects.toThrow(
-      new KoiosError("Koios is having trouble right now (503 for credential_utxos). Try again in a minute."),
+      new KoiosError("Koios is having trouble right now (503 for credential_utxos). Try again in a minute.", "silent"),
     );
     expect(calls).toHaveLength(3);
   });

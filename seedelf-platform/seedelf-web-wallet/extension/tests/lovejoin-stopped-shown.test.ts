@@ -52,7 +52,7 @@ function cutChain(t: T, extra: object = {}) {
     sent: 1,
     at: t.clock.now - HOUR,
     scheduled: true,
-    stopped: CHAIN_CUT,
+    stopped: CHAIN_CUT(),
     ended: t.clock.now - HOUR,
     ...extra,
   };
@@ -74,7 +74,7 @@ describe("a stopped chain on the Lovejoin page and Home", SLOW, () => {
 
     let status = await t.lovejoin.status("preprod");
     expect(status.notMixed).toHaveLength(2);
-    expect(status.chains).toEqual([expect.objectContaining({ stopped: CHAIN_CUT, sent: 1, total: 3 })]);
+    expect(status.chains).toEqual([expect.objectContaining({ stopped: CHAIN_CUT(), sent: 1, total: 3 })]);
     expect(await t.lovejoin.held("preprod")).toMatchObject({ notMixed: 2, stopped: 1 });
 
     // Mix my boxes again spent both: the pool no longer lists them as the wallet's.
@@ -108,7 +108,7 @@ describe("a stopped chain on the Lovejoin page and Home", SLOW, () => {
     await t.store.set("lovejoin.preprod", { due: [], chains: [cutChain(t)] });
     // Read twice, nothing of it listed: it isn't taken for one whose boxes all moved on.
     for (let i = 0; i < 2; i++) {
-      expect((await t.lovejoin.status("preprod")).chains).toEqual([expect.objectContaining({ stopped: CHAIN_CUT })]);
+      expect((await t.lovejoin.status("preprod")).chains).toEqual([expect.objectContaining({ stopped: CHAIN_CUT() })]);
     }
     expect(await t.lovejoin.held("preprod")).toMatchObject({ stopped: 1 });
   });

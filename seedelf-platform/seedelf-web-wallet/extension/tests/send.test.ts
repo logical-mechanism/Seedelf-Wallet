@@ -171,11 +171,11 @@ describe("send", () => {
 
   it("points your own Seedelf to Move in, and Withdraw's Seedelf to Send", async () => {
     const t = await unlocked();
-    await expect(t.send.build("preprod", [{ to: MINE, lovelace: "5000000", tokens: [] }])).rejects.toThrow(OWN_SEEDELF_FROM_ACCOUNT);
+    await expect(t.send.build("preprod", [{ to: MINE, lovelace: "5000000", tokens: [] }])).rejects.toThrow(OWN_SEEDELF_FROM_ACCOUNT());
     await expect(t.send.build("preprod", [{ to: `5eed0e1f${"00".repeat(28)}`, lovelace: "5000000", tokens: [] }])).rejects.toThrow(
       "No Seedelf with that name on preprod.",
     );
-    await expect(t.withdraw.resolve("preprod", SEEDELF)).rejects.toThrow(SEEDELF_NOT_AN_ADDRESS);
+    await expect(t.withdraw.resolve("preprod", SEEDELF)).rejects.toThrow(SEEDELF_NOT_AN_ADDRESS());
   });
 
   it("submits exactly the built transaction, then watches it, and writes no Seedelf history", async () => {

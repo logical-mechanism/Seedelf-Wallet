@@ -10,6 +10,7 @@
 // thing anyone does is type or paste the right value.
 
 import type { ReactNode } from "react";
+import { useT } from "../../i18n";
 
 import { CloseIcon } from "./Icons";
 
@@ -28,6 +29,7 @@ export function Clearable({
   what: string;
   children: ReactNode;
 }) {
+  const t = useT();
   return (
     <div className="clearable">
       {children}
@@ -35,8 +37,8 @@ export function Clearable({
         <button
           type="button"
           className="icon-button icon-button--small clearable__button"
-          aria-label={`Clear the ${what}`}
-          title="Clear"
+          aria-label={t("common.clearThe", { what })}
+          title={t("common.clear")}
           onClick={() => {
             onClear();
             document.getElementById(id)?.focus();

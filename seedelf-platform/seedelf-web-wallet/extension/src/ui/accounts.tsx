@@ -15,10 +15,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { LOCAL_ACCOUNT } from "../shared/preferences";
 import type { KnownAccount } from "../shared/rpc";
+import { currentLanguage, t, useT } from "../i18n";
 import { call } from "./background";
 
 /** The name an account is shown by: its own, or its number as a person counts (from 1). */
-export const accountName = (a: KnownAccount): string => a.name?.trim() || `Account ${a.index + 1}`;
+export const accountName = (a: KnownAccount): string => a.name?.trim() || t("accounts.numbered", { number: a.index + 1 });
 
 /** The name of account `index` among `accounts`, for a message about one that may not be listed. */
 export const nameOf = (accounts: KnownAccount[], index: number): string =>
@@ -42,7 +43,10 @@ export const AccountsContext = createContext<AccountsValue>({
   accounts: ALONE,
   active: 0,
   loaded: false,
-  name: "Account 1",
+  // A getter, as MOVE_TO's are in Settings: called once here, it named the account in the language that was on at import.
+  get name() {
+    return t("accounts.numbered", { number: 1 });
+  },
   several: false,
   reload: async () => undefined,
 });
@@ -85,6 +89,11 @@ export function AccountsProvider({ unlocked, children }: { unlocked: boolean; ch
     };
   }, [unlocked, read]);
 
+  // The active account's name is words ("Cuenta 2"): the language is one of
+  // what it's worked out from, so a switch renames it rather than keeping the
+  // name from before it.
+  useT();
+  const language = currentLanguage();
   const value = useMemo<AccountsValue>(
     () => ({
       accounts,
@@ -94,7 +103,7 @@ export function AccountsProvider({ unlocked, children }: { unlocked: boolean; ch
       several: accounts.length > 1,
       reload: read,
     }),
-    [accounts, active, loaded, read],
+    [accounts, active, loaded, read, language],
   );
   return <AccountsContext.Provider value={value}>{children}</AccountsContext.Provider>;
 }

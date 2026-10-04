@@ -37,6 +37,7 @@
 // unlock, and before any build. Only its settling removes it (final review
 // money-submit-4), not even Remove wallet (independent review M2).
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type { PendingTx } from "../shared/rpc";
 import { VALID_FOR_MS } from "./account";
@@ -80,9 +81,7 @@ export const EXPIRED_AFTER_SLOTS = 30 * 60;
 export const HELD_IN_MEMPOOL_MS = VALID_FOR_MS + EXPIRED_AFTER_SLOTS * 1000;
 
 /** Refused while a payment may still go through. */
-export const MAYBE_SENT_WAIT =
-  "Your last payment may still go through: Koios didn't answer when it was sent, and the network hasn't shown it yet. " +
-  "Home shows when it lands, or when it can't any more. Send another after that.";
+export const MAYBE_SENT_WAIT = () => t("worker.pending.maybeSentWait");
 
 /** What the watch keeps beyond what Home is shown. */
 interface Watched extends PendingTx {
@@ -384,7 +383,7 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     // Something went out, and what isn't known: it stays maybe sent, as written ahead, and
     // says so, so no caller takes it for one that never went out (a session's funding, say).
     if (s.contract) await forgetContractView(deps, s.network).catch(() => undefined);
-    throw new KoiosBusyError(`Koios answered with another transaction id (${submitted}).`, true);
+    throw new KoiosBusyError(t("worker.pending.otherTxId", { id: submitted }), true);
   }
 
   const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
@@ -466,7 +465,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
       return { was, before };
     });
     if (unsettled(was)) {
-      if (was.txHash !== s.txHash) throw new Error(MAYBE_SENT_WAIT);
+      if (was.txHash !== s.txHash) throw new Error(MAYBE_SENT_WAIT());
       return { record: was, again: true };
     }
     const ahead: Ahead = { record, again: false, before };
@@ -773,7 +772,7 @@ export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): 
   await settle(deps, w);
   // As the watch stands now: another may have gone maybe sent meanwhile, or a lock and an unlock
   // while Koios was asked took this one, and it's put back first (final review F7).
-  if (unsettled(await watchedOn(deps, network))) throw new Error(MAYBE_SENT_WAIT);
+  if (unsettled(await watchedOn(deps, network))) throw new Error(MAYBE_SENT_WAIT());
 }
 
 export class PendingService {

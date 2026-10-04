@@ -9,6 +9,7 @@
 //         watch (pending.ts). One Koios didn't answer may have gone through:
 //         it stays kept, and Send sends it again.
 
+import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
@@ -87,7 +88,7 @@ export class MoveInService {
       readAccount(this.deps, network),
       validUntil(this.deps.koios(network)),
     ]);
-    if (utxos.length === 0) throw nothingInAccount(held, "Your public account is empty, so there's nothing to make private.");
+    if (utxos.length === 0) throw nothingInAccount(held, t("worker.moveIn.empty"));
 
     progress?.("building");
     return wallet.withKeys(async (keys) => {
@@ -111,12 +112,12 @@ export class MoveInService {
     const { wallet, session, now } = this.deps;
     const built = await wallet.withKeys(() => session.get<Built>(SESSION_BUILT));
     if (!built || built.txHash !== txHash || built.network !== network) {
-      throw new Error("That payment isn't ready to send. Review it again.");
+      throw new Error(t("worker.moveIn.notReady"));
     }
     const again = built.sentCbor !== undefined;
     if (!again) {
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error("That payment was built more than 10 minutes ago. Review it again.");
+        throw new Error(t("worker.moveIn.tooOld"));
       }
       await settleMaybeSent(this.deps, network);
     }

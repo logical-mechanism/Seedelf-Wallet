@@ -9,6 +9,7 @@
 // enough of the pool ID to tell them apart (launch review #59).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { type I18nKey, joinList, useT } from "../../i18n";
 
 import type { PoolDetails, PoolList, PoolRow } from "../../shared/rpc";
 import { call } from "../background";
@@ -16,7 +17,7 @@ import { Callout } from "../components/Callout";
 import { SearchIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
-import { formatAda, formatPercent, plainName, plural, poolLabel, sharedNames, sharing, shortId } from "../format";
+import { formatAda, formatPercent, plainName, poolLabel, sharedNames, sharing, shortId } from "../format";
 import { initials, tint } from "../tokens";
 import { PoolFacts } from "./Staking";
 
@@ -25,13 +26,13 @@ const PAGE = 50;
 
 export type PoolSort = "ticker" | "saturation" | "margin" | "cost" | "pledge";
 
-const SORTS: Array<{ value: PoolSort; label: string }> = [
-  { value: "ticker", label: "Ticker, A to Z" },
-  { value: "saturation", label: "Least saturated" },
-  { value: "margin", label: "Lowest margin" },
-  { value: "cost", label: "Lowest cost" },
-  { value: "pledge", label: "Highest pledge" },
-];
+const SORTS = [
+  { value: "ticker", label: "pools.sort.ticker" },
+  { value: "saturation", label: "pools.sort.saturation" },
+  { value: "margin", label: "pools.sort.margin" },
+  { value: "cost", label: "pools.sort.cost" },
+  { value: "pledge", label: "pools.sort.pledge" },
+] as const satisfies Array<{ value: PoolSort; label: I18nKey }>;
 
 /** Pools whose ticker or ID holds `query`, case aside. */
 export function searchPools(pools: PoolRow[], query: string): PoolRow[] {
@@ -77,6 +78,7 @@ export function Pools({
   /** The pool, and how many live pools use its ticker. */
   onStake: (pool: PoolDetails, shared: number) => void;
 }) {
+  const t = useT();
   const [list, setList] = useState<PoolList>();
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState<string>();
@@ -119,17 +121,17 @@ export function Pools({
 
   return (
     <Screen
-      title="Choose a pool"
+      title={t("staking.choosePool")}
       titleId="pools-title"
       onBack={onBack}
-      aside={list ? `${plural(list.pools.length, "live pool")}` : " "}
+      aside={list ? t("pools.count", { count: list.pools.length }) : " "}
     >
       <label className="search">
         <SearchIcon size={16} />
         <input
           type="search"
-          aria-label="Search pools"
-          placeholder="Ticker or pool ID"
+          aria-label={t("pools.search")}
+          placeholder={t("pools.searchPlaceholder")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -138,17 +140,17 @@ export function Pools({
           spellCheck={false}
         />
       </label>
-      <select aria-label="Sort pools" value={sort} onChange={(e) => setSort(e.target.value as PoolSort)}>
+      <select aria-label={t("pools.sortLabel")} value={sort} onChange={(e) => setSort(e.target.value as PoolSort)}>
         {SORTS.map((s) => (
           <option key={s.value} value={s.value}>
-            {s.label}
+            {t(s.label)}
           </option>
         ))}
       </select>
 
       {readError && (
         <Callout tone="warn" role="alert">
-          Couldn't read the pools: {readError}
+          {t("pools.warn.readFailed", { error: readError })}
         </Callout>
       )}
       {list &&
@@ -159,11 +161,11 @@ export function Pools({
             ))}
           </ul>
         ) : (
-          <p className="note center empty">No live pool matches “{query.trim()}”.</p>
+          <p className="note center empty">{t("pools.noneMatch", { query: query.trim() })}</p>
         ))}
       {found.length > limit && (
         <button type="button" className="secondary" onClick={() => setLimit(limit + PAGE)}>
-          Show {Math.min(PAGE, found.length - limit)} more
+          {t("tokens.showMore", { number: Math.min(PAGE, found.length - limit) })}
         </button>
       )}
       <RefreshRow reading={reading} updatedAt={list?.updatedAt} onRefresh={() => void load(true)} />
@@ -184,6 +186,7 @@ export function PoolListRow({
   shared: boolean;
   onOpen: (p: PoolRow) => void;
 }) {
+  const t = useT();
   const ticker = pool.ticker ? plainName(pool.ticker) : undefined;
   const label = ticker ?? shortId(pool.id);
   return (
@@ -192,20 +195,24 @@ export function PoolListRow({
         type="button"
         className="token-row"
         onClick={() => onOpen(pool)}
-        aria-label={`${label}${shared ? ", a ticker other pools use too" : ""}, ${shortId(pool.id)}, ${formatPercent(pool.saturation)} saturated${current ? ", your pool" : ""}`}
+        aria-label={joinList([
+          `${label}${shared ? t("pools.row.sharedTicker") : ""}`,
+          shortId(pool.id),
+          `${t("pools.row.saturated", { percent: formatPercent(pool.saturation) })}${current ? t("pools.row.yours") : ""}`,
+        ])}
       >
         <span className={`avatar avatar--tint-${tint(pool.id)}`} aria-hidden="true">
           {initials(ticker ?? "?")}
         </span>
         <span className="token-row__label">
           {label}
-          {current && <span className="utxo-tag"> Yours</span>}
-          {shared && <span className="utxo-tag utxo-tag--warn"> Shared ticker</span>}
+          {current && <span className="utxo-tag"> {t("pools.yours")}</span>}
+          {shared && <span className="utxo-tag utxo-tag--warn"> {t("pools.sharedTickerTag")}</span>}
         </span>
         <span className="token-row__amount">{formatPercent(pool.saturation)}</span>
         <span className="token-row__sub">
           {ticker && <span className="mono-id">{shortId(pool.id)} · </span>}
-          {formatPercent(pool.margin * 100)} margin · {formatAda(pool.cost)} ₳ cost
+          {t("pools.row.marginCost", { margin: formatPercent(pool.margin * 100), cost: formatAda(pool.cost) })}
         </span>
       </button>
     </li>
@@ -235,6 +242,7 @@ function PoolPage({
   onBack: () => void;
   onStake: (pool: PoolDetails, shared: number) => void;
 }) {
+  const t = useT();
   const [details, setDetails] = useState<PoolDetails>();
   const [readError, setReadError] = useState<string>();
   useEffect(() => {
@@ -243,7 +251,7 @@ function PoolPage({
 
   const yours = row.id === current;
   const label = poolLabel(details ?? { id: row.id, ticker: row.ticker });
-  const why = blocked ?? (yours ? "You're staking with this pool" : details?.status === "retired" ? "This pool has retired" : undefined);
+  const why = blocked ?? (yours ? t("pools.alreadyYours") : details?.status === "retired" ? t("pools.retired") : undefined);
   return (
     <Screen
       title={label}
@@ -260,7 +268,7 @@ function PoolPage({
           disabled={!details || !!why || busy}
           title={why}
         >
-          {busy ? "Building…" : yours ? "Your pool" : `Stake with ${label}`}
+          {busy ? t("common.building") : yours ? t("staking.yourPool") : t("pools.stakeWith", { label })}
         </button>
       }
     >
@@ -271,7 +279,7 @@ function PoolPage({
       </p>
       <SharedTicker shared={shared} />
       {!registered && !yours && (
-        <p className="note">Staking the first time takes a 2 ₳ deposit, which comes back when you stop.</p>
+        <p className="note">{t("pools.firstDeposit")}</p>
       )}
     </Screen>
   );
@@ -279,11 +287,11 @@ function PoolPage({
 
 /** Said on a pool's page and its review when other live pools use its ticker. */
 export function SharedTicker({ shared }: { shared: number }) {
+  const t = useT();
   if (shared < 2) return null;
   return (
     <Callout tone="warn" testId="pool-shared-ticker">
-      {shared} live pools use this ticker, or one that looks the same. Anyone can register a pool under any ticker: only
-      the pool ID tells them apart. Check it against the one the pool publishes before you stake.
+      {t("pools.warn.sharedTicker", { count: shared })}
     </Callout>
   );
 }

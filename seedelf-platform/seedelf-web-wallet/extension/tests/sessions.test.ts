@@ -3,7 +3,7 @@
 // signed with the session's key alone, and everything brought back into the
 // private balance. The 12-word phrase, the real WebAssembly, and fakes of
 // Koios, giveme.my and Minswap's aggregator.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
@@ -23,6 +23,9 @@ import {
   SessionService,
 } from "../src/background/sessions";
 import { SESSION_SPENT } from "../src/background/spent";
+import { WalletLocked } from "../src/background/wallet";
+import { i18n, t as translate } from "../src/i18n/core";
+import { activityDetail } from "../src/ui/activity";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
@@ -142,8 +145,11 @@ function alarm() {
   return a;
 }
 
-/** The session service with giveme.my's witness and the one-time key's signature stood in for, as withdraw.test.ts does. */
-function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
+/**
+ * The session service with giveme.my's witness and the one-time key's signature stood in for, as withdraw.test.ts
+ * does. `stood`: more of WebAssembly stood in for.
+ */
+function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm(), stood: Partial<ReturnType<typeof loadTestWasm>> = {}) {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   t.minswap.swapCbor = SWAP;
@@ -155,6 +161,7 @@ function signing(t: Awaited<ReturnType<typeof unlocked>>, runner = alarm()) {
         const { txCbor } = JSON.parse(request) as { txCbor: string };
         return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
       },
+      ...stood,
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
@@ -373,13 +380,15 @@ describe("a private session", () => {
     expect(funded).toMatchObject({ kind: "session-out", txHash: out.txHash });
     expect(t.koios.submitted.map(txIdOf)).toEqual([out.txHash]);
     expect(await t.session.get(SESSION_OUT)).toBeUndefined();
-    // The private history names the session, not its address.
-    expect((await t.activity.seedelf("preprod"))[0]).toMatchObject({
+    // The private history names the session, not its address: by its number, which the page says in its words.
+    const funding = (await t.activity.seedelf("preprod"))[0]!;
+    expect(funding).toMatchObject({
       kind: "session-out",
       direction: "out",
       lovelace: "21000000",
-      detail: "Private session 1",
+      session: 0,
     });
+    expect(activityDetail(funding)).toBe("Private session 1");
 
     let [view] = await sessions.list("preprod");
     expect(view).toMatchObject({ index: 0, stage: "funding", holding: null, swap: { amountOut: "906594100" } });
@@ -430,7 +439,7 @@ describe("a private session", () => {
     expect((await t.activity.seedelf("preprod"))[0]).toMatchObject({
       kind: "session-back",
       direction: "in",
-      detail: "Private session 1",
+      session: 0,
       assets: [{ assetName: "4d494e", quantity: "906594100" }],
     });
 
@@ -1431,7 +1440,12 @@ describe("a swap that runs itself", () => {
     t.minswap.fetch = async (url, init) =>
       url.endsWith("/estimate") ? new Response("Rate limit exceeded, retry in 50 seconds", { status: 429 }) : real(url, init);
     let view = await sessions.advance("preprod", 0);
-    expect(view.auto!.retry).toEqual({ at: t.clock.now + 30_000, error: expect.stringContaining("limiting requests") });
+    // Why, as a code the page words, as well as Minswap's refusal in the worker's own words.
+    expect(view.auto!.retry).toEqual({
+      at: t.clock.now + 30_000,
+      error: expect.stringContaining("limiting requests"),
+      reason: "minswap-rate-limited",
+    });
 
     // Not before the 30 s are up.
     t.clock.now += 20_000;
@@ -1449,6 +1463,62 @@ describe("a swap that runs itself", () => {
     view = await sessions.resume("preprod", 0);
     expect(view.auto!.retry).toBeUndefined();
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  });
+
+  describe("in the user's language, which the worker speaks too", () => {
+    afterEach(async () => {
+      await i18n.changeLanguage("en");
+    });
+
+    it("records why a step failed as a code, from what failed rather than from its words", async () => {
+      await i18n.changeLanguage("es");
+      const t = await unlocked();
+      const sessions = signing(t);
+      await started(sessions);
+      funded(t);
+      const real = t.minswap.fetch;
+      t.minswap.fetch = async (url, init) => (url.endsWith("/estimate") ? new Response("", { status: 429 }) : real(url, init));
+      // Minswap's limit, said in Spanish: no English words for the page to match.
+      const view = await sessions.advance("preprod", 0);
+      expect(view.auto!.retry).toMatchObject({
+        error: "Minswap está limitando las peticiones de tu conexión. Espera un minuto y vuelve a intentarlo.",
+        reason: "minswap-rate-limited",
+      });
+
+      // In Japanese, a refusal that names Koios isn't Koios staying silent: the network answered.
+      await i18n.changeLanguage("ja");
+      t.minswap.fetch = real;
+      t.koios.rejectSubmit = "Koios is down";
+      t.clock.now += 60_000;
+      const refused = await sessions.advance("preprod", 0);
+      expect(refused.auto!.retry).toMatchObject({ error: expect.stringContaining("ネットワーク"), reason: "other" });
+
+      // Koios not answering at all is: three 503s for a read.
+      t.koios.rejectSubmit = undefined;
+      const answering = t.koios.fetch;
+      t.koios.fetch = async (url, init) => (url.includes("/tx_status") ? new Response("", { status: 503 }) : answering(url, init));
+      t.clock.now += 5 * 60_000;
+      const silent = await sessions.advance("preprod", 0);
+      expect(silent.auto!.retry).toMatchObject({ reason: "koios-silent" });
+    });
+
+    it("waits for an unlock, and never pauses, when a lock comes as it reads what Minswap built", async () => {
+      await i18n.changeLanguage("es");
+      const t = await unlocked();
+      // A lock out of the keys' turn as the swap is read, worded in Spanish.
+      const sessions = signing(t, alarm(), {
+        inspectSessionTx: () => {
+          throw new WalletLocked(translate("worker.wallet.locked"));
+        },
+      });
+      await started(sessions);
+      funded(t);
+      const view = await sessions.advance("preprod", 0);
+      // Tried again once unlocked, as in English; a pause would wait for the user's Try again, for good.
+      expect(view.auto!.paused).toBeUndefined();
+      expect(view.auto!.retry).toMatchObject({ error: "La billetera está bloqueada." });
+      expect(t.koios.submitted).toHaveLength(1);
+    });
   });
 
   it("builds a step again when Koios never took its transaction and the chain doesn't have it", async () => {

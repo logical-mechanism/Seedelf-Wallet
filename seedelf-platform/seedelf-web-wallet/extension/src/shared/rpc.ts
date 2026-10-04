@@ -89,8 +89,20 @@ export interface ActivityEntry {
   tokens: number;
   /** The network fee, when this wallet paid it (lovelace). */
   fee?: string;
-  /** Who or where: a seedelf's tag, a $handle, an address. */
+  /** Who or where: a seedelf's tag, a $handle, an address. Data, never the wallet's own words. */
   detail?: string;
+  /**
+   * How many more it paid beside `detail`, which is the first: a transfer or
+   * a withdrawal to several. The page says "and 2 more" in its own language
+   * (ui/activity.ts activityDetail).
+   */
+  more?: number;
+  /**
+   * The private session (from 0) a funding, a top-up or a return was paid
+   * for or by: its name is the page's to say. An entry from before has the
+   * name in `detail` instead, in English (entrySession).
+   */
+  session?: number;
   /** The tokens that moved, each with a signed quantity (negative: out), when known. Older entries have only `tokens`. */
   assets?: TokenQuantity[];
   /** The Cardano account's only: a note on the transaction (CIP-20's message), in whoever wrote it's words. */
@@ -103,6 +115,21 @@ export interface ActivityEntry {
    * UTxOs screen (shared/histories.ts). Absent, it's read from `kind`.
    */
   origin?: HistoryClass;
+}
+
+/**
+ * The private session (from 0) whose funding, top-up or return `entry`
+ * records, if it's one: its `session`, or, on an entry written before the
+ * worker kept the number, the name its `detail` holds ("Private session 3").
+ * The worker wrote that name in English then, the only language it had, so
+ * this is the one place an English name is read back, and only for those.
+ */
+export function entrySession(entry: ActivityEntry): number | undefined {
+  if (entry.kind !== "session-out" && entry.kind !== "session-back") return undefined;
+  const kept = entry.session;
+  if (typeof kept === "number" && Number.isInteger(kept) && kept >= 0) return kept;
+  const n = /^Private session (\d+)$/.exec(entry.detail ?? "")?.[1];
+  return n ? Number(n) - 1 : undefined;
 }
 
 /** What a transaction in the Cardano account's Activity did with its stake key. Lovelace amounts are decimal strings. */
@@ -1170,13 +1197,32 @@ export type SessionPause =
   /** What Minswap built failed a check (`detail` says which), so the wallet didn't sign it. */
   | { at: number; why: "refused"; detail: string };
 
+/**
+ * Why a swap's step failed, as a code the page words (Swaps.tsx): Minswap or
+ * Koios asked the wallet to slow down, or didn't answer, or Minswap hasn't
+ * seen the funding yet. `other` for anything else, whose own words the page
+ * shows. The worker tells it from what failed (sessions.ts retryReasonOf),
+ * never from the message, which is in the language the worker had then.
+ */
+export type RetryReason =
+  | "minswap-rate-limited"
+  | "koios-rate-limited"
+  | "minswap-silent"
+  | "koios-silent"
+  | "funding-unseen"
+  | "other";
+
 /** A swap that runs itself, after one approval: where it's at, for its timeline. */
 export interface SessionAuto {
   /** Each step waits for the one before: the funding, the order, its fill (or cancel), the return. */
   step: "funding" | "ordering" | "filling" | "cancelling" | "returning" | "done";
   paused?: SessionPause;
-  /** The last step failed (Koios or Minswap didn't answer): it's tried again at `at`. */
-  retry?: { at: number; error: string };
+  /**
+   * The last step failed (Koios or Minswap didn't answer): it's tried again
+   * at `at`. `reason`: why, as a code; none on a retry recorded before the
+   * codes, whose `error` is English, the one language the worker wrote then.
+   */
+  retry?: { at: number; error: string; reason?: RetryReason };
   /** The user pressed Stop: any order is cancelled, then everything comes back. */
   stopping: boolean;
   /** The order was filled: `partly`, part of it (a split route), the rest refunded. */

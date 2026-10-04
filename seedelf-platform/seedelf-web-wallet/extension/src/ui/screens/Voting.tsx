@@ -11,6 +11,7 @@
 // (launch review #59).
 
 import { useMemo, useState, type FormEvent } from "react";
+import { type I18nKey, joinList, t, useT } from "../../i18n";
 
 import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails } from "../../shared/rpc";
 import { call } from "../background";
@@ -19,7 +20,7 @@ import { CheckIcon, LandmarkIcon, SearchIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { drepList, isDrepId, searchDreps, type DrepEntry } from "../dreps";
-import { formatAda, nameSkeleton, plainName, plural, sharedNames, sharing, shortId, voteLabel } from "../format";
+import { formatAda, nameSkeleton, plainName, sharedNames, sharing, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
 import { initials, tint } from "../tokens";
 
@@ -28,23 +29,11 @@ const PAGE = 20;
 
 type Pick = "abstain" | "no-confidence" | "drep";
 
-const OPTIONS: Array<{ value: Pick; title: string; text: string }> = [
-  {
-    value: "abstain",
-    title: "Always abstain",
-    text: "Your stake sits out every vote.",
-  },
-  {
-    value: "no-confidence",
-    title: "Always no confidence",
-    text: "Your stake votes no confidence in the constitutional committee, every time.",
-  },
-  {
-    value: "drep",
-    title: "A DRep",
-    text: "Someone who votes for you: search by name, or paste their DRep ID.",
-  },
-];
+const OPTIONS = [
+  { value: "abstain", title: "vote.abstain.title", text: "vote.abstain.text" },
+  { value: "no-confidence", title: "vote.noConfidence.title", text: "vote.noConfidence.text" },
+  { value: "drep", title: "vote.drep.title", text: "vote.drep.text" },
+] as const satisfies Array<{ value: Pick; title: I18nKey; text: I18nKey }>;
 
 const pickOf = (drep: string | null): Pick =>
   drep === ALWAYS_NO_CONFIDENCE ? "no-confidence" : drep && drep !== ALWAYS_ABSTAIN ? "drep" : "abstain";
@@ -69,6 +58,7 @@ export function Voting({
   /** The vote as Koios names it, the DRep's name, and how many DReps share that name (`drepSharing`). */
   onVote: (drep: string, name?: string, shared?: DrepShared) => void;
 }) {
+  const t = useT();
   const network = useNetwork();
   const { dreps } = drepList(network);
   const shared = useMemo(() => sharedNames(dreps, (d) => d.name), [dreps]);
@@ -82,7 +72,7 @@ export function Voting({
   const same = chosen !== undefined && chosen === current;
   const retired = pick === "drep" && drep?.status === "retired";
   const drepShared = drep ? drepSharing(dreps, shared, drep) : NOT_SHARED;
-  const why = blocked ?? (same ? "Your voting power already goes there" : retired ? "That DRep has retired" : undefined);
+  const why = blocked ?? (same ? t("vote.alreadyThere") : retired ? t("vote.drepRetired") : undefined);
 
   async function lookUp(id: string) {
     if (!id || looking) return;
@@ -100,11 +90,11 @@ export function Voting({
 
   return (
     <Screen
-      title="Voting power"
+      title={t("activity.row.votingPower")}
       titleId="voting-title"
       onBack={onBack}
       backDisabled={busy}
-      aside={`Now: ${voteLabel(current)}`}
+      aside={t("vote.now", { what: voteLabel(current) })}
       error={error}
       foot={
         <button
@@ -116,15 +106,14 @@ export function Voting({
           disabled={!chosen || !!why || busy}
           title={why}
         >
-          {busy ? "Building…" : "Review"}
+          {busy ? t("common.building") : t("common.review")}
         </button>
       }
     >
       <p className="note">
-        Cardano's governance votes on changes to the chain and on spending from its treasury. Your stake's voting power
-        goes where you choose.
+        {t("vote.note")}
       </p>
-      <ul className="list" role="radiogroup" aria-label="Where your voting power goes">
+      <ul className="list" role="radiogroup" aria-label={t("vote.whereLabel")}>
         {OPTIONS.map((o) => {
           const on = o.value === pick;
           return (
@@ -139,9 +128,9 @@ export function Voting({
                 <span className="avatar avatar--contact" aria-hidden="true">
                   {on ? <CheckIcon size={16} /> : <LandmarkIcon size={16} />}
                 </span>
-                <span className="token-row__label">{o.title}</span>
+                <span className="token-row__label">{t(o.title)}</span>
                 <span />
-                <span className="token-row__sub wrap">{o.text}</span>
+                <span className="token-row__sub wrap">{t(o.text)}</span>
               </button>
             </li>
           );
@@ -153,7 +142,7 @@ export function Voting({
           <div className="stack-tight">
             <DrepCard drep={drep} shared={drepShared.shared} listed={drepShared.listed} />
             <button type="button" className="link align-start" onClick={() => setDrep(undefined)} disabled={busy}>
-              Choose another DRep
+              {t("vote.chooseAnother")}
             </button>
           </div>
         ) : (
@@ -161,9 +150,9 @@ export function Voting({
         ))}
 
       {!registered && (
-        <p className="note">Your account isn't registered to stake yet: this registers it, with a 2 ₳ deposit that comes back when you stop.</p>
+        <p className="note">{t("vote.notRegistered")}</p>
       )}
-      <Callout tone="privacy">Where your voting power goes is public, and it names your public account.</Callout>
+      <Callout tone="privacy">{t("vote.privacy.public")}</Callout>
     </Screen>
   );
 }
@@ -180,6 +169,7 @@ function DrepSearch({
   error?: string;
   onPick: (id: string) => void;
 }) {
+  const t = useT();
   const { recorded, dreps } = drepList(useNetwork());
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -200,8 +190,8 @@ function DrepSearch({
         <SearchIcon size={16} />
         <input
           type="search"
-          aria-label="Search DReps"
-          placeholder="Name or DRep ID"
+          aria-label={t("vote.search")}
+          placeholder={t("vote.searchPlaceholder")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -218,7 +208,7 @@ function DrepSearch({
       )}
       {pasted ? (
         <button type="submit" className="secondary" disabled={looking}>
-          {looking ? "Looking…" : "Look up this ID"}
+          {looking ? t("vote.looking") : t("vote.lookUp")}
         </button>
       ) : found.length ? (
         <ul className="list" data-testid="drep-results">
@@ -227,16 +217,15 @@ function DrepSearch({
           ))}
         </ul>
       ) : (
-        <p className="note center">No DRep on the wallet's list matches “{query.trim()}”. Paste its whole ID instead.</p>
+        <p className="note center">{t("vote.noneMatch", { query: query.trim() })}</p>
       )}
       {!pasted && found.length > limit && (
         <button type="button" className="secondary" onClick={() => setLimit(limit + PAGE)}>
-          Show {Math.min(PAGE, found.length - limit)} more
+          {t("tokens.showMore", { number: Math.min(PAGE, found.length - limit) })}
         </button>
       )}
       <p className="note" data-testid="drep-list-note">
-        {plural(dreps.length, "DRep")} with a name, from the wallet's list of {dateOf(recorded)}: searching it asks no one. For
-        one who registered since, paste the whole ID.
+        {t("vote.listNote", { count: dreps.length, date: dateOf(recorded) })}
       </p>
     </form>
   );
@@ -244,7 +233,9 @@ function DrepSearch({
 
 /** "24 Sep 2026" for the list's "2026-09-24". */
 const dateOf = (day: string) =>
-  day ? new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "no date";
+  day
+    ? new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+    : t("vote.noDate");
 
 /** One DRep on the list: its name, flagged when another uses it too, and enough of its ID to tell them apart. */
 export function DrepRow({
@@ -259,6 +250,7 @@ export function DrepRow({
   disabled: boolean;
   onPick: (id: string) => void;
 }) {
+  const t = useT();
   const name = plainName(drep.name);
   return (
     <li>
@@ -267,14 +259,14 @@ export function DrepRow({
         className="token-row"
         onClick={() => onPick(drep.id)}
         disabled={disabled}
-        aria-label={`${name}${shared ? ", a name another DRep uses too" : ""}, ${shortId(drep.id)}`}
+        aria-label={joinList([`${name}${shared ? t("vote.row.sharedName") : ""}`, shortId(drep.id)])}
       >
         <span className={`avatar avatar--tint-${tint(drep.id)}`} aria-hidden="true">
           {initials(name)}
         </span>
         <span className="token-row__label">
           {name}
-          {shared && <span className="utxo-tag utxo-tag--warn"> Shared name</span>}
+          {shared && <span className="utxo-tag utxo-tag--warn"> {t("vote.sharedNameTag")}</span>}
         </span>
         <span />
         <span className="token-row__sub mono-id">{shortId(drep.id)}</span>
@@ -306,43 +298,47 @@ export function drepSharing(dreps: DrepEntry[], shared: Map<string, number>, dre
   return { shared: sharing(shared, drep.name) + (listed ? 0 : 1), listed };
 }
 
-/** Who else uses a DRep's name, for its card's and review's warning: "2 DReps on the wallet's list use this name…". */
+/**
+ * Who else uses a DRep's name, for its card's and review's warning: "2 DReps on
+ * the wallet's list use this name…". Named `.warn.`: the warning puts it in from
+ * here, where the critical-set deriver, which reads only the JSX, can't see it.
+ */
 export function sharedDrepName({ shared, listed }: DrepShared): string {
-  if (listed) return `${shared} DReps on the wallet's list use this name, or one that looks the same`;
+  if (listed) return t("vote.sharedName.warn.listed", { count: shared });
   const others = shared - 1;
-  return others === 1
-    ? "A DRep on the wallet's list uses this name, or one that looks the same, under another ID"
-    : `${others} DReps on the wallet's list use this name, or one that looks the same, each under another ID`;
+  return t("vote.sharedName.warn.unlisted", { count: others });
 }
 
 /** The DRep picked, looked up live; `shared` and `listed`: `drepSharing`'s. */
 export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetails; shared?: number; listed?: boolean }) {
+  const t = useT();
   const status =
     drep.status === "retired"
-      ? "Retired"
+      ? t("vote.status.retired")
       : drep.active
-        ? "Active"
-        : `Inactive${drep.expiresEpoch !== null ? ` since epoch ${drep.expiresEpoch}` : ""}`;
+        ? t("vote.status.active")
+        : drep.expiresEpoch !== null
+          ? t("vote.status.inactiveSince", { epoch: drep.expiresEpoch })
+          : t("vote.status.inactive");
   return (
     <div className="stack-tight" data-testid="drep-details">
       <ReviewRows testId="drep-facts">
-        <Row label="Name" value={drep.name ? plainName(drep.name) : "No name given"} strong />
-        <Row label="Status" value={status} />
-        <Row label="Voting power" value={`${formatAda(drep.votingPower)} ₳`} />
-        <Row label="Delegators" value={drep.delegators.toLocaleString("en-US")} />
+        <Row label={t("contacts.nameLabel")} value={drep.name ? plainName(drep.name) : t("vote.noName")} strong />
+        <Row label={t("vote.statusLabel")} value={status} />
+        <Row label={t("activity.row.votingPower")} value={`${formatAda(drep.votingPower)} ₳`} />
+        <Row label={t("pool.delegators")} value={drep.delegators.toLocaleString("en-US")} />
       </ReviewRows>
       <p className="note mono-id" data-testid="drep-id">
         {drep.id}
       </p>
       {shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
-          {sharedDrepName({ shared, listed })}. Anyone can take any name: only the ID tells them apart. Check it against
-          the one the DRep publishes before you delegate.
+          {t("vote.warn.sharedName", { shared: sharedDrepName({ shared, listed }) })}
         </Callout>
       )}
       {drep.status !== "retired" && !drep.active && (
         <Callout tone="warn">
-          This DRep hasn't voted lately, so its votes don't count until it does. Your rewards unlock either way.
+          {t("vote.warn.inactive")}
         </Callout>
       )}
     </div>

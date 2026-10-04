@@ -3,6 +3,7 @@
 // Navigation is plain state switching, no router.
 
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
+import { useT } from "../i18n";
 
 import { enabledNetworks, NETWORKS, serviceHosts } from "../networks";
 import type { Status } from "../shared/rpc";
@@ -20,9 +21,11 @@ import { Reset, Unlock } from "./screens/Unlock";
 import { AccountsProvider, useAccounts } from "./accounts";
 import { NetworkContext } from "./network";
 import { PreferencesProvider } from "./preferences";
+import { withoutStop } from "./sentence";
 import { connectorWindow, openInTab, startFromHash, view } from "./view";
 
 export function App() {
+  const t = useT();
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState<string>();
   // A Lock that failed: said over the screen, which stays as it is.
@@ -146,8 +149,8 @@ export function App() {
                 setSettings(false);
                 setGoHome((n) => n + 1);
               }}
-              aria-label="Home"
-              title="Home"
+              aria-label={t("app.home")}
+              title={t("app.home")}
             >
               {brand}
             </button>
@@ -161,20 +164,20 @@ export function App() {
             <button
               className="icon-button"
               onClick={() => setSettings(!settings)}
-              aria-label="Settings"
+              aria-label={t("app.settings")}
               aria-pressed={settings}
-              title="Settings"
+              title={t("app.settings")}
             >
               <SettingsIcon />
             </button>
           )}
           {unlocked && !connectorWindow && (
-            <button className="icon-button" onClick={lock} aria-label="Lock" title="Lock">
+            <button className="icon-button" onClick={lock} aria-label={t("app.lock")} title={t("app.lock")}>
               <LockIcon />
             </button>
           )}
           {view === "panel" && !connectorWindow && (
-            <button className="icon-button" onClick={() => openInTab()} aria-label="Open in tab" title="Open in a full tab">
+            <button className="icon-button" onClick={() => openInTab()} aria-label={t("app.openInTab")} title={t("app.openInTabTitle")}>
               <ExpandIcon />
             </button>
           )}
@@ -197,7 +200,7 @@ export function App() {
         </main>
 
         <footer className="footer">
-          Seedelf Wallet {status?.version ?? ""} · {network?.label ?? "…"}
+          {t("app.name")} {status?.version ?? ""} · {network?.label ?? "…"}
         </footer>
       </div>
     </AccountsProvider>
@@ -238,6 +241,7 @@ function useServiceAccess(): boolean | undefined {
 
 /** Chrome took the wallet's access to its services away: say so, and ask Chrome again from the click. */
 function ServiceAccess() {
+  const t = useT();
   const [error, setError] = useState<string>();
 
   async function ask() {
@@ -245,7 +249,7 @@ function ServiceAccess() {
     try {
       // Called before anything is awaited: Chrome asks only straight from a click.
       const granted = await chrome.permissions.request({ origins: SERVICE_HOSTS });
-      if (!granted) setError("Chrome still isn't letting the wallet reach Koios.");
+      if (!granted) setError(t("serviceAccess.warn.stillRefused"));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -253,28 +257,27 @@ function ServiceAccess() {
 
   return (
     <div className="stack service-access" role="alert" data-testid="service-access">
-      <Callout tone="warn">
-        Chrome isn't letting Seedelf Wallet reach Koios, where it reads Cardano, so your balances can't load and nothing
-        can be sent. That happens when the wallet's site access is limited in Chrome's extension settings.
-      </Callout>
+      <Callout tone="warn">{t("serviceAccess.warn.blocked")}</Callout>
       <button className="primary" onClick={ask}>
-        Ask Chrome again
+        {t("serviceAccess.askAgain")}
       </button>
       {error && <p className="error">{error}</p>}
     </div>
   );
 }
 
-/** Lock didn't finish: say why, and how to be sure the wallet locks. */
+/**
+ * Lock didn't finish: say why, and how to be sure the wallet locks. The reason comes as it was thrown, the
+ * browser's English as often as the worker's words: its sentence ends with the language's own stop, so it never
+ * runs into "Try again" in Japanese, nor doubles one it brought.
+ */
 export function LockFailed({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const t = useT();
   return (
     <div className="stack service-access" role="alert" data-testid="lock-error">
-      <Callout tone="warn">
-        The wallet couldn't lock: {message} Try again. Closing the browser always locks it: it forgets your keys when it
-        closes.
-      </Callout>
+      <Callout tone="warn">{t("lockFailed.warn.message", { message: withoutStop(message) })}</Callout>
       <button className="primary" onClick={onRetry}>
-        Lock
+        {t("app.lock")}
       </button>
     </div>
   );
@@ -282,23 +285,22 @@ export function LockFailed({ message, onRetry }: { message: string; onRetry: () 
 
 /** The wallet's background service failed: say what happened and offer a way out. */
 function StartupError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const t = useT();
   return (
     <section className="unlock" role="alert" aria-labelledby="startup-error">
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={72} height={72} />
-      <h1 id="startup-error">The wallet couldn't start</h1>
+      <h1 id="startup-error">{t("startup.title")}</h1>
       <div className="stack unlock__form">
         <Callout tone="warn" testId="startup-error">
           {message}
         </Callout>
         <button className="primary" onClick={onRetry}>
-          Try again
+          {t("common.tryAgain")}
         </button>
         <button className="secondary" onClick={() => chrome.runtime.reload()}>
-          Reload the extension
+          {t("startup.reload")}
         </button>
-        <p className="note center">
-          Reloading closes the wallet's windows. Your wallet is kept; you unlock it again with your password.
-        </p>
+        <p className="note center">{t("startup.reloadNote")}</p>
       </div>
     </section>
   );

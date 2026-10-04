@@ -8,6 +8,7 @@
 // A name is what people pay privately; without one, the screen says to
 // create it first.
 
+import { useT } from "../../i18n";
 import type { Account, SeedelfInfo } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
 import { Callout } from "../components/Callout";
@@ -24,45 +25,50 @@ export function Receive({ account, handles, onBack }: { account: Account; handle
   // wrong account's address is money in the wrong place, not a lost payment,
   // but it is still worth naming.
   const { several, name } = useAccounts();
+  const t = useT();
   return (
     <Screen
-      title="Receive"
+      title={t("receive.title")}
       titleId="receive-title"
       onBack={onBack}
-      aside={several ? `Into ${name}, your public account` : "Into your public account"}
+      aside={several ? t("receive.aside.named", { name }) : t("receive.aside.account")}
     >
       <div className="qr-wrap">
-        <QrCode text={account.receiveAddress} maxSize={200} label="QR code of the receive address" />
+        <QrCode text={account.receiveAddress} maxSize={200} label={t("receive.qr.label")} />
       </div>
-      <CopyField label="Receive address" value={account.receiveAddress} testId="receive-address" />
-      <p className="note">
-        Anything that can pay a Cardano address can fund this wallet: scan the code from a phone wallet, or copy the
-        address.
-      </p>
-      <Callout tone="privacy">
-        This is an ordinary Cardano address: anyone can see what it receives. To be paid privately, give out one of your
-        Seedelfs' names instead.
-      </Callout>
+      <CopyField
+        label={t("receive.address.label")}
+        copyLabel={t("receive.address.copy")}
+        value={account.receiveAddress}
+        testId="receive-address"
+      />
+      <p className="note">{t("receive.note.fund")}</p>
+      <Callout tone="privacy">{t("receive.privacy.publicAddress")}</Callout>
       {handles.length > 0 && (
         <section className="section" aria-labelledby="your-handles">
-          <h2 id="your-handles">Your ADA Handles</h2>
+          <h2 id="your-handles">{t("receive.handles.title")}</h2>
           <ul className="list" data-testid="handles">
             {handles.map((h) => (
               <li key={h} className="list__row">
                 <span className="list__name">${h}</span>
                 <span className="list__actions">
-                  <CopyButton value={`$${h}`} label={`Copy $${h}`} />
+                  <CopyButton value={`$${h}`} label={t("receive.handles.copy", { handle: h })} />
                 </span>
               </li>
             ))}
           </ul>
-          <p className="note">
-            A wallet paying {handles.length === 1 ? "this handle" : "one of these"} pays the address holding it: this
-            account. A handle is as public as the address.
-          </p>
+          {/* One sentence a form, not "this handle"/"one of these" dropped into
+              a shared one: which words a count changes isn't English's choice
+              to make for every language. */}
+          <p className="note">{t("receive.handles.note", { count: handles.length })}</p>
         </section>
       )}
-      <CopyField label="Stake address" value={account.stakeAddress} testId="stake-address" />
+      <CopyField
+        label={t("receive.stake.label")}
+        copyLabel={t("receive.stake.copy")}
+        value={account.stakeAddress}
+        testId="stake-address"
+      />
     </Screen>
   );
 }
@@ -85,53 +91,50 @@ export function ReceiveSeedelf({
   removeTitle?: string;
 }) {
   const amounts = useAmounts();
+  const t = useT();
   if (seedelfs.length === 0) {
     return (
       <Screen
-        title="Receive"
+        title={t("receive.title")}
         titleId="receive-seedelf-title"
         onBack={onBack}
-        aside="Into your private balance"
+        aside={t("receive.aside.private")}
         foot={
           <button type="button" className="primary" onClick={onCreate} disabled={!!createTitle} title={createTitle}>
-            Create a Seedelf
+            {t("receive.seedelfs.create")}
           </button>
         }
       >
         <p className="note" data-testid="receive-no-seedelf">
-          People pay a Seedelf's name, and you don't have a Seedelf yet. Create one first: your public account pays for
-          it.
+          {t("receive.seedelfs.none")}
         </p>
       </Screen>
     );
   }
   return (
-    <Screen title="Receive" titleId="receive-seedelf-title" onBack={onBack} aside="Into your private balance">
-      <p className="note">
-        Give out a Seedelf's whole name: tags aren't unique. Anyone with Seedelf Wallet can pay it, and nobody can tell
-        the payment is yours.
-      </p>
+    <Screen title={t("receive.title")} titleId="receive-seedelf-title" onBack={onBack} aside={t("receive.aside.private")}>
+      <p className="note">{t("receive.seedelfs.note")}</p>
       <section className="section" aria-labelledby="your-seedelfs">
-        <h2 id="your-seedelfs">Your Seedelfs</h2>
+        <h2 id="your-seedelfs">{t("receive.seedelfs.title")}</h2>
         <ul className="list" data-testid="seedelfs">
           {seedelfs.map((s) => {
-            const tag = s.label ?? "this Seedelf";
+            const tag = s.label ?? t("receive.seedelfs.thisOne");
             return (
               <li key={s.assetName} className="list__row" title={s.assetName}>
                 {/* No tag, no stand-in: "Unnamed" could be someone's tag. */}
                 <span className="list__name">{s.label ?? ""}</span>
                 <span className="list__actions">
-                  <span className="list__value" title="Locked with it: Remove gives it back">
+                  <span className="list__value" title={t("receive.seedelfs.locked")}>
                     {amounts.ada(s.lovelace)} ₳
                   </span>
-                  <CopyButton value={s.assetName} label={`Copy the name of ${tag}`} />
+                  <CopyButton value={s.assetName} label={t("receive.seedelfs.copyName", { tag })} />
                   <button
                     type="button"
                     className="icon-button icon-button--small"
-                    aria-label={`Remove ${tag}`}
+                    aria-label={t("receive.seedelfs.remove", { tag })}
                     onClick={() => onRemove(s)}
                     disabled={!!removeTitle}
-                    title={removeTitle ?? "Remove this Seedelf"}
+                    title={removeTitle ?? t("receive.seedelfs.removeThis")}
                   >
                     <TrashIcon size={14} />
                   </button>
@@ -144,9 +147,7 @@ export function ReceiveSeedelf({
           })}
         </ul>
       </section>
-      <Callout tone="privacy">
-        A Seedelf's name is public, and linked to whatever paid to create it. What's paid to it isn't.
-      </Callout>
+      <Callout tone="privacy">{t("receive.privacy.seedelfName")}</Callout>
     </Screen>
   );
 }

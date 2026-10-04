@@ -11,6 +11,19 @@
 // first.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  availableLanguages,
+  currentLanguage,
+  type I18nKey,
+  joinList,
+  joinSentences,
+  type LanguageCode,
+  Rich,
+  sentenceGap,
+  setLanguage,
+  t,
+  useT,
+} from "../../i18n";
 
 import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
 import { DAPP_ORIGINS } from "../../shared/dapp";
@@ -52,32 +65,37 @@ import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
-import { plural } from "../format";
+import {  } from "../format";
 import { accountName, useAccounts } from "../accounts";
+import { confirmsDelete, deletePhrase } from "../delete-phrase";
 import { usePreferences } from "../preferences";
+import { asSentence } from "../sentence";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
 import { disconnectWait } from "./SiteSessions";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
+/** Where a wrong translation is reported: no native speaker has checked them (chunk 19). */
+const ISSUES = "https://github.com/logical-mechanism/Seedelf-Wallet/issues";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
 type Page = "menu" | "accounts" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
 
 /** The currencies ADA's value can be shown in, by name. */
-const CURRENCY_NAMES: Record<(typeof CURRENCIES)[number], string> = {
-  usd: "US dollar (USD)",
-  eur: "Euro (EUR)",
-  gbp: "Pound sterling (GBP)",
-  jpy: "Japanese yen (JPY)",
-  cad: "Canadian dollar (CAD)",
-  aud: "Australian dollar (AUD)",
-  chf: "Swiss franc (CHF)",
-  brl: "Brazilian real (BRL)",
-};
+const CURRENCY_NAMES = {
+  usd: "settings.currency.usd",
+  eur: "settings.currency.eur",
+  gbp: "settings.currency.gbp",
+  jpy: "settings.currency.jpy",
+  cad: "settings.currency.cad",
+  aud: "settings.currency.aud",
+  chf: "settings.currency.chf",
+  brl: "settings.currency.brl",
+} as const satisfies Record<(typeof CURRENCIES)[number], I18nKey>;
 
-const lockLabel = (m: LockAfterMinutes) => (m === 60 ? "1 hour" : m === 1 ? "1 minute" : `${m} minutes`);
+const lockLabel = (m: LockAfterMinutes) =>
+  t(m === 60 ? "settings.lock.hour" : m === 1 ? "settings.lock.minute" : "settings.lock.minutes", { count: m });
 
 export function Settings({
   status,
@@ -105,14 +123,14 @@ export function Settings({
   if (page === "remove") return <RemoveWallet onBack={menu} onRemoved={onRemoved} />;
 
   return (
-    <Screen title="Settings" titleId="settings-title" onBack={onBack}>
+    <Screen title={t("app.settings")} titleId="settings-title" onBack={onBack}>
       <NetworkSection status={status} onMoved={onNetwork} />
       <section className="section" aria-labelledby="wallet-title">
-        <h2 id="wallet-title">Wallet</h2>
+        <h2 id="wallet-title">{t("settings.wallet")}</h2>
         <ul className="list">
-          <MenuRow icon={<WalletIcon size={16} />} label="Public accounts" onClick={() => setPage("accounts")} />
-          <MenuRow icon={<UsersIcon size={16} />} label="Contacts" onClick={() => setPage("contacts")} />
-          <MenuRow icon={<VaultIcon size={16} />} label="Collateral" onClick={() => setPage("collateral")} />
+          <MenuRow icon={<WalletIcon size={16} />} label={t("accounts.title")} onClick={() => setPage("accounts")} />
+          <MenuRow icon={<UsersIcon size={16} />} label={t("contacts.title")} onClick={() => setPage("contacts")} />
+          <MenuRow icon={<VaultIcon size={16} />} label={t("utxos.tag.collateral")} onClick={() => setPage("collateral")} />
         </ul>
       </section>
       <PreferencesSection network={status.network} />
@@ -120,26 +138,26 @@ export function Settings({
       {lovejoinOn(status.network) && <LovejoinSettings network={status.network} />}
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
-        <h2 id="security-title">Security</h2>
+        <h2 id="security-title">{t("settings.security")}</h2>
         <LockAfter />
         <ul className="list">
-          <MenuRow icon={<EyeIcon size={16} />} label="Show recovery phrase" onClick={() => setPage("phrase")} />
-          <MenuRow icon={<CheckIcon size={16} />} label="Check recovery phrase" onClick={() => setPage("check-phrase")} />
-          <MenuRow icon={<LockIcon size={16} />} label="Change password" onClick={() => setPage("password")} />
-          <MenuRow icon={<TrashIcon size={16} />} label="Remove wallet" onClick={() => setPage("remove")} danger />
+          <MenuRow icon={<EyeIcon size={16} />} label={t("settings.showPhrase")} onClick={() => setPage("phrase")} />
+          <MenuRow icon={<CheckIcon size={16} />} label={t("settings.checkPhrase")} onClick={() => setPage("check-phrase")} />
+          <MenuRow icon={<LockIcon size={16} />} label={t("settings.changePassword")} onClick={() => setPage("password")} />
+          <MenuRow icon={<TrashIcon size={16} />} label={t("settings.removeWallet")} onClick={() => setPage("remove")} danger />
         </ul>
       </section>
       <section className="section" aria-labelledby="about-title">
-        <h2 id="about-title">About</h2>
+        <h2 id="about-title">{t("settings.about")}</h2>
         <ReviewRows testId="about">
-          <Row label="Version" value={status.version} />
-          <Row label="Network" value={NETWORKS[status.network].label} />
+          <Row label={t("settings.version")} value={status.version} />
+          <Row label={t("network.label")} value={NETWORKS[status.network].label} />
         </ReviewRows>
         <a className="menu-link" href={SOURCE} target="_blank" rel="noreferrer">
-          Source code <ExternalIcon size={12} />
+          {t("settings.sourceCode")} <ExternalIcon size={12} />
         </a>
         <a className="menu-link" href={PRIVACY} target="_blank" rel="noreferrer">
-          Privacy policy <ExternalIcon size={12} />
+          {t("settings.privacyPolicy")} <ExternalIcon size={12} />
         </a>
         <p className="note" data-testid="talks-to">
           {talksTo(prices, lovejoinOn(status.network))}
@@ -205,8 +223,8 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
       const { found: indexes } = await call("account-discover", { limit: 1 });
       setFound(
         indexes.length
-          ? `Found Account ${indexes[0]! + 1}. It's in the list now.`
-          : `The next account in order has never been used on ${NETWORKS[network].label}. A custom number may still have been: check one below.`,
+          ? t("accounts.foundAccount", { number: indexes[0]! + 1 })
+          : t("accounts.nextNeverUsed", { network: NETWORKS[network].label }),
       );
     });
 
@@ -223,8 +241,8 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
       const { used } = await call("account-check", { index });
       setFound(
         used
-          ? `Account ${index + 1} has been used on ${NETWORKS[network].label}. It's in the list now.`
-          : `Account ${index + 1} has never been used on ${NETWORKS[network].label}. You can still add it and start using it.`,
+          ? t("accounts.hasBeenUsed", { number: index + 1, network: NETWORKS[network].label })
+          : t("accounts.neverUsed", { number: index + 1, network: NETWORKS[network].label }),
       );
       if (!used) setUnused(index);
     });
@@ -233,21 +251,21 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   const addOne = (index: number) =>
     run("check", async () => {
       await call("account-add", { index });
-      setFound(`Account ${index + 1} is in the list now.`);
+      setFound(t("accounts.inListNow", { number: index + 1 }));
       setNumber("");
     });
 
   return (
-    <Screen title="Public accounts" titleId="accounts-title" onBack={onBack}>
+    <Screen title={t("accounts.title")} titleId="accounts-title" onBack={onBack}>
       <section className="section" aria-labelledby="accounts-list-title">
         {/* The count, because the list scrolls: a row cut off at the bottom
             edge otherwise reads as clipped rather than as more below. */}
         <h2 id="accounts-list-title">
-          Accounts
+          {t("accounts.heading")}
           {accounts.length > 1 && (
             <span className="section__count">
               {" · "}
-              {shown.length === accounts.length ? accounts.length : `${shown.length} of ${accounts.length}`}
+              {shown.length === accounts.length ? accounts.length : t("accounts.shownOf", { shown: shown.length, total: accounts.length })}
             </span>
           )}
         </h2>
@@ -256,8 +274,8 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             <SearchIcon size={16} />
             <input
               type="search"
-              aria-label="Find an account"
-              placeholder="Number or name"
+              aria-label={t("accounts.find")}
+              placeholder={t("accounts.findPlaceholder")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               spellCheck={false}
@@ -279,21 +297,21 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
                   }}
                 >
                   <label className="sr-only" htmlFor={`account-name-${a.index}`}>
-                    What to call Account {a.index + 1}
+                    {t("accounts.whatToCall", { number: a.index + 1 })}
                   </label>
                   <input
                     id={`account-name-${a.index}`}
                     value={draft}
                     maxLength={24}
                     autoFocus
-                    placeholder={`Account ${a.index + 1}`}
+                    placeholder={t("accountPicker.numbered", { number: a.index + 1 })}
                     onChange={(e) => setDraft(e.target.value)}
                   />
                   <button type="submit" className="secondary" disabled={busy !== undefined}>
-                    Save
+                    {t("contacts.save")}
                   </button>
                   <button type="button" className="link" onClick={() => setNaming(undefined)}>
-                    Cancel
+                    {t("common.cancel")}
                   </button>
                 </form>
               ) : (
@@ -303,7 +321,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
                     {a.index === active && (
                       <span className="account-row__active" data-testid={`account-active-${a.index}`}>
                         {" "}
-                        · working on this one
+                        · {t("accounts.workingOnThis")}
                       </span>
                     )}
                   </span>
@@ -317,7 +335,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
                         disabled={busy !== undefined}
                         onClick={() => void run("switch", () => call("account-use", { index: a.index }).then(() => undefined))}
                       >
-                        {busy === "switch" ? "Switching…" : "Switch to it"}
+                        {busy === "switch" ? t("accounts.switching") : t("accounts.switchTo")}
                       </button>
                     )}
                     <button
@@ -328,7 +346,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
                         setDraft(a.name ?? "");
                       }}
                     >
-                      {a.name ? "Rename" : "Name it"}
+                      {t(a.name ? "accounts.rename" : "accounts.nameIt")}
                     </button>
                   </span>
                 </div>
@@ -338,21 +356,18 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
         </ul>
         {!shown.length && (
           <p className="note center empty" data-testid="accounts-none">
-            No account matches “{query.trim()}”.
+            {t("accounts.noneMatch", { query: query.trim() })}
           </p>
         )}
         <p className="note" data-testid="accounts-note">
-          Each account is a separate Cardano wallet from the same recovery phrase, with its own addresses, its own staking and
-          its own collateral. Other wallets call these accounts too, and show the same ones for this phrase.
+          {t("accounts.note")}
         </p>
         <p className="note" data-testid="accounts-private-note">
-          Your private balance is shared: there's one of it for the whole phrase, whichever account you're on. Nothing on chain
-          links money you make private from one account to money you make private from another — but spending both in one
-          private payment would, so the wallet keeps them apart and says so when it can't.
+          {t("accounts.privacy.sharedBalance")}
         </p>
         <div className="actions">
           <button type="button" className="secondary" onClick={() => void look()} disabled={busy !== undefined}>
-            {busy === "look" ? "Looking…" : "Look for the next account"}
+            {busy === "look" ? t("vote.looking") : t("accounts.lookForNext")}
           </button>
         </div>
         <form
@@ -362,7 +377,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             checkOne();
           }}
         >
-          <label htmlFor="account-number">Account number</label>
+          <label htmlFor="account-number">{t("accounts.numberLabel")}</label>
           <input
             id="account-number"
             type="number"
@@ -381,7 +396,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
           {/* Chips, like Switch to it and Name it in the list above: these sit
               inline with a field, not at the foot of a form. */}
           <button type="submit" className="chip" disabled={busy !== undefined || typed() === undefined}>
-            {busy === "check" ? "Looking…" : "Check it"}
+            {busy === "check" ? t("vote.looking") : t("accounts.checkIt")}
           </button>
           <button
             type="button"
@@ -392,23 +407,26 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
               if (index !== undefined) void addOne(index);
             }}
           >
-            Add it
+            {t("accounts.addIt")}
           </button>
         </form>
         <p className="note" data-testid="accounts-cost-note">
-          <strong>Look for the next account</strong> and <strong>Check it</strong> each ask Koios about one account, and the
-          wallet only ever asks about one at a time: asking about twenty at once would tell Koios those twenty accounts are one
-          wallet's. <strong>Add it</strong> asks nobody anything.
+          <Rich
+            k="accounts.privacy.koiosCost"
+            parts={{
+              look: <strong>{t("accounts.lookForNext")}</strong>,
+              check: <strong>{t("accounts.checkIt")}</strong>,
+              add: <strong>{t("accounts.addIt")}</strong>,
+            }}
+          />
         </p>
         <p className="note" data-testid="accounts-custom-note">
-          A number of your own works too — 1338, say. The look above goes in order and stops at the first account never used, so
-          it can't find one out on its own; checking it by number can. You can add an account that has never been used and start
-          using it: it exists in your recovery phrase either way, and holds nothing until you put something there.
+          {t("accounts.customNote")}
         </p>
         {unused !== undefined && (
           <div className="actions" data-testid="accounts-add-unused">
             <button type="button" className="primary" onClick={() => void addOne(unused)} disabled={busy !== undefined}>
-              Add Account {unused + 1} anyway
+              {t("accounts.addAnyway", { number: unused + 1 })}
             </button>
           </div>
         )}
@@ -434,21 +452,29 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
  * every transaction from the IP address that reads the public account.
  */
 export function talksTo(prices: boolean, lovejoin: boolean): string {
-  return [
-    `The wallet only ever talks to Koios and giveme.my, ${prices ? "to CoinGecko for ADA's price, " : ""}and to Minswap when you swap. It has no accounts, analytics or tracking.`,
-    "Each of them sees your IP address. Koios sends every transaction, from the same IP address that reads your public account.",
-    "giveme.my is run by Logical Mechanism, who make Seedelf Wallet: to lend its collateral, it sees each payment from your private balance.",
-    ...(lovejoin ? [LOVEJOIN_SEEN] : []),
-  ].join(" ");
+  return joinSentences([
+    t(prices ? "settings.privacy.talksToPrices" : "settings.privacy.talksTo"),
+    t("settings.privacy.eachSeesIp"),
+    t("settings.privacy.giveme"),
+    lovejoin && LOVEJOIN_SEEN(),
+  ]);
 }
 
-/** What moving to each network says first, before the wallet moves. */
+/**
+ * What moving to each network says first, before the wallet moves, in a
+ * warning callout. Both keys say so in their names (`.privacy.`, `.warn.`):
+ * the callout shows `MOVE_TO[asking]`, which the critical-set deriver can't
+ * read through.
+ */
 export const MOVE_TO: Record<NetworkName, string> = {
-  preprod:
-    "Preprod is Cardano's test network. ADA there is test ADA, with no value: it can't pay for anything, and real ADA sent to a preprod address is lost. " +
-    "Your wallet is the same there, with its own balances, history and connected sites, and the same keys: anyone comparing the two networks can tell they're one wallet's. " +
-    "To keep them apart, test with a recovery phrase you don't use on mainnet.",
-  mainnet: "Mainnet is Cardano's real network: ADA there is real money. Check every address and amount before you send.",
+  // Getters, as NETWORK_NOTE's are, so the shape everything reads stays a
+  // Record<NetworkName, string> while the words come from the current language.
+  get preprod() {
+    return t("settings.privacy.moveToPreprod");
+  },
+  get mainnet() {
+    return t("settings.warn.moveToMainnet");
+  },
 };
 
 /**
@@ -479,9 +505,9 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
 
   return (
     <section className="section" aria-labelledby="network-title">
-      <h2 id="network-title">Network</h2>
+      <h2 id="network-title">{t("network.label")}</h2>
       <Choice<NetworkName>
-        label="Cardano network"
+        label={t("network.ariaLabel")}
         id="network-label"
         options={status.networks.map((n) => ({ value: n, label: NETWORKS[n].label, disabled: busy }))}
         value={asking ?? status.network}
@@ -499,15 +525,14 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
         <div className="stack" data-testid="network-confirm">
           <Callout tone="warn">{MOVE_TO[asking]}</Callout>
           <p className="note">
-            Anything on its way on {current.label} (a swap, Lovejoin, a payment) carries on there. A site asking something now
-            is declined.
+            {t("settings.network.carriesOn", { network: current.label })}
           </p>
           <div className="actions">
             <button type="button" className="secondary" onClick={() => setAsking(undefined)} disabled={busy}>
-              Stay on {current.label}
+              {t("settings.network.stayOn", { network: current.label })}
             </button>
             <button type="button" className="primary" onClick={() => void move(asking)} disabled={busy}>
-              {busy ? "Switching…" : `Switch to ${NETWORKS[asking].label}`}
+              {busy ? t("accounts.switching") : t("settings.network.switchTo", { network: NETWORKS[asking].label })}
             </button>
           </div>
         </div>
@@ -526,6 +551,7 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
  * Switching where it opens opens it that way at once, as in Lace.
  */
 function PreferencesSection({ network }: { network: Status["network"] }) {
+  const t = useT();
   const { prefs, loaded, set } = usePreferences();
   const [openIn, setOpenIn] = useState<OpenIn>();
   const [error, setError] = useState<string>();
@@ -543,48 +569,73 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
 
   return (
     <section className="section" aria-labelledby="preferences-title">
-      <h2 id="preferences-title">Preferences</h2>
+      <h2 id="preferences-title">{t("settings.preferences")}</h2>
+      <div className="field">
+        <label htmlFor="language">{t("settings.language.label")}</label>
+        <select
+          id="language"
+          value={currentLanguage()}
+          onChange={(e) => void setLanguage(e.target.value as LanguageCode).catch((err: Error) => setError(err.message))}
+        >
+          {availableLanguages.map((l) => (
+            // Each language under its own name, from its own bundle: never
+            // "Japanese" in English.
+            <option key={l.code} value={l.code}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+        <p className="note" data-testid="language-note">
+          {t("settings.language.warn.unchecked")}
+          {sentenceGap()}
+          <a className="link" href={ISSUES} target="_blank" rel="noreferrer">
+            {t("settings.language.report")}
+          </a>
+        </p>
+      </div>
       {openIn && (
         <div className="stack-tight">
           <Choice<OpenIn>
-            label="Open Seedelf Wallet in"
+            label={t("settings.openIn")}
             id="open-in-label"
             options={[
-              { value: "tab", label: "A full tab" },
-              { value: "panel", label: "The side panel" },
+              { value: "tab", label: t("settings.openIn.tab") },
+              { value: "panel", label: t("settings.openIn.panel") },
             ]}
             value={openIn}
             onChange={chooseOpenIn}
           />
           <p className="note" data-testid="open-in-note">
-            {openIn === "panel"
-              ? "The toolbar button opens the wallet beside the page you're on, and it stays open as you browse."
-              : "The toolbar button opens the wallet in a tab, or brings back the one already open."}
-            {openIn === "panel" && view === "tab" ? " Open it with the toolbar button." : ""}
+            {joinSentences([
+              t(openIn === "panel" ? "settings.openIn.panelNote" : "settings.openIn.tabNote"),
+              openIn === "panel" && view === "tab" && t("settings.openIn.useButton"),
+            ])}
           </p>
         </div>
       )}
       <div className="field">
-        <label htmlFor="currency">Show ADA's value in</label>
+        <label htmlFor="currency">{t("settings.currency.label")}</label>
         <select
           id="currency"
           value={prefs.currency}
           disabled={!loaded}
           onChange={(e) => void set({ currency: e.target.value as Currency }).catch((err: Error) => setError(err.message))}
         >
-          <option value="off">Nothing (don't ask for prices)</option>
+          <option value="off">{t("settings.currency.off")}</option>
           {CURRENCIES.map((c) => (
             <option key={c} value={c}>
-              {CURRENCY_NAMES[c]}
+              {t(CURRENCY_NAMES[c])}
             </option>
           ))}
         </select>
         <p className="note" data-testid="currency-note">
-          {priced
-            ? prefs.currency === "off"
-              ? "No prices: the wallet asks CoinGecko nothing."
-              : "From CoinGecko, read when Home opens, at most every five minutes. It learns only that someone at your IP address uses the wallet: nothing about what you hold."
-            : "Values show on mainnet only: test ADA has no price, so nothing is asked on preprod."}
+          {t(
+            priced
+              ? prefs.currency === "off"
+                ? "settings.currency.privacy.none"
+                : "settings.currency.privacy.coingecko"
+              : "settings.currency.mainnetOnly",
+          )}
         </p>
       </div>
       {error && (
@@ -604,7 +655,7 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
 export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
   const mixes = (3 ** depth - 1) / 2;
   const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);
-  return `${mixes} ${mixes === 1 ? "mix" : "mixes"}, about ${(lovelace / 1_000_000).toFixed(1)} ₳`;
+  return t("settings.lovejoin.depthCost", { count: mixes, ada: (lovelace / 1_000_000).toFixed(1) });
 }
 
 /**
@@ -622,28 +673,20 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
   const on = prefs.lovejoinReturns;
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
-      <h2 id="lovejoin-settings-title">Lovejoin</h2>
+      <h2 id="lovejoin-settings-title">{t("settings.lovejoin")}</h2>
       <p className="note">
-        When a private session comes back with ADA to spare (a token→ADA swap's proceeds count), that ADA goes through
-        Lovejoin first, in boxes of 10 ₳ mixed with other people's, so what comes back is harder to tie to the session on
-        chain. The session pays for the mixes, and about 0.3 ₳ brings each box back. Its mixes are sent only while the
-        wallet is unlocked: locking partway stops them, and what's left comes back directly. A swap or a mix brings it back
-        by itself; a site's session, or a return you sent from Bring everything back, keeps it at its account until you
-        bring it back.
-        {floor > 0 &&
-          ` The wallet mixes only once Lovejoin's pool holds ${floor} boxes that aren't yours; until then a return comes back directly, and says so.`}{" "}
-        {LOVEJOIN_SEEN}
+        {joinSentences([t("settings.lovejoin.note"), floor > 0 && t("settings.lovejoin.floor", { count: floor }), LOVEJOIN_SEEN()])}
       </p>
       <Callout tone="warn" testId="lovejoin-unaudited">
-        {LOVEJOIN_UNAUDITED}
+        {LOVEJOIN_UNAUDITED()}
       </Callout>
       <div className="setting-row">
         <span className="stack-tight">
-          <span id="lovejoin-returns-label">Bring private sessions back through Lovejoin</span>
+          <span id="lovejoin-returns-label">{t("settings.lovejoin.returns")}</span>
           <span className="note" id="lovejoin-returns-note" data-testid="lovejoin-returns-note">
             {on
-              ? "A swap's approval, its Stop and each return you review can still bring that one back directly."
-              : `Off, a session's ADA comes back directly: anyone can tie it on chain to the session, and through its funding to the private UTxOs that paid for it. Your public account stays out either way. It saves each box's mixes (${depthCost(network, prefs.lovejoinDepth)}), about 0.3 ₳ to bring it back, and the hours of waiting. A mix from the Lovejoin tile still mixes, and a swap comes back as its approval said.`}
+              ? t("settings.lovejoin.returnsOn")
+              : t("settings.lovejoin.privacy.returnsOff", { cost: depthCost(network, prefs.lovejoinDepth) })}
           </span>
         </span>
         <button
@@ -658,7 +701,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
         />
       </div>
       <div className="field">
-        <label htmlFor="lovejoin-depth">Mixing, for each box</label>
+        <label htmlFor="lovejoin-depth">{t("settings.lovejoin.depth")}</label>
         <select
           id="lovejoin-depth"
           value={prefs.lovejoinDepth}
@@ -667,7 +710,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
         >
           {LOVEJOIN_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {d} {d === 1 ? "wave" : "waves"} deep: {depthCost(network, d)} (up to 1 in {3 ** d})
+              {t("settings.lovejoin.depthOption", { count: d, cost: depthCost(network, d), one: 3 ** d })}
             </option>
           ))}
         </select>
@@ -676,7 +719,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
         </p>
       </div>
       <div className="field">
-        <label htmlFor="lovejoin-delay">Each box comes back after</label>
+        <label htmlFor="lovejoin-delay">{t("settings.lovejoin.delay")}</label>
         <select
           id="lovejoin-delay"
           value={prefs.lovejoinDelay}
@@ -685,13 +728,12 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
         >
           {LOVEJOIN_DELAYS.map((d) => (
             <option key={d} value={d}>
-              {delayText(d)}, at random
+              {t("settings.lovejoin.delayOption", { delay: delayText(d) })}
             </option>
           ))}
         </select>
         <p className="note">
-          A box comes back some minutes into the first time the wallet is unlocked after its wait: never the moment you
-          unlock, nor right after the wallet sends something else.
+          {t("settings.lovejoin.delayNote")}
         </p>
       </div>
       {error && (
@@ -709,7 +751,7 @@ function LockAfter() {
   const [error, setError] = useState<string>();
   return (
     <div className="field">
-      <label htmlFor="lock-after">Lock after</label>
+      <label htmlFor="lock-after">{t("settings.lockAfter")}</label>
       <select
         id="lock-after"
         value={prefs.lockAfterMinutes}
@@ -720,11 +762,11 @@ function LockAfter() {
       >
         {LOCK_AFTER_MINUTES.map((m) => (
           <option key={m} value={m}>
-            {lockLabel(m)} without activity
+            {t("settings.lockAfterOption", { time: lockLabel(m) })}
           </option>
         ))}
       </select>
-      <p className="note">Closing the browser always locks it.</p>
+      <p className="note">{t("settings.closingLocks")}</p>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -773,7 +815,7 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
       async (granted) => {
         setAllowed(granted);
         if (!granted) {
-          setError("Chrome wasn't allowed to let the wallet onto sites, so sites still can't connect.");
+          setError(t("settings.sites.warn.notGranted"));
           return;
         }
         await set({ dappConnector: true });
@@ -784,16 +826,14 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
 
   return (
     <section className="section" aria-labelledby="dapp-settings-title">
-      <h2 id="dapp-settings-title">Sites</h2>
+      <h2 id="dapp-settings-title">{t("settings.sites")}</h2>
       <div className="setting-row">
         <span className="stack-tight">
-          <span id="dapp-connector-label">Let sites connect to Seedelf Wallet</span>
+          <span id="dapp-connector-label">{t("settings.sites.connector")}</span>
           <span className="note" id="dapp-connector-note" data-testid="dapp-connector-note">
             {blocked
-              ? CONNECTOR_BLOCKED
-              : on
-                ? "Sites find Seedelf Wallet as a Cardano wallet (CIP-30) and can ask to connect. When one asks, you choose what it sees: your public account, or a private session. Nothing is signed without you. Every https site you open, and scripts on it, can see that you use Seedelf Wallet, even one you never connect: not your addresses or balance until you connect it."
-                : "Off: sites can't see Seedelf Wallet. Turning it on asks Chrome to let the wallet add itself to https sites, as other Cardano wallets do. Then every https site you open, and scripts on it, can see that you use Seedelf Wallet, even sites you never connect (not your addresses or balance until you connect)."}
+              ? connectorBlockedText()
+              : t(on ? "settings.sites.privacy.on" : "settings.sites.privacy.off")}
           </span>
         </span>
         <button
@@ -816,7 +856,7 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
               accounts, and ten buttons in a row would not fit. */}
           <div className="field">
             <label className="label" htmlFor="dapp-account-select">
-              The account sites use
+              {t("settings.sites.account")}
             </label>
             <select
               id="dapp-account-select"
@@ -835,19 +875,15 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
             </select>
           </div>
           <p className="note" data-testid="dapp-account-note">
-            Connected sites always use this account, whichever one you're working on, so switching accounts never shows a site a
-            second account of yours. Changing it here shows every connected site the new account instead — which anyone watching
-            both can see is the same wallet.
+            {t("settings.sites.privacy.account")}
           </p>
         </div>
       )}
       <div className="setting-row">
         <span className="stack-tight">
-          <span id="dapp-password-label">Ask for your password to sign for a site</span>
+          <span id="dapp-password-label">{t("settings.sites.password")}</span>
           <span className="note" id="dapp-password-note" data-testid="dapp-password-note">
-            {!loaded || prefs.dappPassword
-              ? "A site's transaction or message is signed only once you type your password, even while the wallet is unlocked."
-              : "Sign is enough while the wallet is unlocked, so anyone at your unlocked browser could sign for a site."}
+            {t(!loaded || prefs.dappPassword ? "settings.sites.passwordOn" : "settings.sites.warn.passwordOff")}
           </span>
         </span>
         <button
@@ -865,7 +901,7 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
         />
       </div>
       <ul className="list">
-        <MenuRow icon={<PlugIcon size={16} />} label="Connected sites" onClick={onSites} />
+        <MenuRow icon={<PlugIcon size={16} />} label={t("sites.title")} onClick={onSites} />
       </ul>
       {error && (
         <p className="error" role="alert">
@@ -877,8 +913,7 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
 }
 
 /** Why the connector stays off on a Chrome that won't protect the wallet's storage from sites (`connectorBlocked: "storage"`). */
-export const CONNECTOR_BLOCKED =
-  "Off, and it stays off in this version of Chrome: it can't keep websites away from the wallet's storage, where your encrypted wallet is. Update Chrome to let sites connect.";
+export const connectorBlockedText = () => t("settings.sites.warn.blocked");
 
 /**
  * The sites connected on this network, each with Disconnect. A site's
@@ -922,26 +957,25 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <Screen title="Connected sites" titleId="sites-title" onBack={onBack} aside="Encrypted on this device" error={error}>
+    <Screen title={t("sites.title")} titleId="sites-title" onBack={onBack} aside={t("settings.encryptedHere")} error={error}>
       {sites?.length === 0 && (
         <p className="note center" data-testid="sites-empty">
-          No site is connected. A site asks when it wants to, and you choose.
+          {t("sites.empty")}
         </p>
       )}
       {!!sites?.length && <SiteRows sites={sites} sessions={sessions} busy={busy} onDisconnect={setAsking} />}
       <p className="note">
-        A disconnected site has to ask again before it sees anything more, and it keeps what it already saw. A private
-        session is disconnected once everything in it is brought back, from the dApps page.
+        {t("sites.note")}
       </p>
       {asking && (
         <Modal
-          title={`Disconnect ${host(asking)}?`}
+          title={t("sites.disconnectAsk", { site: host(asking) })}
           titleId="sites-disconnect-title"
           onClose={() => setAsking(undefined)}
           foot={
             <>
               <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                Keep it
+                {t("sites.keepIt")}
               </button>
               <button
                 type="button"
@@ -949,7 +983,7 @@ function ConnectedSites({ onBack }: { onBack: () => void }) {
                 onClick={() => void forget(asking.origin)}
                 data-testid="sites-disconnect-confirm"
               >
-                Disconnect the site
+                {t("sites.disconnectIt")}
               </button>
             </>
           }
@@ -991,12 +1025,13 @@ export function SiteRows({
             <span className="stack-tight">
               <strong>{host(s)}</strong>
               <span className="note">
-                {s.session === undefined ? "Your public account" : `Private session ${s.session + 1}`} · since{" "}
-                {new Date(s.connectedAt).toLocaleDateString()}
+                {s.session === undefined ? t("collateral.yourPublicAccount") : t("claim.session", { number: s.session + 1 })} ·{" "}
+                {t("sites.since", { date: new Date(s.connectedAt).toLocaleDateString() })}
               </span>
               {wait && (
                 <span className="note" data-testid="site-wait">
-                  {wait}.
+                  {/* The button's own title elsewhere, a sentence here: its full stop is the language's. */}
+                  {t("common.sentence", { text: wait })}
                 </span>
               )}
             </span>
@@ -1008,7 +1043,7 @@ export function SiteRows({
               onClick={() => onDisconnect(s)}
               data-testid="sites-disconnect"
             >
-              Disconnect
+              {t("sites.disconnect")}
             </button>
           </li>
         );
@@ -1020,8 +1055,8 @@ export function SiteRows({
 /** What disconnecting a site does, said before it's done: to the public account, or ending its private session `session`. */
 export function disconnectText(site: string, session?: number): string {
   return session === undefined
-    ? `${site} has to ask again before it sees anything more. It keeps what it already saw.`
-    : `Private session ${session + 1} ends, and ${site} has to ask again before it sees anything more. It keeps what it already saw. The wallet stops reading the session's account: anything the site pays it later, or leaves open on it, isn't looked for again.`;
+    ? t("sites.disconnectText", { site })
+    : t("sites.disconnectTextSession", { number: session + 1, site });
 }
 
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */
@@ -1042,14 +1077,12 @@ function SpendRewards() {
 
   return (
     <section className="section" aria-labelledby="staking-settings-title">
-      <h2 id="staking-settings-title">Staking</h2>
+      <h2 id="staking-settings-title">{t("settings.staking")}</h2>
       <div className="setting-row">
         <span className="stack-tight">
-          <span id="spend-rewards-label">Use staking rewards when spending</span>
+          <span id="spend-rewards-label">{t("settings.staking.useRewards")}</span>
           <span className="note" id="spend-rewards-note">
-            {prefs?.spendRewards === false
-              ? "Rewards wait until you withdraw them on the Staking page."
-              : "Anything your public account pays (a send, making money private, a Seedelf) withdraws the rewards too."}
+            {t(prefs?.spendRewards === false ? "settings.staking.rewardsWait" : "settings.staking.rewardsSpend")}
           </span>
         </span>
         <button
@@ -1097,7 +1130,7 @@ function MenuRow({
 function Contacts({ onBack }: { onBack: () => void }) {
   const [contacts, reload] = useContacts();
   return (
-    <Screen title="Contacts" titleId="contacts-title" onBack={onBack} aside="Encrypted on this device">
+    <Screen title={t("contacts.title")} titleId="contacts-title" onBack={onBack} aside={t("settings.encryptedHere")}>
       <ContactsPage contacts={contacts} onChange={reload} />
     </Screen>
   );
@@ -1128,18 +1161,17 @@ function ShowPhrase({ onBack }: { onBack: () => void }) {
   if (words) {
     return (
       <Screen
-        title="Your recovery phrase"
+        title={t("settings.phrase.title")}
         titleId="phrase-title"
         onBack={onBack}
         foot={
           <button type="button" className="primary" onClick={onBack}>
-            Done
+            {t("common.done")}
           </button>
         }
       >
         <Callout tone="warn">
-          Anyone who has these words can take your funds. Don't copy them into a screenshot, a chat, an email or a cloud
-          note, and never type them into a website.
+          {t("settings.phrase.warn.anyone")}
         </Callout>
         <PhraseGrid words={words} />
       </Screen>
@@ -1148,7 +1180,7 @@ function ShowPhrase({ onBack }: { onBack: () => void }) {
 
   return (
     <Screen
-      title="Show recovery phrase"
+      title={t("settings.showPhrase")}
       titleId="phrase-title"
       onBack={onBack}
       backDisabled={busy}
@@ -1156,11 +1188,11 @@ function ShowPhrase({ onBack }: { onBack: () => void }) {
       error={error}
       foot={
         <button type="submit" className="primary" disabled={!password || busy}>
-          {busy ? "Checking…" : "Show phrase"}
+          {busy ? t("settings.phrase.checking") : t("settings.phrase.show")}
         </button>
       }
     >
-      <p className="note">Enter your password to see the words that restore this wallet. Check nobody can see your screen.</p>
+      <p className="note">{t("settings.phrase.enterPassword")}</p>
       <PasswordField id="phrase-password" value={password} onChange={setPassword} autoFocus />
     </Screen>
   );
@@ -1195,8 +1227,7 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
       setResult(matches);
       if (matches) setWords(blank(count));
     } catch (e) {
-      const text = (e as Error).message;
-      setError(`${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`);
+      setError(asSentence((e as Error).message));
     } finally {
       setBusy(false);
     }
@@ -1204,22 +1235,21 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
 
   return (
     <Screen
-      title="Check recovery phrase"
+      title={t("settings.checkPhrase")}
       titleId="check-phrase-title"
       onBack={onBack}
       backDisabled={busy}
       error={error}
       foot={
         <button type="button" className="primary" disabled={busy || words.some((w) => !w)} onClick={check}>
-          {busy ? "Checking…" : "Check"}
+          {busy ? t("settings.phrase.checking") : t("settings.check.button")}
         </button>
       }
     >
       <p className="note">
-        Type the words from where you wrote them down, to make sure that copy restores this wallet. The wallet only says
-        whether they match. Nothing is saved.
+        {t("settings.check.note")}
       </p>
-      <div className="segmented" role="radiogroup" aria-label="Number of words">
+      <div className="segmented" role="radiogroup" aria-label={t("restore.wordCount")}>
         {WORD_COUNTS.map((n) => (
           <button
             key={n}
@@ -1229,7 +1259,7 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
             className={n === count ? "segmented__item segmented__item--on" : "segmented__item"}
             onClick={() => changeCount(n)}
           >
-            {n} words
+            {t("restore.words", { number: n })}
           </button>
         ))}
       </div>
@@ -1243,13 +1273,12 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
       />
       {result === true && (
         <Callout tone="info" testId="phrase-matches">
-          That's this wallet's recovery phrase. Keep that copy somewhere safe and offline.
+          {t("settings.check.match")}
         </Callout>
       )}
       {result === false && (
         <Callout tone="warn" testId="phrase-differs">
-          That isn't this wallet's recovery phrase. Check each word against your copy; if it's wrong, write the phrase down
-          again from Show recovery phrase.
+          {t("settings.check.warn.noMatch")}
         </Callout>
       )}
     </Screen>
@@ -1265,7 +1294,7 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
   async function change(next: string) {
     if (busy) return;
     if (!current) {
-      setError("Enter your current password first.");
+      setError(t("settings.password.warn.currentFirst"));
       return;
     }
     setBusy(true);
@@ -1284,37 +1313,39 @@ function ChangePassword({ onBack }: { onBack: () => void }) {
   if (done) {
     return (
       <Screen
-        title="Change password"
+        title={t("settings.changePassword")}
         titleId="password-title"
         onBack={onBack}
         foot={
           <button type="button" className="primary" onClick={onBack}>
-            Done
+            {t("common.done")}
           </button>
         }
       >
         <Callout tone="info" testId="password-changed">
-          Password changed. Use the new one to unlock from now on.
+          {t("settings.password.changed")}
         </Callout>
       </Screen>
     );
   }
 
   return (
-    <Screen title="Change password" titleId="password-title" onBack={onBack} backDisabled={busy} error={error}>
-      <PasswordField id="current-password" label="Current password" value={current} onChange={setCurrent} />
-      <SetPassword label="New password" submitLabel="Change password" busy={busy} onSubmit={change} />
+    <Screen title={t("settings.changePassword")} titleId="password-title" onBack={onBack} backDisabled={busy} error={error}>
+      <PasswordField id="current-password" label={t("settings.password.current")} value={current} onChange={setCurrent} />
+      <SetPassword label={t("settings.password.new")} submitLabel={t("settings.changePassword")} busy={busy} onSubmit={change} />
     </Screen>
   );
 }
 
-const CONFIRM_TEXT = "delete wallet";
-
 /** A private session as Remove wallet's list names it: by its number, from 1, and a site's by its host. */
 function sessionName(s: AtStake["sessions"][number]): string {
-  const name = `private session ${s.index + 1}`;
-  if (s.kind === "site" && s.origin) return `${name} (${new URL(s.origin).host})`;
-  return s.kind === "mix" ? `${name} (a mix)` : s.kind === "swap" ? `${name} (a swap)` : name;
+  const name = t("claim.sessionLower", { number: s.index + 1 });
+  if (s.kind === "site" && s.origin) {
+    return t("settings.remove.warn.sessionNamed", { name, host: new URL(s.origin).host });
+  }
+  if (s.kind === "mix") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aMix") });
+  if (s.kind === "swap") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aSwap") });
+  return name;
 }
 
 /**
@@ -1326,36 +1357,33 @@ function sessionName(s: AtStake["sessions"][number]): string {
  * account that may have, until the same phrase is restored here, before any
  * other wallet is made here: that deletes its record (pending.ts and
  * lovejoin.ts adoptKept).
+ *
+ * Each line shows in the warning callout, built here rather than in its JSX,
+ * so its key is named `.warn.`, and so are sessionName's: the critical-set
+ * deriver reads only the JSX, and the name is what keeps them checked.
  */
 export function atStakeLines(stake: AtStake[]): string[] {
   return stake.flatMap((s) => {
     const on = NETWORKS[s.network].label;
     const lines: string[] = [];
-    if (s.unreadable) lines.push(`${on}: Seedelf Wallet couldn't read what's still open there.`);
+    if (s.unreadable) lines.push(t("settings.remove.warn.unreadable", { network: on }));
     if (s.maybeSent) {
-      lines.push(
-        `${on}: a payment Koios didn't answer may still go through. An encrypted record of it stays in this browser: restoring this same recovery phrase here watches it again, but making or restoring another wallet here first deletes that record. While nothing watches it, a payment made here or elsewhere could pay twice.`,
-      );
+      lines.push(t("settings.remove.warn.maybeSent", { network: on }));
     }
     const open = s.sessions.filter((x) => !x.leftBehind);
     if (open.length) {
-      lines.push(
-        `${on}: ${plural(open.length, "private session")} still open: ${open.map(sessionName).join(", ")}. What ${open.length === 1 ? "its one-time account holds" : "their one-time accounts hold"} doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.`,
-      );
+      const names = joinList(open.map(sessionName));
+      lines.push(t("settings.remove.warn.sessionsOpen", { network: on, count: open.length, names }));
     }
     const left = s.sessions.filter((x) => x.leftBehind);
     if (left.length) {
-      lines.push(
-        `${on}: something no return takes is left at the account of ${left.map(sessionName).join(", ")}, and it doesn't show after a restore yet.`,
-      );
+      lines.push(t("settings.remove.warn.leftBehind", { network: on, names: joinList(left.map(sessionName)) }));
     }
     if (s.chainSending) {
-      lines.push(`${on}: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.`);
+      lines.push(t("settings.remove.warn.chainSending", { network: on }));
     }
     if (s.mixMaybeSent) {
-      lines.push(
-        `${on}: a mix from your public account stopped at a transaction that may have gone through. An encrypted record of it stays in this browser: restoring this same recovery phrase here looks for it again before another mix from the account is built, but making or restoring another wallet here first deletes that record. While nothing looks for it, the account could pay for a mix twice.`,
-      );
+      lines.push(t("settings.remove.warn.mixMaybeSent", { network: on }));
     }
     return lines;
   });
@@ -1368,7 +1396,7 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
   // What removing it would leave behind, as the worker reads it: undefined while it reads, null when it couldn't.
   const [stake, setStake] = useState<AtStake[] | null>();
   const [anyway, setAnyway] = useState(false);
-  const confirmed = typed.trim().toLowerCase() === CONFIRM_TEXT;
+  const confirmed = confirmsDelete(typed);
   const held = stake === null || !!stake?.length;
 
   const check = () => {
@@ -1397,7 +1425,7 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
 
   return (
     <Screen
-      title="Remove wallet"
+      title={t("settings.removeWallet")}
       titleId="remove-wallet-title"
       onBack={onBack}
       backDisabled={busy}
@@ -1409,20 +1437,16 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
           onClick={remove}
           disabled={busy || !confirmed || stake === undefined || (held && !anyway)}
         >
-          {busy ? "Removing…" : stake === undefined ? "Checking…" : "Remove wallet"}
+          {busy ? t("settings.remove.removing") : stake === undefined ? t("settings.phrase.checking") : t("settings.removeWallet")}
         </button>
       }
     >
       <p className="note" data-testid="remove-wallet-note">
-        This deletes the wallet from this browser. Your funds stay on the chain: your recovery phrase brings back your
-        public account, your private balance and your Lovejoin boxes, here or in Seedelf Wallet on another device. What
-        private sessions' one-time accounts hold doesn't show after a restore yet: bring it back first.
+        {t("settings.remove.note")}
       </p>
       {held && (
         <Callout tone="warn" testId="remove-at-stake">
-          {stake === null
-            ? "Seedelf Wallet couldn't check what's still open, which removing it would leave behind."
-            : "Still open, which removing the wallet leaves behind:"}
+          {t(stake === null ? "settings.remove.warn.cannotCheck" : "settings.remove.warn.stillOpen")}
           {!!stake?.length && (
             <ul className="dapp-points">
               {atStakeLines(stake).map((line) => (
@@ -1434,7 +1458,7 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
       )}
       {held && (
         <div className="setting-row">
-          <span id="remove-anyway-label">Remove it anyway, leaving that behind</span>
+          <span id="remove-anyway-label">{t("settings.remove.anyway")}</span>
           <button
             type="button"
             role="switch"
@@ -1447,12 +1471,11 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
         </div>
       )}
       <Callout tone="warn">
-        Make sure you have your recovery phrase first (Show recovery phrase). Without it, removing the wallet loses your
-        funds for good.
+        {t("settings.remove.warn.havePhrase")}
       </Callout>
       <div className="field">
         <label htmlFor="confirm-remove">
-          Type <strong>{CONFIRM_TEXT}</strong> to confirm
+          <Rich k="reset.confirmLabel" parts={{ text: <strong>{deletePhrase()}</strong> }} />
         </label>
         <input
           id="confirm-remove"

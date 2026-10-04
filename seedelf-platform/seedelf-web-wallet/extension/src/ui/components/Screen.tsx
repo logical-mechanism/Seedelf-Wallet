@@ -4,6 +4,7 @@
 // foot, which stays in view while the body scrolls.
 
 import type { FormEvent, ReactNode } from "react";
+import { useT } from "../../i18n";
 
 import { BackIcon } from "./Icons";
 
@@ -25,6 +26,7 @@ interface ScreenProps {
 }
 
 export function Screen({ title, titleId, onBack, backDisabled, aside, action, error, foot, onSubmit, children }: ScreenProps) {
+  const t = useT();
   const inner = (
     <>
       <header className="screen__head">
@@ -34,8 +36,8 @@ export function Screen({ title, titleId, onBack, backDisabled, aside, action, er
             className="icon-button"
             onClick={onBack}
             disabled={backDisabled}
-            aria-label="Back"
-            title="Back"
+            aria-label={t("common.back")}
+            title={t("common.back")}
           >
             <BackIcon />
           </button>

@@ -2,6 +2,7 @@
 // rough strength hint. The worker enforces the same rule.
 
 import { useState, type FormEvent } from "react";
+import { useT, type I18nKey } from "../../i18n";
 
 import { MIN_PASSWORD_LENGTH, passwordProblem, passwordStrength } from "../../shared/password";
 
@@ -14,13 +15,15 @@ interface SetPasswordProps {
 }
 
 const HINTS = {
-  weak: "Weak. Longer is stronger: a few random words work well.",
-  fair: "Fair. A few more characters or words would help.",
-  good: "Good.",
-  strong: "Strong.",
-} as const;
+  weak: "setPassword.hint.weak",
+  fair: "setPassword.hint.fair",
+  good: "setPassword.hint.good",
+  strong: "setPassword.hint.strong",
+} as const satisfies Record<string, I18nKey>;
 
-export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }: SetPasswordProps) {
+export function SetPassword({ submitLabel, busy, onSubmit, label }: SetPasswordProps) {
+  const tr = useT();
+  const t = useT();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
@@ -38,15 +41,12 @@ export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }:
 
   return (
     <form className="stack" onSubmit={submit}>
-      <p className="note">
-        The password unlocks the wallet in this browser. It encrypts your recovery phrase here; it can't
-        recover your funds anywhere else. Use at least {MIN_PASSWORD_LENGTH} characters.
-      </p>
+      <p className="note">{t("setPassword.note", { min: MIN_PASSWORD_LENGTH })}</p>
       <div className="field">
         <div className="field-row">
-          <label htmlFor="new-password">{label}</label>
+          <label htmlFor="new-password">{label ?? tr("password.label")}</label>
           <button type="button" className="link" onClick={() => setShow(!show)}>
-            {show ? "Hide" : "Show"}
+            {tr(show ? "common.hide" : "common.show")}
           </button>
         </div>
         <input
@@ -74,7 +74,7 @@ export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }:
         )}
       </div>
       <div className="field">
-        <label htmlFor="confirm-password">Confirm password</label>
+        <label htmlFor="confirm-password">{t("setPassword.confirm")}</label>
         <input
           id="confirm-password"
           type={show ? "text" : "password"}
@@ -85,10 +85,10 @@ export function SetPassword({ submitLabel, busy, onSubmit, label = "Password" }:
           onChange={(e) => setConfirm(e.target.value)}
           aria-invalid={mismatch || undefined}
         />
-        {mismatch && <p className="error">The passwords don't match.</p>}
+        {mismatch && <p className="error">{t("setPassword.mismatch")}</p>}
       </div>
       <button type="submit" className="primary" disabled={!ready || busy}>
-        {busy ? "Encrypting…" : submitLabel}
+        {busy ? t("setPassword.encrypting") : submitLabel}
       </button>
     </form>
   );

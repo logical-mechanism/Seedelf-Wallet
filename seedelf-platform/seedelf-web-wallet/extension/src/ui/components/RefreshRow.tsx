@@ -3,6 +3,7 @@
 // back to Home.
 
 import { useEffect, useState } from "react";
+import { useT } from "../../i18n";
 
 import { timeAgo } from "../format";
 import { RefreshIcon } from "./Icons";
@@ -23,19 +24,20 @@ export function RefreshRow({
     const tick = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(tick);
   }, [updatedAt]);
+  const t = useT();
 
   return (
     <div className="refresh-row">
       <span className="note" data-testid="updated">
-        {reading ? "Reading the chain…" : updatedAt !== undefined ? `Updated ${timeAgo(updatedAt, now)}` : ""}
+        {reading ? t("refresh.reading") : updatedAt !== undefined ? t("refresh.updated", { ago: timeAgo(updatedAt, now) }) : ""}
       </span>
       <button
         type="button"
         className="icon-button"
         onClick={onRefresh}
         disabled={reading}
-        aria-label="Refresh"
-        title="Read the chain again"
+        aria-label={t("refresh.again")}
+        title={t("refresh.againTitle")}
       >
         <span className={reading ? "spin" : "icon"}>
           <RefreshIcon size={15} />

@@ -13,6 +13,7 @@
 // The destination is read by destination.ts: an address, or a handle looked
 // up through Koios.
 
+import { t } from "../i18n";
 import type { NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
@@ -90,7 +91,7 @@ export class WithdrawService {
       payments: payments.map((p, i) => ({ to: destinations[i]!.address, lovelace: p.lovelace, tokens: p.tokens })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, "Your private balance is empty, so there's nothing to make public.", returning);
+      throw nothingToSpend(this.deps, view, t("worker.withdraw.empty"), returning);
     }
     progress?.("measuring");
     const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
@@ -129,7 +130,7 @@ export class WithdrawService {
   ): Promise<RemoveSummary> {
     const { wasm, wallet } = this.deps;
     const seedelf = seedelfName(name);
-    if (!seedelf) throw new Error("That isn't a Seedelf's name.");
+    if (!seedelf) throw new Error(t("worker.withdraw.notASeedelf"));
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     progress?.("checking");
     await settleMaybeSent(this.deps, network);
@@ -137,7 +138,7 @@ export class WithdrawService {
     const { view, params } = await readContract(this.deps, network);
     // Any seedelf is found; WebAssembly refuses one that isn't this wallet's.
     const utxo = view.seedelfs[seedelf];
-    if (!utxo) throw new Error(`No Seedelf with that name on ${network}. It may be removed already.`);
+    if (!utxo) throw new Error(t("worker.seedelf.notFoundMaybeRemoved", { network }));
     const request = await wallet.withKeys((keys) => ({
       network,
       params,

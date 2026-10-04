@@ -4,6 +4,7 @@
 // UTxOs are, and the headline counts them in what it sends; these say
 // whether they come back to it.
 
+import { joinSentences, t } from "../i18n";
 import type { DappTxSummary } from "../shared/rpc";
 import { formatAda, voteLabel } from "./format";
 
@@ -24,17 +25,17 @@ export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "st
 export function paidTo(p: Paid): string {
   const what =
     p.yours === "account"
-      ? "Your public account"
+      ? t("dappUi.paid.account")
       : p.yours !== undefined
-        ? `Your private session ${p.yours + 1}`
+        ? t("dappUi.paid.session", { number: p.yours + 1 })
         : p.ownPaymentKey
-          ? "Your payment key, with a stake part that isn't yours"
+          ? t("dappUi.paid.ownPaymentKey")
           : p.seedelf
-            ? "Seedelf Wallet's contract"
+            ? t("dappUi.paid.seedelfContract")
             : p.script
-              ? "A contract"
-              : "An address";
-  return p.datum ? `${what}, with data` : what;
+              ? t("dappUi.paid.contract")
+              : t("dappUi.paid.address");
+  return p.datum ? t("dappUi.paid.withData", { what }) : what;
 }
 
 /**
@@ -42,11 +43,24 @@ export function paidTo(p: Paid): string {
  * which signing ties together on chain for anyone to see (independent review
  * M12): `ties` as the worker found them; `session`, the site is on a private
  * session, not the public account.
+ *
+ * Its keys, and those of the staking lines below, are named `.privacy.` and
+ * `.warn.` because they show in a warning the critical-set deriver can't see
+ * into: it reads only the JSX, and these are built here, so a key's own name
+ * is what keeps it checked (tests/i18n-critical-helpers.test.ts holds them to it).
  */
 export function tiesLine(ties: Array<"account" | number>, session: boolean): string {
-  const names = ties.map((t) => (t === "account" ? "your public account" : `your private session ${t + 1}`));
-  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
-  return `It moves money between ${session ? "this private session" : "your public account"} and ${list}. Signing ties them together on chain, where anyone can see it.`;
+  const names = ties.map((x) =>
+    x === "account" ? t("dappUi.ties.privacy.account") : t("dappUi.ties.privacy.session", { number: x + 1 }),
+  );
+  const list =
+    names.length > 1
+      ? t("dappUi.ties.privacy.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
+      : names[0];
+  return t("dappUi.ties.privacy.moves", {
+    from: t(session ? "dappUi.ties.privacy.thisSession" : "dappUi.ties.privacy.yourAccount"),
+    list,
+  });
 }
 
 /**
@@ -60,47 +74,81 @@ export function tiesLine(ties: Array<"account" | number>, session: boolean): str
 export function signingTies(ties: Array<"account" | number> | undefined, session: boolean, seedelf = false): string {
   const checked = ties !== undefined && ties.length === 0;
   if (session) {
-    const out = !checked ? "" : seedelf ? " Your public account isn't in it." : " Your public account and your private balance aren't in it.";
-    return `Signing ties this transaction to the session's one-time account.${out}`;
+    return joinSentences([
+      t("dappUi.privacy.tiesToSession"),
+      checked && t(seedelf ? "dappUi.privacy.notAccount" : "dappUi.privacy.notAccountNorPrivate"),
+    ]);
   }
-  return `Signing ties this transaction to your public account, as any payment from it.${checked && !seedelf ? " Your private balance isn't in it." : ""}`;
+  return joinSentences([t("dappUi.privacy.tiesToAccount"), checked && !seedelf && t("dappUi.privacy.notPrivate")]);
 }
 
 /**
  * A withdrawal in a sentence. `back`: the account's staking money comes back
  * to it (`stakingComesBack`); `whose`: "your public account" or "your
- * private session".
+ * private session". All three are `.warn.`: they share the staking callout,
+ * which is a warning whenever the account's own staking or money is in it.
  */
 export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): string {
-  if (!w.own) return `Withdraws ${formatAda(w.lovelace)} ₳ from a reward account that isn't yours.`;
-  const rewards = `Withdraws your staking rewards, ${formatAda(w.lovelace)} ₳`;
-  return back
-    ? `${rewards}, into ${whose}.`
-    : `${rewards}, and they don't all come back to ${whose}: they're counted in what it sends above.`;
+  if (!w.own) return t("dappUi.withdrawal.warn.notYours", { amount: formatAda(w.lovelace) });
+  return t(back ? "dappUi.withdrawal.warn.into" : "dappUi.withdrawal.warn.notAllBack", {
+    amount: formatAda(w.lovelace),
+    whose,
+  });
 }
 
-/** A certificate in a sentence: the account's own staking, or someone else's. `back` and `whose` as for a withdrawal. */
+/**
+ * A certificate in a sentence: the account's own staking, or someone else's.
+ * `back` and `whose` as for a withdrawal.
+ *
+ * The account's own is a whole sentence for each thing a certificate does, or
+ * does together (WebAssembly's kinds: register, delegate, vote and their
+ * combinations, unregister), so each language joins the clauses its own way.
+ * Pieced together from fragments, with a capital and a full stop added here,
+ * Japanese read "…登録します（…）、…にステーキングします、投票権を委任します:
+ * 常に棄権.": finished sentences comma-spliced, then an ASCII full stop.
+ */
 export function certificateLine(c: Certificate, back: boolean, whose: string): string {
+  // Someone else's are `.warn.` too: they sit in the same callout as the
+  // account's own, and "a stake key that isn't yours" read as "your stake key"
+  // is the error a check is there to catch.
   if (!c.own) {
     if (c.kind === "pool") {
-      if (c.pool && c.poolAction === "retire") return `Retires stake pool ${c.pool}.`;
-      if (c.pool && c.poolAction === "register") return `Registers stake pool ${c.pool}, or updates its terms.`;
-      return "A stake pool's certificate.";
+      if (c.pool && c.poolAction === "retire") return t("dappUi.cert.warn.retirePool", { pool: c.pool });
+      if (c.pool && c.poolAction === "register") return t("dappUi.cert.warn.registerPool", { pool: c.pool });
+      return t("dappUi.cert.warn.pool");
     }
-    if (c.kind === "drep") return "A DRep's certificate.";
-    if (c.kind === "committee") return "A constitutional committee certificate.";
-    return "A certificate for a stake key that isn't yours.";
+    if (c.kind === "drep") return t("dappUi.cert.warn.drep");
+    if (c.kind === "committee") return t("dappUi.cert.warn.committee");
+    return t("dappUi.cert.warn.otherStakeKey");
   }
-  const parts: string[] = [];
-  if (c.kind.startsWith("register")) parts.push(`Registers your stake key${c.deposit ? ` (a ${formatAda(c.deposit)} ₳ deposit)` : ""}`);
-  if (c.kind === "unregister") {
-    const deposit = c.refund ? `, and its ${formatAda(c.refund)} ₳ deposit` : "";
-    if (!c.refund) parts.push("Stops your staking");
-    else if (back) parts.push(`Stops your staking${deposit} comes back to ${whose}`);
-    else parts.push(`Stops your staking${deposit} doesn't all come back to ${whose}: it's counted in what it sends above`);
+  const what = c.drep ? voteLabel(c.drep) : undefined;
+  if (c.kind.startsWith("register") && c.deposit) {
+    const amount = formatAda(c.deposit);
+    if (c.pool && what) return t("dappUi.cert.warn.registersStakesVotes", { amount, pool: c.pool, what });
+    if (c.pool) return t("dappUi.cert.warn.registersStakes", { amount, pool: c.pool });
+    if (what) return t("dappUi.cert.warn.registersVotes", { amount, what });
+    return t("dappUi.cert.warn.registersDeposit", { amount });
   }
-  if (c.pool) parts.push(`stakes with ${c.pool}`);
-  if (c.drep) parts.push(`delegates your vote: ${voteLabel(c.drep)}`);
-  const sentence = parts.join(", ");
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
+  // A registration with no deposit is WebAssembly's plain "register", and a
+  // stop is "unregister": neither comes with a delegation. Were one to, each
+  // part would still be said, as a sentence of its own.
+  return joinSentences([
+    c.kind.startsWith("register") && t("dappUi.cert.warn.registers"),
+    c.kind === "unregister" && stopsLine(c, back, whose),
+    delegationLine(c.pool, what),
+  ]);
+}
+
+/** The account's staking stopped, and whether the deposit it gets back comes back to it. */
+function stopsLine(c: Certificate, back: boolean, whose: string): string {
+  if (!c.refund) return t("dappUi.cert.warn.stops");
+  return t(back ? "dappUi.cert.warn.stopsBack" : "dappUi.cert.warn.stopsNotAllBack", { amount: formatAda(c.refund), whose });
+}
+
+/** Where the account's stake goes, or its vote, or both, as one sentence. */
+function delegationLine(pool: string | null, what: string | undefined): string | undefined {
+  if (pool && what) return t("dappUi.cert.warn.stakesVotes", { pool, what });
+  if (pool) return t("dappUi.cert.warn.stakes", { pool });
+  if (what) return t("dappUi.cert.warn.votes", { what });
+  return undefined;
 }

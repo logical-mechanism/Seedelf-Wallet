@@ -4,6 +4,7 @@
 // asks which first, so a preprod phrase is never restored on mainnet.
 
 import { useState } from "react";
+import { useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
 import { NetworkPicker, OnNetwork } from "../components/NetworkPicker";
@@ -24,6 +25,7 @@ export function Onboarding({
   onDone: (s: Status) => void;
   onNetwork: (s: Status) => void;
 }) {
+  const t = useT();
   const [step, setStep] = useState<Step>(view === "tab" && start ? start : "welcome");
 
   function go(next: "create" | "restore") {
@@ -46,14 +48,14 @@ export function Onboarding({
 
   return (
     <section className="welcome">
-      <img className="welcome__logo" src="/brand/wordmark-on-dark.png" alt="Seedelf Wallet" width={360} height={118} />
-      <p className="welcome__lead">A private wallet for Cardano.</p>
+      <img className="welcome__logo" src="/brand/wordmark-on-dark.png" alt={t("app.name")} width={360} height={118} />
+      <p className="welcome__lead">{t("welcome.lead")}</p>
       <div className="stack welcome__actions">
         <button className="primary" onClick={() => go("create")}>
-          Create new wallet
+          {t("welcome.create")}
         </button>
         <button className="secondary" onClick={() => go("restore")}>
-          Restore wallet
+          {t("welcome.restore")}
         </button>
       </div>
       <NetworkPicker status={status} onChanged={onNetwork} />

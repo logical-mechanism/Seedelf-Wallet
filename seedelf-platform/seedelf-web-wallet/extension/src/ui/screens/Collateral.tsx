@@ -9,6 +9,7 @@
 // it pays 5 ₳ from the account to its own 0/0, reviewed first like a send.
 
 import { useCallback, useEffect, useState } from "react";
+import { useT } from "../../i18n";
 
 import type { CollateralStatus, SendSummary } from "../../shared/rpc";
 import { call } from "../background";
@@ -21,6 +22,7 @@ import { formatAda, shortHex } from "../format";
 import { useNetwork } from "../network";
 
 export function Collateral({ onBack }: { onBack: () => void }) {
+  const t = useT();
   const network = useNetwork();
   const [status, setStatus] = useState<CollateralStatus>();
   const [summary, setSummary] = useState<SendSummary>();
@@ -63,28 +65,28 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   if (summary) {
     return (
       <Screen
-        title="Review the collateral"
+        title={t("collateral.review.title")}
         titleId="collateral-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={t("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? t("common.sending") : t("common.send")}
           </button>
         }
       >
         <ReviewRows testId="collateral-review">
-          <Row label="To" value="Your public account" strong />
-          <Row label="Address" value={shortHex(summary.payments[0]!.address, 16, 8)} title={summary.payments[0]!.address} />
-          <Row label="Set aside" value={`${formatAda(summary.payments[0]!.lovelace)} ₳`} strong />
-          <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
-          <Row label="UTxOs spent" value={String(summary.inputs)} />
+          <Row label={t("destination.to")} value={t("collateral.yourPublicAccount")} strong />
+          <Row label={t("utxos.address")} value={shortHex(summary.payments[0]!.address, 16, 8)} title={summary.payments[0]!.address} />
+          <Row label={t("collateral.setAside")} value={`${formatAda(summary.payments[0]!.lovelace)} ₳`} strong />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
+          <Row label={t("send.review.spent")} value={String(summary.inputs)} />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="collateral-tx" />
         <p className="note">
-          Once the network confirms it, in about a minute, this 5 ₳ is your collateral. Only the fee leaves your account.
+          {t("collateral.review.note")}
         </p>
       </Screen>
     );
@@ -93,35 +95,34 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   let body;
   let foot;
   if (!status) {
-    body = <p className="note center empty">{error ? "" : "Reading…"}</p>;
+    body = <p className="note center empty">{error ? "" : t("activity.reading")}</p>;
   } else if (status.state === "set") {
     body = (
       <>
         <ReviewRows testId="collateral-set">
-          <Row label="Collateral" value={`${formatAda(status.utxo.lovelace)} ₳`} strong />
+          <Row label={t("utxos.tag.collateral")} value={`${formatAda(status.utxo.lovelace)} ₳`} strong />
           <Row
-            label="UTxO"
+            label={t("collateral.utxo")}
             value={`${shortHex(status.utxo.txHash, 8, 4)}#${status.utxo.index}`}
             title={`${status.utxo.txHash}#${status.utxo.index}`}
           />
-          <Row label="Set by" value={status.by === "you" ? "You" : "The wallet: a 5 ₳ UTxO your account held"} />
+          <Row label={t("collateral.setBy")} value={t(status.by === "you" ? "collateral.setBy.you" : "collateral.setBy.wallet")} />
         </ReviewRows>
         <Callout tone="warn">
-          Reclaiming returns it to your balance. The wallet then won't set one by itself: set it again here when you
-          want one.
+          {t("collateral.warn.reclaiming")}
         </Callout>
       </>
     );
     foot = (
       <button type="button" className="secondary" onClick={reclaim} disabled={busy}>
-        {busy ? "Reclaiming…" : "Reclaim collateral"}
+        {busy ? t("collateral.reclaiming") : t("collateral.reclaim")}
       </button>
     );
   } else if (status.state === "waiting") {
     body = (
       <TxBanner
         state="waiting"
-        title="Waiting for the network to confirm the payment that sets it"
+        title={t("collateral.waiting")}
         network={network}
         txHash={status.txHash}
         testId="collateral-waiting"
@@ -129,39 +130,33 @@ export function Collateral({ onBack }: { onBack: () => void }) {
     );
     foot = (
       <button type="button" className="primary" onClick={onBack}>
-        Done
+        {t("common.done")}
       </button>
     );
   } else {
     body = (
       <>
         <p className="note" data-testid="collateral-none">
-          {status.candidate
-            ? "Your account holds a UTxO of exactly 5 ₳, which can be the collateral with no transaction."
-            : "Setting it pays 5 ₳ from your public account to itself: only the network fee leaves it."}
+          {t(status.candidate ? "collateral.candidate" : "collateral.willPaySelf")}
         </p>
-        {status.reclaimed && <p className="note">You reclaimed it, so the wallet doesn't set one by itself.</p>}
+        {status.reclaimed && <p className="note">{t("collateral.reclaimed")}</p>}
       </>
     );
     foot = (
       <button type="button" className="primary" onClick={set} disabled={busy}>
-        {busy ? "Building…" : "Set collateral"}
+        {busy ? t("common.building") : t("collateral.set")}
       </button>
     );
   }
 
   return (
-    <Screen title="Collateral" titleId="collateral-title" onBack={onBack} backDisabled={busy} error={error} foot={foot}>
+    <Screen title={t("utxos.tag.collateral")} titleId="collateral-title" onBack={onBack} backDisabled={busy} error={error} foot={foot}>
       <p className="note">
-        Collateral is 5 ₳ of your public account set aside for transactions that run a smart contract, such as creating
-        a Seedelf from your account. It's only taken if the contract fails, which the wallet checks before sending, and
-        it's kept out of your payments.
+        {t("collateral.note")}
       </p>
       {body}
       <Callout tone="privacy">
-        Payments from your private balance never put it up: giveme.my lends its own, so nothing on chain ties them to your
-        account. giveme.my is run by Logical Mechanism, who make Seedelf Wallet, and it sees each of those payments, with
-        your IP address.
+        {t("collateral.privacy.giveme")}
       </Callout>
     </Screen>
   );

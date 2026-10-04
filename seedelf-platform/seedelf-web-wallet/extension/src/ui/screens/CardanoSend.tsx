@@ -10,6 +10,7 @@
 // reviewed it and pressed Send.
 
 import { useState, type FormEvent } from "react";
+import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
@@ -58,6 +59,7 @@ export function CardanoSend({
 }) {
   const network = useNetwork();
   const list = useRecipients();
+  const t = useT();
   const [reads, setReads] = useState<Record<number, KnownRead>>({});
   const [max, setMax] = useState(false);
   const [note, setNote] = useState("");
@@ -126,7 +128,7 @@ export function CardanoSend({
       return (
         <>
           <ToRows paid={p} />
-          <Row label="Amount" value={`${formatAda(p.lovelace)} ₳`} strong />
+          <Row label={t("common.amount")} value={`${formatAda(p.lovelace)} ₳`} strong />
           {p.tokens.map((t) => {
             const held = cardano.tokens.find((h) => key(h) === key(t));
             return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
@@ -136,24 +138,24 @@ export function CardanoSend({
     };
     return (
       <Screen
-        title="Review the payment"
+        title={t("withdraw.review.title")}
         titleId="send-review"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside="Nothing is sent until you press Send"
+        aside={t("review.nothingSent")}
         error={error}
         foot={
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? "Sending…" : "Send"}
+            {busy ? t("common.sending") : t("common.send")}
           </button>
         }
       >
         <ReviewRecipients testId="send-review" payments={summary.payments} rows={recipientRows}>
-          {summary.note && <Row label="Note" value={summary.note} />}
-          <Row label="Network fee" value={`${formatAda(summary.fee)} ₳`} />
+          {summary.note && <Row label={t("activity.row.note")} value={summary.note} />}
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
           <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label="Back to your public account" value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label="UTxOs spent" value={String(summary.inputs)} />
+          <Row label={t("review.backToPublic")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label={t("send.review.spent")} value={String(summary.inputs)} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="send-tx" />
         {summary.payments.map((p, i) => (
@@ -163,15 +165,16 @@ export function CardanoSend({
             minimum={p.minimum}
             asked={amounts.each[i]?.lovelace ?? "0"}
             tokens={p.tokens.length}
-            who={several ? `Recipient ${i + 1}` : undefined}
+            who={several ? t("recipients.nth", { number: i + 1 }) : undefined}
           />
         ))}
         {summary.payments.some((p) => p.own) && <OwnNote />}
         <LeftOutNote leftOut={summary.leftOut} testId="send-left-out" />
         <p className="note">
-          {summary.payments.some((p) => p.seedelf) &&
-            `Only the owner of ${several ? "each" : "this"} Seedelf can spend the payment, and it can't be linked to their Seedelf by looking at the chain. `}
-          It takes about a minute for the network to confirm.
+          {joinSentences([
+            summary.payments.some((p) => p.seedelf) && t(several ? "send.review.onlyOwnerEach" : "send.review.onlyOwnerThis"),
+            t("send.review.confirmTime"),
+          ])}
         </p>
       </Screen>
     );
@@ -180,15 +183,15 @@ export function CardanoSend({
   return (
     <Screen
       onSubmit={review}
-      title="Send"
+      title={t("home.action.send")}
       titleId="send-title"
       onBack={onCancel}
-      aside={`${formatAda(cardano.lovelace)} ₳ available${rewardsAside(rewards)}${lockedAside(cardano)}`}
+      aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
       foot={
         <>
           <button type="submit" className="primary" disabled={!ready || busy}>
-            {busy ? "Building…" : "Review"}
+            {busy ? t("common.building") : t("common.review")}
           </button>
           <BuildStage busy={busy} />
         </>
@@ -221,32 +224,31 @@ export function CardanoSend({
               (otherAccount(read) !== undefined ? <OtherAccountNote index={otherAccount(read)!} /> : <OwnNote />)}
 
             <div className="field">
-              <label htmlFor={fieldId("send-amount", d, i)}>Amount</label>
+              <label htmlFor={fieldId("send-amount", d, i)}>{t("common.amount")}</label>
               <AdaInput
                 id={fieldId("send-amount", d, i)}
                 value={d.amount}
                 onChange={(amount) => list.update(d.id, { amount })}
                 disabled={maxed}
-                shown="Max"
-                placeholder={withTokens ? "Minimum" : "0"}
+                shown={t("common.max")}
+                placeholder={withTokens ? t("common.minimum") : "0"}
                 autoFocus={false}
               >
                 {!list.several && (
                   <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
-                    Max
+                    {t("common.max")}
                   </button>
                 )}
               </AdaInput>
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="send-too-much">
-                  That's more than the {formatAda(cardano.lovelace)} ₳ available in your public account.
+                  {t("moveIn.tooMuch", { amount: formatAda(cardano.lovelace) })}
                 </p>
               )}
             </div>
             {maxed ? (
               <p className="note" data-testid="send-max-note">
-                Everything except the fee and what the tokens you keep need{rewards ? ", staking rewards included" : ""}.
-                Your collateral and any UTxOs you locked stay put.
+                {t(rewards ? "moveIn.maxNoteRewards" : "moveIn.maxNote")}
               </p>
             ) : (
               withTokens && <MinimumHint />
@@ -273,12 +275,12 @@ export function CardanoSend({
           total={amounts.total}
           available={cardano.lovelace}
           testId="send-too-much"
-          where="available in your public account"
+          where={t("send.availableInPublic")}
         />
       )}
 
       <div className="field">
-        <label htmlFor="send-note">Note (optional)</label>
+        <label htmlFor="send-note">{t("send.note.label")}</label>
         <input
           id="send-note"
           value={note}
@@ -289,20 +291,24 @@ export function CardanoSend({
           // spell check would send the note to Google before it's sent, even
           // one never sent, and a note is unique enough to find its payment.
           spellCheck={false}
-          placeholder="What it's for"
+          placeholder={t("send.note.placeholder")}
           aria-describedby="send-note-hint"
         />
         <p className="note" id="send-note-hint" data-testid="send-note-hint">
-          {[...note].length}/{NOTE_MAX}. Anyone can read it, for good
-          {toSeedelf ? ", and it could say whose Seedelf this pays" : ""}.
+          {t(toSeedelf ? "send.note.privacy.hintSeedelf" : "send.note.privacy.hint", { used: [...note].length, max: NOTE_MAX })}
         </p>
       </div>
 
       <Callout tone="privacy">
-        {toSeedelf
-          ? "This pays from your public account in the open: anyone can see it came from you and went to a private balance, though not whose."
-          : "This pays from your public account in the open: anyone can see it came from you."}
-        {list.several && " Paying several at once also shows they were paid together."} To pay without that link, make the money private and send it from there.
+        {t(
+          toSeedelf
+            ? list.several
+              ? "send.privacy.openSeedelfSeveral"
+              : "send.privacy.openSeedelf"
+            : list.several
+              ? "send.privacy.openSeveral"
+              : "send.privacy.open",
+        )}
       </Callout>
     </Screen>
   );
@@ -310,35 +316,38 @@ export function CardanoSend({
 
 /** Where one payment went: a Seedelf by tag and name, a $handle and its address, or an address. */
 function ToRows({ paid }: { paid: SendPaid }) {
+  const t = useT();
   if (paid.seedelf) {
     const { name, label } = paid.seedelf;
     return label ? (
       <>
-        <Row label="To" value={label} strong />
-        <Row label="Seedelf name" value={shortHex(name, 16, 8)} title={name} />
+        <Row label={t("destination.to")} value={label} strong />
+        <Row label={t("utxos.seedelfName")} value={shortHex(name, 16, 8)} title={name} />
       </>
     ) : (
-      <Row label="To" value={shortHex(name, 16, 8)} title={name} strong />
+      <Row label={t("destination.to")} value={shortHex(name, 16, 8)} title={name} strong />
     );
   }
   return (
     <>
-      <Row label="To" value={paid.handle ? `$${paid.handle}` : shortHex(paid.address, 16, 8)} title={paid.address} strong />
-      {paid.handle && <Row label="Address" value={shortHex(paid.address, 16, 8)} title={paid.address} />}
+      <Row label={t("destination.to")} value={paid.handle ? `$${paid.handle}` : shortHex(paid.address, 16, 8)} title={paid.address} strong />
+      {paid.handle && <Row label={t("utxos.address")} value={shortHex(paid.address, 16, 8)} title={paid.address} />}
     </>
   );
 }
 
 /** The staking rewards a payment from the account spent, when it did. */
 export function WithdrawalRow({ withdrawal }: { withdrawal?: string }) {
+  const t = useT();
   if (!withdrawal || BigInt(withdrawal) === 0n) return null;
-  return <Row label="Staking rewards spent" value={`${formatAda(withdrawal)} ₳`} />;
+  return <Row label={t("activity.row.rewardsSpent")} value={`${formatAda(withdrawal)} ₳`} />;
 }
 
 function OwnNote() {
+  const t = useT();
   return (
     <Callout tone="warn" testId="send-own">
-      This is your own public account: the payment comes back to it, less the fee.
+      {t("send.warn.ownAccount")}
     </Callout>
   );
 }
@@ -350,10 +359,10 @@ function OwnNote() {
  * like any other: the wallet makes it visible and the user decides.
  */
 function OtherAccountNote({ index }: { index: number }) {
+  const t = useT();
   return (
     <Callout tone="privacy" testId="send-other-account">
-      This is your own Account {index + 1}. It's an ordinary Cardano payment, so anyone can see your two accounts paying each
-      other and tell they're one wallet's. Sending from your private balance instead would avoid that.
+      {t("send.privacy.otherAccount", { number: index + 1 })}
     </Callout>
   );
 }
