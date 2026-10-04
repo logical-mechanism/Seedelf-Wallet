@@ -1927,7 +1927,6 @@
   "unlock.waiting.unknown": "A site is waiting for Seedelf Wallet. Unlock to see what it asks.",
   "unlock.warn.trap": "The wallet's core stopped working, so the wallet locked itself and let go of your keys. Unlock it to carry on.",
   "unlock.warn.wrongPassword": "Wrong password.",
-  "unlock.wrongPassword": "Wrong password.",
   "utxos.address": "Address",
   "utxos.block": "Block",
   "utxos.collateralNote": "Your collateral: put up by transactions that run a script, and otherwise kept. Reclaim it in Settings, under Collateral.",

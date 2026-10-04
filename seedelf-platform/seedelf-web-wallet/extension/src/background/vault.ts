@@ -25,7 +25,7 @@ export interface VaultRecord {
 /** Opening the vault failed authentication: the password is wrong. */
 export class WrongPasswordError extends Error {
   constructor() {
-    super(t("unlock.wrongPassword"));
+    super(t("unlock.warn.wrongPassword"));
   }
 }
 

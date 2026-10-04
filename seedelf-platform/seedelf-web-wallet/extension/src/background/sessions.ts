@@ -3282,19 +3282,24 @@ function leftOut(e: unknown): string {
   return t("sess.skip.warn.chainFailed", { reason: clauseOf(message, true) });
 }
 
+/** Names that keep their capital wherever they stand: the glossary's never-translated words, and the browser. */
+const NAMED = /^(Seedelf|Lovejoin|Koios|Cardanoscan|Cardano|Minswap|Ogmios|Preprod|Chrome|ADA|UTxO|DRep|CIP-30)/;
+
 /**
  * A message made a clause of another sentence: a chain's failure inside
  * sess.skip.warn.chainFailed, or what WebAssembly wouldn't read inside a
  * pause. Where the language starts a clause in lowercase, as
  * sess.skip.warn.chainFailed itself does in English and Spanish, the
  * message's capital goes; Japanese has none to lose, and a name that starts
- * its sentence (Koios, Lovejoin) keeps its own. `end`: its full stop goes
- * too, a "." or a "。", for a sentence that ends with one of its own.
+ * its sentence (Seedelf Wallet, Koios, Lovejoin) keeps its own in every
+ * language. `end`: its full stop goes too, a "." or a "。", for a sentence
+ * that ends with one of its own. Exported for its test.
  */
-function clauseOf(message: string, end = false): string {
+export function clauseOf(message: string, end = false): string {
   const text = end ? message.replace(/[.。]$/, "") : message;
   const start = t("sess.skip.warn.chainFailed", { reason: "" }).charAt(0);
-  return start === start.toUpperCase() ? text : `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  if (start === start.toUpperCase() || NAMED.test(text)) return text;
+  return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 }
 
 /**

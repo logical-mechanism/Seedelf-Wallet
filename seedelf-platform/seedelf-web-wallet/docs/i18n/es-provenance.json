@@ -2027,7 +2027,6 @@
   "unlock.waiting.unknown": "machine",
   "unlock.warn.trap": "mtpe",
   "unlock.warn.wrongPassword": "mtpe",
-  "unlock.wrongPassword": "machine",
   "utxos.address": "machine",
   "utxos.block": "machine",
   "utxos.collateralNote": "machine",

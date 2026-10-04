@@ -1827,7 +1827,6 @@
   "unlock.waiting.unknown": "あるサイトが Seedelf Wallet を待っています。何を求めているか見るにはロックを解除してください。",
   "unlock.warn.trap": "ウォレットのコアが動作を停止したため、ウォレットは自分をロックし、鍵を解放しました。続けるにはロックを解除してください。",
   "unlock.warn.wrongPassword": "パスワードが違います。",
-  "unlock.wrongPassword": "パスワードが違います。",
   "utxos.address": "アドレス",
   "utxos.block": "ブロック",
   "utxos.collateralNote": "あなたのコラテラルです。スクリプトを実行するトランザクションが差し入れ、それ以外のときは保持されます。設定の「コラテラル」で回収できます。",

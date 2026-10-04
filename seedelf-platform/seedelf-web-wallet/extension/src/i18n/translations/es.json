@@ -2027,7 +2027,6 @@
   "unlock.waiting.unknown": "Un sitio está esperando a Seedelf Wallet. Desbloquea para ver qué pide.",
   "unlock.warn.trap": "El núcleo de la billetera dejó de funcionar, así que la billetera se bloqueó y soltó tus claves. Desbloquéala para continuar.",
   "unlock.warn.wrongPassword": "Contraseña incorrecta.",
-  "unlock.wrongPassword": "Contraseña incorrecta.",
   "utxos.address": "Dirección",
   "utxos.block": "Bloque",
   "utxos.collateralNote": "Tu colateral: lo ponen las transacciones que ejecutan un script, y por lo demás se conserva. Recupéralo en Configuración, en Colateral.",

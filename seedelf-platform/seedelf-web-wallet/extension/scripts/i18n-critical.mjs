@@ -44,7 +44,9 @@
 // time from src/background, about 300 of them, and every one was read in the
 // whole-locale review of 2026-10-03; making them all critical is out of this
 // set's scope. One that fills a warning's placeholder is named `.warn.` or
-// `.privacy.` where the worker writes it, and so joins the set by its name.
+// `.privacy.` where the worker writes it, and so joins the set by its name;
+// `tests/i18n-worker-reasons.test.ts` follows the worker's refusals and skip
+// reasons to the fields warnings show, and fails on one that isn't named.
 //
 //   node scripts/i18n-critical.mjs           # print the set
 //   node scripts/i18n-critical.mjs --write   # update docs/i18n/critical-keys.json
@@ -716,7 +718,8 @@ const MEMOS = new Set(["useMemo", "useCallback"]);
  *     about 300, every one read in the whole-locale review of 2026-10-03, and
  *     making all of them critical is beyond this guard. One that fills a
  *     warning's placeholder is named for it where it's written (`lj.privacy.*`,
- *     a refusal's and a skip's reasons).
+ *     a refusal's and a skip's reasons), and `tests/i18n-worker-reasons.test.ts`
+ *     holds the refusals and skip reasons to that.
  *   - A setter, or a function that sets state, handed to another component or
  *     function and called there; a component used through a variable (`const
  *     C = a ? A : B`) or handed on as a value.

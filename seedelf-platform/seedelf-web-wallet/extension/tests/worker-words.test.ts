@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { CHAIN_CUT, PUBLIC_LOOK_MS } from "../src/background/lovejoin";
+import { clauseOf } from "../src/background/sessions";
 import { WalletLocked } from "../src/background/wallet";
 import { i18n, t as tr } from "../src/i18n/core";
 import { NETWORKS } from "../src/networks";
@@ -74,6 +75,25 @@ describe("a session's chain through Lovejoin that fails, in Spanish or Japanese"
     // Its 。 goes, as English's "." does, since lovejoin.warn.skippedIts ends with its own; "Lovejoin" keeps its capital.
     expect(review.lovejoinSkipped).toBe(tr("sess.skip.warn.chainFailed", { reason: failure.slice(0, -1) }));
     expect(tr("lovejoin.warn.skippedIts", { why: review.lovejoinSkipped })).not.toContain("。。");
+  });
+});
+
+describe("a message made a clause of another sentence", () => {
+  const record = (lng: string) => tr("worker.record.warn.unreadable", { what: "contacts", lng });
+
+  it("loses its capital in English and Spanish, but a name keeps its own", async () => {
+    expect(clauseOf("The network refused it.", true)).toBe("the network refused it");
+    expect(clauseOf("Koios didn't answer.", true)).toBe("Koios didn't answer");
+    // The record a chain can't open starts with the wallet's name, which a clause never lowercases.
+    expect(clauseOf(record("en"), true)).toBe(record("en").replace(/\.$/, ""));
+    await i18n.changeLanguage("es");
+    expect(clauseOf("La red lo rechazó.", true)).toBe("la red lo rechazó");
+    expect(clauseOf(record("es"), true)).toMatch(/^Seedelf Wallet no pudo abrir/);
+  });
+
+  it("keeps a Japanese message whole, and only its 。 goes", async () => {
+    await i18n.changeLanguage("ja");
+    expect(clauseOf("ネットワークが拒否しました。", true)).toBe("ネットワークが拒否しました");
   });
 });
 
