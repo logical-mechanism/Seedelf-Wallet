@@ -1,7 +1,8 @@
 # The Rust the workspace, and the web wallet's WebAssembly with it, is built
 # and tested with: the one that built the shipped module. With Cargo.lock it
 # fixes what goes into the module (launch review #61). Bump it on purpose,
-# with CI's toolchain (.github/workflows/web-wallet.yml) in the same change.
+# with CI's toolchain (.github/workflows/web-wallet.yml) and the CLI release's
+# (.github/workflows/release.yml) in the same change.
 [toolchain]
 channel = "1.98.1"
 targets = ["wasm32-unknown-unknown"]
