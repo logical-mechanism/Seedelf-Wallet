@@ -33,8 +33,8 @@ A swap runs itself after one approval, from a dApp browser, as *The design* belo
 2. Read, in order:
    - this file;
    - [chunk-15-dapp-connector.md](chunk-15-dapp-connector.md), its *Step 2* (the A1 steps, *Built*, and *Recovery*);
-   - [flows.md, *Contract round trip*](../flows.md#contract-round-trip), what the user sees now;
-   - [architecture.md, *Private sessions*](../architecture.md#private-sessions), how it's built.
+   - [flows.md, *Contract round trip*](../../flows.md#contract-round-trip), what the user sees now;
+   - [architecture.md, *Private sessions*](../../architecture.md#private-sessions), how it's built.
 3. Build and test.
    - From `seedelf-platform/`: `cargo test -p seedelf-wasm`, then `seedelf-web-wallet/wasm/build.sh`, then `node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"`.
    - From `extension/`: `npm run typecheck && npm test && npm run build:ext && npm run e2e`.

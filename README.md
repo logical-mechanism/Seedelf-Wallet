@@ -2,7 +2,7 @@
 
 **Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet.
 
-The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and macOS.
+The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and macOS. The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in.
 
 ## What is a Seedelf?
 
@@ -147,6 +147,8 @@ This Register would become unspendable, resulting in lost funds.
 This wallet does not verify that the points supplied when you build a Register lie in the prime-order subgroup of BLS12-381.
 If you insert a point that carries any torsion component (i.e., it fails a subgroup membership check), the resulting on-chain Register becomes unspendable, as the validator will never consider it valid, resulting in lost funds. Always generate Registers with the supplied CLI commands (the points will always be torsion-free). If you decide to bring your points, you must run is_torsion_free() (or multiply by the cofactor) before submitting them to the wallet.
 
+Neither point may be the identity either: a Register whose public value is the identity can be spent by anyone.
+
 ### De-Anonymizing Attacks
 
 There exist multiple attacks that are known to break the privacy of this wallet. The first attack is picking a bad $d$ value. A small $d$ value may be able to be brute-forced. Selecting a $d$ value on the order of $2^{254}$ circumvents the brute-force attack. The second attack does not correctly destroy the $d$ value information after the transaction. The $d$ value is considered toxic waste in this context. Suppose the $d$ values are known for some users. In that case, it becomes trivial to invert the Register into the original form, thus losing all privacy. The third attack is tainted collateral UTxOs. On the Cardano blockchain, a collateral UTxO must be placed into a transaction as it incentivizes block producers to validate a failed transaction from the mempool. The collateral UTxO has to be associated with a payment credential, which means that the collateral UTxO, by definition, isn't anonymous, and the ownership is known the entire time. An outside user can watch collateral UTxOs inside a transaction to reveal a user's actions.
@@ -155,11 +157,13 @@ Privacy is preserved if $d$ is large and destroyed after use, and the collateral
 
 #### De-Anonymizing Via IP Tracking
 
-Seedelf communicates with `koios.rest`, a third-party API, and `giveme.my`, the collateral service Logical Mechanism runs. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. Every transaction is submitted through Koios, and every Seedelf spend goes to `giveme.my` for its collateral, each from your IP address, so either service can group your private spends as one person's, and tie them to whatever else that address asks for, though the chain can't. `koios.rest` does not support Tor access. `giveme.my` does support Tor access but is not implemented at the CLI level. Your public IP directly connects to your Koios API and GiveMeMy requests. Consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an identifiable IP for maximum privacy when engaging in sensitive activity. 
+Seedelf communicates with `koios.rest`, a third-party API, and `giveme.my`, the collateral service Logical Mechanism runs. These services track IP addresses as part of their abuse prevention and DoS protection mechanisms. Every Seedelf spend is submitted through Koios and goes to `giveme.my` for its collateral (the CLI's `create` and `fund`, which aren't Seedelf spends, are signed and submitted by the browser wallet you connect over CIP-30), each from your IP address, so either service can group your private spends as one person's, and tie them to whatever else that address asks for, though the chain can't. `koios.rest` does not support Tor access. `giveme.my` does support Tor access but is not implemented at the CLI level. Your public IP directly connects to your Koios API and GiveMeMy requests. The CLI also asks `api.github.com` for its latest version on almost every command. Consider routing traffic through a trusted VPN that doesn't log activity, not using a personal device, or using an unidentifiable IP for maximum privacy when engaging in sensitive activity.
+
+The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) for Chrome talks to the same two services, and to CoinGecko, Minswap and Blockfrost's IPFS gateway for the features that need them; its [privacy.md](./seedelf-platform/seedelf-web-wallet/docs/privacy.md) says who learns what.
 
 We're actively and continuously exploring options for Tor access to all services Seedelf depends on to function.
 
-**Please note that `crate.io` and `github.com` track IP addresses when using `cargo install` and `git clone`, respectively.**
+**Please note that `crates.io` and `github.com` track IP addresses when using `cargo install` and `git clone`, respectively.**
 
 ### Troll Attacks
 
@@ -176,6 +180,8 @@ The second ITM is the linkability of sequential UTxOs via the transaction fee. T
 The third ITM is a flood attack on the protocol itself. The stealthiness of the Seedelf protocol relies on a healthy population of seedelfs as the probability of ownership, $\rho(o)$, should be proportional to $1 / \vert \sigma \vert$, where $\vert \sigma \vert$ is the number of seedelfs in the contract. In the ideal case, $\rho(o) \rightarrow 0$ because $\vert \sigma \vert \gg 1$. In practice, users will have many $\sigma$ such that the number of unique seedelfs is less than the total number of seedelfs. However, these two magnitudes should roughly be comparable, i.e., $\vert \sigma \vert \sim \vert \sigma_{u} \vert$, where $\vert \sigma_{u} \vert$ is the number of uniquely owned seedelfs, assuming an honest distribution and a healthy population of seedelfs. The issue here is that any rich bad actor may own a significant portion of $\vert \sigma \vert$, causing a flood attack. In the flood attack case, users sending funds into the contract have a massively increased $\rho(o)$ because $\vert \sigma_{u} \vert$ tends towards $\vert \sigma_{0} \vert$, the absolute minimum amount of honest actors in the system thus in the worst case limit, $\rho(o) \rightarrow 1 / \vert \sigma_{0} \vert$. The only solution here is encouraging healthy and honest use of the Seedelf protocol, ensuring that $\vert \sigma_{0} \vert \sim \vert \sigma_{u} \vert \sim \vert \sigma \vert$.
 
 ### Wallet File Storage
+
+This is the CLI's. The Seedelf Wallet for Chrome keeps no such file: its keys come from a recovery phrase, sealed in the browser under a password (see its [keys-and-accounts.md](./seedelf-platform/seedelf-web-wallet/docs/keys-and-accounts.md#password-and-vault)).
 
 During the create-a-wallet process, a file will be saved to the default `$HOME/.seedelf` folder. This file is an encrypted file, via AES256GCM, requiring a password to decrypt. Using the CLI, seedelf will require the user to select a password with these requirements below.
 
@@ -203,7 +209,7 @@ Failure to do so may result in lost or corrupted files.
 
 ### Data Layer Reliance
 
-Seedelf does not contain a full peer-to-peer node. It relies heavily on `koios.rest` for the data layer, providing UTxO information and transaction evaluation. Though due to the wallet architecture, faking UTxO information should be impossible from the Koios side, as this would require knowledge of a user's secret key or the locally known seedelf token name. The worst case for the data layer is Koios restricting access to the data necessary for Seedelf to function correctly. So as long as Koios exists and is fair, Seedelf should be safe to use.
+Seedelf does not contain a full peer-to-peer node. It relies heavily on `koios.rest` for the data layer, providing UTxO information and transaction evaluation. Though due to the wallet architecture, Koios can't spend a user's funds or redirect a payment, as that would require knowledge of a user's secret key. What it could do is misreport the chain: hide UTxOs, or repeat a user's registers in UTxOs that don't exist, which would show a wrong balance until a transaction built on them is refused by the chain. The other bad case for the data layer is Koios restricting access to the data necessary for Seedelf to function correctly. So as long as Koios exists and is fair, Seedelf should be safe to use.
 
 ## Happy Path Test Scripts
 
@@ -240,15 +246,15 @@ Sending funds works similarly to removing funds, but instead of sending funds ou
 
 ## Note On Non-Mixability
 
-Spendability is always in the hands of the original owner. It is safe to assume a singular owner if two UTxOs from the contract are inside the same transaction. If two different users spent UTxOs together inside a single transaction, then there would be no way to ensure that one of the parties does not lose or steal funds. If Alice and Bob work together, then either Alice or Bob will have the chance of losing funds. Inside real mixers, the possibility of losing funds does not exist as the spendability is arbitrary, thus ensuring the mixing probably exists. The seedelf wallet is purely for stealth, not for mixing.
+Spendability is always in the hands of the original owner. It is safe to assume a singular owner if two UTxOs from the contract are inside the same transaction. If two different users spent UTxOs together inside a single transaction, then there would be no way to ensure that one of the parties does not lose or steal funds. If Alice and Bob work together, then either Alice or Bob will have the chance of losing funds. Inside real mixers, the possibility of losing funds does not exist as the spendability is arbitrary, thus ensuring the mixing probably exists. The seedelf wallet is purely for stealth, not for mixing. The Seedelf Wallet for Chrome offers mixing separately, through Lovejoin, a different contract that has had no third-party audit (see its [architecture.md](./seedelf-platform/seedelf-web-wallet/docs/architecture.md#lovejoin)).
 
 ## Defeating The Collateral Problem
 
-The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem.
+The `seedelf-cli` uses the [Cardano Collateral Provider](https://giveme.my/). Every user will share the same collateral UTxO, thus defeating the collateral problem. The Seedelf Wallet does the same for Seedelf spends. Where a key account of its own pays — the public account creating a Seedelf, mixing through Lovejoin or signing for a connected site, or a private session's one-time account bringing money back — that account's own collateral is used instead, since the transaction names the account anyway.
 
 ## The **seedelf-platform**
 
-Users can interact with the wallet protocol via the [seedelf-platform](./seedelf-platform/README.md).
+Users can interact with the wallet protocol via the [seedelf-platform](./seedelf-platform/README.md): the `seedelf-cli`, and the [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) for Chrome.
 
 ## Contact
 

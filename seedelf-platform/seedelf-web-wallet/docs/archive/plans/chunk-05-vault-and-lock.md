@@ -1,6 +1,6 @@
 # Chunk 5 plan: vault, onboarding and lock
 
-> **Done on 2026-09-23.** What was built, and where it differs from this plan, is in the [roadmap handoff note](../roadmap.md#handoff-notes).
+> **Done on 2026-09-23.** What was built, and where it differs from this plan, is in the [roadmap handoff note](../../roadmap.md#handoff-notes).
 
 **Branch:** `web-wallet/vault-lock`, created from `seedelf-web-wallet` at `b3e9383` (after PR #248). It ends with a PR back into `seedelf-web-wallet`.
 
@@ -8,10 +8,10 @@
 
 1. Check out the branch: `git checkout web-wallet/vault-lock && git pull`. If `seedelf-web-wallet` has moved since, merge it in.
 2. Read this plan, then:
-   - [keys-and-accounts.md](../keys-and-accounts.md): *Password and vault*, and *The Cardano account*
-   - [architecture.md](../architecture.md): *Service worker*, and *Storage*
-   - [flows.md](../flows.md): *Onboarding*, and *Lock and unlock*
-   - [privacy.md](../privacy.md): *Rules the wallet enforces*
+   - [keys-and-accounts.md](../../keys-and-accounts.md): *Password and vault*, and *The Cardano account*
+   - [architecture.md](../../architecture.md): *Service worker*, and *Storage*
+   - [flows.md](../../flows.md): *Onboarding*, and *Lock and unlock*
+   - [privacy.md](../../privacy.md): *Rules the wallet enforces*
 3. The tooling is already installed on the dev machine:
    - Rust 1.98 with `wasm32-unknown-unknown`
    - `clang` and `llvm-ar-18`
@@ -19,7 +19,7 @@
    - Node 24
    - Playwright's Chromium (build 1243)
 
-   Build and test commands are in [extension/README.md](../../extension/README.md).
+   Build and test commands are in [extension/README.md](../../../extension/README.md).
 4. Confirm the [decisions](#decisions-to-confirm-first) with the user before building the parts they affect.
 
 ## Goal

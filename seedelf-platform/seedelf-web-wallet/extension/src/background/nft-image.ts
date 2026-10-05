@@ -1,5 +1,5 @@
 // An NFT's image, when the user asks to see it: one NFT at a time, from its
-// details, and never otherwise (chunk 20, docs/plans/chunk-20-nft-images.md).
+// details, and never otherwise (chunk 20; docs/architecture.md, Chain data).
 // Nothing is fetched for a wallet merely holding NFTs, or opening Tokens.
 //
 // A click costs two requests. Koios's `asset_info` gives the token's metadata:

@@ -5,7 +5,7 @@
 
 export type NetworkName = "preprod" | "mainnet";
 
-/** Lovejoin, the mixer, where it's deployed (docs/plans/chunk-16-lovejoin.md). */
+/** Lovejoin, the mixer, where it's deployed (docs/architecture.md, Lovejoin). */
 export interface LovejoinConfig {
   /** Lovejoin's `mix_box` script hash: where every box sits. */
   mixBox: string;

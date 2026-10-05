@@ -6,12 +6,9 @@ The `seedelf-cli` is a Rust implementation of the Seedelf stealth wallet protoco
 
 ## Installation
 
-Precompiled binaries are available for Linux, Windows, and macOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest).
+Precompiled binaries are available for Linux, Windows, and macOS. These may be found in the [latest release](https://github.com/logical-mechanism/Seedelf-Wallet/releases/latest). Each archive comes with a detached GPG signature (`.asc`); verify it against the [release key](../util/pubkeys/seedelfwallet.asc) before running the binary.
 
-If you are running Linux, macOS, or a Unix-like OS, run the following command on your terminal and follow the instructions.
-```bash
-curl -fsSL https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/refs/heads/main/util/seedelf-init.sh | bash
-```
+Looking for a wallet in the browser instead? The [Seedelf Wallet](seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in. It's a separate product from the CLI, on its own version line.
 
 If you have [rust installed](https://www.rust-lang.org/tools/install), then the `seedelf-cli` may be installed directly from [crates.io](https://crates.io/crates/seedelf-cli).
 

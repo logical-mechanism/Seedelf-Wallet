@@ -1,17 +1,17 @@
 # Development
 
-This is how we run and test the extension before it's in the Chrome Web Store. The extension lives in [../extension/](../extension/); its README lists every script.
+This is how we run and test the extension before a release goes to the Chrome Web Store. The extension lives in [../extension/](../extension/); its README lists every script.
 
 ## Branching
 
-**Since v1.0.0 (2026-09-29), the web wallet lives on `main`.** `seedelf-web-wallet`, the long-lived dev branch it was built on, was merged into `main` (PR #266) and is finished. It held the wallet off `main` until it worked, so shelving the effort would have left no dead code there; that job is done.
+**The web wallet lives on `main`.** `seedelf-web-wallet`, the long-lived dev branch it was built on, was merged into `main` on 2026-09-29 (PR #266) and is finished. It held the wallet off `main` until it worked, so shelving the effort would have left no dead code there; that job is done.
 
 **Feature branches and PRs:**
 
 - **Start every feature branch from `main`** and name it `web-wallet/<topic>`. Keep the prefix: it reads well in the log, and it's what tags use.
 - **Open PRs into `main`.**
-  - CI runs on pull requests into any branch.
-  - Direct pushes don't trigger CI, so go through a PR even for a docs change.
+  - CI ([web-wallet.yml](../../../.github/workflows/web-wallet.yml)) runs on pull requests into any branch that touch `seedelf-platform/`.
+  - Direct pushes don't trigger it, so go through a PR even for a docs change.
 - **Never name a branch `web-wallet/<x>.<y>.<z>`** — that's the tag namespace (`web-wallet/1.0.0`), and a branch and tag sharing a name makes `git checkout` ambiguous.
 
 **The old branch:**
@@ -20,9 +20,11 @@ This is how we run and test the extension before it's in the Chrome Web Store. T
 
 **Shared Rust code:**
 
-- **Changes to shared Rust code that only the web wallet needs stay on the dev branch too.** The builder extraction is the main example.
+- **Changes to shared Rust code that only the web wallet needs go through a `web-wallet/<topic>` branch into `main` too.** The builder extraction is the main example.
 
-**Progress** is tracked in [roadmap.md](roadmap.md). The work happens in chunks of about one session each, and each chunk updates the roadmap when it finishes.
+**Progress** is tracked in [roadmap.md](roadmap.md), and what comes next in [post-release-roadmap.md](post-release-roadmap.md). The work happens in chunks of about one session each, and each chunk updates the roadmap when it finishes.
+
+**Plans:** a chunk's plan lives in [plans/](plans/) while it's being built. When the chunk lands, what still holds moves into the design docs ([architecture.md](architecture.md), [flows.md](flows.md), [privacy.md](privacy.md), [keys-and-accounts.md](keys-and-accounts.md), this file) and the plan moves to `docs/archive/plans/`, so `plans/` only ever holds live specs.
 
 ## Running it in Chrome
 
@@ -67,22 +69,34 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 
 | Layer | What | How |
 |---|---|---|
-| Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. |
+| Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. The WebAssembly's own JS tests run in Node once it's built: `node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"` from `seedelf-platform/`, as CI runs them. |
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
 | End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the side panel's layout and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. The dApp connector's tests (chunk 15) load a copy of the build whose manifest grants the sites from install, because Chrome's own dialog for an optional permission can't be answered from automation (`withSiteAccess` in `e2e/support.ts`); their dApp is a page served at `https://dapp.example/`. The harness sets the network before the wallet starts (`network`, preprod by default, as the fakes answer), so the suite runs on a dev build and on the store's mainnet build alike. |
 | Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
-| Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |
+| Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. `probe-governance.mjs` does the same for every DRep transaction (register, update, retire, vote), and `probe-note.mjs` for a public send with a note. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |
 | Live | Real preprod transactions from the built extension, by hand, never in CI | `node e2e/live/run.mjs all` runs every Seedelf flow in one browser session on the private test wallet, waiting for each to confirm, and prints the hashes. `node e2e/live/run.mjs staking` stakes, delegates the vote and changes pool; `withdraw-rewards` and `unstake` wait until rewards arrive. `run.mjs` also takes single flows: `mint live-1 account + move-in 25.5`. |
 | Manual | What a script can't see, before each release | [The preprod checklist](#preprod-checklist-before-a-release) |
+
+## Rules for a change to the screens
+
+These hold for every change to what the wallet shows, from one label to a whole restyle. They began as chunk 14's *Rules that still hold* ([archive/plans/chunk-14-style-flow-2.md](archive/plans/chunk-14-style-flow-2.md#rules-that-still-hold)); this list is the one that governs now.
+
+- **Lace is inspiration for look and flow, never a brand to copy:** not its name, logo, purple palette or commercial fonts (Brandon Grotesque and Proxima Nova, which are in its repo but not licensed to us). A file adapted from Lace stays Apache-2.0, with its notice, our changes marked and the licence beside it, as [`background/secret-box/`](../extension/src/background/secret-box/README.md) does.
+- **Every privacy note stays.** A redesign may move or shorten one, never drop it. Each is in the translations' critical set ([critical-keys.json](i18n/critical-keys.json), derived from the source by `extension/scripts/i18n-critical.mjs`): what a privacy or warning callout or an alert shows, and any key named `.privacy.` or `.warn.`.
+- **Correctness UX is always in scope:** clear errors, input limits.
+- **Nothing new phones home without its own decision**, because of what a new host or query tells it. The pages' CSP keeps fonts, icons and images inside the extension (`font-src 'self'`, `img-src 'self' data:`, in `extension/src/manifest.ts`).
+- **Every feature states its Koios cost, and anything paged scales with the contract's size.** The public tier takes 5,000 requests a day and 100 every 10 s from an IP address, and the wallet keeps to 40 (`RateLimit` in `extension/src/background/koios.ts`); a response holds at most 1,000 rows. The e2e tests assert the exact requests a screen makes.
+- **Tests find controls by role, label and test id**, so a restyle doesn't break them; the few class selectors in `e2e/extension.spec.ts` only look inside a part (a phrase's words, a cut name, a review's rows). **A renamed control updates `e2e/extension.spec.ts` in the same commit, and [flows.md](flows.md) too:** the owner brought the documentation review ahead of the UX pass on 2026-10-04, on the understanding that the pass keeps the docs current as it goes.
+- **The name is Seedelf**, and Seedelf Wallet for the app. `extension/tests/words.test.ts` checks the source, and `extension/tests/i18n.test.ts` every locale.
 
 ## Preprod checklist before a release
 
 On the built extension (`npm run build`, then load `dist/` unpacked), in the side panel and in a tab.
 
-1. **The automated layers:** `cargo test --workspace --locked`, the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=true npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
+1. **The automated layers:** `cargo test --workspace --locked`, the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=false npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
 2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match. Restore a 12- or 15-word phrase from Lace or Eternl, and check its account. **Restore a phrase that has used more than one account** (make one in Lace, or fund account 1's address): the picker appears on its own, and both accounts are there.
-3. **Public accounts** (chunk 18): switch from the top bar and from Settings → Public accounts, and check the balance, Activity, Receive, the UTxOs screen, Staking and the collateral are all the account you chose. Name one and check the name shows in the picker and on Home. *Check for another account* with nothing there says so and costs one request. Connect a site on one account, switch, and check the site is refused by name rather than served the other account's addresses; switch back and it works again. **Make private from two accounts, then send privately from the balance**: the review names both accounts and says the spend ties them together. Add an account by a number of your own (1338, say) that has never been used, and check it can be switched to and received into. On Send publicly, **Your accounts** offers the others and picking one says what the payment reveals rather than refusing it. The × clears each To field, on both sides and on Make public, and Make public offers **Your accounts** too. Past eight accounts the Settings list filters by number or name. **Settings → Sites picks the account sites use:** connect a site, switch the wallet to another account, and check the site still sees the dApp account and is never refused; then change the dApp account and check the site sees the new one.
+3. **Public accounts** (chunk 18): switch from the top bar and from Settings → Public accounts, and check the balance, Activity, Receive, the UTxOs screen, Staking and the collateral are all the account you chose. Name one and check the name shows in the picker and on Home. *Look for the next account* with nothing there says so and costs one request. **Make private from two accounts, then send privately from the balance**: the review names both accounts and says the spend ties them together. Add an account by a number of your own (1338, say) that has never been used, and check it can be switched to and received into. On Send publicly, **Your accounts** offers the others and picking one says what the payment reveals rather than refusing it. The × clears each To field, on both sides and on Make public, and Make public offers **Your accounts** too. Past eight accounts the Settings list filters by number or name. **Settings → Sites picks the account sites use:** connect a site, switch the wallet to another account, and check the site still sees the dApp account and is never refused; then change the dApp account and check the site sees the new one.
 4. **Locking:**
    - the lock button;
    - auto-lock after 15 minutes, and after 1 minute once Settings says so;
@@ -100,20 +114,26 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - withdraw to an address and to a `$handle`;
    - remove a Seedelf;
    - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, and stop staking;
-   - send with *Use staking rewards when spending* on, then off.
+   - become a DRep with the account's own vote, vote on a live governance action, change the profile, and retire as a DRep;
+   - send with *Use staking rewards when spending* on, then off;
+   - turn the connector on (Settings → Sites), connect one site to the public account and one to a private session, sign for each, and give a governance site such as GovTool CIP-95;
+   - a private swap from the Minswap tile through to everything back, and one stopped partway;
+   - a Lovejoin mix from each side, and **Bring one back now**;
+   - **Show image** on an NFT, in each balance;
+   - switch the language to Español and to 日本語, read Home and a review in each, and back to English.
 
    Read every review and every privacy note as you go.
 7. **Mistakes and failures:**
    - Koios blocked (offline, or an ad blocker) says why, and recovers on Refresh;
    - amounts: more than the balance, seven decimals, letters;
    - a mistyped Seedelf name, and a `$handle` that doesn't exist.
-8. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my` (and Minswap's preprod aggregator from the page, for a swap).
+8. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my` (and Minswap's preprod aggregator, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see).
 9. **The store's build, both networks** (`npm run package`, `dist/` loaded unpacked in a fresh profile):
    - it opens on **MAINNET**, with no preprod strip;
    - Settings, Network: moving to preprod says first that its ADA has no value; then every screen, and the connector's window, shows the **PREPROD** badge and strip, and Home the preprod balances;
    - a payment reviewed on one network and sent after a switch is refused ("isn't ready to send");
    - a site connected on one network asks again on the other, and one waiting as you switch is declined;
-   - on mainnet, the worker's network panel shows only `api.koios.rest`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org` from the page, for a swap), plus `preprod.koios.rest` only for something still on its way on preprod.
+   - on mainnet, the worker's network panel shows only `api.koios.rest`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org`, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see), plus `preprod.koios.rest` only for something still on its way on preprod.
 
 ## Web Store release: copy/paste procedure
 
@@ -159,7 +179,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-For the current release, that file is `extension/release/seedelf-wallet-1.1.0-mainnet.zip`.
+With `package.json` at 1.1.0, that file is `extension/release/seedelf-wallet-1.1.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it. Keep the SHA-256 output for the release record.
 
@@ -168,11 +188,11 @@ For the current release, that file is `extension/release/seedelf-wallet-1.1.0-ma
 ### 3. Upload and submit
 
 1. Open the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
-2. Choose **Add new item** for the first release, or open the existing item for an update. Upload `extension/release/seedelf-wallet-$release_version.zip`.
+2. Choose **Add new item** for the first release, or open the existing item for an update. Upload `extension/release/seedelf-wallet-$release_version-mainnet.zip`.
 3. Complete the **Store Listing**, **Privacy**, **Distribution**, and **Test instructions** tabs using [store/README.md](store/README.md).
 4. Set visibility (**Public** for launch, or **Unlisted** for a quieter start), check the host justifications match the manifest's four hosts, and verify the privacy-policy URL resolves.
 5. Submit for review.
-6. After approval, record the version, ZIP SHA-256, submission date, and approval date in the roadmap, then share the store link with the intended users.
+6. Record the version, the commit it was built from and the zip's SHA-256 in the roadmap's handoff notes, then share the store link with the intended users.
 
 The official Chrome upload flow is also described in [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish/).
 
@@ -191,14 +211,14 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
    - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints its SHA-256. The zip is reproducible: the same commit and toolchain give the same bytes.
 6. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
-7. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([plans/launch-review.md](plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
+7. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
 8. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
 9. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
-10. **Record it** in the roadmap's handoff notes: the version, the zip's SHA-256, and the date it was submitted and approved.
+10. **Record it** in the roadmap's handoff notes: the version, the commit it was built from, and the zip's SHA-256.
 
 ## Sharing with testers before launch (history)
 
-**Decided (chunk 11c): an unlisted, preprod-only Web Store listing.** Superseded at launch (2026-09-26): the store's build is mainnet, with preprod in Settings for testing. See [store/README.md](store/README.md).
+**Decided (chunk 11c): an unlisted, preprod-only Web Store listing.** Superseded on 2026-09-26, when one build came to carry both networks: the store's build is mainnet, with preprod in Settings for testing. See [store/README.md](store/README.md).
 
 - **Zip of `dist/`:** testers load it unpacked the same way we do. It works, but it's clunky and gets no automatic updates.
 - **Chrome Web Store, unlisted or private (recommended for the first testers):**

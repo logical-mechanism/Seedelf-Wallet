@@ -48,9 +48,22 @@ export const LOCAL_ACCOUNT = "seedelf.account";
  */
 export const LOCAL_LANGUAGE = "seedelf.language";
 
+/**
+ * The CIP-1852 account private sessions' one-time accounts live under
+ * (`cardano::ONE_TIME_ACCOUNT` in seedelf-crypto, `24301'`). Never a public
+ * account, whatever number is typed: its `0/i` and `2/0` keys are session
+ * `i`'s and session 0's, so as a public account it would read, and spend,
+ * private sessions' money (privacy.md, rule 6).
+ */
+export const ONE_TIME_ACCOUNT = 0x5eed;
+
 /** Whether `value` is a public account index a preference may hold (background/accounts.ts bounds it). */
 export const isAccountIndex = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0x7fff_ffff;
+  typeof value === "number" &&
+  Number.isInteger(value) &&
+  value >= 0 &&
+  value <= 0x7fff_ffff &&
+  value !== ONE_TIME_ACCOUNT;
 
 /** How long without activity before the wallet locks, in minutes: Lace's choices, less "never". */
 export const LOCK_AFTER_MINUTES = [1, 5, 15, 30, 60] as const;

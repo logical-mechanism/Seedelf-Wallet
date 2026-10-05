@@ -35,7 +35,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 
 **Notes:**
 
-- **`account` is `0` for v1.** The index keeps multiple Seedelf accounts per phrase possible later.
+- **`account` is `0` for v1.** The index would allow several Seedelf keys per phrase, and the owner decided against one per public account on 2026-10-02: see [Several accounts and the private balance](#several-accounts-and-the-private-balance).
 - **Why the BIP39 seed and not the raw entropy:**
   - The BIP39 seed is the standard input for non-Cardano derivations.
   - It's already a different function of the phrase than Cardano's Icarus master key.
@@ -50,6 +50,24 @@ if x == 0: derivation error                 probability ≈ 2^-255
   - `generatePhrase` and `validatePhrase` in the WebAssembly module apply these rules, and `validatePhrase` says what is wrong.
 - **One implementation:** the derivation lives in Rust (`seedelf-crypto`), and the extension uses it through WebAssembly (`SeedelfKey.fromPhrase`).
 
+### One-time spend keys
+
+**Every Seedelf spend is signed by a key of its own** (privacy rule 1). Each proof's challenge binds that key's hash (`vkh`), so a proof can't be replayed in another transaction, and no two spends share a signer. The web wallet derives the key from the Seedelf key rather than drawing it:
+
+```text
+okm = HKDF-SHA-256(ikm  = x, 32 bytes big-endian,
+                   salt = "seedelf-one-time-key-v1",
+                   info = seed,                     32 fresh random bytes, one per spend
+                   L    = 32)
+key = the Ed25519 key whose secret is okm
+```
+
+- **Implementation:** `one_time_key` in [`wasm/src/lib.rs`](../wasm/src/lib.rs).
+- **A new seed per spend is a new key per spend.** The seed waits with the built transaction in session storage between Review and Send, so a worker restart doesn't lose it. Without `x` it gives nothing, and the key itself never leaves WebAssembly.
+- **Nothing is kept under it.** The key signs one transaction and the money goes under registers, so a lost seed loses nothing. The salt is still a frozen string, like the derivation's.
+- **Never an account's key.** A private session's return merged into its funding's change (a Lovejoin chain's return among them) is signed by the session's key too, but its proofs are bound to a fresh one-time key, since a connected site can ask the session's key to sign (chunk 16; `api::merged_return`, and `ScriptSpend::with_account` refuses the account's key as the one-time key).
+- **The CLI draws its one-time keys at random.**
+
 ## Accounts
 
 | Account | What it is | Address | Lifetime |
@@ -60,26 +78,27 @@ if x == 0: derivation error                 probability ≈ 2^-255
 
 - **The Cardano account is what exchanges and other wallets pay.** It is linked to the user by definition, so it is never used as a one-time account.
 - **One-time accounts are how funds leave Seedelf to use a contract.** The wallet sweeps them back automatically (see [flows.md](flows.md#contract-round-trip)).
-  - On restore, scan them with a gap limit so any leftovers are found.
+  - **The restore scan** (designed, not built yet). The session record is sealed on one device, so a restored wallet, or the same phrase in another browser, doesn't know which `24301'` indices hold money. The design: walk the indices in batches of 20, one request a batch, until a batch shows none used; read what's left at the used ones (`credential_utxos`, 75 keys a request); and ask Minswap's `pending-orders` only about used accounts with an order and no return after it. It runs once, at a restore or from a **Find leftovers** button, never when the wallet opens, because Koios and Minswap see every account it asks about together, from one IP address. Swaps, site sessions and Lovejoin's mix sessions all take their index from one sequence (`freshIndex`), so one scan covers all three. Lovejoin's boxes need none of it: the Seedelf key finds them in the pool after a restore. Until it's built, Remove wallet and Forgot password say that what one-time accounts hold doesn't show after a restore (independent review M5).
   - **A session's index is checked against the chain before it's used** (the crypto review, 2026-09-25). The next index is kept in the sealed session record, which is only on this device: a restored wallet, one removed and restored, or the same phrase in another browser starts it at 0 again. So before a session is funded, the worker asks Koios whether the next index's stake key (`2/i`) has been used by any address (`account_addresses`, that one stake address, which the funding puts on chain anyway), and only when it has, which of the 20 after it have, in one request, taking the first that none has (`SessionService.freshIndex`; the launch review, #22). Asking about 20 at once tells Koios they're one wallet's, so it's done only when a restore or another browser used the next one. Every session since chunk 15b has its own stake key, so any payment to one shows there. The few sessions from before then, with the shared staking part, were on preprod only.
     - **Send asks again** (independent review M13): before the funding is recorded and sent, `SessionService.stillUnused` asks about that one index: its stake key (`account_addresses`), then, if that shows nothing, its payment key (`credential_utxos`). If either shows it used, nothing is sent: the record's next index moves past it, and the error says to review it again, which takes the next unused one. A top-up doesn't ask: its account is already the session's.
     - **Neither check sees a mempool,** or what a Koios backend that's behind hasn't shown yet. So two browsers with the same phrase funding sessions at about the same time can still put both on one account.
+  - **The same index on preprod and mainnet is the same key.** Each network keeps its own sealed record, both counting from 0, and only the address's network tag differs, so someone comparing the two chains could tie preprod sessions to mainnet ones. Accepted as it is (crypto review, 2026-09-25; the privacy review lists it as accepted): the derivation is frozen.
 - **The CLI has the same concept:** its External Wallet (`seedelf-cli/src/commands/external/`), a normal address tied to the Seedelf key. The web wallet reaches it through HD derivation instead.
 
 ## The Cardano account
 
-The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano wallet account, and the wallet's non-private side. What it holds depends on where the phrase came from:
+The Cardano account is CIP-1852 account `0'` of the phrase, or since chunk 18 whichever account `n'` the wallet is working on (rule 1 below): an ordinary Cardano wallet account, and the wallet's non-private side. What it holds depends on where the phrase came from:
 
 - **A new Seedelf phrase:** a fresh, empty account.
 - **A restored Lace, Yoroi or Eternl phrase:** that wallet's first account, with the same addresses, UTxOs, tokens, NFTs, staking key and delegation, and any collateral.
 
 **Implementation:** [`seedelf-crypto/src/cardano.rs`](../../seedelf-crypto/src/cardano.rs).
 
-- **Master key:** the Icarus master key (CIP-3) from `pallas-wallet`.
+- **Master key:** the Icarus master key (CIP-3): PBKDF2-HMAC-SHA512 of the BIP39 entropy with an empty password, 4096 rounds, 96 bytes, clamped. `seedelf-crypto` makes it from the entropy as `pallas-wallet`'s `from_bip39_mnenomic` does, without the phrase string that one takes (launch review #32), and `pallas-wallet` derives the keys below it. `cardano_test.rs` checks each role's key `0` against pallas's own, for every vector.
 - **Derivation:** `m/1852'/1815'/account'/role/index`.
 - **Vectors:** [`seedelf-crypto/tests/vectors/cardano_account.json`](../../seedelf-crypto/tests/vectors/cardano_account.json).
   - They cover 12-, 15- and 24-word phrases, accounts 0 and 1, and both networks.
-  - They match `@cardano-sdk/key-management`, the library Lace uses: 80 of 80 values.
+  - They match `@cardano-sdk/key-management`, the library Lace uses: every value. The file holds eight vectors, each with the account key and, on both networks, two receive addresses, a change address and the stake address: 72 values.
 
 **Rules:**
 
@@ -87,17 +106,17 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
    - Discovery scans both the receive (`0/i`) and change (`1/i`) chains with the standard gap limit of 20, so a restored wallet shows its full balance. Built in chunk 6; see [architecture.md](architecture.md#chain-data).
    - Everything under the account's payment keys is the account's, whatever the address's staking part: enterprise addresses, and our key with someone else's stake key, are found and spent too (chunk 12).
    - **Which account the wallet works on** is one integer in `chrome.storage.local` (`seedelf.account`, unsealed, beside the network and for the same reason: `Wallet` reads it while deriving the keys, before anything is unlocked). `Wallet` reads it at **every** key use, so a switch writes the choice and nothing else — the next use re-derives, and no request can sign with the account the user just left. **Which accounts the phrase has used, and what they are called, are sealed** with the other private records (`accounts`): how many accounts someone runs is about them.
-   - **Any CIP-1852 index is an account.** The path component is hardened, so `m/1852'/1815'/n'` runs to 2^31 - 1, and `seedelf-crypto`'s `check_account` is the only bound. The wallet keeps up to 100 of them in its list — a list length, never a limit on *which* numbers.
+   - **Any CIP-1852 index is an account but one.** The path component is hardened, so `m/1852'/1815'/n'` runs to 2^31 - 1 (`seedelf-crypto`'s `check_account`). The exception is `24301'`, the private sessions' one-time accounts: its `0/i` and `2/0` keys are session `i`'s and session 0's, so as a public account it would read, and spend, their money. The worker refuses it however it's reached (`ONE_TIME_ACCOUNT` in `shared/preferences.ts`; the screens call it Account 24302, counting from 1), and a stored one reads as account 0. The wallet keeps up to 100 of them in its list — a list length, never a limit on *which* numbers.
    - **A custom or non-sequential account is reached by number** (the owner, 2026-10-02). Sequential discovery stops at the first unused account, so it can never find account 1337; and an account that has never been used can't be discovered at all. So Settings → Public accounts has an account-number entry with two actions: **Check it**, one `account_addresses` request about that one account, which adds it if it has been used; and **Add it**, which asks nobody anything and adds it whether or not it has ever been used — the way to *start* a custom-numbered account. It exists in the phrase either way and holds nothing until something is put there.
    - **Discovery looks for accounts in order, stopping at the first never used** (BIP44's rule), **one `account_addresses` request at a time**. It carries on from the first gap in the run up from 0, not from the highest known, so adding a custom account doesn't stop it ever reaching account 2. `Koios.usedStakeAddresses` would answer for twenty in one request, and that request would tell Koios those twenty stake addresses are one wallet's — which works against the habit several accounts serve. It runs on a **restore** (in the background: a restored phrase may hold funds past account 0) and on demand from Settings → Public accounts, which probes exactly one. Never on unlock.
    - **The Seedelf key stays on account 0.** One private balance for the whole phrase, whichever public account is active. See [Several accounts and the private balance](#several-accounts-and-the-private-balance).
    - Each account has **its own staking** (its own `2/0`), **its own collateral** and **its own locked UTxOs**; contacts, the Seedelf history and the private sessions are the wallet's, not an account's.
    - **One account is the dApp account** (`Preferences.dappAccount`, Settings → Sites), and connected sites always use it, whichever account the wallet is working on. Eternl's model, on the owner's call (2026-10-02): switching accounts can then never hand a site a second account's addresses, and a site is never refused for being on the "wrong" one. Changing which account it is, is a deliberate act, and Settings says it shows every connected site the new account. Account 0 by default — the one account every wallet from before this had, so nothing a site already sees changes.
-   - A switch is **refused while something of the account's is on its way** — a payment Koios didn't answer, or a public mix still being sent — since a watch must not lose its account halfway through.
+   - A switch is **refused while something of the account's is on its way** — a payment Koios didn't answer, a mix from the public account stopped at a transaction that may have gone through, or a Lovejoin chain still being sent — since a watch must not lose its account halfway through.
 2. **One collateral, set aside, as in Lace (chunk 12).**
    - Lace's collateral is just a pure-ADA UTxO of exactly 5 ADA, which Lace marks as reserved in its own local storage; nothing on-chain says so. The web wallet does the same, in Settings → Collateral.
    - With none chosen, the wallet takes the oldest pure 5 ADA UTxO the account holds (no transaction), so another wallet's collateral on the same phrase stays put. Reclaiming it stops that; setting one with none to take pays 5 ADA to `0/0`.
-   - It's kept out of every payment, and put up only by the account-paid mint: move-in and send run no script, and Seedelf spends use giveme.my.
+   - It's kept out of every payment, and put up only by what the account signs that runs a script: the account-paid mint, a Lovejoin mix from the public account (chunk 16), and a connected site's transaction (CIP-30's `getCollateral`, chunk 15). Move-in and send run no script, and Seedelf spends use giveme.my.
    - Until chunk 12, move-in and send never spent any pure 5 ADA UTxO, as the CLI's `collect_address_utxos` doesn't. Now only the collateral, and the UTxOs the user locked, stay put.
 3. **Tokens and NFTs are shown.** Move-in moves ADA by default, and tokens only when the user picks them. Each Seedelf UTxO can only hold so many tokens (see the root README's *Wallet Limitations*).
 4. **The account stakes, with its own stake key `2/0` (chunk 13).**
@@ -119,14 +138,14 @@ The Cardano account is CIP-1852 account `0'` of the phrase: an ordinary Cardano 
 
 **What stealth addressing does not cover is co-spending.** A contract UTxO's creating transaction is public. The registers hid *who* the money went to, not where an input came from — so one later private spend that takes a UTxO originating from account 0 together with one from account 1 **ties those two accounts to one owner, in the open**.
 
-So each account's money made private is **its own history class**: `public:<n>` in [`shared/histories.ts`](../extension/src/shared/histories.ts). Coin selection keeps different classes apart where a choice that doesn't merge them pays (`seedelf-core`'s `build::Histories`), the review says what a merge ties together and names the accounts, and the UTxOs screen tags each private UTxO with the account its money came from. See [privacy.md](privacy.md#several-public-accounts).
+So each account's money made private is **its own history class**: `public:<n>` in [`shared/histories.ts`](../extension/src/shared/histories.ts). Coin selection keeps different classes apart where a choice that doesn't merge them pays (`seedelf-core`'s `build::Histories`), the review says what a merge ties together and names the accounts, and the UTxOs screen tags each private UTxO with the account its money came from. See [privacy.md](privacy.md#known-links), *Several public accounts*.
 
 - **The bare `public` of a wallet from before chunk 18 reads as `public:0`**, canonicalized on the way in. Two classes there would have the wallet claim a spend ties two accounts together when both are account 0 — a privacy note that is simply false.
 - **Paying your own public account from Seedelf is flagged for every account the wallet knows**, not only the active one: the money is re-linked to that account either way.
 - **Sending between your own accounts is allowed, and said** (the owner, 2026-10-02). It is an ordinary Cardano payment, so anyone can see the two accounts paying each other and tell they are one wallet's — which the Send form says, naming the account, so the user decides. It reads the resolved address, so it reads the same however the address arrived: typed, pasted, an ADA Handle, or picked from Contacts. Paying *this* account says what it always said (the money comes straight back less the fee), and the collateral payment is exactly that.
   - **And offered, not merely allowed** (the owner, 2026-10-02): the Send form's To field has *Your accounts* beside *Contacts*, listing every account but the one you are on — paying the one you are on sends the money straight back, which is the collateral payment's job. The addresses are derived on the device, so opening it asks nobody anything. Picking one only fills the field: it is then read and said like any address typed by hand. Without it the only way to pay your own Account 2 is to switch to it, copy its address, switch back and paste, which is worse in every way than picking it and reading the note.
   - **Not refused, on the owner's call:** people do want to move money between their own accounts, and **accounts are not necessarily unlinked in the first place** — several things the wallet already does link them, and in some cases that is the point. So this is a *known link* like every other: the wallet makes it visible rather than forbidding it ([privacy.md](privacy.md#known-links)).
-- **Making money *public* to another of your accounts** is the same: allowed, and said. What it links is the account to the private UTxOs spent, which Make public always names, and the history classes say what else it ties.
+- **Making money *public* to another of your accounts** is the same: allowed, and said, and Make public's To field offers *Your accounts* too. What it links is the account to the private UTxOs spent, which Make public always names, and the history classes say what else it ties.
 
 ## Password and vault
 
@@ -134,12 +153,14 @@ So each account's money made private is **its own history class**: `public:<n>` 
 
 - **The vault is one SecretBox blob** that seals the phrase's BIP39 entropy under the user's password. It holds 16, 20 or 32 bytes for 12, 15 or 24 words; the words themselves are never stored.
   - Every key is re-derived on unlock, so no derived key is stored.
-  - It lives in `chrome.storage.local` under `seedelf.vault`, as `{ version: 1, blob: <base64>, createdAt }`.
+  - It lives in `chrome.storage.local` under `seedelf.vault`, as `{ version: 1, blob: <base64> }`. A vault sealed before the privacy review (§3.13) also carries `createdAt`, in the clear and never read; the next password change drops it.
   - The entropy ↔ phrase conversion is in Rust (`seedelf_crypto::derivation::{phrase_to_entropy, entropy_to_phrase}`), with the same rules as `parse_phrase`.
   - Unlock goes straight from entropy to keys inside WebAssembly (`SeedelfKey.fromEntropy`, `CardanoAccount.fromEntropy`), so the phrase never becomes a JavaScript string after onboarding, unless the user asks to see it (Settings, below).
   - Since the launch review (#32), WebAssembly doesn't write the phrase out either: the keys come from the entropy directly (`seedelf_key_v1_from_entropy`, `CardanoAccount::from_entropy`), and they're the keys the phrase gives. Tests check that against the frozen vectors and against pallas's own Cardano master key.
 - **SecretBox `SBV1`**, adapted from Lace (`packages/lib/core/src/secret-box/`) into [`secret-box/`](../extension/src/background/secret-box/). Those files stay under Apache-2.0, with Lace's notice and our changes listed in that folder's README.
   - **Key derivation:** Argon2id with m = 19456 KiB, t = 2, p = 1, giving a 32-byte key (`@noble/hashes`).
+    - These are OWASP's minimum and exactly Lace's (`kdf.ts`); the owner kept them to match Lace (crypto review, 2026-09-25). The crypto review put a stolen profile at about 10⁴ guesses a second per GPU, so length is what protects the password. Stronger parameters mean `SBV2` and a reseal at the next unlock.
+    - The password is hashed as typed (UTF-8, `TextEncoder`), not Unicode-normalized, so the same password composed differently on another keyboard won't open the vault.
   - **Cipher:** ChaCha20-Poly1305 (`@noble/ciphers`).
   - **Header:** 48 bytes: magic `SBV1`, a 32-byte salt and a 12-byte nonce. It is authenticated as associated data.
   - **Changing parameters** means a new magic (`SBV2`), never a silent change.
@@ -148,9 +169,10 @@ So each account's money made private is **its own history class**: `public:<n>` 
 - **Password check:** opening the vault proves the password, because the authentication tag fails otherwise. We have one blob, so Lace's separate "sentinel" value isn't needed.
 - **Settings (chunk 12):**
   - **Show recovery phrase** opens the vault with the password again, even while unlocked, and shows the words. A wrong password counts towards the unlock back-off and waits like one.
-  - **Change password** opens the vault with the current password and seals the same entropy under the new one, keeping `createdAt`. The same back-off applies.
+  - **Check recovery phrase** (chunk 14) compares a typed phrase's entropy with the unlocked wallet's and says only whether they match, never which words differ. It needs no password: it tells someone at an unlocked browser nothing a whole phrase they already have wouldn't.
+  - **Change password** opens the vault with the current password and seals the same entropy under the new one, dropping an older vault's `createdAt`. The same back-off applies.
   - **Remove wallet** deletes the vault after the typed confirmation (`delete wallet`), as Forgot password does, and every private record with it but two: a payment that may still go through, and, from Remove wallet only, a mix from the public account that may have gone through, stay sealed until a wallet is next made or restored here, which looks for them again if it's the same phrase and deletes them if not (independent review M2, final review F1). While something is still open (that payment or mix, a private session, a Lovejoin chain being sent), it lists it first and asks a second time (independent review M5).
-- **Private records** (contacts, the Seedelf history, the locked UTxOs and the collateral) are sealed under a second key: HKDF-SHA-256 of the entropy with its own salt (`seedelf-web-wallet-private-store-v1`), so it has nothing to do with the Seedelf or Cardano keys. See [architecture.md](architecture.md#storage).
+- **Private records** (the public accounts, contacts, the Seedelf history, the locked UTxOs and the collateral, the connected sites, the private sessions, the Lovejoin boxes, a payment or a mix that may have gone through, and who paid for each Seedelf: `PRIVATE_RECORDS` in `private-store.ts`) are sealed under a second key: HKDF-SHA-256 of the entropy with its own salt (`seedelf-web-wallet-private-store-v1`), so it has nothing to do with the Seedelf or Cardano keys. See [architecture.md](architecture.md#storage).
 - **Password rule:** at least 12 characters, with no composition rules. The UI shows a rough strength hint, and the worker enforces the length. (The CLI asks for 14 characters with character classes; the two are separate products.)
 - **Performance:** unlock takes about 190 ms in the service worker, measured end to end in Playwright (Argon2id in pure JS, plus both key derivations in WebAssembly). That's well under the 1.5 s budget, so no faster Argon2id is needed. Lace's `setArgon2idImplementation` hook is kept in case that changes.
 - **Lock and wipe:**

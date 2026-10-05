@@ -7,19 +7,33 @@
 //   lookup          the whole wallet contract from Koios (credential_utxos),
 //                   then the UTxO holding the recipient's seedelf, picked
 //                   locally: Koios is never asked about the recipient.
-//   draftTransfer   the draft, under a new one-time key. It sends 5 ADA and
-//                   1 of the synthetic tUSDM, so two inputs pay.
-//   Ogmios          preprod Koios evaluates the draft. The owned UTxOs aren't
-//                   on chain, so they go along as `additionalUtxo`; the
-//                   wallet script, its reference input and giveme.my's
-//                   collateral UTxO are real.
-//   finishTransfer  the transaction with the measured budgets
+//   buildTransfer   the transaction, under a new one-time key, measured by the
+//                   wallet's own evaluator, as the worker builds it
+//                   (background/transfer.ts). It sends 5 ADA and 1 of the
+//                   synthetic tUSDM, so two inputs pay.
+//   Ogmios          preprod Koios evaluates that transaction, a check the
+//                   worker doesn't make: declaredCovers must find the
+//                   wallet's budgets cover what the network measures. The
+//                   owned UTxOs aren't on chain, so they go along as
+//                   `additionalUtxo`; the wallet script, its reference input
+//                   and giveme.my's collateral UTxO are real.
 //   giveme.my       asked to witness it. It checks a transaction against the
 //                   chain first, so it refuses this one (the inputs don't
 //                   exist): the recorded answer is that refusal.
 //
 // Nothing is submitted. transfer-preprod.json keeps each step, so tests can
 // replay the flow on real data.
+//
+// The committed transfer-preprod.json is older than this script: the
+// draftTransfer → Ogmios → finishTransfer recording of 2026-09-24, from
+// before a transfer took a list of payments (chunk 14) and was measured in
+// the wallet (the crypto review). Tests read its `draft`, its `final.to`,
+// and its `final.fee`, the network's measure, to compare theirs with
+// (wasm/tests/api_test.rs and transfer.test.mjs; tests/spent.test.ts and
+// transfer.test.ts). A new recording has no `draft`, its `final` is
+// buildTransfer's (`payments`, and the wallet's own fee), and its
+// `evaluation` is the finished transaction's: move those readers in the
+// same change.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const wasmPkg = new URL("../../../wasm/pkg/", import.meta.url);
@@ -88,17 +102,19 @@ const recipient = seedelfs.find((u) => seedelfOf(u).startsWith(PREFERRED)) ?? se
 if (!recipient) throw new Error("no live Seedelf to pay on preprod");
 const to = seedelfOf(recipient);
 
-const request = { network: "preprod", params, utxos, to, recipient, lovelace: LOVELACE, tokens };
-const draft = JSON.parse(wasm.draftTransfer(key, JSON.stringify(request)));
-const spent = utxos.filter((u) => draft.inputs.some((i) => i.txHash === u.tx_hash && i.txIndex === u.tx_index));
+// As the worker asks, less `classes`: the synthetic UTxOs have no history.
+const request = { network: "preprod", params, utxos, payments: [{ to, recipient, lovelace: LOVELACE, tokens }] };
+const final = JSON.parse(wasm.buildTransfer(key, JSON.stringify(request)));
+const spent = utxos.filter((u) => final.inputs.some((i) => i.txHash === u.tx_hash && i.txIndex === u.tx_index));
 const { answer: evaluation } = await post(`${KOIOS}/ogmios`, {
   jsonrpc: "2.0",
   method: "evaluateTransaction",
-  params: { transaction: { cbor: draft.draftCbor }, additionalUtxo: spent.map(ogmiosUtxo) },
+  params: { transaction: { cbor: final.txCbor }, additionalUtxo: spent.map(ogmiosUtxo) },
 });
 if (evaluation.error) throw new Error(`evaluation failed: ${JSON.stringify(evaluation.error)}`);
+const checked = JSON.parse(wasm.declaredCovers(final.txCbor, JSON.stringify(evaluation)));
+if (!checked.covers) throw new Error(`the wallet's budgets don't cover preprod's: ${checked.reason}`);
 
-const final = JSON.parse(wasm.finishTransfer(key, JSON.stringify({ ...request, seed: draft.seed, evaluation })));
 const collateral = await post(COLLATERAL, { tx: final.txCbor });
 key.free();
 
@@ -114,7 +130,6 @@ writeFileSync(
       recipient,
       lovelace: LOVELACE,
       tokens,
-      draft,
       evaluation,
       final,
       collateral,
@@ -124,5 +139,5 @@ writeFileSync(
   )}\n`,
 );
 console.log(
-  `transfer to ${to}: ${draft.inputs.length} input(s), fee ${final.fee.total}, tx ${final.txHash}; giveme.my: ${collateral.status} ${JSON.stringify(collateral.answer)}`,
+  `transfer to ${to}: ${final.inputs.length} input(s), fee ${final.fee.total}, tx ${final.txHash}; giveme.my: ${collateral.status} ${JSON.stringify(collateral.answer)}`,
 );

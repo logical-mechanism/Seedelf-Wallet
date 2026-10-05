@@ -1,13 +1,13 @@
 # Chunk 7 plan: builder extraction and move-in
 
-> **Done on 2026-09-23, except the live preprod run** (the test wallet wasn't funded). The [roadmap handoff note](../roadmap.md#handoff-notes) has what was built and how to finish the live run.
+> **Done on 2026-09-23, except the live preprod run** (the test wallet wasn't funded). The [roadmap handoff note](../../roadmap.md#handoff-notes) has what was built and how to finish the live run.
 
 **Branch:** `web-wallet/move-in`, created from `seedelf-web-wallet` at `1e70e35` (after PR #250). `main` had nothing new to merge. It ends with a PR back into `seedelf-web-wallet`.
 
 ## Start here (new session)
 
 1. Check out the branch and merge `seedelf-web-wallet` if it moved.
-2. Read this plan, then [architecture.md](../architecture.md) *Transaction building* and *Chain data*, and [flows.md](../flows.md) *Move in*.
+2. Read this plan, then [architecture.md](../../architecture.md) *Transaction building* and *Chain data*, and [flows.md](../../flows.md) *Move in*.
 3. The preprod test wallet for the live run is in `extension/.preprod-test-wallet.txt` (gitignored).
 
 ## Decided with the user (2026-09-23)
@@ -38,7 +38,7 @@
   - **Max** spends every eligible UTxO. The change output keeps exactly the minimum ADA for the tokens that aren't moving.
   - **Outputs:** the deposit outputs, then change to `0/0`, with any unpicked tokens split 20 per output. No change output if nothing is left.
   - Returns the unsigned transaction and a summary: ADA and tokens moved, fee, change, and the signer paths.
-- The CLI's `seedelf-platform/CLAUDE.md` rule against `build_*` functions is reversed, as [architecture.md](../architecture.md#transaction-building) planned.
+- The CLI's `seedelf-platform/CLAUDE.md` rule against `build_*` functions is reversed, as [architecture.md](../../architecture.md#transaction-building) planned.
 
 ### 3. WebAssembly: `buildMoveIn(account, key, requestJson)`
 

@@ -2106,6 +2106,7 @@
   "worker.account.onItsWay": "このアカウントの何かがまだ送信中です（Seedelf Wallet が待っている支払い、または送信中のミックス）。それが確定するのを待ってから、アカウントを切り替えてください。",
   "worker.accounts.badIndex": "アカウント番号は 0 から {{max}} までの整数です。",
   "worker.accounts.notAnAccount": "それはアカウントではありません。",
+  "worker.accounts.reserved": "アカウント {{number}} は Seedelf Wallet がプライベートセッションに使うため、公開アカウントにはできません。",
   "worker.accounts.tooMany": "Seedelf Wallet が保持できるアカウントは最大 {{max}} 件です。別のものを追加する前に、リストから一つ削除してください。",
   "worker.accounts.unknown": "Seedelf Wallet はそのアカウントを知りません。",
   "worker.accounts.unknownAdd": "Seedelf Wallet はそのアカウントを知りません。まず設定 → 公開アカウントで追加してください。",

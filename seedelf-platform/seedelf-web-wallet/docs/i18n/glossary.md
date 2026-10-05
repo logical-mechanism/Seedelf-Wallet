@@ -11,7 +11,8 @@ the word.
 **Seedelf**, **Seedelf Wallet**, **Lovejoin**, **Koios**, **Cardanoscan**,
 **giveme.my**, **Minswap**, **Preprod**, **mainnet**, **ADA Handle**, **UTxO**,
 **CIP-30**, **DRep**, **ADA**, **₳**. Seedelf is the name and
-`extension/tests/words.test.ts` checks it in every locale.
+`extension/tests/i18n.test.ts` checks it in every locale, as
+`extension/tests/words.test.ts` does in the source.
 
 **Seedelf and Lovejoin are brands and are never transliterated** — not
 シードエルフ, not ラブジョイン. The two network names are Cardano's own and stay
@@ -32,8 +33,8 @@ translated; the words on them are not.
 | account | cuenta | アカウント | Lace's |
 | public account | cuenta pública | 公開アカウント | the wallet's own term |
 | private balance | saldo privado | プライベート残高 | the wallet's own term |
-| Receive | Recibir | 受取 | Lace has 受信, "receive a signal"; 受取 is what money does — the one place we part from Lace, deliberately |
-| Send | Enviar | 送金 | |
+| Receive | Recibir | 受取 | Lace has 受信, "receive a signal"; 受取 is what money does — we part from Lace here deliberately, as for Home's Send |
+| Send | Enviar | 送金 | Home's Send, which pays: 送金, where Lace has 送信. The review's Send button, which submits the transaction, keeps Lace's 送信 |
 | transaction | transacción | トランザクション | Lace's |
 | Collateral | Colateral | コラテラル | Lace's |
 | Stake | Stake | ステーク | Lace's: left in English |
@@ -98,7 +99,7 @@ of them is the owner's to overrule.
 | Connected sites | 接続済みのサイト | |
 | create a Seedelf; a stealth mint | 作成; ミント | a token mint or burn in a transaction's details is 発行 / 焼却 |
 | datum, redeemer, witness | データム, リディーマー, ウィットネス | a redeemer's argument is 引数 |
-| transaction ID | トランザクション ID | Lace's |
+| transaction ID | トランザクション ID | Lace's word; Lace writes it トランザクションID, and the space is this wallet's, as in DRep を or IPFS ゲートウェイ |
 | already | すでに | not 既に |
 | a quoted search | 「{{query}}」 | never “ ” |
 | route (a swap's) | ルーティング | Lace's; not 配送 |
@@ -119,16 +120,21 @@ of them is the owner's to overrule.
 Three files beside this one, one set per language:
 
 - **`<lang>-provenance.json`** — how each key's value was produced:
-  `human`, `mtpe` (a machine draft that was checked and corrected — so far
-  only the critical keys, by Claude's back-translation, as
-  `verified-critical-<lang>.json` names), `exact-reuse` (the
-  English is a name or a number and is reused on purpose), `verbatim`, or
-  `machine` for a raw draft nobody has checked.
+  `human`, `mtpe` (a machine draft checked and corrected value by value: the
+  critical keys, by Claude's back-translation, as
+  `verified-critical-<lang>.json` names, and a handful of others, chunk 20's
+  NFT image messages among them), `exact-reuse` (the English is a name or a
+  number and is reused on purpose), `verbatim`, or `machine` for a machine
+  draft not checked value by value. The whole-locale review of 2026-10-03
+  read every `machine` value that existed then and corrected the ones it
+  found wrong without changing their label, so for those `machine` means
+  read, not back-translated; a key added since is a draft until someone
+  reads it.
 - **`verified-critical-<lang>.json`** — the accuracy-critical keys that have
   been back-translated and compared for meaning, and **who did it**.
 - **`critical-keys.json`** — which keys are accuracy-critical. Generated from
   the source by `extension/scripts/i18n-critical.mjs`, not written by hand.
 
 `extension/tests/i18n.test.ts` holds all of it together: a critical key whose
-provenance is a raw `machine` draft and which is not listed as verified fails
+provenance is `machine` and which is not listed as verified fails
 the build. There is no flag to turn that off.

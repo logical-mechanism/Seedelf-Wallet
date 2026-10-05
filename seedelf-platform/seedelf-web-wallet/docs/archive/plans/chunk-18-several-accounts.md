@@ -4,7 +4,7 @@ The public side gets more than account `0'`. A picker discovers the phrase's
 Cardano accounts in order, the wallet works on one at a time, and money made
 private from different accounts is kept apart in the private balance.
 
-[P1](../post-release-roadmap.md#p1--several-accounts), the owner's first pick
+[P1](../../post-release-roadmap.md#p1--several-accounts), the owner's first pick
 after the release (2026-10-02). Branch `web-wallet/several-accounts`, from
 `main`.
 
@@ -29,11 +29,11 @@ Four things about the code as it stands decide most of this plan's shape.
    whole reason the chunk is tractable.
 2. **The Rust and WebAssembly layers need no change.**
    `CardanoAccount::from_entropy(entropy, account: u32)`
-   ([cardano.rs:68](../../seedelf-crypto/src/cardano.rs)) and
+   ([cardano.rs:68](../../../../seedelf-crypto/src/cardano.rs)) and
    `WasmCardanoAccount::from_entropy`
-   ([wasm/src/lib.rs:2870](../../wasm/src/lib.rs)) already take the index; the
+   ([wasm/src/lib.rs:2870](../../../wasm/src/lib.rs)) already take the index; the
    extension passes `0` at
-   [wallet.ts:550](../extension/src/background/wallet.ts). The frozen vectors
+   [wallet.ts:550](../../../extension/src/background/wallet.ts). The frozen vectors
    in `cardano_account.json` already cover accounts 0 **and 1**, on both
    networks, against `@cardano-sdk/key-management`. Nothing in the derivation
    is new work, and nothing frozen is touched.
@@ -140,7 +140,7 @@ loses its account.
 
 **Today every move-in shares one class.** `MADE_PRIVATE` is the single constant
 `{ id: "public", origin: "own" }`
-([histories.ts:35](../extension/src/shared/histories.ts)), so money made
+([histories.ts:35](../../../extension/src/shared/histories.ts)), so money made
 private from account 0 and from account 1 would be the *same* history, and
 selection would co-spend them freely.
 
@@ -382,7 +382,7 @@ I read that as a prohibition and built one: `send.ts` refused a recipient belong
 
 That is the better frame, and the refusal was wrong. **Accounts are not necessarily unlinked**, several things the wallet already does link them — a move-in, Make public back to an account, a Seedelf the account paid for — and in some cases that is the point. And people do want to move money between their own accounts.
 
-So it works the way every other entry in [privacy.md](../privacy.md#known-links)'s *Known links* works, which is what that section says it is for: **the wallet cannot prevent the link, so it makes it visible.**
+So it works the way every other entry in [privacy.md](../../privacy.md#known-links)'s *Known links* works, which is what that section says it is for: **the wallet cannot prevent the link, so it makes it visible.**
 
 - `WithdrawDestination` carries `ownAccount`, so a destination says *which* of the wallet's accounts it is rather than only that it is one.
 - The Send form names the account and says what the payment reveals — *"anyone can see your two accounts paying each other and tell they're one wallet's"* — and the payment goes through.

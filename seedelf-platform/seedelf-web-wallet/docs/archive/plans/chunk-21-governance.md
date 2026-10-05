@@ -1,12 +1,12 @@
 # Chunk 21 plan: be your own DRep, and vote
 
-The public account registers its own DRep, votes Yes, No or Abstain on live governance actions, keeps an optional profile, and retires to get its deposit back. Then the dApp connector learns CIP-95, so GovTool and the other governance sites work too. [post-release-roadmap.md](../post-release-roadmap.md#public-side-completeness)'s item 2, the last of public-side completeness, and the last chunk before [the UX pass](../post-release-roadmap.md#the-ux-and-ui-pass).
+The public account registers its own DRep, votes Yes, No or Abstain on live governance actions, keeps an optional profile, and retires to get its deposit back. Then the dApp connector learns CIP-95, so GovTool and the other governance sites work too. [post-release-roadmap.md](../../post-release-roadmap.md#public-side-completeness)'s item 2, the last of public-side completeness, and the last chunk before [the UX pass](../../post-release-roadmap.md#the-ux-and-ui-pass).
 
 **Status: built, 21a and 21b (2026-10-04).** Branch `web-wallet/governance`, from `main` at `3a3deed` (chunk 20 merged). What landed, and where it went differently from this plan, is under [*What was built*](#what-was-built). **The owner ran it on preprod (2026-10-04):** a DRep registered with its own vote, and a vote on an info action. **Not done, and the owner's:** retiring live (and its move of the account's own vote to Always abstain), and GovTool by hand.
 
 ## Why
 
-Chunk 13 delegated the vote and stopped there: Always abstain, Always no confidence, or a DRep. The owner (2026-10-02, and again 2026-10-04): voting is **"a required feature for a complete wallet experience"**. Registering is the gate on voting, not a sibling of it: a plain delegator casts no vote, DReps do. So the chunk is *be your own DRep and vote*, one thing ([the correction](../post-release-roadmap.md#public-side-completeness), confirmed by the owner's pick).
+Chunk 13 delegated the vote and stopped there: Always abstain, Always no confidence, or a DRep. The owner (2026-10-02, and again 2026-10-04): voting is **"a required feature for a complete wallet experience"**. Registering is the gate on voting, not a sibling of it: a plain delegator casts no vote, DReps do. So the chunk is *be your own DRep and vote*, one thing ([the correction](../../post-release-roadmap.md#public-side-completeness), confirmed by the owner's pick).
 
 ## Decided with the owner (2026-10-04)
 
@@ -23,7 +23,7 @@ Chunk 13 delegated the vote and stopped there: Always abstain, Always no confide
 
 **Lace** (`_reference/lace`, 2.4.2) has no DRep or voting screens. It derives the DRep key at **`account'/3/0`** (`KeyRole.DRep` in `cardano-key-agent.ts`, `ROLE_DREP = 3` in its Keystone paths) and offers it over CIP-95: `cip95.getPubDRepKey`, `getRegisteredPubStakeKeys`, `getUnregisteredPubStakeKeys`, and `signData` taking a DRep ID. It signs what the site builds, with the DRep key when the transaction needs it (`getUniqueSigners.ts` collects DRep credentials from certificates and voters).
 
-**The key is CIP-105's**, `m/1852'/1815'/account'/3/0`, so a phrase restored in Lace, Eternl or Yoroi is the same DRep. CIP-105's test vector 1 (`test walk nut penalty hip pave soap entry language right filter choice`, account 0) pins it: verification key `f74d7ac3…7a752b`, key hash `a5b45515…b832aa`, CIP-129 ID `drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a`. Adding the role changes nothing that's derived today: roles 0–2 are the same keys, and the Seedelf key ([derivation.rs](../../../seedelf-crypto/src/derivation.rs)) is untouched.
+**The key is CIP-105's**, `m/1852'/1815'/account'/3/0`, so a phrase restored in Lace, Eternl or Yoroi is the same DRep. CIP-105's test vector 1 (`test walk nut penalty hip pave soap entry language right filter choice`, account 0) pins it: verification key `f74d7ac3…7a752b`, key hash `a5b45515…b832aa`, CIP-129 ID `drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a`. Adding the role changes nothing that's derived today: roles 0–2 are the same keys, and the Seedelf key ([derivation.rs](../../../../seedelf-crypto/src/derivation.rs)) is untouched.
 
 **Pallas 0.35 has every type needed** (`pallas-primitives` `conway`): `Certificate::RegDRepCert(cred, deposit, anchor)`, `UnRegDRepCert(cred, deposit)`, `UpdateDRepCert(cred, anchor)`; the body's `voting_procedures: Option<VotingProcedures>`, a map of `Voter::DRepKey(hash)` to a map of `GovActionId { transaction_id, action_index }` to `VotingProcedure { vote: Yes | No | Abstain, anchor }`. The builder can stage none of it, as with chunk 13's certificates, so **the same patch** sets them after the build.
 
@@ -128,7 +128,7 @@ privacy.md (*Known links*: the DRep and its votes tie to the account), flows.md 
 
 ## What was built
 
-**21a, the wallet's own screens (2026-10-04).** Everything in *Scope* under 21a. Checked: `cargo test --workspace --locked` 502 passed (8 new), clippy and fmt clean; the WebAssembly's Node tests (a new one); Vitest 1,403 passed (21 new, in `governance.test.ts` and `governance-screen.test.ts`); Playwright 68 passed (two new: becoming a DRep with the account's own vote, and a DRep voting). The probe ([`tests/fixtures/probe-governance.mjs`](../../extension/tests/fixtures/probe-governance.mjs)) had preprod's node decode every kind: a registration with the account's own vote, with a profile and alone, and registering the stake key too; an update; a retirement moving the account's vote to always abstain; a vote on all seven live actions. Fees 0.17–0.18 ₳.
+**21a, the wallet's own screens (2026-10-04).** Everything in *Scope* under 21a. Checked: `cargo test --workspace --locked` 502 passed (8 new), clippy and fmt clean; the WebAssembly's Node tests (a new one); Vitest 1,403 passed (21 new, in `governance.test.ts` and `governance-screen.test.ts`); Playwright 68 passed (two new: becoming a DRep with the account's own vote, and a DRep voting). The probe ([`tests/fixtures/probe-governance.mjs`](../../../extension/tests/fixtures/probe-governance.mjs)) had preprod's node decode every kind: a registration with the account's own vote, with a profile and alone, and registering the stake key too; an update; a retirement moving the account's vote to always abstain; a vote on all seven live actions. Fees 0.17–0.18 ₳.
 
 **Where it went differently from the plan:**
 

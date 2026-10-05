@@ -7,6 +7,7 @@ use pallas_addresses::Address;
 use pallas_txbuilder::{BuildConway, BuiltTransaction, Input, Output, StagingTransaction};
 use seedelf_core::address;
 use seedelf_core::assets::Assets;
+use seedelf_core::build;
 use seedelf_core::constants::{Config, MAXIMUM_TOKENS_PER_UTXO, get_config};
 use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
 use seedelf_core::utxos;
@@ -111,6 +112,14 @@ pub async fn run(args: FundArgs, network_flag: bool, variant: u64) -> Result<()>
 
     let seedelf_datum: Register = extract_bytes_with_logging(&seedelf_utxo.inline_datum)
         .ok_or_else(|| anyhow::anyhow!("Seedelf datum is not a Register"))?;
+    // The minting policy doesn't check datums, so a Seedelf can sit under any
+    // register. Re-randomizing keeps torsion out but not the identity, and a
+    // payment under an identity public value is anyone's to take.
+    if !build::is_payable(&seedelf_datum) {
+        bail!(
+            "That Seedelf's register isn't valid: a payment to it could be locked for good, or taken by anyone"
+        );
+    }
 
     let every_utxo_at_address: Vec<UtxoResponse> =
         utxos::get_address_utxos(&args.address, network_flag).await?;

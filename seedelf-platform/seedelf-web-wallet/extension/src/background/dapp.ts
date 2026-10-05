@@ -958,17 +958,17 @@ export class DappService {
   }
 
   /**
-   * Who a connected site talks to: its private session's account, or the
-   * public account it connected to.
+   * Who a connected site talks to: its private session's account, or
+   * (`undefined`) the public side, which is always the one dApp account
+   * Settings chooses (`withDappKeys`), whichever account the wallet is on.
    *
-   * A site bound to a public account the wallet isn't on is **refused, not
-   * served from the active one**. Following the active account would hand a
-   * site that had already seen Account 1's addresses Account 2's as well,
-   * and teach it the two are one wallet's **without the user choosing that**.
-   * A link the user makes themselves is their business — a payment between
-   * their own accounts is allowed, and only said — but one a site is handed
-   * behind their back is not. The connect window chooses nothing by design
-   * (chunk 15), and this keeps that true across a switch.
+   * Following the active account instead would hand a site that had already
+   * seen Account 1's addresses Account 2's as well, and teach it the two are
+   * one wallet's **without the user choosing that**. A link the user makes
+   * themselves is their business — a payment between their own accounts is
+   * allowed, and only said, and so is changing the dApp account in Settings
+   * — but one a site is handed behind their back is not (chunk 18, Eternl's
+   * model).
    */
   private async holder(network: NetworkName, site: DappSite): Promise<Holder> {
     if (site.session === undefined) return undefined;
