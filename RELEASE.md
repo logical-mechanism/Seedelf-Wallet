@@ -6,7 +6,7 @@ Change the version, then run the command below in the parent folder.
 
 ```bash
 # set the version
-version="0.4.10"
+version="0.5.0"
 # update the toml files
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-contracts/aiken.toml
 sed -i '0,/^version = ".*"/s//version = "'${version}'"/' seedelf-platform/Cargo.toml
@@ -53,7 +53,7 @@ Variant 1 is frozen on chain, so a rebuild that changes the contract hashes is d
 Removing a tagged release involves deleting it locally and deleting the tagged branch.
 
 ```bash
-version="0.4.10"
+version="0.5.0"
 git tag -d ${version}
 git push origin --delete ${version}
 ```

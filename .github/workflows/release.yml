@@ -10,14 +10,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
+      # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
 
       - name: Build (Linux)
         working-directory: seedelf-platform
-        run: cargo build --release --bin seedelf-cli
+        run: cargo build --release --locked --bin seedelf-cli
 
       - name: Move Binary (Linux)
         working-directory: seedelf-platform
@@ -72,14 +76,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out the code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
+      # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-gnu
 
       - name: Build (Windows)
         working-directory: seedelf-platform
-        run: cargo build --release --bin seedelf-cli --target x86_64-pc-windows-gnu
+        run: cargo build --release --locked --bin seedelf-cli --target x86_64-pc-windows-gnu
 
       - name: Move Binary (Windows)
         shell: pwsh
@@ -163,17 +172,19 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Check out the code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
+      # The toolchain seedelf-platform/rust-toolchain.toml pins, which every
+      # cargo call in that folder runs on: keep the two in step.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install x86_64-apple-darwin Target
-        run: rustup target add x86_64-apple-darwin
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-apple-darwin
 
       - name: Build (macOS)
         working-directory: seedelf-platform
-        run: cargo build --release --bin seedelf-cli --target x86_64-apple-darwin
+        run: cargo build --release --locked --bin seedelf-cli --target x86_64-apple-darwin
 
       - name: Move Binary (macOS)
         working-directory: seedelf-platform
@@ -263,7 +274,7 @@ jobs:
               --armor --detach-sign -o hashes.txt.asc hashes.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true

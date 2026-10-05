@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "seedelf-cli"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2448,7 +2448,7 @@ dependencies = [
 
 [[package]]
 name = "seedelf-core"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bech32",
@@ -2476,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "seedelf-crypto"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bip39",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "seedelf-display"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "blstrs",
  "colored",
@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "seedelf-koios"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "seedelf-wasm"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "blstrs",
