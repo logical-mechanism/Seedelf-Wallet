@@ -118,7 +118,7 @@ fn asset_list(tokens: &[TokenAmount]) -> Option<Vec<Asset>> {
 /// Encode a `Register` the way Koios reports an inline datum: the raw PlutusData
 /// CBOR in `bytes`, and the decoded constructor in `value` (what the CLI parses
 /// via `extract_bytes_with_logging`).
-fn register_inline_datum(reg: &Register) -> InlineDatum {
+pub fn register_inline_datum(reg: &Register) -> InlineDatum {
     InlineDatum {
         bytes: hex::encode(reg.to_vec().expect("register cbor")),
         value: json!({

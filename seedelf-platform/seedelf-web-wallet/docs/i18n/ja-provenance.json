@@ -2106,6 +2106,7 @@
   "worker.account.onItsWay": "machine",
   "worker.accounts.badIndex": "machine",
   "worker.accounts.notAnAccount": "machine",
+  "worker.accounts.reserved": "machine",
   "worker.accounts.tooMany": "machine",
   "worker.accounts.unknown": "machine",
   "worker.accounts.unknownAdd": "machine",

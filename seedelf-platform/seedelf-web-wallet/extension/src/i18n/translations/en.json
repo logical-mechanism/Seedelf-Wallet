@@ -2213,6 +2213,7 @@
   "worker.account.onItsWay": "Something of this account's is still on its way: a payment Seedelf Wallet is waiting on, or a mix still being sent. Wait for it to settle, then switch accounts.",
   "worker.accounts.badIndex": "An account number is a whole number from 0 to {{max}}.",
   "worker.accounts.notAnAccount": "That isn't an account.",
+  "worker.accounts.reserved": "Account {{number}} is the one Seedelf Wallet keeps for private sessions, so it can't be a public account.",
   "worker.accounts.tooMany": "Seedelf Wallet keeps up to {{max}} accounts. Remove one from the list before adding another.",
   "worker.accounts.unknown": "Seedelf Wallet doesn't know that account.",
   "worker.accounts.unknownAdd": "Seedelf Wallet doesn't know that account. Add it in Settings → Public accounts first.",

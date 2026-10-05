@@ -28,7 +28,7 @@ import { t } from "../i18n";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import { LOCAL_ACCOUNT } from "../shared/preferences";
+import { isAccountIndex, LOCAL_ACCOUNT, ONE_TIME_ACCOUNT } from "../shared/preferences";
 import type { KnownAccount } from "../shared/rpc";
 import { SESSION_ACCOUNT_ACTIVITY_PREFIX, SESSION_ACCOUNT_ADDRESSES_PREFIX } from "./activity";
 import { SESSION_ACCOUNT_UTXOS_PREFIX, SESSION_TOO_LARGE_PREFIX } from "./coin-control";
@@ -275,7 +275,7 @@ export class AccountsService {
    * user's call (`add`) and needs no request at all.
    */
   async check(network: NetworkName, index: number): Promise<{ index: number; used: boolean }> {
-    if (!isIndex(index)) throw new Error(badIndex());
+    if (!isIndex(index)) throw new Error(notPublic(index));
     const known = await this.known();
     const used = await this.used(network, index);
     if (used && !known.some((a) => a.index === index)) {
@@ -297,7 +297,7 @@ export class AccountsService {
    * address, and adding tells it nothing until the account is used.
    */
   async add(index: number): Promise<KnownAccount[]> {
-    if (!isIndex(index)) throw new Error(badIndex());
+    if (!isIndex(index)) throw new Error(notPublic(index));
     const known = await this.known();
     if (known.some((a) => a.index === index)) return known;
     if (known.length >= MAX_KEPT) throw new Error(tooMany());
@@ -311,8 +311,15 @@ export class AccountsService {
   }
 }
 
-/** What the wallet says for an index outside CIP-1852's hardened range. */
-const badIndex = () => t("worker.accounts.badIndex", { max: MAX_INDEX });
+/**
+ * What the wallet says for an index that can't be a public account: the
+ * one-time accounts' (counted from 1, as the screens count), or one outside
+ * CIP-1852's hardened range.
+ */
+const notPublic = (index: number) =>
+  index === ONE_TIME_ACCOUNT
+    ? t("worker.accounts.reserved", { number: ONE_TIME_ACCOUNT + 1 })
+    : t("worker.accounts.badIndex", { max: MAX_INDEX });
 /** And for a list that is already as long as the picker should get. */
 const tooMany = () => t("worker.accounts.tooMany", { max: MAX_KEPT });
 
@@ -324,9 +331,12 @@ function nextSequential(known: KnownAccount[]): number {
   return index;
 }
 
-/** Whether `value` is a CIP-1852 account index: any of them, not just a low one. */
+/**
+ * Whether `value` can be a public account: any CIP-1852 account index, not
+ * just a low one, except the one private sessions' one-time accounts use.
+ */
 export function isIndex(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_INDEX;
+  return isAccountIndex(value) && value <= MAX_INDEX;
 }
 
 /** Account 0 first, each index once, and account 0 always there. */

@@ -2320,6 +2320,7 @@
   "worker.account.onItsWay": "Algo de esta cuenta sigue en camino: un pago que Seedelf Wallet está esperando, o una mezcla que todavía se está enviando. Espera a que se resuelva, y luego cambia de cuenta.",
   "worker.accounts.badIndex": "Un número de cuenta es un número entero de 0 a {{max}}.",
   "worker.accounts.notAnAccount": "Eso no es una cuenta.",
+  "worker.accounts.reserved": "La Cuenta {{number}} es la que Seedelf Wallet reserva para las sesiones privadas, así que no puede ser una cuenta pública.",
   "worker.accounts.tooMany": "Seedelf Wallet guarda hasta {{max}} cuentas. Elimina una de la lista antes de añadir otra.",
   "worker.accounts.unknown": "Seedelf Wallet no conoce esa cuenta.",
   "worker.accounts.unknownAdd": "Seedelf Wallet no conoce esa cuenta. Añádela primero en Configuración → Cuentas públicas.",

@@ -1,10 +1,11 @@
 // The phrase's public accounts (chunk 18, P1): discovery, the switch, and
 // what each account keeps of its own.
+import * as wasm from "@seedelf/wasm";
 import { describe, expect, it } from "vitest";
 
 import { accountLabel, activeAccount, MAX_INDEX, MAX_KEPT, WIPED_ON_SWITCH } from "../src/background/accounts";
 import { choicesOf, withChoices } from "../src/background/coin-control";
-import { LOCAL_ACCOUNT } from "../src/shared/preferences";
+import { isAccountIndex, LOCAL_ACCOUNT, LOCAL_PREFERENCES, ONE_TIME_ACCOUNT } from "../src/shared/preferences";
 import { testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -171,6 +172,44 @@ describe("the wallet's public accounts", () => {
     expect((await t.accounts.add(1337)).map((a) => a.index)).toEqual([0, 1337]);
     await expect(t.accounts.add(-1)).rejects.toThrow("whole number from 0 to");
     await expect(t.accounts.add(MAX_INDEX + 1)).rejects.toThrow("whole number from 0 to");
+  });
+
+  it("never makes the private sessions' one-time account a public one", async () => {
+    // Its 0/i and 2/0 keys are session i's and session 0's: as a public
+    // account it would read, and spend, private sessions' money (privacy.md,
+    // rule 6). The screens count from 1, so it's Account 24302 there.
+    const t = await unlocked();
+    t.koios.calls.length = 0;
+    await expect(t.accounts.add(ONE_TIME_ACCOUNT)).rejects.toThrow("Account 24302 is the one Seedelf Wallet keeps for private sessions");
+    await expect(t.accounts.check("preprod", ONE_TIME_ACCOUNT)).rejects.toThrow("keeps for private sessions");
+    await expect(t.accounts.use(ONE_TIME_ACCOUNT, ["preprod"])).rejects.toThrow("That isn't an account");
+    expect(t.koios.calls).toEqual([]);
+    // Its neighbours are ordinary accounts.
+    expect((await t.accounts.add(ONE_TIME_ACCOUNT + 1)).map((a) => a.index)).toEqual([0, ONE_TIME_ACCOUNT + 1]);
+
+    // Kept by a build from before the check, it reads as account 0 and leaves
+    // the list, and a dApp account kept as it is account 0 too.
+    await t.local.set(LOCAL_ACCOUNT, ONE_TIME_ACCOUNT);
+    expect(await activeAccount(t.local)).toBe(0);
+    expect(isAccountIndex(ONE_TIME_ACCOUNT)).toBe(false);
+    await t.deps.store.set("accounts", { known: [{ index: 0 }, { index: ONE_TIME_ACCOUNT }] });
+    expect((await t.accounts.list()).accounts.map((a) => a.index)).toEqual([0]);
+    await t.local.set(LOCAL_PREFERENCES, { dappAccount: ONE_TIME_ACCOUNT });
+    expect((await t.deps.preferences.get()).dappAccount).toBe(0);
+  });
+
+  it("names the account the one-time accounts are derived under", () => {
+    // Session 0's address is payment key 0/0 and stake key 2/0 of account
+    // ONE_TIME_ACCOUNT, so the constant here is seedelf-crypto's, not a guess.
+    const { phrase: words } = phrase(0);
+    const sessions = wasm.OneTimeAccounts.fromPhrase(words);
+    const account = wasm.CardanoAccount.fromPhrase(words, ONE_TIME_ACCOUNT);
+    try {
+      expect(account.receiveAddress(wasm.Network.Preprod, 0)).toBe(sessions.address(wasm.Network.Preprod, 0));
+    } finally {
+      sessions.free();
+      account.free();
+    }
   });
 
   it("carries the sequential look on from the first gap, not the highest known", async () => {

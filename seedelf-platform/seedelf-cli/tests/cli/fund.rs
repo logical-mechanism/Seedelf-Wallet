@@ -5,6 +5,7 @@
 use serial_test::serial;
 
 use seedelf_cli::commands::fund::{FundArgs, run};
+use seedelf_crypto::register::Register;
 
 use crate::harness::*;
 
@@ -111,4 +112,47 @@ async fn fund_never_spends_a_utxo_holding_a_reference_script() {
     let tx = decode_tx(&scenario.captured_cbor());
     assert_sound_transaction(&tx, &scenario, &params);
     assert_eq!(tx.inputs, vec![(tx_hash(2), 0)]);
+}
+
+/// A Seedelf whose register's public value is the identity is refused before
+/// anything is built: the minting policy doesn't check datums, so one can be
+/// minted by hand, and a payment under it is anyone's to take.
+#[tokio::test]
+#[serial]
+async fn fund_refuses_a_seedelf_whose_public_value_is_the_identity() {
+    let mut scenario = Scenario::start().await;
+
+    let mut hostile = seedelf_utxo(scenario.scalar, 1, 1_500_000, SAMPLE_SEEDELF);
+    let generator = owned_register(scenario.scalar).generator;
+    let identity = format!("c0{}", "00".repeat(47));
+    hostile.inline_datum = Some(register_inline_datum(&Register::new(generator, identity)));
+    scenario.mount_credential_utxos(vec![hostile]).await;
+    scenario
+        .mount_address_utxos(vec![address_utxo(
+            &external_address_bech32(),
+            2,
+            10_000_000,
+            &[],
+        )])
+        .await;
+    // Armed so that, without the check, the run ends at the signing site
+    // rather than waiting there for a browser.
+    scenario.arm_web_capture();
+
+    let refused = run(
+        FundArgs {
+            address: external_address_bech32(),
+            seedelf: SAMPLE_SEEDELF.to_string(),
+            lovelace: Some(3_000_000),
+            assets: vec![],
+        },
+        PREPROD,
+        VARIANT,
+    )
+    .await
+    .expect_err("a payment to an identity public value must be refused");
+    assert!(
+        refused.to_string().contains("register isn't valid"),
+        "{refused}"
+    );
 }
