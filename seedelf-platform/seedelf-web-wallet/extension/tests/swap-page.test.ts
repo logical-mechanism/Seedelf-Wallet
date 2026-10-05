@@ -100,7 +100,7 @@ describe("a swap whose order was refunded (independent review M18)", () => {
 
 describe("Stop's dialog (independent review L22)", () => {
   const dialog = (placed: boolean, cost: SwapLovejoin | null) =>
-    text(createElement(StopDialog, { placed, cost, busy: false, onStop: () => undefined, onClose: () => undefined }));
+    text(createElement(StopDialog, { placed, cost, through: true, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined }));
   const through: SwapLovejoin = { boxes: 1, depth: 2, mixes: 4, mixFees: "3800000", withdrawFees: "300000", delay: "1-6", on: true };
 
   it("never promises no order is placed: the runner may be placing it as the dialog shows", () => {

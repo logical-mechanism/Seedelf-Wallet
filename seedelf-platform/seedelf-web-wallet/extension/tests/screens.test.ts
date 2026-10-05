@@ -450,22 +450,35 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(line).toContain("Only if Lovejoin's pool has room by the time it comes back: it has none now");
   });
 
-  it("offers Stop through Lovejoin, with what it takes, or directly", () => {
-    const dialog = (cost: SwapLovejoin | null | undefined, placed = false) =>
-      text(createElement(StopDialog, { placed, cost, busy: false, onStop: () => undefined, onClose: () => undefined }));
-    const mixes = dialog({ ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" });
+  it("offers Stop through Lovejoin, with what it takes, or directly, by the approval's switch", () => {
+    const dialog = (cost: SwapLovejoin | null | undefined, placed = false, through = true) =>
+      createElement(StopDialog, { placed, cost, through, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined });
+    const cost = { ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" };
+    // The switch comes first, on as approved, where it can't be missed (the owner missed the link it was, 2026-10-05).
+    const html = renderToStaticMarkup(dialog(cost));
+    expect(html.indexOf('role="switch"')).toBeLessThan(html.indexOf('data-testid="session-stop-what"'));
+    expect(html).toContain('aria-checked="true"');
+    const mixes = text(dialog(cost));
+    expect(mixes).toContain("Bring it back through Lovejoin");
     expect(mixes).toContain("Stop, through Lovejoin");
-    expect(mixes).toContain("Stop and bring it back directly");
     expect(mixes).toContain("Its ADA goes through Lovejoin first: about 1 box of 10 ₳");
     expect(mixes).toContain("for about 3.8 ₳ in fees, which the session pays, and about 0.3 ₳ to bring them back, each on its own after 1 to 6 hours");
+    // Off: Stop says it comes back directly, for one fee, and what that ties.
+    const off = text(dialog(cost, false, false));
+    expect(off).toContain("Stop and bring it back directly");
+    expect(off).not.toContain("Stop, through Lovejoin");
+    expect(off).not.toContain("Its ADA goes through Lovejoin first");
+    expect(off).toContain("less the return's network fee");
+    expect(off).toContain("anyone can tie it on chain to this session and its funding");
+    expect(text(dialog(cost, true, false))).toContain("The cancel and the return each cost a network fee.");
     // Directly: as it always said.
-    const direct = dialog(null);
+    const direct = text(dialog(null));
     expect(direct).toContain("Stop the swap");
-    expect(direct).not.toContain("bring it back directly");
+    expect(direct).not.toContain("Bring it back through Lovejoin");
     expect(direct).toContain(
       "If no order has gone out yet, none is placed, and everything comes back into your private balance, less the return's network fee.",
     );
-    const short = dialog({ ...through, boxes: 0, skipped: "Right now Lovejoin's pool holds 3 boxes that aren't yours, under the 30 it needs" }, true);
+    const short = text(dialog({ ...through, boxes: 0, skipped: "Right now Lovejoin's pool holds 3 boxes that aren't yours, under the 30 it needs" }, true));
     expect(short).toContain("Stop the swap");
     expect(short).toContain("under the 30 it needs, so it would come back directly");
   });

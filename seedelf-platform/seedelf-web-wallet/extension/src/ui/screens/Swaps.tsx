@@ -1678,6 +1678,8 @@ export function Session({
   const [stopping, setStopping] = useState(false);
   // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
   const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
+  // Stop's switch: through Lovejoin, as the swap was approved, until the user turns it off.
+  const [stopThrough, setStopThrough] = useState(true);
   // Whether an order has gone out, as the record says as Stop's dialog opens: the page's last reading may be
   // behind the runner. And one went out before Stop took effect, though the dialog said none had (independent
   // review L22).
@@ -1940,6 +1942,7 @@ export function Session({
     const placed = s.txs.some((t) => t.kind === "swap");
     const openStop = () => {
       setStopCost(undefined);
+      setStopThrough(true);
       setPlacedNow(false);
       setStopping(true);
       // The record as it is now (no Koios read), not the page's last reading: the runner may have placed the order since.
@@ -2027,6 +2030,8 @@ export function Session({
           <StopDialog
             placed={placed || placedNow}
             cost={stopCost}
+            through={stopThrough}
+            onThrough={setStopThrough}
             busy={busy}
             onClose={() => setStopping(false)}
             onStop={(direct) =>
@@ -2109,25 +2114,33 @@ const IF_ORDERED = () => t("swaps.stop.ifOrdered");
 
 /**
  * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
- * comes back through Lovejoin, what that takes as the worker works it out
- * now (`cost`: undefined while it's read, null when it comes back
- * directly), with the way to bring it back directly instead.
+ * would come back through Lovejoin (`cost`, as the worker works it out now:
+ * undefined while it's read, null when it comes back directly anyway), the
+ * approval's switch again, first, on as approved (`through`), with what each
+ * way takes. Stop says which way it goes. The way back directly was a link
+ * under the costs, and the owner, stopping a real swap after a price drop,
+ * never saw it (2026-10-05).
  */
 export function StopDialog({
   placed,
   cost,
+  through,
+  onThrough,
   busy,
   onStop,
   onClose,
 }: {
   placed: boolean;
   cost?: SwapLovejoin | null;
+  through: boolean;
+  onThrough: (through: boolean) => void;
   busy: boolean;
   onStop: (direct: boolean) => void;
   onClose: () => void;
 }) {
   const tr = useT();
   const mixes = !!cost && !cost.skipped && cost.boxes > 0;
+  const lovejoin = mixes && through;
   return (
     <Modal
       title={tr("swaps.stop.title")}
@@ -2138,14 +2151,35 @@ export function StopDialog({
           <button type="button" className="secondary" onClick={onClose} disabled={busy}>
             {tr("lovejoin.stop.keep")}
           </button>
-          <button type="button" className="danger" disabled={busy} onClick={() => onStop(false)}>
-            {tr(busy ? "swaps.stop.stopping" : mixes ? "swaps.stop.throughLovejoin" : "swaps.stop.confirm")}
+          <button type="button" className="danger" disabled={busy} onClick={() => onStop(mixes && !through)}>
+            {tr(busy ? "swaps.stop.stopping" : !mixes ? "swaps.stop.confirm" : through ? "swaps.stop.throughLovejoin" : "swaps.stop.direct")}
           </button>
         </>
       }
     >
+      {mixes && (
+        <div className="setting-row">
+          <span className="stack-tight">
+            <span id="session-stop-lovejoin-label">{tr("swaps.lovejoin.label")}</span>
+            <span className="note" id="session-stop-lovejoin-note">
+              {tr(through ? "swaps.lovejoin.privacy.on" : "swaps.stop.privacy.direct")}
+            </span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            className="switch"
+            aria-checked={through}
+            aria-labelledby="session-stop-lovejoin-label"
+            aria-describedby="session-stop-lovejoin-note"
+            onClick={() => onThrough(!through)}
+            disabled={busy}
+            data-testid="session-stop-lovejoin-switch"
+          />
+        </div>
+      )}
       <p className="note" data-testid="session-stop-what">
-        {mixes
+        {lovejoin
           ? joinSentences([
               tr(placed ? "swaps.stop.cancelled" : "swaps.stop.notPlaced"),
               !placed && IF_ORDERED(),
@@ -2168,14 +2202,6 @@ export function StopDialog({
         </p>
       )}
       {cost === undefined && <p className="note">{tr("swaps.stop.working")}</p>}
-      {mixes && (
-        <div className="stack-tight">
-          <button type="button" className="link align-start" disabled={busy} onClick={() => onStop(true)} data-testid="session-stop-direct">
-            {tr("swaps.stop.direct")}
-          </button>
-          <p className="note">{tr("swaps.stop.privacy.direct")}</p>
-        </div>
-      )}
     </Modal>
   );
 }
