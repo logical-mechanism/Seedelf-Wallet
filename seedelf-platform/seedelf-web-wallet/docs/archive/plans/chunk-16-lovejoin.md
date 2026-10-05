@@ -524,8 +524,8 @@ Totals: Rust 327, WebAssembly (Node) 33, Vitest 295, Playwright 52. The module i
 1. `git fetch origin && git checkout web-wallet/lovejoin`.
 2. Read, in order:
    - this file, starting with the latest *Handoff*
-   - [architecture.md, *Private sessions*](../architecture.md#private-sessions)
-   - [flows.md, *Contract round trip*](../flows.md#contract-round-trip)
+   - [architecture.md, *Private sessions*](../../architecture.md#private-sessions)
+   - [flows.md, *Contract round trip*](../../flows.md#contract-round-trip)
    - [chunk-15b-swap-runner.md](chunk-15b-swap-runner.md), for how the runner records and resumes
    - in `_reference/Lovejoin/`: `CLAUDE.md`; then `contracts/validators/mix_logic.ak`, `mix_box.ak` and `fee_contract.ak`; then `offchain/src/crypto/` and `offchain/src/tx/mix.ts`
 3. The checks' scratch code isn't kept. The measurements and results are above; build order step 2 records the five transactions again as fixtures.

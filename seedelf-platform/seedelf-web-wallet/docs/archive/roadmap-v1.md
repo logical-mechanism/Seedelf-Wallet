@@ -4,7 +4,7 @@
 >
 > **Read this when** a one-line entry in the live roadmap isn't enough — when you need the reasoning behind a decision, what a chunk actually did, what surprised the session that built it, or a transaction hash and fee from a live run.
 >
-> **Line references** to `roadmap.md` written before 2026-10-02 (such as the one in [plans/privacy-review.md](../plans/privacy-review.md)) resolve against this file, not the live one.
+> **Line references** to `roadmap.md` written before 2026-10-02 (such as the one in [plans/privacy-review.md](plans/privacy-review.md)) resolve against this file, not the live one.
 >
 > **Don't edit this file.** It's a record. New handoff notes go in the live [roadmap.md](../roadmap.md); what comes next is in [post-release-roadmap.md](../post-release-roadmap.md).
 >
@@ -34,21 +34,21 @@ The wallet is built in **chunks**, each about one working session.
 | 2 | Seedelf key derivation | ✅ | Implement the v1 HKDF spec ([keys-and-accounts.md](../keys-and-accounts.md#seedelf-key-derivation)) in `seedelf-crypto` with frozen test vectors. Expose it through WASM and check the vectors from TS. |
 | 3 | Cardano keys | ✅ | Phrase → CIP-1852 Cardano account (account `0'`): receive, change and stake addresses, in Rust (`pallas-wallet`). Checked against Lace's library (`@cardano-sdk`). |
 | 4 | Extension scaffold | ✅ | Vite + React + TS and an MV3 manifest (preprod). Service worker, popup plus full tab, typed messaging, WASM loaded in the worker, load unpacked. CI for Rust and the extension on PRs. |
-| 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](../plans/chunk-05-vault-and-lock.md). |
+| 5 | Vault and lock | ✅ | SecretBox vault, create/restore onboarding (restore has per-word BIP39 autocomplete, like Lace and Eternl), unlock, `chrome.storage.session`, auto-lock, unlock back-off. Plan: [plans/chunk-05-vault-and-lock.md](plans/chunk-05-vault-and-lock.md). |
 | 6 | Balance | ✅ | TS Koios client. Contract scan using the ownership check. Cardano account discovery: receive and change chains, gap limit 20. Balances, tokens, list of Seedelfs. QR code for the receive address. |
 | 7 | Builder extraction + move in | ✅ | Merge `main` first. Gate `seedelf-koios`'s `connect_timeout` for wasm32 (the only thing that stops `seedelf-core` compiling to WASM). Split building from network calls in `seedelf-core`, starting with `external sweep`, and keep the CLI tests green. Then move in, end to end on preprod. |
-| 8 | Create a Seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](../plans/chunk-08-create-seedelf.md). |
+| 8 | Create a Seedelf | ✅ | Stealth mint (`util mint`) with giveme.my collateral. Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md). |
 | 8b | Mint first | ✅ | The first Seedelf is paid by the Cardano account (the CLI's `create`, signed in WASM, the account's own collateral), before any move-in. The stealth mint stays as a choice for a Seedelf balance holding received money. See [flows.md](../flows.md#create-a-seedelf). |
-| 9 | Transfer | ✅ | Seedelf → Seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](../plans/chunk-09-transfer.md). |
-| 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](../plans/chunk-10-withdraw.md). |
-| 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](../plans/chunk-11-polish.md).** |
+| 9 | Transfer | ✅ | Seedelf → Seedelf (`transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md). |
+| 10 | Withdraw | ✅ | `sweep` and `remove`, on `ScriptSpend` and the extension's `script-spend.ts`. Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md). |
+| 11a | Style and flow pass | ✅ | The whole UI, much more like Lace's dark mode (`packages/lib/ui-toolkit/src/design-tokens/theme/dark.ts`): its look, not its brand. Dark only, Inter, Lucide icons, and Home as a Seedelf / Cardano account switch with round actions. **Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).** |
 | 11b | Size and live runs | ✅ | A smaller WebAssembly module: a size-tuned cargo profile (`wasm-opt` measured and left out). Live preprod runs of every flow from the built extension. The loose ends from chunks 8b–10. Same plan. |
 | 11c | Testers | ✅ | Everything needed to submit an unlisted, preprod-only Chrome Web Store listing, never submitted: `npm run package` (the store build, third-party notices, a reproducible zip), the listing text and privacy policy in [store/](../store/README.md), the images from `npm run store:images`, and a release checklist. Same plan. |
-| 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 29 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, spending everything under the account's payment keys, a UTxOs screen on both sides with locks, the Cardano account's collateral in Settings, and Refresh on UTxOs and Activity. **Plan: [plans/chunk-12-style-flow.md](../plans/chunk-12-style-flow.md).** |
-| 13 | Staking and voting | ✅ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), a pool browser, and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](../plans/chunk-13-staking.md).** |
-| 14 | Style and flow, second pass | ✅ | The user's second round of findings, each decided with the user, as in chunk 12. So far: Send from the Cardano account pays a Seedelf, one way to write the name (Seedelf, and Seedelf Wallet for the app), several recipients in one payment on both sides, and Private and Public in place of Seedelf and Cardano. Then what Lace and Eternl had that the wallet didn't: a full tab by default or the side panel (no popup), hide balances, a note on a public send, the lock time, your handles on Receive (and a warning for a handle in Seedelf), a check of the written phrase, Activity as CSV, staking in the public Activity, and ADA's value in a currency on mainnet. Readable dropdowns, and a code review's fixes before the PR. **Plan: [plans/chunk-14-style-flow-2.md](../plans/chunk-14-style-flow-2.md).** |
-| 15 | dApps: the public connector, and private swaps | ✅ | The first steps towards using contracts privately. Private swaps: Minswap's aggregator swaps from a one-time account funded from the private balance, and everything comes back into it (step 2). CIP-30 for the public account, as Lace has it, behind a Settings switch that's off by default: Chrome is asked for access to sites only when it's turned on, and nothing is added to any page until then. A window to connect, sign transactions (what they do to the account, read in WebAssembly) and sign messages (CIP-8), connected sites to disconnect, and chaining on the account's own unconfirmed outputs. Then private sessions, a dApp browser, and Minswap. **Plan: [plans/chunk-15-dapp-connector.md](../plans/chunk-15-dapp-connector.md).** |
-| 16 | Lovejoin | ✅ | The mixer in the wallet. A private session's spare ADA goes through Lovejoin on its way back: 10 ₳ boxes owned by the Seedelf key, a fan-out 3 wide (depth a setting, default 2) chained locally and paid by the session, then each box withdrawn into a fresh register after a random delay. The leftover and any tokens merge into the session's funding change. A Lovejoin tile mixes from the private balance or the public account. Scripts are evaluated in WebAssembly (`uplc`), after Pallas moves to 0.35. **Plan: [plans/chunk-16-lovejoin.md](../plans/chunk-16-lovejoin.md).** |
+| 12 | Style and flow | ✅ | The user tested the built wallet and sent findings; 29 items, each decided with the user. Among them: a loading splash, a Tokens screen and a bundled token list, a token picker with any amount of each, Settings, Activity, Contacts, an incremental contract scan, Send from the Cardano account, the minimum ADA worked out, Receive on the Seedelf tab, spending everything under the account's payment keys, a UTxOs screen on both sides with locks, the Cardano account's collateral in Settings, and Refresh on UTxOs and Activity. **Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).** |
+| 13 | Staking and voting | ✅ | The wallet becomes a full Cardano wallet with Seedelf built in: a Staking page (one pool, rewards spent automatically or by hand), a pool browser, and voting delegation (Always abstain, No confidence, or a DRep). Certificates patched into Pallas's transactions. **Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md).** |
+| 14 | Style and flow, second pass | ✅ | The user's second round of findings, each decided with the user, as in chunk 12. So far: Send from the Cardano account pays a Seedelf, one way to write the name (Seedelf, and Seedelf Wallet for the app), several recipients in one payment on both sides, and Private and Public in place of Seedelf and Cardano. Then what Lace and Eternl had that the wallet didn't: a full tab by default or the side panel (no popup), hide balances, a note on a public send, the lock time, your handles on Receive (and a warning for a handle in Seedelf), a check of the written phrase, Activity as CSV, staking in the public Activity, and ADA's value in a currency on mainnet. Readable dropdowns, and a code review's fixes before the PR. **Plan: [plans/chunk-14-style-flow-2.md](plans/chunk-14-style-flow-2.md).** |
+| 15 | dApps: the public connector, and private swaps | ✅ | The first steps towards using contracts privately. Private swaps: Minswap's aggregator swaps from a one-time account funded from the private balance, and everything comes back into it (step 2). CIP-30 for the public account, as Lace has it, behind a Settings switch that's off by default: Chrome is asked for access to sites only when it's turned on, and nothing is added to any page until then. A window to connect, sign transactions (what they do to the account, read in WebAssembly) and sign messages (CIP-8), connected sites to disconnect, and chaining on the account's own unconfirmed outputs. Then private sessions, a dApp browser, and Minswap. **Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md).** |
+| 16 | Lovejoin | ✅ | The mixer in the wallet. A private session's spare ADA goes through Lovejoin on its way back: 10 ₳ boxes owned by the Seedelf key, a fan-out 3 wide (depth a setting, default 2) chained locally and paid by the session, then each box withdrawn into a fresh register after a random delay. The leftover and any tokens merge into the session's funding change. A Lovejoin tile mixes from the private balance or the public account. Scripts are evaluated in WebAssembly (`uplc`), after Pallas moves to 0.35. **Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md).** |
 
 ## After v1
 
@@ -56,7 +56,7 @@ The wallet is built in **chunks**, each about one working session.
 
 | # | Chunk | Status | Scope |
 |---|---|---|---|
-| 17 | The transaction view | ✅ | Open the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers, metadata — decoded from the CBOR about to be signed, plus the raw bytes, from every review and from the connector's sign window. A decoder in WebAssembly that takes CBOR and nothing else (`wasm/src/decode.rs`), the cheapest handler in the worker (`background/tx-view.ts`), one shared modal (`ui/components/TxDetail.tsx`), and a cross-check against `cardano-cli debug transaction view` for every fixture. **Plan: [plans/chunk-17-transaction-view.md](../plans/chunk-17-transaction-view.md).** |
+| 17 | The transaction view | ✅ | Open the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers, metadata — decoded from the CBOR about to be signed, plus the raw bytes, from every review and from the connector's sign window. A decoder in WebAssembly that takes CBOR and nothing else (`wasm/src/decode.rs`), the cheapest handler in the worker (`background/tx-view.ts`), one shared modal (`ui/components/TxDetail.tsx`), and a cross-check against `cardano-cli debug transaction view` for every fixture. **Plan: [plans/chunk-17-transaction-view.md](plans/chunk-17-transaction-view.md).** |
 
 
 - ~~A detailed transaction view~~ **done (chunk 17 above).** The owner's ask from the 2026-09-28 mainnet test: there was nowhere to open the transaction itself. There is now, on every review and in the connector's window ([flows.md](../flows.md#read-the-transaction-every-review-and-the-connectors-window), [architecture.md](../architecture.md#reading-a-transaction)).
@@ -80,7 +80,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Datums are read as trees, for any contract** (the owner, 2026-10-01): a datum was hex with one special case for Seedelf's register, which is no datum view at all. Plutus data now decodes into its shape — constructors by their number, lists, maps, byte strings, and integers including the big tag-2 and tag-3 forms — in all three places data appears, a redeemer's argument included. There is no schema to read a datum against, so the shape is what can honestly be shown; the register stays as the one thing on top, since it says whether a payment under it could be spent. A tree was bounded at first (512 nodes), which the next change undid.
   - **The owner's testing pass, on mainnet and preprod.** The splash is a cap, not a timer: it tracks the first reading and stands down after 8s so a slow Koios can't hide Refresh or an error — mainnet Koios reaches that cap, which is Koios being slow, not the splash. Four things in the view were changed: **one rule for what's shown whole** (an address is read, so all of it, wrapped, with a copy button; an id is carried, so it's shortened to one, which the script hash and the datum hash weren't), **a redeemer's budget on its own line** under the script it belongs to, since a ten-digit budget squeezed the words beside it, and **a chain's review now opens the transaction the money goes in through** — the deposit, not the last mix or the return that Send names, whose inputs are outputs nothing has sent yet, with the button saying which one it is. Left alone on purpose: the per-output `#0 · a contract · Seedelf Wallet's contract · under a register` line, where the Seedelf naming is a hash compare against the variant's own script hash and the register adds the one thing a shape can't say — whether a payment under it could be spent. Everything else in the view is already general, and a datum of another contract's is named nothing.
   - **The chain stays abstracted away, and that's the call** (the owner, 2026-10-01). Approval is about the entry; audit is about the whole chain, afterwards, and belongs in Activity or the chain's own row rather than in a dialog held open before Send. Most of what the automation assumes is checked mechanically — `is_payable` for each box's register, Ogmios for the cost model before a chain starts, the sealed record so a chain cut short surfaces as not-mixed-yet. The one assumption that isn't is Lovejoin's own contract, which the review already says in words. **Still open:** a chain in flight is invisible to the view, since its transactions move to `seedelf.session.chain.<network>.<index>`, which `BUILT_KEYS` doesn't name — the audit view wants that prefix scan. And Home's banner watches the chain's last transaction, so it shows a hash the user never saw; it may want to say "the chain" instead.
-  - **Next:** the contract round trip (A2, a V2 order to a Seedelf) still waits on a batcher test; the by-hand mainnet checks in [plans/launch-review.md](../plans/launch-review.md) are still open. The style and flow pass the owner asked for after the roadmap is still to come, and this view is a fair thing to put in front of them.
+  - **Next:** the contract round trip (A2, a V2 order to a Seedelf) still waits on a batcher test; the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md) are still open. The style and flow pass the owner asked for after the roadmap is still to come, and this view is a fair thing to put in front of them.
 
 - **2026-10-01: v1.1.0, the transaction view, prepared for the Web Store** (`web-wallet/release-1.1.0`, from `main` after PR #270 merged chunk 17).
   - **Why 1.1.0 and not 1.0.1** (the owner asked): the release adds something a user can do, which is a minor bump; a patch is for a fix or a listing hotfix on its own. The store only demands a strictly higher number, so the semantics are for the wallet's own users — [development.md](../development.md#web-store-release-copypaste-procedure) now says which to pick.
@@ -91,7 +91,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
 - **2026-09-28: v1.0.0 submitted to the Chrome Web Store** — `seedelf-web-wallet` was merged into `main` first (PR #266, a fast-forward), so the listing's homepage and privacy-policy URLs, and the wallet's own Settings link, all point at `main` and resolve.
   - **The package:** `seedelf-wallet-1.0.0-mainnet.zip`, built from `0d5ec42`, **SHA-256 `85c0fb093fa8bb157f5ad3d9ea1fd001db75d7273c3068aa52ea65932dee714b`** (1,533,435 bytes). Checked before upload: no dev key, mainnet and preprod hosts, `licenses/THIRD-PARTY.txt` present, and the privacy URL in its own bundle points at `main` — which is what proves it was built from the merged tree. The zip is reproducible from that commit.
   - **Two things the dashboard asked that these docs didn't cover:** it refuses *every* upload until 2-Step Verification is on the developer account (the error blames the file, not the account); and it gives **one** host-permission box, not one per host, so the five justifications in [store/README.md](../store/README.md) — 1,694 characters together, against its ~1,000 limit — had to be merged into the single block now recorded there.
-  - **Next:** the three Lovejoin items under *Smaller items* in [plans/launch-review.md](../plans/launch-review.md), and the mainnet checks still not done by hand: nine of the ten `MAINNET_PROTOCOLS` routes, `exclude_protocols`, and Stop or a refund. None blocks the listing.
+  - **Next:** the three Lovejoin items under *Smaller items* in [plans/launch-review.md](plans/launch-review.md), and the mainnet checks still not done by hand: nine of the ten `MAINNET_PROTOCOLS` routes, `exclude_protocols`, and Stop or a refund. None blocks the listing.
 
 - **2026-09-28: release prep and the owner's mainnet test** (`web-wallet/release-prep`, from `seedelf-web-wallet`).
   - **Store:** the five screenshots are made on mainnet now (the fake Koios retags the recordings' addresses and stands real tokens in), and [store/README.md](../store/README.md) has the two data-usage calls written out (*Location* and *Web history*, both recommended checked) and the new-listing-or-update trade-off.
@@ -100,9 +100,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Lovejoin could never start:** mainnet's pool was empty and the floor of 30 gated the deposit too, so nothing could go in — and the wallet's own boxes never count towards the floor. A **seed** (depth 0: the deposit alone, no mixes) now works on an empty pool, offered only when a mix was refused for want of boxes. It hides nothing of the seeder's and says so; its boxes wait with no due time. The floor stays 30 for mixing (the owner's call).
   - **Lovejoin ran on mainnet** (the owner, 2026-09-28). The pool, seeded from a second wallet, holds 39 boxes of 10 ₳, over the floor of 30, and a swap's return went through it end to end: a deposit of three boxes (`64d636bd`), twelve mixes two waves deep, then the return (`c18a5207`). **The mainnet `mix_box` hash `c145c10f…1fad` is confirmed against real transactions** — it had none at all before this, and Lovejoin's own `config/network.mainnet.json` still has `mix_script_hash: null` (upstream). A mix measured **0.8225 ₳** across the twelve, which is `networks.ts`'s `mixCost` (825_000) and the launch review's 0.822–0.828 ₳, now read off the chain rather than estimated.
   - **The rest of that run:** Minswap answered the extension's origin and a swap quoted, ordered, filled and paid out, through one route; a Seedelf was funded from the private balance and its return merged back into it. The 9.954 ₳ left at the end came back directly, as designed — a box is a fixed 10 ₳ and a fourth needed 56.7 ₳ of the 50.011 ₳ the swap returned. The review's arithmetic is the builder's own (`funding_for`), so the three boxes it promised are the three the chain made.
-  - **Next:** the owner's calls — the Store listing, and the zip's SHA-256 here once they package it. Still untested by hand on mainnet, and listed in [plans/launch-review.md](../plans/launch-review.md)'s *Still open*: the other nine `MAINNET_PROTOCOLS` routes, `exclude_protocols`, and Stop or a refund. A detailed transaction view is recorded under *After v1* for its own branch.
+  - **Next:** the owner's calls — the Store listing, and the zip's SHA-256 here once they package it. Still untested by hand on mainnet, and listed in [plans/launch-review.md](plans/launch-review.md)'s *Still open*: the other nine `MAINNET_PROTOCOLS` routes, `exclude_protocols`, and Stop or a refund. A detailed transaction view is recorded under *After v1* for its own branch.
 
-- **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). A fresh review before mainnet, and its fixes, are in [plans/independent-review.md](../plans/independent-review.md) (see its *Status*).
+- **2026-09-28: independent review and its fixes** (`web-wallet/crypto-review`). A fresh review before mainnet, and its fixes, are in [plans/independent-review.md](plans/independent-review.md) (see its *Status*).
   - **What landed:**
     - A stranger's junk at a session's account can no longer strand its money: a return is planned by cost.
     - Payments are sealed as maybe sent before Koios is asked, and Remove wallet lists what's still open.
@@ -114,9 +114,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - A final review of the merged fixes found 13 more bugs where the areas met; all are fixed.
   - **Surprising:** most findings were bugs the earlier rounds' own fixes brought in, where two features meet. That's why the fixes were reviewed across areas after merging.
   - **The owner's calls** (2026-09-28): a restored wallet checks on chain whether each box it can't account for was mixed, and holds the unmixed; strangers' token deliveries that can't pay their way stay behind; a stopped swap waits for an order Minswap doesn't list, and says so.
-  - **Next:** the by-hand mainnet checks in [plans/launch-review.md](../plans/launch-review.md).
+  - **Next:** the by-hand mainnet checks in [plans/launch-review.md](plans/launch-review.md).
 
-- **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](../plans/privacy-review.md) (see its *Status*).
+- **2026-09-27: privacy by default** (`web-wallet/crypto-review`). The owner's rule is "the most private by default, with the ability to turn it down". A review against it, and its fixes, are in [plans/privacy-review.md](plans/privacy-review.md) (see its *Status*).
   - **What landed:**
     - Sites can no longer tell whether a UTxO or a recent transaction is the wallet's, or when it's locked.
     - The connect window chooses nothing.
@@ -128,7 +128,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Declined by the owner:** a longer default delay, the price lookup off, Hide balances on, a keep-apart switch, and a default account for new sites.
   - **Next: a fresh, independent review in a new context,** before mainnet. See the PR into `seedelf-web-wallet`.
 
-- **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). The findings, the owner's calls, what's fixed and what's still open are in [plans/launch-review.md](../plans/launch-review.md) (see its *Status*).
+- **2026-09-27: launch review and its fixes** (`web-wallet/crypto-review`). The findings, the owner's calls, what's fixed and what's still open are in [plans/launch-review.md](plans/launch-review.md) (see its *Status*).
   - **What landed:** every finding of the launch review, and of a second review of the fixes.
     - Lovejoin on mainnet.
     - One build with both networks.
@@ -143,10 +143,10 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - The bundler had put runtime helpers in `sw.js`, so every page ran a second worker. It's fixed, and a build now fails if it happens again.
     - seedelf-contracts' `hashes/` is a later, undeployed build: never copy it into the constants.
   - **Next:**
-    - the privacy-by-default analysis ([plans/privacy-review.md](../plans/privacy-review.md));
+    - the privacy-by-default analysis ([plans/privacy-review.md](plans/privacy-review.md));
     - then the by-hand mainnet checks and the store in *Still open*.
 
-- **2026-09-25: crypto review** (`web-wallet/crypto-review`, from `web-wallet/lovejoin`). The findings, what's fixed, and what's left to decide are in [plans/crypto-review.md](../plans/crypto-review.md).
+- **2026-09-25: crypto review** (`web-wallet/crypto-review`, from `web-wallet/lovejoin`). The findings, what's fixed, and what's left to decide are in [plans/crypto-review.md](plans/crypto-review.md).
   - **What landed:**
     - A one-time session account is never reused: the chain is asked first.
     - The entropy no longer reaches UI pages through `storage.onChanged`.
@@ -183,7 +183,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - Koios requests are now held under the public tier's burst limit.
   - **Next:** the plan's *Handoff to the third session*. It says what's uncommitted, where the user's live tests stood, and the two features the user decided next: *Mix my boxes again* from the private balance, and a countdown before auto-lock. Then the PR into `seedelf-web-wallet`.
 
-- **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](../plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
+- **2026-09-25: chunk 16, Lovejoin (first session)** (`web-wallet/lovejoin`). Plan: [plans/chunk-16-lovejoin.md](plans/chunk-16-lovejoin.md), whose *Built* lists everything. Chunk 15 merged as PR #262.
   - **What landed:**
     - Pallas 0.35.
     - Scripts evaluated in the wallet (`uplc` 1.1.23).
@@ -204,7 +204,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - end-to-end tests
     - a live preprod run, on the user's go-ahead
 
-- **2026-09-25: chunk 15, the public dApp connector** (`web-wallet/dapp-connector`). Plan: [plans/chunk-15-dapp-connector.md](../plans/chunk-15-dapp-connector.md). Chunk 14 merged as PR #261.
+- **2026-09-25: chunk 15, the public dApp connector** (`web-wallet/dapp-connector`). Plan: [plans/chunk-15-dapp-connector.md](plans/chunk-15-dapp-connector.md). Chunk 14 merged as PR #261.
   - **What landed:**
     - **Core, in WebAssembly** (`wasm/src/cip30.rs`): CIP-30's encodings, what a dApp's transaction does to the public account, signing it with the keys it needs, and CIP-8 data signatures. Exports: `cip30Utxos`, `cip30Value`, `cip30Address`, `cip30ReadValue`, `inspectDappTx`, `signDappTx`, `dataSigner`, `signDappData`.
     - **Worker:** `dapp.ts` (the service), `connector.ts` (registering the content scripts), `dapp-window.ts` (the popup), the port listener in `sw.ts`, and Koios `utxo_info`.
@@ -234,7 +234,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **Next:** the restore scan, a live cancel, then private CIP-30 (step 4).
   - **Then (2026-09-25): preprod MIN's decimals** (384ef7b). It isn't in the token registry, so `src/tokens/list.json` can now carry a hand-vetted test-network token as `unregistered`.
   - **Then (2026-09-25): the swap form in Minswap's shape** (e43cec9): You pay over You receive, a live quote, a token picker, slippage settings.
-  - **Then (2026-09-25): chunk 15b, a swap that runs itself, and the dApp browser.** Plan: [plans/chunk-15b-swap-runner.md](../plans/chunk-15b-swap-runner.md), whose *Built* lists what landed.
+  - **Then (2026-09-25): chunk 15b, a swap that runs itself, and the dApp browser.** Plan: [plans/chunk-15b-swap-runner.md](plans/chunk-15b-swap-runner.md), whose *Built* lists what landed.
     - **The user decided:** an unfilled order is never cancelled by the wallet; **Stop**, always there, cancels it and brings everything back. Home's Swaps row became **dApps**, a grid of tiles, with Minswap's opening its swaps.
     - **What landed:** the runner in `sessions.ts` (one approval, then `advance` from the page, a one-minute alarm and unlock), a timeline page with Stop, pauses that say why, Home's running rows, and `screens/Dapps.tsx`.
     - **Tests:** Vitest 9, Playwright 2.
@@ -254,7 +254,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Then (2026-09-25): the password at Sign for sites.** The user connected the public account to Minswap's preprod site (custom wallet, CIP-30 ID `seedelf`) and asked whether signing without the password was safe.
     - **What landed:** a site's transaction or message needs the password typed in the connector's window, even while unlocked (`dappPassword`, on by default, a switch under Settings' *Sites*). A wrong one leaves the request waiting and counts towards the unlock back-off (`Wallet.checkPassword`). The connector window's Unlock says a site is waiting.
     - **Surprise:** skipping it right after an unlock doesn't work, because sites call `enable()` first and the unlock goes to that call. So Sign always asks.
-  - **Then (2026-09-25): chunk 15c, private CIP-30** (step 4). Plan: [plans/chunk-15c-private-cip30.md](../plans/chunk-15c-private-cip30.md), whose *Built* lists what landed.
+  - **Then (2026-09-25): chunk 15c, private CIP-30** (step 4). Plan: [plans/chunk-15c-private-cip30.md](plans/chunk-15c-private-cip30.md), whose *Built* lists what landed.
     - **The user decided:**
       - the choice is in the connect window, remembered per site;
       - one session per site;
@@ -275,7 +275,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - See the 15c plan's *Then: Bring everything back*.
     - **Next:** the restore scan, then the chunk 15 PR's merge.
 
-- **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](../plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
+- **2026-09-24: chunk 13 done** (`web-wallet/staking`), in one PR rather than 13a and 13b. Plan: [plans/chunk-13-staking.md](plans/chunk-13-staking.md), whose *Status* says where the build departed from it.
   - **What landed:**
     - **Core:** `seedelf-core/src/staking.rs` patches certificates and a withdrawal into a built account transaction and writes the new body hash into the `BuiltTransaction`, so signing is unchanged. `build::account_staking` (a payment to `Payee::Nobody`) delegates, delegates the vote, withdraws, or stops; `move_in`, `account_send` and `account_mint` take a `&Staking` for rewards riding along. `ProtocolParameters` gains `key_deposit`.
     - **WebAssembly:** `buildStaking`, `poolId`, `drepId`, and `withdrawal` on the move-in, send and account-mint requests; the stake key `2/0` signs inside it.
@@ -294,9 +294,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Tests:** cargo 241 (core 123, of which 12 are staking; WASM native 34), WASM Node 33, Vitest 196 (+2 live), Playwright 34.
   - **Next:** the user's review of the staking screens, and the live run. The follow-up left (staking in the Cardano Activity) is in the plan. Then the after-v1 items.
 
-- **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](../plans/chunk-12-style-flow.md).
+- **2026-09-24: chunk 12 done** (`web-wallet/style-flow`). Plan: [plans/chunk-12-style-flow.md](plans/chunk-12-style-flow.md).
   - **What landed:** the user's 29 findings, each with its decision in the plan's list. Items 21–29 came after the PR opened: UTxOs on each Home tab, locks on both sides (from each row too), the collateral in Settings, Refresh on UTxOs and Activity, no "Unnamed" stand-in for an untagged Seedelf, and a centred transaction banner. The store images are regenerated (Home changed); the listing text isn't, until chunk 13's new positioning.
-  - **Decided for what's next:** the wallet is a full Cardano wallet with private payments built in, not a sidecar. Chunk 13 adds staking and voting delegation; the decisions are in [plans/chunk-13-staking.md](../plans/chunk-13-staking.md).
+  - **Decided for what's next:** the wallet is a full Cardano wallet with private payments built in, not a sidecar. Chunk 13 adds staking and voting delegation; the decisions are in [plans/chunk-13-staking.md](plans/chunk-13-staking.md).
   - **Surprises:**
     - `pallas-txbuilder` (0.33, and 1.4.0 too) can't build certificates or withdrawals; chunk 13 patches them into the built body.
     - Koios's public tier refuses request bodies over 5,120 bytes: `credential_utxos` now asks about 75 keys a request.
@@ -305,7 +305,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - `build::move_in`, `account_send` and `account_mint` no longer skip pure 5 ₳ UTxOs: they spend what they're given, and the web wallet leaves out locked UTxOs and its collateral (items 21–23). The CLI doesn't call them, and its own selection (`collect_address_utxos`) is unchanged.
   - **Next:** merge this PR, then chunk 13 from its plan's *Start here*.
 
-- **2026-09-24: chunk 11c done** (`web-wallet/store`). Plan: [plans/chunk-11-polish.md](../plans/chunk-11-polish.md). The materials only; the listing was never submitted.
+- **2026-09-24: chunk 11c done** (`web-wallet/store`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md). The materials only; the listing was never submitted.
   - **Decided with the user:**
     - Preprod only, and **unlisted**.
     - The privacy policy is [store/privacy-policy.md](../store/privacy-policy.md), linked on the `seedelf-web-wallet` branch.
@@ -340,7 +340,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - When the look changes, regenerate the listing's images (`npm run store:images`) and upload them with the next version.
     - After that come the after-v1 items: the contract round trip, the mainnet flag, and merging into `main`.
 
-- **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). Plan: [plans/chunk-11-polish.md](../plans/chunk-11-polish.md).
+- **2026-09-24: chunk 11b done** (`web-wallet/size-and-live`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
   - **Decided with the user:**
     - The `wasm-release` profile with `opt-level = "z"`, and no `wasm-opt`.
     - The live runs run from here, on the private test wallet.
@@ -383,7 +383,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Tests:** Vitest 117 (+2 live), Playwright 19, WASM Node 29.
   - **Next:** 11c, the unlisted Web Store listing, on `web-wallet/store` once this merges.
 
-- **2026-09-24: chunk 11a done** (`web-wallet/polish`). Plan: [plans/chunk-11-polish.md](../plans/chunk-11-polish.md).
+- **2026-09-24: chunk 11a done** (`web-wallet/polish`). Plan: [plans/chunk-11-polish.md](plans/chunk-11-polish.md).
   - **Decided with the user:**
     - **Dark only;** there's no light theme.
     - **Inter** is bundled (OFL), and the icons are **Lucide** (ISC).
@@ -410,10 +410,10 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Next:** 11b, size and live runs, on `web-wallet/size-and-live` from `seedelf-web-wallet` once this merges.
 
 - **2026-09-24: chunk 11 planned** (after #255 merged; CI green).
-  - It's split into three sessions, 11a, 11b and 11c, each with a "Start here": [plans/chunk-11-polish.md](../plans/chunk-11-polish.md). The plan is committed on the pushed branch `web-wallet/polish`, which 11a builds on.
+  - It's split into three sessions, 11a, 11b and 11c, each with a "Start here": [plans/chunk-11-polish.md](plans/chunk-11-polish.md). The plan is committed on the pushed branch `web-wallet/polish`, which 11a builds on.
   - **Next:** 11a, the style and flow pass (done, above).
 
-- **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). Plan: [plans/chunk-10-withdraw.md](../plans/chunk-10-withdraw.md).
+- **2026-09-24: chunk 10 done** (`web-wallet/withdraw`). Plan: [plans/chunk-10-withdraw.md](plans/chunk-10-withdraw.md).
   - **Decided with the user:**
     - A removed Seedelf's ADA goes to the Cardano account by default, or to the Seedelf balance.
     - Withdrawals go to any key address or ADA Handle, with a warning when it's your own account.
@@ -440,7 +440,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - An ADA Handle lookup against a real preprod handle is still untested.
   - **Next:** chunk 11, polish and testers. See the chunk 11 entry above.
 
-- **2026-09-24: chunk 9 done** (`web-wallet/transfer`). Plan: [plans/chunk-09-transfer.md](../plans/chunk-09-transfer.md).
+- **2026-09-24: chunk 9 done** (`web-wallet/transfer`). Plan: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md).
   - **Decided with the user:** the plan's table, except that **paying your own Seedelf is allowed, with a warning**. The plan suggested refusing it.
   - **Rust (`seedelf-core/src/build.rs`):**
     - `transfer` and `transfer_from` take `Payment { register, lovelace, tokens }`s. Each output is `deposit_output`, a fresh re-randomization of the register found on chain, checked against its minimum.
@@ -496,9 +496,9 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
   - **Live on preprod (2026-09-24, by the user):** the account-paid mint [`ca0fac00…ade137`](https://preprod.cardanoscan.io/transaction/ca0fac004c2b59a28cc7065b10225db8acfb2f5ef0c808a09d5ffbcba4ade137), the Seedelf `TAK2` (`5eed0e1f54414b32019dda2589…`) with 1.74986 ₳.
     - Fee 212,516 for 990 bytes. One account input; the change, with its tokens, went back to the account.
     - **The collateral held tokens:** a 3 ₳ UTxO with four. The collateral return is 2,681,226 (3 ₳ − 3/2 × fee) with all four tokens, so that path works live.
-  - **Next:** chunk 9, transfer. **Its plan is ready: [plans/chunk-09-transfer.md](../plans/chunk-09-transfer.md),** committed on the `web-wallet/transfer` branch. Start there.
+  - **Next:** chunk 9, transfer. **Its plan is ready: [plans/chunk-09-transfer.md](plans/chunk-09-transfer.md),** committed on the `web-wallet/transfer` branch. Start there.
 
-- **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](../plans/chunk-08-create-seedelf.md).
+- **2026-09-24: chunk 8 done** (`web-wallet/create-seedelf`). Plan: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).
   - **Decided with the user:**
     - The tag is optional, printable ASCII, at most 15 characters, with a live preview.
     - giveme.my is asked at Send, not at Review.
@@ -548,7 +548,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - **An idea for 8b:** the wallet can tell received UTxOs from moved-in ones by the transaction that created them. A received one came from a tx spending contract inputs; a moved-in one came from key inputs.
   - **Next:** chunk 8b, mint first: the account-paid mint, then the Create screen's default, before chunk 9 (transfer).
 
-- **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](../plans/chunk-07-move-in.md).
+- **2026-09-23: chunk 7 done** (`web-wallet/move-in`). Plan: [plans/chunk-07-move-in.md](plans/chunk-07-move-in.md).
   - **Decided with the user:**
     - Move-in takes an ADA amount or Max, plus a token picker (a picked token moves in full).
     - After sending, the wallet watches `tx_status` every 15 s, then refreshes.
@@ -578,7 +578,7 @@ Newest first. Keep each entry short: what landed, what's next, and anything surp
     - To finish: fund that wallet, `npm run build`, then `node e2e/live/move-in.mjs 10`. It restores the wallet, moves 10 tADA plus any tokens, waits for confirmation, and prints the result.
   - **Next:**
     - The user plans CSS and UX fixes as part of the Lace style and flow pass (chunk 11). Keep new screens simple until then.
-    - Chunk 8, create a Seedelf (`util mint`), is the first script spend. **Its plan is ready: [plans/chunk-08-create-seedelf.md](../plans/chunk-08-create-seedelf.md).** Start there, and finish chunk 7's live move-in first.
+    - Chunk 8, create a Seedelf (`util mint`), is the first script spend. **Its plan is ready: [plans/chunk-08-create-seedelf.md](plans/chunk-08-create-seedelf.md).** Start there, and finish chunk 7's live move-in first.
     - A real owned contract UTxO (from a live move-in) would let chunk 8 test on-chain.
 
 - **2026-09-23: chunk 6 done** (`web-wallet/balances`).

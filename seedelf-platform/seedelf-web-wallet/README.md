@@ -2,7 +2,7 @@
 
 A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
-> **Status:** released. v1.0.0 reached the Chrome Web Store on 2026-09-28 and 1.1.0 followed on 2026-10-01. Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what was built is in [docs/roadmap.md](docs/roadmap.md), and what comes next is in [docs/post-release-roadmap.md](docs/post-release-roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
+> **Status:** version 1.x, the web wallet's own version line, kept apart from the Rust workspace's 0.x (see the root [CLAUDE.md](../../CLAUDE.md#release--versioning)). Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what was built is in [docs/roadmap.md](docs/roadmap.md), and what comes next is in [docs/post-release-roadmap.md](docs/post-release-roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
 
@@ -20,7 +20,7 @@ So money that sits stays staked in the public account, and is made private when 
 
 ## Scope
 
-**v1: the core wallet**
+**The core wallet**
 
 - Create or restore a wallet from a recovery phrase, then lock it with a password.
 - See your balance: your Seedelfs and the funds they hold.
@@ -35,26 +35,28 @@ So money that sits stays staked in the public account, and is made private when 
 - **Send** (private, a transfer): send funds privately from your private balance to any Seedelfs, by their full names.
 - **Make public** (a withdrawal): send funds from your private balance to any Cardano addresses, or remove a Seedelf.
 
-**Also in v1: dApps, privately** ([plans/chunk-15-dapp-connector.md](docs/plans/chunk-15-dapp-connector.md)). All four are built:
+**Also in v1: dApps, privately** ([architecture.md](docs/architecture.md#dapp-connector), [flows.md](docs/flows.md#contract-round-trip)). All four are built:
 
 1. **The connector** (chunk 15): sites connect over CIP-30, as with Lace. It's off until you turn it on in Settings, and nothing is added to any page until then.
 2. **Private sessions** (chunks 15 and 15b): move funds out of Seedelf into a one-time account, use a dApp with that account, and bring what comes back into Seedelf. The first is a swap through Minswap's aggregator, which runs by itself after one approval.
 3. **A dApp browser in the wallet** (chunk 15b): Home's **dApps**, where dApps run in private sessions. Minswap is the first.
 4. **Private CIP-30** (chunk 15c): any site can connect to a private session instead of the public account, chosen in the connect window. Its session is managed under the dApps page's **Sites**.
 
-**Also in v1: Lovejoin** ([plans/chunk-16-lovejoin.md](docs/plans/chunk-16-lovejoin.md)). The mixer in the wallet: the spare ADA a private session brings back goes through Lovejoin, 10 ₳ boxes on chain, so what comes back is harder to tie to the session. A Settings switch turns it off, any box can be brought back directly, and the Lovejoin tile mixes from either side. It has had no third-party audit, only its makers' own review, and the wallet says so wherever Lovejoin is chosen. On mainnet it mixes only once Lovejoin's pool holds 30 boxes that aren't yours.
+**Also in v1: Lovejoin** ([architecture.md](docs/architecture.md#lovejoin)). The mixer in the wallet: the spare ADA a private session brings back goes through Lovejoin, 10 ₳ boxes on chain, so what comes back is harder to tie to the session. A Settings switch turns it off, any box can be brought back directly, and the Lovejoin tile mixes from either side. It has had no third-party audit, only its makers' own review, and the wallet says so wherever Lovejoin is chosen. On mainnet it mixes only once Lovejoin's pool holds 30 boxes that aren't yours.
 
-**Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. See [plans/chunk-14-style-flow-2.md](docs/plans/chunk-14-style-flow-2.md).
+**Also in v1** (chunk 12): Contacts, the public account's collateral in Settings, and a UTxOs screen on each side where a UTxO can be locked out of every payment.
 
-**After v1: the transaction view** ([plans/chunk-17-transaction-view.md](docs/plans/chunk-17-transaction-view.md)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
+**Also in v1** (chunk 14, from what Lace and Eternl have): the public account's staking changes in its Activity, a note on a public send, hiding the balances, the lock time, a check of the written recovery phrase, Activity saved as CSV, and ADA's value in a currency on mainnet. What each of them tells anyone is in [privacy.md](docs/privacy.md#known-links).
 
-**After v1: several public accounts, three languages, and NFT images.** Several accounts are above (chunk 18). The wallet reads in English, Spanish and Japanese, every language bundled, so choosing one asks nobody anything ([plans/chunk-19-language.md](docs/plans/chunk-19-language.md)). And an NFT's image shows when you ask for it in its details, one NFT at a time: your browser fetches it from IPFS through Blockfrost's gateway, nothing of ours in between, and the details say first who sees what, more strongly for an NFT in your private balance ([plans/chunk-20-nft-images.md](docs/plans/chunk-20-nft-images.md)).
+**After v1: the transaction view** ([flows.md](docs/flows.md#read-the-transaction-every-review-and-the-connectors-window)). Every review, and the connector's sign window, opens **Transaction details**: the transaction itself — inputs, outputs, datums, scripts, certificates, votes, redeemers and metadata — decoded from the CBOR that is about to be signed, with a tab for the raw bytes. It asks nobody anything: no lookup, no explorer link, a copy button instead.
+
+**After v1: several public accounts, three languages, and NFT images.** Several accounts are above (chunk 18). The wallet reads in English, Spanish and Japanese, every language bundled, so choosing one asks nobody anything ([the translation glossary](docs/i18n/glossary.md)). And an NFT's image shows when you ask for it in its details, one NFT at a time: your browser fetches it from IPFS through Blockfrost's gateway, nothing of ours in between, and the details say first who sees what, more strongly for an NFT in your private balance ([privacy.md](docs/privacy.md#known-links)).
 
 **Next** ([docs/post-release-roadmap.md](docs/post-release-roadmap.md) has the whole picture, and the reasoning): a pass over how all of it looks and reads.
 
-**Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet.
+**Later, maybe:** word of an incoming payment without opening the wallet. It needs the chain read in the background, which the public Koios tier can't carry, so it waits on a data layer built for the wallet. And `web+cardano` payment links (CIP-13), so a link can open Send with the recipient filled in.
 
-**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), folders or an account centre, other chains, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand.
+**Not planned:** several pools per account (one pool per account is the model, and several accounts spread stake across pools anyway), folders or an account centre, a Seedelf key per account (one private balance for the whole phrase), reading several accounts at once or a total across them (either would link them), Earn / RealFi USDr staking and CIP-99 claims (likely AML/KYC), other chains, mobile. **Hardware wallets can't be done at all:** the Seedelf key is derived from the recovery phrase's seed, and a hardware wallet's whole purpose is that the seed never leaves it — so a device could hold the public account and never the private balance. And nothing that reports on you or ties you to an identity: no analytics, no AML/KYC, no on-ramp. We add features only if there's demand.
 
 ## Relationship to the CLI
 
@@ -74,9 +76,10 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
 | [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, staking, being your own DRep, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
-| [development.md](docs/development.md) | The branching rule, running it in Chrome, test funds, the testing layers, the release checklist, sharing with testers |
+| [development.md](docs/development.md) | The branching rule and where plans live, running it in Chrome, test funds, the testing layers, the rules for a change to the screens, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
-| [roadmap.md](docs/roadmap.md) | How v1 was built: the 17 chunks and a one-line handoff note each ([archive/](docs/archive/roadmap-v1.md) keeps every note in full) |
+| [i18n/glossary.md](docs/i18n/glossary.md) | The translations: the words fixed in every language, and how each Spanish and Japanese string is recorded |
+| [roadmap.md](docs/roadmap.md) | How v1 was built: the 17 chunks and a one-line handoff note each ([archive/](docs/archive/roadmap-v1.md) keeps every note in full), then the handoff note of every chunk since |
 | [post-release-roadmap.md](docs/post-release-roadmap.md) | What comes after v1: the order (parity, then the look and feel), where Cardano parity stands against Lace, and what's declined and why |
 
 ## Reference: Lace
@@ -86,11 +89,11 @@ IOG's [Lace](https://github.com/input-output-hk/lace) wallet (Apache-2.0) is our
 Clone it locally for reading. `seedelf-platform/_reference/` is gitignored.
 
 ```bash
-git clone --depth 1 --branch lace-extension@2.4.0 \
-  https://github.com/input-output-hk/lace seedelf-platform/_reference/lace
+git clone https://github.com/input-output-hk/lace seedelf-platform/_reference/lace
+git -C seedelf-platform/_reference/lace checkout e431933
 ```
 
-Every Lace path in these docs is relative to that checkout.
+Every Lace path in these docs is relative to that checkout. `e431933` is where Lace's extension is at 2.4.2, the version the docs measure against; SecretBox ([extension/src/background/secret-box/](extension/src/background/secret-box/README.md)) was adapted from the `lace-extension@2.4.0` tag, three commits earlier, and its files are the same at both.
 
 ## Decisions
 

@@ -5,7 +5,8 @@
 //         Max included: the builders only ever see what's unlocked.
 // Collateral  One pure-ADA 5 ₳ UTxO under the account, put up by anything
 //         the account signs that runs a script (an account-paid seedelf
-//         mint), and otherwise never spent. As in Lace, it's a UTxO set
+//         mint, a Lovejoin mix from the account, a connected site's
+//         transaction through getCollateral), and otherwise never spent. As in Lace, it's a UTxO set
 //         aside, not an amount. With none chosen, the wallet takes the
 //         oldest pure 5 ₳ UTxO the account holds, so a UTxO another wallet
 //         with the same phrase uses as its collateral stays put. Reclaiming

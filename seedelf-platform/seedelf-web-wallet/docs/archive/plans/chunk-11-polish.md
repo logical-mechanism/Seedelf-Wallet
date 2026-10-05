@@ -22,7 +22,7 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
    ```
 2. **Read:**
    - this plan
-   - the newest entries in [roadmap.md](../roadmap.md#handoff-notes)
+   - the newest entries in [roadmap.md](../../roadmap.md#handoff-notes)
    - the part's reading list below
    - The memory notes load on their own. The ones that matter here are *Style polish later*, *Chrome web wallet direction* and *Web wallet branching*.
 3. **Build and check that everything passes before changing anything** (from `seedelf-platform/`):
@@ -38,15 +38,15 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 
 ## Rules that hold throughout
 
-- **Lace is inspiration for look and flow, not a brand to copy** (see [architecture.md](../architecture.md#ui)).
+- **Lace is inspiration for look and flow, not a brand to copy** (see [architecture.md](../../architecture.md#ui)).
   - Don't take its name, logo or brand assets.
-  - Don't take its purple brand palette (`#8B2BEC` and friends). Seedelf keeps its own navy `#011833` and teal `#00c4bc` (see [brand/](../../brand/)).
+  - Don't take its purple brand palette (`#8B2BEC` and friends). Seedelf keeps its own navy `#011833` and teal `#00c4bc` (see [brand/](../../../brand/)).
   - Don't take its commercial fonts: Brandon Grotesque and Proxima Nova are in its repo but not licensed to us.
   - A file copied or adapted from Lace stays Apache-2.0. Keep its notices, mark our changes, and ship the license next to it, as `extension/src/background/secret-box/` does.
 - **Keep it light.** Plain CSS with design tokens, React, no component library, and nothing that phones home.
 - **The page CSP is strict:** `default-src 'self'`. Fonts, images and icons must ship inside the extension. There are no web fonts from a CDN.
 - **The tests find things by role, label and `data-testid`, not by class.** Restyling is safe; renaming a button or a label means updating `e2e/extension.spec.ts` in the same commit.
-- **Every privacy note on the screens stays.** They carry the decisions in [privacy.md](../privacy.md): what move-in links, mint first, the transfer lookup, the own-account warning, and the rest. A restyle can move them and shorten them, but never drop one.
+- **Every privacy note on the screens stays.** They carry the decisions in [privacy.md](../../privacy.md): what move-in links, mint first, the transfer lookup, the own-account warning, and the rest. A restyle can move them and shorten them, but never drop one.
 
 ---
 
@@ -109,7 +109,7 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 ### Reading list
 
 - `wasm/build.sh` and the workspace `Cargo.toml`, which has no `[profile.*]` yet.
-- `extension/e2e/live/{move-in,mint}.mjs` and [development.md](../development.md) *Testing layers*.
+- `extension/e2e/live/{move-in,mint}.mjs` and [development.md](../../development.md) *Testing layers*.
 - The *Not done* items in the handoff notes for chunks 8b, 9 and 10.
 
 ### Decisions to confirm
@@ -142,7 +142,7 @@ Do them in order: 11c's screenshots should show 11a's look, and its build should
 
 The user owns the Chrome Web Store developer account and submits the listing. This part prepares everything, so that submitting is copy and paste.
 
-**Done (2026-09-24)** — the materials only; the listing was never submitted. The decisions below were preprod only, unlisted, the policy on GitHub, *Authentication* and *Financial* declared, and framed screenshots. Everything to submit is in [store/](../store/README.md). See the roadmap's handoff note.
+**Done (2026-09-24)** — the materials only; the listing was never submitted. The decisions below were preprod only, unlisted, the policy on GitHub, *Authentication* and *Financial* declared, and framed screenshots. Everything to submit is in [store/](../../store/README.md). See the roadmap's handoff note.
 
 ### What 11a and 11b left for 11c
 
@@ -164,7 +164,7 @@ The user owns the Chrome Web Store developer account and submits the listing. Th
 ### Reading list
 
 - `extension/src/manifest.ts` (`VITE_STORE_BUILD=true` drops the dev `key`; `VITE_ENABLE_MAINNET` adds mainnet).
-- [development.md](../development.md) *Sharing with testers*, [privacy.md](../privacy.md) and [README](../../README.md).
+- [development.md](../../development.md) *Sharing with testers*, [privacy.md](../../privacy.md) and [README](../../../README.md).
 - The Chrome Web Store's current developer program policies and listing requirements. **Check them live;** they change. The things to look for:
   - a single purpose
   - a justification for each permission and host

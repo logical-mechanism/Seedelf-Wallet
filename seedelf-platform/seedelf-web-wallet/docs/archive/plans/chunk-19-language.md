@@ -4,7 +4,7 @@ The wallet speaks English, Spanish and Japanese. Every locale is bundled, so
 nothing is fetched and no new host is asked for; a picker in Settings chooses,
 and the system's language is used when it is one we ship.
 
-[P2](../post-release-roadmap.md#p2--language), the owner's pick after chunk 18.
+[P2](../../post-release-roadmap.md#p2--language), the owner's pick after chunk 18.
 Branch `web-wallet/language`, from `main`.
 
 **The owner's call (2026-10-02):** copy what Lace does, including its
@@ -29,7 +29,7 @@ than landed in one commit.
 `lovejoin.ts`, 60 in `dapp.ts`, 25 in `koios.ts`: the worker's error messages
 are shown by the UI, so they are read by a person and must be translated. The
 house rule already says this of core's messages, "since it shows them"
-([seedelf-platform/CLAUDE.md](../../CLAUDE.md)).
+([seedelf-platform/CLAUDE.md](../../../../CLAUDE.md)).
 
 **What is out of reach, and has to be said plainly:** error text that comes
 from Rust — `seedelf-core` through the WebAssembly — cannot be translated by a
@@ -447,7 +447,7 @@ it found are worth remembering:
   the second reader caught.
 
 The vocabulary each locale settled on is a section of
-[the glossary](../i18n/glossary.md), marked as the review's choices rather
+[the glossary](../../i18n/glossary.md), marked as the review's choices rather
 than the owner's; Spanish "Configuración" for Settings (Lace's and Chrome's
 word, replacing "Ajustes") is the one most worth the owner's look. Now
 `en.json` holds 2,128 keys (2,023 base), `es.json` 2,233 and `ja.json` 2,023,

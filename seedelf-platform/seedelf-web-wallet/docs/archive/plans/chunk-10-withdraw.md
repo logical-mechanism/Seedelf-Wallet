@@ -19,9 +19,9 @@ What's new: change that goes to an **address** instead of back into the contract
    ```
 2. Read:
    - this plan
-   - the chunk 9 entry in [roadmap.md](../roadmap.md#handoff-notes)
-   - [flows.md](../flows.md) *Withdraw* and *Transfer*
-   - [privacy.md](../privacy.md) *Known links*, especially *Exit*
+   - the chunk 9 entry in [roadmap.md](../../roadmap.md#handoff-notes)
+   - [flows.md](../../flows.md) *Withdraw* and *Transfer*
+   - [privacy.md](../../privacy.md) *Known links*, especially *Exit*
 3. Read the code this chunk extracts and copies:
    - `seedelf-cli/src/commands/sweep.rs` and `remove.rs`: still building inline.
    - `seedelf-core/src/build.rs`: `ScriptSpend`, `transfer`, `select_script_inputs`, `change_outputs`.

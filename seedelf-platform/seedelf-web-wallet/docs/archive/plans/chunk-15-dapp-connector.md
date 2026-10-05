@@ -84,7 +84,7 @@
   - **The connector, off, removed `https://*/*`** at every start (`chrome.permissions.remove`), and **Chrome's remove takes every host under the pattern**, so the required Koios and giveme.my grants went with it. Checked with a two-line test extension: the grants are `[]` after the call. Without the grant, the extension's requests fall under CORS. Before Koios's change, Koios's own CORS header had hidden this.
 - **Fixed:** off unregisters the scripts and keeps Chrome's access (`connector.ts`). A browser restart, or reloading the unpacked extension, gives an affected profile its grants back.
 - **The case left, a user limiting the wallet's site access in Chrome,** takes the Koios grant too. The Koios client then says so instead of blaming the connection (`KOIOS_NOT_ALLOWED`, not retried), and the wallet's page shows **Ask Chrome again** (`ServiceAccess` in `App.tsx`). Chrome accepts `permissions.request` for a required host it no longer grants, and shows its dialog.
-- **No API key (the user, 2026-09-25):** the wallet stays on the public tier, whose limits are per IP address, so each user is on their own. A key shipped in the extension would leak, and every user would share its one allowance; a server holding the key is the only way around that, which the user would rather not run. See [architecture.md](../architecture.md), *Koios's public tier*.
+- **No API key (the user, 2026-09-25):** the wallet stays on the public tier, whose limits are per IP address, so each user is on their own. A key shipped in the extension would leak, and every user would share its one allowance; a server holding the key is the only way around that, which the user would rather not run. See [architecture.md](../../architecture.md), *Koios's public tier*.
 
 ### Tests
 
@@ -106,7 +106,7 @@
 
 ### For the user
 
-- **Resubmit the store listing:** the new `scripting` permission, the optional host permissions, and the updated privacy policy and description in [store/README.md](../store/README.md).
+- **Resubmit the store listing:** the new `scripting` permission, the optional host permissions, and the updated privacy policy and description in [store/README.md](../../store/README.md).
   - The Privacy practices form may now need **Web history**: the list of connected sites is kept, sealed, on the device.
 - Try it on preprod with a dApp that lists every CIP-30 wallet.
 
@@ -119,7 +119,7 @@ The user's two designs (2026-09-25):
 
 **Which one fits depends on the dApp.** giveme.my can't witness a chained transaction: it checks every input against the chain first, as found in chunk 8. So a dApp whose flow chains transactions needs design 1, and design 2 works only for a dApp that doesn't.
 
-**What design 1 needs** (docs: [flows.md](../flows.md#contract-round-trip), [keys-and-accounts.md](../keys-and-accounts.md)):
+**What design 1 needs** (docs: [flows.md](../../flows.md#contract-round-trip), [keys-and-accounts.md](../../keys-and-accounts.md)):
 
 - The one-time accounts are already specified: the reserved account `24301'`, a fresh index per session, and (since 15b) each session's own stake key `2/i` rather than the shared Seedelf staking part.
 - It's funded by a Make public (`sweep_many`) that pays two outputs to that account: the amount, and 5 ₳ as its own collateral. The collateral is its own because the dApp's script transactions spend that account's key UTxOs, and giveme.my can't back them.
@@ -169,7 +169,7 @@ Checked on 2026-09-25 against the preprod site (`testnet-preprod.minswap.org`) a
 
 ### Built (2026-09-25)
 
-A swap in a private session, end to end, as *A swap (A1), step by step* below says. The flow is in [flows.md](../flows.md#contract-round-trip), the design in [architecture.md](../architecture.md#private-sessions).
+A swap in a private session, end to end, as *A swap (A1), step by step* below says. The flow is in [flows.md](../../flows.md#contract-round-trip), the design in [architecture.md](../../architecture.md#private-sessions).
 
 - **Rust:** `ONE_TIME_ACCOUNT` in `seedelf-crypto`; in `seedelf-wasm`, the `OneTimeAccounts` type, `buildSessionReturn` (`build::external_sweep`), `inspectSessionTx`/`signSessionTx` (the connector's code on a session's key), and `attachWitnesses`, which splices a signature into a transaction someone else built, byte for byte.
 - **Worker:** `sessions.ts` (the sealed `sessions.<network>` record; out, swap, cancel, back; the stages) and `minswap.ts` (the aggregator: estimate, build-tx, pending-orders, cancel-tx, tokens). Minswap is only in the pages' `connect-src`: it answers with CORS headers, so no new permission.
@@ -188,7 +188,7 @@ A swap in a private session, end to end, as *A swap (A1), step by step* below sa
 
 ### A private session
 
-- **Its account:** a one-time account, `24301'/0/i`, a base address with its own stake key `24301'/2/i` since 15b (the shared Seedelf staking part before; see [privacy.md](../privacy.md#known-links)).
+- **Its account:** a one-time account, `24301'/0/i`, a base address with its own stake key `24301'/2/i` since 15b (the shared Seedelf staking part before; see [privacy.md](../../privacy.md#known-links)).
 - **Its stages:** funding, ready, in use (orders open, positions held), returning, closed.
 - **It lasts as long as what the dApp holds for it.** A swap closes in minutes. A lending or liquidity position keeps its account open until the position closes, across restarts and devices. That's why recovery matters.
 
@@ -226,7 +226,7 @@ A swap in a private session, end to end, as *A swap (A1), step by step* below sa
 - **Every stall is recoverable from the phrase alone:**
   - Money sitting in the account: Bring back.
   - An order never filled: Cancel, then Bring back.
-  - Proceeds that arrived while the wallet was closed: brought back at the next open (the auto-return in [flows.md](../flows.md#contract-round-trip)).
+  - Proceeds that arrived while the wallet was closed: brought back at the next open (the auto-return in [flows.md](../../flows.md#contract-round-trip)).
 - **On a new device (restore),** the list is gone, so the wallet scans the one-time accounts:
   - **Which were used:** `credential_txs` over 20 indices a request, until a request finds none, and new sessions start from there.
     - Its rows don't name the credential, so it shows that a batch was used, not which account in it. Skipping the rest of a batch costs nothing.

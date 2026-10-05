@@ -2806,7 +2806,7 @@ pub mod api {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct SignRequest {
-        /// The unsigned transaction from `finishMint`.
+        /// The unsigned transaction a `build*` call returned.
         pub tx_cbor: String,
         /// Its one-time key's seed.
         pub seed: String,
@@ -3140,7 +3140,8 @@ pub struct WasmCardanoAccount {
 #[wasm_bindgen(js_class = CardanoAccount)]
 impl WasmCardanoAccount {
     /// Account `account` (`m/1852'/1815'/account'`) of a 12-, 15- or 24-word
-    /// phrase. v1 of the wallet uses account 0. WebAssembly's copy of the
+    /// phrase. The web wallet's public accounts are any index but `24301'`,
+    /// the one-time accounts' (`OneTimeAccounts`). WebAssembly's copy of the
     /// phrase is wiped.
     #[wasm_bindgen(js_name = fromPhrase)]
     pub fn from_phrase(phrase: String, account: u32) -> Result<WasmCardanoAccount, JsError> {

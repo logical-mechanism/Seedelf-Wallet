@@ -42,7 +42,7 @@ const MARK = "\u0000";
  *   "accounts.koios": "{{look}} and {{check}} each ask Koios about one account."
  *   <Rich k="accounts.koios" parts={{ look: <strong>…</strong>, check: <strong>…</strong> }} />
  *
- * Placeholders rather than numbered tags on purpose: `tests/i18n-parity.test.ts`
+ * Placeholders rather than numbered tags on purpose: `tests/i18n.test.ts`
  * already holds every locale to English's `{{tokens}}`, so a translation that
  * drops the bolded phrase fails there, with no second mechanism to maintain.
  */

@@ -1,6 +1,6 @@
 # Chunk 20 plan: NFT images
 
-An NFT's image, shown when the user asks for it. [post-release-roadmap.md](../post-release-roadmap.md#p3--nft-images)'s P3, the last item of feature parity. Lace is the reference for what the feature is, and not for how it's done: Lace loads every NFT's image the moment a wallet opens.
+An NFT's image, shown when the user asks for it. [post-release-roadmap.md](../../post-release-roadmap.md#p3--nft-images)'s P3, the last item of feature parity. Lace is the reference for what the feature is, and not for how it's done: Lace loads every NFT's image the moment a wallet opens.
 
 **Status: built (2026-10-04).** Branch `web-wallet/nft-images`, from `main`. What landed, and where it differs from this plan, is at the end under [*What was built*](#what-was-built).
 
@@ -39,9 +39,9 @@ An NFT's image, shown when the user asks for it. [post-release-roadmap.md](../po
 ## Decided
 
 1. **Click per image** (the owner). **Show image** is in an NFT's details, and nowhere else. Nothing is asked for holding NFTs, opening Tokens or opening an NFT's details.
-2. **Blockfrost's gateway, one for both networks.** It's the only one that answered, and it's Lace's, so Cardano users' wallets already ask it. It's named where it's chosen, in the details and in Settings' list of the services the wallet talks to. Not a setting: a gateway picker is a choice of who sees the request, which the [data layer](../post-release-roadmap.md#the-data-layer) can revisit.
+2. **Blockfrost's gateway, one for both networks.** It's the only one that answered, and it's Lace's, so Cardano users' wallets already ask it. It's named where it's chosen, in the details and in Settings' list of the services the wallet talks to. Not a setting: a gateway picker is a choice of who sees the request, which the [data layer](../../post-release-roadmap.md#the-data-layer) can revisit.
 3. **Chrome's grant for that one host, asked at the first click; not an `<img src>`.** An `<img>` from the gateway needs no grant, but two things rule it out:
-   - **It writes to the disk.** Chrome's HTTP cache would keep the image and its address, which names the NFT, and the gateway sends `max-age` of a year. [privacy.md](../privacy.md) holds that which contract UTxOs are the user's is never on the disk unencrypted; a cached image of an NFT in the private balance is exactly that. `fetch` with `cache: "no-store"` writes nothing.
+   - **It writes to the disk.** Chrome's HTTP cache would keep the image and its address, which names the NFT, and the gateway sends `max-age` of a year. [privacy.md](../../privacy.md) holds that which contract UTxOs are the user's is never on the disk unencrypted; a cached image of an NFT in the private balance is exactly that. `fetch` with `cache: "no-store"` writes nothing.
    - **It sends cookies.** An `<img>` without CORS goes in credentials mode, so it carries whatever cookies the browser holds for that host. Every service request goes with `credentials: "omit"` (privacy review §2.14).
 
    `https://ipfs.blockfrost.dev/*` is a part of the optional `https://*/*` the dApp connector already declares, so **the manifest's permissions don't change** and installing asks for nothing new. Only the CSP's `connect-src` gains the origin. `img-src` stays `'self' data:`: the page shows what the worker fetched, as data. Chrome's dialog names the host, which makes the grant a second, browser-level consent to the same thing the details explain.
@@ -61,7 +61,7 @@ An NFT's image, shown when the user asks for it. [post-release-roadmap.md](../po
 
 - **Arweave** (`ar://`) and plain `https` images: shown as an address, not fetched (point 4). `ar://` would be one more host to name and grant; Lace doesn't handle it either.
 - **Video and `files[]`:** only `image`, which CIP-25 and CIP-68 both define as the thumbnail.
-- **A grid view, a "show all" or an "always show" setting.** A grid is the [UX pass](../post-release-roadmap.md#the-ux-and-ui-pass)'s to decide. "Show all" would be the page that quietly fetches everything a wallet holds, which the owner's design rules out.
+- **A grid view, a "show all" or an "always show" setting.** A grid is the [UX pass](../../post-release-roadmap.md#the-ux-and-ui-pass)'s to decide. "Show all" would be the page that quietly fetches everything a wallet holds, which the owner's design rules out.
 - **Keeping images past the lock**, or across windows.
 
 ## What was built
@@ -90,6 +90,6 @@ An NFT's image, shown when the user asks for it. [post-release-roadmap.md](../po
 
 ## Still open
 
-- **The store dashboard's texts**, at the next upload: the host-permission box (a 991-character version that names the gateway is in [store/README.md](../store/README.md)), the remote-code answer and the test instructions, which that file now has. No new permission is declared, so nothing new needs a justification of its own.
+- **The store dashboard's texts**, at the next upload: the host-permission box (a 991-character version that names the gateway is in [store/README.md](../../store/README.md)), the remote-code answer and the test instructions, which that file now has. No new permission is declared, so nothing new needs a justification of its own.
 - **The privacy policy** says it (4 October 2026). It's served from `main`, so it goes live with the merge, ahead of the release, as the policy promises.
 - **If Blockfrost's gateway stops serving**, every image fails in words and nothing else breaks. The fix is one constant (`IPFS_GATEWAY`) and the CSP that reads it. A verified fetch from trustless gateways (Helia's `verified-fetch`) would take the trust out of any one gateway, at the cost of a large dependency.

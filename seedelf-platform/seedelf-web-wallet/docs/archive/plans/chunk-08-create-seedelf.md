@@ -12,13 +12,13 @@ This is the first **script spend** in the web wallet. Every Seedelf spend in chu
    git log --oneline HEAD..origin/main   # merge main first if this lists anything
    git checkout -b web-wallet/create-seedelf
    ```
-2. Read this plan, then the chunk 7 entry in [roadmap.md](../roadmap.md#handoff-notes), [architecture.md](../architecture.md) *Transaction building*, [flows.md](../flows.md) *Create a Seedelf*, and [privacy.md](../privacy.md) *Rules the wallet enforces*.
+2. Read this plan, then the chunk 7 entry in [roadmap.md](../../roadmap.md#handoff-notes), [architecture.md](../../architecture.md) *Transaction building*, [flows.md](../../flows.md) *Create a Seedelf*, and [privacy.md](../../privacy.md) *Rules the wallet enforces*.
 3. Read the code this chunk extracts: `seedelf-cli/src/commands/util/mint.rs` (about 500 lines), and the helpers it uses in `seedelf-core/src/transaction.rs` (`seedelf_token_name`, `extract_budgets`, `total_computation_fee`, `seedelf_minimum_lovelace`, `collateral_input`, `reference_utxo`), `seedelf-core/src/data_structures.rs` (the redeemers), and `seedelf-cli/src/commands/fee.rs` (the collateral output and even rounding).
 4. **Finish chunk 7's live move-in first.** Minting spends *owned contract UTxOs*, and on preprod none exist for a phrase wallet until a move-in lands.
    - The test wallet is in `extension/.preprod-test-wallet.txt` (gitignored). The user funds its `receive_0` from the faucet.
    - Then run `npm run build && node e2e/live/move-in.mjs 10`.
    - Record the tx hash in the roadmap.
-5. The tooling is already installed (see [chunk 5's plan](chunk-05-vault-and-lock.md#start-here-new-session)). Commands are in [extension/README.md](../../extension/README.md).
+5. The tooling is already installed (see [chunk 5's plan](chunk-05-vault-and-lock.md#start-here-new-session)). Commands are in [extension/README.md](../../../extension/README.md).
 6. Confirm the [decisions](#decisions-to-confirm-first) with the user before building the parts they affect.
 
 ## What `util mint` does today

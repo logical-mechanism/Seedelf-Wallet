@@ -15,7 +15,7 @@ A verifier re-traced every finding against the committed code. The settled decis
 
 **Since:** an independent review found more, and fixed it on the same branch: see [independent-review.md](independent-review.md). Its M8 finished §2.9 for the paths this round missed.
 
-**Everything in §2 is done, and so is most of §3 and §4.1**, as the owner decided below. The owner declined §3.5, §3.8, §3.9, §4.2 and §4.3. §3.10 and §4.4–§4.9 are still open, with the smaller items under *Still open*. §5's limits are said plainly in [privacy.md](../privacy.md) and the [privacy policy](../store/privacy-policy.md), and §6's docs are corrected.
+**Everything in §2 is done, and so is most of §3 and §4.1**, as the owner decided below. The owner declined §3.5, §3.8, §3.9, §4.2 and §4.3. §3.10 and §4.4–§4.9 are still open, with the smaller items under *Still open*. §5's limits are said plainly in [privacy.md](../../privacy.md) and the [privacy policy](../../store/privacy-policy.md), and §6's docs are corrected.
 
 Two parts were built in parallel worktrees, marked *(connector)* and *(small items)* below, and are merged into `web-wallet/crypto-review` (the hashes below are the merged commits).
 
@@ -882,7 +882,7 @@ These are the corrections not already named in §2–§5.
 
 | Doc | Change | Source |
 |---|---|---|
-| privacy.md:85 ("never polls in the background"); architecture.md:250; privacy.md:115, :129; [archive/roadmap-v1.md](../archive/roadmap-v1.md):501 | Say what really runs. The balance is read only when Home opens or on Refresh. While unlocked, a one-minute alarm reads only what's running: a swap's account and its Minswap orders, a chain, a box that's due, a maybe-sent payment every 2 min. At unlock, the pool is read once on each network with Lovejoin open. Home polls `tx_status` every 15 s while waiting. Locking stops all of it, and a VPN must stay on until the work is done. | observers-12, docs-13 |
+| privacy.md:85 ("never polls in the background"); architecture.md:250; privacy.md:115, :129; [archive/roadmap-v1.md](../roadmap-v1.md):501 | Say what really runs. The balance is read only when Home opens or on Refresh. While unlocked, a one-minute alarm reads only what's running: a swap's account and its Minswap orders, a chain, a box that's due, a maybe-sent payment every 2 min. At unlock, the pool is read once on each network with Lovejoin open. Home polls `tx_status` every 15 s while waiting. Locking stops all of it, and a VPN must stay on until the work is done. | observers-12, docs-13 |
 | keys-and-accounts.md:64 | Probes the next index alone, and a window of 20 only if that index was used (sessions.ts:2162-2173; launch review #22). Add a pointer at crypto-review.md:17. | docs-14 |
 | privacy.md:74-77; flows.md:273-274; architecture.md:128 | Describe coin selection as it's actually implemented (after §2.3), not "should". | onchain-1, defaults-1 |
 | architecture.md:445 | "On preprod, spare ADA goes through Lovejoin first" → "on mainnet, once the pool floor is met". | defaults-17 |

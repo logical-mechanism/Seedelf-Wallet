@@ -3,7 +3,7 @@
 Open the transaction itself — inputs, outputs, datums, scripts, certificates,
 metadata — decoded from the CBOR that is about to be signed, plus the raw bytes.
 The owner's ask from the 2026-09-28 mainnet test, listed under *After v1* in
-[roadmap.md](../roadmap.md#after-v1). Eternl is the model: a detail view with a
+[roadmap.md](../../roadmap.md#after-v1). Eternl is the model: a detail view with a
 way to read the CBOR.
 
 **Status: built (2026-10-01).** Branch `web-wallet/transaction-view`, from `main`. What
@@ -24,7 +24,7 @@ Each flow parks the built transaction in session storage under its own key —
 `seedelf.send.built`, `.transfer.built`, `.mint.built`, `.stake.built`,
 `.withdraw.built`, `.remove.built`, `.collateral.built`, and the session ones in
 `sessions.ts` — all through `keep()` in
-[`background/script-spend.ts:241`](../../extension/src/background/script-spend.ts),
+[`background/script-spend.ts:241`](../../../extension/src/background/script-spend.ts),
 and all of them hold `txCbor` (`transfer.ts:117`, `send.ts:144`,
 `withdraw.ts:115`, `mint.ts:133`, `staking.ts:270`). So "available any time the
 wallet is building a transaction" needs **no new plumbing**: the view reads the
@@ -40,7 +40,7 @@ on a signed transaction, close it, submit, and the submit still goes.
 
 ## Start here
 
-- **`inspect_tx` already does the walk.** [`wasm/src/cip30.rs:1490`](../../wasm/src/cip30.rs)
+- **`inspect_tx` already does the walk.** [`wasm/src/cip30.rs:1490`](../../../wasm/src/cip30.rs)
   returns `TxSummary`: fee, net movement, `paid`, `own_outputs`, `mint`,
   `certificates`, `withdrawals`, `collateral`, validity, signers. It reads the
   whole body in Pallas — but **reduces most of it to tallies**
@@ -269,7 +269,7 @@ once, and the text takes room in the flow when it opens rather than floating —
 a scrolling panel can never clip it.
 
 **Where it stops.** A privacy `Callout` is a decision from
-[privacy.md](../privacy.md), not an explanation to ask for, and
+[privacy.md](../../privacy.md), not an explanation to ask for, and
 `tests/screens.test.ts` pins the wording of several; a warning (a transaction
 marked to fail, a field the wallet can't name) is the same. Those stay where
 everyone reads them, and a test says so.

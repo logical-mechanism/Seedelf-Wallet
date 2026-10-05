@@ -474,11 +474,12 @@ export class Wallet {
 
   /**
    * Runs `task` with the keys of public account `index`, whichever one is
-   * active: how a connected site keeps talking to the account it connected
-   * to (dapp.ts). A site that followed the active account would be handed a
-   * second account's addresses and learn the two are one wallet's **without
-   * the user choosing that** — which is the part that matters. A link the
-   * user makes on purpose is their business (a payment between their own
+   * active: how connected sites are served from the one dApp account
+   * Settings chooses (`withDappKeys` in dapp.ts), and how discovery reads an
+   * account the wallet isn't on. Sites never follow the active account: one
+   * that did would be handed a second account's addresses and learn the two
+   * are one wallet's **without the user choosing that**. A link the user
+   * makes on purpose is their business (a payment between their own
    * accounts is allowed and merely said); one a site is handed behind their
    * back is not.
    *

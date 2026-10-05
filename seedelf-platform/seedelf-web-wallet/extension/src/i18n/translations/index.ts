@@ -6,7 +6,7 @@
 //   1. Write `<code>.json`, mirroring `en.json`'s keys exactly.
 //   2. Set its own `language.name` (in that language) and `language.code`.
 //   3. Import it below and add it to `bundles`.
-// i18next and the picker then pick it up. `tests/i18n-parity.test.ts` holds
+// i18next and the picker then pick it up. `tests/i18n.test.ts` holds
 // the key sets identical, so a half-finished file fails rather than ships.
 
 import en from "./en.json" with { type: "json" };

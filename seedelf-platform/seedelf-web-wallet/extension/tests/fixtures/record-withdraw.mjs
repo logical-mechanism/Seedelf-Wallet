@@ -10,10 +10,26 @@
 //   remove   the phrase's synthetic seedelf "web-wallet" burned, its ADA to
 //            the address
 //
-// Each is drafted, evaluated by preprod Ogmios (the owned UTxOs go along as
-// `additionalUtxo`; the scripts, reference inputs and giveme.my's collateral
-// UTxO are real), and finished. giveme.my is asked about the first one; it
-// refuses, since the inputs aren't on chain. Nothing is submitted.
+// Each is built with buildWithdraw or buildRemove, measured by the wallet's
+// own evaluator, as the worker builds them (background/withdraw.ts, its
+// `build` and `buildRemove`); then preprod Ogmios evaluates it, a check the worker doesn't
+// make, and declaredCovers must find the wallet's budgets cover what the
+// network measures (the owned UTxOs go along as `additionalUtxo`; the
+// scripts, reference inputs and giveme.my's collateral UTxO are real).
+// giveme.my is asked about the first one; it refuses, since the inputs
+// aren't on chain. Nothing is submitted.
+//
+// The committed withdraw-preprod.json is older than this script: the
+// draftWithdraw/draftRemove → Ogmios → finish recording of 2026-09-24, from
+// before a withdrawal took a list of payments (chunk 14) and was measured in
+// the wallet (the crypto review). Tests read each spend's `draft`, its
+// request with `to`, `lovelace` and `tokens` at the top, and its
+// `final.fee`, the network's measure, to compare theirs with
+// (wasm/tests/api_test.rs and withdraw.test.mjs; tests/withdraw.test.ts;
+// e2e/extension.spec.ts). A new recording has no `draft`, its requests carry
+// `payments`, its `final` is the build's (the wallet's own fee), and its
+// `evaluation` is the finished transaction's: move those readers in the
+// same change.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const wasmPkg = new URL("../../../wasm/pkg/", import.meta.url);
@@ -56,28 +72,31 @@ function ogmiosUtxo(u) {
 const [params] = await (await fetch(`${KOIOS}/epoch_params?limit=1`)).json();
 const key = wasm.SeedelfKey.fromPhrase(vector(12).phrase, 0);
 
-/** Draft, evaluate on preprod, finish. */
-async function record(draftFn, finishFn, request) {
-  const draft = JSON.parse(draftFn(key, JSON.stringify(request)));
-  const spent = owned.filter((u) => draft.inputs.some((i) => i.txHash === u.tx_hash && i.txIndex === u.tx_index));
+/** Build, then have preprod evaluate what was built. */
+async function record(build, request) {
+  const final = JSON.parse(build(key, JSON.stringify(request)));
+  const spent = owned.filter((u) => final.inputs.some((i) => i.txHash === u.tx_hash && i.txIndex === u.tx_index));
   const { answer: evaluation } = await post(`${KOIOS}/ogmios`, {
     jsonrpc: "2.0",
     method: "evaluateTransaction",
-    params: { transaction: { cbor: draft.draftCbor }, additionalUtxo: spent.map(ogmiosUtxo) },
+    params: { transaction: { cbor: final.txCbor }, additionalUtxo: spent.map(ogmiosUtxo) },
   });
   if (evaluation.error) throw new Error(`evaluation failed: ${JSON.stringify(evaluation.error)}`);
-  const final = JSON.parse(finishFn(key, JSON.stringify({ ...request, seed: draft.seed, evaluation })));
-  return { request: { ...request, params: undefined }, draft, evaluation, final };
+  const checked = JSON.parse(wasm.declaredCovers(final.txCbor, JSON.stringify(evaluation)));
+  if (!checked.covers) throw new Error(`the wallet's budgets don't cover preprod's: ${checked.reason}`);
+  return { request: { ...request, params: undefined }, evaluation, final };
 }
 
-const base = { network: "preprod", params, utxos, to };
-const amount = await record(wasm.draftWithdraw, wasm.finishWithdraw, {
+// As the worker asks, less `classes`: the synthetic UTxOs have no history.
+const base = { network: "preprod", params, utxos };
+const amount = await record(wasm.buildWithdraw, {
   ...base,
-  lovelace: "5000000",
-  tokens: [{ policyId: tusdm.policy_id, assetName: tusdm.asset_name, quantity: "1000000" }],
+  payments: [
+    { to, lovelace: "5000000", tokens: [{ policyId: tusdm.policy_id, assetName: tusdm.asset_name, quantity: "1000000" }] },
+  ],
 });
-const max = await record(wasm.draftWithdraw, wasm.finishWithdraw, { ...base, lovelace: null, tokens: [] });
-const remove = await record(wasm.draftRemove, wasm.finishRemove, {
+const max = await record(wasm.buildWithdraw, { ...base, payments: [{ to, lovelace: null, tokens: [] }] });
+const remove = await record(wasm.buildRemove, {
   network: "preprod",
   params,
   utxo: seedelf,
@@ -105,6 +124,7 @@ writeFileSync(
   )}\n`,
 );
 for (const [name, r] of Object.entries({ amount, max, remove })) {
-  console.log(`${name}: ${r.draft.inputs.length} input(s), fee ${r.final.fee.total}, lovelace ${r.final.lovelace}`);
+  const lovelace = r.final.lovelace ?? r.final.payments[0].lovelace;
+  console.log(`${name}: ${r.final.inputs.length} input(s), fee ${r.final.fee.total}, lovelace ${lovelace}`);
 }
 console.log(`giveme.my: ${collateral.status} ${JSON.stringify(collateral.answer)}`);

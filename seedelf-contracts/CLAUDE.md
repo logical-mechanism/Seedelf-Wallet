@@ -18,7 +18,7 @@ aiken build --trace-level verbose --trace-filter all   # keep traces for debuggi
 
 **Never copy `hashes/` into the Rust `seedelf-core` constants.** The deployed contracts are variant 1, and it's frozen: commit `5b82530`, built with Aiken `v1.1.9` and stdlib `v2.2.0` (wallet `94bca9c0…`, policy `84967d91…`, always-false `6777ba4d…`). The source here, `contracts/` and `hashes/` are a later revision that was never deployed, and [AUDIT.md](AUDIT.md) reviews that revision, not variant 1's bytecode. Any change that moves a hash (validator code, the toolchain, the seed) is a new variant with its own reference UTxOs, deployed and added beside variant 1, never an edit to variant 1. See [README.md](README.md).
 
-Toolchain: Aiken `v1.1.24`, Plutus `v3`, stdlib `v4.0.0` (pinned in [aiken.toml](aiken.toml); CI installs the same Aiken).
+Toolchain: Aiken `v1.1.24`, Plutus `v3`, stdlib `v4.0.0` (pinned in [aiken.toml](aiken.toml); CI installs the same Aiken). The committed `contracts/` and `hashes/` predate that bump: they were last committed at `34d070e` (2025-10-22), when `aiken.toml` pinned Aiken `v1.1.19` and stdlib `v3.0.0`.
 
 ## Architecture
 
