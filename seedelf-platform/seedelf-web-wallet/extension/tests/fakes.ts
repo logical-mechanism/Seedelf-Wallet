@@ -450,9 +450,24 @@ export function fakeMinswap(): FakeMinswap {
     cancelCbor: "",
     fetch: async (url, init) => {
       const path = new URL(url).pathname.split("/").pop()!;
-      fake.calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+      const body = init.body ? JSON.parse(String(init.body)) : null;
+      fake.calls.push({ path, body });
       if (path === "estimate") return Response.json(fake.estimate);
-      if (path === "build-tx") return Response.json({ cbor: fake.swapCbor });
+      if (path === "build-tx") {
+        // Minswap quotes again, at the slippage asked, and won't build under the minimum it's given (as it does live).
+        const own = BigInt(Math.floor(Number(fake.estimate.amount_out) / (1 + body.estimate.slippage / 100)));
+        if (BigInt(body.min_amount_out) > own) {
+          return Response.json(
+            {
+              error: "InvalidOrderOptionsError",
+              message: "Invalid order options: Minimum amount out is less than or equal to the estimated minimum amount out.",
+              details: { min_amount_out: body.min_amount_out, new_min_amount_out: own.toString() },
+            },
+            { status: 400 },
+          );
+        }
+        return Response.json({ cbor: fake.swapCbor });
+      }
       if (path === "pending-orders") return Response.json({ orders: fake.orders, amount_in_decimal: false });
       if (path === "cancel-tx") return Response.json({ cbor: fake.cancelCbor });
       return new Response("not found", { status: 404 });

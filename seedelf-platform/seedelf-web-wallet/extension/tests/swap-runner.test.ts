@@ -4,6 +4,7 @@
 // account, the return after a cancel, and a refund told from a fill.
 import { describe, expect, it } from "vitest";
 
+import { slippageKeeping } from "../src/background/sessions";
 import { bech32 } from "./fixtures/bech32";
 import { bytes, ORDER_ADDRESS } from "./fixtures/swap-tx";
 import {
@@ -296,6 +297,46 @@ describe("the least a swap's order asks for (independent review L24)", () => {
     t.minswap.estimate = { ...t.minswap.estimate, amount_out: "910000000", min_amount_out: "905450000" };
     const view = await sessions.advance("preprod", 0, true);
     expect(view.auto).toMatchObject({ approvedMinOut: "902083681", placedMinOut: "905450000" });
+  });
+
+  it("is the approved one after a dip within the slippage, asked with the slippage that keeps Minswap's own there", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    // A big trade moved the pool: still above the approved minimum, but Minswap's own at 0.5% is under it, and
+    // asked for the approved one at 0.5% it refuses every build until the price comes back (mainnet, 1.1.0).
+    t.minswap.estimate = { ...t.minswap.estimate, amount_out: "904000000", min_amount_out: "899502487" };
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.auto!.paused).toBeUndefined();
+    const build = t.minswap.calls.find((c) => c.path === "build-tx")!;
+    expect(build.body).toMatchObject({ min_amount_out: "902083681", estimate: { slippage: 0.2123 } });
+    expect(view.auto).toMatchObject({ approvedMinOut: "902083681", placedMinOut: "902083681" });
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  });
+});
+
+describe("slippageKeeping", () => {
+  it("leaves Minswap's minimum, amount_out / (1 + slippage%) rounded down, at the least or above, a step under the bound", () => {
+    expect(slippageKeeping(904000000n, 902083681n)).toBe(0.2123);
+    for (const [out, least] of [
+      [904000000n, 902083681n],
+      [625803009n, 624557629n],
+      [10_000_000_000_000_000n, 9_500_000_000_000_000n],
+      [1_000_001n, 1_000_000n],
+      [57n, 50n],
+    ] as const) {
+      const s = slippageKeeping(out, least);
+      expect(Math.floor(Number(out) / (1 + s / 100))).toBeGreaterThanOrEqual(Number(least));
+      // Two steps more, and it's no longer above the least: no more than it needs is given up.
+      expect(Math.floor(Number(out) / (1 + (s + 0.0002) / 100))).toBeLessThanOrEqual(Number(least));
+    }
+  });
+
+  it("is none when the quote is the least, or barely above it", () => {
+    expect(slippageKeeping(902083681n, 902083681n)).toBe(0);
+    expect(slippageKeeping(902083682n, 902083681n)).toBe(0);
   });
 });
 

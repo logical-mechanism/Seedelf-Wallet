@@ -253,7 +253,14 @@ export class Minswap {
     return this.post<Estimate>("estimate", { ...routed(ask, this.exclude), amount_in_decimal: false });
   }
 
-  /** An unsigned swap from `sender`, for the ask quoted; it gives at least `minAmountOut` or is refunded. */
+  /**
+   * An unsigned swap from `sender`, for the ask quoted. Minswap quotes it
+   * again and puts its own fresh minimum in the order, amount_out / (1 +
+   * slippage%) rounded down, whatever `minAmountOut` is: that's only the
+   * least it may be, and a build under it is refused, a 400 whose message
+   * has the comparison backwards ("Minimum amount out is less than or equal
+   * to the estimated minimum amount out", seen 2026-10-05 on mainnet).
+   */
   async buildTx(sender: string, minAmountOut: string, ask: SwapAsk): Promise<string> {
     const { cbor } = await this.post<{ cbor: string }>("build-tx", {
       sender,

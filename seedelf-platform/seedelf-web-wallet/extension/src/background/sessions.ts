@@ -535,6 +535,19 @@ export function checkAsk(ask: SwapAsk): SwapAsk {
   return { amount: ask.amount, tokenIn: ask.tokenIn, tokenOut: ask.tokenOut, slippage: ask.slippage };
 }
 
+/**
+ * The most slippage, in percent to four places, that leaves Minswap's
+ * minimum for a quote of `amountOut`, amountOut / (1 + slippage%), at
+ * `least` or more: a step of 0.0001% under the exact bound, so Minswap's
+ * rounding never takes it below. 0 when the quote is barely above `least`.
+ */
+export function slippageKeeping(amountOut: bigint, least: bigint): number {
+  const room = amountOut - least - 1n;
+  if (room <= 0n) return 0;
+  const steps = (room * 1_000_000n) / (least + 1n) - 1n;
+  return steps > 0n ? Number(steps) / 10_000 : 0;
+}
+
 /** A quote from Minswap's estimate, with what a session for it is funded with. */
 export function quoteOf(network: NetworkName, ask: SwapAsk, est: Estimate): SwapQuote {
   const costs = BigInt(est.total_dex_fee) + BigInt(est.deposits) + BigInt(est.aggregator_fee ?? "0") + SWAP_MARGIN;
@@ -2227,11 +2240,17 @@ export class SessionService {
     }
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
+    // Minswap puts its own fresh minimum in the order, amount_out / (1 + slippage%), whatever it's asked for, and
+    // won't build one under the minimum it's given (Minswap.buildTx). After a dip the quote is still above the
+    // approved minimum, but the approved slippage puts Minswap's under it, and every build is refused until the
+    // price comes back: asked with only the slippage that keeps it at the approved minimum (seen on mainnet, 1.1.0).
+    const dipped = BigInt(est.min_amount_out) < least;
+    const asked = dipped ? { ...ask, slippage: slippageKeeping(BigInt(est.amount_out), least) } : ask;
     // At least what the user approved, or more when the price has moved their way.
-    const min = BigInt(est.min_amount_out) > least ? est.min_amount_out : approved.minAmountOut;
-    const txCbor = await minswap.buildTx(address, min, ask);
+    const min = dipped ? approved.minAmountOut : est.min_amount_out;
+    const txCbor = await minswap.buildTx(address, min, asked);
     // Minswap's fee is bounded by what was approved, not by what it quotes now.
-    const quote = { ...quoteOf(network, ask, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
+    const quote = { ...quoteOf(network, asked, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
     const built = await this.inspect(network, s, "swap", txCbor, rows, quote);
     withinFunding(paidOut(built.summary, address), built.summary.fee, approved.fund);
     await this.signAndSend(network, built);
