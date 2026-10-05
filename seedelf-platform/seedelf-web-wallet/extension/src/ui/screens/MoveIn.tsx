@@ -9,23 +9,27 @@ import { useT } from "../../i18n";
 import type { Balances, MoveInSummary, PendingTx } from "../../shared/rpc";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
-import { AdaInput, lovelaceToSend, MinimumHint, MinimumNote } from "../components/AdaInput";
+import { AdaInput, amountText, lovelaceToSend, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { ReviewWait, waitingFor } from "../components/Recipients";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { AfterRow, RewardsRow, RewardsSetting, TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { HandleWarning } from "../components/HandleWarning";
 import { LeftOutNote } from "../components/LeftOut";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { adaWithTokens, formatAda, lockedAside, rewardsAside, tokenKey as key } from "../format";
-import { WithdrawalRow } from "./CardanoSend";
+import { adaText, formatAda, lockedAside, rewardsAside, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
+import { useAmounts } from "../preferences";
 import { tokenQuantity } from "../tokens";
 
 export function MoveIn({
   cardano,
   rewards,
+  totals,
+  picked,
   onCancel,
   onSent,
 }: {
@@ -33,13 +37,17 @@ export function MoveIn({
   cardano: Balances["cardano"];
   /** Staking rewards that ride along (lovelace), when any do. */
   rewards?: string;
+  /** Both balances as Home shows them, for the review's after rows. */
+  totals?: { public: string; private: string };
+  /** Tokens picked already, from a token's details: each asks for its amount. */
+  picked?: Record<string, string>;
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
   const t = useT();
   const [amount, setAmount] = useState("");
   const [max, setMax] = useState(false);
-  const [tokenAmounts, setTokenAmounts] = useState<Record<string, string>>({});
+  const [tokenAmounts, setTokenAmounts] = useState<Record<string, string>>(picked ?? {});
   const [summary, setSummary] = useState<MoveInSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -51,6 +59,9 @@ export function MoveIn({
   // The builder decides exactly (fee, change, collateral UTxOs); this catches the obvious case early.
   const tooMuch = typeof lovelace === "string" && BigInt(lovelace) > BigInt(cardano.lovelace);
   const ready = tokens.ok && (max || (typeof lovelace === "string" && !tooMuch));
+  const waiting = waitingFor({ amount, tokensPicked: Object.keys(tokenAmounts).length > 0, tokensOk: tokens.ok, max });
+  // The form's balance lines, hidden with the balances; the review shows what moves in full (HM-9).
+  const shown = useAmounts();
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -79,6 +90,11 @@ export function MoveIn({
   }
 
   if (summary) {
+    // The screen's own verb, with the amount and any tokens that move with it: "Make 2.21103 ₳ private" left out
+    // the four tokens going too (chunk 23's second review, PY-5).
+    const action = summary.tokens.length
+      ? t("moveIn.review.buttonTokens", { amount: formatAda(summary.lovelace), count: summary.tokens.length })
+      : t("moveIn.review.button", { amount: formatAda(summary.lovelace) });
     return (
       <Screen
         title={t("moveIn.review.title")}
@@ -87,26 +103,40 @@ export function MoveIn({
         hintTestId="move-in-review-note"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
-        aside={t("review.nothingSent")}
+        aside={t("review.nothingUntil", { action })}
         error={error}
         foot={
+          // The screen's own verb, with the amount: every review's button used to say Send (chunk 23's review, S-7).
           <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? t("common.sending") : t("common.send")}
+            {busy ? t("common.sending") : action}
           </button>
         }
       >
         <ReviewRows testId="move-in-review">
-          <Row label={t("moveIn.review.into")} value={`${formatAda(summary.lovelace)} ₳`} strong />
-          {summary.tokens.map((t) => {
-            const known = cardano.tokens.find((c) => key(c) === key(t));
-            return <TokenAmountRow key={key(t)} label="" token={known ?? t} amount={tokenQuantity(network, { ...known, ...t })} />;
+          <Row label={t("moveIn.review.into")} value={amountText(summary.lovelace, summary.minimum, lovelace ?? "0")} strong />
+          {summary.tokens.map((tk, n) => {
+            const known = cardano.tokens.find((c) => key(c) === key(tk));
+            return (
+              <TokenAmountRow
+                key={key(tk)}
+                label={n === 0 ? t("review.tokens") : ""}
+                token={known ?? tk}
+                amount={tokenQuantity(network, { ...known, ...tk })}
+              />
+            );
           })}
-          <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
-          <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label={t("review.backToPublic")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label={t("moveIn.review.newUtxos")} value={String(summary.depositOutputs)} />
+          <Row label={t("review.fee")} value={adaText(summary.fee)} />
+          <RewardsRow withdrawal={summary.withdrawal} />
+          <TotalRows
+            side="public"
+            leaving={BigInt(summary.lovelace) + BigInt(summary.fee)}
+            before={totals?.public}
+            tokens={summary.tokens.length}
+          />
+          {totals && <AfterRow side="private" lovelace={BigInt(totals.private) + BigInt(summary.lovelace)} />}
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="move-in-tx" />
+        <RewardsSetting withdrawal={summary.withdrawal} />
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
         <LeftOutNote leftOut={summary.leftOut} testId="move-in-left-out" />
       </Screen>
@@ -121,14 +151,15 @@ export function MoveIn({
       hint={t("moveIn.note")}
       hintTestId="move-in-note"
       onBack={onCancel}
-      aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
+      aside={`${t("withdraw.asideAvailable", { amount: shown.ada(cardano.lovelace) })}${rewardsAside(rewards, shown.ada)}${lockedAside(cardano, shown.ada)}`}
       error={error}
       foot={
         <>
+          <BuildStage busy={busy} />
           <button type="submit" className="primary" disabled={!ready || busy}>
             {busy ? t("common.building") : t("common.review")}
           </button>
-          <BuildStage busy={busy} />
+          {!ready && <ReviewWait reasons={[waiting]} tooMuch={tooMuch} busy={busy} />}
         </>
       }
     >
@@ -139,7 +170,7 @@ export function MoveIn({
           value={amount}
           onChange={setAmount}
           disabled={max}
-          shown={t("common.max")}
+          shown={t("common.maxUpTo", { amount: shown.ada(cardano.lovelace) })}
           placeholder={withTokens ? t("common.minimum") : "0"}
         >
           <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
@@ -148,7 +179,7 @@ export function MoveIn({
         </AdaInput>
         {tooMuch && (
           <p className="field-note" data-testid="move-in-too-much">
-            {t("moveIn.tooMuch", { amount: formatAda(cardano.lovelace) })}
+            {t("moveIn.tooMuch", { amount: shown.ada(cardano.lovelace) })}
           </p>
         )}
       </div>

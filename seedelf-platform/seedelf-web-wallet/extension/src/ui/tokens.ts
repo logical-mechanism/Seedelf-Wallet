@@ -267,6 +267,13 @@ export interface TokenView {
   label: string;
   /** A second line: the registry's full name, or the fingerprint. */
   sub: string;
+  /**
+   * The second line is a warning: a token passing for ADA or a listed one,
+   * which goes by its fingerprint and says what it calls itself. Shown whole,
+   * never cut: in the side panel it read "not on the wallet's …", the part
+   * that matters lost (chunk 23's review, H-9).
+   */
+  warn?: boolean;
   decimals: number;
   amount: string;
   nft: boolean;
@@ -297,6 +304,7 @@ export function viewToken(network: NetworkName, token: TokenAmount): TokenView {
     label: text.label,
     // One passing for another says what it calls itself, beside its fingerprint.
     sub: info ? info.name : text.posesAs ? t("tokens.callsItself", { own: text.own }) : text.id,
+    ...(!info && text.posesAs ? { warn: true } : {}),
     decimals,
     amount: formatQuantity(token.quantity, decimals),
     nft: isNft(token, info),

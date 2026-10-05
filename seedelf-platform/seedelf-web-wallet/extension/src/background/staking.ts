@@ -176,6 +176,13 @@ const PENDING_KIND: Record<StakingAction["kind"], PendingTx["kind"]> = {
 /** Whether `action` is the account's own DRep's, signed with the DRep key. */
 const isDrepAction = (action: StakingAction) => action.kind.startsWith("drep-");
 
+/**
+ * Whether `action` locks up a deposit: registering a DRep, and the stake key's
+ * first pool or vote delegation, which registers it. The rest pay a fee only.
+ */
+export const takesDeposit = (action: StakingAction, registered: boolean) =>
+  action.kind === "drep-register" || (!registered && (action.kind === "delegate" || action.kind === "vote"));
+
 export class StakingService {
   constructor(private readonly deps: StakingDeps) {}
 
@@ -287,10 +294,13 @@ export class StakingService {
     if (action.kind === "drep-retire" && !/^[1-9]\d*$/.test(drepRow?.deposit ?? "")) {
       throw new Error(t("worker.governance.noDeposit"));
     }
-    if (utxos.length === 0) {
-      throw nothingInAccount(held, t("worker.staking.accountEmpty"));
-    }
     const state = stakeInfoOf(stake, null);
+    if (utxos.length === 0) {
+      // Only what this action needs: a withdrawal, a retirement or a vote pays a fee and no deposit, and rewards
+      // can't pay it alone (chunk 23's second review, ST-9).
+      const empty = takesDeposit(action, state.registered) ? "worker.staking.accountEmpty" : "worker.staking.accountEmptyFee";
+      throw nothingInAccount(held, t(empty));
+    }
     if (action.kind === "delegate" && state.registered && stake?.delegated_pool === wasm.poolId(action.pool)) {
       throw new Error(t("worker.staking.samePool"));
     }

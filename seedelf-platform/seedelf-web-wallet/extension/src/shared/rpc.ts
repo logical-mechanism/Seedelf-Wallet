@@ -255,8 +255,14 @@ export interface Balances {
   network: NetworkName;
   /** When the chain was read (ms since the epoch). */
   updatedAt: number;
+  /**
+   * When the reading of its private side began (ms since the epoch), before it took what the wallet had spent to
+   * leave out: a transaction sent before then is left out of it (background/incoming.ts). Not `updatedAt`, which is
+   * when it ended: a send that landed between the two is still in it (chunk 23's second review, fix round).
+   */
+  spentAsOf?: number;
   /** UTxOs in the wallet contract this wallet owns, except those holding a seedelf (as in the CLI's `balance`). */
-  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[]; locked: Locked };
+  seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[]; locked: Locked; incoming?: Incoming };
   /** The Cardano account (CIP-1852 account 0): `lovelace` is its UTxOs', without the rewards in `staking`. */
   cardano: {
     lovelace: string;
@@ -265,8 +271,17 @@ export interface Balances {
     addressesUsed: number;
     locked: Locked;
     staking: StakeInfo;
+    incoming?: Incoming;
   };
 }
+
+/**
+ * What the wallet's own sent transactions pay back to a side that no reading
+ * lists yet: a payment's change, a Make private's deposit (background/incoming.ts,
+ * chunk 23's second review, HM-1, HM-2). Not in `lovelace` or `tokens`, and
+ * nothing a form may spend until the chain shows it.
+ */
+export type Incoming = Locked;
 
 /** A live stake pool in the browser. Lovelace amounts are decimal strings. */
 export interface PoolRow {
@@ -397,6 +412,10 @@ export interface GovAction {
   title?: string;
   abstract?: string;
   proposedEpoch: number;
+  /** When it was proposed (ms since 1970): its transaction's block time, when Koios gave it. */
+  proposedAt?: number;
+  /** A treasury withdrawal's payments, as the ledger holds them: each reward address, and the lovelace it gets. */
+  withdrawals?: Array<{ to: string; amount: string }>;
   /** The last epoch it can be voted on in. */
   expiresEpoch: number;
   /** What its proposer locked up (lovelace). */
@@ -473,6 +492,12 @@ export interface UtxoInfo {
   blockHeight?: number;
   /** The Cardano account's address holding it. */
   address?: string;
+  /**
+   * Where that address sits in the account: its chain (0 receive, 1 change)
+   * and index, so the details can say it's the account's own (chunk 23's
+   * second review, AC-4).
+   */
+  path?: { role: 0 | 1; index: number };
   /** Kept out of every payment (the collateral always is). */
   locked: boolean;
   /** The Cardano account's collateral. */
@@ -1466,7 +1491,23 @@ export interface SessionView {
    * may still land: Try again looks for it again.
    */
   unsent?: boolean;
+  /** With `unsent`: why it was turned away, when that's known (chunk 23's second review, DX-5). */
+  unsentWhy?: UnsentWhy;
+  /**
+   * Once it's over: what its last return brought back at once, as that
+   * return's review said (a chain's boxes come back later). None on a
+   * session from before it was kept (DX-5).
+   */
+  received?: { lovelace: string; tokens: TokenQuantity[] };
 }
+
+/**
+ * Why a session's funding was turned away, as a code the page words:
+ * `changed`, something it spends changed since the review; `unreachable`,
+ * the collateral service couldn't be reached; `busy`, the network turned it
+ * away for now; `network`, the network refused it.
+ */
+export type UnsentWhy = "changed" | "unreachable" | "busy" | "network";
 
 /**
  * A UTxO at a session's account that no return of the wallet's takes:
@@ -1624,6 +1665,12 @@ export interface LovejoinPublicSummary {
 export interface LovejoinStatus {
   /** Real boxes in the pool that aren't this wallet's: what the floor counts. */
   others: number;
+  /**
+   * Of `others`, those no chain of the wallet's will spend: what a new mix
+   * draws from, so the page says before Review whether one fits (chunk 23's
+   * second review, LJ-1). None from a worker before it was counted.
+   */
+  free?: number;
   /** The fewest others the wallet mixes with on this network; 0 where there's no floor. */
   floor: number;
   available: boolean;
@@ -1770,6 +1817,8 @@ export interface Requests {
   "reveal-phrase": { payload: { password: string }; result: { words: string[] } };
   /** Whether a typed phrase is this wallet's, for Settings' check: yes or no, never which words differ. */
   "check-phrase": { payload: { phrase: string }; result: { matches: boolean } };
+  /** How many words this wallet's phrase has, so Settings' check opens on that many boxes. Unlocked only. */
+  "phrase-words": { payload: None; result: { words: number } };
   /** Seals the vault under a new password. */
   "change-password": { payload: { current: string; next: string }; result: None };
   /** This network's contacts, by name. */
@@ -1892,7 +1941,11 @@ export interface Requests {
   "dapp-answer": {
     /** `governance`: a connect that asked for CIP-95, connected with it (the window's switch, off by default). */
     payload: { id: string; approve: boolean; password?: string; fund?: { txHash: string }; governance?: boolean };
-    result: { error?: string };
+    /**
+     * `code`, as a refused request's reply carries it (`ReplyCode`): a private session's funding that building
+     * again fixes. Whether one that failed otherwise is built again, the window reads from its session (DX-1).
+     */
+    result: { error?: string; code?: ReplyCode };
   };
   /** Ends a site's private session, once its account is empty, and disconnects the site that has it. */
   "dapp-disconnect-session": { payload: { index: number }; result: null };
@@ -2019,9 +2072,16 @@ export type Message = {
   [K in RequestName]: { type: K } & Requests[K]["payload"];
 }[RequestName];
 
+/**
+ * What a refusal is, where a screen acts on it rather than only saying it.
+ * `stale`: a reviewed transaction that building again from the chain fixes
+ * (background/collateral.ts StaleReviewError).
+ */
+export type ReplyCode = "stale";
+
 export type Reply<K extends RequestName> =
   | { ok: true; value: Requests[K]["result"] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: ReplyCode };
 
 const REQUEST_LIST = [
   "status",
@@ -2055,6 +2115,7 @@ const REQUEST_LIST = [
   "reset-check",
   "reveal-phrase",
   "check-phrase",
+  "phrase-words",
   "change-password",
   "contacts",
   "contact-save",

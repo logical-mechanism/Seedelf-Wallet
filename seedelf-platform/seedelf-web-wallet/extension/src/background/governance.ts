@@ -11,8 +11,9 @@
 //   profile  when it has one, `drep_metadata` says whether Koios found the
 //            file and it matched its hash. The wallet never fetches it.
 //   actions  every live action (`proposal_list`), its title and abstract as
-//            Koios read them from its anchor. The same for everyone, so kept
-//            in chrome.storage.local for an hour.
+//            Koios read them from its anchor, when it was proposed, and what
+//            a treasury withdrawal pays to whom. The same for everyone, so
+//            kept in chrome.storage.local for an hour.
 //   votes    the DRep's votes on those actions (`vote_list`).
 
 import type * as Wasm from "@seedelf/wasm";
@@ -124,9 +125,26 @@ export function shownText(text: unknown, most: number, { lines = false } = {}): 
   return clean.length > most ? `${clean.slice(0, most).trimEnd()}…` : clean;
 }
 
+/**
+ * A treasury withdrawal's payments as Koios lists them, each checked for shape: anything else is left out. A list,
+ * or one payment on its own: an action paying one address showed none when it came as an object (chunk 23's second
+ * review, fix round).
+ */
+export function withdrawalsOf(found: unknown): Array<{ to: string; amount: string }> {
+  type Row = { stake_address?: unknown; amount?: unknown } | null;
+  const rows: Row[] = Array.isArray(found) ? found : found && typeof found === "object" ? [found as Row] : [];
+  const address = /^stake(_test)?1[02-9ac-hj-np-z]+$/;
+  return rows.flatMap((r) =>
+    typeof r?.stake_address === "string" && address.test(r.stake_address) && /^\d+$/.test(String(r.amount))
+      ? [{ to: r.stake_address, amount: String(r.amount) }]
+      : [],
+  );
+}
+
 function actionOf(row: KoiosProposal): GovAction {
   const title = shownText(row.title, MAX_TITLE);
   const abstract = shownText(row.abstract, MAX_ABSTRACT, { lines: true });
+  const withdrawals = withdrawalsOf(row.withdrawal);
   return {
     id: row.proposal_id,
     txHash: row.proposal_tx_hash,
@@ -135,6 +153,8 @@ function actionOf(row: KoiosProposal): GovAction {
     ...(title ? { title } : {}),
     ...(abstract ? { abstract } : {}),
     proposedEpoch: row.proposed_epoch,
+    ...(typeof row.block_time === "number" ? { proposedAt: row.block_time * 1000 } : {}),
+    ...(withdrawals.length ? { withdrawals } : {}),
     // Koios's `expiration` is the epoch an action is expired in (its `expired_epoch`, checked on
     // mainnet 2026-10-04): the ledger takes votes through the one before, its proposal's epoch
     // plus `gov_action_lifetime`.

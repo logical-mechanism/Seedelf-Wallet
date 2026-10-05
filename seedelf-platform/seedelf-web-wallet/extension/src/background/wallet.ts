@@ -410,6 +410,23 @@ export class Wallet {
     });
   }
 
+  /**
+   * How many words the recovery phrase has, read off the entropy the unlocked wallet keeps: 16 bytes are 12 words,
+   * 20 are 15, 32 are 24 (BIP39). Settings' check opens on that many boxes (chunk 23's second review, FR-11). The
+   * length is no secret worth keeping from someone at an unlocked browser: every length is at least 128 bits.
+   */
+  phraseWords(): Promise<number> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      const kept = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
+      try {
+        return (kept.length * 3) / 4;
+      } finally {
+        kept.fill(0);
+      }
+    });
+  }
+
   /** Seals the vault under a new password; the current one proves who's asking. */
   changePassword(current: string, next: string): Promise<void> {
     return this.serial(async () => {

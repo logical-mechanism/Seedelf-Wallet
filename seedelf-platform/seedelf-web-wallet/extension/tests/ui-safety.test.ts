@@ -28,7 +28,9 @@ describe("a transaction's banner", () => {
         testId: "pending-tx",
       }),
     );
-    expect(html).toContain('<span class="tx-banner__detail" data-testid="pending-tx-detail">Koios didn&#x27;t answer.</span>');
+    // A block: a payment that may have gone through puts Check now and a Details disclosure in it (chunk 23's second
+    // review, HM-4).
+    expect(html).toContain('<div class="tx-banner__detail" data-testid="pending-tx-detail">Koios didn&#x27;t answer.</div>');
   });
 });
 
@@ -43,7 +45,7 @@ describe("the To field", () => {
         ),
       ).match(/placeholder="([^"]*)"/)![1];
     expect(field("mainnet", false)).toBe("addr1… or $handle");
-    expect(field("mainnet", true)).toBe("addr1…, $handle or 5eed0e1f…");
+    expect(field("mainnet", true)).toBe("addr1…, $handle or a Seedelf name");
     expect(field("preprod", false)).toBe("addr_test1… or $handle");
   });
 });

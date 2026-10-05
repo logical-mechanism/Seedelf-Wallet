@@ -4,13 +4,16 @@
 // Nothing goes to giveme.my, and nothing into the Seedelf history.
 import { describe, expect, it } from "vitest";
 
-import { ADA_HANDLE_POLICY } from "../src/background/destination";
+import { Collateral, StaleReviewError } from "../src/background/collateral";
+import { ADA_HANDLE_POLICY, checkPayable } from "../src/background/destination";
 import { pendingKey } from "../src/background/pending";
-import { SESSION_SEND } from "../src/background/send";
+import { SESSION_SEND, SendService } from "../src/background/send";
+import { publicShort } from "../src/background/short";
+import { WalletLocked, WASM_BROKEN } from "../src/background/wallet";
 import { MAX_RECIPIENTS } from "../src/shared/recipients";
 import { OWN_SEEDELF_FROM_ACCOUNT, SEEDELF_NOT_AN_ADDRESS } from "../src/shared/seedelf-name";
 import { ttlOf, txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const TUSDM = { policyId: "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9", assetName: "0014df10745553444d" };
@@ -196,20 +199,98 @@ describe("send", () => {
     expect(await t.session.get(SESSION_SEND)).toBeUndefined();
     expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ kind: "send" });
     expect(await t.activity.seedelf("preprod")).toEqual([]);
-    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("isn't ready to send");
+    // Send again, from a page that missed the answer: sent already, never a stale review, whose "Refresh and review
+    // again" under "Nothing was sent" would build a second payment (chunk 23's second review, fix round).
+    const again = await t.send.submit("preprod", summary.txHash).catch((e: unknown) => e);
+    expect((again as Error).message).toMatch(/^That was sent already, so it isn't sent again\./);
+    expect(again).not.toBeInstanceOf(StaleReviewError);
+    // So after another page's review took Send's place, and after the worker restarted (a new service, the same
+    // session storage).
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("sent already");
+    await expect(new SendService(t.send["deps"]).submit("preprod", summary.txHash)).rejects.toThrow("sent already");
+    expect(t.koios.submitted).toHaveLength(1);
+    // One never sent, and no longer kept, is still a stale review.
+    await expect(t.send.submit("preprod", "00".repeat(32))).rejects.toBeInstanceOf(StaleReviewError);
   });
 
   it("explains what stops a payment and needs the wallet unlocked", async () => {
     const t = await unlocked();
     await expect(t.send.build("preprod", [{ to: "nope", lovelace: "2000000", tokens: [] }])).rejects.toThrow("isn't a Cardano address");
+    // What's wrong with an address, named (chunk 23's second review, PY-10).
     await expect(t.send.build("preprod", [{ to: account(12).mainnet.receive_0, lovelace: "2000000", tokens: [] }])).rejects.toThrow(
-      "normal preprod address",
+      "That's a mainnet address; this wallet is on Preprod.",
     );
-    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "999999999999999", tokens: [] }])).rejects.toThrow("Not enough ADA");
+    // Core's shortfall in the wallet's own words, with what Max would send that one recipient.
+    const short = t.send.build("preprod", [{ to: THEIRS, lovelace: "999999999999999", tokens: [] }]);
+    await expect(short).rejects.toThrow(/^Not enough ADA: with the fee, your public account can pay up to [\d,.]+\u00a0₳ here\. Use Max/);
+    await expect(short).rejects.not.toThrow("Cardano account");
+    // Two recipients have no Max: what to do instead.
+    await expect(
+      t.send.build("preprod", [
+        { to: THEIRS, lovelace: "999999999999999", tokens: [] },
+        { to: THEIRS, lovelace: "2000000", tokens: [] },
+      ]),
+    ).rejects.toThrow("Lower an amount, or take a recipient off.");
     await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [{ ...TUSDM, quantity: "3000000001" }] }])).rejects.toThrow(
       "holds only 3000000000",
     );
     await t.wallet.lock();
     await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow("locked");
+  });
+
+  it("says what would stay is too little when the amount fits, never 'up to' as much as was asked", async () => {
+    // Core's shortfall comes too when the amount fits and what's left can't stay: 100 ₳ in one UTxO, 99.5 ₳ asked.
+    // Max then pays more than was asked (chunk 23's second review, fix round).
+    const t = await unlocked();
+    await t.balances.get("preprod");
+    // The account's ADA alone, so nothing has to come back with the tokens and Max leaves nothing behind.
+    for (const u of (await t.coins.lists("preprod")).cardano) {
+      if (u.tokens.length) await t.coins.setLocked("preprod", "cardano", `${u.txHash}#${u.index}`, true);
+    }
+    const most = BigInt((await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).payments[0]!.lovelace);
+    const pay = (...amounts: bigint[]) => t.send.build("preprod", amounts.map((a) => ({ to: THEIRS, lovelace: a.toString(), tokens: [] })));
+    const left = "what stays in your public account would be less than the least ADA the network accepts";
+    // Half an ADA under Max: it fits, and the half left over can't stay.
+    const short = pay(most - 500_000n);
+    await expect(short).rejects.toThrow(`Not enough ADA: after this payment and its fee, ${left}. Use Max to send all of it, or send less.`);
+    await expect(short).rejects.not.toThrow("up to");
+    // Over Max, it's still how much can go.
+    await expect(pay(most + 1n)).rejects.toThrow("up to");
+    // Two that fit together and leave too little, and two that come to more than the account holds.
+    await expect(pay(2_000_000n, most - 2_500_000n)).rejects.toThrow(`after these payments and their fee, ${left}`);
+    await expect(pay(2_000_000n, most)).rejects.toThrow("these come to more than your public account can pay");
+  });
+
+  it("hands on a trap in the Max rebuild or the address check, so the wallet locks, never as a refusal", async () => {
+    // A trap leaves the instance broken for good (wasm.ts): taken for a shortfall or a bad address, the next build
+    // ran on it (chunk 23's second review, fix round).
+    const trap = new WebAssembly.RuntimeError("unreachable");
+    expect(() => publicShort(() => { throw trap; }, () => "")).toThrow(trap);
+    expect(publicShort(() => { throw new Error("Not enough ADA in the Cardano account"); }, () => "").message).toBe(
+      "Not enough ADA in your public account for this and its fee.",
+    );
+    const wasm = loadTestWasm();
+    const broken = { ...wasm, checkPayableAddress: () => { throw trap; } } as typeof wasm;
+    expect(() => checkPayable(broken, "preprod", THEIRS)).toThrow(trap);
+
+    const t = await unlocked();
+    let builds = 0;
+    const send = new SendService({
+      ...t.deps,
+      wasm: {
+        ...wasm,
+        buildAccountSend: () => {
+          if (builds++ === 0) throw new Error("Not enough ADA in the Cardano account for this payment, its fee and the change");
+          throw trap;
+        },
+      } as typeof wasm,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+    });
+    const e = await send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(WalletLocked);
+    expect((e as Error).message).toBe(WASM_BROKEN());
+    expect(builds).toBe(2);
+    expect(await t.wallet.state()).toBe("locked");
   });
 });

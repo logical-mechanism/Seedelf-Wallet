@@ -67,7 +67,7 @@ describe("the collateral", () => {
 
     const chosen = at(fives[2]!);
     expect(await t.coins.use("preprod", chosen)).toMatchObject({ state: "set", by: "you", utxo: { txHash: fives[2]!.tx_hash } });
-    await expect(t.coins.use("preprod", at(ours.find((u) => u.asset_list?.length)!))).rejects.toThrow("exactly 5 ₳");
+    await expect(t.coins.use("preprod", at(ours.find((u) => u.asset_list?.length)!))).rejects.toThrow("exactly 5\u00a0₳");
     // The Max above read the account, its stake key and the chain's tip again; reclaiming and choosing didn't.
     expect(t.koios.calls.length - calls).toBe(5);
   });

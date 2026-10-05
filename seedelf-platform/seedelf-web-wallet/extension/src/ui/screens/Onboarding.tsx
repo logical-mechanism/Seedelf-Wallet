@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useT } from "../../i18n";
 
 import type { Status } from "../../shared/rpc";
+import { Callout } from "../components/Callout";
 import { NetworkPicker, OnNetwork } from "../components/NetworkPicker";
 import { openInTab, view } from "../view";
 import { Create } from "./Create";
@@ -17,11 +18,14 @@ type Step = "welcome" | "create" | "restore";
 export function Onboarding({
   status,
   start,
+  removed,
   onDone,
   onNetwork,
 }: {
   status: Status;
   start?: "create" | "restore";
+  /** The wallet was just removed from Settings: said on the welcome screen. */
+  removed?: boolean;
   onDone: (s: Status) => void;
   onNetwork: (s: Status) => void;
 }) {
@@ -34,20 +38,23 @@ export function Onboarding({
   }
 
   if (step === "create" || step === "restore") {
-    return (
-      <>
-        <OnNetwork status={status} doing={step} onChange={() => setStep("welcome")} />
-        {step === "create" ? (
-          <Create onBack={() => setStep("welcome")} onDone={onDone} />
-        ) : (
-          <Restore onBack={() => setStep("welcome")} onDone={onDone} />
-        )}
-      </>
+    // Which network, with a way to change it, on the first step only: on every step it was a distraction mid-backup
+    // (chunk 23's review, C-6). The badge in the top bar says it throughout.
+    const network = <OnNetwork status={status} doing={step} onChange={() => setStep("welcome")} />;
+    return step === "create" ? (
+      <Create network={network} onBack={() => setStep("welcome")} onDone={onDone} />
+    ) : (
+      <Restore network={network} onBack={() => setStep("welcome")} onDone={onDone} />
     );
   }
 
   return (
     <section className="welcome">
+      {removed && (
+        <Callout testId="wallet-removed">
+          {t("welcome.removed")}
+        </Callout>
+      )}
       <img className="welcome__logo" src="/brand/wordmark-on-dark.png" alt={t("app.name")} width={360} height={118} />
       <p className="welcome__lead">{t("welcome.lead")}</p>
       <div className="stack welcome__actions">
@@ -57,6 +64,12 @@ export function Onboarding({
         <button className="secondary" onClick={() => go("restore")}>
           {t("welcome.restore")}
         </button>
+        {/* Said before it happens: the panel closing under the cursor looked like a crash (chunk 23's review, W-2). */}
+        {view === "panel" && (
+          <p className="note center" data-testid="welcome-opens-tab">
+            {t("welcome.opensTab")}
+          </p>
+        )}
       </div>
       <NetworkPicker status={status} onChanged={onNetwork} />
     </section>

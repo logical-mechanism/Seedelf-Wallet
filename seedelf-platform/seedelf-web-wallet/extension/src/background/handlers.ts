@@ -178,6 +178,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return { words: await wallet.revealPhrase(message.password) };
     case "check-phrase":
       return { matches: await wallet.checkPhrase(message.phrase) };
+    case "phrase-words":
+      return { words: await wallet.phraseWords() };
     case "change-password":
       await wallet.changePassword(message.current, message.next);
       return null;

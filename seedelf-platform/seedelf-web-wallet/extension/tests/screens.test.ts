@@ -22,21 +22,24 @@ import { HandleWarning } from "../src/ui/components/HandleWarning";
 import { LovejoinNote } from "../src/ui/components/LovejoinReturn";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
+import { SessionRefusedFoot } from "../src/ui/components/SessionRefused";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimReview } from "../src/ui/screens/ClaimAll";
 import { ClaimCard, Dapps } from "../src/ui/screens/Dapps";
 import {
+  boxesAffordable,
   Chains,
   detailOf as lovejoinDetail,
   NotMixed,
+  poolRoom,
   PrivateReview,
   PublicReview,
   subOf as lovejoinSub,
   WayBack,
 } from "../src/ui/screens/Lovejoin";
-import { attachedTo, disconnectWait, SiteRow, SiteSession } from "../src/ui/screens/SiteSessions";
+import { attachedTo, DisconnectSession, disconnectWait, SiteRow, SiteSession, siteConnected } from "../src/ui/screens/SiteSessions";
 import {
   isRunningSwap,
   localMatches,
@@ -75,18 +78,36 @@ const shown = (element: ReactElement) =>
   );
 
 describe("Home's banner for a payment Koios didn't answer (launch review #10)", () => {
-  const at = new Date(2026, 8, 27, 14, 5).getTime();
+  // Today, so the time it can land until needs no date.
+  const day = new Date();
+  const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 5).getTime();
   const sent: PendingTx = { kind: "send", network: "preprod", txHash: "ab".repeat(32), submittedAt: at, confirmations: null };
-  const banner = (pending: PendingTx, watching: boolean) =>
-    text(createElement(PendingBanner, { pending, watching, onDismiss: () => undefined }));
+  const banner = (pending: PendingTx, watching: boolean, onCheck?: () => void) =>
+    text(createElement(PendingBanner, { pending, watching, onDismiss: () => undefined, onCheck }));
 
   it("says until when one from the public account can land, and that new payments wait for it", () => {
     const pub = { ...sent, maybeSent: true, invalidHereafter: 123_456 };
-    expect(validUntil(pub)).toBe("16:05");
+    expect(validUntil(pub)).toBe("11:05");
     const line = banner(pub, true);
-    expect(line).toContain("Payment may have gone through. Waiting for the network…");
-    expect(line).toContain("New payments wait until it lands, or until it can't any more: it can land until about 16:05");
+    expect(line).toContain("New payments wait until it lands, or until it can't any more: it can land until about 11:05");
     expect(line).not.toContain("Dismiss");
+  });
+
+  it("leads with not paying again, offers Check now, and keeps how long it can land for under Details (chunk 23's second review, HM-4)", () => {
+    const pub = { ...sent, maybeSent: true, invalidHereafter: 123_456 };
+    const line = banner(pub, true, () => undefined);
+    expect(line).toMatch(/^Payment not confirmed yet: don't pay it again Koios didn't answer when it was sent, so it may have gone through\./);
+    expect(line).toContain("Check now Details New payments wait until it lands");
+    // Without a way to ask, no button.
+    expect(banner(pub, true)).not.toContain("Check now");
+  });
+
+  it("gives a time past midnight its date: said at 23:17, 01:17 read as hours ago", () => {
+    const late = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 17).getTime();
+    const tomorrow = new Date(late + 2 * 60 * 60_000).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+    const pub = { ...sent, submittedAt: late, maybeSent: true, invalidHereafter: 123_456 };
+    expect(validUntil(pub, late)).toBe(`${tomorrow}, 01:17`);
+    expect(banner(pub, true)).toContain(`it can land until about ${tomorrow}, 01:17`);
   });
 
   it("says a private one is let go 20 minutes on, since it carries no slot", () => {
@@ -98,7 +119,7 @@ describe("Home's banner for a payment Koios didn't answer (launch review #10)", 
   it("says one from the public account can still land for about two hours, once it no longer holds payments back", () => {
     const line = banner({ ...sent, invalidHereafter: 123_456 }, false);
     expect(line).toContain("Payment not confirmed yet");
-    expect(line).toContain("It can land until about 16:05, and the wallet keeps watching: if it hasn't landed by then, nothing was sent");
+    expect(line).toContain("It can land until about 11:05, and the wallet keeps watching: if it hasn't landed by then, nothing was sent");
     expect(line).toContain("Dismiss");
     // A private one Koios took says nothing more.
     expect(banner({ ...sent, kind: "transfer" }, false)).not.toContain("It can land");
@@ -189,7 +210,7 @@ describe("a swap's tokens (launch review #18, #20)", () => {
     const pair = pairOf(s, "preprod");
     expect(pair).toMatch(/^1,000 asset1\w{4}…\w{6} → tUSDM$/);
     expect(pair).not.toContain("₳");
-    expect(pairOf(swapSession(), "preprod")).toBe("10 ₳ → tUSDM");
+    expect(pairOf(swapSession(), "preprod")).toBe("10\u00a0₳ → tUSDM");
   });
 
   it("lists held tokens that aren't listed or verified apart, after Minswap's, on the You receive side only", () => {
@@ -274,7 +295,7 @@ describe("the swap form's privacy note (privacy review §2.13)", () => {
     expect(line).toContain("Minswap sees the pair, the amount and your IP address as you type, never your public account");
     expect(line).toContain("Half and Max round down to a whole unit, but still tell it roughly what your private balance holds");
     expect(line).not.toContain("never your private balance");
-    expect(html).toContain("title=\"All but what&#x27;s under 1 ₳, less the swap&#x27;s costs and the collateral\"");
+    expect(html).toContain("title=\"All but what&#x27;s under 1\u00a0₳, less the swap&#x27;s costs and the collateral\"");
   });
 });
 
@@ -386,6 +407,32 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(line).not.toContain("Less than a box's worth");
   });
 
+  it("says the slippage, that it relies on Minswap for the minimum, and what For the swap pays for (chunk 23's second review, DX-2, DX-3)", () => {
+    const line = approval(through);
+    expect(line).toContain("Asks for at least 4.158 tUSDM · 1% slippage · 0.3% price impact");
+    expect(line).toContain(
+      "Seedelf Wallet relies on Minswap for the minimum of 4.158 tUSDM: it asks Minswap for it, but can't read it back from the order Minswap builds.",
+    );
+    expect(line).toContain("For the swap 16 ₳ The swap 10 ₳ DEX fee 2 ₳ Order deposit 2 ₳, back with the proceeds Room for network fees 2 ₳, what's left comes back");
+    // The approval's own words no longer bury the minimum, and its button is the act.
+    expect(line).not.toContain("the order's own minimum it can't read");
+    expect(line).toContain("Start swap approves the whole run");
+    expect(line).not.toContain("High slippage");
+    const high = text(
+      createElement(SwapApproval, {
+        summary,
+        quote: { ...quote, ask: { ...quote.ask, slippage: 12 } },
+        lovejoin: through,
+        pay,
+        get,
+        through: true,
+        onThrough: () => undefined,
+        busy: false,
+      }),
+    );
+    expect(high).toContain("High slippage: at 12%, the order can be filled for up to 12% less than the quote.");
+  });
+
   it("says the pool takes nothing now, and doesn't promise Lovejoin", () => {
     const line = approval({
       ...through,
@@ -399,6 +446,8 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     );
     expect(line).not.toContain("On the way back, through Lovejoin");
     expect(line).toContain("The proceeds and everything left, directly");
+    // The switch, on, says it applies only if the pool has room by then (chunk 23's second review, DX-3).
+    expect(line).toContain("Only if Lovejoin's pool has room by the time it comes back: it has none now");
   });
 
   it("offers Stop through Lovejoin, with what it takes, or directly", () => {
@@ -557,7 +606,7 @@ describe("what the swap and session screens say sites and chain watchers see (pr
 
 describe("a site's private session (launch review H7, #43, H6, #23, #56)", () => {
   const seedelf = { lovelace: "0", tokens: [], utxos: 0, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
-  const markup = (s: SessionView, attached?: boolean) =>
+  const markup = (s: SessionView, attached?: boolean, connected?: boolean) =>
     renderToStaticMarkup(
       createElement(
         NetworkContext.Provider,
@@ -565,6 +614,7 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
         createElement(SiteSession, {
           session: s,
           attached,
+          connected,
           seedelf,
           reading: false,
           onRefresh: () => undefined,
@@ -624,6 +674,37 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
     const failed = siteSession({ stage: "failed", holding: { lovelace: "0", tokens: [], utxos: 0 } });
     expect(markup(failed, true)).toContain("it may still land");
     expect(markup({ ...failed, unsent: true }, true)).toContain("Its funding never reached the chain");
+  });
+
+  it("says why each action it can't take is off, under the buttons (chunk 23's second review, CW-6)", () => {
+    const why = (html: string) => (html.match(/data-testid="site-session-why"[^>]*>([^<]*)</) ?? [])[1]?.replaceAll("&#x27;", "'");
+    expect(why(markup(siteSession(), true))).toBe("Nothing to bring back: the account is empty.");
+    // Unread: one sentence for both actions that wait on it.
+    expect(why(markup(siteSession({ holding: null }), true))).toBe(
+      "Refresh to read what it holds: Bring it back and Disconnect wait until then.",
+    );
+    const funded = siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 1 } });
+    expect(why(markup(funded, true))).toBe("Disconnect waits until everything in it is brought back.");
+    // Its site doesn't use it: Top up is off too, and says so.
+    expect(why(markup(funded, false, false))).toBe(
+      "Top up is off: app.example doesn't use this session. Disconnect waits until everything in it is brought back.",
+    );
+  });
+
+  it("never says a site connected to nothing stays connected, or that another request connected it (CW-6)", () => {
+    const funded = siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 1 } });
+    expect(siteConnected(funded, [])).toBe(false);
+    expect(siteConnected(funded, [{ origin: "https://app.example", connectedAt: 0 }])).toBe(true);
+    const nowhere = markup(funded, false, false).replace(/<[^>]+>/g, " ").replaceAll("&#x27;", "'");
+    expect(nowhere).toContain("Not connected to its site: app.example isn't connected to this session, so it won't use it.");
+    expect(nowhere).not.toContain("another of");
+    const elsewhere = markup(funded, false, true).replace(/<[^>]+>/g, " ").replaceAll("&#x27;", "'");
+    expect(elsewhere).toContain("another of app.example's requests connected it meanwhile");
+    const dialog = (connected?: boolean) =>
+      text(createElement(DisconnectSession, { session: funded, attached: false, connected, busy: false, onKeep: () => undefined, onDisconnect: () => undefined }));
+    expect(dialog(false)).toContain("Private session 5 ends. app.example isn't connected to it, so nothing changes for the site.");
+    expect(dialog(false)).not.toContain("stays connected");
+    expect(dialog(true)).toContain("stays connected as it is now");
   });
 
   it("hides what the sessions hold on the dApps page while balances are hidden", () => {
@@ -876,5 +957,49 @@ describe("a mix from the private balance (launch review H2, H8, #11)", () => {
     expect(lovejoinDetail(failed)).toContain("it may still land: Try again looks for it again");
     expect(lovejoinSub({ ...failed, unsent: true }, 0)).toBe("Its funding didn't go through");
     expect(lovejoinDetail({ ...failed, unsent: true })).toBeUndefined();
+  });
+});
+
+describe("Lovejoin's page before Review (chunk 23's second review, LJ-1, LJ-3)", () => {
+  it("says whether the pool has others enough for a mix, and whether one wave deep would do", () => {
+    // One box two waves deep: four mixes, two others each.
+    expect(poolRoom({ others: 20, free: 20, floor: 0 }, 1, 2)).toEqual({ have: 20, need: 8, floorShort: false, fits: 2, shallower: true });
+    // What a chain of the wallet's holds isn't drawn on.
+    expect(poolRoom({ others: 20, free: 6, floor: 0 }, 1, 2)).toMatchObject({ have: 6, fits: 0, shallower: true });
+    expect(poolRoom({ others: 1, free: 1, floor: 0 }, 1, 2)).toMatchObject({ fits: 0, shallower: false });
+    // Under mainnet's floor, nothing mixes, whatever the room.
+    expect(poolRoom({ others: 12, floor: 30 }, 1, 1)).toMatchObject({ floorShort: true, have: 12 });
+  });
+
+  it("offers no more boxes than the private balance pays for, with the collateral and the fee aside", () => {
+    // One box two waves deep takes 15.3 ₳: 13.8 ₳ a box, and 1.5 ₳ besides.
+    const one = { boxes: 1, lovelace: "15300000", mixFees: "3800000" };
+    expect(boxesAffordable("28000000", one)).toBe(1);
+    expect(boxesAffordable("21000000", one)).toBe(0);
+    expect(boxesAffordable("50000000", one)).toBe(3);
+    // Worked out the same from a funding for three.
+    expect(boxesAffordable("50000000", { boxes: 3, lovelace: "42900000", mixFees: "11400000" })).toBe(3);
+  });
+});
+
+describe("a session's funding refused at Send (chunk 23's second review, DX-1)", () => {
+  const foot = (refusal: Parameters<typeof SessionRefusedFoot>[0]["refusal"], onWatch?: () => void) =>
+    text(createElement(SessionRefusedFoot, { refusal, busy: false, onAgain: () => undefined, onWatch }));
+
+  it("gives way to building it again, with no service named up front and its words under Details", () => {
+    const detail = "giveme.my, which lends the collateral, refused this transaction: Transaction Fails Validation.";
+    const changed = foot({ kind: "again", changed: true, detail });
+    expect(changed).toMatch(/^Nothing was sent: something it spends may have changed since you reviewed it\./);
+    expect(changed).toContain("Details " + detail);
+    expect(changed).toContain("Build it again");
+    expect(foot({ kind: "again", detail })).toContain("Nothing was sent, and this review can't go again");
+  });
+
+  it("isn't built again when it may have gone out: its page watches for it", () => {
+    const watch = foot({ kind: "watch", detail: "Koios didn't answer." }, () => undefined);
+    expect(watch).toContain("It may have gone out all the same, so it isn't built again");
+    expect(watch).toContain("See where it is");
+    expect(watch).not.toContain("Build it again");
+    expect(foot({ kind: "watch", detail: "x" })).not.toContain("See where it is");
   });
 });

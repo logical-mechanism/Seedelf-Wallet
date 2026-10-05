@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { SESSION_BUILT } from "../src/background/move-in";
 import { pendingKey } from "../src/background/pending";
+import { keptAsSent } from "../src/background/sent-txs";
 import { spentSet } from "../src/background/spent";
 import { SESSION_BALANCES_PREFIX } from "../src/background/wallet";
 import { ttlOf, txIdOf } from "./fixtures/cbor";
@@ -84,6 +85,10 @@ describe("move-in", () => {
     expect(t.koios.submitted).toHaveLength(1);
     expect(txIdOf(t.koios.submitted[0]!)).toBe(summary.txHash);
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
+    // Send again from a page that missed the answer: sent already, never "review it again", which would make a
+    // second payment private (chunk 23's second review, fix round).
+    await expect(t.moveIn.submit("preprod", summary.txHash)).rejects.toThrow("That was sent already");
+    expect(t.koios.submitted).toHaveLength(1);
 
     // Not on chain yet: still watching.
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null });
@@ -117,8 +122,13 @@ describe("move-in", () => {
     expect(await spentSet(t.session)).toEqual(new Set(inputs));
     t.koios.tip = invalidHereafter! + 31 * 60;
     await t.session.set(`${SESSION_BALANCES_PREFIX}preprod`, { stale: true });
+    const keptSent = () => t.wallet.withKeys(() => keptAsSent(t.session, "preprod", summary.txHash));
+    expect(await keptSent()).toBe(true);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null, dropped: "expired" });
     expect(await spentSet(t.session)).toEqual(new Set());
+    // Past its slot it can't land: it's no longer kept as sent, so nothing counts its outputs on their way, and a
+    // payment built again on what it spent counts alone (chunk 23's second review, fix round).
+    expect(await keptSent()).toBe(false);
     expect(await t.session.get(`${SESSION_BALANCES_PREFIX}preprod`)).toBeUndefined();
     expect(await t.pending.pending("preprod")).toBeNull();
   });
@@ -188,10 +198,30 @@ describe("move-in", () => {
 
   it("explains an impossible move and needs the wallet unlocked", async () => {
     const t = await unlocked();
-    await expect(t.moveIn.build("preprod", "999999999999999", [])).rejects.toThrow("Not enough ADA");
+    // In the wallet's words, with what Max would make private: core said "Cardano account" and "the change"
+    // (chunk 23's second review, PY-10).
+    const most = await t.moveIn.build("preprod", null, []);
+    const ada = (lovelace: string) => (Number(BigInt(lovelace)) / 1e6).toLocaleString("en-US", { maximumFractionDigits: 6 });
+    await expect(t.moveIn.build("preprod", "999999999999999", [])).rejects.toThrow(
+      `Not enough ADA: with the fee, your public account can make up to ${ada(most.lovelace)} ₳ private. Use Max to make all of it private.`,
+    );
     await t.moveIn.build("preprod", "5000000", []);
     await t.wallet.lock();
     expect(await t.session.get(SESSION_BUILT)).toBeUndefined();
+    await t.wallet.unlock(PASSWORD);
+    // The account's ADA alone: half an ADA under Max fits, and what's left can't stay. Max makes more private than
+    // that, so "up to" it would be false: what stays is said instead (chunk 23's second review, fix round).
+    await t.balances.get("preprod");
+    for (const u of (await t.coins.lists("preprod")).cardano) {
+      if (u.tokens.length) await t.coins.setLocked("preprod", "cardano", `${u.txHash}#${u.index}`, true);
+    }
+    const all = BigInt((await t.moveIn.build("preprod", null, [])).lovelace);
+    const left = t.moveIn.build("preprod", (all - 500_000n).toString(), []);
+    await expect(left).rejects.toThrow(
+      "Not enough ADA: after this and its fee, what stays in your public account would be less than the least ADA the network accepts. Use Max to make all of it private, or make less private.",
+    );
+    await expect(left).rejects.not.toThrow("up to");
+    await t.wallet.lock();
     await expect(t.moveIn.build("preprod", "5000000", [])).rejects.toThrow("locked");
     await expect(t.pending.pending("preprod")).rejects.toThrow("locked");
   });

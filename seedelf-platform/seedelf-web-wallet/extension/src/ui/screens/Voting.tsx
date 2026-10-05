@@ -16,26 +16,40 @@ import { type I18nKey, joinList, t, useT } from "../../i18n";
 import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails, type OwnDrep } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { CheckIcon, LandmarkIcon, SearchIcon } from "../components/Icons";
+import { CheckIcon, LandmarkIcon, SearchIcon, UsersIcon, WalletIcon, WarnIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { drepList, isDrepId, searchDreps, type DrepEntry } from "../dreps";
 import { formatAda, nameSkeleton, plainName, sharedNames, sharing, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
 import { initials, tint } from "../tokens";
+import { ReadFailed } from "./Staking";
 
 /** DReps shown at a time; "Show more" adds as many again. */
 const PAGE = 20;
 
-type Pick = "abstain" | "no-confidence" | "own" | "drep";
+export type Pick = "abstain" | "no-confidence" | "own" | "drep";
 
+/** An icon each, where all four shared one bank (chunk 23's second review, ST-12). */
 const OPTIONS = [
-  { value: "abstain", title: "vote.abstain.title", text: "vote.abstain.text" },
-  { value: "no-confidence", title: "vote.noConfidence.title", text: "vote.noConfidence.text" },
+  { value: "abstain", title: "vote.abstain.title", text: "vote.abstain.text", Icon: LandmarkIcon },
+  { value: "no-confidence", title: "vote.noConfidence.title", text: "vote.noConfidence.text", Icon: WarnIcon },
   // The account as its own DRep (chunk 21): whether it is one yet or not, so it never has to find itself.
-  { value: "own", title: "drep.yourOwn", text: "vote.own.text" },
-  { value: "drep", title: "vote.drep.title", text: "vote.drep.text" },
-] as const satisfies Array<{ value: Pick; title: I18nKey; text: I18nKey }>;
+  { value: "own", title: "drep.yourOwn", text: "vote.own.text", Icon: WalletIcon },
+  { value: "drep", title: "vote.drep.title", text: "vote.drep.text", Icon: UsersIcon },
+] as const satisfies Array<{ value: Pick; title: I18nKey; text: I18nKey; Icon: typeof LandmarkIcon }>;
+
+/**
+ * What Voting power was showing: the choice, the DRep picked and the search.
+ * Kept by the Staking page, so Back from the review returns to them: it reset
+ * to Always abstain, and the search and the pick had to be made again
+ * (chunk 23's second review, ST-11).
+ */
+export interface VoteView {
+  pick: Pick;
+  drep?: DrepDetails;
+  query: string;
+}
 
 /** Which choice the vote's delegation is now: the account's own DRep (`ownId`), when it goes there. */
 export const pickOf = (drep: string | null, ownId?: string): Pick =>
@@ -53,6 +67,8 @@ export function Voting({
   blocked,
   busy,
   error,
+  view,
+  onView,
   onBack,
   onVote,
   own,
@@ -66,9 +82,16 @@ export function Voting({
   /** Building the delegation. */
   busy: boolean;
   error?: string;
+  /** What was showing before a review, to show again. */
+  view?: VoteView;
+  onView?: (view: VoteView) => void;
   onBack: () => void;
-  /** The vote as Koios names it, the DRep's name, and how many DReps share that name (`drepSharing`). */
-  onVote: (drep: string, name?: string, shared?: DrepShared) => void;
+  /**
+   * The vote as Koios names it, the DRep's name, how many DReps share that
+   * name (`drepSharing`), and whether the DRep is inactive, which its review
+   * says again (GV-5).
+   */
+  onVote: (drep: string, name?: string, shared?: DrepShared, inactive?: boolean) => void;
   /** The account's own DRep, as the Staking page read it (no request here); undefined while it reads. */
   own?: OwnDrep;
   ownError?: string;
@@ -79,7 +102,7 @@ export function Voting({
   const network = useNetwork();
   const { dreps } = drepList(network);
   const shared = useMemo(() => sharedNames(dreps, (d) => d.name), [dreps]);
-  const [pick, setPick] = useState<Pick>(pickOf(current, own?.id));
+  const [pick, setPick] = useState<Pick>(view?.pick ?? pickOf(current, own?.id));
   // The account's DRep read after this opened: a vote already on it is "Your own DRep".
   const ownId = own?.id;
   useEffect(() => {
@@ -88,9 +111,11 @@ export function Voting({
   /** The account's own DRep, when it's registered: the only one a vote can go to. */
   const registeredOwn = own?.status === "registered" ? own : undefined;
   const ownRegistered = registeredOwn !== undefined;
-  const [drep, setDrep] = useState<DrepDetails>();
+  const [drep, setDrep] = useState<DrepDetails | undefined>(view?.drep);
+  const [query, setQuery] = useState(view?.query ?? "");
   const [looking, setLooking] = useState(false);
   const [lookError, setLookError] = useState<string>();
+  useEffect(() => onView?.({ pick, drep, query }), [pick, drep, query]);
 
   const chosen =
     pick === "abstain"
@@ -103,15 +128,10 @@ export function Voting({
   const same = chosen !== undefined && chosen === current;
   const retired = pick === "drep" && drep?.status === "retired";
   const drepShared = drep ? drepSharing(dreps, shared, drep) : NOT_SHARED;
-  const why =
-    blocked ??
-    (same
-      ? t("vote.alreadyThere")
-      : retired
-        ? t("vote.drepRetired")
-        : pick === "own" && own && !ownRegistered
-          ? t("vote.own.registerFirst")
-          : undefined);
+  // Your own DRep before the account is one: the foot opens Become a DRep, where it was a Review that couldn't be
+  // pressed, its reason below the fold (chunk 23's second review, GV-3).
+  const becomeFirst = pick === "own" && own !== undefined && !ownRegistered;
+  const why = blocked ?? (same ? t("vote.alreadyThere") : retired ? t("vote.drepRetired") : undefined);
   const ownName = own && current === own.id ? t("drep.yourOwn") : undefined;
 
   async function lookUp(id: string) {
@@ -145,22 +165,29 @@ export function Voting({
       aside={t("vote.now", { what: voteLabel(current, ownName) })}
       error={error}
       foot={
-        <button
-          type="button"
-          className="primary"
-          onClick={() =>
-            chosen &&
-            onVote(
-              chosen,
-              pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
-              pick === "drep" ? drepShared : undefined,
-            )
-          }
-          disabled={!chosen || !!why || busy}
-          title={why}
-        >
-          {busy ? t("common.building") : t("common.review")}
-        </button>
+        becomeFirst ? (
+          <button type="button" className="primary" onClick={onBecome} disabled={!!blocked || busy} title={blocked}>
+            {t("drep.become")}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary"
+            onClick={() =>
+              chosen &&
+              onVote(
+                chosen,
+                pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
+                pick === "drep" ? drepShared : undefined,
+                pick === "drep" && drep !== undefined && drep.status !== "retired" && !drep.active,
+              )
+            }
+            disabled={!chosen || !!why || busy}
+            title={why}
+          >
+            {busy ? t("common.building") : t("common.review")}
+          </button>
+        )
       }
     >
       <ul className="list" role="radiogroup" aria-label={t("vote.whereLabel")}>
@@ -176,50 +203,18 @@ export function Voting({
                 onClick={() => setPick(o.value)}
               >
                 <span className="avatar avatar--contact" aria-hidden="true">
-                  {on ? <CheckIcon size={16} /> : <LandmarkIcon size={16} />}
+                  {on ? <CheckIcon size={16} /> : <o.Icon size={16} />}
                 </span>
                 <span className="token-row__label">{t(o.title)}</span>
                 <span />
                 <span className="token-row__sub wrap">{t(o.text)}</span>
               </button>
+              {/* Where this account stands as a DRep, under its own option rather than after the list (GV-3). */}
+              {o.value === "own" && on && <OwnStanding own={own} ownError={ownError} />}
             </li>
           );
         })}
       </ul>
-
-      {pick === "own" && (
-        <div className="stack-tight" data-testid="own-drep">
-          {!own ? (
-            <p className="note">{ownError ? t("drep.readFailed", { error: ownError }) : t("drep.reading")}</p>
-          ) : registeredOwn ? (
-            <>
-              <ReviewRows testId="own-drep-facts">
-                <Row
-                  label={t("vote.statusLabel")}
-                  value={registeredOwn.active ? t("vote.status.active") : t("vote.status.inactive")}
-                  strong
-                />
-                <Row label={t("activity.row.votingPower")} value={`${formatAda(registeredOwn.votingPower)} ₳`} />
-              </ReviewRows>
-              <p className="note mono-id" data-testid="own-drep-id">
-                {registeredOwn.id}
-              </p>
-              {!registeredOwn.active && <Callout tone="warn">{t("vote.warn.inactive")}</Callout>}
-            </>
-          ) : (
-            <>
-              <p className="note" data-testid="own-drep-not-yet">
-                {own.depositNow
-                  ? t("vote.own.notYet", { amount: formatAda(own.depositNow) })
-                  : t("vote.own.notYetUnknown")}
-              </p>
-              <button type="button" className="secondary align-start" onClick={onBecome} disabled={!!blocked || busy} title={blocked}>
-                {t("drep.become")}
-              </button>
-            </>
-          )}
-        </div>
-      )}
 
       {pick === "drep" &&
         (drep ? (
@@ -230,32 +225,78 @@ export function Voting({
             </button>
           </div>
         ) : (
-          <DrepSearch shared={shared} looking={looking} error={lookError} onPick={(id) => void lookUp(id)} />
+          <DrepSearch
+            shared={shared}
+            query={query}
+            onQuery={setQuery}
+            looking={looking}
+            error={lookError}
+            onPick={(id) => void lookUp(id)}
+          />
         ))}
 
-      {!registered && (
-        <p className="note">{t("vote.notRegistered")}</p>
-      )}
+      {!registered && <p className="note">{t("vote.notRegistered")}</p>}
       <Callout tone="privacy">{t("vote.privacy.public")}</Callout>
     </Screen>
+  );
+}
+
+/** The account's own DRep under its option: its standing, or what becoming one costs (the foot opens it). */
+function OwnStanding({ own, ownError }: { own?: OwnDrep; ownError?: string }) {
+  const t = useT();
+  const registeredOwn = own?.status === "registered" ? own : undefined;
+  return (
+    <div className="stack-tight option-detail" data-testid="own-drep">
+      {!own ? (
+        ownError ? (
+          // What failed in plain words, the service's own under Details, as the Staking page says it (ST-10).
+          <ReadFailed what={t("drep.readFailed")} detail={ownError} testId="own-drep-failed" />
+        ) : (
+          <p className="note">{t("drep.reading")}</p>
+        )
+      ) : registeredOwn ? (
+        <>
+          <ReviewRows testId="own-drep-facts">
+            <Row
+              label={t("vote.statusLabel")}
+              value={registeredOwn.active ? t("vote.status.active") : t("vote.status.inactive")}
+              strong
+            />
+            <Row label={t("activity.row.votingPower")} value={`${formatAda(registeredOwn.votingPower)}\u00a0₳`} />
+          </ReviewRows>
+          <p className="note mono-id" data-testid="own-drep-id">
+            {registeredOwn.id}
+          </p>
+          {!registeredOwn.active && <Callout tone="warn">{t("vote.warn.inactive")}</Callout>}
+        </>
+      ) : (
+        <p className="note" data-testid="own-drep-not-yet">
+          {own.depositNow ? t("vote.own.notYet", { amount: formatAda(own.depositNow) }) : t("vote.own.notYetUnknown")}
+        </p>
+      )}
+    </div>
   );
 }
 
 /** The wallet's list of named DReps, searched on the device, or an ID pasted in. */
 function DrepSearch({
   shared,
+  query,
+  onQuery,
   looking,
   error,
   onPick,
 }: {
   shared: Map<string, number>;
+  /** The search, kept by Voting so Back from a review finds it as it was. */
+  query: string;
+  onQuery: (query: string) => void;
   looking: boolean;
   error?: string;
   onPick: (id: string) => void;
 }) {
   const t = useT();
   const { recorded, dreps } = drepList(useNetwork());
-  const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const found = searchDreps(dreps, query);
   // A whole ID the list doesn't have (a DRep registered since, or CIP-105's form): looked up as pasted.
@@ -278,7 +319,7 @@ function DrepSearch({
           placeholder={t("vote.searchPlaceholder")}
           value={query}
           onChange={(e) => {
-            setQuery(e.target.value);
+            onQuery(e.target.value);
             setLimit(PAGE);
           }}
           spellCheck={false}
@@ -321,7 +362,12 @@ const dateOf = (day: string) =>
     ? new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
     : t("vote.noDate");
 
-/** One DRep on the list: its name, flagged when another uses it too, and enough of its ID to tell them apart. */
+/**
+ * One DRep on the list: its name, flagged when another uses it too, and
+ * enough of its ID to tell them apart. The list holds names and IDs only, so
+ * a DRep's standing is read once it's picked. The flag has a line of its own,
+ * where it ran into the name (V-11).
+ */
 export function DrepRow({
   drep,
   shared,
@@ -348,12 +394,14 @@ export function DrepRow({
         <span className={`avatar avatar--tint-${tint(drep.id)}`} aria-hidden="true">
           {initials(name)}
         </span>
-        <span className="token-row__label">
-          {name}
-          {shared && <span className="utxo-tag utxo-tag--warn"> {t("vote.sharedNameTag")}</span>}
-        </span>
+        <span className="token-row__label">{name}</span>
         <span />
         <span className="token-row__sub mono-id">{shortId(drep.id)}</span>
+        {shared && (
+          <span className="token-row__tags">
+            <span className="utxo-tag utxo-tag--warn">{t("vote.sharedNameTag")}</span>
+          </span>
+        )}
       </button>
     </li>
   );
@@ -393,7 +441,11 @@ export function sharedDrepName({ shared, listed }: DrepShared): string {
   return t("vote.sharedName.warn.unlisted", { count: others });
 }
 
-/** The DRep picked, looked up live; `shared` and `listed`: `drepSharing`'s. */
+/**
+ * The DRep picked, looked up live; `shared` and `listed`: `drepSharing`'s.
+ * An inactive DRep's warning comes first, where it was buried after the
+ * name's (GV-5).
+ */
 export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetails; shared?: number; listed?: boolean }) {
   const t = useT();
   const status =
@@ -406,10 +458,15 @@ export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetail
           : t("vote.status.inactive");
   return (
     <div className="stack-tight" data-testid="drep-details">
+      {drep.status !== "retired" && !drep.active && (
+        <Callout tone="warn" testId="drep-inactive">
+          {t("vote.warn.inactive")}
+        </Callout>
+      )}
       <ReviewRows testId="drep-facts">
         <Row label={t("contacts.nameLabel")} value={drep.name ? plainName(drep.name) : t("vote.noName")} strong />
         <Row label={t("vote.statusLabel")} value={status} />
-        <Row label={t("activity.row.votingPower")} value={`${formatAda(drep.votingPower)} ₳`} />
+        <Row label={t("activity.row.votingPower")} value={`${formatAda(drep.votingPower)}\u00a0₳`} />
         <Row label={t("pool.delegators")} value={drep.delegators.toLocaleString("en-US")} />
       </ReviewRows>
       <p className="note mono-id" data-testid="drep-id">
@@ -418,11 +475,6 @@ export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetail
       {shared > 1 && (
         <Callout tone="warn" testId="drep-shared-name">
           {t("vote.warn.sharedName", { shared: sharedDrepName({ shared, listed }) })}
-        </Callout>
-      )}
-      {drep.status !== "retired" && !drep.active && (
-        <Callout tone="warn">
-          {t("vote.warn.inactive")}
         </Callout>
       )}
     </div>

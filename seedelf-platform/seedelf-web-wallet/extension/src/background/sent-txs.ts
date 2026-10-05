@@ -67,3 +67,11 @@ export async function forgetSent(session: Area, network: NetworkName, txHash: st
 export async function recentlySent(session: Area, network: NetworkName, now = Date.now()): Promise<SentTx[]> {
   return ((await session.get<SentTx[]>(SESSION_SENT_PREFIX + network)) ?? []).filter((s) => now - s.sentAt < SENT_KEEP_MS);
 }
+
+/**
+ * Whether `txHash` is among those kept for `network`, however long ago it was sent: one is only pruned when another
+ * is sent. Send asks it of a review it has no transaction kept for (pending.ts `sentBefore`). Call it while unlocked.
+ */
+export async function keptAsSent(session: Area, network: NetworkName, txHash: string): Promise<boolean> {
+  return ((await session.get<SentTx[]>(SESSION_SENT_PREFIX + network)) ?? []).some((s) => s.txHash === txHash);
+}

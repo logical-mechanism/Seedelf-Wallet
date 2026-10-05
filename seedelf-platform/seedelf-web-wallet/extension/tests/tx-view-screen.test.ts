@@ -167,10 +167,11 @@ describe("the transaction view's page", () => {
     expect(shown(cborOf("payment"))).toContain("Signed Not yet");
     // The wallet's transfer carries its redeemers and no signature yet: still unsigned.
     expect(shown(transferPreprod.final.txCbor)).toContain("Signed Not yet");
-    // One that has been signed says how many have signed it.
+    // One that has been signed says how many have signed it, and that it hasn't gone: the sheet is only ever
+    // shown for a transaction the wallet holds, before Send (chunk 23's second review, PY-7).
     const detail = { ...read(cborOf("payment")), signatures: [{ publicKey: "ab".repeat(32), keyHash: "cd".repeat(28) }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("Signed 1 signature so far");
+    expect(page).toContain("Signed 1 signature, not sent yet");
   });
 
   it("reports a field it has no name for rather than leaving it out", () => {

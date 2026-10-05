@@ -9,11 +9,25 @@ import {
   UI_PORT,
   type BuildStage,
   type Reply,
+  type ReplyCode,
   type RequestName,
   type Requests,
 } from "../shared/rpc";
 
 const NO_ANSWER = () => t("worker.noAnswer");
+
+/** A refusal from the worker, with what it is when a screen acts on it (shared/rpc.ts `ReplyCode`). */
+export class RpcError extends Error {
+  constructor(
+    message: string,
+    readonly code?: ReplyCode,
+  ) {
+    super(message);
+  }
+}
+
+/** A reviewed transaction that building again fixes: giveme.my refused it, or it waited too long. */
+export const isStale = (error: unknown) => error instanceof RpcError && error.code === "stale";
 
 /**
  * Asks the worker, on a port of its own that only the worker listens for
@@ -41,7 +55,7 @@ export function call<K extends RequestName>(type: K, payload: Requests[K]["paylo
       port.disconnect();
       done();
       if (reply?.ok) resolve(reply.value);
-      else reject(new Error(reply?.error ?? NO_ANSWER()));
+      else reject(new RpcError(reply?.error ?? NO_ANSWER(), reply?.code));
     });
     port.onDisconnect.addListener(() => {
       // Read, so Chrome doesn't log it as unchecked: the worker couldn't be reached.

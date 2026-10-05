@@ -7,7 +7,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { SessionView, SwapLovejoin } from "../src/shared/rpc";
+import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import { NetworkContext } from "../src/ui/network";
+import { PreferencesContext } from "../src/ui/preferences";
 import { Session, StopDialog, SwapRow } from "../src/ui/screens/Swaps";
 
 /** A page's text, as a person reads it. */
@@ -113,5 +115,68 @@ describe("Stop's dialog (independent review L22)", () => {
 
   it("isn't followed by a note about an order that went first until Stop says one did", () => {
     expect(page(swapSession())).not.toContain("An order had gone out before Stop took effect");
+  });
+});
+
+describe("a swap's page once its order is filled, and once it's over (chunk 23's second review, DX-5)", () => {
+  // Balances shown, as the preferences have them once read.
+  const html = (s: SessionView) =>
+    renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(
+          NetworkContext.Provider,
+          { value: "preprod" },
+          createElement(Session, { session: s, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+        ),
+      ),
+    );
+  const shown = (s: SessionView) =>
+    html(s)
+      .replace(/<[^>]+>/g, " ")
+      .replaceAll("&#x27;", "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  const stop = />Stop<\/button>/;
+  const MIN = { policyId: TUSDM.slice(0, 56), assetName: TUSDM.slice(56), quantity: "4200000" };
+
+  it("offers Stop until the order is filled, and not while everything comes back", () => {
+    expect(html(swapSession())).toMatch(stop);
+    const coming = swapSession({
+      stage: "open",
+      txs: [...swapSession().txs, swapTx],
+      holding: { lovelace: "7000000", tokens: [MIN], utxos: 2 },
+      auto: { step: "returning", stopping: false, filled: true, approvedMinOut: "4158000" },
+    });
+    expect(html(coming)).not.toMatch(stop);
+    // What the account holds is one labelled row, its tokens too.
+    expect(shown(coming)).toContain("It holds 7 ₳, 4.2 tUSDM");
+  });
+
+  it("says what came back once it's over, when the wallet kept it", () => {
+    const done = swapSession({
+      stage: "closed",
+      holding: { lovelace: "0", tokens: [], utxos: 0 },
+      txs: [...swapSession().txs, swapTx, { kind: "back", txHash: "ef".repeat(32), at: 0, confirmed: true }],
+      auto: { step: "done", stopping: false, filled: true, approvedMinOut: "4158000" },
+      received: { lovelace: "6500000", tokens: [MIN] },
+    });
+    expect(shown(done)).toContain("Received 4.2 tUSDM, 6.5 ₳");
+    expect(shown({ ...done, received: undefined })).not.toContain("Received");
+  });
+
+  it("gives a turned-away funding's reason, and takes it off the list rather than forgetting it", () => {
+    const failed = swapSession({
+      stage: "failed",
+      holding: null,
+      unsent: true,
+      unsentWhy: "changed",
+      auto: { ...swapSession().auto!, step: "funding" },
+    });
+    const line = page(failed);
+    expect(line).toContain("Its funding was turned away before it went out, so the account is empty. Something it spends had changed since the review.");
+    expect(line).toContain("Remove from list");
+    expect(line).not.toContain("Forget it");
   });
 });

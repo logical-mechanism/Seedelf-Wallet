@@ -7,23 +7,27 @@
 // Ogmios then, to measure the policy, so Koios sees the tag and the account's
 // inputs even for a review that's never sent (privacy review §3.10); a
 // stealth mint is measured in the wallet. Nothing is submitted until the
-// user has reviewed it and pressed Send.
+// user has reviewed it and pressed Send. With nothing to pay with, Review
+// waits and says to fund the account, with its address a tap away
+// (chunk 23's second review, GS-2).
 
 import { useState, type FormEvent } from "react";
 import { type I18nKey, Rich, useT } from "../../i18n";
 
 import { LABEL_MAX, labelProblem, tokenNamePrefix } from "../../shared/label";
 import type { Balances, MintSource, MintSummary, PendingTx } from "../../shared/rpc";
-import { call } from "../background";
+import { call, isStale } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
-import { Choice } from "../components/Choice";
+import { ShieldIcon, WalletIcon } from "../components/Icons";
+import { RadioCards } from "../components/RadioCards";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
+import { RewardsRow, TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
-import { adaWithTokens, formatAda, shortHex } from "../format";
-import { WithdrawalRow } from "./CardanoSend";
+import { formatAda } from "../format";
 
 /**
  * What pays for the mint. Keys, not words: the review and the aside used to
@@ -35,30 +39,50 @@ const SOURCES = { account: "mint.source.account", seedelf: "mint.source.seedelf"
 
 export function CreateSeedelf({
   balances,
+  totals,
+  blocked,
+  onFund,
   onCancel,
   onSent,
 }: {
   balances: Balances;
+  /** Both balances as Home shows them (locked UTxOs and rewards in), for the review's balance after. */
+  totals?: { public: string; private: string };
+  /** Why nothing can pay for one now, if so: Review waits, and says why. */
+  blocked?: string;
+  /** Neither side holds anything: where the public account's address is, to fund it. */
+  onFund?: () => void;
   onCancel: () => void;
-  onSent: (pending: PendingTx) => void;
+  /** `from`: the side that paid, which Home goes back to. */
+  onSent: (pending: PendingTx, from: MintSource) => void;
 }) {
   const t = useT();
-  const [from, setFrom] = useState<MintSource>(balances.cardano.utxos > 0 ? "account" : "seedelf");
+  // The public account unless only the private balance can pay: with both empty it was Private, whose reason then
+  // sent a new wallet to make ADA private first (chunk 23's second review, GS-2).
+  const [from, setFrom] = useState<MintSource>(balances.cardano.utxos === 0 && balances.seedelf.utxos > 0 ? "seedelf" : "account");
   const [label, setLabel] = useState("");
   const [summary, setSummary] = useState<MintSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // The worker's words for a review that can't go as it is: Create gives way to building it again.
+  const stale = useStale();
 
   const tag = label.trim();
   const problem = labelProblem(label);
 
-  async function review(e: FormEvent) {
+  function review(e: FormEvent) {
     e.preventDefault();
+    void build();
+  }
+
+  async function build() {
     if (problem || busy) return;
     setBusy(true);
     setError(undefined);
+    // A refusal stays, its foot saying it's building, until the new review is in (chunk 23's second review, PY-1).
     try {
       setSummary(await call("mint-build", { label: tag, from }));
+      stale.built();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -71,9 +95,10 @@ export function CreateSeedelf({
     setBusy(true);
     setError(undefined);
     try {
-      onSent(await call("mint-submit", { txHash: summary.txHash }));
+      onSent(await call("mint-submit", { txHash: summary.txHash }), summary.from);
     } catch (err) {
-      setError((err as Error).message);
+      if (isStale(err)) stale.refused((err as Error).message);
+      else setError((err as Error).message);
       setBusy(false);
     }
   }
@@ -83,24 +108,44 @@ export function CreateSeedelf({
       <Screen
         title={t("mint.review.title")}
         titleId="mint-review"
-        onBack={() => setSummary(undefined)}
+        onBack={() => {
+          // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
+          setSummary(undefined);
+          setError(undefined);
+          stale.clear();
+        }}
         backDisabled={busy}
-        aside={t("review.nothingSent")}
+        aside={t("review.nothingUntil", { action: t("mint.review.button") })}
         error={error}
         foot={
-          <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? t("common.sending") : t("common.send")}
-          </button>
+          stale.detail !== undefined ? (
+            <StaleFoot detail={stale.detail} busy={busy} onAgain={() => void build()} />
+          ) : (
+            <>
+              <RenewedNote renewed={stale.renewed} />
+              {/* The screen's own verb: every review's button used to say Send (chunk 23's review, S-7). */}
+              <button type="button" className="primary" onClick={send} disabled={busy}>
+                {busy ? t("common.sending") : t("mint.review.button")}
+              </button>
+            </>
+          )
         }
       >
         <ReviewRows testId="mint-review">
           {summary.label && <Row label={t("activity.row.seedelf")} value={summary.label} strong />}
-          <Row label={t("mint.review.tokenName")} value={shortHex(summary.tokenName, 16, 8)} title={summary.tokenName} strong={!summary.label} />
           <Row label={t("mint.review.paidFrom")} value={t(SOURCES[summary.from])} />
-          <Row label={t("mint.review.locked")} value={`${formatAda(summary.lovelace)} ₳`} />
-          <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
-          <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label={t(summary.from === "account" ? "review.backToPublic" : "review.backToPrivate")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
+          <Row label={t("mint.review.locked")} value={`${formatAda(summary.lovelace)}\u00a0₳`} />
+          {/* Its name, whole, as Receive will show it to share: not the token's (chunk 23's review, SE-1). After what
+              pays and what's locked, not first: 64 hex characters were the review's opening line (chunk 23's second
+              review, PY-11). */}
+          <Row label={t("utxos.seedelfName")} value={summary.tokenName} whole />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+          <RewardsRow withdrawal={summary.withdrawal} />
+          <TotalRows
+            side={summary.from === "account" ? "public" : "private"}
+            leaving={BigInt(summary.lovelace) + BigInt(summary.fee.total)}
+            before={summary.from === "account" ? totals?.public : totals?.private}
+          />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="mint-tx" />
         <HistoriesNote histories={summary.histories} testId="mint-histories" />
@@ -125,10 +170,22 @@ export function CreateSeedelf({
       error={error}
       foot={
         <>
-          <button type="submit" className="primary" disabled={!!problem || busy}>
+          <BuildStage busy={busy} />
+          <button type="submit" className="primary" disabled={!!problem || busy || !!blocked}>
             {busy ? t("common.building") : t("common.review")}
           </button>
-          <BuildStage busy={busy} />
+          {/* Why Review waits, and with nothing to pay, the way to fund the account: it built for seconds, then said
+              to make ADA private first (chunk 23's second review, GS-2). */}
+          {blocked && (
+            <p className="note foot-note" data-testid="mint-blocked">
+              {blocked}
+            </p>
+          )}
+          {blocked && onFund && (
+            <button type="button" className="secondary" onClick={onFund}>
+              {t("receive.seedelfs.showPublic")}
+            </button>
+          )}
         </>
       }
     >
@@ -161,7 +218,9 @@ export function CreateSeedelf({
         )}
       </div>
 
-      <Choice
+      {/* Cards, not the pill switch Home's tabs use: who pays decides what the Seedelf is linked to (chunk 23's
+          review, SE-5). */}
+      <RadioCards
         label={t("mint.payWith")}
         id="mint-from"
         value={from}
@@ -169,6 +228,7 @@ export function CreateSeedelf({
         options={(["account", "seedelf"] as const).map((source) => ({
           value: source,
           label: t(SOURCES[source]),
+          icon: source === "account" ? <WalletIcon size={16} /> : <ShieldIcon size={16} />,
           disabled: (source === "account" ? balances.cardano.utxos : balances.seedelf.utxos) === 0,
         }))}
       />

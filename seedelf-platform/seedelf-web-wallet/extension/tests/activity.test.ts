@@ -208,6 +208,30 @@ describe("Cardano account activity", () => {
     expect(entries.map((e) => e.at)).toEqual([...entries.map((e) => e.at)].sort((a, b) => b - a));
   });
 
+  // Read from the chain, a payment this device didn't make still says who: the addresses it paid, or that paid
+  // it, from the transaction already read, with no request (chunk 23's review, A-1).
+  it("names who a payment from elsewhere paid, or who paid it, from the transaction already read", async () => {
+    const t = await unlocked();
+    await t.balances.get("preprod");
+    const before = t.koios.calls.length;
+    const { entries } = await t.activity.cardano("preprod");
+    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.addresses);
+    const named = entries.filter((e) => e.kind === "sent" || e.kind === "received");
+    expect(named.length).toBeGreaterThan(0);
+    for (const e of named) {
+      const tx = activityPreprod.tx_info.find((x) => x.tx_hash === e.txHash) as unknown as {
+        inputs: Array<{ payment_addr: { bech32: string } }>;
+        outputs: Array<{ payment_addr: { bech32: string } }>;
+      };
+      const others = [...new Set((e.kind === "sent" ? tx.outputs : tx.inputs).map((r) => r.payment_addr.bech32))].filter(
+        (a) => !ours.has(a),
+      );
+      expect(e.detail, e.txHash).toBe(others[0]);
+      expect(e.more ?? 0, e.txHash).toBe(Math.max(0, others.length - 1));
+    }
+  });
+
   it("needs a balance reading first, for the account's addresses", async () => {
     const t = await unlocked();
     await expect(t.activity.cardano("preprod")).rejects.toThrow("Read the balances first");

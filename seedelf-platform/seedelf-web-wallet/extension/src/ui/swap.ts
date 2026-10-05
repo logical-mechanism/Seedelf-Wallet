@@ -90,6 +90,34 @@ export function impactLevel(percent: number): "ok" | "warn" | "high" {
 /** The least and most slippage the wallet takes, in percent (sessions.ts checkAsk). */
 export const SLIPPAGE_MIN = 0.1;
 export const SLIPPAGE_MAX = 20;
+/**
+ * From here a slippage is warned of on the form and the review, not only in
+ * its dialog, and its chip turns amber (chunk 23's second review, DX-4).
+ */
+export const SLIPPAGE_HIGH = 5;
+
+/**
+ * What a swap's funding pays for, line by line, so the review's rows add up
+ * to "For the swap" (chunk 23's second review, DX-3): the ADA swapped (none
+ * when a token is), the DEX's fee, Minswap's, the order's deposit, and the
+ * room left for the order's fee (sessions.ts SWAP_MARGIN). Undefined when
+ * they don't add up to `funded`, which only a quote from before could do.
+ */
+export function fundParts(
+  quote: SwapQuote,
+  funded: string,
+): { swapped: string; dexFee: string; aggregatorFee: string; deposits: string; room: string } | undefined {
+  const swapped = quote.ask.tokenIn === "lovelace" ? BigInt(quote.ask.amount) : 0n;
+  const room = BigInt(funded) - swapped - BigInt(quote.dexFee) - BigInt(quote.aggregatorFee) - BigInt(quote.deposits);
+  if (room < 0n) return undefined;
+  return {
+    swapped: swapped.toString(),
+    dexFee: quote.dexFee,
+    aggregatorFee: quote.aggregatorFee,
+    deposits: quote.deposits,
+    room: room.toString(),
+  };
+}
 
 /** A slippage typed in percent ("1.5", "2%"), if it's one the wallet takes: 0.1% to 20%, two places at most. */
 export function parseSlippage(text: string): number | undefined {

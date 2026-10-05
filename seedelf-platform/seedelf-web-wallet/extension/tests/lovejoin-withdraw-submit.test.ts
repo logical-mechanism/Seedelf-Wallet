@@ -14,6 +14,7 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { CHAIN_RESEND_MS, LovejoinService, QUIET_AFTER_SEND_MS, QUIET_PUSH_MS, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
+import { SESSION_SENT_PREFIX } from "../src/background/sent-txs";
 import { lastSpentAt, SESSION_SPENT, spentSet } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { txIdOf } from "./fixtures/cbor";
@@ -39,6 +40,8 @@ interface Kept {
   withdrawing?: { txHash: string; sentAt: number; waitUntil?: number; pushes?: number; unlock?: true };
 }
 const kept = async (t: T) => (await t.store.get<Kept>("lovejoin.preprod"))!;
+/** The transactions kept as sent on preprod (sent-txs.ts), whatever their age. Call it while unlocked. */
+const sentKept = async (t: T) => (await t.session.get<unknown[]>(`${SESSION_SENT_PREFIX}preprod`)) ?? [];
 
 /** A box of ours in the pool: a fresh re-randomization of the Seedelf key's register. */
 async function ownedBox(t: T, tx: string): Promise<KoiosUtxo> {
@@ -160,6 +163,9 @@ describe("a withdraw kept before it's sent (independent review M1)", SLOW, () =>
     expect((await kept(t)).due).toEqual(before);
     expect(await t.wallet.withKeys(() => spentSet(t.session, t.clock.now))).not.toContain(box);
     expect(await t.wallet.withKeys(() => lastSpentAt(t.session, t.clock.now))).toBeUndefined();
+    // Nor kept as sent: the withdraw drawn again on its box counts alone as on its way back, rather than neither of
+    // two spending one box (incoming.ts, chunk 23's second review, fix round).
+    expect(await t.wallet.withKeys(() => sentKept(t))).toEqual([]);
   });
 
   it("is kept no more once it's sent, and its history is written then", async () => {
@@ -211,6 +217,7 @@ describe("a withdraw Koios turned away (independent review M11)", SLOW, () => {
     expect((await kept(t)).withdrawing).toBeUndefined();
     expect((await kept(t)).due).toEqual(before);
     expect(await t.wallet.withKeys(() => spentSet(t.session, t.clock.now))).not.toContain(box);
+    expect(await t.wallet.withKeys(() => sentKept(t))).toEqual([]);
     // The next minute's run tries it again, and it goes.
     await busyFor(t, 60_000);
     const [pending] = await lovejoin.withdrawDue("preprod", false, t.clock.now);

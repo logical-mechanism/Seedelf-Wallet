@@ -3,23 +3,31 @@
 //
 // Independent review L35: a site that isn't connected asks to connect once at
 // a time, however often it calls enable(); once the user says no, or closes
-// the window on it, its enable() is declined unasked for a minute, locked or
+// the window on it, its enable() is declined unasked for a while, locked or
 // not; and one site has at most 5 requests waiting of the window's 20.
 //
-// Independent review L36: in the minute after the window is closed on a
+// Independent review L36: in the while after the window is closed on a
 // locked wallet, a site's signatures and sends hear what a site that isn't
 // connected hears unlocked, never "Seedelf Wallet is locked.".
+//
+// Chunk 23's second review, CW-3: that while is 10 s the first time, so a
+// user who cancelled by mistake can ask again, then a minute, then five, and
+// the refusal says when the site can ask again.
 import { describe, expect, it } from "vitest";
 
 import { type DappError, type DappSession } from "../src/background/dapp";
 import { APIError, DataSignError } from "../src/shared/dapp";
-import { testBalances, vectors } from "./fakes";
+import { busyFor, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
 const OWN = account.preprod.receive_0 as string;
 const STRANGER = "https://stranger.example";
 const DECLINED = { failure: { code: APIError.Refused, info: "The user declined." } };
+/** What a site asking again too soon hears: when it can ask again. */
+const WAIT = (seconds: number) => ({
+  failure: { code: APIError.Refused, info: `The user declined this site just now. It can ask again in ${seconds} s.` },
+});
 const NOT_CONNECTED = { failure: { code: APIError.Refused, info: "This site isn't connected to Seedelf Wallet. Call enable() first." } };
 const BUSY = { failure: { code: APIError.Refused, info: "Seedelf Wallet is busy with this site's other requests." } };
 const GONE = { code: APIError.Refused, info: "The page went away." };
@@ -53,7 +61,7 @@ async function connected(t: Awaited<ReturnType<typeof on>>, s = site()) {
 }
 
 describe("a site that isn't connected, calling enable() again and again", () => {
-  it("asks once, leaves room for the other sites, and isn't asked again for a minute once the window is closed on it", async () => {
+  it("asks once, leaves room for the other sites, and isn't asked again for a while once the window is closed on it", async () => {
     const t = await on();
     const good = await connected(t);
     const shown = t.dappWindow.shown;
@@ -74,25 +82,25 @@ describe("a site that isn't connected, calling enable() again and again", () => 
     expect(await Promise.all(asking)).toEqual(Array.from({ length: 20 }, () => DECLINED.failure));
     expect(await signing).toEqual({ code: DataSignError.UserDeclined, info: "The user declined." });
 
-    // It asks again at once: declined unasked, the window left alone, for a minute.
-    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(DECLINED);
+    // It asks again at once: declined unasked, the window left alone, for 10 s, and it says so.
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
     expect(t.dappWindow.shown).toBe(shown + 2);
     expect(t.dapp.approvals()).toEqual([]);
-    t.clock.now += 61_000;
+    t.clock.now += 10_000;
     const again = t.dapp.call(site(STRANGER), "enable", []);
     await until(() => t.dapp.approvals().length === 1);
     await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
     expect(await again).toBe(true);
   });
 
-  it("isn't asked again for a minute once the user says no either", async () => {
+  it("isn't asked again for a while once the user says no either", async () => {
     const t = await on();
     const asking = t.dapp.call(site(STRANGER), "enable", []);
     await until(() => t.dapp.approvals().length === 1);
     await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await expect(asking).rejects.toMatchObject(DECLINED);
     const shown = t.dappWindow.shown;
-    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(DECLINED);
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
     expect(t.dappWindow.shown).toBe(shown);
     // Another site is asked as ever.
     const other = t.dapp.call(site("https://other.example"), "enable", []);
@@ -101,7 +109,7 @@ describe("a site that isn't connected, calling enable() again and again", () => 
     expect(await other).toBe(true);
   });
 
-  it("is declined unasked for a minute after the unlock window is closed on it too, in the same words", async () => {
+  it("is declined unasked for a while after the unlock window is closed on it too, in the same words", async () => {
     const t = await on();
     await t.wallet.lock();
     const asking = t.dapp.call(site(STRANGER), "enable", []);
@@ -113,13 +121,71 @@ describe("a site that isn't connected, calling enable() again and again", () => 
     const locked = await heard(t.dapp.call(site(STRANGER), "enable", []));
     expect(t.dappWindow.shown).toBe(shown);
     expect(t.dapp.unlockingSites()).toEqual([]);
-    // Unlocked, within the minute: the same answer.
+    // Unlocked, within the 10 s: the same answer.
     await t.wallet.unlock(PASSWORD);
     await t.dapp.stateChanged();
     const unlocked = await heard(t.dapp.call(site(STRANGER), "enable", []));
     expect(t.dappWindow.shown).toBe(shown);
-    expect(locked).toEqual(DECLINED.failure);
+    expect(locked).toEqual(WAIT(10).failure);
     expect(unlocked).toEqual(locked);
+  });
+});
+
+describe("the refusals after a site is declined (chunk 23's second review, CW-3)", () => {
+  /** The user declines the stranger's next connect question. */
+  async function decline(t: Awaited<ReturnType<typeof on>>) {
+    const asking = t.dapp.call(site(STRANGER), "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
+    await expect(asking).rejects.toMatchObject(DECLINED);
+  }
+
+  it("last 10 s, then a minute, then five, saying how long is left, and start again after a quiet spell", async () => {
+    const t = await on();
+    await decline(t);
+    t.clock.now += 4_000;
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(6));
+    t.clock.now += 6_000;
+    // Asked again, and declined again straight away: a dApp asking the moment it's refused.
+    await decline(t);
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(60));
+    t.clock.now += 60_000;
+    await decline(t);
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(300));
+    await busyFor(t, 300_000);
+    await decline(t);
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(300));
+
+    // Left alone for ten minutes after the last one ended, it starts at 10 s again.
+    await busyFor(t, 300_000 + 10 * 60_000);
+    await decline(t);
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
+  });
+
+  it("count once for a window closed on many of a site's requests, and not at all once it's connected", async () => {
+    const t = await on();
+    await t.wallet.lock();
+    // Three of its pages wait for the unlock.
+    const asking = [site(STRANGER), site(STRANGER), site(STRANGER)].map((s) => heard(t.dapp.call(s, "enable", [])));
+    await until(() => t.dapp.unlockingSites().length === 1);
+    await settle();
+    t.dappWindow.open = false;
+    await t.dapp.windowClosed();
+    expect(await Promise.all(asking)).toEqual([DECLINED.failure, DECLINED.failure, DECLINED.failure]);
+    await t.wallet.unlock(PASSWORD);
+    await t.dapp.stateChanged();
+    // One refusal, the first and shortest: not three in a row.
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
+    t.clock.now += 10_000;
+
+    // Connected now, then disconnected: the refusals before don't count against it.
+    const enabling = t.dapp.call(site(STRANGER), "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    await t.dapp.forget(STRANGER);
+    await decline(t);
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
   });
 });
 

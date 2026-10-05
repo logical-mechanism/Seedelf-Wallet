@@ -392,14 +392,14 @@ describe("the dApp connector", () => {
     expect(away).toMatchObject({ stakingLovelace: "1000000000", netLovelace: `-${BigInt(own!.lovelace) + 1_000_000_000n}` });
     expect(stakingComesBack(away)).toBe(false);
     expect(withdrawalLine(away.withdrawals[0]!, false, whose)).toBe(
-      "Withdraws your staking rewards, 1,000 ₳, and they don't all come back to your public account: they're counted in what it sends above.",
+      "Withdraws your staking rewards, 1,000\u00a0₳, and they don't all come back to your public account: they're counted in what it sends above.",
     );
     // Back into the account: it sends only the fee.
     const back = BigInt(own!.lovelace) + 1_000_000_000n - 170_000n;
     const home = await asked(siteTx({ inputs: [input], withdrawals, pays: [{ address: wasm.cip30Address(OWN), lovelace: back }] }));
     expect(home.netLovelace).toBe("-170000");
     expect(stakingComesBack(home)).toBe(true);
-    expect(withdrawalLine(home.withdrawals[0]!, true, whose)).toBe("Withdraws your staking rewards, 1,000 ₳, into your public account.");
+    expect(withdrawalLine(home.withdrawals[0]!, true, whose)).toBe("Withdraws your staking rewards, 1,000\u00a0₳, into your public account.");
 
     // The account's payment key under someone else's stake part: paid, not change.
     const franken = wasm.cip30Address(OWN).slice(0, 58) + wasm.cip30Address(THEIRS).slice(58);
@@ -1364,8 +1364,13 @@ describe("private CIP-30: a site connected to a private session", () => {
     const out = await dapp.privateBuild(connect.id, "15000000", []);
     // giveme.my refuses: nothing is sent, the site isn't connected, and the request still waits for the user.
     t.collateral.answer = { status: 400, body: { error: "refused" } };
-    const { error } = await dapp.answer(connect.id, true, PASSWORD, { txHash: out.txHash });
+    const { error, code } = await dapp.answer(connect.id, true, PASSWORD, { txHash: out.txHash });
     expect(error).toBeTruthy();
+    // giveme.my's refusal is a stale review, said as the port says one, so the window builds the funding again
+    // rather than offering Send, which only met "That session was started already" (chunk 23's second review,
+    // DX-1). A wrong password is no such thing.
+    expect(code).toBe("stale");
+    expect(await dapp.answer(connect.id, true, "not the password", { txHash: out.txHash })).not.toHaveProperty("code");
     expect(t.koios.submitted).toHaveLength(0);
     expect(await dapp.sites()).toEqual([]);
     expect(dapp.approvals()).toMatchObject([{ kind: "connect" }]);
@@ -1488,10 +1493,10 @@ describe("the prompt's words for the account's staking", () => {
 
   it("says whether a deposit back comes back to the account, and names a stake pool's certificate", () => {
     expect(certificateLine(cert({}), true, "your public account")).toBe(
-      "Stops your staking, and its 2 ₳ deposit comes back to your public account.",
+      "Stops your staking, and its 2\u00a0₳ deposit comes back to your public account.",
     );
     expect(certificateLine(cert({}), false, "your private session")).toBe(
-      "Stops your staking, and its 2 ₳ deposit doesn't all come back to your private session: it's counted in what it sends above.",
+      "Stops your staking, and its 2\u00a0₳ deposit doesn't all come back to your private session: it's counted in what it sends above.",
     );
     const pool = { kind: "pool", own: false, refund: null, pool: "pool1abc" } as const;
     expect(certificateLine(cert({ ...pool, poolAction: "register" }), true, "")).toBe("Registers stake pool pool1abc, or updates its terms.");

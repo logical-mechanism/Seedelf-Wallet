@@ -19,9 +19,10 @@ import { nothingInAccount, readAccount, validUntil } from "./account";
 import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
-import { settleMaybeSent, submitWatched } from "./pending";
+import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
 import type { PreferencesService } from "./preferences";
 import type { PrivateStore } from "./private-store";
+import { isPublicShort, publicShort } from "./short";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
 
@@ -93,8 +94,22 @@ export class MoveInService {
     progress?.("building");
     return wallet.withKeys(async (keys) => {
       const request = { network, params, utxos, lovelace, tokens, withdrawal, invalidHereafter };
-      const result = JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(request)));
-      const { txCbor, ...rest } = result as MoveInSummary & { txCbor: string };
+      const build = (r: typeof request) =>
+        JSON.parse(wasm.buildMoveIn(keys.cardano, keys.seedelf, JSON.stringify(r))) as MoveInSummary & { txCbor: string };
+      let result: MoveInSummary & { txCbor: string };
+      try {
+        result = build(request);
+      } catch (e) {
+        if (!isPublicShort(e)) throw e;
+        // How much could go, by building it as Max would (chunk 23's second review, PY-10), or, when that's at least
+        // what was asked, that what would stay is too little (fix round).
+        throw publicShort(
+          lovelace === null ? undefined : () => build({ ...request, lovelace: null }).lovelace,
+          (max) => t("worker.short.moveIn", { max }),
+          lovelace === null ? {} : { asked: lovelace, left: () => t("worker.short.moveInLeft") },
+        );
+      }
+      const { txCbor, ...rest } = result;
       const summary: MoveInSummary = { ...rest, network };
       await session.set(SESSION_BUILT, {
         ...summary,
@@ -112,6 +127,8 @@ export class MoveInService {
     const { wallet, session, now } = this.deps;
     const built = await wallet.withKeys(() => session.get<Built>(SESSION_BUILT));
     if (!built || built.txHash !== txHash || built.network !== network) {
+      // Gone once it's sent: a page that missed the answer hears so, never "review it again" (pending.ts).
+      await refuseSent(this.deps, network, txHash);
       throw new Error(t("worker.moveIn.notReady"));
     }
     const again = built.sentCbor !== undefined;

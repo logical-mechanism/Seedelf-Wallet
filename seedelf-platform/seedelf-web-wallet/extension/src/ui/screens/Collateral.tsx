@@ -28,6 +28,8 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   const [summary, setSummary] = useState<SendSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // From the last reading, no request: an empty account has nothing to set aside.
+  const [empty, setEmpty] = useState(false);
 
   const run = useCallback(async (task: () => Promise<void>) => {
     setBusy(true);
@@ -43,6 +45,10 @@ export function Collateral({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     call("collateral", {}).then(setStatus, (e: Error) => setError(e.message));
+    call("balances", {}).then(
+      (b) => setEmpty(b.cardano.utxos === 0),
+      () => undefined,
+    );
   }, []);
 
   const set = () =>
@@ -80,8 +86,8 @@ export function Collateral({ onBack }: { onBack: () => void }) {
         <ReviewRows testId="collateral-review">
           <Row label={t("destination.to")} value={t("collateral.yourPublicAccount")} strong />
           <Row label={t("utxos.address")} value={shortHex(summary.payments[0]!.address, 16, 8)} title={summary.payments[0]!.address} />
-          <Row label={t("collateral.setAside")} value={`${formatAda(summary.payments[0]!.lovelace)} ₳`} strong />
-          <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
+          <Row label={t("collateral.setAside")} value={`${formatAda(summary.payments[0]!.lovelace)}\u00a0₳`} strong />
+          <Row label={t("review.fee")} value={`${formatAda(summary.fee)}\u00a0₳`} />
           <Row label={t("send.review.spent")} value={String(summary.inputs)} />
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="collateral-tx" />
@@ -99,8 +105,13 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   } else if (status.state === "set") {
     body = (
       <>
+        {/* Status and purpose first, the details after: it led with the cost, and what collateral is sat behind the
+            ⓘ (chunk 23's second review, CW-8). */}
+        <p className="note" data-testid="collateral-status">
+          {t("collateral.isSet", { ada: formatAda(status.utxo.lovelace) })}
+        </p>
         <ReviewRows testId="collateral-set">
-          <Row label={t("utxos.tag.collateral")} value={`${formatAda(status.utxo.lovelace)} ₳`} strong />
+          <Row label={t("utxos.tag.collateral")} value={`${formatAda(status.utxo.lovelace)}\u00a0₳`} strong />
           <Row
             label={t("collateral.utxo")}
             value={`${shortHex(status.utxo.txHash, 8, 4)}#${status.utxo.index}`}
@@ -136,16 +147,29 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   } else {
     body = (
       <>
+        <p className="note" data-testid="collateral-status">
+          {t("collateral.notSet")}
+        </p>
+        {/* What setting it costs stays on the page, under what it's for. */}
         <p className="note" data-testid="collateral-none">
           {t(status.candidate ? "collateral.candidate" : "collateral.willPaySelf")}
         </p>
         {status.reclaimed && <p className="note">{t("collateral.reclaimed")}</p>}
       </>
     );
+    // An empty account can't pay itself 5 ₳: said before it's tried, not after (chunk 23's review, SET-3).
+    const why = !status.candidate && empty ? t("collateral.fundFirst") : undefined;
     foot = (
-      <button type="button" className="primary" onClick={set} disabled={busy}>
-        {busy ? t("common.building") : t("collateral.set")}
-      </button>
+      <>
+        <button type="button" className="primary" onClick={set} disabled={busy || !!why}>
+          {busy ? t("common.building") : t("collateral.set")}
+        </button>
+        {why && (
+          <p className="note foot-note" data-testid="collateral-why">
+            {why}
+          </p>
+        )}
+      </>
     );
   }
 

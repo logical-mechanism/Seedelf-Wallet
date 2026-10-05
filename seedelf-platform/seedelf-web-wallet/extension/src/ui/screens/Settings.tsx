@@ -10,7 +10,7 @@
 // disconnecting a site's private session, whose account the worker reads
 // first.
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   availableLanguages,
   currentLanguage,
@@ -26,7 +26,6 @@ import {
 } from "../../i18n";
 
 import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
-import { DAPP_ORIGINS } from "../../shared/dapp";
 import { readOpenIn, type OpenIn } from "../../shared/open-in";
 import {
   CURRENCIES,
@@ -51,6 +50,7 @@ import {
   EyeIcon,
   LockIcon,
   PlugIcon,
+  ShieldIcon,
   TrashIcon,
   UsersIcon,
   VaultIcon,
@@ -58,8 +58,8 @@ import {
 } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
-import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
-import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides } from "../components/LovejoinReturn";
+import { PhraseInput, phraseProblem, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
+import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides, mixFeesText } from "../components/LovejoinReturn";
 import { HintButton, HintText, Hinted, useHint } from "../components/Hint";
 import { Modal } from "../components/Modal";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
@@ -71,6 +71,7 @@ import { accountName, useAccounts } from "../accounts";
 import { confirmsDelete, deletePhrase } from "../delete-phrase";
 import { usePreferences } from "../preferences";
 import { asSentence } from "../sentence";
+import { connectorBlockedText, useConnectorSwitch } from "../sites";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
 import { disconnectWait } from "./SiteSessions";
@@ -81,7 +82,18 @@ const ISSUES = "https://github.com/logical-mechanism/Seedelf-Wallet/issues";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
 
-type Page = "menu" | "accounts" | "contacts" | "collateral" | "sites" | "phrase" | "check-phrase" | "password" | "remove";
+type Page =
+  | "menu"
+  | "accounts"
+  | "contacts"
+  | "collateral"
+  | "sites-settings"
+  | "sites"
+  | "lovejoin"
+  | "phrase"
+  | "check-phrase"
+  | "password"
+  | "remove";
 
 /** The currencies ADA's value can be shown in, by name. */
 const CURRENCY_NAMES = {
@@ -111,17 +123,47 @@ export function Settings({
   onNetwork: (status: Status) => void;
 }) {
   const [page, setPage] = useState<Page>("menu");
+  const [phraseFrom, setPhraseFrom] = useState<"menu" | "remove">("menu");
   const { prefs } = usePreferences();
+  const sites = useConnectorSwitch(status.connectorBlocked);
   const prices = !!NETWORKS[status.network].prices && prefs.currency !== "off";
   const menu = () => setPage("menu");
   if (page === "accounts") return <Accounts onBack={menu} network={status.network} />;
   if (page === "contacts") return <Contacts onBack={menu} />;
   if (page === "collateral") return <Collateral onBack={menu} />;
-  if (page === "sites") return <ConnectedSites onBack={menu} />;
-  if (page === "phrase") return <ShowPhrase onBack={menu} />;
+  if (page === "sites") return <ConnectedSites onBack={() => setPage("sites-settings")} />;
+  // The two longest sections, each on a page of its own: inline, they made Settings one 3,400 px page, with "Lock
+  // after" found only by scrolling past them (chunk 23's review, SET-1).
+  if (page === "sites-settings") {
+    return (
+      <Screen title={t("settings.sites")} titleId="sites-settings-title" onBack={menu}>
+        <DappConnector blocked={status.connectorBlocked} onSites={() => setPage("sites")} heading={false} />
+      </Screen>
+    );
+  }
+  if (page === "lovejoin") {
+    return (
+      <Screen title={t("settings.lovejoin")} titleId="lovejoin-settings-page" onBack={menu}>
+        <LovejoinSettings network={status.network} heading={false} />
+      </Screen>
+    );
+  }
+  // Opened from Remove wallet's warning, the phrase goes back there (chunk 23's second review, SE-4).
+  if (page === "phrase") return <ShowPhrase onBack={phraseFrom === "remove" ? () => setPage("remove") : menu} />;
   if (page === "check-phrase") return <CheckPhrase onBack={menu} />;
   if (page === "password") return <ChangePassword onBack={menu} />;
-  if (page === "remove") return <RemoveWallet onBack={menu} onRemoved={onRemoved} />;
+  if (page === "remove") {
+    return (
+      <RemoveWallet
+        onBack={menu}
+        onRemoved={onRemoved}
+        onShowPhrase={() => {
+          setPhraseFrom("remove");
+          setPage("phrase");
+        }}
+      />
+    );
+  }
 
   return (
     <Screen title={t("app.settings")} titleId="settings-title" onBack={onBack}>
@@ -135,14 +177,44 @@ export function Settings({
         </ul>
       </section>
       <PreferencesSection network={status.network} />
-      <DappConnector blocked={status.connectorBlocked} onSites={() => setPage("sites")} />
-      {lovejoinOn(status.network) && <LovejoinSettings network={status.network} />}
+      <section className="section" aria-labelledby="privacy-settings-title">
+        <h2 id="privacy-settings-title">{t("settings.privacySection")}</h2>
+        <ul className="list">
+          {/* Each row says what its setting does now, not a bare On or Off that read as the feature itself
+              being on or off (chunk 23's second review, SE-3). */}
+          <MenuRow
+            icon={<PlugIcon size={16} />}
+            label={t("settings.sites")}
+            sub={t(sites.on ? "settings.sites.stateOn" : "settings.sites.stateOff")}
+            onClick={() => setPage("sites-settings")}
+          />
+          {lovejoinOn(status.network) && (
+            <MenuRow
+              icon={<ShieldIcon size={16} />}
+              label={t("settings.lovejoin")}
+              sub={
+                prefs.lovejoinReturns
+                  ? t("settings.lovejoin.stateOn", { count: prefs.lovejoinDepth })
+                  : t("settings.lovejoin.stateOff")
+              }
+              onClick={() => setPage("lovejoin")}
+            />
+          )}
+        </ul>
+      </section>
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
         <h2 id="security-title">{t("settings.security")}</h2>
         <LockAfter />
         <ul className="list">
-          <MenuRow icon={<EyeIcon size={16} />} label={t("settings.showPhrase")} onClick={() => setPage("phrase")} />
+          <MenuRow
+            icon={<EyeIcon size={16} />}
+            label={t("settings.showPhrase")}
+            onClick={() => {
+              setPhraseFrom("menu");
+              setPage("phrase");
+            }}
+          />
           <MenuRow icon={<CheckIcon size={16} />} label={t("settings.checkPhrase")} onClick={() => setPage("check-phrase")} />
           <MenuRow icon={<LockIcon size={16} />} label={t("settings.changePassword")} onClick={() => setPage("password")} />
           <MenuRow icon={<TrashIcon size={16} />} label={t("settings.removeWallet")} onClick={() => setPage("remove")} danger />
@@ -172,6 +244,9 @@ export function Settings({
 /** Past this many accounts the list gets a filter: it scrolls from about eight. */
 const FILTER_FROM = 8;
 
+/** Which way an account was asked about: the look for the next one, or a number of your own. */
+type Asked = "look" | "own";
+
 /**
  * The phrase's public accounts: which one the wallet works on, what each is
  * called, and a look for one more.
@@ -186,15 +261,19 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   const { accounts, active, reload } = useAccounts();
   const [busy, setBusy] = useState<"switch" | "check" | "name" | "look">();
   const [error, setError] = useState<string>();
-  const [found, setFound] = useState<string>();
+  // What the last look or check found, said beside the button that asked (`by`), not at the foot of the page
+  // (chunk 23's second review, PA-1).
+  const [found, setFound] = useState<{ text: string; by: Asked }>();
   const [naming, setNaming] = useState<number>();
   const [draft, setDraft] = useState("");
   // The account number to look up or add. Any CIP-1852 index: a custom or
   // non-sequential one (1337, say) is unreachable otherwise, since the
   // sequential look stops at the first unused account (the owner, 2026-10-02).
   const [number, setNumber] = useState("");
-  // Set when a checked account has never been used, so Add can be offered for it.
-  const [unused, setUnused] = useState<number>();
+  // Set when a looked-for or checked account has never been used, so Add can be offered for it.
+  const [unused, setUnused] = useState<{ index: number; by: Asked }>();
+  // The account number of your own, folded away: the look for the next account is the way most people need.
+  const [ownNumber, setOwnNumber] = useState(false);
   // A filter, once the list is long enough to scroll past: by number or by
   // the name the user gave it (the owner, 2026-10-02).
   const [query, setQuery] = useState("");
@@ -220,15 +299,25 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   };
 
   /** The next account in the sequential run, which is what most wallets have. */
-  const look = () =>
-    run("look", async () => {
+  const look = () => {
+    // The one the worker looks at: the first gap in the run up from account 0 (accounts.ts nextSequential).
+    const known = new Set(accounts.map((a) => a.index));
+    let next = 0;
+    while (known.has(next)) next += 1;
+    return run("look", async () => {
       const { found: indexes } = await call("account-discover", { limit: 1 });
-      setFound(
-        indexes.length
-          ? t("accounts.foundAccount", { number: indexes[0]! + 1 })
-          : t("accounts.nextNeverUsed", { network: NETWORKS[network].label }),
-      );
+      if (indexes.length) {
+        setFound({ text: t("accounts.foundAccount", { number: indexes[0]! + 1 }), by: "look" });
+        return;
+      }
+      // Never used: adding it is the next step, so it's the main button, not a number to type below (PA-1).
+      setFound({
+        text: t("accounts.nextNeverUsed", { number: next + 1, network: NETWORKS[network].label }),
+        by: "look",
+      });
+      setUnused({ index: next, by: "look" });
     });
+  };
 
   /** The number typed, as an index from 0; undefined when it isn't a number a person would mean. */
   const typed = () => {
@@ -241,21 +330,45 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
     if (index === undefined) return;
     void run("check", async () => {
       const { used } = await call("account-check", { index });
-      setFound(
-        used
+      setFound({
+        text: used
           ? t("accounts.hasBeenUsed", { number: index + 1, network: NETWORKS[network].label })
           : t("accounts.neverUsed", { number: index + 1, network: NETWORKS[network].label }),
-      );
-      if (!used) setUnused(index);
+        by: "own",
+      });
+      if (!used) setUnused({ index, by: "own" });
     });
   };
 
-  const addOne = (index: number) =>
+  const addOne = (index: number, by: Asked) =>
     run("check", async () => {
       await call("account-add", { index });
-      setFound(t("accounts.inListNow", { number: index + 1 }));
+      setFound({ text: t("accounts.inListNow", { number: index + 1 }), by });
       setNumber("");
     });
+
+  /** What the look, or the check by number, found: under the button that asked, with Add when it's unused. */
+  const result = (by: Asked) => (
+    <>
+      {found?.by === by && (
+        <p className="note" role="status" data-testid="accounts-found">
+          {found.text}
+        </p>
+      )}
+      {unused?.by === by && (
+        <div className="actions" data-testid={by === "look" ? "accounts-add-next" : "accounts-add-unused"}>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => void addOne(unused.index, by)}
+            disabled={busy !== undefined}
+          >
+            {t(by === "look" ? "accounts.addNext" : "accounts.addAnyway", { number: unused.index + 1 })}
+          </button>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <Screen
@@ -346,9 +459,11 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
                         {busy === "switch" ? t("accounts.switching") : t("accounts.switchTo")}
                       </button>
                     )}
+                    {/* A chip too: as a bare link beside Switch to it, it read as disabled (chunk 23's second
+                        review, V-9). */}
                     <button
                       type="button"
-                      className="link"
+                      className="chip"
                       onClick={() => {
                         setNaming(a.index);
                         setDraft(a.name ?? "");
@@ -375,53 +490,70 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             {busy === "look" ? t("vote.looking") : t("accounts.lookForNext")}
           </button>
         </div>
-        <form
-          className="account-number"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            checkOne();
-          }}
+        {result("look")}
+        {/* A number of your own reaches an account the look can't (1337, say), but few need it: folded under its own
+            button, under the look (chunk 23's second review, PA-1). */}
+        <button
+          type="button"
+          className="link align-start"
+          aria-expanded={ownNumber}
+          aria-controls="account-own-number"
+          onClick={() => setOwnNumber(!ownNumber)}
         >
-          <label htmlFor="account-number">{t("accounts.numberLabel")}</label>
-          <HintButton
-            text={t("accounts.customNote")}
-            open={custom.open}
-            onToggle={custom.toggle}
-            controls={custom.id}
-            testId="accounts-custom-note-hint"
-          />
-          <input
-            id="account-number"
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={2147483648}
-            step={1}
-            value={number}
-            placeholder="1338"
-            onChange={(e) => {
-              setNumber(e.target.value);
-              setUnused(undefined);
-              setFound(undefined);
-            }}
-          />
-          {/* Chips, like Switch to it and Name it in the list above: these sit
-              inline with a field, not at the foot of a form. */}
-          <button type="submit" className="chip" disabled={busy !== undefined || typed() === undefined}>
-            {busy === "check" ? t("vote.looking") : t("accounts.checkIt")}
-          </button>
-          <button
-            type="button"
-            className="chip"
-            disabled={busy !== undefined || typed() === undefined}
-            onClick={() => {
-              const index = typed();
-              if (index !== undefined) void addOne(index);
-            }}
-          >
-            {t("accounts.addIt")}
-          </button>
-        </form>
+          {t("accounts.ownNumber")}
+        </button>
+        {ownNumber && (
+          <div className="stack" id="account-own-number">
+            <form
+              className="account-number"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                checkOne();
+              }}
+            >
+              <label htmlFor="account-number">{t("accounts.numberLabel")}</label>
+              <HintButton
+                text={t("accounts.customNote")}
+                open={custom.open}
+                onToggle={custom.toggle}
+                controls={custom.id}
+                testId="accounts-custom-note-hint"
+              />
+              <input
+                id="account-number"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={2147483648}
+                step={1}
+                value={number}
+                onChange={(e) => {
+                  setNumber(e.target.value);
+                  setUnused(undefined);
+                  setFound(undefined);
+                }}
+              />
+              {/* Chips, like Switch to it and Name it in the list above: these sit
+                  inline with a field, not at the foot of a form. */}
+              <button type="submit" className="chip" disabled={busy !== undefined || typed() === undefined}>
+                {busy === "check" ? t("vote.looking") : t("accounts.checkIt")}
+              </button>
+              <button
+                type="button"
+                className="chip"
+                disabled={busy !== undefined || typed() === undefined}
+                onClick={() => {
+                  const index = typed();
+                  if (index !== undefined) void addOne(index, "own");
+                }}
+              >
+                {t("accounts.addIt")}
+              </button>
+            </form>
+            {custom.open && <HintText text={t("accounts.customNote")} id={custom.id} testId="accounts-custom-note" />}
+            {result("own")}
+          </div>
+        )}
         <p className="note" data-testid="accounts-cost-note">
           <Rich
             k="accounts.privacy.koiosCost"
@@ -432,19 +564,6 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             }}
           />
         </p>
-        {custom.open && <HintText text={t("accounts.customNote")} id={custom.id} testId="accounts-custom-note" />}
-        {unused !== undefined && (
-          <div className="actions" data-testid="accounts-add-unused">
-            <button type="button" className="primary" onClick={() => void addOne(unused)} disabled={busy !== undefined}>
-              {t("accounts.addAnyway", { number: unused + 1 })}
-            </button>
-          </div>
-        )}
-        {found && (
-          <p className="note" role="status" data-testid="accounts-found">
-            {found}
-          </p>
-        )}
         {error && (
           <p className="error" role="alert">
             {error}
@@ -520,7 +639,9 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
         label={t("network.ariaLabel")}
         id="network-label"
         options={status.networks.map((n) => ({ value: n, label: NETWORKS[n].label, disabled: busy }))}
-        value={asking ?? status.network}
+        // The network it's on stays pressed until the move is confirmed: pressing the other one only asks
+        // (chunk 23's second review, SE-2).
+        value={status.network}
         onChange={(n) => {
           setError(undefined);
           setAsking(n === status.network ? undefined : n);
@@ -658,14 +779,15 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
 }
 
 /**
- * About what a box's fan-out costs on `network`: its mixes (1, 4 or 13, three
- * wide), at what a mix measured there (networks.ts: 0.877 ₳ on preprod, about
- * 0.82 ₳ on mainnet).
+ * About what a box's fan-out costs where Lovejoin is on `network`: its mixes
+ * (1, 4 or 13, three wide), at what the wallet plans a mix at, the figure
+ * the Lovejoin page and its reviews give (mixFeesText). It priced them at
+ * what a mix measured (networks.ts), so Settings and the page disagreed
+ * (chunk 23's second review, LJ-3).
  */
 export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
   const mixes = (3 ** depth - 1) / 2;
-  const lovelace = mixes * (NETWORKS[network].lovejoin?.mixCost ?? 0);
-  return t("settings.lovejoin.depthCost", { count: mixes, ada: (lovelace / 1_000_000).toFixed(1) });
+  return t("settings.lovejoin.depthCost", { count: mixes, ada: NETWORKS[network].lovejoin ? mixFeesText(mixes) : "0" });
 }
 
 /**
@@ -675,7 +797,7 @@ export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
  * 16, privacy review §4.1). Shown where Lovejoin is deployed (networks.ts),
  * as the worker uses it.
  */
-export function LovejoinSettings({ network }: { network: NetworkName }) {
+export function LovejoinSettings({ network, heading = true }: { network: NetworkName; heading?: boolean }) {
   const { prefs, loaded, set } = usePreferences();
   const [error, setError] = useState<string>();
   const fail = (err: Error) => setError(err.message);
@@ -683,7 +805,10 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
   const on = prefs.lovejoinReturns;
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
-      <h2 id="lovejoin-settings-title">{t("settings.lovejoin")}</h2>
+      {/* On its own page, the screen's title says it. */}
+      <h2 id="lovejoin-settings-title" className={heading ? undefined : "sr-only"}>
+        {t("settings.lovejoin")}
+      </h2>
       {/* What it costs, what a lock does to it and what it doesn't hide: on the page, not behind an icon (chunk 23). */}
       <p className="note">
         {joinSentences([t("settings.lovejoin.note"), floor > 0 && t("settings.lovejoin.floor", { count: floor }), LOVEJOIN_SEEN()])}
@@ -719,9 +844,11 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
           disabled={!loaded || !on}
           onChange={(e) => void set({ lovejoinDepth: Number(e.target.value) as LovejoinDepth }).catch(fail)}
         >
+          {/* Short enough for the side panel: a native select clips, and "(up to 1 in 9)" was cut mid-bracket. The note
+              under it says how far the chosen depth hides a box (chunk 23's review, SET-2). */}
           {LOVEJOIN_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {t("settings.lovejoin.depthOption", { count: d, cost: depthCost(network, d), one: 3 ** d })}
+              {t("settings.lovejoin.depthOption", { count: d, cost: depthCost(network, d) })}
             </option>
           ))}
         </select>
@@ -800,43 +927,26 @@ function LockAfter() {
  * the worker keeps the connector off (launch review #60). The switch is off
  * and can't be turned on, and the note says why.
  */
-export function DappConnector({ blocked, onSites }: { blocked?: Status["connectorBlocked"]; onSites: () => void }) {
+export function DappConnector({
+  blocked,
+  onSites,
+  heading = true,
+}: {
+  blocked?: Status["connectorBlocked"];
+  onSites: () => void;
+  /** False on its own page, whose title says it. */
+  heading?: boolean;
+}) {
   const accounts = useAccounts();
   const { prefs, loaded, set } = usePreferences();
-  const [allowed, setAllowed] = useState<boolean>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    chrome.permissions.contains({ origins: DAPP_ORIGINS }).then(setAllowed, () => setAllowed(false));
-  }, [prefs.dappConnector]);
-  const on = !blocked && loaded && prefs.dappConnector && allowed === true;
-
-  function toggle() {
-    if (blocked || !loaded || allowed === undefined) return;
-    setError(undefined);
-    if (on) {
-      set({ dappConnector: false }).then(
-        () => setAllowed(false),
-        (e: Error) => setError(e.message),
-      );
-      return;
-    }
-    // Before anything is awaited: Chrome asks only straight from a click.
-    chrome.permissions.request({ origins: DAPP_ORIGINS }).then(
-      async (granted) => {
-        setAllowed(granted);
-        if (!granted) {
-          setError(t("settings.sites.warn.notGranted"));
-          return;
-        }
-        await set({ dappConnector: true });
-      },
-      (e: Error) => setError(e.message),
-    );
-  }
+  // The section's other settings say their own refusals in the same place.
+  const { on, allowed, error, setError, toggle } = useConnectorSwitch(blocked);
 
   return (
     <section className="section" aria-labelledby="dapp-settings-title">
-      <h2 id="dapp-settings-title">{t("settings.sites")}</h2>
+      <h2 id="dapp-settings-title" className={heading ? undefined : "sr-only"}>
+        {t("settings.sites")}
+      </h2>
       <div className="setting-row">
         <span className="stack-tight">
           <span id="dapp-connector-label">{t("settings.sites.connector")}</span>
@@ -923,7 +1033,6 @@ export function DappConnector({ blocked, onSites }: { blocked?: Status["connecto
 }
 
 /** Why the connector stays off on a Chrome that won't protect the wallet's storage from sites (`connectorBlocked: "storage"`). */
-export const connectorBlockedText = () => t("settings.sites.warn.blocked");
 
 /**
  * The sites connected on this network, each with Disconnect. A site's
@@ -1128,11 +1237,14 @@ function SpendRewards() {
 function MenuRow({
   icon,
   label,
+  sub,
   onClick,
   danger,
 }: {
   icon: ReactNode;
   label: string;
+  /** How it's set now, under the label: "On", "Off, …". */
+  sub?: string;
   onClick: () => void;
   danger?: boolean;
 }) {
@@ -1140,7 +1252,14 @@ function MenuRow({
     <li>
       <button type="button" className={danger ? "menu-row menu-row--danger" : "menu-row"} onClick={onClick}>
         <span className="menu-row__icon">{icon}</span>
-        <span>{label}</span>
+        {sub ? (
+          <span className="menu-row__text">
+            <span>{label}</span>
+            <span className="menu-row__sub menu-row__sub--wrap">{sub}</span>
+          </span>
+        ) : (
+          <span>{label}</span>
+        )}
         <ChevronRightIcon size={16} />
       </button>
     </li>
@@ -1230,8 +1349,28 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<boolean>();
   const [error, setError] = useState<string>();
+  // Set once the user picks a count, types or pastes: the wallet's own count, arriving after, mustn't undo it.
+  const chosen = useRef(false);
+
+  // As many boxes as this wallet's phrase has words, not 24 for a 12-word wallet (chunk 23's second review, FR-11).
+  // The worker reads it off the unlocked wallet, asking nobody and keeping nothing new.
+  useEffect(() => {
+    let live = true;
+    call("phrase-words", {}).then(
+      ({ words: n }) => {
+        if (!live || chosen.current || !(WORD_COUNTS as readonly number[]).includes(n)) return;
+        setCount(n as WordCount);
+        setWords(blank(n));
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   function changeCount(n: WordCount) {
+    chosen.current = true;
     setCount(n);
     setWords((w) => Array.from({ length: n }, (_, i) => w[i] ?? ""));
     setResult(undefined);
@@ -1242,8 +1381,18 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
     setBusy(true);
     setError(undefined);
     setResult(undefined);
+    const phrase = words.join(" ");
     try {
-      const { matches } = await call("check-phrase", { phrase: words.join(" ") });
+      // Whether it's a phrase at all first, said as Restore says it: never core's "checksum" (chunk 23's second
+      // review, FR-7).
+      await call("validate-phrase", { phrase });
+    } catch (e) {
+      setError(await phraseProblem(words, (e as Error).message));
+      setBusy(false);
+      return;
+    }
+    try {
+      const { matches } = await call("check-phrase", { phrase });
       setResult(matches);
       if (matches) setWords(blank(count));
     } catch (e) {
@@ -1286,6 +1435,7 @@ function CheckPhrase({ onBack }: { onBack: () => void }) {
       <PhraseInput
         words={words}
         onChange={(w) => {
+          chosen.current = true;
           setWords(w);
           setResult(undefined);
         }}
@@ -1409,7 +1559,16 @@ export function atStakeLines(stake: AtStake[]): string[] {
   });
 }
 
-export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemoved: (status: Status) => void }) {
+export function RemoveWallet({
+  onBack,
+  onRemoved,
+  onShowPhrase,
+}: {
+  onBack: () => void;
+  onRemoved: (status: Status) => void;
+  /** Opens Show recovery phrase, which its warning names. */
+  onShowPhrase?: () => void;
+}) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -1491,7 +1650,19 @@ export function RemoveWallet({ onBack, onRemoved }: { onBack: () => void; onRemo
         </div>
       )}
       <Callout tone="warn">
-        {t("settings.remove.warn.havePhrase")}
+        {/* The screen it names, as a link rather than words to go and find (chunk 23's second review, SE-4). */}
+        <Rich
+          k="settings.remove.warn.havePhrase"
+          parts={{
+            show: onShowPhrase ? (
+              <button type="button" className="link" onClick={onShowPhrase} disabled={busy}>
+                {t("settings.showPhrase")}
+              </button>
+            ) : (
+              t("settings.showPhrase")
+            ),
+          }}
+        />
       </Callout>
       <div className="field">
         <label htmlFor="confirm-remove">

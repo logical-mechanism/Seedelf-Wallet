@@ -182,7 +182,7 @@ describe("a payment that may still go through, across Remove wallet", () => {
 });
 
 describe("Remove wallet's screen", () => {
-  it("promises back only what a restore finds, and says private sessions' accounts aren't found yet", async () => {
+  it("promises back only what a restore finds, and says what's in private sessions isn't found yet", async () => {
     const { RemoveWallet } = await import("../src/ui/screens/Settings");
     const html = renderToStaticMarkup(createElement(RemoveWallet, { onBack: () => undefined, onRemoved: () => undefined }))
       .replace(/<[^>]+>/g, " ")
@@ -190,9 +190,15 @@ describe("Remove wallet's screen", () => {
       .replace(/\s+/g, " ");
     expect(html).not.toContain("your recovery phrase brings them back");
     expect(html).toContain("your recovery phrase brings back your public account, your private balance and your Lovejoin boxes");
-    expect(html).toContain("What private sessions' one-time accounts hold doesn't show after a restore yet: bring it back first.");
+    // In plain words, not "private sessions' one-time accounts" (chunk 23's second review, SE-4).
+    expect(html).toContain("What's still in a private session (a swap's, a mix's or a site's) doesn't show after a restore yet: bring it back first.");
     // Until the worker says what's open, it can't be removed.
     expect(html).toContain("Checking…");
+    // The screen its warning names is a link to it, inside the sentence (chunk 23's second review, SE-4).
+    const linked = renderToStaticMarkup(
+      createElement(RemoveWallet, { onBack: () => undefined, onRemoved: () => undefined, onShowPhrase: () => undefined }),
+    );
+    expect(linked).toContain('first (<button type="button" class="link">Show recovery phrase</button>). Without it');
   });
 
   it("lists what's left behind in plain words", async () => {
@@ -212,7 +218,7 @@ describe("Remove wallet's screen", () => {
     ]);
     expect(lines).toEqual([
       "Mainnet: a payment Koios didn't answer may still go through. An encrypted record of it stays in this browser: restoring this same recovery phrase here watches it again, but making or restoring another wallet here first deletes that record. While nothing watches it, a payment made here or elsewhere could pay twice.",
-      "Mainnet: 2 private sessions still open: private session 1 (app.example), private session 3 (a swap). What their one-time accounts hold doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.",
+      "Mainnet: 2 private sessions still open: private session 1 (app.example), private session 3 (a swap). What's in them doesn't show after a restore yet: bring it back first, with Bring everything back on the dApps page, or a running swap's Stop.",
       "Mainnet: something no return takes is left at the account of private session 4 (a mix), and it doesn't show after a restore yet.",
       "Mainnet: a chain through Lovejoin is still being sent. Removing the wallet stops it partway, its boxes less mixed.",
       "Preprod: Seedelf Wallet couldn't read what's still open there.",
@@ -226,7 +232,7 @@ describe("Remove wallet's screen", () => {
       .replaceAll("&#x27;", "'")
       .replace(/\s+/g, " ");
     expect(html).toContain("The phrase brings back your public account, your private balance and your Lovejoin boxes.");
-    expect(html).toContain("What private sessions' one-time accounts hold doesn't show after a restore yet.");
+    expect(html).toContain("What's still in a private session (a swap's, a mix's or a site's) doesn't show after a restore yet.");
     // It runs locked, and keeps a payment that may still go through: it says so, and what brings it back.
     expect(html).toContain(
       "If a payment may still go through, an encrypted record of it stays in this browser: restoring this same phrase here watches it again, and making or restoring another wallet deletes that record.",

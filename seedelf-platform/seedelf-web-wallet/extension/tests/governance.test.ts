@@ -115,6 +115,8 @@ describe("governance actions", () => {
     const query = decodeURIComponent(t.koios.calls.find((c) => c.path === "proposal_list")!.query);
     expect(query).toContain("ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null&expired_epoch=is.null");
     expect(query).toContain("title:meta_json->body->>title,abstract:meta_json->body->>abstract");
+    // When each was proposed, and what a treasury withdrawal pays: the same request (chunk 23's second review, GV-1).
+    expect(query).toContain(",block_time,withdrawal&");
     expect(await t.local.get(LOCAL_GOV_ACTIONS_PREFIX + "preprod")).toMatchObject({ updatedAt: t.clock.now });
 
     // Within the hour, from the device; a refresh, or an hour on, asks again.
@@ -164,6 +166,21 @@ describe("governance actions", () => {
     expect(shownText("x".repeat(300), 200)).toHaveLength(201);
     expect(shownText("   ", 200)).toBeUndefined();
     expect(shownText(42, 200)).toBeUndefined();
+  });
+
+  it("carry when each was proposed, and what a treasury withdrawal pays to whom (GV-1, GV-2)", async () => {
+    const t = await unlocked();
+    const [a, b] = governanceFixture.proposal_list.preprod;
+    const to = "stake_test1ups2mn0y23vsm0l9jd0chs5kr8lxprtum433tqxv0zm8wccewjn92";
+    t.koios.proposals = [
+      { ...a!, proposal_type: "TreasuryWithdrawals", block_time: 1790023030, withdrawal: [{ stake_address: to, amount: "1000000" }] },
+      { ...b!, withdrawal: null },
+    ];
+    const { list } = await t.staking.governance("preprod");
+    expect(list.actions[0]).toMatchObject({ proposedAt: 1_790_023_030_000, withdrawals: [{ to, amount: "1000000" }] });
+    // A row without them, as one kept on the device from before: neither is made up.
+    expect(list.actions[1]).not.toHaveProperty("proposedAt");
+    expect(list.actions[1]).not.toHaveProperty("withdrawals");
   });
 
   it("close when their epoch ends, counted with no request", () => {

@@ -98,7 +98,7 @@ describe("a return's chain through Lovejoin (independent review L20)", () => {
     t.koios.addedToAccounts.unshift({ ...atSession("0c".repeat(32), 0, "5000000"), inline_datum: { bytes: `${"81".repeat(129)}80`, value: {} } });
     const review = await sessions.backBuild("preprod", 0);
     expect(review.lovejoin).toBeUndefined();
-    expect(review.lovejoinSkipped).toMatch(/5 ₳ collateral isn't at its account/);
+    expect(review.lovejoinSkipped).toMatch(/5\u00a0₳ collateral isn't at its account/);
   });
 });
 

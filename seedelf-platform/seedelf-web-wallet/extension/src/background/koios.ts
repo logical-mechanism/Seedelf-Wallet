@@ -216,6 +216,10 @@ export interface KoiosProposal {
   meta_is_valid: boolean | null;
   title: string | null;
   abstract: string | null;
+  /** Its transaction's block time (seconds); absent from a list kept from before it was asked for. */
+  block_time?: number;
+  /** A treasury withdrawal's payments as the ledger holds them, or one alone (withdrawalsOf); null for any other type. */
+  withdrawal?: Array<{ stake_address: string; amount: string }> | { stake_address: string; amount: string } | null;
 }
 
 /** One vote: `vote_list`. */
@@ -269,12 +273,15 @@ const DREP_PROFILE_COLUMNS = "drep_id,is_valid,meta_json->body->givenName";
 /**
  * A live governance action is one not yet ratified, enacted, dropped or
  * expired. Its metadata's text is most of a row (70 KB for mainnet's three on
- * 2026-10-04), so only the title and abstract are taken from it (5.7 KB).
+ * 2026-10-04), so only the title and abstract are taken from it (5.7 KB). The
+ * block time dates each row, and a treasury withdrawal's `withdrawal` says
+ * who it pays and how much (chunk 23's second review, GV-1, GV-2): a few bytes
+ * more of the same request, asking Koios nothing new.
  */
 const LIVE_PROPOSALS =
   "ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null&expired_epoch=is.null";
 const PROPOSAL_COLUMNS =
-  "proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json->body->>title,abstract:meta_json->body->>abstract";
+  "proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json->body->>title,abstract:meta_json->body->>abstract,block_time,withdrawal";
 /** How many live actions a vote_list request asks about at once, so its address stays short. */
 const VOTES_PER_REQUEST = 40;
 /** What an NFT's image is read from: its CIP-25 and CIP-68 metadata, nothing else. */

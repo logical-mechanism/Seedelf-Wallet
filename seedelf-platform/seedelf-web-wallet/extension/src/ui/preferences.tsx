@@ -3,8 +3,10 @@
 // screens that show what the wallet holds (Home, Tokens, UTxOs, Activity,
 // Receive, Staking, Lovejoin) write their amounts through `useAmounts`,
 // which masks them, and a count that is an amount too (Lovejoin's boxes,
-// each 10 ₳). The forms and reviews don't: what's being sent is always
-// shown.
+// each 10 ₳). So do the payment forms' lines about the balance (what's
+// available, Max's most, a token's "of 1,234"; chunk 23's second review,
+// HM-9). What's typed and a review's amounts don't: what's being sent is
+// always shown, since it's read before it's sent.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 

@@ -34,7 +34,12 @@ export function TokenAvatar({ view, large }: { view: TokenView; large?: boolean 
   );
 }
 
-export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: TokenView) => void }) {
+/**
+ * `coming`: some of it is on its way back, with a payment's change, and the
+ * row says so rather than the token vanishing until it confirms (chunk 23's
+ * second review, HM-1).
+ */
+export function TokenRow({ view, coming, onOpen }: { view: TokenView; coming?: boolean; onOpen: (view: TokenView) => void }) {
   const tr = useT();
   const amount = useAmounts().text(view.amount);
   return (
@@ -43,30 +48,48 @@ export function TokenRow({ view, onOpen }: { view: TokenView; onOpen: (view: Tok
         type="button"
         className="token-row"
         onClick={() => onOpen(view)}
-        aria-label={joinList([view.label, amount])}
+        aria-label={joinList(view.warn ? [view.label, amount, view.sub] : [view.label, amount])}
         title={tr("tokenList.details", { label: view.label })}
       >
         <TokenAvatar view={view} />
         <span className="token-row__label">{view.label}</span>
         <span className="token-row__amount">{amount}</span>
-        <span className="token-row__sub">{view.sub}</span>
+        <span className={view.warn ? "token-row__sub wrap token-row__sub--warn" : "token-row__sub"}>
+          {coming ? joinList([tr("tokenList.onItsWay"), view.sub]) : view.sub}
+        </span>
       </button>
     </li>
   );
 }
+
+/**
+ * What a token's details can start, with the token picked: a payment from the
+ * balance it's in (Send), or moving it to the other side (Make private, Make
+ * public). Before chunk 23 the details were a dead end (the review's T-1).
+ */
+export type TokenAction = "send" | "move";
 
 /** Home's tokens: fungible ones first, by name, then NFTs; the first five, and View all. */
 export function TokenList({
   tokens,
   of,
   testId,
+  coming,
+  blocked,
   onViewAll,
+  onAction,
 }: {
   tokens: TokenAmount[];
   /** Whose tokens: what showing an NFT's image reveals depends on it. */
   of: "seedelf" | "cardano";
   testId: string;
+  /** The tokens (`tokenKey`) some of which are on their way back. */
+  coming?: ReadonlySet<string>;
+  /** Why a token's details can't start a payment now, when that's the one transaction at a time. */
+  blocked?: string;
   onViewAll: () => void;
+  /** A token's details start a payment with it, when one can be made now. */
+  onAction?: (action: TokenAction, token: TokenAmount) => void;
 }) {
   const tr = useT();
   const network = useNetwork();
@@ -83,7 +106,7 @@ export function TokenList({
     <div className="stack-tight" data-testid={testId}>
       <ul className="list">
         {views.slice(0, PREVIEW).map((v) => (
-          <TokenRow key={tokenKey(v.token)} view={v} onOpen={setOpen} />
+          <TokenRow key={tokenKey(v.token)} view={v} coming={coming?.has(tokenKey(v.token))} onOpen={setOpen} />
         ))}
       </ul>
       {views.length > PREVIEW && (
@@ -92,7 +115,7 @@ export function TokenList({
           <ChevronRightIcon size={16} />
         </button>
       )}
-      {open && <TokenDetails view={open} of={of} onClose={() => setOpen(undefined)} />}
+      {open && <TokenDetails view={open} of={of} onClose={() => setOpen(undefined)} onAction={onAction} blocked={blocked} />}
     </div>
   );
 }
@@ -102,10 +125,27 @@ export function TokenList({
  * identify it, each with Copy. An NFT's image is offered here, and only here.
  * `of`: whose token it is, the private balance's or the public account's.
  */
-export function TokenDetails({ view, of, onClose }: { view: TokenView; of: "seedelf" | "cardano"; onClose: () => void }) {
+export function TokenDetails({
+  view,
+  of,
+  onClose,
+  onAction,
+  blocked,
+}: {
+  view: TokenView;
+  of: "seedelf" | "cardano";
+  onClose: () => void;
+  onAction?: (action: TokenAction, token: TokenAmount) => void;
+  /** Why there's no Send or Make private here now: said, where the buttons were (chunk 23's second review, HM-3). */
+  blocked?: string;
+}) {
   const tr = useT();
   const t = view.token;
   const amounts = useAmounts();
+  const start = (action: TokenAction) => {
+    onClose();
+    onAction?.(action, t);
+  };
   return (
     <Modal title={view.label} titleId="token-details-title" onClose={onClose}>
       <div className="token-details" data-testid="token-details">
@@ -118,6 +158,21 @@ export function TokenDetails({ view, of, onClose }: { view: TokenView; of: "seed
           </p>
           {view.info && <p className="note">{view.info.name}</p>}
         </div>
+        {!onAction && blocked && (
+          <p className="note" data-testid="token-actions-blocked">
+            {blocked}
+          </p>
+        )}
+        {onAction && (
+          <div className="actions" data-testid="token-actions">
+            <button type="button" className="primary primary--compact" onClick={() => start("send")}>
+              {tr("home.action.send")}
+            </button>
+            <button type="button" className="secondary primary--compact" onClick={() => start("move")}>
+              {tr(of === "cardano" ? "home.action.makePrivate" : "home.action.makePublic")}
+            </button>
+          </div>
+        )}
         <NftImageShow view={view} of={of} />
         {view.info ? (
           <p className="token-details__listed">

@@ -5,7 +5,7 @@
 // submit exactly it.
 import { describe, expect, it } from "vitest";
 
-import { Collateral } from "../src/background/collateral";
+import { Collateral, StaleReviewError } from "../src/background/collateral";
 import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { Koios } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
@@ -235,9 +235,35 @@ describe("transfer", () => {
     expect(await t.pending.pending("preprod")).toMatchObject({ kind: "transfer", confirmations: 2 });
   });
 
+  it("says a transfer Koios took was sent already, never that its review is stale, after a lock too", async () => {
+    // Its kept copy goes once it's taken: a page that missed the answer (a restarted worker, a lock, another page's
+    // Send) found none, was told "Nothing was sent", and "Refresh and review again" built a second payment (chunk
+    // 23's second review, fix round).
+    const t = await unlocked();
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: transferPreprod.lovelace, tokens: transferPreprod.tokens }]);
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    const wasm = loadTestWasm();
+    const service = new TransferService({
+      ...t.deps,
+      wasm: { ...wasm, signScriptSpend: (_key: unknown, r: string) => JSON.stringify({ txCbor: JSON.parse(r).txCbor, txHash: summary.txHash }) } as typeof wasm,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+    });
+    await service.submit("preprod", summary.txHash);
+    const again = await service.submit("preprod", summary.txHash).catch((e: unknown) => e);
+    expect((again as Error).message).toMatch(/^That was sent already/);
+    expect(again).not.toBeInstanceOf(StaleReviewError);
+    // A lock wipes what the session kept of it; the Seedelf history still has it.
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    await expect(service.submit("preprod", summary.txHash)).rejects.toThrow("That was sent already");
+    expect(t.koios.submitted).toHaveLength(1);
+    expect(t.collateral.asked).toHaveLength(1);
+  });
+
   it("refuses to send anything but the reviewed transaction", async () => {
     const t = await unlocked();
     await expect(t.transfer.submit("preprod", "00".repeat(32))).rejects.toThrow("That payment isn't ready to send");
+    await expect(t.transfer.submit("preprod", "00".repeat(32))).rejects.toBeInstanceOf(StaleReviewError);
     const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     await expect(t.transfer.submit("preprod", "11".repeat(32))).rejects.toThrow("isn't ready to send");
     await expect(t.transfer.submit("mainnet", summary.txHash)).rejects.toThrow("isn't ready to send");

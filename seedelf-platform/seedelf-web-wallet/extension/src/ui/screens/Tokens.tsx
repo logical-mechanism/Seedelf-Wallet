@@ -9,7 +9,7 @@ import type { TokenAmount } from "../../shared/rpc";
 import { SearchIcon } from "../components/Icons";
 import { Screen } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
-import { TokenDetails, TokenRow } from "../components/TokenList";
+import { TokenDetails, TokenRow, type TokenAction } from "../components/TokenList";
 import { tokenKey } from "../format";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, type TokenSort, type TokenView, viewToken } from "../tokens";
@@ -21,13 +21,22 @@ type Kind = "tokens" | "nfts";
 
 export function Tokens({
   tokens,
+  coming,
   of,
   onBack,
+  onAction,
+  blocked,
 }: {
   tokens: TokenAmount[];
+  /** The tokens (`tokenKey`) some of which are on their way back with a payment's change (chunk 23's second review, HM-1). */
+  coming?: ReadonlySet<string>;
   /** Whose tokens: the title says. */
   of: "seedelf" | "cardano";
   onBack: () => void;
+  /** A token's details start a payment with it, when one can be made now. */
+  onAction?: (action: TokenAction, token: TokenAmount) => void;
+  /** Why they can't now, when it's the one transaction at a time (HM-3). */
+  blocked?: string;
 }) {
   const network = useNetwork();
   const views = useMemo(() => tokens.map((t) => viewToken(network, t)), [network, tokens]);
@@ -95,7 +104,7 @@ export function Tokens({
         {found.length ? (
           <ul className="list" data-testid="token-results">
             {found.slice(0, limit).map((v) => (
-              <TokenRow key={tokenKey(v.token)} view={v} onOpen={setOpen} />
+              <TokenRow key={tokenKey(v.token)} view={v} coming={coming?.has(tokenKey(v.token))} onOpen={setOpen} />
             ))}
           </ul>
         ) : (
@@ -111,7 +120,7 @@ export function Tokens({
           {t("tokens.showMore", { number: Math.min(PAGE, found.length - limit) })}
         </button>
       )}
-      {open && <TokenDetails view={open} of={of} onClose={() => setOpen(undefined)} />}
+      {open && <TokenDetails view={open} of={of} onClose={() => setOpen(undefined)} onAction={onAction} blocked={blocked} />}
     </Screen>
   );
 }

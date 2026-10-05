@@ -448,11 +448,11 @@ describe("a dApp's staking, in a sentence", () => {
   it("says each of WebAssembly's kinds as English said it", () => {
     const line = (c: Partial<Certificate>) => certificateLine(own(c), true, "your public account");
     expect(line({})).toBe("Registers your stake key.");
-    expect(line({ deposit: "2000000" })).toBe("Registers your stake key (a 2 ₳ deposit).");
-    expect(line({ kind: "register-delegate", deposit: "2000000", pool })).toBe("Registers your stake key (a 2 ₳ deposit), stakes with pool1abc.");
-    expect(line({ kind: "register-vote", deposit: "2000000", drep })).toBe("Registers your stake key (a 2 ₳ deposit), delegates your vote: Always abstain.");
+    expect(line({ deposit: "2000000" })).toBe("Registers your stake key (a 2\u00a0₳ deposit).");
+    expect(line({ kind: "register-delegate", deposit: "2000000", pool })).toBe("Registers your stake key (a 2\u00a0₳ deposit), stakes with pool1abc.");
+    expect(line({ kind: "register-vote", deposit: "2000000", drep })).toBe("Registers your stake key (a 2\u00a0₳ deposit), delegates your vote: Always abstain.");
     expect(line({ kind: "register-delegate-vote", deposit: "2000000", pool, drep })).toBe(
-      "Registers your stake key (a 2 ₳ deposit), stakes with pool1abc, delegates your vote: Always abstain.",
+      "Registers your stake key (a 2\u00a0₳ deposit), stakes with pool1abc, delegates your vote: Always abstain.",
     );
     expect(line({ kind: "delegate", pool })).toBe("Stakes with pool1abc.");
     expect(line({ kind: "vote", drep })).toBe("Delegates your vote: Always abstain.");
@@ -464,10 +464,10 @@ describe("a dApp's staking, in a sentence", () => {
     await japanese();
     const line = (c: Partial<Certificate>, back = true) => certificateLine(own(c), back, t("dappUi.whose.warn.account"));
     expect(line({ kind: "register-delegate-vote", deposit: "2000000", pool, drep })).toBe(
-      "あなたのステーク鍵を登録し（2 ₳ のデポジット）、pool1abc にステーキングし、投票権を委任します（委任先: 常に棄権）。",
+      "あなたのステーク鍵を登録し（2\u00a0₳ のデポジット）、pool1abc にステーキングし、投票権を委任します（委任先: 常に棄権）。",
     );
     expect(line({ kind: "unregister", refund: "2000000" }, false)).toBe(
-      "あなたのステーキングを停止しますが、その 2 ₳ のデポジットはすべてが公開アカウントへ戻るわけではありません。上に表示された送信額に含まれています。",
+      "あなたのステーキングを停止しますが、その 2\u00a0₳ のデポジットはすべてが公開アカウントへ戻るわけではありません。上に表示された送信額に含まれています。",
     );
     for (const kind of ["register", "delegate", "vote", "delegate-vote", "unregister"]) {
       const said = line({ kind, pool: kind.includes("delegate") ? pool : null, drep: kind.includes("vote") ? drep : null });

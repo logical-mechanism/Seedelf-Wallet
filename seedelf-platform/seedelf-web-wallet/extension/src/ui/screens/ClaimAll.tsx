@@ -260,7 +260,7 @@ export function ClaimReview({
                       {on && <CheckIcon size={14} />}
                     </span>
                     <span className="token-row__label">{nameOf(network, byIndex.get(r.index))}</span>
-                    <span className="token-row__amount">{formatAda(r.lovelace)} ₳</span>
+                    <span className="token-row__amount">{formatAda(r.lovelace)}{"\u00a0₳"}</span>
                     <span className="token-row__sub">
                       {t("claim.session", { number: r.index + 1 })}
                       {r.tokens.length ? ` · ${t("claim.andTokens", { count: r.tokens.length })}` : ""}
@@ -312,12 +312,12 @@ export function ClaimReview({
       ))}
       <HandleWarning tokens={picked.flatMap((r) => r.tokens)} returning />
       <ReviewRows testId="claim-total">
-        <Row label={t(boxes ? "claim.backNow" : "moveIn.review.into")} value={`${formatAda(total.toString())} ₳`} strong />
+        <Row label={t(boxes ? "claim.backNow" : "moveIn.review.into")} value={`${formatAda(total.toString())}\u00a0₳`} strong />
         {tokens > 0 && <Row label="" value={t("claim.andTokens", { count: tokens })} />}
         {boxes > 0 && delay && (
           <Row label={t("claim.throughLovejoin")} value={t("claim.boxesBackAfter", { count: boxes, delay: delayText(delay) })} />
         )}
-        <Row label={t("claim.fees")} value={`${formatAda(fees.toString())} ₳`} />
+        <Row label={t("claim.fees")} value={`${formatAda(fees.toString())}\u00a0₳`} />
         <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>
       {/* Each session comes back in its own transaction, so each is its own

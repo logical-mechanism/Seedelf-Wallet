@@ -598,6 +598,13 @@ export function describe(
                 : "sent";
     const moved = [...assets].filter(([, q]) => q !== 0n);
     const note = noteOf(tx.metadata);
+    // Who, for a payment this device didn't make: the addresses it paid, or that paid it, read from the transaction
+    // already in hand, no request (chunk 23's review, A-1: "where did my 100 ₳ go?" had no answer).
+    const counterparts =
+      mine || (kind !== "sent" && kind !== "received")
+        ? []
+        : [...new Set((kind === "sent" ? tx.outputs : tx.inputs).filter((o) => !ours(o)).map((o) => o.payment_addr.bech32))];
+    const who = mine?.detail ? { detail: mine.detail, ...(mine.more ? { more: mine.more } : {}) } : counterparts.length ? several(counterparts) : {};
     const entry: ActivityEntry = {
       txHash: tx.tx_hash,
       at: tx.tx_timestamp * 1000,
@@ -606,8 +613,7 @@ export function describe(
       lovelace: (net < 0n ? -net : net).toString(),
       tokens: moved.length,
       ...(spent ? { fee: tx.fee } : {}),
-      ...(mine?.detail ? { detail: mine.detail } : {}),
-      ...(mine?.more ? { more: mine.more } : {}),
+      ...who,
       ...(mine?.session !== undefined ? { session: mine.session } : {}),
       ...(moved.length
         ? {

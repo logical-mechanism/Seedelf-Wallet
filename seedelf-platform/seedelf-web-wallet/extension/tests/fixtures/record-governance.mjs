@@ -15,7 +15,7 @@ const KOIOS = { preprod: "https://preprod.koios.rest/api/v1", mainnet: "https://
 const LIVE =
   "ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null&expired_epoch=is.null";
 const PROPOSAL_COLUMNS =
-  "proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json->body->>title,abstract:meta_json->body->>abstract";
+  "proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json->body->>title,abstract:meta_json->body->>abstract,block_time,withdrawal";
 const DREP_STANDING_COLUMNS =
   "drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count,deposit,meta_url,meta_hash";
 const DREP_PROFILE_COLUMNS = "drep_id,is_valid,meta_json->body->givenName";

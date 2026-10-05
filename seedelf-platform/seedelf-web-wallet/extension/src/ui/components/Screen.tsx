@@ -1,11 +1,20 @@
 // One layout for every flow's screen, after Lace's navigation header: Back
-// and the title at the top, a line under it (what's available, the step,
+// (the browser's too: ../history.ts) and the title at the top, a line under it (what's available, the step,
 // "Nothing is sent…"), the body, then the error and the primary action at the
 // foot, which stays in view while the body scrolls.
+//
+// The foot is sticky, not fixed: it keeps its place in the flow, so the body's
+// last block always scrolls clear of it at the end (measured at 360×640 and in
+// a tab), and no padding under the body is needed for that. What it did cover
+// was a field the keyboard moved into: Tab to Send's note, under the foot,
+// left it there, out of sight (chunk 23's second review, PY-8). The page's
+// scroll padding now matches the foot, so the browser scrolls a focused field
+// clear of it.
 
-import type { FormEvent, ReactNode } from "react";
+import { useLayoutEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useT } from "../../i18n";
 
+import { useBrowserBack } from "../history";
 import { HintButton, HintText, useHint } from "./Hint";
 import { BackIcon } from "./Icons";
 
@@ -21,6 +30,13 @@ interface ScreenProps {
   error?: string;
   /** The primary action, or actions. */
   foot?: ReactNode;
+  /**
+   * False: the foot follows the body instead of staying in view. For a screen
+   * whose body must all be read before its button is pressed, which a foot
+   * kept in view would cover, as it covered a new phrase's last words
+   * (chunk 23's review, C-2).
+   */
+  footSticky?: boolean;
   /** Makes the screen a form, so Enter submits it. */
   onSubmit?: (e: FormEvent) => void;
   /**
@@ -43,6 +59,7 @@ export function Screen({
   action,
   error,
   foot,
+  footSticky = true,
   onSubmit,
   hint,
   hintTestId,
@@ -50,6 +67,13 @@ export function Screen({
 }: ScreenProps) {
   const t = useT();
   const explained = useHint();
+  // The browser's Back, Alt+← and a mouse's back button are this screen's Back (chunk 23's review, N-1).
+  useBrowserBack(onBack, backDisabled);
+  // The element itself, not a ref object: a flow's form and its review are one Screen, a <form> then a <section>,
+  // so the foot is a new element each switch, and an observer on the old one measured nothing (the cross-area review
+  // of chunk 23's second fix round).
+  const [footEl, setFootEl] = useState<HTMLDivElement | null>(null);
+  useFootClearance(footEl, footSticky && !!(error || foot));
   const inner = (
     <>
       <header className="screen__head">
@@ -93,7 +117,7 @@ export function Screen({
         {children}
       </div>
       {(error || foot) && (
-        <div className="screen__foot">
+        <div ref={setFootEl} className={footSticky ? "screen__foot" : "screen__foot screen__foot--static"}>
           {error && (
             <p className="error" role="alert">
               {error}
@@ -113,4 +137,26 @@ export function Screen({
       {inner}
     </section>
   );
+}
+
+/** Room the page keeps under a focused field: the sticky foot's height, and a little more for its fade. */
+const FADE_PX = 8;
+
+/**
+ * The page's scroll padding at the bottom, kept at the foot's height while it's in view and sticky (PY-8): the
+ * page is what scrolls, so that's where the browser reads it when it brings a focused field into view.
+ */
+function useFootClearance(el: HTMLDivElement | null, sticky: boolean) {
+  useLayoutEffect(() => {
+    if (!sticky || !el || typeof ResizeObserver === "undefined") return;
+    const page = document.documentElement;
+    const fit = () => page.style.setProperty("scroll-padding-bottom", `${el.offsetHeight + FADE_PX}px`);
+    fit();
+    const watch = new ResizeObserver(fit);
+    watch.observe(el);
+    return () => {
+      watch.disconnect();
+      page.style.removeProperty("scroll-padding-bottom");
+    };
+  }, [el, sticky]);
 }

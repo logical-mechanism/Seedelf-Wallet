@@ -32,7 +32,7 @@ import { ExpandIcon, SpinnerIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
 import { Tabs } from "./Tabs";
-import { formatAda, formatQuantity, shortHex } from "../format";
+import { adaText, formatAda, formatQuantity, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
 
@@ -284,9 +284,9 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         >
           {d.collateral.length > 0 && <Outpoints list={d.collateral} testId={`${testId}-collateral-list`} />}
           <ReviewRows testId={`${testId}-collateral-rows`}>
-            {d.totalCollateral && <Row label={tr("tx.mostTaken")} value={`${formatAda(d.totalCollateral)} ₳`} />}
+            {d.totalCollateral && <Row label={tr("tx.mostTaken")} value={adaText(d.totalCollateral)} />}
             {d.collateralReturn && (
-              <Row label={tr("tx.comesBack")} value={`${formatAda(d.collateralReturn.lovelace)} ₳`} />
+              <Row label={tr("tx.comesBack")} value={adaText(d.collateralReturn.lovelace)} />
             )}
           </ReviewRows>
         </Section>
@@ -318,14 +318,17 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       <Section title={tr("tx.title")} id={`${testId}-body`}>
         <ReviewRows testId={`${testId}-rows`}>
-          <Row label={tr("review.fee")} value={`${formatAda(d.fee)} ₳`} strong />
+          <Row label={tr("review.fee")} value={adaText(d.fee)} strong />
           {d.validFrom !== null && <Row label={tr("tx.validFrom")} value={d.validFrom} />}
           {d.validUntil !== null && <Row label={tr("tx.validUntil")} value={d.validUntil} />}
           {d.networkId !== null && <Row label={tr("network.label")} value={d.networkId === 1 ? "Mainnet" : tr("tx.testNetwork")} />}
           <Row label={tr("tx.size")} value={tr("tx.sizeValue", { size: d.size, body: d.bodySize })} />
           {/* What matters is whether anything has signed it, not what else the
               witness set carries: a transaction with its redeemers and no
-              signature is unsigned. */}
+              signature is unsigned. Signed, it still hasn't gone, and says so:
+              this sheet only shows a transaction the wallet holds, and "2
+              signatures so far" before Send read as sent (chunk 23's second
+              review, PY-7). */}
           <Row
             label={tr("tx.signed")}
             value={d.signatures.length ? tr("tx.signaturesSoFar", { count: d.signatures.length }) : tr("tx.notYet")}
@@ -339,8 +342,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           {d.auxiliaryDataHash && (
             <Row label={tr("tx.metadataHash")} value={shortHex(d.auxiliaryDataHash, 10, 6)} title={d.auxiliaryDataHash} />
           )}
-          {d.donation && <Row label={tr("tx.toTreasury")} value={`${formatAda(d.donation)} ₳`} />}
-          {d.treasuryValue && <Row label={tr("tx.treasuryValue")} value={`${formatAda(d.treasuryValue)} ₳`} />}
+          {d.donation && <Row label={tr("tx.toTreasury")} value={adaText(d.donation)} />}
+          {d.treasuryValue && <Row label={tr("tx.treasuryValue")} value={adaText(d.treasuryValue)} />}
         </ReviewRows>
       </Section>
 
@@ -377,7 +380,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   </span>
                   <CopyButton value={w.address} label={tr("tx.copyRewardAddress")} />
                 </span>
-                <span className="dapp-amount">{formatAda(w.lovelace)} ₳</span>
+                <span className="dapp-amount">{adaText(w.lovelace)}</span>
               </li>
             ))}
           </ul>
@@ -607,7 +610,7 @@ function Output({
         {o.scriptRef && ` · ${tr("tx.out.carriesScript", { kind: scriptWords(o.scriptRef.kind) })}`}
       </span>
       <span className="dapp-amount">
-        {formatAda(o.lovelace)} ₳
+        {adaText(o.lovelace)}
         {o.assets.map((t, i) => (
           // The name can be anyone's choice, so the policy and the name in hex
           // stay within reach of it.
@@ -678,7 +681,7 @@ function fieldText(value: unknown): string {
     }
     if (typeof o.txHash === "string") return `${String(o.txHash)}#${String(o.index)}`;
     if (typeof o.field === "string") return t("tx.numberedField", { field: o.field, hex: String(o.hex) });
-    if (typeof o.address === "string") return `${String(o.address)} ${formatAda(String(o.lovelace))} ₳`;
+    if (typeof o.address === "string") return `${String(o.address)} ${adaText(String(o.lovelace))}`;
     return JSON.stringify(value);
   }
   return String(value);

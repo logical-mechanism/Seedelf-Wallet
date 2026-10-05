@@ -35,6 +35,23 @@ export const LOVEJOIN_UNAUDITED = () => t("lovejoin.warn.unaudited");
  */
 export const LOVEJOIN_SEEN = () => t("lovejoin.privacy.seen");
 
+/** How many mixes fan one box out `depth` waves deep, three wide (lovejoin.ts mixesPerBox): 1, 4 or 13. */
+export const mixesPerBox = (depth: number) => (3 ** depth - 1) / 2;
+
+/**
+ * What the wallet plans a mix at, as WebAssembly prices a mix's funding and
+ * a swap's way back (seedelf-core's MIX_FEE_ESTIMATE: 0.95 ₳, above the
+ * 0.877 ₳ one measured on preprod and about 0.82 ₳ on mainnet). Settings
+ * prices each depth at it too, so the Lovejoin page, its reviews and
+ * Settings give one figure (chunk 23's second review, LJ-3): Settings said
+ * "about 3.5 ₳" where the page said "about 3.8 ₳" for the same mixes. What
+ * the mixes don't use comes back.
+ */
+const MIX_FEE_ESTIMATE = 950_000;
+
+/** About what `mixes` mixes cost, in ₳, as every screen that prices Lovejoin says it. */
+export const mixFeesText = (mixes: number): string => formatAda(String(mixes * MIX_FEE_ESTIMATE));
+
 /**
  * How well Lovejoin hides a box at `depth`, said wherever the user chooses
  * it (privacy review §2.6): at best one of the fan-out's 3^depth leaves, and

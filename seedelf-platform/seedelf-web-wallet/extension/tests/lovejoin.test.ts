@@ -528,7 +528,7 @@ describe("a session's collateral (privacy review §2.15)", CHAINS, () => {
     t.koios.addedToAccounts = t.koios.addedToAccounts.filter((u) => u.tx_hash !== "c2".repeat(32));
     const review = await sessions.backBuild("preprod", 0);
     expect(review.lovejoin).toBeUndefined();
-    expect(review.lovejoinSkipped).toBe("its 5 ₳ collateral isn't at its account anymore, and the mixes need it");
+    expect(review.lovejoinSkipped).toBe("its 5\u00a0₳ collateral isn't at its account anymore, and the mixes need it");
     await sessions.backSubmit("preprod", review.txHash);
     expect((await sessions.list("preprod"))[0]!.lovejoinSkipped).toBe(review.lovejoinSkipped);
 
@@ -1854,6 +1854,11 @@ describe("mixing from the tile", CHAINS, () => {
     expect(BigInt(seeded.mix.lovelace)).toBe(11_500_000n);
     expect(seeded.payments.map((p) => p.lovelace)).toEqual(["11500000", "5000000"]);
     expect(t.koios.calls.length).toBeGreaterThan(asked);
+    // More than the private balance holds: said in the screens' words, not core's "Seedelf balance" (chunk 23's
+    // second review, LJ-6).
+    await expect(sessions.mixOutBuild("preprod", 30, true)).rejects.toThrow(
+      /^Not enough ADA in your private balance for this, its fee and the change\.$/,
+    );
 
     // One box at depth 2: the box, four mixes and the deposit's change, and 5 ₳ of collateral.
     const out = await sessions.mixOutBuild("preprod", 1);
@@ -2227,7 +2232,9 @@ describe("mixing from the tile", CHAINS, () => {
     const t = await wallet();
     // The recorded pool's 20 boxes are other people's; preprod has no floor.
     const listed = await t.lovejoin.status("preprod");
-    expect(listed).toMatchObject({ available: true, others: 20, floor: 0 });
+    // And how many a mix could draw on now, none held by a chain of the wallet's, so the page says before Review
+    // whether one fits (chunk 23's second review, LJ-1).
+    expect(listed).toMatchObject({ available: true, others: 20, free: 20, floor: 0 });
     expect(listed.boxes).toHaveLength(0);
     // Mainnet's floor is what the page compares against: nothing of the pool sits there.
     const onMainnet = await t.lovejoin.status("mainnet");

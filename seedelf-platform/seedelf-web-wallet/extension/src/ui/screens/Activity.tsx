@@ -8,17 +8,20 @@
 // Export saves what's listed as CSV, on the device: the file isn't
 // encrypted, and the screen says so. On the private side it says what the
 // file ties together, for whoever has it: each row's transaction ID finds it
-// on the chain (privacy review §2.21).
+// on the chain (privacy review §2.21). Saving says how many rows it holds. A
+// read that fails says so in plain words, with Try again (chunk 23's second
+// review, AC-2, AC-3).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { joinSentences, t, useT } from "../../i18n";
+import { type I18nKey, joinSentences, Rich, t, useT } from "../../i18n";
 
-import type { ActivityEntry } from "../../shared/rpc";
+import { entrySession, type ActivityEntry } from "../../shared/rpc";
 import { activityCsv, activityDetail, activityTitle as title, poolOf, signedQuantity, stakingLine, voteOf } from "../activity";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
 import { ExplorerLink } from "../components/ExplorerLink";
+import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import {
   ArrowUpRightIcon,
   DownloadIcon,
@@ -69,7 +72,7 @@ function icon(e: ActivityEntry): ReactNode {
 /** "+25 ₳", "−5 ₳ and 1 token", or "1.74986 ₳" for a seedelf's locked ADA; masked while balances are hidden. */
 function amount(e: ActivityEntry, ada: (lovelace: string) => string): string {
   const sign = e.direction === "in" ? "+" : e.direction === "out" ? "−" : "";
-  const held = e.tokens ? t("format.adaAndTokens", { ada: ada(e.lovelace), count: e.tokens }) : `${ada(e.lovelace)} ₳`;
+  const held = e.tokens ? t("format.adaAndTokens", { ada: ada(e.lovelace), count: e.tokens }) : `${ada(e.lovelace)}\u00a0₳`;
   return `${sign}${held}`;
 }
 
@@ -127,8 +130,11 @@ export function Activity({
   const [more, setMore] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [busy, setBusy] = useState<"more" | "refresh" | "open">();
-  const [error, setError] = useState<string>();
+  // What failed, and which read, so Try again asks the same (chunk 23's second review, AC-2).
+  const [error, setError] = useState<{ message: string; why: "more" | "refresh" | "open" }>();
   const [open, setOpen] = useState<ActivityEntry>();
+  // Save as CSV's answer: how many rows the file holds (AC-3).
+  const [saved, setSaved] = useState<number>();
   // Home's callback is new on every render; reading it through a ref keeps `load` (and the effect) stable.
   const read = useRef(onRead);
   useEffect(() => {
@@ -146,7 +152,7 @@ export function Activity({
         setUpdatedAt(page.updatedAt);
         if (why === "refresh") read.current();
       } catch (e) {
-        setError((e as Error).message);
+        setError({ message: (e as Error).message, why });
       } finally {
         setBusy(undefined);
       }
@@ -166,20 +172,31 @@ export function Activity({
   }
 
   return (
-    <Screen
-      title={t(of === "seedelf" ? "activity.titlePrivate" : "activity.titlePublic")}
-      titleId="activity-title"
-      onBack={onBack}
-      error={error}
-    >
+    <Screen title={t(of === "seedelf" ? "activity.titlePrivate" : "activity.titlePublic")} titleId="activity-title" onBack={onBack}>
       {of === "seedelf" ? (
         <Callout tone="privacy">{t("activity.privacy.kept")}</Callout>
       ) : (
         <p className="note">{t("activity.fromKoios")}</p>
       )}
       <RefreshRow reading={busy === "refresh"} updatedAt={updatedAt} onRefresh={() => void load("refresh")} />
+      {/* What failed in plain words, with the way back; the service's own words under Details. It was the service's
+          words alone, in a red card below a gap, with no Try again (chunk 23's second review, AC-2). */}
+      {error && (
+        <Callout tone="warn" role="alert" testId="activity-failed">
+          <div className="stack-tight">
+            <strong>{t("activity.warn.readFailed")}</strong>
+            <button type="button" className="link align-start" onClick={() => void load(error.why)} disabled={busy !== undefined}>
+              {busy ? t("home.trying") : t("common.tryAgain")}
+            </button>
+            <details className="disclosure">
+              <summary>{t("common.details")}</summary>
+              <p className="note">{error.message}</p>
+            </details>
+          </div>
+        </Callout>
+      )}
       {entries === undefined ? (
-        <p className="note center empty">{busy ? t("activity.reading") : ""}</p>
+        !error && <p className="note center empty">{busy ? t("activity.reading") : ""}</p>
       ) : entries.length === 0 ? (
         <p className="note center empty">{t("activity.empty")}</p>
       ) : (
@@ -192,14 +209,16 @@ export function Activity({
                   <li key={e.txHash}>
                     <button type="button" className="token-row" onClick={() => setOpen(e)}>
                       <span className={`avatar activity__icon activity__icon--${e.direction}`}>{icon(e)}</span>
-                      <span className="token-row__label">{title(e)}</span>
+                      {/* Whole, on a second line if it must: "Already in your private bal…" was cut (AC-3). */}
+                      <span className="token-row__label activity__title">{title(e)}</span>
                       <span className={`token-row__amount activity__amount--${e.direction}`}>
                         {amount(e, amounts.ada)}
                       </span>
-                      <span className="token-row__sub">
-                        {e.txHash === pendingHash ? `${t("activity.pending")} · ` : ""}
-                        {[time(e.at), activityDetail(e) ?? stakingLine(network, e.staking)].filter(Boolean).join(" · ")}
-                      </span>
+                      <EntryLine
+                        lead={[e.txHash === pendingHash ? t("activity.pending") : "", time(e.at)]}
+                        entry={e}
+                        otherwise={stakingLine(network, e.staking)}
+                      />
                     </button>
                   </li>
                 ))}
@@ -222,11 +241,18 @@ export function Activity({
             onClick={() => {
               const day = new Date().toISOString().slice(0, 10);
               download(`seedelf-wallet-${of === "seedelf" ? "private" : "public"}-activity-${network}-${day}.csv`, activityCsv(network, entries));
+              setSaved(entries.length);
             }}
           >
             <DownloadIcon size={16} />
             {t("activity.export.save")}
           </button>
+          {/* It said nothing, and held only the rows read so far (chunk 23's second review, AC-3). */}
+          {saved !== undefined && (
+            <p className="note" role="status" data-testid="export-saved">
+              {t(more ? "activity.export.savedSoFar" : "activity.export.saved", { count: saved })}
+            </p>
+          )}
           <ExportNote of={of} listed={entries.length} more={more} />
         </section>
       )}
@@ -242,24 +268,32 @@ export function Activity({
                 amount={amounts.text(signedQuantity(network, t))}
               />
             ))}
-            {open.fee && <Row label={t("activity.row.fee")} value={`${formatAda(open.fee)} ₳`} />}
-            {openDetail && <Row label={t(open.kind === "withdraw" || open.kind === "transfer" ? "activity.row.to" : "activity.row.seedelf")} value={openDetail} />}
+            {open.fee && <Row label={t("activity.row.fee")} value={`${formatAda(open.fee)}\u00a0₳`} />}
+            {/* Who was paid, or who paid: a public Send's recipient was labelled "Seedelf", and a payment read from the
+                chain named no one (chunk 23's review, A-1). */}
+            {openDetail && <Row label={t(detailLabel(open.kind))} value={openDetail} />}
             {open.staking && poolOf(open.staking) && (
               <Row label={t("activity.row.pool")} value={poolOf(open.staking)!} title={open.staking.pool} />
             )}
             {open.staking && voteOf(network, open.staking) && (
               <Row label={t("activity.row.votingPower")} value={voteOf(network, open.staking)!} title={open.staking.drep} />
             )}
-            {open.staking?.deposit && <Row label={t("activity.row.deposit")} value={`${formatAda(open.staking.deposit)} ₳`} />}
-            {open.staking?.refund && <Row label={t("activity.row.depositBack")} value={`${formatAda(open.staking.refund)} ₳`} />}
+            {open.staking?.deposit && <Row label={t("activity.row.deposit")} value={`${formatAda(open.staking.deposit)}\u00a0₳`} />}
+            {open.staking?.refund && <Row label={t("activity.row.depositBack")} value={`${formatAda(open.staking.refund)}\u00a0₳`} />}
             {open.staking?.rewards && (
               <Row
                 label={t(open.kind === "withdraw-rewards" || open.kind === "unstake" ? "activity.row.rewardsWithdrawn" : "activity.row.rewardsSpent")}
-                value={`${amounts.ada(open.staking.rewards)} ₳`}
+                value={`${amounts.ada(open.staking.rewards)}\u00a0₳`}
               />
             )}
             <Row label={t("activity.row.when")} value={open.at ? new Date(open.at).toLocaleString("en-GB") : t("activity.row.beforeWallet")} />
           </ReviewRows>
+          {/* Why it's called that: found already there, so who paid it isn't known (AC-3). */}
+          {open.kind === "received" && open.origin?.origin === "unknown" && (
+            <p className="note" data-testid="activity-already-private">
+              {t("activity.alreadyPrivateWhy")}
+            </p>
+          )}
           {open.note && (
             <div className="stack-tight" data-testid="activity-note">
               <span className="label">{t("activity.row.note")}</span>
@@ -278,4 +312,39 @@ export function Activity({
       )}
     </Screen>
   );
+}
+
+/**
+ * An entry's line under its title: pending, the time, then who or where (or,
+ * with no one, `otherwise`: its staking). An address is cut in the middle,
+ * keeping the tail people compare, as everywhere else: cut at the end it read
+ * "08:35 · a…" (chunk 23's second review, AC-1).
+ */
+function EntryLine({ lead, entry, otherwise }: { lead: string[]; entry: ActivityEntry; otherwise?: string }) {
+  // A session is named by its number, in the page's words; anyone else as the worker kept them.
+  const who = entry.detail !== undefined && entrySession(entry) === undefined ? entry.detail : undefined;
+  const front = [...lead, who === undefined ? (activityDetail(entry) ?? otherwise) : undefined].filter(Boolean).join(" · ");
+  return (
+    <span className="token-row__sub activity__sub">
+      <span className={who !== undefined ? "activity__sub-lead activity__sub-lead--fixed" : "activity__sub-lead"}>
+        {front}
+        {who !== undefined && front ? " · " : ""}
+      </span>
+      {who !== undefined && <Who name={who} more={entry.more} />}
+    </span>
+  );
+}
+
+/** Who an entry paid, or who paid it: an address cut in the middle, and how many more beside it. */
+function Who({ name, more }: { name: string; more?: number }) {
+  // A tag or a $handle is short and said whole; an address has no spaces and runs long.
+  const shown = name.length > 24 && !/\s/.test(name) ? <MiddleEllipsis text={name} /> : <span>{name}</span>;
+  return more ? <Rich k="activity.andMore" parts={{ first: shown }} values={{ count: more }} /> : shown;
+}
+
+/** What an entry's who-or-where row is called: who it paid, who paid it, or the Seedelf it made or removed. */
+function detailLabel(kind: ActivityEntry["kind"]): I18nKey {
+  if (kind === "received") return "activity.row.from";
+  if (kind === "sent" || kind === "send" || kind === "withdraw" || kind === "transfer") return "activity.row.to";
+  return "activity.row.seedelf";
 }

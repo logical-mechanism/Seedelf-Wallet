@@ -1,5 +1,7 @@
-// The public account the wallet is working on, in the top bar beside the
-// network badge (chunk 18).
+// The public account the wallet is working on, on a row of its own under the
+// top bar (chunk 18). It began in the top bar, beside the network badge, and
+// there a 360 px side panel had room for the word "Account" alone, with Lock
+// and Open in tab pushed off the edge (chunk 23's review, HD-1).
 //
 // Hidden with one account, as the network picker is hidden in a build with one
 // network: there is nothing to choose between, and a wallet that has never had
@@ -37,7 +39,7 @@ export function AccountPicker() {
 
   return (
     <div className="account-picker" data-testid="account-picker">
-      <label className="sr-only" htmlFor="account-select">
+      <label className="account-picker__label" htmlFor="account-select">
         {t("accountPicker.label")}
       </label>
       <select

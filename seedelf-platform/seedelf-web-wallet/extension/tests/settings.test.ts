@@ -107,7 +107,7 @@ describe("Settings' dApp connector", () => {
 describe("the network on every screen", () => {
   it("marks preprod with a strip that test ADA has no value, and mainnet with its badge alone", () => {
     expect(text(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "preprod" })))).toContain(
-      "Preprod, Cardano's test network: ADA here is test ADA, with no value.",
+      "Test network: ADA here has no value.",
     );
     expect(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "mainnet" }))).toBe("");
     expect(text(renderToStaticMarkup(createElement(NetworkBadge, { network: "preprod" })))).toContain("PREPROD");
@@ -115,17 +115,14 @@ describe("the network on every screen", () => {
 });
 
 describe("Settings' Lovejoin section", () => {
-  it("prices each depth at what a mix measured on that network", () => {
-    expect([1, 2, 3].map((d) => Settings.depthCost("preprod", d as 1 | 2 | 3))).toEqual([
-      "1 mix, about 0.9 ₳",
-      "4 mixes, about 3.5 ₳",
-      "13 mixes, about 11.4 ₳",
-    ]);
-    expect([1, 2, 3].map((d) => Settings.depthCost("mainnet", d as 1 | 2 | 3))).toEqual([
-      "1 mix, about 0.8 ₳",
-      "4 mixes, about 3.3 ₳",
-      "13 mixes, about 10.7 ₳",
-    ]);
+  it("prices each depth as the Lovejoin page and its reviews do, on either network (chunk 23's second review, LJ-3)", () => {
+    for (const network of ["preprod", "mainnet"] as const) {
+      expect([1, 2, 3].map((d) => Settings.depthCost(network, d as 1 | 2 | 3))).toEqual([
+        "1 mix, about 0.95\u00a0₳",
+        "4 mixes, about 3.8\u00a0₳",
+        "13 mixes, about 12.35\u00a0₳",
+      ]);
+    }
   });
 
   it("says on both networks that Lovejoin has had no third-party audit, and on mainnet that it waits for its pool's floor", () => {
@@ -136,9 +133,9 @@ describe("Settings' Lovejoin section", () => {
       expect(shown).not.toMatch(/\baudited\b/);
     }
     expect(mainnet).toContain("The wallet mixes only once Lovejoin's pool holds 30 boxes that aren't yours");
-    expect(mainnet).toContain("about 3.3 ₳");
+    expect(mainnet).toContain("about 3.8 ₳");
     expect(preprod).not.toContain("pool holds");
-    expect(preprod).toContain("about 3.5 ₳");
+    expect(preprod).toContain("about 3.8 ₳");
   });
 });
 
@@ -168,7 +165,9 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(shown).toContain("locking partway stops them, and what's left comes back directly");
     // Not from the services that carry both ends (privacy review §2.4).
     expect(shown).toContain("Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my");
-    expect(shown).toContain("(up to 1 in 9)");
+    // Each depth's option is short enough for the side panel; how far it hides is the note's (chunk 23's review, SET-2).
+    expect(shown).toContain("2 waves deep: 4 mixes, about 3.8 ₳");
+    expect(shown).not.toContain("(up to 1 in 9)");
     expect(shown).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
   });
 
@@ -178,7 +177,7 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(html.match(/<select[^>]*disabled=""/g)).toHaveLength(2);
     const shown = text(html);
     expect(shown).toContain("Off, a session's ADA comes back directly: anyone can tie it on chain to the session");
-    expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.3 ₳)");
+    expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.8 ₳)");
     expect(shown).toContain("A mix from the Lovejoin tile still mixes");
   });
 });

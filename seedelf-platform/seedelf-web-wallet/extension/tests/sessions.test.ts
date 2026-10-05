@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
-import { Collateral } from "../src/background/collateral";
+import { Collateral, StaleReviewError } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { MAX_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
@@ -448,6 +448,9 @@ describe("a private session", () => {
     [view] = await sessions.list("preprod", true);
     expect(view).toMatchObject({ stage: "closed", holding: { lovelace: "0", utxos: 0 } });
     expect(view!.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    // Over, it says what came back, as its return's review said, kept past its history's summary (chunk 23's
+    // second review, DX-5).
+    expect(view!.received).toMatchObject({ tokens: [expect.objectContaining({ assetName: "4d494e", quantity: "906594100" })] });
     await expect(sessions.backBuild("preprod", 0)).rejects.toThrow("That session is over");
     // The next one gets a new account.
     expect((await sessions.outBuild("preprod", quote)).index).toBe(1);
@@ -461,10 +464,17 @@ describe("a private session", () => {
     await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow();
     expect(t.koios.submitted).toHaveLength(0);
     const [failed] = await t.sessions.list("preprod", true);
-    // Turned away, it never went out: the page says so, and offers nothing but Forget.
-    expect(failed).toMatchObject({ index: 0, stage: "failed", unsent: true });
-    // The kept payment for index 0 can't be sent again, and the next session is index 1.
-    await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("started already");
+    // Turned away, it never went out: the page says so, and why (giveme.my checks the chain first: something it
+    // spends changed, chunk 23's second review, DX-5), and offers nothing but Forget.
+    expect(failed).toMatchObject({ index: 0, stage: "failed", unsent: true, unsentWhy: "changed" });
+    // The kept payment for index 0 can't be sent again, and the next session is index 1. That refusal isn't one a
+    // new review is offered for by its type: the page reads the record to tell whether that try went out (DX-1).
+    const again = await t.sessions.outSubmit("preprod", out.txHash).catch((e: unknown) => e);
+    expect(again).toBeInstanceOf(Error);
+    expect((again as Error).message).toContain("started already");
+    expect(again).not.toBeInstanceOf(StaleReviewError);
+    // One that isn't the review kept is stale: building it again fixes it.
+    await expect(t.sessions.outSubmit("preprod", "ab".repeat(32))).rejects.toBeInstanceOf(StaleReviewError);
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(1);
     // A failed session can be forgotten; its index still isn't reused.
     expect(await t.sessions.forget("preprod", 0)).toEqual([]);
@@ -496,7 +506,11 @@ describe("a private session", () => {
     await expect(sessions.outSubmit("preprod", next.txHash)).rejects.toThrow("limiting requests");
     undo();
     t.koios.confirmations = null;
-    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({ stage: "failed", unsent: true });
+    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({
+      stage: "failed",
+      unsent: true,
+      unsentWhy: "busy",
+    });
   });
 
   it("never takes a one-time account the chain has seen used, whatever this device's record says", async () => {

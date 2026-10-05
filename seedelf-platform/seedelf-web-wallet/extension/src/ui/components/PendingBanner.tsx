@@ -6,6 +6,14 @@
 // land until its slot, about two hours on, and says until when. One that
 // never landed says that nothing was sent, or most likely wasn't
 // (pending.ts).
+//
+// One that may have gone through leads with what to do, not to pay it again,
+// and offers Check now, the same question Home asks every 15 s; how long it
+// can still land is under Details, with its date when that's not today: "until
+// about 01:17", said at 23:17, read as hours ago (chunk 23's second review,
+// HM-4).
+
+import { useState } from "react";
 
 import type { PendingTx } from "../../shared/rpc";
 import { type I18nKey, t, useT } from "../../i18n";
@@ -117,34 +125,87 @@ const HELD_IN_MEMPOOL_MS = VALID_FOR_MS + 30 * 60_000;
  * ("16:05"): its slot, two hours on by the chain's clock from when it was
  * built, read from when it was sent. Time passes the same here, so this
  * device's clock says it right even when it's off. None for a private one,
- * which carries no slot yet.
+ * which carries no slot yet. With `now`, a time on another day says which
+ * ("6 Oct, 01:17").
  */
-export function validUntil(pending: PendingTx): string | undefined {
+export function validUntil(pending: PendingTx, now?: number): string | undefined {
   if (pending.invalidHereafter === undefined) return undefined;
-  return new Date(pending.submittedAt + VALID_FOR_MS).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return clock(pending.submittedAt + VALID_FOR_MS, now);
 }
 
-/** Why a payment Koios didn't answer is still shown as on its way, and until when it holds new ones back. */
-function maybeSentDetail(pending: PendingTx): string {
-  const until = validUntil(pending);
+/** A time to the minute, and its date when it isn't on `now`'s day (none given: the time alone). */
+function clock(at: number, now?: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  if (now === undefined || d.toDateString() === new Date(now).toDateString()) return time;
+  return t("format.dateAndTime", { date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }), time });
+}
+
+/** Why a payment Koios didn't answer is still shown as on its way: said first, under the title. */
+function maybeSentWhy(pending: PendingTx): string {
+  return t(pending.inMempool ? "pending.maybeSent.inMempool" : "pending.maybeSent.resent");
+}
+
+/** Until when a payment Koios didn't answer holds new ones back: the far horizon, under Details. */
+function maybeSentUntil(pending: PendingTx, now: number): string {
+  const until = validUntil(pending, now);
   if (pending.inMempool) {
-    const held = new Date(pending.submittedAt + HELD_IN_MEMPOOL_MS).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
     return until
       ? t("pending.maybeSent.inMempoolUntil", { until })
-      : t("pending.maybeSent.inMempoolHeld", { held });
+      : t("pending.maybeSent.inMempoolHeld", { held: clock(pending.submittedAt + HELD_IN_MEMPOOL_MS, now) });
   }
-  return until
-    ? t("pending.maybeSent.resentUntil", { until })
-    : t("pending.maybeSent.resentNoSlot");
+  return until ? t("pending.maybeSent.resentUntil", { until }) : t("pending.maybeSent.resentNoSlot");
+}
+
+/**
+ * What a payment that may have gone through means: that the wallet keeps at
+ * it; Check now, which asks the network straight away what Home asks every
+ * 15 s; and how long it can still land, under Details.
+ */
+function MaybeSentDetail({ pending, onCheck }: { pending: PendingTx; onCheck?: () => Promise<void> | void }) {
+  const tr = useT();
+  const [checking, setChecking] = useState(false);
+  const check = async () => {
+    setChecking(true);
+    try {
+      await onCheck?.();
+    } finally {
+      setChecking(false);
+    }
+  };
+  return (
+    <span className="stack-tight">
+      <span>{maybeSentWhy(pending)}</span>
+      {onCheck && (
+        <button type="button" className="link" onClick={() => void check()} disabled={checking}>
+          {checking ? tr("pending.checking") : tr("pending.checkNow")}
+        </button>
+      )}
+      <details className="disclosure">
+        <summary>{tr("common.details")}</summary>
+        <span data-testid="pending-tx-until">{maybeSentUntil(pending, Date.now())}</span>
+      </details>
+    </span>
+  );
 }
 
 /**
  * Home's banner for the sent transaction. `watching`: Home still asks about
  * it, and new payments wait. A maybe-sent one always waits, whatever
  * `watching` says: only the worker settles it, and Dismiss would hide a
- * payment that may still land.
+ * payment that may still land. `onCheck` asks about it now.
  */
-export function PendingBanner({ pending, watching, onDismiss }: { pending: PendingTx; watching: boolean; onDismiss: () => void }) {
+export function PendingBanner({
+  pending,
+  watching,
+  onDismiss,
+  onCheck,
+}: {
+  pending: PendingTx;
+  watching: boolean;
+  onDismiss: () => void;
+  onCheck?: () => Promise<void> | void;
+}) {
   const tr = useT();
   const what = tr(SENT[pending.kind]);
   const shared = {
@@ -166,11 +227,11 @@ export function PendingBanner({ pending, watching, onDismiss }: { pending: Pendi
         {...shared}
         state="waiting"
         title={tr("pending.maybeSentTitle", { what })}
-        detail={maybeSentDetail(pending)}
+        detail={<MaybeSentDetail pending={pending} onCheck={onCheck} />}
       />
     );
   }
-  const until = validUntil(pending);
+  const until = validUntil(pending, Date.now());
   return (
     <TxBanner
       {...shared}

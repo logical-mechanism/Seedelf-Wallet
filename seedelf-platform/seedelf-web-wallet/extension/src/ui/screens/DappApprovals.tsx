@@ -10,23 +10,30 @@
 // one-time account funded from the private balance, here, before the site
 // gets it. Its funding is reviewed and sent from this window, which then
 // waits for the network; closing it then doesn't undo the payment.
+//
+// A signature's foot (the password, Decline and Sign) follows the request
+// rather than staying in view: kept in view at 400×605, it covered who the
+// transaction pays and the warning that signing ties two accounts together,
+// so Sign could be pressed without either having been on screen (chunk 23's
+// second review, CW-1). Now Sign is reached only past them.
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { joinSentences, t, useT } from "../../i18n";
 
 import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
 import { accountNumberAndName, useAccounts } from "../accounts";
-import { call, onDappChanged } from "../background";
+import { call, onDappChanged, RpcError } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { PaidRows } from "../components/PaidRows";
-import { Choice } from "../components/Choice";
+import { RadioCards } from "../components/RadioCards";
 import { ExplorerLink } from "../components/ExplorerLink";
-import { GlobeIcon, SpinnerIcon } from "../components/Icons";
+import { GlobeIcon, ShieldIcon, SpinnerIcon, WalletIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/SessionRefused";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
@@ -60,6 +67,13 @@ function useSiteAccount(): string | undefined {
 
 /** How the request shown came to be: the next after the user's answer, or in the place of one that's gone. */
 type Change = "next" | "replaced";
+
+/**
+ * How an answer went: done, or not (the window's error says why), or a
+ * private session's funding refused, which its review reads to build it
+ * again or say where to look (chunk 23's second review, DX-1).
+ */
+type Answered = boolean | { refused: RpcError };
 
 export function DappApprovals() {
   const tr = useT();
@@ -120,7 +134,7 @@ export function DappApprovals() {
   async function answer(
     approve: boolean,
     extra: { password?: string; fund?: { txHash: string }; governance?: boolean } = {},
-  ): Promise<boolean> {
+  ): Promise<Answered> {
     if (!current || busy || held || (approve && needsPassword && !password)) return false;
     answered.current = current.id;
     setBusy(true);
@@ -133,14 +147,39 @@ export function DappApprovals() {
         ...extra,
       });
       if (result.error) {
-        setError(result.error);
         setPassword("");
+        // A private session's funding: its review works out what the refusal leaves it (DX-1).
+        if (extra.fund) return { refused: new RpcError(result.error, result.code) };
+        setError(result.error);
         return false;
       }
       return true;
     } catch (e) {
       setError((e as Error).message);
       return false;
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }
+
+  /**
+   * Declines everything listed, as closing the window does: a private
+   * session's funding that's sent isn't undone. At most the window's 20
+   * (chunk 23's second review, CW-7).
+   */
+  async function declineAll() {
+    if (!approvals || busy) return;
+    // What comes in meanwhile shows as the next request, not as one in the place of a request that went away.
+    answered.current = current?.id;
+    setBusy(true);
+    setError(undefined);
+    try {
+      for (const a of approvals) {
+        if (a.kind === "connect" && a.funding) continue;
+        // One the site took back meanwhile is gone already: nothing to say.
+        await call("dapp-answer", { id: a.id, approve: false }).catch(() => undefined);
+      }
     } finally {
       setBusy(false);
       load();
@@ -157,13 +196,13 @@ export function DappApprovals() {
     );
   }
 
-  const more = approvals!.length > 1 ? tr("dappUi.oneOf", { total: approvals!.length }) : "";
+  const queue = <Queue total={approvals!.length} busy={busy} onDeclineAll={() => void declineAll()} />;
   if (current.kind === "connect") {
     return (
       <ConnectRequest
         key={current.id}
         approval={current}
-        more={more}
+        queue={queue}
         busy={busy}
         held={held}
         change={change}
@@ -180,7 +219,7 @@ export function DappApprovals() {
     <Screen
       title={title}
       titleId="dapp-title"
-      aside={`${tr("dappUi.nothingUntil", { action })}${more}`}
+      aside={tr("dappUi.nothingUntil", { action })}
       error={error}
       // With the password, Enter in its box signs, as it unlocks elsewhere.
       onSubmit={
@@ -191,23 +230,34 @@ export function DappApprovals() {
             }
           : undefined
       }
+      // After the request, not kept over it: read to its end before Sign (chunk 23's second review, CW-1).
+      footSticky={false}
       foot={
-        <div className="actions">
-          <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy || held}>
-            {tr("dappUi.decline")}
-          </button>
-          <button
-            type={needsPassword ? "submit" : "button"}
-            className="primary"
-            onClick={needsPassword ? undefined : () => answer(true)}
-            disabled={busy || held || (needsPassword && !password)}
-          >
-            {busy ? "…" : action}
-          </button>
-        </div>
+        <>
+          {/* In the foot, over the buttons it unlocks: in the body, under a foot kept in view, it started below the
+              fold and Sign looked broken (chunk 23's review, CW-1). Never focused first: the request is read before
+              the password is typed. */}
+          {needsPassword && (
+            <PasswordField id="dapp-password" label={tr("dappUi.passwordLabel")} value={password} onChange={setPassword} />
+          )}
+          <div className="actions">
+            <button type="button" className="secondary" onClick={() => answer(false)} disabled={busy || held}>
+              {tr("dappUi.decline")}
+            </button>
+            <button
+              type={needsPassword ? "submit" : "button"}
+              className="primary"
+              onClick={needsPassword ? undefined : () => answer(true)}
+              disabled={busy || held || (needsPassword && !password)}
+            >
+              {busy ? "…" : action}
+            </button>
+          </div>
+        </>
       }
     >
       <div className="stack" data-testid={`dapp-${current.kind}`}>
+        {queue}
         <Changed change={change} />
         <Site
           origin={current.origin}
@@ -222,17 +272,38 @@ export function DappApprovals() {
             session={current.session !== undefined}
             collateralSpent={!!current.collateralSpent}
             ties={current.ties}
+            account={current.session === undefined ? siteAccount : undefined}
           />
         )}
         {current.kind === "sign-data" && (
-          <SignData address={current.address} signer={current.key} payload={current.payload} text={current.text} />
-        )}
-        {/* Under what it signs, and never focused first: the review is read before the password is typed. */}
-        {needsPassword && (
-          <PasswordField id="dapp-password" label={tr("dappUi.passwordLabel")} value={password} onChange={setPassword} />
+          <SignData
+            address={current.address}
+            signer={current.key}
+            payload={current.payload}
+            text={current.text}
+            account={current.session === undefined ? siteAccount : undefined}
+          />
         )}
       </div>
     </Screen>
+  );
+}
+
+/**
+ * How many requests wait, when more than this one: at the top, where it's
+ * seen, not at the end of the line under the title (chunk 23's second review,
+ * CW-7), with Decline all.
+ */
+function Queue({ total, busy, onDeclineAll }: { total: number; busy: boolean; onDeclineAll: () => void }) {
+  const tr = useT();
+  if (total < 2) return null;
+  return (
+    <div className="field-row note" data-testid="dapp-queue">
+      <span>{tr("dappUi.queue", { total })}</span>
+      <button type="button" className="link" onClick={onDeclineAll} disabled={busy}>
+        {tr("dappUi.declineAll")}
+      </button>
+    </div>
   );
 }
 
@@ -316,7 +387,7 @@ export function fundingPrivacy(changeLovelace: string): string {
  */
 export function ConnectRequest({
   approval,
-  more,
+  queue,
   busy,
   held,
   change,
@@ -325,14 +396,15 @@ export function ConnectRequest({
   onAnswer,
 }: {
   approval: Extract<DappApproval, { kind: "connect" }>;
-  more: string;
+  /** How many requests wait, when more than this one (`Queue`). */
+  queue?: ReactNode;
   busy: boolean;
   /** Its buttons wait: it just took another request's place. */
   held: boolean;
   change?: Change;
   error?: string;
   onError: (error?: string) => void;
-  onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string }; governance?: boolean }) => Promise<boolean>;
+  onAnswer: (approve: boolean, extra?: { password?: string; fund?: { txHash: string }; governance?: boolean }) => Promise<Answered>;
 }) {
   const tr = useT();
   const network = useNetwork();
@@ -346,6 +418,20 @@ export function ConnectRequest({
   const [review, setReview] = useState<SessionOutSummary>();
   const [building, setBuilding] = useState(false);
   const [password, setPassword] = useState("");
+  // The funding was refused: Send gives way to building it again, or to where to look if it may have gone (DX-1).
+  const [refusal, setRefusal] = useState<Refusal>();
+
+  // Choosing a private session brings its amount into view, and into focus: below the two cards it started under
+  // the fold of the 400×605 window, beside a Review that was disabled with no reason (chunk 23's second review,
+  // CW-2). Centred, so the foot kept in view doesn't cover it.
+  const amountField = useRef<HTMLDivElement>(null);
+  const [choseSession, setChoseSession] = useState(0);
+  useEffect(() => {
+    if (!choseSession) return;
+    const field = amountField.current;
+    field?.querySelector("input")?.focus({ preventScroll: true });
+    field?.scrollIntoView({ block: "center" });
+  }, [choseSession]);
 
   // What the private balance holds, for the amount and its tokens: the last reading, no request.
   useEffect(() => {
@@ -393,7 +479,7 @@ export function ConnectRequest({
       <Screen
         title={tr("dappUi.governanceTitle")}
         titleId="dapp-title"
-        aside={`${tr("dappUi.nothingUntil", { action: tr("dappUi.allow") })}${more}`}
+        aside={tr("dappUi.nothingUntil", { action: tr("dappUi.allow") })}
         error={error}
         foot={
           <div className="actions">
@@ -407,6 +493,7 @@ export function ConnectRequest({
         }
       >
         <div className="stack" data-testid="dapp-governance">
+          {queue}
           <Changed change={change} />
           {connectedSite}
           <p className="note">{tr("dappUi.governance.asks")}</p>
@@ -424,25 +511,42 @@ export function ConnectRequest({
   const tooMuch = !!seedelf && !!lovelace && BigInt(lovelace) > BigInt(seedelf.lovelace);
   const canReview = !!seedelf && !!lovelace && !tooMuch && !!tokens?.ok;
 
-  async function build(e: FormEvent) {
-    e.preventDefault();
+  /** Builds the funding to review: from Review, and again, on the next unused account, after a refusal (DX-1). */
+  async function buildReview() {
     if (!canReview || building || held) return;
     setBuilding(true);
     onError(undefined);
     try {
       setReview(await call("dapp-private-build", { id: approval.id, lovelace: lovelace!, tokens: tokens!.sent }));
     } catch (err) {
+      // Built again after a refusal, and it can't be: back to the amount, where the error says why.
+      if (refusal) setReview(undefined);
       onError((err as Error).message);
     } finally {
+      // The refusal stays until the new review is in, so its button says it's building meanwhile.
+      setRefusal(undefined);
       setBuilding(false);
     }
   }
 
+  function build(e: FormEvent) {
+    e.preventDefault();
+    void buildReview();
+  }
+
   async function send(e: FormEvent) {
     e.preventDefault();
-    if (!review || busy || (approval.password && !password)) return;
+    if (!review || refusal || busy || (approval.password && !password)) return;
     const sent = await onAnswer(true, { fund: { txHash: review.txHash }, ...(approval.password ? { password } : {}) });
-    if (!sent) setPassword("");
+    if (sent === true) return;
+    setPassword("");
+    if (typeof sent !== "object") return;
+    // Its session was recorded before it was sent, so Send can't go again: build it again, or, when it may have
+    // gone out all the same, say where to look. A refusal before anything was recorded (a wrong password) is
+    // only said, and Send can go again (chunk 23's second review, DX-1).
+    const refused = await refusalOf(sent.refused, review.index, review.txHash);
+    if (refused) setRefusal(refused);
+    else onError(sent.refused.message);
   }
 
   // The funding, built: what goes where, and Send.
@@ -458,19 +562,43 @@ export function ConnectRequest({
         onBack={() => {
           setReview(undefined);
           setPassword("");
+          setRefusal(undefined);
+          onError(undefined);
         }}
-        backDisabled={busy}
+        backDisabled={busy || building}
         aside={tr("dappUi.fundingAside", { host })}
         error={error}
         foot={
-          <div className="actions">
-            <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy}>
-              {tr("dappUi.cancel")}
-            </button>
-            <button type="submit" className="primary" disabled={busy || (approval.password && !password)}>
-              {busy ? tr("common.sending") : tr("common.send")}
-            </button>
-          </div>
+          refusal ? (
+            // Refused, its session is used up: Send again only said "That session was started already". The way
+            // on is a swap's and a mix's (SessionRefused.tsx), and Cancel still says no to the site (DX-1).
+            <>
+              <SessionRefusedFoot refusal={refusal} busy={building} onAgain={() => void buildReview()} />
+              <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy || building}>
+                {tr("dappUi.cancel")}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* In the foot, over Send, as a signature's is (CW-1). */}
+              {approval.password && (
+                <PasswordField
+                  id="dapp-funding-password"
+                  label={tr("dappUi.passwordToSend")}
+                  value={password}
+                  onChange={setPassword}
+                />
+              )}
+              <div className="actions">
+                <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy}>
+                  {tr("dappUi.cancel")}
+                </button>
+                <button type="submit" className="primary" disabled={busy || (approval.password && !password)}>
+                  {busy ? tr("common.sending") : tr("common.send")}
+                </button>
+              </div>
+            </>
+          )
         }
       >
         <div className="stack" data-testid="dapp-funding-review">
@@ -478,9 +606,11 @@ export function ConnectRequest({
             <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
             <Row label={tr("lovejoin.review.account")} value={shortHex(review.address, 16, 8)} title={review.address} />
             <PaidRows label={tr("dappUi.forTheSite")} paid={forSite} />
-            <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral?.lovelace ?? "0")} ₳`} />
-            <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)} ₳`} />
-            <Row label={tr("review.backToPrivate")} value={`${formatAda(review.changeLovelace)} ₳`} />
+            {/* What it's for, not "collateral", a word the wallet uses for three things (chunk 23's second review,
+                CW-8). */}
+            <Row label={tr("dappUi.keptAside")} value={`${formatAda(collateral?.lovelace ?? "0")}\u00a0₳`} />
+            <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
+            <Row label={tr("review.backToPrivate")} value={`${formatAda(review.changeLovelace)}\u00a0₳`} />
           </ReviewRows>
           <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
           <Callout tone="privacy" testId="dapp-funding-privacy">
@@ -488,14 +618,6 @@ export function ConnectRequest({
           </Callout>
           <HistoriesNote histories={review.histories} session={review.index} testId="dapp-funding-histories" />
           <p className="note">{tr("swaps.review.givemeNote")}</p>
-          {approval.password && (
-            <PasswordField
-              id="dapp-funding-password"
-              label={tr("dappUi.passwordToSend")}
-              value={password}
-              onChange={setPassword}
-            />
-          )}
         </div>
       </Screen>
     );
@@ -510,8 +632,8 @@ export function ConnectRequest({
       hintTestId="dapp-disconnect-note"
       aside={
         connection
-          ? `${tr("dappUi.nothingUntil", { action: tr(connection === "private" ? "common.review" : "dappUi.connect") })}${more}`
-          : `${tr("dappUi.chooseWhatItSees")}${more}`
+          ? tr("dappUi.nothingUntil", { action: tr(connection === "private" ? "common.review" : "dappUi.connect") })
+          : tr("dappUi.chooseWhatItSees")
       }
       error={error}
       foot={
@@ -525,8 +647,9 @@ export function ConnectRequest({
             {tr("dappUi.cancel")}
           </button>
           {connection === "private" ? (
+            // With no amount yet it says so, rather than a Review that's disabled for no reason given (CW-2).
             <button type="submit" className="primary" disabled={!canReview || building || held}>
-              {tr(building ? "common.building" : "common.review")}
+              {tr(building ? "common.building" : lovelace ? "common.review" : "dappUi.enterAmount")}
             </button>
           ) : (
             // Only once the public account is chosen: never one press from the window opening.
@@ -543,38 +666,40 @@ export function ConnectRequest({
       }
     >
       <div className="stack" data-testid="dapp-connect">
+        {queue}
         <Changed change={change} />
         {site}
-        <Choice<Connection>
+        {/* Two cards, what each costs inside it: a pill switch with its explanations in a list apart read as a tab,
+            and nothing said a choice was needed (chunk 23's review, CW-3). Still nothing chosen for the user. */}
+        <RadioCards<Connection>
           label={tr("dappUi.connectItTo")}
           id="dapp-connection"
+          testId="dapp-connect-costs"
           value={connection}
           onChange={(c) => {
             setConnection(c);
             onError(undefined);
+            if (c === "private") setChoseSession((n) => n + 1);
           }}
           options={[
-            { value: "public", label: tr("dappUi.publicAccount") },
-            { value: "private", label: tr("dappUi.privateSession") },
+            {
+              value: "public",
+              label: siteAccount ? tr("dappUi.publicAccountNamed", { account: siteAccount }) : tr("dappUi.publicAccount"),
+              text: tr("dappUi.cost.public"),
+              icon: <WalletIcon size={16} />,
+            },
+            {
+              value: "private",
+              label: tr("dappUi.privateSession"),
+              text: tr("dappUi.cost.private"),
+              icon: <ShieldIcon size={16} />,
+            },
           ]}
         />
-        {connection === undefined ? (
-          <ul className="dapp-points" data-testid="dapp-connect-costs">
-            <li>
-              <strong>
-                {siteAccount ? tr("dappUi.cost.publicLabelNamed", { account: siteAccount }) : tr("dappUi.cost.publicLabel")}
-              </strong>{" "}
-              {tr("dappUi.cost.public")}
-            </li>
-            <li>
-              <strong>{tr("dappUi.cost.privateLabel")}</strong> {tr("dappUi.cost.private")}
-            </li>
-          </ul>
-        ) : connection === "public" ? (
+        {connection === "public" ? (
           <>
             <ul className="dapp-points">
               {siteAccount && <li data-testid="dapp-connect-account">{tr("dappUi.public.which", { account: siteAccount })}</li>}
-              <li>{tr("dappUi.public.sees")}</li>
               <li>{tr("dappUi.public.asks")}</li>
             </ul>
             <Callout tone="privacy" testId="dapp-connect-privacy">
@@ -606,14 +731,14 @@ export function ConnectRequest({
               </>
             )}
           </>
-        ) : (
+        ) : connection === "private" ? (
           <>
             <ul className="dapp-points" data-testid="dapp-private-points">
               <li>{tr("dappUi.private.account")}</li>
               <li>{tr("dappUi.private.stays")}</li>
               {approval.governance && <li data-testid="dapp-private-no-governance">{tr("dappUi.private.noGovernance")}</li>}
             </ul>
-            <div className="field">
+            <div className="field" ref={amountField}>
               <label htmlFor="dapp-private-amount">{tr("dappUi.whatToPutIn")}</label>
               <AdaInput
                 id="dapp-private-amount"
@@ -637,7 +762,7 @@ export function ConnectRequest({
               {PRIVATE_SESSION_PRIVACY()}
             </Callout>
           </>
-        )}
+        ) : null}
       </div>
     </Screen>
   );
@@ -650,6 +775,7 @@ export function SignTx({
   session,
   collateralSpent,
   ties,
+  account,
 }: {
   summary: DappTxSummary;
   partial: boolean;
@@ -657,6 +783,8 @@ export function SignTx({
   collateralSpent: boolean;
   /** The wallet's other accounts it moves money with (independent review M12); undefined when unchecked. */
   ties?: Array<"account" | number>;
+  /** The public account it's for, by number and name, when the wallet has more than one (`useSiteAccount`). */
+  account?: string;
 }) {
   const tr = useT();
   const network = useNetwork();
@@ -696,22 +824,18 @@ export function SignTx({
   if (s.donation) notes.push(tr("dappUi.note.donates", { ada: formatAda(s.donation) }));
   if (s.metadata && !s.note) notes.push(tr("dappUi.note.metadata"));
 
+  // What leaves the account, or comes into it, all told: "sends, net" read as jargon (chunk 23's second review,
+  // CW-7). It's the wallet's own reviews' "Total leaving", and names the account where there's more than one (CW-5).
+  const total = session
+    ? tr(net < 0n ? "dappUi.net.sessionSends" : "dappUi.net.sessionGets")
+    : account
+      ? tr(net < 0n ? "dappUi.net.namedSends" : "dappUi.net.namedGets", { account })
+      : tr(net < 0n ? "dappUi.net.accountSends" : "dappUi.net.accountGets");
+
   return (
     <>
       <ReviewRows testId="dapp-tx-net">
-        <Row
-          label={tr(
-            session
-              ? net < 0n
-                ? "dappUi.net.sessionSends"
-                : "dappUi.net.sessionGets"
-              : net < 0n
-                ? "dappUi.net.accountSends"
-                : "dappUi.net.accountGets",
-          )}
-          value={`${formatAda((net < 0n ? -net : net).toString())} ₳`}
-          strong
-        />
+        <Row label={total} value={`${formatAda((net < 0n ? -net : net).toString())}\u00a0₳`} strong />
         {s.netTokens.map((t) => (
           <TokenAmountRow
             key={`${t.policyId}.${t.assetName}`}
@@ -726,10 +850,10 @@ export function SignTx({
         )}
         <Row
           label={tr("review.fee")}
-          value={s.ownInputs ? tr("dappUi.included", { ada: formatAda(s.fee) }) : `${formatAda(s.fee)} ₳`}
+          value={s.ownInputs ? tr("dappUi.included", { ada: formatAda(s.fee) }) : `${formatAda(s.fee)}\u00a0₳`}
         />
         {s.collateral && s.collateral.own > 0 && (
-          <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(s.collateral.atRisk)} ₳`} />
+          <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(s.collateral.atRisk)}\u00a0₳`} />
         )}
         <Row label={tr("dappUi.signsWith")} value={signers} />
       </ReviewRows>
@@ -746,7 +870,7 @@ export function SignTx({
                 </span>
                 <span className="note">{paidTo(p)}</span>
                 <span className="dapp-amount">
-                  {formatAda(p.lovelace)} ₳
+                  {formatAda(p.lovelace)}{"\u00a0₳"}
                   {p.tokens.map((t) => (
                     <span key={`${t.policyId}.${t.assetName}`} className="note">
                       <TokenAmountText token={t} amount={amount(t)} />
@@ -882,20 +1006,28 @@ export function SignData({
   signer,
   payload,
   text,
+  account,
 }: {
   address: string;
   signer: "payment" | "stake" | "drep";
   payload: string;
   text?: string;
+  /** The public account it signs for, by number and name, when the wallet has more than one (`useSiteAccount`). */
+  account?: string;
 }) {
   const tr = useT();
+  // Which account signs, where there's more than one: "Your address" could be any of them, and the window can't
+  // change which (chunk 23's second review, CW-5).
+  const key = account
+    ? tr(
+        signer === "stake" ? "dappUi.signer.stake" : signer === "drep" ? "dappUi.signer.drep" : "dappUi.signer.payment",
+        { account },
+      )
+    : tr(signer === "stake" ? "dappUi.stakeKey" : signer === "drep" ? "dappUi.drepKey" : "dappUi.paymentKey");
   return (
     <>
       <ReviewRows testId="dapp-data">
-        <Row
-          label={tr("dappUi.with")}
-          value={tr(signer === "stake" ? "dappUi.stakeKey" : signer === "drep" ? "dappUi.drepKey" : "dappUi.paymentKey")}
-        />
+        <Row label={tr("dappUi.with")} value={key} />
       </ReviewRows>
       {/* The whole address on its own line, as the Pays rows show it: shortened, a lookalike's could read the same. */}
       <div className="stack-tight">

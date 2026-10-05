@@ -19,12 +19,28 @@
 // with the balances (prices.ts). An ADA Handle in the private balance gets a
 // warning: anyone paying it from another wallet pays the contract with no
 // datum, which anyone can take.
+//
+// Chunk 23's second review: a balance counts what the wallet's own sent
+// transaction pays back to it before the chain shows it (a payment's change,
+// a Make private's deposit: background/incoming.ts), and says so, so a pending
+// payment no longer reads as a loss (HM-1, HM-2). After an action Home opens
+// on the side it spent from, and a reload keeps the tab (HM-6).
 
 import { useCallback, useEffect, useState } from "react";
-import { joinList, joinSentences, t, useT } from "../../i18n";
+import { type I18nKey, joinList, joinSentences, t, useT } from "../../i18n";
 
 import { handlesIn } from "../../shared/handles";
-import type { Account, AdaPrice, Balances, LovejoinHeld, PendingTx, SeedelfInfo, SessionView, StakeInfo } from "../../shared/rpc";
+import type {
+  Account,
+  AdaPrice,
+  Balances,
+  LovejoinHeld,
+  PendingTx,
+  SeedelfInfo,
+  SessionView,
+  StakeInfo,
+  TokenAmount,
+} from "../../shared/rpc";
 import { call } from "../background";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
@@ -48,10 +64,21 @@ import {
   WithdrawIcon,
 } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
-import { TokenList } from "../components/TokenList";
-import { formatFiat, poolLabel, rewardsLocked, spentRewards, unlocked, voteLabel, whenOf, withRewards } from "../format";
+import { TokenList, type TokenAction } from "../components/TokenList";
+import {
+  formatFiat,
+  poolLabel,
+  rewardsLocked,
+  spentRewards,
+  tokenKey,
+  unlocked,
+  voteLabel,
+  whenOf,
+  withRewards,
+} from "../format";
 import { useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
+import { assetFingerprint } from "../tokens";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
@@ -77,6 +104,64 @@ const SETTLE_EVERY_MS = 60_000;
 
 type Tab = "seedelf" | "cardano";
 
+/**
+ * The side each kind of transaction spends from: Home goes back to that tab
+ * once it's sent (chunk 23's second review, HM-6). A Seedelf's creation says
+ * which side paid for it.
+ */
+const SPENT_FROM: Record<PendingTx["kind"], Tab> = {
+  "move-in": "cardano",
+  mint: "cardano",
+  send: "cardano",
+  collateral: "cardano",
+  stake: "cardano",
+  vote: "cardano",
+  "withdraw-rewards": "cardano",
+  unstake: "cardano",
+  "drep-register": "cardano",
+  "drep-update": "cardano",
+  "drep-retire": "cardano",
+  "drep-vote": "cardano",
+  transfer: "seedelf",
+  withdraw: "seedelf",
+  remove: "seedelf",
+  "session-out": "seedelf",
+  "session-swap": "seedelf",
+  "session-cancel": "seedelf",
+  "session-back": "seedelf",
+  "lovejoin-withdraw": "seedelf",
+  "lovejoin-mix": "seedelf",
+};
+
+/**
+ * The tab last chosen, kept for this page alone so a reload opens on it (HM-6):
+ * sessionStorage, which may be refused, and never chrome.storage. Private when
+ * nothing's kept.
+ */
+const TAB_KEY = "seedelf.homeTab";
+function keptTab(): Tab {
+  try {
+    return sessionStorage.getItem(TAB_KEY) === "cardano" ? "cardano" : "seedelf";
+  } catch {
+    return "seedelf";
+  }
+}
+function keepTab(tab: Tab): void {
+  try {
+    sessionStorage.setItem(TAB_KEY, tab);
+  } catch {
+    // Not kept: the next reload opens on Private.
+  }
+}
+/** Forgets it: a lock, or a wallet removed, starts the next Home over on Private (App.tsx). */
+export function forgetHomeTab(): void {
+  try {
+    sessionStorage.removeItem(TAB_KEY);
+  } catch {
+    // Nothing was kept.
+  }
+}
+
 const BUSY = "home.busy.wait" as const;
 const MAYBE_BUSY = "home.busy.maybe" as const;
 const ALL_LOCKED = "home.busy.allLocked" as const;
@@ -94,9 +179,15 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const [account, setAccount] = useState<Account>();
   const [balances, setBalances] = useState<Balances>();
   const [reading, setReading] = useState(false);
-  const [error, setError] = useState<string>();
+  // What failed, and when: a reading made after it clears it, however it came (chunk 23's second review, HM-5);
+  // the kept one a page is served meanwhile doesn't.
+  const [error, setError] = useState<{ message: string; at: number }>();
   const [now, setNow] = useState(Date.now);
-  const [tab, setTab] = useState<Tab>("seedelf");
+  const [tab, setTab] = useState<Tab>(keptTab);
+  useEffect(() => keepTab(tab), [tab]);
+  // Where public Receive's Back goes: Home, or the screen that offered the public address (GS-5).
+  // Where Back goes from the public Receive, or Make public, opened from another screen than Home: back there (GS-5).
+  const [backTo, setBackTo] = useState<"home" | "receive-seedelf" | "create" | "staking">("home");
   const [screen, setScreen] = useState<
     | "home"
     | "receive"
@@ -114,6 +205,10 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const amounts = useAmounts();
   const [price, setPrice] = useState<AdaPrice | null>(null);
   const [removing, setRemoving] = useState<SeedelfInfo>();
+  // An address Send handed to Make public, which pays it (chunk 23's review, P-1).
+  const [payTo, setPayTo] = useState<string>();
+  // A token a token's details started a payment with, picked in the form (chunk 23's review, T-1).
+  const [picked, setPicked] = useState<Record<string, string>>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
   const [utxosOf, setUtxosOf] = useState<Tab>();
@@ -133,10 +228,10 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     try {
       const b = await call("balances", { refresh });
       setBalances(b);
-      setError(undefined);
+      setError((was) => (was && b.updatedAt < was.at ? was : undefined));
       return b;
     } catch (e) {
-      setError((e as Error).message);
+      setError({ message: (e as Error).message, at: Date.now() });
       return undefined;
     } finally {
       setReading(false);
@@ -165,7 +260,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   }, [load]);
 
   useEffect(() => {
-    call("account", {}).then(setAccount, (e: Error) => setError(e.message));
+    call("account", {}).then(setAccount, (e: Error) => setError({ message: e.message, at: Date.now() }));
     void load(false).then((b) => {
       if (b && Date.now() - b.updatedAt > STALE_MS) void load(true);
     });
@@ -228,37 +323,100 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     seedelf: unlocked(balances.seedelf),
     cardano: withRewards(unlocked(balances.cardano), rewards),
   };
+  // Why each action can't be pressed, as keys, so two that say the same are said once. A side emptied by a
+  // transaction whose change is on its way waits for it, rather than asking for money.
+  type Why = I18nKey | "busy" | undefined;
   const canSpend = !!free && free.seedelf.utxos > 0 && !watching;
-  const spendTitle = watching
-    ? busy
+  const spendWhy: Why = watching
+    ? "busy"
     : balances && balances.seedelf.utxos === 0
-      ? t("home.busy.makePrivateFirst")
+      ? balances.seedelf.incoming
+        ? BUSY
+        : // Get started's order: with no Seedelf yet, creating one comes before making ADA private (GS-1).
+          seedelfs.length === 0
+          ? "home.busy.createFirst"
+          : "home.busy.makePrivateFirst"
       : free && free.seedelf.utxos === 0
-        ? t(ALL_LOCKED)
+        ? ALL_LOCKED
         : undefined;
   const canCreate = !!free && (free.cardano.utxos > 0 || free.seedelf.utxos > 0) && !watching;
-  const createTitle = watching
-    ? busy
+  // Nothing on either side, and nothing on its way: the account has to be funded first.
+  const unfunded =
+    !!balances && balances.cardano.utxos === 0 && balances.seedelf.utxos === 0 && !balances.cardano.incoming && !balances.seedelf.incoming;
+  const createWhy: Why = watching
+    ? "busy"
     : balances && !canCreate
-      ? balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
-        ? t(ALL_LOCKED)
-        : t("home.busy.fundFirst")
+      ? unfunded
+        ? "home.busy.fundFirst"
+        : balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
+          ? ALL_LOCKED
+          : BUSY
       : undefined;
+  const say = (why: Why) => (why === "busy" ? busy : why && t(why));
+  const spendTitle = say(spendWhy);
+  const createTitle = say(createWhy);
   // Move in and Send both spend the account.
   const canMoveIn = !!free && free.cardano.utxos > 0 && !watching;
-  const moveInTitle = watching ? busy : balances && free && balances.cardano.utxos > 0 && !canMoveIn ? t(ALL_LOCKED) : undefined;
+  const moveInTitle = watching
+    ? busy
+    : balances && free && !canMoveIn
+      ? balances.cardano.utxos > 0
+        ? t(ALL_LOCKED)
+        : balances.cardano.incoming
+          ? t(BUSY)
+          : undefined
+      : undefined;
+  // Why a tab's actions can't be pressed, said under them: a tooltip alone reached no touch screen, and the
+  // public tab had none for an empty account (chunk 23's review, H-1, H-10). Create gives its own reason where it
+  // differs from Send's: Send's was shown for both, telling a new wallet to make ADA private first while Get
+  // started said to create the Seedelf first. With nothing anywhere and no Seedelf, funding the account is the one
+  // step, for all three (chunk 23's second review, GS-1).
+  const privateReasons = (
+    !balances
+      ? []
+      : seedelfs.length === 0 && unfunded && !watching
+        ? ["home.busy.fundFirst" as const]
+        : [...new Set([!canSpend && spendWhy, !canCreate && createWhy])]
+  )
+    .map((why) => (why ? say(why) : undefined))
+    .filter((r): r is string => !!r);
+  const publicReason = !balances || canMoveIn ? undefined : (moveInTitle ?? t("home.busy.publicEmpty"));
+  // Until there's a Seedelf, making money private isn't the next step: creating one is, and the callout under the
+  // balance says so, so the action row doesn't contradict it (H-4). An empty account's next step is Receive.
+  const seedelfFirst = !!balances && seedelfs.length === 0;
+  const publicEmpty = !!balances && balances.cardano.utxos === 0 && !balances.cardano.incoming;
 
-  const sent = (p: PendingTx) => {
+  // Home opens on the side the transaction spent from (HM-6): a Seedelf's creation says which paid.
+  const sent = (p: PendingTx, from: Tab = SPENT_FROM[p.kind]) => {
     setPending(p);
     setScreen("home");
+    setTab(from);
     setRemoving(undefined);
+    setPicked(undefined);
+    setBackTo("home");
   };
-  const home = () => setScreen("home");
+  const home = () => {
+    setScreen("home");
+    setPicked(undefined);
+    setBackTo("home");
+  };
+  // A token's details start a payment with it, from the side it's in, when one can be made now.
+  const tokenAction = (side: Tab) =>
+    (side === "cardano" ? canMoveIn : canSpend)
+      ? (action: TokenAction, token: TokenAmount) => {
+          setPicked({ [tokenKey(token)]: "" });
+          setTokensOf(undefined);
+          setScreen(side === "cardano" ? (action === "send" ? "send" : "move-in") : action === "send" ? "transfer" : "withdraw");
+        }
+      : undefined;
   // The top bar's mark: leave every flow and overlay, keeping the tab chosen.
   useEffect(() => {
     if (!goHome) return;
     setScreen("home");
+    setBackTo("home");
     setRemoving(undefined);
+    setPayTo(undefined);
+    setPicked(undefined);
     setTokensOf(undefined);
     setActivityOf(undefined);
     setUtxosOf(undefined);
@@ -273,8 +431,20 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   if (removing) {
     return <RemoveSeedelf seedelf={removing} onCancel={() => setRemoving(undefined)} onSent={sent} />;
   }
+  // The public address, from a screen that offered it: Back returns to that screen, not to Home (GS-5).
+  const publicAddressFrom = (from: "receive-seedelf" | "create" | "staking") => () => {
+    setBackTo(from);
+    setScreen("receive");
+  };
   if (screen === "receive" && account) {
-    return <Receive account={account} handles={handlesIn(balances?.cardano.tokens ?? [])} onBack={home} />;
+    return (
+      <Receive
+        account={account}
+        handles={handlesIn(balances?.cardano.tokens ?? [])}
+        onBack={backTo === "home" ? home : () => setScreen(backTo)}
+        onPrivate={() => setScreen("receive-seedelf")}
+      />
+    );
   }
   if (screen === "receive-seedelf") {
     return (
@@ -283,16 +453,22 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         onBack={home}
         onCreate={() => setScreen("create")}
         createTitle={canCreate ? undefined : createTitle}
+        onFund={unfunded ? publicAddressFrom("receive-seedelf") : undefined}
+        onPublic={publicAddressFrom("receive-seedelf")}
         onRemove={setRemoving}
         removeTitle={watching ? busy : undefined}
       />
     );
   }
+  // Both balances as Home shows them, for a review's "balance after" (chunk 23's review, S-1).
+  const totals = balances && { public: accountTotal(balances.cardano), private: balances.seedelf.lovelace };
   if (screen === "move-in" && free) {
-    return <MoveIn cardano={free.cardano} rewards={rewardsProp} onCancel={home} onSent={sent} />;
+    return <MoveIn cardano={free.cardano} rewards={rewardsProp} totals={totals} picked={picked} onCancel={home} onSent={sent} />;
   }
   if (screen === "send" && free) {
-    return <CardanoSend cardano={free.cardano} rewards={rewardsProp} onCancel={home} onSent={sent} />;
+    return (
+      <CardanoSend cardano={free.cardano} rewards={rewardsProp} total={totals?.public} picked={picked} onCancel={home} onSent={sent} />
+    );
   }
   if ((screen === "staking" || screen === "staking-vote") && balances) {
     return (
@@ -301,21 +477,80 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         spendRewards={spendRewards}
         blocked={watching ? busy : undefined}
         start={screen === "staking-vote" ? "vote" : "overview"}
+        total={totals?.public}
+        // What Staking checks before a build, and the way on when the account can't pay a fee (chunk 23's second
+        // review, ST-9); a vote stays on its action while Home watches it (GV-6).
+        account={balances.cardano}
+        onReceive={publicAddressFrom("staking")}
+        onMakePublic={
+          canSpend
+            ? () => {
+                setBackTo("staking");
+                setScreen("withdraw");
+              }
+            : undefined
+        }
         onBack={home}
+        onSent={sent}
+        onPending={setPending}
+      />
+    );
+  }
+  if (screen === "create" && free) {
+    return (
+      <CreateSeedelf
+        balances={free}
+        totals={totals}
+        blocked={canCreate ? undefined : createTitle}
+        onFund={unfunded ? publicAddressFrom("create") : undefined}
+        onCancel={home}
+        onSent={(p, from) => sent(p, from === "account" ? "cardano" : "seedelf")}
+      />
+    );
+  }
+  if (screen === "transfer" && free) {
+    return (
+      <Transfer
+        seedelf={free.seedelf}
+        total={totals?.private}
+        picked={picked}
+        onPayAddress={(to) => {
+          setPayTo(to);
+          setScreen("withdraw");
+        }}
+        onCancel={home}
         onSent={sent}
       />
     );
   }
-  if (screen === "create" && free) return <CreateSeedelf balances={free} onCancel={home} onSent={sent} />;
-  if (screen === "transfer" && free) return <Transfer seedelf={free.seedelf} onCancel={home} onSent={sent} />;
-  if (screen === "withdraw" && free) return <Withdraw seedelf={free.seedelf} onCancel={home} onSent={sent} />;
+  if (screen === "withdraw" && free) {
+    return (
+      <Withdraw
+        seedelf={free.seedelf}
+        total={totals?.private}
+        to={payTo}
+        picked={picked}
+        onCancel={() => {
+          setPayTo(undefined);
+          if (backTo === "home") home();
+          else setScreen(backTo);
+        }}
+        onSent={(p) => {
+          setPayTo(undefined);
+          sent(p);
+        }}
+      />
+    );
+  }
   if (screen === "dapps" && free) {
     return (
       <Dapps
         seedelf={free.seedelf}
         blocked={watching ? busy : undefined}
         start={dappStart}
-        banner={pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} /> : undefined}
+        banner={
+          pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} onCheck={watch} /> : undefined
+        }
         onBack={home}
         onPending={setPending}
       />
@@ -332,9 +567,17 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
       />
     );
   }
-  if (tokensOf && balances) {
+  // Each side's tokens with those on their way back counted in, and which those are (HM-1).
+  const privateTokens = balances && withComing(balances.seedelf);
+  const publicTokens = balances && withComing(balances.cardano);
+  // Why a token's details offer no payment, when it's the one transaction at a time (HM-3).
+  const tokenBlocked = watching ? busy : undefined;
+  if (tokensOf && privateTokens && publicTokens) {
     const back = () => setTokensOf(undefined);
-    return <Tokens tokens={balances[tokensOf].tokens} of={tokensOf} onBack={back} />;
+    const { tokens, coming } = tokensOf === "seedelf" ? privateTokens : publicTokens;
+    return (
+      <Tokens tokens={tokens} coming={coming} of={tokensOf} onBack={back} onAction={tokenAction(tokensOf)} blocked={tokenBlocked} />
+    );
   }
   if (utxosOf) {
     // Locking or refreshing there changes the kept reading: Home picks it up, with no request.
@@ -345,18 +588,29 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     <>
       <Splash phase={splash} />
       <div className={splash === "wait" || splash === "show" ? "home home--hidden" : "home"}>
+        {/* What it means for the screen, and the way on; the service's own words, its name and status code, wait
+            under Details (chunk 23's review, L-2). The balances last read stay on screen. */}
+        {/* One time, the "Updated" line's: the alert's own froze while that one ticked on. Details sit inside it, and
+            a reading made since clears it (chunk 23's second review, HM-5). */}
         {error && (
-          <Callout tone="warn" role="alert">
-            <div className="stack-tight">
-              <strong>{t("home.warn.readFailed")}</strong>
-              <span>{error}</span>
-              <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
-                {reading ? t("home.trying") : t("common.tryAgain")}
-              </button>
-            </div>
-          </Callout>
+          <div data-testid="home-read-failed">
+            <Callout tone="warn" role="alert">
+              <div className="stack-tight">
+                <strong>{balances ? t("home.warn.stale") : t("home.warn.readFailed")}</strong>
+                <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
+                  {reading ? t("home.trying") : t("common.tryAgain")}
+                </button>
+                <details className="disclosure">
+                  <summary>{t("common.details")}</summary>
+                  <p className="note">{error.message}</p>
+                </details>
+              </div>
+            </Callout>
+          </div>
         )}
-        {pending && <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} />}
+        {pending && (
+          <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} onCheck={watch} />
+        )}
 
         <Tabs
           label={t("home.tabsLabel")}
@@ -381,10 +635,10 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 </h1>
                 <HideToggle />
               </div>
-              <Amount lovelace={balances?.seedelf.lovelace} price={price} testId="seedelf-lovelace" />
-              <span className="hero__meta" data-testid="seedelf-meta">
-                {balances ? `${t("amount.utxos", { count: balances.seedelf.utxos })}${lockedMeta(balances.seedelf, amounts.ada)}` : "\u00a0"}
-              </span>
+              <Amount lovelace={balances && privateTotal(balances.seedelf)} price={price} testId="seedelf-lovelace" />
+              {/* What's locked, and nothing else: a UTxO count is the UTxOs page's (chunk 23's review, H-5). */}
+              {balances && lockedMeta(balances.seedelf, amounts.ada, "seedelf-meta")}
+              {balances && incomingMeta(balances.seedelf, "seedelf-incoming")}
               <div className="hero__actions">
                 <ActionButton
                   icon={<ReceiveIcon />}
@@ -418,6 +672,15 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                   title={createTitle}
                 />
               </div>
+              {privateReasons.length > 0 && (
+                <p className="hero__reason" data-testid="seedelf-reason">
+                  {privateReasons.map((reason) => (
+                    <span key={reason} className="hero__reason-line">
+                      {reason}
+                    </span>
+                  ))}
+                </p>
+              )}
             </div>
 
             {balances && (seedelfs.length === 0 || balances.seedelf.utxos === 0) && (
@@ -426,6 +689,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 watching={watching}
                 onReceive={() => {
                   setTab("cardano");
+                  setBackTo("home");
                   setScreen("receive");
                 }}
                 onCreate={() => setScreen("create")}
@@ -439,14 +703,17 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               </Callout>
             )}
 
-            {balances && balances.seedelf.tokens.length > 0 && (
+            {privateTokens && privateTokens.tokens.length > 0 && (
               <section className="section" aria-labelledby="seedelf-tokens-title">
                 <h2 id="seedelf-tokens-title">{t("home.tokens")}</h2>
                 <TokenList
-                  tokens={balances.seedelf.tokens}
+                  tokens={privateTokens.tokens}
+                  coming={privateTokens.coming}
                   of="seedelf"
                   testId="seedelf-tokens"
                   onViewAll={() => setTokensOf("seedelf")}
+                  onAction={tokenAction("seedelf")}
+                  blocked={tokenBlocked}
                 />
               </section>
             )}
@@ -474,18 +741,27 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 </h1>
                 <HideToggle />
               </div>
-              <Amount lovelace={balances && accountTotal(balances.cardano)} price={price} testId="cardano-lovelace" />
-              <span className="hero__meta" data-testid="cardano-meta">
-                {balances
-                  ? `${t("home.addressesUsed", { count: balances.cardano.addressesUsed })}${lockedMeta(balances.cardano, amounts.ada)}`
-                  : "\u00a0"}
-              </span>
+              <Amount lovelace={balances && shownAccountTotal(balances.cardano)} price={price} testId="cardano-lovelace" />
+              {balances && lockedMeta(balances.cardano, amounts.ada, "cardano-meta")}
+              {balances && incomingMeta(balances.cardano, "cardano-incoming")}
+              {/* The rewards are in the balance, as other wallets count them: said here, so the staking row's figure
+                  doesn't read as more on top, and, when payments leave them alone, so a form that finds less to spend
+                  doesn't contradict it (chunk 23's second review, ST-6). */}
+              {balances && BigInt(balances.cardano.staking.rewards) > 0n && (
+                <span className="hero__meta" data-testid="cardano-rewards">
+                  {t(rewards > 0n ? "home.rewardsIn" : "home.rewardsInUnspent", { amount: amounts.ada(balances.cardano.staking.rewards) })}
+                </span>
+              )}
               <div className="hero__actions">
                 <ActionButton
+                  primary={publicEmpty}
                   icon={<ReceiveIcon />}
                   label={t("home.action.receive")}
                   name={t("home.action.receivePublicly")}
-                  onClick={() => setScreen("receive")}
+                  onClick={() => {
+                    setBackTo("home");
+                    setScreen("receive");
+                  }}
                   disabled={!account}
                 />
                 <ActionButton
@@ -497,7 +773,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                   title={moveInTitle}
                 />
                 <ActionButton
-                  primary
+                  primary={!seedelfFirst && !publicEmpty}
                   icon={<MoveInIcon />}
                   label={t("home.action.makePrivate")}
                   onClick={() => setScreen("move-in")}
@@ -505,6 +781,11 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                   title={moveInTitle}
                 />
               </div>
+              {publicReason && (
+                <p className="hero__reason" data-testid="cardano-reason">
+                  {publicReason}
+                </p>
+              )}
             </div>
 
             {mixing && !mixing.stopped && mixing.sent < mixing.total && (
@@ -527,21 +808,33 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               <Callout tone="privacy" testId="mint-first">
                 <div className="stack">
                   <span>{t("home.privacy.mintFirst")}</span>
-                  <button type="button" className="link align-start" onClick={() => setScreen("create")}>
+                  {/* Once the account can pay for it, this is the tab's next step, so it's the filled button (H-4). */}
+                  {/* Held, like the hero's actions, while the last transaction confirms; the reason is the hero's
+                      (chunk 23's second review, HM-3). */}
+                  <button
+                    type="button"
+                    className={canCreate ? "primary primary--compact align-start" : "link align-start"}
+                    onClick={() => setScreen("create")}
+                    disabled={watching}
+                    title={watching ? busy : undefined}
+                  >
                     {t("home.action.createSeedelf")}
                   </button>
                 </div>
               </Callout>
             )}
 
-            {balances && balances.cardano.tokens.length > 0 && (
+            {publicTokens && publicTokens.tokens.length > 0 && (
               <section className="section" aria-labelledby="cardano-tokens-title">
                 <h2 id="cardano-tokens-title">{t("home.tokens")}</h2>
                 <TokenList
-                  tokens={balances.cardano.tokens}
+                  tokens={publicTokens.tokens}
+                  coming={publicTokens.coming}
                   of="cardano"
                   testId="cardano-tokens"
                   onViewAll={() => setTokensOf("cardano")}
+                  onAction={tokenAction("cardano")}
+                  blocked={tokenBlocked}
                 />
               </section>
             )}
@@ -554,9 +847,65 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   );
 }
 
-/** " · 5 ₳ locked" under a balance, when some of it is. */
-function lockedMeta(side: Balances["seedelf" | "cardano"], ada: (lovelace: string) => string): string {
-  return side.locked.utxos ? t("home.lockedMeta", { amount: ada(side.locked.lovelace) }) : "";
+/** "5 ₳ locked" under a balance, when some of it is. */
+function lockedMeta(side: Balances["seedelf" | "cardano"], ada: (lovelace: string) => string, testId: string) {
+  if (!side.locked.utxos) return null;
+  return (
+    <span className="hero__meta" data-testid={testId}>
+      {t("home.locked", { amount: ada(side.locked.lovelace) })}
+    </span>
+  );
+}
+
+/**
+ * "1.2 ₳ of this is on its way" under a balance, while the wallet's own sent transaction pays some back to it that
+ * the chain doesn't show yet: a payment's change, a Make private's deposit (chunk 23's second review, HM-1, HM-2).
+ */
+function incomingMeta(side: Balances["seedelf" | "cardano"], testId: string) {
+  return side.incoming ? <IncomingMeta incoming={side.incoming} testId={testId} /> : null;
+}
+
+function IncomingMeta({ incoming, testId }: { incoming: NonNullable<Balances["cardano"]["incoming"]>; testId: string }) {
+  const t = useT();
+  const amounts = useAmounts();
+  const what = incoming.tokens.length
+    ? t("format.adaAndTokens", { ada: amounts.ada(incoming.lovelace), count: incoming.tokens.length })
+    : `${amounts.ada(incoming.lovelace)}\u00a0₳`;
+  return (
+    <span className="hero__meta" data-testid={testId}>
+      {t("home.incoming", { what })}
+    </span>
+  );
+}
+
+/** The private balance as Home shows it: what's on its way back counted in. */
+function privateTotal(seedelf: Balances["seedelf"]): string {
+  return (BigInt(seedelf.lovelace) + BigInt(seedelf.incoming?.lovelace ?? "0")).toString();
+}
+
+/** The public account as Home shows it: its UTxOs, its rewards and what's on its way back. */
+function shownAccountTotal(cardano: Balances["cardano"]): string {
+  return (BigInt(accountTotal(cardano)) + BigInt(cardano.incoming?.lovelace ?? "0")).toString();
+}
+
+/**
+ * A side's tokens with those on their way back added in, and which those are: a payment's change took every token
+ * of the coin it spent out of the list until it confirmed (HM-1).
+ */
+function withComing(side: { tokens: TokenAmount[]; incoming?: Balances["cardano"]["incoming"] }): {
+  tokens: TokenAmount[];
+  coming?: ReadonlySet<string>;
+} {
+  const coming = side.incoming?.tokens ?? [];
+  if (!coming.length) return { tokens: side.tokens };
+  const all = new Map(side.tokens.map((token) => [tokenKey(token), { ...token }]));
+  for (const c of coming) {
+    const had = all.get(tokenKey(c));
+    if (had) had.quantity = (BigInt(had.quantity) + BigInt(c.quantity)).toString();
+    // Read from the transaction, it carries no fingerprint or decimals of its own.
+    else all.set(tokenKey(c), { ...c, fingerprint: c.fingerprint || assetFingerprint(c) });
+  }
+  return { tokens: [...all.values()], coming: new Set(coming.map(tokenKey)) };
 }
 
 /** Why an ADA Handle doesn't belong in Seedelf: what's paid to it can be taken by anyone. */
@@ -588,10 +937,12 @@ function accountTotal(cardano: Balances["cardano"]): string {
   return (BigInt(cardano.lovelace) + BigInt(cardano.staking.rewards)).toString();
 }
 
-/** "Staking with LOGIC · 57.47 ₳ rewards", or "Not staking": opens Staking. */
+/**
+ * "Staking with LOGIC", or "Not staking": opens Staking. The rewards' figure is said under the balance, which counts
+ * it: beside the pool it read as more on top (chunk 23's second review, ST-6).
+ */
 function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => void }) {
   const t = useT();
-  const amounts = useAmounts();
   const rewards = BigInt(staking.rewards) > 0n;
   return (
     <section className="section">
@@ -605,9 +956,9 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
               <span>{t("staking.pageTitle")}</span>
               <span className="menu-row__sub" data-testid="staking-row-pool">
                 {staking.pool
-                  ? t("home.staking.pool", { pool: poolLabel(staking.pool), amount: amounts.ada(staking.rewards) })
+                  ? t("home.staking.pool", { pool: poolLabel(staking.pool) })
                   : rewards
-                    ? t("home.staking.rewards", { amount: amounts.ada(staking.rewards) })
+                    ? t("home.staking.rewards")
                     : t("home.staking.notEarn")}
               </span>
               <span className="menu-row__sub" data-testid="staking-row-vote">
@@ -703,7 +1054,7 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
         <span className="token-row__label">
           {boxes ? t("home.lovejoin.boxesOf", { boxes: amounts.count(boxes, "amount.boxes") }) : t("home.lovejoin.yourMixes")}
         </span>
-        <span className="token-row__amount">{boxes ? `${amounts.ada(lovelace)} ₳` : ""}</span>
+        <span className="token-row__amount">{boxes ? `${amounts.ada(lovelace)}\u00a0₳` : ""}</span>
         <span className="token-row__sub">{held.boxes ? next : held.notMixed ? t("home.lovejoin.notBack") : ""}</span>
         {flagged && (
           <span className="token-row__detail" data-testid="in-lovejoin-flag">
@@ -781,7 +1132,8 @@ function GettingStarted({
       done: funded,
       title: t("home.start.fund.title"),
       text: t("home.start.fund.text"),
-      action: t("home.action.receive"),
+      // Not "Receive": the action row's Receive, just above, goes to the private side (chunk 23's review, H-2).
+      action: t("home.start.fund.action"),
       onClick: onReceive,
       disabled: false,
     },
@@ -806,6 +1158,10 @@ function GettingStarted({
   return (
     <section className="section" aria-labelledby="getting-started">
       <h2 id="getting-started">{t("home.start.title")}</h2>
+      {/* The two sides, said once before the steps that use them (§4 of chunk 23's review). */}
+      <p className="note" data-testid="getting-started-intro">
+        {t("home.start.intro")}
+      </p>
       <ol className="steps" data-testid="getting-started">
         {steps.map((s, i) => (
           <li key={s.title} className={s.done ? "step step--done" : "step"}>
@@ -841,11 +1197,22 @@ function GettingStarted({
 function Amount({ lovelace, price, testId }: { lovelace?: string; price: AdaPrice | null; testId: string }) {
   const t = useT();
   const amounts = useAmounts();
+  const shown = lovelace === undefined ? undefined : amounts.ada(lovelace);
+  // A long amount gets a smaller size rather than a second line: at seven figures the ₳ wrapped onto its own in the
+  // side panel (chunk 23's review, H-8).
+  const size =
+    !shown || shown.length <= 13
+      ? "amount"
+      : shown.length <= 15
+        ? "amount amount--long"
+        : shown.length <= 18
+          ? "amount amount--longer"
+          : "amount amount--longest";
   return (
     <>
-      <p className="amount" data-testid={testId}>
-        {lovelace === undefined ? <span className="amount__placeholder">—</span> : amounts.ada(lovelace)}
-        <span className="amount__unit"> ₳</span>
+      <p className={size} data-testid={testId}>
+        {shown === undefined ? <span className="amount__placeholder">—</span> : shown}
+        <span className="amount__unit">{"\u00a0₳"}</span>
       </p>
       {lovelace !== undefined && price && (
         <p className="hero__fiat" data-testid={`${testId}-fiat`} title={t("home.fiatTitle", { price: formatFiat("1000000", price) })}>

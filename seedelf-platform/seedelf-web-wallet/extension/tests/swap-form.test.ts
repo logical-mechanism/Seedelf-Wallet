@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SwapQuote } from "../src/shared/rpc";
-import { adaShort, halfOf, impactLevel, maxAdaIn, parseSlippage, rateOf, sameAsk, wholeUnits } from "../src/ui/swap";
+import { adaShort, fundParts, halfOf, impactLevel, maxAdaIn, parseSlippage, rateOf, sameAsk, wholeUnits } from "../src/ui/swap";
 
 /** 10 ₳ for MIN: 6 ₳ of costs on top, and 5 ₳ of collateral. */
 const quote: SwapQuote = {
@@ -83,5 +83,20 @@ describe("the swap form", () => {
   it("knows a quote for the same ask", () => {
     expect(sameAsk(quote.ask, { ...quote.ask })).toBe(true);
     expect(sameAsk(quote.ask, { ...quote.ask, slippage: 3 })).toBe(false);
+  });
+});
+
+describe("what a swap's funding pays for (chunk 23's second review, DX-3)", () => {
+  it("adds up to For the swap: the ADA swapped, the fees, the order's deposit and the room left", () => {
+    const parts = fundParts(quote, quote.fund.lovelace)!;
+    expect(parts).toEqual({ swapped: "10000000", dexFee: "2000000", aggregatorFee: "0", deposits: "2000000", room: "2000000" });
+    const sum = Object.values(parts).reduce((a, b) => a + BigInt(b), 0n);
+    expect(sum.toString()).toBe(quote.fund.lovelace);
+  });
+
+  it("swaps no ADA when a token is paid, and says nothing when the parts don't add up", () => {
+    const token = { ...quote, ask: { ...quote.ask, tokenIn: quote.ask.tokenOut, tokenOut: "lovelace" } };
+    expect(fundParts(token, "6000000")).toMatchObject({ swapped: "0", room: "2000000" });
+    expect(fundParts(quote, "13000000")).toBeUndefined();
   });
 });

@@ -6,12 +6,13 @@
 // turns it off.
 
 import { useRef, useState, type ReactNode } from "react";
-import { useT } from "../../i18n";
+import { useT, type I18nKey } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { Paid, TokenAmount } from "../../shared/rpc";
 import { MAX_RECIPIENTS } from "../../shared/recipients";
-import { adaWithTokens, formatAda, tokenKey as key } from "../format";
+import { adaWithTokens, formatAda, parseAda, tokenKey as key } from "../format";
+import { useAmounts } from "../preferences";
 import { lovelaceToSend } from "./AdaInput";
 import { CloseIcon, PlusIcon } from "./Icons";
 import { ReviewRows, Row } from "./ReviewRows";
@@ -27,9 +28,13 @@ export interface Draft {
 
 const blank = (id: number): Draft => ({ id, to: "", amount: "", tokens: {} });
 
-/** The recipients on a form, and ways to change them. */
-export function useRecipients() {
-  const [drafts, setDrafts] = useState<Draft[]>([blank(0)]);
+/**
+ * The recipients on a form, and ways to change them; `to` fills the first, as
+ * a payment handed on from another form, and `tokens` picks tokens for it, as
+ * a token's details do.
+ */
+export function useRecipients(to = "", tokens: Record<string, string> = {}) {
+  const [drafts, setDrafts] = useState<Draft[]>([{ ...blank(0), to, tokens }]);
   const next = useRef(1);
   return {
     drafts,
@@ -112,27 +117,81 @@ export function AddRecipient({ count, onAdd }: { count: number; onAdd: () => voi
     return <p className="note center">{t("recipients.atMost", { number: MAX_RECIPIENTS })}</p>;
   }
   return (
-    <button type="button" className="secondary add-recipient" onClick={onAdd}>
-      <PlusIcon size={16} />
+    <button type="button" className="add-more add-recipient" onClick={onAdd}>
+      <PlusIcon size={14} />
       {t("recipients.add")}
     </button>
   );
 }
 
-/** Under the recipients: when together they ask for more than there is. */
+/** Under the recipients: when together they ask for more than there is. What's there is hidden with the balances. */
 export function TooMuchTogether({ total, available, testId, where }: { total: bigint; available: string; testId: string; where: string }) {
   const t = useT();
+  const amounts = useAmounts();
   if (total <= BigInt(available)) return null;
   return (
     <p className="field-note" data-testid={testId}>
-      {t("recipients.tooMuch", { total: formatAda(total.toString()), available: formatAda(available), where })}
+      {t("recipients.tooMuch", { total: formatAda(total.toString()), available: amounts.ada(available), where })}
+    </p>
+  );
+}
+
+/** Where a recipient's To field is: nothing typed, being read, read and payable, or refused (its note says why). */
+export type ToState = "empty" | "reading" | "ok" | "bad";
+
+/**
+ * What one payment still needs before Review, the first thing in the form's own order: where it goes, its
+ * amount, then its tokens. Undefined while nothing's missing, or while a To is being read, which its own note
+ * says (chunk 23's second review, PY-9: Review greyed out at a blank or 0 amount with nothing to say why).
+ * `emptyTo` is how the form asks for a recipient.
+ */
+export function waitingFor({
+  to,
+  amount,
+  tokensPicked,
+  tokensOk,
+  max = false,
+  emptyTo = "review.why.to",
+}: {
+  to?: ToState;
+  amount: string;
+  /** Any token box added, filled or not: with one, the ADA may stay empty, and the box is what's missing. */
+  tokensPicked: boolean;
+  tokensOk: boolean;
+  max?: boolean;
+  emptyTo?: I18nKey;
+}): I18nKey | undefined {
+  if (to === "empty") return emptyTo;
+  if (to === "bad") return "review.why.toCheck";
+  if (!max && amount.trim() !== "" && parseAda(amount) === undefined) return "review.why.amountNumber";
+  if (!max && lovelaceToSend(amount, tokensPicked) === undefined) return "review.why.amount";
+  if (!tokensOk) return "review.why.tokens";
+  return undefined;
+}
+
+/**
+ * Why Review can't be pressed, under it: the first recipient's reason that has one, named by its number when
+ * there are several, else `tooMuch` (the payment as a whole asks for more than there is). Said where a touch
+ * screen shows it, as Remove's "choose where" is (chunk 23's review, H-1).
+ */
+export function ReviewWait({ reasons, tooMuch, busy }: { reasons: Array<I18nKey | undefined>; tooMuch?: boolean; busy: boolean }) {
+  const t = useT();
+  if (busy) return null;
+  const at = reasons.findIndex((r) => r !== undefined);
+  const why = at >= 0 ? t(reasons[at]!) : tooMuch ? t("review.why.tooMuch") : undefined;
+  if (!why) return null;
+  return (
+    <p className="note foot-note" data-testid="review-wait">
+      {at >= 0 && reasons.length > 1 ? t("adaInput.forWho", { who: t("recipients.nth", { number: at + 1 }), note: why }) : why}
     </p>
   );
 }
 
 /**
  * A review's recipients: with one, its rows open the review; with several,
- * each gets its own box under "Recipient N", and a Total leads the rest.
+ * each gets its own box under "Recipient N", and what they get in all leads
+ * the rest. Not in bold, and not called Total: the bold total is what leaves
+ * the balance, fee included (components/ReviewTotals.tsx).
  */
 export function ReviewRecipients({
   testId,
@@ -144,7 +203,7 @@ export function ReviewRecipients({
   payments: Paid[];
   /** One recipient's rows. */
   rows: (index: number) => ReactNode;
-  /** The rows after them: fee, change, UTxOs spent. */
+  /** The rows after them: the fee, and what leaves the balance in all. */
   children: ReactNode;
 }) {
   const t = useT();
@@ -169,7 +228,7 @@ export function ReviewRecipients({
         </section>
       ))}
       <ReviewRows testId={testId}>
-        <Row label={t("recipients.total")} value={adaWithTokens(lovelace, kinds)} strong />
+        <Row label={t("recipients.total")} value={adaWithTokens(lovelace, kinds)} />
         {children}
       </ReviewRows>
     </>

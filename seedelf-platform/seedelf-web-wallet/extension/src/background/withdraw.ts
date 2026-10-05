@@ -29,6 +29,7 @@ import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
 import { settleMaybeSent } from "./pending";
+import { privateShort } from "./short";
 import {
   changeHistory,
   classesOf,
@@ -94,7 +95,12 @@ export class WithdrawService {
       throw nothingToSpend(this.deps, view, t("worker.withdraw.empty"), returning);
     }
     progress?.("measuring");
-    const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
+    // Core's shortfall in the user's words (chunk 23's second review, PY-10).
+    const finished = await measureLocally<WithdrawResult>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r)).catch(
+      (e: unknown) => {
+        throw privateShort(e);
+      },
+    );
     const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
     const histories = spentHistories(classes, inputs, classesMixed);
     // Max says what no Seedelf spend can take, which the private balance leaves out too, and what a
@@ -146,7 +152,11 @@ export class WithdrawService {
       to: to === "account" ? keys.cardano.receiveAddress(net, 0) : null,
     }));
     progress?.("measuring");
-    const finished = await measureLocally<RemoveResult>(this.deps, request, (keys, r) => wasm.buildRemove(keys.seedelf, r));
+    const finished = await measureLocally<RemoveResult>(this.deps, request, (keys, r) => wasm.buildRemove(keys.seedelf, r)).catch(
+      (e: unknown) => {
+        throw privateShort(e);
+      },
+    );
     const { txCbor, seed, inputs: _inputs, to: _to, ...rest } = finished;
     const summary: RemoveSummary = { ...rest, network, label: seedelfLabel(seedelf), to };
     // Its ADA back in the private balance has the history of what paid for the Seedelf.

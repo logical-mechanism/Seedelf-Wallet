@@ -107,6 +107,7 @@ import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import type { ScriptSpendDeps } from "./script-spend";
+import { forgetSent } from "./sent-txs";
 import {
   forgetSpent,
   outpoint,
@@ -839,6 +840,23 @@ function quiet(now: number, sent: number, forgotten: number): "sent" | "forgotte
 }
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
+
+/**
+ * A withdraw that never went (refused, or a 429): its box is free, and it's no longer kept as sent either, so the
+ * withdraw drawn again on that box counts alone as on its way back (incoming.ts), rather than neither, as two
+ * spending one box do (chunk 23's second review, fix round). `at`: when it was held, as `forgetSpent` takes it.
+ * Call it while unlocked.
+ */
+async function forgetWithdraw(
+  session: ScriptSpendDeps["session"],
+  network: NetworkName,
+  txHash: string,
+  bytes: Uint8Array,
+  at?: number,
+): Promise<void> {
+  await forgetSpent(session, txInputs(bytes), at === undefined ? {} : { at });
+  await forgetSent(session, network, txHash);
+}
 
 /** The mixes one box goes through, `depth` waves deep and three wide. */
 export const mixesPerBox = (depth: number) => (3 ** depth - 1) / 2;
@@ -2776,12 +2794,17 @@ export class LovejoinService {
     await this.scheduleFound(network, back.length);
     const schedule = await this.read(network);
     const { due, chains } = schedule;
+    // What a new mix draws from, as fits counts it: the device's own reservations, no request.
+    const drawable = free(others, await this.reservedBoxes(network)).length;
     return {
       available: true,
       boxes: owned,
       // What the floor counts, and the floor itself: the page offers to seed
       // the pool when it's short, without waiting for a mix to be refused.
       others: others.length,
+      // And what a mix could draw from, so the page says whether one fits before Review (chunk 23's second
+      // review, LJ-1).
+      free: drawable,
       floor: NETWORKS[network].lovejoin?.poolFloor ?? 0,
       lovelace: (BigInt(owned.length) * LOVEJOIN_DENOM).toString(),
       due: [...due].sort((a, b) => a - b),
@@ -3212,7 +3235,7 @@ export class LovejoinService {
       // later run, under the same rules (independent review M11), after a
       // lock meanwhile too (final review F5).
       await this.neverWent(network, built.txHash);
-      await wallet.withKeys(() => forgetSpent(session, txInputs(bytes))).catch(() => undefined);
+      await wallet.withKeys(() => forgetWithdraw(session, network, built.txHash, bytes)).catch(() => undefined);
       throw e;
     }
     if (submitted !== built.txHash) {
@@ -3272,7 +3295,7 @@ export class LovejoinService {
     await this.dropWithdrawing(network, w.txHash, true);
     this.refused.delete(w.txHash);
     const { wallet, session } = this.deps;
-    await wallet.withKeys(() => forgetSpent(session, txInputs(hexBytes(w.txCbor)), { at: w.sentAt })).catch(() => undefined);
+    await wallet.withKeys(() => forgetWithdraw(session, network, w.txHash, hexBytes(w.txCbor), w.sentAt)).catch(() => undefined);
   }
 
   /**

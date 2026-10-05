@@ -20,7 +20,7 @@
 // wallet asks Minswap for; Minswap builds the order (#21).
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { type I18nKey, joinSentences, sentenceGap, t, useT } from "../../i18n";
+import { type I18nKey, joinList, joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type {
@@ -79,6 +79,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
 import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
@@ -99,12 +100,14 @@ import { useAmounts } from "../preferences";
 import { withStop } from "../sentence";
 import {
   adaShort,
+  fundParts,
   halfOf,
   impactLevel,
   maxAdaIn,
   parseSlippage,
   rateOf,
   sameAsk,
+  SLIPPAGE_HIGH,
   SLIPPAGE_MAX,
   SLIPPAGE_MIN,
   wholeUnits,
@@ -134,7 +137,7 @@ const ADA_PICK: Pick = { id: "lovelace", side: ADA };
 
 /** An amount on one side of a swap: "10 ₳", "906.5941 MIN". ADA by its ID: a token may call itself ₳. */
 function amountOf(quantity: string, pick: Pick): string {
-  return pick.id === "lovelace" ? `${formatAda(quantity)} ₳` : `${formatQuantity(quantity, pick.side.decimals)} ${pick.side.label}`;
+  return pick.id === "lovelace" ? `${formatAda(quantity)}\u00a0₳` : `${formatQuantity(quantity, pick.side.decimals)} ${pick.side.label}`;
 }
 
 /** A side's name on its button and in the lists: ADA, or the token's name (tokenText). */
@@ -240,6 +243,15 @@ function subOf(s: SessionView, now: number): string {
   // Stopped before its order: it comes back rather than place one.
   return t(STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step]);
 }
+
+/**
+ * Whether Stop still changes anything: before the order is filled or
+ * refunded. Once it has been, everything is coming back anyway, and Stop's
+ * dialog would speak of cancelling an order that's gone (chunk 23's second
+ * review, DX-5).
+ */
+const stoppable = (a: SessionAuto) =>
+  !a.stopping && !a.filled && !a.refunded && (a.step === "funding" || a.step === "ordering" || a.step === "filling");
 
 /** A swap's state as a small pill: a live dot, a tick, a warning, a stop, or a cross. */
 export function SwapTag({ tone, label }: { tone: SwapTone; label: string }) {
@@ -366,7 +378,12 @@ export function Swaps({
       // Straight to the swap's own page, where it runs.
       void load(false).then(() => setOpen(index));
     };
-    return <NewSwap seedelf={seedelf} onCancel={done} onStarted={started} />;
+    // Refused, but it may have gone out: its page watches for it, and says whether it lands (DX-1).
+    const watch = (index: number) => {
+      setStarting(false);
+      void load(true).then(() => setOpen(index));
+    };
+    return <NewSwap seedelf={seedelf} onCancel={done} onStarted={started} onWatch={watch} />;
   }
   const session = sessions?.find((s) => s.index === open);
   if (session) {
@@ -552,13 +569,17 @@ export function NewSwap({
   seedelf,
   onCancel,
   onStarted,
+  onWatch,
 }: {
   seedelf: Balances["seedelf"];
   onCancel: () => void;
   /** The funding was sent: session `index` runs from here. */
   onStarted: (index: number, pending: PendingTx) => void;
+  /** The funding was refused, but may have gone out all the same: session `index`'s page watches for it (DX-1). */
+  onWatch?: (index: number) => void;
 }) {
   const tr = useT();
+  const amounts = useAmounts();
   const [pay, setPay] = useState<Pick>(ADA_PICK);
   const [get, setGet] = useState<Pick>();
   const [amount, setAmount] = useState("");
@@ -580,6 +601,8 @@ export function NewSwap({
   const [through, setThrough] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // Send was refused: the review gives way to building it again, or to watching one that may have gone out (DX-1).
+  const [refusal, setRefusal] = useState<Refusal>();
 
   useEffect(() => {
     call("price", {}).then(setPrice, () => setPrice(null));
@@ -663,26 +686,53 @@ export function NewSwap({
     }
   }
 
+  /**
+   * Builds the funding on the quote shown, asked again first when it's over a
+   * minute old (prices move). False: the fresh quote is more than the private
+   * balance has, which the form then says. `keepWay`: a review built again
+   * keeps the way back the user chose on the one before.
+   */
+  async function buildOut(keepWay = false): Promise<boolean> {
+    if (!current || !quoted || !get) return false;
+    let quote = current;
+    if (Date.now() - quoted.at > QUOTE_FRESH_MS) {
+      quote = await call("swap-quote", quote.ask);
+      setQuoted({ quote, at: Date.now() });
+      if (adaShort(seedelf.lovelace, quote)) return false;
+    }
+    const { lovejoin, ...summary } = await call("session-out-build", { quote, display: { in: pay.side, out: get.side } });
+    if (!keepWay) setThrough(lovejoin?.on ?? false);
+    setOut({ summary, quote, lovejoin });
+    return true;
+  }
+
   async function review(e: FormEvent) {
     e.preventDefault();
-    if (!ready || !current || !quoted || !get || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     setError(undefined);
     try {
-      let quote = current;
-      // Prices move: a quote over a minute old is asked for again before the funding is built on it.
-      if (Date.now() - quoted.at > QUOTE_FRESH_MS) {
-        quote = await call("swap-quote", quote.ask);
-        setQuoted({ quote, at: Date.now() });
-        // The form now says what's short.
-        if (adaShort(seedelf.lovelace, quote)) return;
-      }
-      const { lovejoin, ...summary } = await call("session-out-build", { quote, display: { in: pay.side, out: get.side } });
-      setThrough(lovejoin?.on ?? false);
-      setOut({ summary, quote, lovejoin });
+      await buildOut();
     } catch (err) {
       setError((err as Error).message);
     } finally {
+      setBusy(false);
+    }
+  }
+
+  /** A refused funding, built again on the next unused account; back to the form when that can't be done (DX-1). */
+  async function buildAgain() {
+    if (busy) return;
+    // The refusal stays until the new review is in, so its button says Building…, never Sending… (PY-1's lesson).
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (!(await buildOut(true))) setOut(undefined);
+    } catch (err) {
+      setOut(undefined);
+      setError((err as Error).message);
+    } finally {
+      setRefusal(undefined);
       setBusy(false);
     }
   }
@@ -696,7 +746,10 @@ export function NewSwap({
       const direct = out.lovejoin ? { direct: !through } : {};
       onStarted(out.summary.index, await call("session-out-submit", { txHash: out.summary.txHash, ...direct }));
     } catch (err) {
-      setError((err as Error).message);
+      // Its session was recorded before it was sent, so Send can't go again: build it again, or watch it (DX-1).
+      const refused = await refusalOf(err, out.summary.index, out.summary.txHash);
+      if (refused) setRefusal(refused);
+      else setError((err as Error).message);
       setBusy(false);
     }
   }
@@ -706,14 +759,28 @@ export function NewSwap({
       <Screen
         title={tr("swaps.review.title")}
         titleId="swap-fund-review"
-        onBack={() => setOut(undefined)}
+        onBack={() => {
+          // The review's alert doesn't follow the user back to the form (DX-1).
+          setOut(undefined);
+          setRefusal(undefined);
+          setError(undefined);
+        }}
         backDisabled={busy}
-        aside={tr("review.nothingSent")}
+        aside={tr("swaps.review.nothingSent")}
         error={error}
         foot={
-          <button type="button" className="primary" onClick={send} disabled={busy}>
-            {busy ? tr("common.sending") : tr("common.send")}
-          </button>
+          refusal ? (
+            <SessionRefusedFoot
+              refusal={refusal}
+              busy={busy}
+              onAgain={() => void buildAgain()}
+              onWatch={onWatch && (() => onWatch(out.summary.index))}
+            />
+          ) : (
+            <button type="button" className="primary" onClick={send} disabled={busy}>
+              {busy ? tr("common.sending") : tr("swaps.review.start")}
+            </button>
+          )
         }
       >
         <SwapApproval {...out} pay={pay} get={get} through={through} onThrough={setThrough} busy={busy} />
@@ -749,17 +816,6 @@ export function NewSwap({
       onBack={onCancel}
       backDisabled={busy}
       aside={tr("swaps.form.aside")}
-      action={
-        <button
-          type="button"
-          className="icon-button"
-          onClick={() => setSettings(true)}
-          aria-label={tr("swaps.slippageIs", { percent: formatPercent(slippage) })}
-          title={tr("swaps.slippage")}
-        >
-          <SlidersIcon />
-        </button>
-      }
       error={error ?? quoteError}
       foot={
         quoteError && !error ? (
@@ -773,6 +829,18 @@ export function NewSwap({
         )
       }
     >
+      {/* The slippage, said with its value where the swap is set up, not behind an unlabelled icon in the header;
+          amber once it's high (chunk 23's second review, DX-4). */}
+      <button
+        type="button"
+        className={slippage >= SLIPPAGE_HIGH ? "chip swap-slippage swap-slippage--high" : "chip swap-slippage"}
+        onClick={() => setSettings(true)}
+        aria-haspopup="dialog"
+        data-testid="swap-slippage"
+      >
+        <SlidersIcon size={14} />
+        {tr("swaps.slippageIs", { percent: formatPercent(slippage) })}
+      </button>
       <div className="swap-cards">
         <div className="swap-card">
           <div className="swap-card__head">
@@ -830,7 +898,7 @@ export function NewSwap({
               data-testid="swap-held"
             >
               <WalletIcon size={14} />
-              {formatQuantity(held, pay.side.decimals)}
+              {amounts.quantity(held, pay.side.decimals)}
             </span>
           </div>
         </div>
@@ -878,13 +946,19 @@ export function NewSwap({
           {tr("swaps.tooMuch", { held: amountOf(held, pay) })}
         </p>
       )}
+      {/* Max is less than the balance: it says why, on the page, not only in its label (DX-4). */}
+      {pay.id === "lovelace" && max !== "0" && raw === max && (
+        <p className="note" data-testid="swap-max-note">
+          {tr("swaps.maxNote", { max: amounts.ada(max), aside: amounts.ada((BigInt(held) - BigInt(max)).toString()) })}
+        </p>
+      )}
       {unverified && get && <Unverified pick={get} />}
       {short && current && (
         <p className="field-note" data-testid="swap-short">
           {tr("swaps.short", {
             takes: formatAda(current.fund.lovelace),
             collateral: formatAda(current.collateral),
-            held: formatAda(seedelf.lovelace),
+            held: amounts.ada(seedelf.lovelace),
           })}
         </p>
       )}
@@ -954,9 +1028,9 @@ export function NewSwap({
                 }
               />
               <Detail label={tr("swaps.detail.route")} value={shown.route.join(tr("histories.list.comma"))} />
-              <Detail label={tr("swaps.detail.dexFee")} value={`${formatAda(shown.dexFee)} ₳`} />
+              <Detail label={tr("swaps.detail.dexFee")} value={`${formatAda(shown.dexFee)}\u00a0₳`} />
               {shown.aggregatorFee !== "0" && (
-                <Detail label={tr("swaps.detail.minswapFee")} value={`${formatAda(shown.aggregatorFee)} ₳`} />
+                <Detail label={tr("swaps.detail.minswapFee")} value={`${formatAda(shown.aggregatorFee)}\u00a0₳`} />
               )}
               <Detail
                 label={tr("swaps.detail.deposit")}
@@ -977,6 +1051,12 @@ export function NewSwap({
       {level === "high" && shown && (
         <Callout tone="warn" testId="swap-impact-warning">
           {tr("swaps.warn.impact", { percent: formatPercent(shown.priceImpact), token: nameOf(pay) })}
+        </Callout>
+      )}
+      {/* On the form too, not only in the slippage's dialog (DX-4). */}
+      {slippage >= SLIPPAGE_HIGH && (
+        <Callout tone="warn" testId="swap-slippage-high">
+          {tr("swaps.slippage.warn.high", { percent: formatPercent(slippage) })}
         </Callout>
       )}
       <Callout tone="privacy" testId="swap-quote-privacy">{tr("swaps.privacy.quote")}</Callout>
@@ -1041,6 +1121,7 @@ export function SwapApproval({
         <p className="swap-summary__foot">
           {tr("swaps.summary.foot", {
             least: amountOf(quote.minAmountOut, get),
+            slippage: formatPercent(quote.ask.slippage),
             impact: formatPercent(quote.priceImpact),
             route: quote.route.join(tr("histories.list.comma")),
           })}
@@ -1051,14 +1132,25 @@ export function SwapApproval({
           </p>
         )}
       </div>
+      {/* By the minimum, its own line: the wallet asks Minswap for it, and can't read it back from the order Minswap
+          builds (chunk 23's second review, DX-2). Reading it would mean decoding each DEX's order datum. */}
+      <Callout tone="warn" testId="swap-minimum-trust">
+        {tr("swaps.review.warn.minimum", { least: amountOf(quote.minAmountOut, get) })}
+      </Callout>
+      {quote.ask.slippage >= SLIPPAGE_HIGH && (
+        <Callout tone="warn" testId="swap-slippage-high">
+          {tr("swaps.slippage.warn.high", { percent: formatPercent(quote.ask.slippage) })}
+        </Callout>
+      )}
       <h2>{tr("lovejoin.review.firstFunded")}</h2>
       <ReviewRows testId="swap-fund-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
         <Row label={tr("swaps.review.forSwap")} value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
-        <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral!.lovelace)} ₳`} />
-        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
-        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)} ₳`} />
+        <FundParts quote={quote} funded={swapPart!.lovelace} />
+        <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)}\u00a0₳`} />
       </ReviewRows>
       <h2>{tr("lovejoin.review.thenItself")}</h2>
       <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={any && through && !l!.skipped && l!.boxes > 0} adaOut={adaOut} />
@@ -1152,8 +1244,10 @@ export function LovejoinChoice({
       <div className="setting-row">
         <span className="stack-tight">
           <span id="swap-lovejoin-label">{tr("swaps.lovejoin.label")}</span>
+          {/* On while the pool has no room now: the switch says it doesn't apply as things are, as the note under
+              it does (chunk 23's second review, DX-3). */}
           <span className="note" id="swap-lovejoin-note" data-testid="swap-lovejoin-choice">
-            {tr(through ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.off")}
+            {tr(!through ? "swaps.lovejoin.privacy.off" : l.skipped ? "swaps.lovejoin.privacy.onPoolShort" : "swaps.lovejoin.privacy.on")}
           </span>
         </span>
         <button
@@ -1223,8 +1317,8 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
           label={tr("lovejoin.mixedLabel")}
           value={tr("lovejoin.mix.depthAndMixes", { count: l.depth, mixes: tr("amount.mixes", { count: l.mixes }) })}
         />
-        <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(l.mixFees)} ₳`} />
-        <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(l.withdrawFees)} ₳`} />
+        <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(l.mixFees)}\u00a0₳`} />
+        <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(l.withdrawFees)}\u00a0₳`} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} />
       </ReviewRows>
       <p className="note" data-testid="swap-lovejoin">
@@ -1264,9 +1358,31 @@ export function Unverified({ pick }: { pick: Pick }) {
   );
 }
 
+/**
+ * What "For the swap" pays for, a row each, so the rows add up to it (chunk
+ * 23's second review, DX-3): the ADA swapped, the DEX's fee, Minswap's, the
+ * order's deposit, back with the proceeds, and the room left for the network
+ * fees, whose rest comes back. Nothing when they don't add up (fundParts).
+ */
+function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
+  const tr = useT();
+  const parts = fundParts(quote, funded);
+  if (!parts) return null;
+  const ada = (lovelace: string) => `${formatAda(lovelace)}\u00a0₳`;
+  return (
+    <>
+      {parts.swapped !== "0" && <Row label={tr("swaps.review.part.swapped")} value={ada(parts.swapped)} />}
+      <Row label={tr("swaps.detail.dexFee")} value={ada(parts.dexFee)} />
+      {parts.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={ada(parts.aggregatorFee)} />}
+      <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} />
+      <Row label={tr("swaps.review.part.room")} value={tr("swaps.review.part.roomValue", { ada: formatAda(parts.room) })} />
+    </>
+  );
+}
+
 /** What the funding carries for the swap, in words: each token named by `tokenAmountText`. */
 function fundText(lovelace: string, tokens: TokenQuantity[], side: SwapSide, network: NetworkName): string {
-  const ada = `${formatAda(lovelace)} ₳`;
+  const ada = `${formatAda(lovelace)}\u00a0₳`;
   if (!tokens.length) return ada;
   return t("swaps.fundAndTokens", {
     ada,
@@ -1499,12 +1615,12 @@ function SlippageSettings({
       </div>
       <div className="field">
         <label htmlFor="swap-slippage-own">{tr("swaps.slippage.yourOwn")}</label>
+        {/* No placeholder: a "2" there read as a value set while 1% was chosen (DX-4). */}
         <div className="amount-box">
           <input
             id="swap-slippage-own"
             inputMode="decimal"
             autoComplete="off"
-            placeholder="2"
             value={own}
             aria-invalid={(!!own.trim() && typed === undefined) || undefined}
             onChange={(e) => {
@@ -1521,7 +1637,7 @@ function SlippageSettings({
           </p>
         )}
       </div>
-      {value >= 5 && (
+      {value >= SLIPPAGE_HIGH && (
         <Callout tone="warn" testId="swap-slippage-warning">
           {tr("swaps.slippage.warn.high", { percent: formatPercent(value) })}
         </Callout>
@@ -1680,15 +1796,15 @@ export function Session({
               value={
                 p.tokens.length
                   ? tr("format.adaAndTokens", { ada: formatAda(p.lovelace), count: p.tokens.length })
-                  : `${formatAda(p.lovelace)} ₳`
+                  : `${formatAda(p.lovelace)}\u00a0₳`
               }
               title={p.address}
             />
           ))}
-          <Row label={tr("review.fee")} value={`${formatAda(review.summary.fee)} ₳`} />
-          <Row label={tr("swaps.tx.backToSession")} value={`${formatAda(review.summary.returnedLovelace)} ₳`} />
+          <Row label={tr("review.fee")} value={`${formatAda(review.summary.fee)}\u00a0₳`} />
+          <Row label={tr("swaps.tx.backToSession")} value={`${formatAda(review.summary.returnedLovelace)}\u00a0₳`} />
           {review.summary.collateral && (
-            <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(review.summary.collateral.atRisk)} ₳`} />
+            <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(review.summary.collateral.atRisk)}\u00a0₳`} />
           )}
         </ReviewRows>
         <TxDetailButton txHash={review.txHash} testId="session-tx-detail" />
@@ -1737,13 +1853,13 @@ export function Session({
           <LovejoinRows back={back} />
           <Row
             label={tr(back.lovejoin ? "swaps.back.backNow" : "swaps.back.intoPrivate")}
-            value={`${formatAda(back.lovelace)} ₳`}
+            value={`${formatAda(back.lovelace)}\u00a0₳`}
             strong
           />
           {back.tokens.map((t) => (
             <Row key={tokenKey(t)} label="" value={heldText(t, s, network)} />
           ))}
-          <Row label={tr(back.lovejoin ? "lovejoin.review.fees" : "review.fee")} value={`${formatAda(back.fee)} ₳`} />
+          <Row label={tr(back.lovejoin ? "lovejoin.review.fees" : "review.fee")} value={`${formatAda(back.fee)}\u00a0₳`} />
           <Row
             label={tr("swaps.back.from")}
             value={tr("swaps.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
@@ -1785,11 +1901,26 @@ export function Session({
       )}
       <Row label={tr("swaps.rows.started")} value={whenOf(s.createdAt, new Date())} />
       <Row label={tr("lovejoin.review.account")} value={shortHex(s.address, 16, 8)} title={s.address} />
-      {/* What it holds is a balance: hidden while balances are (launch review #56). */}
-      {holding && <Row label={tr("swaps.rows.itHolds")} value={`${amounts.ada(holding.lovelace)} ₳`} />}
-      {holding?.tokens.map((t) => (
-        <Row key={tokenKey(t)} label="" value={amounts.text(heldText(t, s, network))} />
-      ))}
+      {/* What it holds is a balance: hidden while balances are (launch review #56). Its tokens on the same
+          labelled row, not rows with none (chunk 23's second review, DX-5). */}
+      {holding && (
+        <Row
+          label={tr("swaps.rows.itHolds")}
+          value={joinList([`${amounts.ada(holding.lovelace)}\u00a0₳`, ...holding.tokens.map((t) => amounts.text(heldText(t, s, network)))])}
+        />
+      )}
+      {/* Over: what came back, as its return's review said, when the wallet kept it (DX-5). Through Lovejoin, its
+          boxes come back later, on their own. */}
+      {s.stage === "closed" && s.received && (
+        <Row
+          label={tr(s.chain && !s.chain.cut ? "swaps.rows.receivedBesides" : "swaps.rows.received")}
+          value={joinList([
+            ...s.received.tokens.map((t) => amounts.text(heldText(t, s, network))),
+            `${amounts.ada(s.received.lovelace)}\u00a0₳`,
+          ])}
+          strong
+        />
+      )}
     </ReviewRows>
   );
   // A funding turned away never went out; one the chain hasn't shown may still land, and a
@@ -1838,11 +1969,12 @@ export function Session({
                   {tr(busy ? "swaps.looking" : "common.tryAgain")}
                 </button>
               )}
+              {/* Known never to have gone out, it only comes off the list; one that may still land asks first. */}
               <button type="button" className="secondary" onClick={forget} disabled={busy}>
-                {tr("swaps.forget.confirm")}
+                {tr(s.unsent ? "swaps.forget.remove" : "swaps.forget.confirm")}
               </button>
             </div>
-          ) : auto.stopping ? null : (
+          ) : !stoppable(auto) ? null : (
             <button type="button" className="secondary" onClick={openStop} disabled={busy}>
               {tr("lovejoin.mixes.stop")}
             </button>
@@ -2267,9 +2399,7 @@ const ORDER_OPEN = () => t("swaps.now.orderOpen");
 /** What's happening now, in plain words. */
 export function nowLine(s: SessionView): string {
   const a = s.auto!;
-  if (s.stage === "failed") {
-    return t(s.unsent ? "swaps.now.neverSent" : "swaps.now.fundingUnseen");
-  }
+  if (s.stage === "failed") return s.unsent ? neverSent(s) : t("swaps.now.fundingUnseen");
   switch (a.step) {
     case "funding":
       return t(a.stopping ? "swaps.now.stoppingAtFunding" : "swaps.now.funding");
@@ -2306,13 +2436,18 @@ function tokenKeyOf(id: string): string {
   return tokenKey(tokenOf(id));
 }
 
+/** A funding turned away before it went out, and why, when the worker knew (chunk 23's second review, DX-5). */
+function neverSent(s: SessionView): string {
+  return joinSentences([t("swaps.now.neverSent"), unsentWhyText(s.unsentWhy), t("swaps.now.removeIt")]);
+}
+
 /** A session from before swaps ran themselves: what to do next, by hand. */
 function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
   switch (s.stage) {
     case "funding":
       return t("swaps.next.funding");
     case "failed":
-      return t(s.unsent ? "swaps.now.neverSent" : "swaps.next.fundingUnseen");
+      return s.unsent ? neverSent(s) : t("swaps.next.fundingUnseen");
     case "returning":
       return t("swaps.next.returning");
     case "closed":
@@ -2347,7 +2482,7 @@ function SessionFoot({
   if (s.stage === "failed") {
     return (
       <button type="button" className="secondary" onClick={onForget} disabled={busy}>
-        {tr("swaps.forget.confirm")}
+        {tr(s.unsent ? "swaps.forget.remove" : "swaps.forget.confirm")}
       </button>
     );
   }

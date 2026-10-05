@@ -12,10 +12,20 @@ const TIMEOUT_MS = 20_000;
 export class CollateralError extends Error {}
 
 /**
- * giveme.my answered, and refused. It checks a transaction against the chain
- * first, so one reason is an input spent since the review.
+ * A reviewed transaction that can't go as it is, and that building it again
+ * from the chain as it is now fixes: the UI swaps its Send for "Refresh and
+ * review again" (chunk 23's review, P-3), since Send again only meets the same
+ * refusal. It crosses the port as the reply's `code: "stale"` (ui-port.ts).
  */
-export class CollateralRefusedError extends CollateralError {}
+export class StaleReviewError extends Error {}
+
+/**
+ * giveme.my answered, and refused. It checks a transaction against the chain
+ * first, so one reason is an input spent since the review: a stale review.
+ */
+export class CollateralRefusedError extends CollateralError {
+  readonly stale = true;
+}
 
 export class Collateral {
   constructor(

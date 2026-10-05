@@ -117,7 +117,10 @@ describe("handlers", () => {
     expect(((await handle({ type: "create-wallet", phrase, password: PASSWORD }, ctx)) as Status).state).toBe(
       "unlocked",
     );
+    expect(await handle({ type: "phrase-words" }, ctx)).toEqual({ words: 24 });
     expect(((await handle({ type: "reset-wallet" }, ctx)) as Status).state).toBe("no-wallet");
+    // With no wallet unlocked, there's no phrase to count.
+    await expect(handle({ type: "phrase-words" }, ctx)).rejects.toThrow();
   });
 
   it("validates typed phrases with the Rust core's reason", async () => {
@@ -140,6 +143,9 @@ describe("handlers", () => {
     expect(await handle({ type: "check-phrase", phrase: v.phrase }, ctx)).toEqual({ matches: true });
     expect(await handle({ type: "check-phrase", phrase: other.phrase }, ctx)).toEqual({ matches: false });
     expect(isMessage({ type: "check-phrase", phrase: v.phrase })).toBe(true);
+    // The check opens on as many boxes as this wallet's phrase has words (chunk 23's second review, FR-11).
+    expect(await handle({ type: "phrase-words" }, ctx)).toEqual({ words: 12 });
+    expect(isMessage({ type: "phrase-words" })).toBe(true);
 
     expect(await handle({ type: "preferences-set", hideBalances: true, currency: "eur" }, ctx)).toMatchObject({
       hideBalances: true,

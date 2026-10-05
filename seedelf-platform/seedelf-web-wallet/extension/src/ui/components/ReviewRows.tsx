@@ -10,12 +10,34 @@ export function ReviewRows({ testId, children }: { testId: string; children: Rea
   );
 }
 
-/** One row. `title` shows the whole value on hover when `value` is shortened. */
-export function Row({ label, value, strong, title }: { label: string; value: string; strong?: boolean; title?: string }) {
+/**
+ * One row. `title` shows the whole value on hover when `value` is shortened.
+ * `whole`: an address or a Seedelf's name, shown entire under its label, in
+ * monospace, never shortened, since a shortened one is what an address
+ * poisoner's lookalike matches (chunk 23's review, S-4).
+ */
+export function Row({
+  label,
+  value,
+  strong,
+  title,
+  whole,
+  testId,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  title?: string;
+  whole?: boolean;
+  testId?: string;
+}) {
+  const kind = `review__row${strong ? " review__row--strong" : ""}${whole ? " review__row--whole" : ""}`;
   return (
-    <div className={strong ? "review__row review__row--strong" : "review__row"}>
+    <div className={kind} data-testid={testId}>
       <dt>{label}</dt>
-      <dd title={title}>{value}</dd>
+      <dd title={title} data-value={whole ? value : undefined}>
+        {value}
+      </dd>
     </div>
   );
 }

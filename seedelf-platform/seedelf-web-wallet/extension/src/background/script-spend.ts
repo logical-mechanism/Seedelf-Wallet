@@ -13,7 +13,10 @@
 //        seed, so a restarted worker still signs. Koios submits exactly that
 //        transaction, and the pending watch takes over (pending.ts). One
 //        Koios didn't answer may have gone through: it's kept, signed, and
-//        Send sends those very bytes again.
+//        Send sends those very bytes again. One Koios took isn't kept any
+//        more: Send again, from a page that missed the answer, hears it was
+//        sent already, never that its review is stale (pending.ts
+//        `refuseSent`, chunk 23's second review, fix round).
 //
 // A transaction WebAssembly signed at review (an account-paid mint, and the
 // public account's send and staking) is kept without a seed, and Send only
@@ -30,11 +33,11 @@ import { txInputs } from "./cbor";
 import { seedelfTokenOf } from "./chain";
 import type { ActivityService } from "./activity";
 import type { CoinControlService } from "./coin-control";
-import { CollateralRefusedError, type Collateral } from "./collateral";
+import { CollateralRefusedError, StaleReviewError, type Collateral } from "./collateral";
 import { forgetContractView, readContractView, type ContractView } from "./contract-scan";
 import type { Koios, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
-import { settleMaybeSent, submitWatched } from "./pending";
+import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
 import { outpoint, reservedSet } from "./spent";
@@ -288,7 +291,9 @@ export function keep(deps: ScriptSpendDeps, key: string, built: Omit<Kept, "buil
  * Sends the transaction kept under `key`, if it's the one reviewed (`txHash`
  * on `network`) and not too old. `what` says what it is in errors. One Koios
  * didn't answer comes back maybe sent (pending.ts), and stays kept: Send
- * again sends the same bytes, however old, and asks giveme.my nothing.
+ * again sends the same bytes, however old, and asks giveme.my nothing. One
+ * sent already isn't kept any more, and says so (pending.ts `refuseSent`),
+ * never that its review is stale.
  */
 export async function send(
   deps: ScriptSpendDeps,
@@ -301,12 +306,13 @@ export async function send(
   const { wasm, wallet, session, now } = deps;
   const built = await wallet.withKeys(() => session.get<Kept>(key));
   if (!built || built.txHash !== txHash || built.network !== network) {
-    throw new Error(t(NOT_READY[what]));
+    await refuseSent(deps, network, txHash);
+    throw new StaleReviewError(t(NOT_READY[what]));
   }
   const again = built.sentCbor !== undefined;
   if (!again) {
     if (now() - built.builtAt > BUILT_TTL_MS) {
-      throw new Error(t(TOO_OLD[what]));
+      throw new StaleReviewError(t(TOO_OLD[what]));
     }
     await settleMaybeSent(deps, network);
   }
@@ -363,6 +369,6 @@ async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbo
   const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
   const reserved = await deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true, now: deps.now() }));
   if (inputs.some((o) => reserved.inputs.has(o))) {
-    throw new Error(t(CHAIN_CONFLICT[what]));
+    throw new StaleReviewError(t(CHAIN_CONFLICT[what]));
   }
 }

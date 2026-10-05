@@ -273,6 +273,7 @@ export class CoinControlService {
       (p): UtxoInfo => ({
         ...info(p.utxo),
         address: p.utxo.address,
+        path: { role: p.role, index: p.index },
         locked: p === collateral || lockedCardano.has(outpoint(p.utxo)),
         ...(p === collateral ? { collateral: true } : {}),
         ...(measurable(p.utxo) ? {} : script),

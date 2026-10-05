@@ -72,10 +72,19 @@ describe("reading a destination", () => {
     const t = await unlocked();
     await expect(t.withdraw.resolve("preprod", "nope")).rejects.toThrow("isn't a Cardano address");
     await expect(t.withdraw.resolve("preprod", "$not a handle")).rejects.toThrow("An ADA Handle is $");
-    await expect(t.withdraw.resolve("preprod", account(12).mainnet.receive_0)).rejects.toThrow("normal preprod address");
+    // Each reason named, rather than one sentence for all four (chunk 23's second review, PY-10).
+    await expect(t.withdraw.resolve("preprod", account(12).mainnet.receive_0)).rejects.toThrow(
+      "That's a mainnet address; this wallet is on Preprod.",
+    );
+    await expect(t.withdraw.resolve("mainnet", account(12).preprod.receive_0)).rejects.toThrow(
+      "That's a test network's address; this wallet is on mainnet.",
+    );
+    await expect(t.withdraw.resolve("preprod", account(12).preprod.stake)).rejects.toThrow(
+      "That's a stake address, which can't receive a payment. Use an address that starts addr_test1.",
+    );
     // A handle held by a script (here, the wallet contract itself).
     t.koios.nfts.set(`${ADA_HANDLE_POLICY}.${hex("vault")}`, ownedUtxos[0]!.address);
-    await expect(t.withdraw.resolve("preprod", "$vault")).rejects.toThrow("normal preprod address");
+    await expect(t.withdraw.resolve("preprod", "$vault")).rejects.toThrow("That's a script's address.");
   });
 });
 

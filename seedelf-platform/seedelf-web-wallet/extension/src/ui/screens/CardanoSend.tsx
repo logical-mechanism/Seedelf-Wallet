@@ -16,7 +16,7 @@ import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rp
 import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { BuildStage } from "../components/BuildStage";
-import { AdaInput, MinimumHint, MinimumNote } from "../components/AdaInput";
+import { AdaInput, amountText, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
 import { HandleWarning } from "../components/HandleWarning";
@@ -29,16 +29,21 @@ import {
   type Draft,
   recipientAmounts,
   ReviewRecipients,
+  ReviewWait,
   TooMuchTogether,
+  type ToState,
   useRecipients,
+  waitingFor,
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
+import { RewardsRow, RewardsSetting, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { adaWithTokens, formatAda, lockedAside, rewardsAside, shortHex, tokenKey as key } from "../format";
+import { adaText, lockedAside, rewardsAside, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
+import { useAmounts } from "../preferences";
 import { tokenQuantity } from "../tokens";
 
 /** The longest note: one of CIP-20's lines, as Lace allows (core's `MAX_NOTE_CHARS`). */
@@ -47,6 +52,8 @@ const NOTE_MAX = 64;
 export function CardanoSend({
   cardano,
   rewards,
+  total,
+  picked,
   onCancel,
   onSent,
 }: {
@@ -54,15 +61,21 @@ export function CardanoSend({
   cardano: Balances["cardano"];
   /** Staking rewards that ride along (lovelace), when any do. */
   rewards?: string;
+  /** All the account holds, as Home shows it (locked UTxOs and rewards in): the review's balance after. */
+  total?: string;
+  /** Tokens picked already, from a token's details: each asks for its amount. */
+  picked?: Record<string, string>;
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
   const network = useNetwork();
-  const list = useRecipients();
+  const list = useRecipients("", picked);
   const t = useT();
   const [reads, setReads] = useState<Record<number, KnownRead>>({});
   const [max, setMax] = useState(false);
   const [note, setNote] = useState("");
+  // A pasted note longer than a note can be is cut to fit, and says so (chunk 23's second review, PY-12).
+  const [noteCut, setNoteCut] = useState(false);
   const [summary, setSummary] = useState<SendSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -90,6 +103,23 @@ export function CardanoSend({
   const tooMuch = !maxed && amounts.total > BigInt(cardano.lovelace);
   const ready = found && amounts.ok && !tooMuch;
   const toSeedelf = list.drafts.some((d) => readOf(d).state === "seedelf");
+  // What the form shows of the balance: masked while balances are hidden, as Home's is (chunk 23's second
+  // review, HM-9). The review shows what's sent in full, since it's read before sending.
+  const shown = useAmounts();
+  const toState = (d: Draft): ToState => {
+    const state = readOf(d).state;
+    if (d.to.trim() === "") return "empty";
+    return state === "error" ? "bad" : state === "read" || state === "seedelf" ? "ok" : "reading";
+  };
+  const waiting = amounts.each.map((e) =>
+    waitingFor({
+      to: toState(e.draft),
+      amount: e.draft.amount,
+      tokensPicked: Object.keys(e.draft.tokens).length > 0,
+      tokensOk: e.tokens.ok,
+      max: maxed,
+    }),
+  );
 
   async function review(e: FormEvent) {
     e.preventDefault();
@@ -123,15 +153,36 @@ export function CardanoSend({
 
   if (summary) {
     const several = summary.payments.length > 1;
+    // A payment to this same account comes straight back: it isn't leaving.
+    const leaving = summary.payments.reduce(
+      (sum, p) => (p.own && p.ownAccount === active ? sum : sum + BigInt(p.lovelace)),
+      BigInt(summary.fee),
+    );
+    // Tokens leave too, unless they come straight back: the total says how many kinds (PY-5).
+    const tokenKinds = new Set(
+      summary.payments.filter((p) => !(p.own && p.ownAccount === active)).flatMap((p) => p.tokens.map(key)),
+    ).size;
     const recipientRows = (i: number) => {
       const p = summary.payments[i]!;
       return (
         <>
           <ToRows paid={p} />
-          <Row label={t("common.amount")} value={`${formatAda(p.lovelace)} ₳`} strong />
-          {p.tokens.map((t) => {
-            const held = cardano.tokens.find((h) => key(h) === key(t));
-            return <TokenAmountRow key={key(t)} label="" token={held ?? t} amount={tokenQuantity(network, { ...held, ...t })} />;
+          <Row
+            label={t("common.amount")}
+            value={amountText(p.lovelace, p.minimum, amounts.each[i]?.lovelace ?? "0")}
+            strong
+          />
+          {/* Labelled once, over the first: a row with no label read as part of the amount's (PY-14). */}
+          {p.tokens.map((tk, n) => {
+            const held = cardano.tokens.find((h) => key(h) === key(tk));
+            return (
+              <TokenAmountRow
+                key={key(tk)}
+                label={n === 0 ? t("review.tokens") : ""}
+                token={held ?? tk}
+                amount={tokenQuantity(network, { ...held, ...tk })}
+              />
+            );
           })}
         </>
       );
@@ -152,12 +203,12 @@ export function CardanoSend({
       >
         <ReviewRecipients testId="send-review" payments={summary.payments} rows={recipientRows}>
           {summary.note && <Row label={t("activity.row.note")} value={summary.note} />}
-          <Row label={t("review.fee")} value={`${formatAda(summary.fee)} ₳`} />
-          <WithdrawalRow withdrawal={summary.withdrawal} />
-          <Row label={t("review.backToPublic")} value={adaWithTokens(summary.changeLovelace, summary.changeTokens)} />
-          <Row label={t("send.review.spent")} value={String(summary.inputs)} />
+          <Row label={t("review.fee")} value={adaText(summary.fee)} />
+          <RewardsRow withdrawal={summary.withdrawal} />
+          <TotalRows side="public" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="send-tx" />
+        <RewardsSetting withdrawal={summary.withdrawal} />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}
@@ -168,7 +219,15 @@ export function CardanoSend({
             who={several ? t("recipients.nth", { number: i + 1 }) : undefined}
           />
         ))}
-        {summary.payments.some((p) => p.own) && <OwnNote />}
+        {/* With several, each own one by its number: "your own public account" didn't say which it meant (PY-5).
+            Another of the user's accounts says what paying it shows, as the form did: it doesn't come back here. */}
+        {summary.payments.map((p, i) =>
+          !p.own ? null : p.ownAccount !== undefined && p.ownAccount !== active ? (
+            <OtherAccountNote key={i} index={p.ownAccount} />
+          ) : (
+            <OwnNote key={i} nth={several ? i + 1 : undefined} />
+          ),
+        )}
         <LeftOutNote leftOut={summary.leftOut} testId="send-left-out" />
         <p className="note">
           {joinSentences([
@@ -186,14 +245,15 @@ export function CardanoSend({
       title={t("home.action.send")}
       titleId="send-title"
       onBack={onCancel}
-      aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
+      aside={`${t("withdraw.asideAvailable", { amount: shown.ada(cardano.lovelace) })}${rewardsAside(rewards, shown.ada)}${lockedAside(cardano, shown.ada)}`}
       error={error}
       foot={
         <>
+          <BuildStage busy={busy} />
           <button type="submit" className="primary" disabled={!ready || busy}>
             {busy ? t("common.building") : t("common.review")}
           </button>
-          <BuildStage busy={busy} />
+          {!ready && <ReviewWait reasons={waiting} tooMuch={tooMuch} busy={busy} />}
         </>
       }
     >
@@ -230,7 +290,7 @@ export function CardanoSend({
                 value={d.amount}
                 onChange={(amount) => list.update(d.id, { amount })}
                 disabled={maxed}
-                shown={t("common.max")}
+                shown={t("common.maxUpTo", { amount: shown.ada(cardano.lovelace) })}
                 placeholder={withTokens ? t("common.minimum") : "0"}
                 autoFocus={false}
               >
@@ -242,7 +302,7 @@ export function CardanoSend({
               </AdaInput>
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="send-too-much">
-                  {t("moveIn.tooMuch", { amount: formatAda(cardano.lovelace) })}
+                  {t("moveIn.tooMuch", { amount: shown.ada(cardano.lovelace) })}
                 </p>
               )}
             </div>
@@ -285,7 +345,11 @@ export function CardanoSend({
           id="send-note"
           value={note}
           // Characters, as core counts them: an input's maxLength counts UTF-16 units, so an emoji would count twice.
-          onChange={(e) => setNote([...e.target.value].slice(0, NOTE_MAX).join(""))}
+          onChange={(e) => {
+            const chars = [...e.target.value];
+            setNoteCut(chars.length > NOTE_MAX);
+            setNote(chars.slice(0, NOTE_MAX).join(""));
+          }}
           autoComplete="off"
           // Not spell-checked, as no field in the wallet is: Chrome's enhanced
           // spell check would send the note to Google before it's sent, even
@@ -297,6 +361,11 @@ export function CardanoSend({
         <p className="note" id="send-note-hint" data-testid="send-note-hint">
           {t(toSeedelf ? "send.note.privacy.hintSeedelf" : "send.note.privacy.hint", { used: [...note].length, max: NOTE_MAX })}
         </p>
+        {noteCut && (
+          <p className="field-note" data-testid="send-note-cut">
+            {t("send.note.cut", { max: NOTE_MAX })}
+          </p>
+        )}
       </div>
 
       <Callout tone="privacy">
@@ -314,7 +383,11 @@ export function CardanoSend({
   );
 }
 
-/** Where one payment went: a Seedelf by tag and name, a $handle and its address, or an address. */
+/**
+ * Where one payment went: a Seedelf by tag and whole name, a $handle and its
+ * whole address, or a whole address. Never shortened: a shortened address is
+ * what an address poisoner's lookalike matches (chunk 23's review, S-4).
+ */
 function ToRows({ paid }: { paid: SendPaid }) {
   const t = useT();
   if (paid.seedelf) {
@@ -322,32 +395,28 @@ function ToRows({ paid }: { paid: SendPaid }) {
     return label ? (
       <>
         <Row label={t("destination.to")} value={label} strong />
-        <Row label={t("utxos.seedelfName")} value={shortHex(name, 16, 8)} title={name} />
+        <Row label={t("utxos.seedelfName")} value={name} whole />
       </>
     ) : (
-      <Row label={t("destination.to")} value={shortHex(name, 16, 8)} title={name} strong />
+      <Row label={t("destination.to")} value={name} whole />
     );
   }
-  return (
+  return paid.handle ? (
     <>
-      <Row label={t("destination.to")} value={paid.handle ? `$${paid.handle}` : shortHex(paid.address, 16, 8)} title={paid.address} strong />
-      {paid.handle && <Row label={t("utxos.address")} value={shortHex(paid.address, 16, 8)} title={paid.address} />}
+      <Row label={t("destination.to")} value={`$${paid.handle}`} strong />
+      <Row label={t("utxos.address")} value={paid.address} whole />
     </>
+  ) : (
+    <Row label={t("destination.to")} value={paid.address} whole />
   );
 }
 
-/** The staking rewards a payment from the account spent, when it did. */
-export function WithdrawalRow({ withdrawal }: { withdrawal?: string }) {
-  const t = useT();
-  if (!withdrawal || BigInt(withdrawal) === 0n) return null;
-  return <Row label={t("activity.row.rewardsSpent")} value={`${formatAda(withdrawal)} ₳`} />;
-}
-
-function OwnNote() {
+/** This account's own address: `nth` names which recipient, on a review with several. */
+function OwnNote({ nth }: { nth?: number }) {
   const t = useT();
   return (
     <Callout tone="warn" testId="send-own">
-      {t("send.warn.ownAccount")}
+      {nth === undefined ? t("send.warn.ownAccount") : t("send.warn.ownAccountNth", { number: nth })}
     </Callout>
   );
 }

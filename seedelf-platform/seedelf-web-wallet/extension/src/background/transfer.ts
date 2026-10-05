@@ -27,6 +27,7 @@ import { seedelfLabel } from "./chain";
 import { keptContractView, readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
 import { settleMaybeSent } from "./pending";
+import { privateShort } from "./short";
 import {
   changeHistory,
   keep,
@@ -102,7 +103,12 @@ export class TransferService {
     }
 
     progress?.("measuring");
-    const finished = await measureLocally<TransferResult>(this.deps, request, (keys, r) => wasm.buildTransfer(keys.seedelf, r));
+    // Core's shortfall in the user's words (chunk 23's second review, PY-10).
+    const finished = await measureLocally<TransferResult>(this.deps, request, (keys, r) => wasm.buildTransfer(keys.seedelf, r)).catch(
+      (e: unknown) => {
+        throw privateShort(e);
+      },
+    );
     const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
     const histories = spentHistories(classes, inputs, classesMixed);
     const summary: TransferSummary = {

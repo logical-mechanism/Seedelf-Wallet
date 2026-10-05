@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { type I18nKey, useT } from "../../i18n";
 
 import { lovejoinOn } from "../../networks";
-import type { Balances, PendingTx, SessionView } from "../../shared/rpc";
+import type { Balances, PendingTx, SessionView, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ShieldIcon, SwapIcon } from "../components/Icons";
@@ -25,8 +25,9 @@ import { Screen } from "../components/Screen";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { ClaimAll, isClaimable } from "./ClaimAll";
+import { connectorBlockedText, useConnectorSwitch } from "../sites";
 import { Lovejoin } from "./Lovejoin";
-import { attachedTo, type ConnectedSites, isSiteSession, SiteRow, SiteSession } from "./SiteSessions";
+import { attachedTo, type ConnectedSites, isSiteSession, SiteRow, SiteSession, siteConnected } from "./SiteSessions";
 import { fundingUnseen, isRunningSwap, Swaps, SwapTag } from "./Swaps";
 
 type DappId = "minswap" | "lovejoin";
@@ -106,7 +107,7 @@ export function Dapps({
   }, [site, load]);
 
   if (open === "lovejoin") {
-    return <Lovejoin banner={banner} onBack={() => setOpen(undefined)} onPending={onPending} />;
+    return <Lovejoin seedelf={seedelf} banner={banner} onBack={() => setOpen(undefined)} onPending={onPending} />;
   }
 
   if (open === "minswap") {
@@ -144,6 +145,7 @@ export function Dapps({
       <SiteSession
         session={opened}
         attached={attachedTo(opened, connected)}
+        connected={siteConnected(opened, connected)}
         seedelf={seedelf}
         reading={reading}
         updatedAt={updatedAt}
@@ -186,10 +188,10 @@ export function Dapps({
             )}
           </button>
         ))}
-        <div className="dapp-tile dapp-tile--soon">
-          <span className="dapp-tile__what">{t("dapps.moreSoon")}</span>
-        </div>
       </div>
+      {/* A line, not a tile: as a tile it took a slot and looked like a dApp that wouldn't open (chunk 23's review,
+          D-4). */}
+      <p className="note center">{t("dapps.moreSoon")}</p>
       {sites.length > 0 && (
         <section className="section" aria-label={t("settings.sites")}>
           <h2>{t("settings.sites")}</h2>
@@ -205,12 +207,45 @@ export function Dapps({
       <Callout tone="privacy">
         {t("dapps.privacy.oneTime")}
       </Callout>
+      {sites.length === 0 && <SitesOff />}
       {sites.length === 0 && (
         <p className="note" data-testid="dapp-sites-hint">
           {t("dapps.sitesHint")}
         </p>
       )}
     </Screen>
+  );
+}
+
+/**
+ * Sites can't see the wallet yet: the line above says to connect on a site, and
+ * the switch is off by default (a privacy decision, which stays). Said here,
+ * with the same disclosure Settings → Sites shows, and the switch's own way to
+ * turn it on (chunk 23's review, D-1).
+ */
+function SitesOff() {
+  const t = useT();
+  const [status, setStatus] = useState<Status>();
+  useEffect(() => {
+    call("status", {}).then(setStatus, () => undefined);
+  }, []);
+  const blocked = status?.connectorBlocked;
+  const sites = useConnectorSwitch(blocked);
+  if (!status || !sites.ready || sites.on) return null;
+  return (
+    <div className="stack-tight" data-testid="dapp-sites-off">
+      <Callout tone="privacy">{blocked ? connectorBlockedText() : t("settings.sites.privacy.off")}</Callout>
+      {!blocked && (
+        <button type="button" className="secondary align-start" onClick={sites.toggle}>
+          {t("dapps.letSitesConnect")}
+        </button>
+      )}
+      {sites.error && (
+        <p className="error" role="alert">
+          {sites.error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -224,7 +259,7 @@ export function ClaimCard({ sessions, onOpen }: { sessions: SessionView[]; onOpe
     <section className="section claim-card" aria-labelledby="claim-card-title" data-testid="claim-card">
       <h2 id="claim-card-title">{t("dapps.inSessions")}</h2>
       <p className="claim-card__amount">
-        {amounts.ada(lovelace.toString())} ₳{tokens ? ` ${t("claim.andTokens", { count: tokens })}` : ""}
+        {amounts.ada(lovelace.toString())}{"\u00a0₳"}{tokens ? ` ${t("claim.andTokens", { count: tokens })}` : ""}
       </p>
       <p className="note">
         {t("dapps.sessionsHold", { count: sessions.length })}

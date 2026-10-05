@@ -533,13 +533,14 @@ describe("Home's banner", () => {
       .replaceAll("&#x27;", "'")
       .replace(/\s+/g, " ");
 
-  it("says plainly that a payment Koios didn't answer may have gone through, and that sending it again is safe", () => {
+  it("says plainly not to pay it again, that it may have gone through, and that sending it again is safe", () => {
+    // What to do first, then why (chunk 23's second review, HM-4).
     expect(text({ ...sent, maybeSent: true }, true)).toContain(
-      "Payment may have gone through. Waiting for the network… Koios didn't answer when it was sent. The wallet sends it again now and then, which is safe",
+      "Payment not confirmed yet: don't pay it again Koios didn't answer when it was sent, so it may have gone through. The wallet keeps sending it now and then, which is safe",
     );
     // It waits until the worker settles it, whatever Home's clock says: no Dismiss for a payment that may still land.
     const later = text({ ...sent, maybeSent: true }, false);
-    expect(later).toContain("Payment may have gone through. Waiting for the network…");
+    expect(later).toContain("Payment not confirmed yet: don't pay it again");
     expect(later).not.toContain("Dismiss");
     expect(text(sent, true)).toContain("Payment sent. Waiting for the network…");
   });

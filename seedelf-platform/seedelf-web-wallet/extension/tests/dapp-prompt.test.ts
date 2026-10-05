@@ -106,6 +106,30 @@ describe("a site's signing prompt", () => {
     const html = renderToStaticMarkup(createElement(SignData, { address: ADDRESS, signer: "payment", payload: "00", text: "Sign in" }));
     expect(html).toContain(`<span class="dapp-address" data-testid="dapp-data-address" data-value="${ADDRESS}">${ADDRESS}</span>`);
   });
+
+  it("says what leaves the account in total, in the wallet's own reviews' words (chunk 23's second review, CW-7)", () => {
+    const page = text(render(summary({})));
+    expect(page).toMatch(/Total leaving your public account\s+500 ₳/);
+    expect(page).toMatch(/fee\s+0.18 ₳, counted in the total/);
+    expect(page).not.toMatch(/, net|the net/);
+    const gets = text(render(summary({ netLovelace: "2000000", spentLovelace: "0", returnedLovelace: "2000000", ownInputs: 0 })));
+    expect(gets).toMatch(/Total coming into your public account\s+2 ₳/);
+  });
+
+  it("names the account that signs when the wallet has more than one, and only then (chunk 23's second review, CW-5)", () => {
+    const tx = (account?: string) =>
+      text(renderToStaticMarkup(createElement(SignTx, { summary: summary({}), partial: false, session: false, collateralSpent: false, account })));
+    expect(tx("Account 3 · Savings")).toMatch(/Total leaving Account 3 · Savings\s+500 ₳/);
+    expect(tx()).toMatch(/Total leaving your public account\s+500 ₳/);
+
+    const data = (signer: "payment" | "stake" | "drep", account?: string) =>
+      text(renderToStaticMarkup(createElement(SignData, { address: ADDRESS, signer, payload: "00", text: "Sign in", account })));
+    expect(data("payment", "Account 3 · Savings")).toContain("Signs with The address of Account 3 · Savings");
+    expect(data("stake", "Account 2")).toContain("Signs with The stake address of Account 2");
+    expect(data("drep", "Account 2")).toContain("Signs with The DRep of Account 2");
+    // One account: nothing to tell apart.
+    expect(data("payment")).toContain("Signs with Your address");
+  });
 });
 
 describe("who's asking", () => {
@@ -125,7 +149,6 @@ describe("a site's connect window", () => {
     renderToStaticMarkup(
       createElement(ConnectRequest, {
         approval: { kind: "connect", id: "a", origin: "https://app.example", title: "App", password: true },
-        more: "",
         busy: false,
         held: false,
         onError: () => undefined,
@@ -135,14 +158,19 @@ describe("a site's connect window", () => {
 
   it("chooses nothing for the user: Connect waits for a choice, and each says what it costs (privacy review §3.3)", () => {
     const html = render();
-    // Neither the public account nor a private session is pressed.
-    expect([...html.matchAll(/aria-pressed="(true|false)"/g)].map((m) => m[1])).toEqual(["false", "false"]);
+    // Neither the public account nor a private session is checked: two radio cards, each saying what it costs
+    // inside it (chunk 23's review, CW-3).
+    expect([...html.matchAll(/role="radio" aria-checked="(true|false)"/g)].map((m) => m[1])).toEqual(["false", "false"]);
     expect(/<button[^>]*>Connect<\/button>/.exec(html)![0]).toContain("disabled");
     const page = text(html);
-    expect(page).toContain("Choose what it sees. Nothing happens until you press Connect or Review");
-    expect(page).toContain("Your public account: the site sees its addresses, its balance and its UTxOs, and keeps what it saw. No fee.");
-    expect(page).toContain("A private session: the site sees only a new one-time account you fund from your private balance.");
-    expect(page).toContain("5 ₳ of collateral that comes back");
+    expect(page).toContain("Choose what the site sees");
+    expect(page).toContain("Nothing happens until you choose, and press Connect or Review");
+    expect(page).toContain("Your public account The site sees its addresses, its balance and its UTxOs, and keeps what it saw. No fee.");
+    // The more private choice isn't the harder one to read (chunk 23's second review, CW-7): what it costs in one
+    // line, the 5 ₳ said for what it's for rather than as "collateral" (CW-8).
+    expect(page).toContain(
+      "A private session The site sees only a new one-time account, funded from your private balance. A fee each way, 5 ₳ kept aside that comes back, and about a minute.",
+    );
     // What each shows once chosen isn't said yet.
     expect(html).not.toContain('data-testid="dapp-connect-privacy"');
     expect(html).not.toContain('data-testid="dapp-private-points"');
@@ -154,7 +182,6 @@ describe("a site's connect window", () => {
     const several = accounts.length > 1;
     const element = createElement(ConnectRequest, {
       approval: { kind: "connect", id: "a", origin: "https://app.example", title: "App", password: true },
-      more: "",
       busy: false,
       held: false,
       onError: () => undefined,
@@ -177,11 +204,11 @@ describe("a site's connect window", () => {
 
   it("names the account a site would get, by number and name, when there's more than one", () => {
     expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 2)).toContain(
-      "Your public account, Account 3 · Savings: the site sees its addresses",
+      "Your public account, Account 3 · Savings The site sees its addresses",
     );
-    expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 0)).toContain("Your public account, Account 1:");
+    expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 0)).toContain("Your public account, Account 1 The site sees");
     // One account: nothing to tell apart, and the window reads as it always did.
-    expect(withAccounts([{ index: 0 }], 0)).toContain("Your public account: the site sees");
+    expect(withAccounts([{ index: 0 }], 0)).toContain("Your public account The site sees");
   });
 
   it("says what a site can still find out: the browser, the funding on chain, and its change (privacy review §2.12)", () => {
@@ -190,7 +217,7 @@ describe("a site's connect window", () => {
     expect(PRIVATE_SESSION_PRIVACY()).toContain("if it has seen your public account here, it can tell the session is yours");
     expect(PRIVATE_SESSION_PRIVACY()).not.toContain("never appears");
     expect(fundingPrivacy("12300000")).toBe(
-      "This payment links the private UTxOs it spends to the one-time account, as Make public does, and so does the 12.3 ₳ it leaves in your private balance as change. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain and follow that change.",
+      "This payment links the private UTxOs it spends to the one-time account, as Make public does, and so does the 12.3\u00a0₳ it leaves in your private balance as change. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain and follow that change.",
     );
     expect(fundingPrivacy("0")).toBe(
       "This payment links the private UTxOs it spends to the one-time account, as Make public does. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain.",
