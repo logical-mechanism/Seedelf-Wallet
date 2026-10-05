@@ -11,8 +11,16 @@
 // **It is for explanations, not for what a screen must say.** A privacy note
 // (components/Callout.tsx) carries a decision from privacy.md and stays where
 // everyone reads it without asking.
+//
+// Chunk 23 moved the wallet's other explanations behind it too: what a
+// feature is, and how a transaction runs once sent. A note stays on the page
+// when it says what someone else learns or sees, what an action costs or
+// locks up, what can't be undone, what to do next, or what's happening now.
+// Three places hold the icon: a screen's title (`Screen`'s `hint`), a
+// section's heading or a field's label (`Hinted`), and a row of its own
+// (`Hint`).
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useT } from "../../i18n";
 
 import { InfoIcon } from "./Icons";
@@ -75,6 +83,24 @@ export function Hint({ text, testId }: { text: string; testId?: string }) {
         controls={id}
         testId={testId && `${testId}-hint`}
       />
+      {open && <HintText text={text} id={id} testId={testId} />}
+    </>
+  );
+}
+
+/**
+ * A heading or a label, with its explanation behind the icon beside it and the
+ * text under it once asked for. `testId` names the text; the icon is
+ * `${testId}-hint`.
+ */
+export function Hinted({ text, testId, children }: { text: string; testId?: string; children: ReactNode }) {
+  const { open, toggle, id } = useHint();
+  return (
+    <>
+      <div className="hinted">
+        {children}
+        <HintButton text={text} open={open} onToggle={toggle} controls={id} testId={testId && `${testId}-hint`} />
+      </div>
       {open && <HintText text={text} id={id} testId={testId} />}
     </>
   );

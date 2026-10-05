@@ -6,7 +6,10 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { DappTxSummary } from "../src/shared/rpc";
+import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
+import type { DappTxSummary, KnownAccount } from "../src/shared/rpc";
+import { AccountsContext } from "../src/ui/accounts";
+import { PreferencesContext } from "../src/ui/preferences";
 import {
   ConnectRequest,
   fundingPrivacy,
@@ -14,6 +17,7 @@ import {
   PUBLIC_PRIVACY,
   SignData,
   SignTx,
+  Site,
 } from "../src/ui/screens/DappApprovals";
 import { assetFingerprint } from "../src/ui/tokens";
 
@@ -104,6 +108,18 @@ describe("a site's signing prompt", () => {
   });
 });
 
+describe("who's asking", () => {
+  const site = (props: Parameters<typeof Site>[0]) => text(renderToStaticMarkup(createElement(Site, props)));
+
+  it("names the public account a connected site uses, or its private session (chunk 23)", () => {
+    expect(site({ origin: "https://app.example", account: "Account 3 · Savings" })).toContain("Connected to Account 3 · Savings");
+    expect(site({ origin: "https://app.example", session: 1 })).toContain("Connected to private session 2");
+    // A session's request never names the public account, which isn't in it.
+    expect(site({ origin: "https://app.example", session: 1, account: "Account 3" })).not.toContain("Account 3");
+    expect(site({ origin: "https://app.example" })).not.toContain("Connected to");
+  });
+});
+
 describe("a site's connect window", () => {
   const render = () =>
     renderToStaticMarkup(
@@ -130,6 +146,42 @@ describe("a site's connect window", () => {
     // What each shows once chosen isn't said yet.
     expect(html).not.toContain('data-testid="dapp-connect-privacy"');
     expect(html).not.toContain('data-testid="dapp-private-points"');
+  });
+
+  // Sites always use the account Settings → Sites chooses, whichever is on
+  // screen, so with several the window says which, by number and name (chunk 23).
+  const withAccounts = (accounts: KnownAccount[], dappAccount: number) => {
+    const several = accounts.length > 1;
+    const element = createElement(ConnectRequest, {
+      approval: { kind: "connect", id: "a", origin: "https://app.example", title: "App", password: true },
+      more: "",
+      busy: false,
+      held: false,
+      onError: () => undefined,
+      onAnswer: async () => true,
+    });
+    return text(
+      renderToStaticMarkup(
+        createElement(
+          AccountsContext.Provider,
+          { value: { accounts, active: 0, loaded: true, name: "Account 1", several, reload: async () => undefined } },
+          createElement(
+            PreferencesContext.Provider,
+            { value: { prefs: { ...DEFAULT_PREFERENCES, dappAccount }, loaded: true, set: async () => undefined } },
+            element,
+          ),
+        ),
+      ),
+    );
+  };
+
+  it("names the account a site would get, by number and name, when there's more than one", () => {
+    expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 2)).toContain(
+      "Your public account, Account 3 · Savings: the site sees its addresses",
+    );
+    expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 0)).toContain("Your public account, Account 1:");
+    // One account: nothing to tell apart, and the window reads as it always did.
+    expect(withAccounts([{ index: 0 }], 0)).toContain("Your public account: the site sees");
   });
 
   it("says what a site can still find out: the browser, the funding on chain, and its change (privacy review §2.12)", () => {

@@ -139,6 +139,8 @@ export function Voting({
       title={t("activity.row.votingPower")}
       titleId="voting-title"
       onBack={onBack}
+      hint={t("vote.note")}
+      hintTestId="vote-note"
       backDisabled={busy}
       aside={t("vote.now", { what: voteLabel(current, ownName) })}
       error={error}
@@ -161,9 +163,6 @@ export function Voting({
         </button>
       }
     >
-      <p className="note">
-        {t("vote.note")}
-      </p>
       <ul className="list" role="radiogroup" aria-label={t("vote.whereLabel")}>
         {OPTIONS.map((o) => {
           const on = o.value === pick;

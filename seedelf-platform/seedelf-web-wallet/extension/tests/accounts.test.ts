@@ -154,8 +154,8 @@ describe("the wallet's public accounts", () => {
     expect(await t.accounts.check("preprod", 9)).toEqual({ index: 9, used: false });
     expect((await t.accounts.list()).accounts.map((a) => a.index)).toEqual([0, 1337]);
 
-    await expect(t.accounts.check("preprod", MAX_INDEX + 1)).rejects.toThrow("whole number from 0 to");
-    await expect(t.accounts.check("preprod", 1.5)).rejects.toThrow("whole number from 0 to");
+    await expect(t.accounts.check("preprod", MAX_INDEX + 1)).rejects.toThrow("whole number from 1 to");
+    await expect(t.accounts.check("preprod", 1.5)).rejects.toThrow("whole number from 1 to");
   });
 
   it("adds an account that has never been used, asking nobody anything", async () => {
@@ -170,8 +170,8 @@ describe("the wallet's public accounts", () => {
 
     // Adding it twice changes nothing, and a bad number is refused.
     expect((await t.accounts.add(1337)).map((a) => a.index)).toEqual([0, 1337]);
-    await expect(t.accounts.add(-1)).rejects.toThrow("whole number from 0 to");
-    await expect(t.accounts.add(MAX_INDEX + 1)).rejects.toThrow("whole number from 0 to");
+    await expect(t.accounts.add(-1)).rejects.toThrow("whole number from 1 to");
+    await expect(t.accounts.add(MAX_INDEX + 1)).rejects.toThrow("whole number from 1 to");
   });
 
   it("never makes the private sessions' one-time account a public one", async () => {

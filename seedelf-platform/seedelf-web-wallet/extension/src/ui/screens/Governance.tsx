@@ -33,6 +33,7 @@ import { ExplorerLink } from "../components/ExplorerLink";
 import { ChevronRightIcon, DownloadIcon, LandmarkIcon, TrashIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { Hinted } from "../components/Hint";
 import { Screen } from "../components/Screen";
 import { epochEnds, formatAda, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
@@ -112,7 +113,14 @@ export function DrepCard({
   const registered = drep?.status === "registered";
   return (
     <section className="section" aria-labelledby="drep-title" data-testid="drep-card">
-      <h2 id="drep-title">{t(registered ? "drep.title" : "drep.beOne")}</h2>
+      {/* What a DRep is, for an account that isn't one: behind the icon, the deposit on the page. */}
+      {drep && !registered ? (
+        <Hinted text={t("drep.none.text")} testId="drep-none-text">
+          <h2 id="drep-title">{t("drep.beOne")}</h2>
+        </Hinted>
+      ) : (
+        <h2 id="drep-title">{t(registered ? "drep.title" : "drep.beOne")}</h2>
+      )}
       {!drep ? (
         <p className="note">{error ? t("drep.readFailed", { error }) : t("drep.reading")}</p>
       ) : registered ? (
@@ -183,7 +191,6 @@ export function DrepCard({
         </>
       ) : (
         <>
-          <p className="note">{t("drep.none.text")}</p>
           {drep.status === "retired" && <p className="note">{t("drep.retired.text")}</p>}
           <p className="note" data-testid="drep-deposit-note">
             {drep.depositNow
@@ -237,6 +244,8 @@ export function BecomeDrep({
     <Screen
       title={t("drep.register.title")}
       titleId="drep-register-title"
+      hint={t("drep.none.text")}
+      hintTestId="drep-register-note"
       onBack={onBack}
       backDisabled={busy}
       error={error}
@@ -252,7 +261,6 @@ export function BecomeDrep({
         </button>
       }
     >
-      <p className="note">{t("drep.none.text")}</p>
       <p className="note">
         {drep.depositNow ? t("drep.none.deposit", { amount: formatAda(drep.depositNow) }) : t("drep.none.depositUnknown")}
       </p>
@@ -278,8 +286,9 @@ export function BecomeDrep({
       </div>
 
       <section className="section" aria-labelledby="drep-profile-title">
-        <h2 id="drep-profile-title">{t("drep.register.profile")}</h2>
-        <p className="note">{t("drep.register.profileNote")}</p>
+        <Hinted text={t("drep.register.profileNote")} testId="drep-profile-note">
+          <h2 id="drep-profile-title">{t("drep.register.profile")}</h2>
+        </Hinted>
         {withProfile ? (
           <>
             <ProfileForm onAnchor={setAnchor} busy={busy} />

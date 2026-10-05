@@ -461,6 +461,13 @@ export function Lovejoin({
     if (r.source === "public" && r.summary.seed) return tr("lovejoin.review.seed");
     return tr((r.source === "private" ? r.summary.mix.again : r.summary.again) ? "lovejoin.review.again" : "lovejoin.review.mix");
   };
+  // How the reviewed mix runs once sent, behind the icon by the title (chunk 23): what it costs, hides and
+  // ties stays in the review's rows and callouts.
+  const howItRuns = (r: Review) => {
+    if (r.source === "private") return tr(r.summary.mix.again ? "lovejoin.review.againNote" : "lovejoin.review.privateNote");
+    if (r.summary.again) return tr("lovejoin.review.publicAgainNote");
+    return tr(r.summary.seed ? "lovejoin.review.seedNote" : "lovejoin.review.publicNote");
+  };
 
   const build = () =>
     act(async () => {
@@ -512,6 +519,8 @@ export function Lovejoin({
       <Screen
         title={reviewTitle(review)}
         titleId="lovejoin-review-title"
+        hint={howItRuns(review)}
+        hintTestId="lovejoin-review-note"
         onBack={() => setReview(undefined)}
         backDisabled={busy}
         aside={tr("review.nothingSent")}
@@ -950,7 +959,6 @@ export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix:
         />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.privateNote")}</p>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <p className="note">{tr("lovejoin.review.givemeNote")}</p>
@@ -995,7 +1003,6 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
         />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(mix.delay) })} />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.againNote")}</p>
       {mix.owned && mix.owned > mix.boxes && (
         <p className="note" data-testid="lovejoin-again-rest">
           {tr("lovejoin.review.asManyAsOneGo", { count: mix.boxes })}
@@ -1032,7 +1039,6 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.publicNote")}</p>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.public"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );
@@ -1054,7 +1060,6 @@ function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.seedNote")}</p>
       <Callout tone="warn" testId="lovejoin-seed-warning">
         {tr("lovejoin.review.warn.seed")}
       </Callout>
@@ -1078,7 +1083,6 @@ function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.publicAgainNote")}</p>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );

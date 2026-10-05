@@ -21,6 +21,17 @@ import { call } from "./background";
 /** The name an account is shown by: its own, or its number as a person counts (from 1). */
 export const accountName = (a: KnownAccount): string => a.name?.trim() || t("accounts.numbered", { number: a.index + 1 });
 
+/**
+ * Its number and, when it has one, its name: where a screen has to say exactly
+ * which account it means (the connector's windows, chunk 23), a name alone
+ * could be anyone's, and two accounts can share one.
+ */
+export const accountNumberAndName = (a: KnownAccount): string => {
+  const number = t("accounts.numbered", { number: a.index + 1 });
+  const name = a.name?.trim();
+  return name ? `${number} · ${name}` : number;
+};
+
 /** The name of account `index` among `accounts`, for a message about one that may not be listed. */
 export const nameOf = (accounts: KnownAccount[], index: number): string =>
   accountName(accounts.find((a) => a.index === index) ?? { index });

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { joinSentences, t, useT } from "../../i18n";
 
 import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
+import { accountNumberAndName, useAccounts } from "../accounts";
 import { call, onDappChanged } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
@@ -32,6 +33,7 @@ import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
 import { formatAda, formatQuantity, shortHex } from "../format";
 import { useNetwork } from "../network";
+import { usePreferences } from "../preferences";
 import { tokenDecimals, tokenText } from "../tokens";
 
 /** How long an empty list waits before the window closes: a site's next request may be on its way. */
@@ -42,11 +44,26 @@ const CLOSE_AFTER_MS = 800;
  */
 const HOLD_MS = 1_000;
 
+/**
+ * Which public account a site connected to it gets, by its number and name,
+ * when the wallet has more than one: sites always use the one Settings →
+ * Sites chooses, whichever is on screen, so "your public account" alone
+ * could mean an account the screen isn't showing (chunk 23). Undefined with
+ * one account, where there's nothing to tell apart.
+ */
+function useSiteAccount(): string | undefined {
+  const { accounts, several } = useAccounts();
+  const { prefs, loaded } = usePreferences();
+  if (!several || !loaded) return undefined;
+  return accountNumberAndName(accounts.find((a) => a.index === prefs.dappAccount) ?? { index: prefs.dappAccount });
+}
+
 /** How the request shown came to be: the next after the user's answer, or in the place of one that's gone. */
 type Change = "next" | "replaced";
 
 export function DappApprovals() {
   const tr = useT();
+  const siteAccount = useSiteAccount();
   const [approvals, setApprovals] = useState<DappApproval[]>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -192,7 +209,12 @@ export function DappApprovals() {
     >
       <div className="stack" data-testid={`dapp-${current.kind}`}>
         <Changed change={change} />
-        <Site origin={current.origin} title={current.title} session={current.session} />
+        <Site
+          origin={current.origin}
+          title={current.title}
+          session={current.session}
+          account={current.session === undefined ? siteAccount : undefined}
+        />
         {current.kind === "sign-tx" && (
           <SignTx
             summary={current.summary}
@@ -237,9 +259,10 @@ function Changed({ change }: { change?: Change }) {
 /**
  * Who's asking: the origin, as Chrome reported it. The page's own title is
  * the site's to choose, so it's second. A site connected to a private
- * session says so.
+ * session says so, and one connected to the public account names it when
+ * there's more than one (`account`). Exported for its tests.
  */
-function Site({ origin, title, session }: { origin: string; title?: string; session?: number }) {
+export function Site({ origin, title, session, account }: { origin: string; title?: string; session?: number; account?: string }) {
   const tr = useT();
   const host = new URL(origin).host;
   return (
@@ -253,6 +276,11 @@ function Site({ origin, title, session }: { origin: string; title?: string; sess
         {session !== undefined && (
           <span className="dapp-site__session" data-testid="dapp-site-session">
             {tr("dappUi.connectedToSession", { number: session + 1 })}
+          </span>
+        )}
+        {session === undefined && account && (
+          <span className="dapp-site__session" data-testid="dapp-site-account">
+            {tr("dappUi.connectedToAccount", { account })}
           </span>
         )}
       </span>
@@ -308,6 +336,7 @@ export function ConnectRequest({
 }) {
   const tr = useT();
   const network = useNetwork();
+  const siteAccount = useSiteAccount();
   const [connection, setConnection] = useState<Connection>();
   // Asked for, governance goes with the public account only when switched on: off, as the most private choice is.
   const [governance, setGovernance] = useState(false);
@@ -329,6 +358,8 @@ export function ConnectRequest({
 
   const host = new URL(approval.origin).host;
   const site = <Site origin={approval.origin} title={approval.title} />;
+  // Asking for governance alone, it's connected already: to the dApp account, named as a signature's window names it.
+  const connectedSite = <Site origin={approval.origin} title={approval.title} account={siteAccount} />;
 
   // Sent: it waits for the network, and the site connects once Koios sees the money.
   if (approval.funding) {
@@ -377,7 +408,7 @@ export function ConnectRequest({
       >
         <div className="stack" data-testid="dapp-governance">
           <Changed change={change} />
-          {site}
+          {connectedSite}
           <p className="note">{tr("dappUi.governance.asks")}</p>
           <Callout tone="privacy" testId="dapp-governance-privacy">
             {tr("dappUi.privacy.governance")}
@@ -422,6 +453,8 @@ export function ConnectRequest({
         onSubmit={send}
         title={tr("dappUi.reviewFunding")}
         titleId="dapp-title"
+        hint={tr("dappUi.ordinaryWallet")}
+        hintTestId="dapp-funding-note"
         onBack={() => {
           setReview(undefined);
           setPassword("");
@@ -450,7 +483,6 @@ export function ConnectRequest({
             <Row label={tr("review.backToPrivate")} value={`${formatAda(review.changeLovelace)} ₳`} />
           </ReviewRows>
           <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
-          <p className="note">{tr("dappUi.ordinaryWallet")}</p>
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}
           </Callout>
@@ -474,6 +506,8 @@ export function ConnectRequest({
       onSubmit={connection === "private" ? build : undefined}
       title={tr("dappUi.connectTitle")}
       titleId="dapp-title"
+      hint={tr("dappUi.disconnectInSettings")}
+      hintTestId="dapp-disconnect-note"
       aside={
         connection
           ? `${tr("dappUi.nothingUntil", { action: tr(connection === "private" ? "common.review" : "dappUi.connect") })}${more}`
@@ -527,7 +561,10 @@ export function ConnectRequest({
         {connection === undefined ? (
           <ul className="dapp-points" data-testid="dapp-connect-costs">
             <li>
-              <strong>{tr("dappUi.cost.publicLabel")}</strong> {tr("dappUi.cost.public")}
+              <strong>
+                {siteAccount ? tr("dappUi.cost.publicLabelNamed", { account: siteAccount }) : tr("dappUi.cost.publicLabel")}
+              </strong>{" "}
+              {tr("dappUi.cost.public")}
             </li>
             <li>
               <strong>{tr("dappUi.cost.privateLabel")}</strong> {tr("dappUi.cost.private")}
@@ -536,6 +573,7 @@ export function ConnectRequest({
         ) : connection === "public" ? (
           <>
             <ul className="dapp-points">
+              {siteAccount && <li data-testid="dapp-connect-account">{tr("dappUi.public.which", { account: siteAccount })}</li>}
               <li>{tr("dappUi.public.sees")}</li>
               <li>{tr("dappUi.public.asks")}</li>
             </ul>
@@ -600,7 +638,6 @@ export function ConnectRequest({
             </Callout>
           </>
         )}
-        <p className="note">{tr("dappUi.disconnectInSettings")}</p>
       </div>
     </Screen>
   );

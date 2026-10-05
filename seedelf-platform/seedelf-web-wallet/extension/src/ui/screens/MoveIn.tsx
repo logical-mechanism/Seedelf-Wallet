@@ -83,6 +83,8 @@ export function MoveIn({
       <Screen
         title={t("moveIn.review.title")}
         titleId="move-in-review"
+        hint={t("moveIn.review.note")}
+        hintTestId="move-in-review-note"
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
         aside={t("review.nothingSent")}
@@ -107,7 +109,6 @@ export function MoveIn({
         <TxDetailButton txHash={summary.txHash} testId="move-in-tx" />
         <MinimumNote lovelace={summary.lovelace} minimum={summary.minimum} asked={lovelace ?? "0"} tokens={summary.tokens.length} />
         <LeftOutNote leftOut={summary.leftOut} testId="move-in-left-out" />
-        <p className="note">{t("moveIn.review.note")}</p>
       </Screen>
     );
   }
@@ -117,6 +118,8 @@ export function MoveIn({
       onSubmit={review}
       title={t("home.action.makePrivate")}
       titleId="move-in-title"
+      hint={t("moveIn.note")}
+      hintTestId="move-in-note"
       onBack={onCancel}
       aside={`${t("withdraw.asideAvailable", { amount: formatAda(cardano.lovelace) })}${rewardsAside(rewards)}${lockedAside(cardano)}`}
       error={error}
@@ -129,8 +132,6 @@ export function MoveIn({
         </>
       }
     >
-      <p className="note">{t("moveIn.note")}</p>
-
       <div className="field">
         <label htmlFor="move-in-amount">{t("common.amount")}</label>
         <AdaInput

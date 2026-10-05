@@ -149,12 +149,11 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
       title={t(of === "seedelf" ? "utxos.titlePrivate" : "utxos.titlePublic")}
       titleId="utxos-title"
       onBack={onBack}
+      hint={joinSentences([t("utxos.lockNote"), of === "cardano" && t("utxos.lockNoteSite")])}
+      hintTestId="utxos-lock-note"
       aside={list ? `${t("amount.utxos", { count: list.length })}${locked ? t("utxos.lockedMeta", { count: locked }) : ""}` : " "}
       error={shown ? undefined : error}
     >
-      <p className="note" data-testid="utxos-lock-note">
-        {joinSentences([t("utxos.lockNote"), of === "cardano" && t("utxos.lockNoteSite")])}
-      </p>
       {of === "cardano" && <MixHolding progress={mix} />}
       {stuck > 0 && (
         <Callout tone="warn" testId="utxos-unspendable">

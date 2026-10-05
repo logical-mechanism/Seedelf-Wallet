@@ -31,6 +31,8 @@ export function Receive({ account, handles, onBack }: { account: Account; handle
       title={t("receive.title")}
       titleId="receive-title"
       onBack={onBack}
+      hint={t("receive.note.fund")}
+      hintTestId="receive-fund-note"
       aside={several ? t("receive.aside.named", { name }) : t("receive.aside.account")}
     >
       <div className="qr-wrap">
@@ -42,7 +44,6 @@ export function Receive({ account, handles, onBack }: { account: Account; handle
         value={account.receiveAddress}
         testId="receive-address"
       />
-      <p className="note">{t("receive.note.fund")}</p>
       <Callout tone="privacy">{t("receive.privacy.publicAddress")}</Callout>
       {handles.length > 0 && (
         <section className="section" aria-labelledby="your-handles">

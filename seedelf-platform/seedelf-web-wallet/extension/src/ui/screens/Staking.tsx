@@ -27,6 +27,7 @@ import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ChevronRightIcon, TrashIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { Hinted } from "../components/Hint";
 import { Screen } from "../components/Screen";
 import { TxDetailButton } from "../components/TxDetail";
 import { adaWithTokens, formatAda, formatPercent, poolLabel, rewardsLocked, shortId, voteLabel } from "../format";
@@ -234,10 +235,9 @@ export function Staking({
         </section>
       ) : (
         <section className="section" aria-labelledby="pool-title">
-          <h2 id="pool-title">{t("home.staking.not")}</h2>
-          <p className="note">
-            {t("staking.note")}
-          </p>
+          <Hinted text={t("staking.note")} testId="staking-note">
+            <h2 id="pool-title">{t("home.staking.not")}</h2>
+          </Hinted>
           {!staking.registered && (
             <p className="note">{t("staking.depositNote")}</p>
           )}
@@ -270,7 +270,9 @@ export function Staking({
       )}
 
       <section className="section" aria-labelledby="vote-title">
-        <h2 id="vote-title">{t("activity.row.votingPower")}</h2>
+        <Hinted text={t("staking.voteNote")} testId="staking-vote-note">
+          <h2 id="vote-title">{t("activity.row.votingPower")}</h2>
+        </Hinted>
         <ReviewRows testId="vote-now">
           <Row label={t("staking.delegatedTo")} value={voteLabel(staking.drep, ownDrepName)} title={staking.drep ?? undefined} strong />
         </ReviewRows>
@@ -279,7 +281,6 @@ export function Staking({
             {t("staking.warn.rewardsLocked", { amount: amounts.ada(staking.rewards) })}
           </Callout>
         )}
-        <p className="note">{t("staking.voteNote")}</p>
         <button type="button" className="secondary" onClick={() => setPage("vote")} disabled={!!blocked || busy} title={blocked}>
           {t(staking.drep ? "staking.change" : "staking.delegate")}
         </button>
@@ -431,6 +432,9 @@ export function StakingReview({
     <Screen
       title={t(TITLES[action.kind])}
       titleId="staking-review-title"
+      // When rewards start: how a delegation runs once sent, for anyone who wants it.
+      hint={action.kind === "delegate" ? t("staking.review.rewardsStart") : undefined}
+      hintTestId="staking-rewards-start"
       onBack={onBack}
       backDisabled={busy}
       aside={t("review.nothingSent")}
@@ -492,11 +496,6 @@ export function StakingReview({
       )}
       {stakeDeposit > 0n && (
         <p className="note">{t("staking.review.depositNote")}</p>
-      )}
-      {action.kind === "delegate" && (
-        <p className="note">
-          {t("staking.review.rewardsStart")}
-        </p>
       )}
       {action.kind === "stop" && (
         <p className="note">{t("staking.review.stopNote")}</p>

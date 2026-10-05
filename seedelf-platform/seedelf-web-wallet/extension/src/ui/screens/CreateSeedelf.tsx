@@ -116,6 +116,8 @@ export function CreateSeedelf({
       onSubmit={review}
       title={t("home.action.createSeedelf")}
       titleId="mint-title"
+      hint={t("mint.note")}
+      hintTestId="mint-note"
       onBack={onCancel}
       aside={t(from === "account" ? "mint.asideAccount" : "mint.asidePrivate", {
         amount: formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace),
@@ -130,8 +132,6 @@ export function CreateSeedelf({
         </>
       }
     >
-      <p className="note">{t("mint.note")}</p>
-
       <div className="field">
         <label htmlFor="mint-label">{t("mint.tagLabel")}</label>
         <input

@@ -60,6 +60,7 @@ import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
 import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides } from "../components/LovejoinReturn";
+import { HintButton, HintText, Hinted, useHint } from "../components/Hint";
 import { Modal } from "../components/Modal";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -198,6 +199,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   // the name the user gave it (the owner, 2026-10-02).
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
+  const custom = useHint();
   const shown = q
     ? accounts.filter((a) => accountName(a).toLowerCase().includes(q) || String(a.index + 1).includes(q))
     : accounts;
@@ -256,7 +258,13 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
     });
 
   return (
-    <Screen title={t("accounts.title")} titleId="accounts-title" onBack={onBack}>
+    <Screen
+      title={t("accounts.title")}
+      titleId="accounts-title"
+      onBack={onBack}
+      hint={t("accounts.note")}
+      hintTestId="accounts-note"
+    >
       <section className="section" aria-labelledby="accounts-list-title">
         {/* The count, because the list scrolls: a row cut off at the bottom
             edge otherwise reads as clipped rather than as more below. */}
@@ -359,9 +367,6 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             {t("accounts.noneMatch", { query: query.trim() })}
           </p>
         )}
-        <p className="note" data-testid="accounts-note">
-          {t("accounts.note")}
-        </p>
         <p className="note" data-testid="accounts-private-note">
           {t("accounts.privacy.sharedBalance")}
         </p>
@@ -378,6 +383,13 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
           }}
         >
           <label htmlFor="account-number">{t("accounts.numberLabel")}</label>
+          <HintButton
+            text={t("accounts.customNote")}
+            open={custom.open}
+            onToggle={custom.toggle}
+            controls={custom.id}
+            testId="accounts-custom-note-hint"
+          />
           <input
             id="account-number"
             type="number"
@@ -420,9 +432,7 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
             }}
           />
         </p>
-        <p className="note" data-testid="accounts-custom-note">
-          {t("accounts.customNote")}
-        </p>
+        {custom.open && <HintText text={t("accounts.customNote")} id={custom.id} testId="accounts-custom-note" />}
         {unused !== undefined && (
           <div className="actions" data-testid="accounts-add-unused">
             <button type="button" className="primary" onClick={() => void addOne(unused)} disabled={busy !== undefined}>
@@ -674,6 +684,7 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
       <h2 id="lovejoin-settings-title">{t("settings.lovejoin")}</h2>
+      {/* What it costs, what a lock does to it and what it doesn't hide: on the page, not behind an icon (chunk 23). */}
       <p className="note">
         {joinSentences([t("settings.lovejoin.note"), floor > 0 && t("settings.lovejoin.floor", { count: floor }), LOVEJOIN_SEEN()])}
       </p>
@@ -719,7 +730,9 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
         </p>
       </div>
       <div className="field">
-        <label htmlFor="lovejoin-delay">{t("settings.lovejoin.delay")}</label>
+        <Hinted text={t("settings.lovejoin.delayNote")} testId="lovejoin-delay-note">
+          <label htmlFor="lovejoin-delay">{t("settings.lovejoin.delay")}</label>
+        </Hinted>
         <select
           id="lovejoin-delay"
           value={prefs.lovejoinDelay}
@@ -732,9 +745,6 @@ export function LovejoinSettings({ network }: { network: NetworkName }) {
             </option>
           ))}
         </select>
-        <p className="note">
-          {t("settings.lovejoin.delayNote")}
-        </p>
       </div>
       {error && (
         <p className="error" role="alert">

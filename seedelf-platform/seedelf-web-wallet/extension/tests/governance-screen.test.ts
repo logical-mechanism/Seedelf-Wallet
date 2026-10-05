@@ -22,6 +22,11 @@ const text = (html: string) =>
     .replace(/\s+/g, " ")
     .trim();
 const noop = () => undefined;
+/** An explanation behind an icon (components/Hint.tsx): in the icon's title, and not on the page until it's asked for. */
+const behindIcon = (html: string, words: string) => {
+  expect(html).toMatch(new RegExp(`class="hint" title="[^"]*${words.replaceAll("'", "&#x27;").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  expect(text(html)).not.toContain(words);
+};
 
 const ID = "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a";
 const staking: StakeInfo = { registered: true, pool: null, drep: "drep_always_abstain", rewards: "0", deposit: "2000000" };
@@ -46,21 +51,20 @@ const registered: OwnDrep = {
   votingPower: "61211118",
   delegators: 1,
 };
-const card = (drep: OwnDrep | undefined, stake = staking) =>
-  text(
-    markup(
-      createElement(DrepCard, {
-        drep,
-        staking: stake,
-        busy: false,
-        onBecome: noop,
-        onActions: noop,
-        onProfile: noop,
-        onRetire: noop,
-        onDelegateOwn: noop,
-      }),
-    ),
+const cardHtml = (drep: OwnDrep | undefined, stake = staking) =>
+  markup(
+    createElement(DrepCard, {
+      drep,
+      staking: stake,
+      busy: false,
+      onBecome: noop,
+      onActions: noop,
+      onProfile: noop,
+      onRetire: noop,
+      onDelegateOwn: noop,
+    }),
   );
+const card = (drep: OwnDrep | undefined, stake = staking) => text(cardHtml(drep, stake));
 
 afterEach(async () => {
   await i18n.changeLanguage("en");
@@ -70,7 +74,8 @@ describe("the DRep card", () => {
   it("not a DRep: what one is, the deposit and that it comes back, and Become a DRep", () => {
     const shown = card(none);
     expect(shown).toContain("Be your own DRep");
-    expect(shown).toContain("you vote with your own stake, instead of delegating it to someone else.");
+    // What a DRep is sits behind the heading's icon (chunk 23); the deposit stays on the page.
+    behindIcon(cardHtml(none), "you vote with your own stake, instead of delegating it to someone else.");
     expect(shown).toContain("Registering locks up 500 ₳, which comes back when you retire it.");
     expect(shown).toContain("Become a DRep");
     expect(shown).toContain("Private money has no stake key, so it carries no voting power");
@@ -119,7 +124,7 @@ describe("Become a DRep", () => {
     expect(html).toContain('role="switch" class="switch" aria-checked="true"');
     const shown = text(html);
     expect(shown).toContain("It goes to your DRep instead of Always abstain.");
-    expect(shown).toContain("A DRep needs no profile to vote.");
+    behindIcon(html, "A DRep needs no profile to vote.");
     expect(shown).toContain("Add a profile");
     expect(shown).toContain(
       "A DRep is public, and it's paid for from your public account, so anyone can tie the DRep, and every vote it casts, to that account.",

@@ -150,10 +150,16 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <Screen title={t("utxos.tag.collateral")} titleId="collateral-title" onBack={onBack} backDisabled={busy} error={error} foot={foot}>
-      <p className="note">
-        {t("collateral.note")}
-      </p>
+    <Screen
+      title={t("utxos.tag.collateral")}
+      titleId="collateral-title"
+      onBack={onBack}
+      backDisabled={busy}
+      error={error}
+      foot={foot}
+      hint={t("collateral.note")}
+      hintTestId="collateral-note"
+    >
       {body}
       <Callout tone="privacy">
         {t("collateral.privacy.giveme")}

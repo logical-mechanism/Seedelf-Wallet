@@ -767,6 +767,16 @@ main {
   overflow-wrap: anywhere;
 }
 
+/* A title with its explanation behind an icon (components/Hint.tsx): the pair
+   stays centred, the icon after the words. */
+.screen__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
 .screen__aside {
   margin: -8px 0 0;
   text-align: center;
@@ -3358,6 +3368,14 @@ button.dapp-tile:hover {
 
 .hint__text {
   margin: 0;
+}
+
+/* A heading or a label with its hint beside it (components/Hint.tsx's Hinted). */
+.hinted {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 
 /* A datum, or a redeemer's argument, as a tree that opens

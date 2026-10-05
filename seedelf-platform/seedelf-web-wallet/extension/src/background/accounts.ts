@@ -319,7 +319,7 @@ export class AccountsService {
 const notPublic = (index: number) =>
   index === ONE_TIME_ACCOUNT
     ? t("worker.accounts.reserved", { number: ONE_TIME_ACCOUNT + 1 })
-    : t("worker.accounts.badIndex", { max: MAX_INDEX });
+    : t("worker.accounts.badIndex", { max: MAX_INDEX + 1 });
 /** And for a list that is already as long as the picker should get. */
 const tooMany = () => t("worker.accounts.tooMany", { max: MAX_KEPT });
 
