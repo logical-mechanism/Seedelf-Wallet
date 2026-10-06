@@ -412,7 +412,14 @@ export function Staking({
             {amounts.ada(staking.rewards)}
             <span className="amount__unit">{"\u00a0₳"}</span>
           </p>
-          <p className="note">{t(spendRewards ? "staking.rewardsSpent" : "staking.rewardsWait")}</p>
+          {/* When withdrawing by hand matters, naming the setting that decides it (blind test §9.9, E04): with it on,
+              payments take the rewards along, so only a site, which counts the balance without them, needs it.
+              Locked, the warning under the vote says what's true instead. */}
+          {!locked && (
+            <p className="note" data-testid="staking-rewards-note">
+              {t(spendRewards ? "staking.rewardsSpent" : "staking.rewardsWait", { setting: t("settings.staking.useRewards") })}
+            </p>
+          )}
           <button
             type="button"
             className="secondary"
@@ -701,6 +708,7 @@ export function StakingReview({
     <Screen
       title={t(action.kind === "delegate" && switching ? "staking.review.changePool" : TITLES[action.kind])}
       titleId="staking-review-title"
+      review
       // When rewards start: how a delegation runs once sent, for anyone who wants it. Changing pools has no gap,
       // which the first stake's words didn't say to an account already earning (ST-7).
       hint={action.kind === "delegate" ? t(switching ? "staking.review.rewardsSwitch" : "staking.review.rewardsStart") : undefined}

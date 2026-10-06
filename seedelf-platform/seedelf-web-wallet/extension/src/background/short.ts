@@ -10,6 +10,10 @@
 // less than the least ADA the network accepts: 100 ₳ in one UTxO, 99.5 ₳ asked.
 // Max then pays more than was asked, and "up to {max}" would be false, so that
 // one says what stays is too little (chunk 23's second review, fix round).
+//
+// The private side said only "for this and its fee" until blind test T05: its
+// Send and Make public now say the most that can go, and what has to stay
+// (`privateShortOf`), as the public side does.
 
 import { t } from "../i18n";
 import { isTrap } from "./wasm";
@@ -21,9 +25,70 @@ const PRIVATE_SHORT = /Not enough ADA in the Seedelf balance/;
 /** Whether `e` is core saying the public account can't pay. */
 export const isPublicShort = (e: unknown): boolean => e instanceof Error && PUBLIC_SHORT.test(e.message);
 
+/** Whether `e` is core saying the private balance can't pay. */
+const isPrivateShort = (e: unknown): boolean => e instanceof Error && PRIVATE_SHORT.test(e.message);
+
 /** A private spend's shortfall in the user's words; any other error as it was. */
 export function privateShort(e: unknown): unknown {
-  return e instanceof Error && PRIVATE_SHORT.test(e.message) ? new Error(t("worker.short.private")) : e;
+  return isPrivateShort(e) ? new Error(t("worker.short.private")) : e;
+}
+
+/** What a private payment built as Max says, for a shortfall's figures (WebAssembly's `TransferResult`/`WithdrawResult`). */
+export interface PrivateMost {
+  payments: Array<{ lovelace: string }>;
+  /** What stays in the private balance: the tokens kept, with the least ADA they need. */
+  changeLovelace: string;
+  changeTokens: number;
+  /** The least ADA what stays needs: the kept tokens', or, with none, an output of ADA alone. */
+  changeMinimum: string;
+}
+
+/**
+ * A private payment's shortfall in the user's words, with what must stay behind and the most that can go (blind
+ * test T05). "Not enough ADA … for this and its fee" also refused amounts well within the fee on screen: what
+ * stays must carry the least ADA the network accepts, 1.64642 ₳ while it held a token, and the tester needed about
+ * 15 guesses to find the limit. WebAssembly now measures an amount before refusing it, so the limit is the
+ * review's own fee's; `most` builds the payment again as Max would (the same UTxOs, read already: nothing asked of
+ * anyone) and says what that pays. It says "about" that much: each build's fee depends a little on its new one-time
+ * key (the script finds that key's hash among the signers a step sooner or later, a few hundred lovelace), so the
+ * figure moves that much from one build to the next. Max itself always pays exactly what its review shows.
+ *
+ * - `asked` is each payment's lovelace as asked (null for Max). One payment: past Max's, "up to" Max's figure, and
+ *   what the tokens kept need to keep with them; at or under it, it's what would stay that's too little, and the
+ *   least that can.
+ * - Several: no Max measures them, so as the public side says it (`severalShort`), against `available`, the
+ *   private UTxOs' lovelace.
+ * - Max itself short, or a rebuild that fails: the plain sentence. A trap is thrown as it is (wasm.ts).
+ */
+export async function privateShortOf(
+  e: unknown,
+  asked: Array<string | null>,
+  most: () => Promise<PrivateMost>,
+  available: bigint,
+): Promise<unknown> {
+  if (!isPrivateShort(e)) return e;
+  const plain = new Error(t("worker.short.private"));
+  if (asked.length > 1) {
+    if (asked.some((a) => a === null || !/^\d+$/.test(a))) return new Error(t("worker.short.privateSeveral"));
+    const total = asked.reduce((sum, a) => sum + BigInt(a!), 0n);
+    return new Error(t(total < available ? "worker.short.privateSeveralLeft" : "worker.short.privateSeveral"));
+  }
+  const [one] = asked;
+  if (one === null || one === undefined || !/^\d+$/.test(one)) return plain;
+  let max: PrivateMost;
+  try {
+    max = await most();
+  } catch (err) {
+    if (isTrap(err)) throw err;
+    return plain;
+  }
+  const top = BigInt(max.payments[0]!.lovelace);
+  if (top >= BigInt(one)) return new Error(t("worker.short.privateLeft", { least: adaWords(max.changeMinimum) }));
+  return new Error(
+    max.changeTokens > 0
+      ? t("worker.short.privateUpToKept", { max: adaWords(top.toString()), kept: adaWords(max.changeLovelace) })
+      : t("worker.short.privateUpTo", { max: adaWords(top.toString()) }),
+  );
 }
 
 /**

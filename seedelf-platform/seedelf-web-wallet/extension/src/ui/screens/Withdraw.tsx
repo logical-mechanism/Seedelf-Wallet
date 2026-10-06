@@ -6,8 +6,8 @@
 // with Ogmios measuring its spends, and nothing is sent until the user has
 // reviewed it and pressed Send.
 
-import { useState, type FormEvent } from "react";
-import { useT } from "../../i18n";
+import { useEffect, useState, type FormEvent } from "react";
+import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
@@ -15,6 +15,7 @@ import { call, isStale } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, amountText, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { LeftOutNote } from "../components/LeftOut";
 import { DestinationInput, type DestinationRead, type KnownRead } from "../components/Destination";
@@ -51,13 +52,15 @@ export function Withdraw({
   seedelf,
   total,
   to,
+  amount,
   picked,
   onCancel,
   onSent,
 }: {
   seedelf: Balances["seedelf"];
-  /** An address handed on from Send, which pays only Seedelfs (chunk 23's review, P-1). */
+  /** An address handed on from Send, which pays only Seedelfs (chunk 23's review, P-1), with the amount typed (blind test §9.7). */
   to?: string;
+  amount?: string;
   /** Tokens picked already, from a token's details: each asks for its amount. */
   picked?: Record<string, string>;
   /** The whole private balance, as Home shows it (locked UTxOs in): the review's balance after. */
@@ -67,7 +70,7 @@ export function Withdraw({
 }) {
   const t = useT();
   const network = useNetwork();
-  const list = useRecipients(to, picked);
+  const list = useRecipients(to, picked, amount);
   const [reads, setReads] = useState<Record<number, KnownRead>>({});
   const [max, setMax] = useState(false);
   const [summary, setSummary] = useState<WithdrawSummary>();
@@ -75,6 +78,8 @@ export function Withdraw({
   const [error, setError] = useState<string>();
   // The worker's words for a review that can't go as it is: Send gives way to building it again.
   const stale = useStale();
+  // A refusal is about what was asked: once the form changes, it's gone, not left to read as the new answer (T05).
+  useEffect(() => setError(undefined), [list.drafts, max]);
 
   // Max pays a single address.
   const maxed = max && !list.several;
@@ -136,7 +141,7 @@ export function Withdraw({
     try {
       onSent(await call("withdraw-submit", { txHash: summary.txHash }));
     } catch (err) {
-      if (isStale(err)) stale.refused((err as Error).message);
+      if (isStale(err)) stale.refused(err);
       else setError((err as Error).message);
       setBusy(false);
     }
@@ -183,6 +188,7 @@ export function Withdraw({
       <Screen
         title={t("withdraw.review.title")}
         titleId="withdraw-review"
+        review
         onBack={() => {
           // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
           setSummary(undefined);
@@ -194,7 +200,7 @@ export function Withdraw({
         error={error}
         foot={
           stale.detail !== undefined ? (
-            <StaleFoot detail={stale.detail} busy={busy} onAgain={() => void build()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void build()} />
           ) : (
             <>
               <RenewedNote renewed={stale.renewed} />
@@ -223,16 +229,20 @@ export function Withdraw({
         ))}
         {summary.left > 0 && (
           <p className="note" data-testid="withdraw-left">
-            {t("withdraw.left", { count: summary.left })}{" "}
-            {summary.inputs < MAX_UTXOS
-              ? t("withdraw.leftTokens", { count: summary.left })
-              : t("withdraw.leftLimit", { max: MAX_UTXOS })}
+            {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
+            {joinSentences([
+              t("withdraw.left", { count: summary.left }),
+              summary.inputs < MAX_UTXOS
+                ? t("withdraw.leftTokens", { count: summary.left })
+                : t("withdraw.leftLimit", { max: MAX_UTXOS }),
+            ])}
           </p>
         )}
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {/* With several, each of the user's own by its number: the warning didn't say which it meant (PY-5). */}
         {summary.payments.map((p, i) => p.own && <OwnWarning key={i} account={p.ownAccount} nth={several ? i + 1 : undefined} />)}
         <p className="note">{t("withdraw.review.note")}</p>
+        <GivemeNote />
       </Screen>
     );
   }
@@ -242,6 +252,10 @@ export function Withdraw({
       onSubmit={review}
       title={t("home.action.makePublic")}
       titleId="withdraw-title"
+      // What the name means, by the name: "Make public" read as a privacy setting, or a move to one's own account
+      // (blind test §5, T04b, T06). The name is the owner's call (PY-2).
+      hint={t("withdraw.hint")}
+      hintTestId="withdraw-hint"
       onBack={onCancel}
       aside={
         seedelf.locked.utxos
@@ -260,9 +274,10 @@ export function Withdraw({
       }
     >
       {/* What this is for, on the page: "Make public" read as moving money to your own account, not as paying
-          anyone (chunk 23's review, P-2). */}
+          anyone (chunk 23's review, P-2); and what the payment shows at their end, which the screen that sent T04b
+          and T06 here said and this one didn't (blind test §9.7). */}
       <p className="note" data-testid="withdraw-lead">
-        {t("withdraw.lead")}
+        {joinSentences([t("withdraw.lead"), t("withdraw.privacy.shows")])}
       </p>
       {list.drafts.map((d, i) => {
         const read = readOf(d);

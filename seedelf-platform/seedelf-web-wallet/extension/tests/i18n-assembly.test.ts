@@ -323,7 +323,7 @@ describe("whole sentences, one after another", () => {
       lovejoinSkipped: "ボックスが足りません。",
     };
     await japanese();
-    const note = words(createElement(LovejoinNote, { back, busy: false, onDirect: noop }));
+    const note = words(createElement(LovejoinNote, { back }));
     expect(note).toContain(": ボックスが足りません。そのため");
     expect(note).not.toContain("。。");
     const site: SessionView = {

@@ -280,7 +280,7 @@ export class StakingService {
     const { wasm, wallet } = this.deps;
     await settleMaybeSent(this.deps, network);
     const koios = this.deps.koios(network);
-    const [{ params, utxos, held, stake }, invalidHereafter, drepRow] = await Promise.all([
+    const [{ params, utxos, held, stake, rewardsOnTheWay }, invalidHereafter, drepRow] = await Promise.all([
       readAccount(this.deps, network, { stake: true }),
       validUntil(koios),
       isDrepAction(action) ? ownDrepId(this.deps).then((id) => koios.drepStanding(id)) : undefined,
@@ -293,6 +293,12 @@ export class StakingService {
     // Retiring returns exactly what was paid: without Koios's figure, nothing is guessed.
     if (action.kind === "drep-retire" && !/^[1-9]\d*$/.test(drepRow?.deposit ?? "")) {
       throw new Error(t("worker.governance.noDeposit"));
+    }
+    // Withdrawing the rewards, or stopping, which withdraws them too, while a payment that withdrew them is on its
+    // way: Koios still reports them, and the ledger would refuse one of the two (the fix round's review of blind
+    // test §9.1). Home shows them gone already.
+    if ((action.kind === "withdraw" || action.kind === "stop") && rewardsOnTheWay) {
+      throw new Error(t("worker.staking.warn.rewardsOnTheWay"));
     }
     const state = stakeInfoOf(stake, null);
     if (utxos.length === 0) {

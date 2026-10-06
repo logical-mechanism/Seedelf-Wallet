@@ -75,3 +75,18 @@ test("knows the account's own addresses", () => {
   assert.equal(account.isOwnAddress("nope"), false);
   account.free();
 });
+
+test("says the most an amount could be, the tokens staying (blind test T05)", () => {
+  const key = SeedelfKey.fromPhrase(vector(12).phrase, 0);
+  const most = JSON.parse(buildWithdraw(key, JSON.stringify({ ...withdrawal("amount", { lovelace: null, tokens: [] }), most: true })));
+  assert.equal(most.changeTokens, 1);
+  assert.equal(most.changeMinimum, most.changeLovelace);
+  const top = 28_000_000 - Number(most.fee.total) - Number(most.changeLovelace);
+  assert.equal(most.payments[0].lovelace, String(top));
+  // A hair under it pays; Max, without `most`, still sends every token.
+  const under = JSON.parse(buildWithdraw(key, JSON.stringify(withdrawal("amount", { lovelace: String(top - 5_000), tokens: [] }))));
+  assert.equal(under.payments[0].lovelace, String(top - 5_000));
+  const all = JSON.parse(buildWithdraw(key, JSON.stringify(withdrawal("amount", { lovelace: null, tokens: [] }))));
+  assert.equal(all.payments[0].tokens.length, 1);
+  key.free();
+});

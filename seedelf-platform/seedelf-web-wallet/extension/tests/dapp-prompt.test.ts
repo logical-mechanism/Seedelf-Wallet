@@ -2,6 +2,7 @@
 // (launch review #18): a stranger's token called "₳" or "tUSDM" is shown by
 // its fingerprint, marked, and warned about, never as ADA or the listed
 // token. The address a message is signed for is shown whole.
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -12,6 +13,7 @@ import { AccountsContext } from "../src/ui/accounts";
 import { PreferencesContext } from "../src/ui/preferences";
 import {
   ConnectRequest,
+  FundingWayBack,
   fundingPrivacy,
   PRIVATE_SESSION_PRIVACY,
   PUBLIC_PRIVACY,
@@ -19,6 +21,7 @@ import {
   SignTx,
   Site,
 } from "../src/ui/screens/DappApprovals";
+import { DeclinedSites, Disconnected, SiteRows } from "../src/ui/screens/ConnectedSites";
 import { assetFingerprint } from "../src/ui/tokens";
 
 const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
@@ -144,6 +147,32 @@ describe("who's asking", () => {
   });
 });
 
+describe("a private session's way back, on its funding's review (blind test §9.8, T16)", () => {
+  const wayBack = (lovejoin: boolean) =>
+    text(renderToStaticMarkup(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1" })));
+
+  it("gives the return's fee as an estimate, and both ways' together with this one's exact", () => {
+    const direct = wayBack(false);
+    // 0.233208 + about 0.25: about 0.48 ₳.
+    expect(direct).toContain("Its network fee, about 0.25 ₳ Network fees both ways, about 0.48 ₳");
+    expect(direct).toContain("everything there comes straight back into your private balance, the 5 ₳ kept aside with it");
+    expect(direct).not.toContain("Lovejoin");
+  });
+
+  it("says in plain words what coming back through Lovejoin is, and what a box of it costs", () => {
+    const through = wayBack(true);
+    expect(through).toContain("Through Lovejoin first, about 4.1 ₳ a 10 ₳ box");
+    // Through Lovejoin the way back is a deposit, the mixes and the return (sessions.ts backBuild): two network fees
+    // besides the mixes', so both ways are 0.233208 + 2 × about 0.25, about 0.73 ₳, as swapCosts and mixCosts count it.
+    expect(through).toContain("Its network fees, about 0.5 ₳: Lovejoin's deposit and the return");
+    expect(through).toContain("Network fees both ways, about 0.73 ₳");
+    expect(through).not.toContain("Its network fee, about 0.25 ₳");
+    expect(through).toContain("goes through Lovejoin first, a mixer: in 10 ₳ boxes mixed with other people's, so it's harder to tie");
+    expect(through).toContain("Settings, Lovejoin turns that off.");
+    expect(through).not.toContain("as Settings has it");
+  });
+});
+
 describe("a site's connect window", () => {
   const render = () =>
     renderToStaticMarkup(
@@ -167,10 +196,13 @@ describe("a site's connect window", () => {
     expect(page).toContain("Nothing happens until you choose, and press Connect or Review");
     expect(page).toContain("Your public account The site sees its addresses, its balance and its UTxOs, and keeps what it saw. No fee.");
     // The more private choice isn't the harder one to read (chunk 23's second review, CW-7): what it costs in one
-    // line, the 5 ₳ said for what it's for rather than as "collateral" (CW-8).
+    // line, the 5 ₳ said for what it's for rather than as "collateral" (CW-8), the fee each way with a figure, and
+    // what the wallet gives the site, not "sees only", which the note on what anyone can follow qualifies (blind test
+    // §9.8, §7, T16).
     expect(page).toContain(
-      "A private session The site sees only a new one-time account, funded from your private balance. A fee each way, 5 ₳ kept aside that comes back, and about a minute.",
+      "A private session The wallet gives the site only a new one-time account, funded from your private balance. A network fee each way, about 0.25 ₳ each, 5 ₳ kept aside that comes back, and about a minute.",
     );
+    expect(page).not.toContain("The site sees only");
     // What each shows once chosen isn't said yet.
     expect(html).not.toContain('data-testid="dapp-connect-privacy"');
     expect(html).not.toContain('data-testid="dapp-private-points"');
@@ -202,6 +234,44 @@ describe("a site's connect window", () => {
     );
   };
 
+  // Blind test §9.2 (T17, T17r): Cancel refused the site and started its wait, and said neither.
+  it("says Decline, and how long it turns the site away, before either Decline or closing the window", () => {
+    const html = renderToStaticMarkup(
+      createElement(ConnectRequest, {
+        approval: { kind: "connect", id: "a", origin: "https://app.example", title: "App", password: true, declineWaitMs: 10_000 },
+        busy: false,
+        held: false,
+        onError: () => undefined,
+        onAnswer: async () => true,
+      }),
+    );
+    expect(/<button[^>]*>Decline<\/button>/.test(html)).toBe(true);
+    expect(html).not.toContain(">Cancel<");
+    expect(text(html)).toContain("Decline, or closing this window, turns app.example away: it can ask again in 10 s.");
+    // A minute and five are said in minutes; no wait known, nothing is said.
+    const wait = (declineWaitMs?: number) =>
+      text(
+        renderToStaticMarkup(
+          createElement(ConnectRequest, {
+            approval: { kind: "connect", id: "a", origin: "https://app.example", password: true, ...(declineWaitMs ? { declineWaitMs } : {}) },
+            busy: false,
+            held: false,
+            onError: () => undefined,
+            onAnswer: async () => true,
+          }),
+        ),
+      );
+    expect(wait(300_000)).toContain("it can ask again in 5 min.");
+    expect(wait()).not.toContain("turns app.example away");
+  });
+
+  it("says which account the public account is before it's chosen, with several (blind test T15)", () => {
+    expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 2)).toContain(
+      "With your public account, the site gets Account 3 · Savings: sites always use the account Settings → Sites chooses",
+    );
+    expect(withAccounts([{ index: 0 }], 0)).not.toContain("the site gets");
+  });
+
   it("names the account a site would get, by number and name, when there's more than one", () => {
     expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 2)).toContain(
       "Your public account, Account 3 · Savings The site sees its addresses",
@@ -217,10 +287,83 @@ describe("a site's connect window", () => {
     expect(PRIVATE_SESSION_PRIVACY()).toContain("if it has seen your public account here, it can tell the session is yours");
     expect(PRIVATE_SESSION_PRIVACY()).not.toContain("never appears");
     expect(fundingPrivacy("12300000")).toBe(
-      "This payment links the private UTxOs it spends to the one-time account, as Make public does, and so does the 12.3\u00a0₳ it leaves in your private balance as change. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain and follow that change.",
+      "This payment links the private UTxOs it spends to the one-time account, as any payment from your private balance to an address does, and so does the 12.3\u00a0₳ it leaves in your private balance as change. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain and follow that change.",
     );
     expect(fundingPrivacy("0")).toBe(
-      "This payment links the private UTxOs it spends to the one-time account, as Make public does. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain.",
+      "This payment links the private UTxOs it spends to the one-time account, as any payment from your private balance to an address does. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain.",
     );
+  });
+});
+
+// Blind test §9.2, E03: the lists name a site by its address, then its page's
+// title; a site on the public account by its account when there are several;
+// and say, once one is disconnected, that its open page may still look
+// connected. T17r: the sites declined just now are listed, with the wait left.
+describe("the lists of sites", () => {
+  const sites = [
+    { origin: "https://dapp.example", connectedAt: 0, title: "Example Market (test site)" },
+    { origin: "https://same.example", connectedAt: 0, title: "same.example" },
+  ];
+
+  it("name a site by its address, then its own title, and the account it gets when there are several", () => {
+    const one = text(renderToStaticMarkup(createElement(SiteRows, { sites, busy: false, onDisconnect: () => undefined })));
+    expect(one).toContain("dapp.example Example Market (test site) Your public account");
+    // A title that only repeats the address isn't said twice.
+    expect(one).toContain("same.example Your public account");
+    const several = text(
+      renderToStaticMarkup(createElement(SiteRows, { sites, account: "Account 2 · Savings", busy: false, onDisconnect: () => undefined })),
+    );
+    expect(several).toContain("Your public account, Account 2 · Savings");
+  });
+
+  it("say a disconnected site's open page may still look connected, though it can't use the wallet", () => {
+    expect(text(renderToStaticMarkup(createElement(Disconnected, { host: "dapp.example" }))).trim()).toBe(
+      "dapp.example is disconnected: it can't use Seedelf Wallet until it asks again and you choose. A page of it that's still open may show itself connected, with what it read, until it's reloaded.",
+    );
+    expect(renderToStaticMarkup(createElement(Disconnected, {}))).toBe("");
+  });
+
+  it("list a declined site with the wait it has left, whether it asked again, and Let it ask now", () => {
+    const now = 1_000_000;
+    const shown = renderToStaticMarkup(
+      createElement(DeclinedSites, {
+        declined: [
+          { origin: "https://dapp.example", until: now + 8_200, title: "Example Market" },
+          { origin: "https://pushy.example", until: now + 240_000, retried: true },
+        ],
+        now,
+        onLetAsk: () => undefined,
+      }),
+    );
+    expect(text(shown)).toContain("dapp.example Example Market You declined it: it can ask again in 9 s.");
+    expect(text(shown)).toContain("pushy.example You declined it, and it asked again: it can ask again in 4 min.");
+    expect([...shown.matchAll(/>Let it ask now</g)]).toHaveLength(2);
+    expect(renderToStaticMarkup(createElement(DeclinedSites, { declined: [], now, onLetAsk: () => undefined }))).toBe("");
+  });
+});
+
+// Blind test §7, T16: "the site sees only a new one-time account" read as a
+// promise that the site can't tie the session to the user, which the privacy
+// note under it says it can. What the wallet does is give the site only that
+// account; what the site can find out is the note's to say. The cross-area
+// review found the dApps page's hint still promising it.
+describe("what a private session is said to give a site", () => {
+  const SEES_ONLY: Record<string, RegExp> = {
+    en: /\b(sees? only|only sees?|will only see|see only)\b/i,
+    // Accented letters aren't word characters to \b: a letter-free edge instead.
+    es: /(?<!\p{L})(solo|solamente) (ve|verá|vea|ven|verán)(?!\p{L})|(?<!\p{L})(ve|verá|vea|ven|verán) (solo|solamente)(?!\p{L})/iu,
+    ja: /だけが?見え|しか見え/,
+  };
+
+  it("is that the wallet gives it only a one-time account, never that it sees only one, in every language", () => {
+    for (const [code, said] of Object.entries(SEES_ONLY)) {
+      const strings: Record<string, string> = JSON.parse(
+        readFileSync(new URL(`../src/i18n/translations/${code}.json`, import.meta.url), "utf8"),
+      );
+      const promising = Object.entries(strings)
+        .filter(([, value]) => said.test(value))
+        .map(([key]) => key);
+      expect(promising, `${code}.json`).toEqual([]);
+    }
   });
 });

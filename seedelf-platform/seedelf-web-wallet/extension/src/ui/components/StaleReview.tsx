@@ -11,47 +11,81 @@
 // used to clear the refusal first, so the foot became Send, greyed out and
 // reading "Sending…" while nothing was being sent; and the review it came
 // back to looked exactly like the one before.
+//
+// The headline says who refused when the worker can tell (blind test §9.5,
+// T09): every giveme.my refusal used to open with a guess at the user's own
+// money ("something it spends may have been spent"), giveme.my named only
+// under Details, and nothing to try if it came again. Send now asks the device
+// first, and one it knows was spent since is said as that; any other giveme.my
+// refusal names giveme.my, says the money hasn't moved, and what to try.
 
 import { useState } from "react";
 import { useT } from "../../i18n";
 
+import type { RefusedBy } from "../../shared/rpc";
+import { refusedByOf } from "../background";
 import { BuildStage } from "./BuildStage";
 
 /**
  * A review's refusal, kept until a new review replaces it. `refused` takes
- * the worker's words when Send is refused as stale; `built` is called once a
- * new review is in, and says whether it replaced a refused one (`renewed`);
- * `clear` is Back to the form.
+ * the refusal when Send is refused as stale: its words, and who refused
+ * (`by`); `built` is called once a new review is in, and says whether it
+ * replaced a refused one (`renewed`); `clear` is Back to the form.
  */
 export function useStale() {
   const [detail, setDetail] = useState<string>();
+  const [by, setBy] = useState<RefusedBy>();
   const [renewed, setRenewed] = useState(false);
   return {
     detail,
+    by,
     renewed,
-    refused: (message: string) => {
-      setDetail(message);
+    refused: (error: unknown) => {
+      setDetail(error instanceof Error ? error.message : String(error));
+      setBy(refusedByOf(error));
       setRenewed(false);
     },
     built: () => {
       setRenewed(detail !== undefined);
       setDetail(undefined);
+      setBy(undefined);
     },
     clear: () => {
       setDetail(undefined);
+      setBy(undefined);
       setRenewed(false);
     },
   };
 }
 
-/** The foot of a stale review: what happened, the worker's words under Details, and the one way on. */
-export function StaleFoot({ detail, busy, onAgain }: { detail: string; busy: boolean; onAgain: () => void }) {
+/**
+ * The foot of a stale review: what happened, and who refused it when that's
+ * giveme.my (`by`), the worker's words under Details, and the one way on.
+ */
+export function StaleFoot({
+  detail,
+  by,
+  busy,
+  onAgain,
+}: {
+  detail: string;
+  by?: RefusedBy;
+  busy: boolean;
+  onAgain: () => void;
+}) {
   const t = useT();
   return (
     <>
       <div className="stack-tight" data-testid="review-stale">
+        {/* Each headline's key written out here, in the alert: the critical set is read from what an alert shows. */}
         <p className="error" role="alert">
-          {t("review.stale.warn")}
+          {t(
+            by === "givemeBusy"
+              ? "review.stale.warn.givemeBusy"
+              : by === "giveme"
+                ? "review.stale.warn.giveme"
+                : "review.stale.warn",
+          )}
         </p>
         <details className="disclosure">
           <summary>{t("common.details")}</summary>

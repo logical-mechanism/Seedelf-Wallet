@@ -17,18 +17,20 @@
 
 import { type I18nKey, t, useT } from "../../i18n";
 
-import type { UnsentWhy } from "../../shared/rpc";
-import { call, isStale } from "../background";
+import type { RefusedBy, UnsentWhy } from "../../shared/rpc";
+import { call, isStale, refusedByOf } from "../background";
 
 /** What a refused funding leaves its review. */
 export interface Refusal {
   /**
    * `again`: nothing went out, so a new review is the way on (`changed`: the
-   * worker said something it spends may have changed); `watch`: it may have
-   * gone out, so its page watches for it.
+   * worker said something it spends may have changed; `by`: giveme.my refused
+   * it, which the headline names, blind test §9.5); `watch`: it may have gone
+   * out, so its page watches for it.
    */
   kind: "again" | "watch";
   changed?: boolean;
+  by?: RefusedBy;
   /** The worker's own words, for Details. */
   detail: string;
 }
@@ -49,16 +51,25 @@ export async function refusalOf(err: unknown, index: number, txHash?: string): P
       all.find((x) => x.index === index && (txHash === undefined || x.txs.some((tx) => tx.kind === "out" && tx.txHash === txHash))),
     () => undefined,
   );
-  if (s?.stage === "failed" && s.unsent) return { kind: "again", changed: s.unsentWhy === "changed", detail };
+  const by = refusedByOf(err);
+  if (s?.stage === "failed" && s.unsent) {
+    // Its record says giveme.my refused it, or couldn't take it: the refusal says how when it's here, or the record.
+    const giveme =
+      s.unsentWhy === "refused" || s.unsentWhy === "givemeBusy"
+        ? { by: by ?? (s.unsentWhy === "givemeBusy" ? ("givemeBusy" as const) : ("giveme" as const)) }
+        : {};
+    return { kind: "again", changed: s.unsentWhy === "changed", ...giveme, detail };
+  }
   if (s) return { kind: "watch", detail };
-  if (isStale(err)) return { kind: "again", changed: true, detail };
+  if (isStale(err)) return { kind: "again", changed: !by, ...(by ? { by } : {}), detail };
   return undefined;
 }
 
 /**
- * The foot of a refused funding's review: what happened, without naming a
- * service (the worker's words, which do, under Details), and the one way on.
- * `onWatch`, for one that may have gone out: opens where it's watched.
+ * The foot of a refused funding's review: what happened, naming giveme.my
+ * only when it refused (blind test §9.5: the service's words wait under
+ * Details either way), and the one way on. `onWatch`, for one that may have
+ * gone out: opens where it's watched.
  */
 export function SessionRefusedFoot({
   refusal,
@@ -77,7 +88,7 @@ export function SessionRefusedFoot({
     <>
       <div className="stack-tight" data-testid={watch ? "review-maybe-sent" : "review-stale"}>
         <p className="error" role="alert">
-          {tr(watch ? "review.session.warn.maybe" : refusal.changed ? "review.session.warn.changed" : "review.session.warn.again")}
+          {tr(watch ? "review.session.warn.maybe" : againHeadline(refusal))}
         </p>
         <details className="disclosure">
           <summary>{tr("common.details")}</summary>
@@ -99,9 +110,18 @@ export function SessionRefusedFoot({
   );
 }
 
+/** Why a funding that can go again didn't: giveme.my refused it (busy, or not), something it spends changed, or neither said. */
+function againHeadline(refusal: Refusal): I18nKey {
+  if (refusal.by === "givemeBusy") return "review.session.warn.givemeBusy";
+  if (refusal.by === "giveme") return "review.session.warn.giveme";
+  return refusal.changed ? "review.session.warn.changed" : "review.session.warn.again";
+}
+
 const UNSENT_WHY: Record<UnsentWhy, I18nKey> = {
   changed: "review.session.why.changed",
   unreachable: "review.session.why.unreachable",
+  refused: "review.session.why.refused",
+  givemeBusy: "review.session.why.givemeBusy",
   busy: "review.session.why.busy",
   network: "review.session.why.network",
 };

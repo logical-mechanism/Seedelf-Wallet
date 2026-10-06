@@ -867,6 +867,19 @@ main {
   background: none;
 }
 
+/* A review in a short window: its foot follows its rows, as the sign windows' always does (chunk 23's second
+   review, V-1). Kept in view, at 360×480 the send review's Send sat over "Total leaving …" and "… after", and could
+   be pressed with them unseen (blind test T04, §9.10). A taller window, 360×640 among them, keeps it in view, and so
+   does every screen that isn't a review (Screen's `review`): a foot holding only an error stays where it's seen. */
+@media (max-height: 600px) {
+  .screen--review > .screen__foot {
+    position: static;
+    margin-top: 0;
+    padding-top: 0;
+    background: none;
+  }
+}
+
 /* Why the foot's button can't be pressed yet, said under it rather than in a
    tooltip no touch screen shows (chunk 23's review, H-1). */
 .foot-note {
@@ -926,6 +939,21 @@ main {
   text-align: left;
   font: 500 12.5px/1.5 var(--mono);
   word-break: break-all;
+}
+
+/* A row whose label has a hint (Lovejoin's "Mixed"): the text opens under the row, across it. */
+.review__row--hinted {
+  flex-wrap: wrap;
+}
+
+.review__row--hinted dt {
+  align-self: center;
+}
+
+.review__row dd.review__hint {
+  flex-basis: 100%;
+  text-align: left;
+  font-weight: 400;
 }
 
 /* Segmented switches: Home's tabs, the word count, who pays. */
@@ -1775,6 +1803,21 @@ main {
   white-space: normal;
 }
 
+/* A row's first line with a figure at its end: Home's row for the other side's balance (blind test §9.4). A long
+   figure goes under the name rather than being cut. */
+.menu-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: var(--s2);
+}
+
+.menu-row__figure {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* An on/off setting (Settings' staking rewards). */
 .switch {
   flex: none;
@@ -1954,11 +1997,9 @@ main {
   gap: var(--s2);
 }
 
-.refresh-row .icon-button {
-  width: 28px;
-  height: 28px;
-  background: none;
-  border-color: transparent;
+/* Refresh, named: an unlabelled icon went unfound (blind test §4.12). A pill, so the row stays one line at 360 px. */
+.refresh-row__button {
+  flex: none;
 }
 
 .spin {
@@ -3689,6 +3730,13 @@ button.dapp-tile:hover {
 
 .hint__text {
   margin: 0;
+}
+
+/* An icon at the end of a note's sentence (components/GivemeNote.tsx): in the line, not above it. */
+.note > .hint {
+  width: 18px;
+  height: 18px;
+  vertical-align: text-bottom;
 }
 
 /* A heading or a label with its hint beside it (components/Hint.tsx's Hinted). */

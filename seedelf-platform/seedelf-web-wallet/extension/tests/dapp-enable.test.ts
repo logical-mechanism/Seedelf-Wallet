@@ -15,7 +15,7 @@
 // the refusal says when the site can ask again.
 import { describe, expect, it } from "vitest";
 
-import { type DappError, type DappSession } from "../src/background/dapp";
+import { DappService, SESSION_DAPP_REFUSED, type DappError, type DappSession } from "../src/background/dapp";
 import { APIError, DataSignError } from "../src/shared/dapp";
 import { busyFor, testBalances, vectors } from "./fakes";
 
@@ -186,6 +186,173 @@ describe("the refusals after a site is declined (chunk 23's second review, CW-3)
     await t.dapp.forget(STRANGER);
     await decline(t);
     await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
+  });
+});
+
+// Blind test §9.2 (T17, T17r): the wallet's own pages say what a decline did.
+// The connect question says how long Decline turns the site away, the answer
+// says it again, and the dApps page and Connected sites list the sites still
+// turned away, whether they asked again, with Let it ask now.
+describe("what the wallet's pages say of a declined site (blind test §9.2)", () => {
+  async function ask(t: Awaited<ReturnType<typeof on>>, s = site(STRANGER)) {
+    const asking = heard(t.dapp.call(s, "enable", []));
+    await until(() => t.dapp.approvals().length === 1);
+    return { asking, approval: t.dapp.approvals()[0]! };
+  }
+
+  it("says before and after a decline how long it turns the site away, and lists it until then", async () => {
+    const t = await on();
+    let { asking, approval } = await ask(t);
+    expect(approval).toMatchObject({ kind: "connect", declineWaitMs: 10_000 });
+    expect(await t.dapp.answer(approval.id, false)).toEqual({ waitMs: 10_000 });
+    expect(await asking).toEqual(DECLINED.failure);
+    expect(await t.dapp.declined()).toEqual([{ origin: STRANGER, until: t.clock.now + 10_000, title: "Example" }]);
+
+    // It asks again at once: turned away, and the list says it asked, once, however often it asks.
+    const changes = t.dappChanged();
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(10));
+    expect(t.dappChanged()).toBe(changes + 1);
+    expect(await t.dapp.declined()).toEqual([{ origin: STRANGER, until: t.clock.now + 10_000, title: "Example", retried: true }]);
+
+    // Once the wait is over, it isn't listed, and the next question says the next wait is a minute.
+    t.clock.now += 10_000;
+    expect(await t.dapp.declined()).toEqual([]);
+    ({ asking, approval } = await ask(t));
+    expect(approval).toMatchObject({ declineWaitMs: 60_000 });
+    t.dappWindow.open = false;
+    await t.dapp.windowClosed();
+    expect(await asking).toEqual(DECLINED.failure);
+    // Closing the window turned it away as Decline does, and the wallet's pages heard.
+    expect(await t.dapp.declined()).toEqual([{ origin: STRANGER, until: t.clock.now + 60_000, title: "Example" }]);
+  });
+
+  it("lets the user, and only the user, end the wait: the site asks again, and a decline after counts in a row", async () => {
+    const t = await on();
+    const { approval } = await ask(t);
+    await t.dapp.answer(approval.id, false);
+    const shown = t.dappWindow.shown;
+    expect(await t.dapp.letAsk(STRANGER)).toEqual([]);
+    expect(await t.dapp.declined()).toEqual([]);
+    // Asked now, it opens the window, and declining again turns it away for a minute: the next in a row.
+    const again = await ask(t);
+    expect(t.dappWindow.shown).toBe(shown + 1);
+    expect(await t.dapp.answer(again.approval.id, false)).toEqual({ waitMs: 60_000 });
+    await expect(t.dapp.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(60));
+    // A site that isn't turned away has nothing to end.
+    expect(await t.dapp.letAsk("https://other.example")).toEqual([
+      { origin: STRANGER, until: t.clock.now + 60_000, title: "Example", retried: true },
+    ]);
+  });
+
+  it("says nothing of a wait for a site connected already: a no to governance leaves it connected", async () => {
+    const t = await on();
+    const s = await connected(t);
+    const asking = t.dapp.call(s, "enable", [{ extensions: [{ cip: 95 }] }]);
+    await until(() => t.dapp.approvals().length === 1);
+    expect(t.dapp.approvals()[0]).not.toHaveProperty("declineWaitMs");
+    expect(await t.dapp.answer(t.dapp.approvals()[0]!.id, false)).toEqual({});
+    expect(await asking).toBe(true);
+    expect(await t.dapp.declined()).toEqual([]);
+  });
+});
+
+// The cross-area review of the blind test's fixes: Chrome stops an idle
+// worker after about 30 s, and refusals kept only in its memory went with it,
+// so a minute's wait the wallet states in numbers lasted half of one, and the
+// next decline started at 10 s again. And the list of declined sites showed
+// connected sites, and sites declined on the other network.
+describe("a declined site's wait, across workers, and where it's listed", () => {
+  /** The worker Chrome starts again: a new service over the same storage. */
+  const restarted = (t: Awaited<ReturnType<typeof on>>) =>
+    new DappService({
+      ...t.deps,
+      store: t.store,
+      sessions: t.sessions,
+      network: () => t.networkChoice.get(),
+      window: t.dappWindow,
+      changed: () => undefined,
+    });
+
+  async function decline(dapp: DappService) {
+    const asking = heard(dapp.call(site(STRANGER), "enable", []));
+    await until(() => dapp.approvals().length === 1);
+    const answered = await dapp.answer(dapp.approvals()[0]!.id, false);
+    expect(await asking).toEqual(DECLINED.failure);
+    return answered;
+  }
+
+  it("outlasts the worker: the wait, and the count that makes the next one longer", async () => {
+    const t = await on();
+    await decline(t.dapp);
+    t.clock.now += 10_000;
+    expect(await decline(t.dapp)).toEqual({ waitMs: 60_000 });
+    // Kept in session storage, origins and waits only: the page's title stays in the worker's memory.
+    expect(JSON.stringify(await t.session.get(SESSION_DAPP_REFUSED))).not.toContain("Example");
+
+    // Chrome stops the worker; the next one still turns the site away, for what's left of the minute.
+    t.clock.now += 20_000;
+    let next = restarted(t);
+    await expect(next.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(40));
+    expect(await next.declined()).toEqual([{ origin: STRANGER, until: t.clock.now + 40_000, retried: true }]);
+    // And the next decline is the third in a row: five minutes.
+    t.clock.now += 40_000;
+    expect(await decline(next)).toEqual({ waitMs: 300_000 });
+
+    // A lock clears session storage but carries the refusals across, so locking doesn't let the site ask at once.
+    await t.wallet.lock();
+    await next.stateChanged();
+    next = restarted(t);
+    await expect(next.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(300));
+  });
+
+  it("survives a lock made by a worker that hasn't read it yet, and goes with the wallet when it's removed", async () => {
+    const t = await on();
+    await decline(t.dapp);
+    // Chrome stops the worker; the next is started by the lock (Lock, or the auto-lock alarm), before any site's call
+    // or any list has read the refusals back.
+    t.clock.now += 3_000;
+    const locking = restarted(t);
+    await t.wallet.lock();
+    await locking.stateChanged();
+    await t.wallet.unlock(PASSWORD);
+    // The site asks 3 s into its 10 s wait: still turned away, and the window left alone.
+    const next = restarted(t);
+    const shown = t.dappWindow.shown;
+    await expect(next.call(site(STRANGER), "enable", [])).rejects.toMatchObject(WAIT(7));
+    expect(t.dappWindow.shown).toBe(shown);
+    // And the next decline is the second in a row: a minute.
+    t.clock.now += 7_000;
+    expect(await decline(next)).toEqual({ waitMs: 60_000 });
+
+    // Removing the wallet takes them with it.
+    await t.wallet.reset();
+    expect(await t.session.get(SESSION_DAPP_REFUSED)).toBeUndefined();
+  });
+
+  it("lists only sites declined on this network, never a connected one, and none while the connector is off", async () => {
+    const t = await on();
+    const s = await connected(t);
+    await decline(t.dapp);
+    expect((await t.dapp.declined()).map((d) => d.origin)).toEqual([STRANGER]);
+
+    // The unlock window closed on the connected site's signature turns it away too (L36), but it wasn't declined.
+    await t.wallet.lock();
+    const message = [t.deps.wasm.cip30Address(OWN), hex("Sign in")];
+    const signing = heard(t.dapp.call(s, "signData", message));
+    await until(() => t.dapp.unlockingSites().length === 1);
+    t.dappWindow.open = false;
+    await t.dapp.windowClosed();
+    await signing;
+    await t.wallet.unlock(PASSWORD);
+    expect((await t.dapp.declined()).map((d) => d.origin)).toEqual([STRANGER]);
+
+    // On the other network it isn't listed, though it's still turned away there.
+    await t.networkChoice.set("mainnet");
+    expect(await t.dapp.declined()).toEqual([]);
+    await t.networkChoice.set("preprod");
+    await t.preferences.set({ dappConnector: false });
+    expect(await t.dapp.declined()).toEqual([]);
   });
 });
 

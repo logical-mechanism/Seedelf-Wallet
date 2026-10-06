@@ -2248,8 +2248,14 @@ pub mod api {
         /// register is the recipient's; see [`recipient_register`].
         pub recipient: UtxoResponse,
         /// Lovelace to send, as a decimal string, raised to the least the
-        /// payment needs (so "0" sends only that).
-        pub lovelace: String,
+        /// payment needs (so "0" sends only that); `null` sends the most
+        /// possible (Max), to a single Seedelf only: all the ADA of up to
+        /// [`MAX_WITHDRAW_UTXOS`] UTxOs but the fee and what the tokens
+        /// that stay need (`build::transfer_most`), as Max on Send from the
+        /// Cardano account pays.
+        pub lovelace: Option<String>,
+        /// Tokens to send, each with how much of it goes; Max sends these
+        /// too, and the others stay.
         pub tokens: Vec<TokenAmount>,
     }
 
@@ -2262,8 +2268,8 @@ pub mod api {
         /// Whether that Seedelf is this wallet's own: the payment comes back.
         pub to_self: bool,
         pub lovelace: String,
-        /// The least the payment could carry.
-        pub minimum: String,
+        /// The least the payment could carry; `null` for Max.
+        pub minimum: Option<String>,
         pub tokens: Vec<TokenAmount>,
     }
 
@@ -2277,14 +2283,31 @@ pub mod api {
         pub seed: String,
         /// What each Seedelf receives, in order.
         pub payments: Vec<SeedelfPaid>,
+        /// The most possible (Max) to a single Seedelf, rather than amounts.
+        pub max: bool,
         pub fee: FeeOut,
-        /// Back into the Seedelf balance.
+        /// Back into the Seedelf balance: for Max, only the tokens that stay,
+        /// with the least ADA they need.
         pub change_lovelace: String,
         pub change_tokens: usize,
         pub change_outputs: usize,
+        /// The least ADA what stays in the Seedelf balance needs ([`change_minimum`]).
+        pub change_minimum: String,
         pub inputs: Vec<OutRef>,
+        /// Spendable UTxOs Max left for another payment: past the
+        /// [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that would
+        /// total more with the rest than an output can hold. None for amounts.
+        pub left: usize,
         /// The classes of money it spends together, when they're more than one.
         pub classes_mixed: Vec<String>,
+    }
+
+    /// The least ADA what stays in the Seedelf balance after `built` needs:
+    /// with tokens, what they need; with none, what an output of ADA alone
+    /// needs, so less than that can't stay, though nothing can. A shortfall's
+    /// message says it (blind test T05: what had to stay was never said).
+    fn change_minimum(chain: &Chain, built: &build::FinalSpend) -> Result<u64> {
+        build::minimum_deposit(&chain.params, &built.change_tokens)
     }
 
     /// Whether `name` is a whole seedelf token name: 32 bytes of lowercase
@@ -2322,14 +2345,27 @@ pub mod api {
             .ok_or_else(|| anyhow!("That Seedelf sits under no register, so it can't be paid"))
     }
 
-    fn transfer_spend(
+    /// A transfer as asked, checked, before any UTxO is picked.
+    struct TransferPlan {
+        chain: Chain,
+        payments: Vec<Payment>,
+        /// What each Seedelf is paid: Max's lovelace is known once it's finished.
+        paid: Vec<SeedelfPaid>,
+        /// The most possible to a single Seedelf.
+        max: bool,
+        owner: Register,
+        signer: Hash<28>,
+    }
+
+    fn transfer_plan(
         sk: Scalar,
         request: &TransferRequest,
         seed: &[u8; 32],
-    ) -> Result<(ScriptSpend, Vec<SeedelfPaid>)> {
+    ) -> Result<TransferPlan> {
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
         check_recipients(request.payments.len())?;
+        let max = matches!(request.payments.as_slice(), [only] if only.lovelace.is_none());
         let mut payments = Vec::with_capacity(request.payments.len());
         let mut paid = Vec::with_capacity(request.payments.len());
         for p in &request.payments {
@@ -2337,12 +2373,16 @@ pub mod api {
             let to_self = register.is_owned(sk).unwrap_or(false);
             let tokens = assets_of(&p.tokens)?;
             let minimum = build::minimum_seedelf_payment(&chain.params, &tokens)?;
-            let lovelace = lovelace_of(&p.lovelace)?.max(minimum);
+            let lovelace = match &p.lovelace {
+                Some(l) => lovelace_of(l)?.max(minimum),
+                None if max => 0,
+                None => bail!("Max pays a single recipient: give each of several an amount"),
+            };
             paid.push(SeedelfPaid {
                 to: p.to.clone(),
                 to_self,
                 lovelace: lovelace.to_string(),
-                minimum: minimum.to_string(),
+                minimum: (!max).then(|| minimum.to_string()),
                 tokens: tokens.items.iter().map(token_amount).collect(),
             });
             payments.push(Payment {
@@ -2351,16 +2391,54 @@ pub mod api {
                 tokens,
             });
         }
-        let signer = key_hash(&one_time_key(&sk, seed));
+        if max && request.utxos.is_empty() {
+            bail!("There's nothing in the Seedelf balance to send");
+        }
+        Ok(TransferPlan {
+            chain,
+            payments,
+            paid,
+            max,
+            owner: Register::create(sk)?,
+            signer: key_hash(&one_time_key(&sk, seed)),
+        })
+    }
+
+    /// The plan's spend, proven, and how many UTxOs Max left. Amounts pick as
+    /// few UTxOs as pay, keeping histories apart where they can
+    /// (`build::transfer_apart`); Max takes the largest
+    /// [`MAX_WITHDRAW_UTXOS`], the ones holding the tokens it sends first
+    /// (`build::max_inputs`), and pays everything but the fee and what the
+    /// tokens that stay need (`build::transfer_most`).
+    fn transfer_spend(
+        sk: Scalar,
+        request: &TransferRequest,
+        plan: &TransferPlan,
+    ) -> Result<(ScriptSpend, usize)> {
+        let TransferPlan {
+            chain,
+            payments,
+            owner,
+            signer,
+            ..
+        } = plan;
+        if plan.max {
+            let only = &payments[0];
+            let (inputs, left) =
+                build::max_inputs(&request.utxos, &only.tokens, MAX_WITHDRAW_UTXOS)?;
+            let spend =
+                build::transfer_most(chain, &inputs, &only.register, &only.tokens, owner, *signer)?;
+            return Ok((prove_with(sk, spend)?, left));
+        }
         let spend = build::transfer_apart(
-            &chain,
+            chain,
             &request.utxos,
             &histories(Purpose::Pay, &request.classes)?,
-            &payments,
-            &Register::create(sk)?,
-            signer,
+            payments,
+            owner,
+            *signer,
         )?;
-        Ok((prove_with(sk, spend)?, paid))
+        Ok((prove_with(sk, spend)?, 0))
     }
 
     /// Step 1 of paying a seedelf: checks the recipient, picks the UTxOs,
@@ -2368,7 +2446,8 @@ pub mod api {
     /// one-time key.
     pub fn draft_transfer(sk: Scalar, request: TransferRequest) -> Result<SpendDraft> {
         let seed = new_seed();
-        let (spend, _) = transfer_spend(sk, &request, &seed)?;
+        let plan = transfer_plan(sk, &request, &seed)?;
+        let (spend, _) = transfer_spend(sk, &request, &plan)?;
         draft_of(&spend, &seed)
     }
 
@@ -2381,36 +2460,98 @@ pub mod api {
             request.seed.as_deref(),
             request.evaluation.as_ref(),
         )?;
-        let (spend, payments) = transfer_spend(sk, &request, &seed)?;
+        let plan = transfer_plan(sk, &request, &seed)?;
+        let (spend, left) = transfer_spend(sk, &request, &plan)?;
         let built = spend.finalize(&budgets)?;
-        transfer_result(&request, &spend, payments, &built, &seed)
+        transfer_result(&request, &spend, plan, left, &built, &seed)
     }
 
     /// Paying Seedelfs in one step, measured in the wallet ([`measured`]).
+    ///
+    /// Picking checks each choice with guessed budgets, about 1.3× what the
+    /// scripts use. When none pays, the largest UTxOs together are measured
+    /// before the amount is refused ([`measured_or_more`]), so what's refused
+    /// is what the review's own fee can't pay, and an amount up to Max's goes
+    /// (blind test T05).
     pub fn build_transfer(sk: Scalar, request: TransferRequest) -> Result<TransferResult> {
         let seed = new_seed();
-        let (spend, payments) = transfer_spend(sk, &request, &seed)?;
-        let built = measured(&spend)?;
-        transfer_result(&request, &spend, payments, &built, &seed)
+        let plan = transfer_plan(sk, &request, &seed)?;
+        let (spend, left, built) = match transfer_spend(sk, &request, &plan) {
+            Ok((spend, left)) => {
+                let built = measured(&spend)?;
+                (spend, left, built)
+            }
+            Err(short) if build::is_short(&short) => {
+                let needed = plan
+                    .payments
+                    .iter()
+                    .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
+                let (spend, built) = measured_or_more(short, &request.utxos, &needed, |inputs| {
+                    let spend = build::transfer_from(
+                        &plan.chain,
+                        inputs,
+                        &plan.payments,
+                        &plan.owner,
+                        plan.signer,
+                    )?;
+                    prove_with(sk, spend)
+                })?;
+                (spend, 0, built)
+            }
+            Err(e) => return Err(e),
+        };
+        transfer_result(&request, &spend, plan, left, &built, &seed)
+    }
+
+    /// When picking found nothing that pays by the guessed budgets (`short`):
+    /// the largest UTxOs together, the ones holding `needed` first
+    /// ([`build::max_inputs`]), spent by `spend` and measured. The guess runs
+    /// above what the scripts use, so they may pay; if they don't, `short`.
+    fn measured_or_more(
+        short: anyhow::Error,
+        utxos: &[UtxoResponse],
+        needed: &Assets,
+        spend: impl FnOnce(&[UtxoResponse]) -> Result<ScriptSpend>,
+    ) -> Result<(ScriptSpend, build::FinalSpend)> {
+        let Ok((inputs, _)) = build::max_inputs(utxos, needed, MAX_WITHDRAW_UTXOS) else {
+            return Err(short);
+        };
+        let spend = spend(&inputs)?;
+        match measured(&spend) {
+            Ok(built) => Ok((spend, built)),
+            Err(e) if build::is_short(&e) => Err(short),
+            Err(e) => Err(e),
+        }
     }
 
     fn transfer_result(
         request: &TransferRequest,
         spend: &ScriptSpend,
-        payments: Vec<SeedelfPaid>,
+        plan: TransferPlan,
+        left: usize,
         built: &build::FinalSpend,
         seed: &[u8; 32],
     ) -> Result<TransferResult> {
+        let mut payments = plan.paid;
+        // Max's one payment is everything but the fee and what the tokens that stay need.
+        if let (true, Some(paid), Some(lovelace)) =
+            (plan.max, payments.first_mut(), built.rest_lovelace)
+        {
+            paid.lovelace = lovelace.to_string();
+        }
         Ok(TransferResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
             seed: hex::encode(seed),
             payments,
+            max: plan.max,
             fee: fee_out(&built.fee),
             change_lovelace: built.change_lovelace.to_string(),
             change_tokens: built.change_tokens.items.len(),
             change_outputs: built.change_outputs,
+            change_minimum: change_minimum(&plan.chain, built)?.to_string(),
             inputs: out_refs(spend),
+            left,
             classes_mixed: classes_mixed(&request.classes, spend)?,
         })
     }
@@ -2453,6 +2594,13 @@ pub mod api {
         /// session's money last.
         #[serde(default)]
         pub funding: Option<Funding>,
+        /// With a single payment's `lovelace` null: the most a payment of its
+        /// tokens can be, the other tokens staying with the least ADA they
+        /// need (`build::sweep_most`), rather than everything with every
+        /// token (Max). The worker asks it to say how much an amount that's
+        /// too much could be (blind test T05).
+        #[serde(default)]
+        pub most: bool,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -2491,13 +2639,17 @@ pub mod api {
         pub seed: String,
         /// What each address receives, in order.
         pub payments: Vec<Paid>,
-        /// Everything (Max) to a single address, rather than amounts.
+        /// Everything (Max) to a single address, rather than amounts; the
+        /// most a payment of some tokens can be ([`WithdrawRequest::most`]) too.
         pub max: bool,
         pub fee: FeeOut,
-        /// Back into the Seedelf balance (nothing, for Max).
+        /// Back into the Seedelf balance (nothing, for Max; for `most`, the
+        /// tokens that stay, with the least ADA they need).
         pub change_lovelace: String,
         pub change_tokens: usize,
         pub change_outputs: usize,
+        /// The least ADA what stays in the Seedelf balance needs ([`change_minimum`]).
+        pub change_minimum: String,
         pub inputs: Vec<OutRef>,
         /// Spendable UTxOs Max left for another withdrawal: past the
         /// [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that would total
@@ -2508,63 +2660,82 @@ pub mod api {
         pub classes_mixed: Vec<String>,
     }
 
-    /// The withdrawal, proven; how many UTxOs Max left out; and, for
-    /// amounts, what each address is paid (Max's is known once it's
-    /// finished).
+    /// What a withdrawal pays: amounts, everything (Max), or the most a
+    /// payment of some tokens can be ([`WithdrawRequest::most`]).
+    enum Withdrawing {
+        /// What each address is paid.
+        Amounts(Vec<Paid>, Vec<AddressPayment>),
+        Everything(Address),
+        Most(Address, Assets),
+    }
+
+    /// What a withdrawal asks for, checked.
+    fn withdrawal_of(chain: &Chain, request: &WithdrawRequest) -> Result<Withdrawing> {
+        check_recipients(request.payments.len())?;
+        if let [only] = request.payments.as_slice()
+            && only.lovelace.is_none()
+        {
+            let to = payable_address(chain.network_flag, &only.to)?;
+            if request.utxos.is_empty() {
+                bail!("There's nothing in the Seedelf balance to withdraw");
+            }
+            if request.most {
+                return Ok(Withdrawing::Most(to, assets_of(&only.tokens)?));
+            }
+            if !only.tokens.is_empty() {
+                bail!("Max sends every token, so it takes no token amounts");
+            }
+            return Ok(Withdrawing::Everything(to));
+        }
+        let mut to_pay = Vec::with_capacity(request.payments.len());
+        let mut paid = Vec::with_capacity(request.payments.len());
+        for p in &request.payments {
+            let Some(l) = &p.lovelace else {
+                bail!("Max pays a single recipient: give each of several an amount");
+            };
+            let to = payable_address(chain.network_flag, &p.to)?;
+            let tokens = assets_of(&p.tokens)?;
+            let minimum = build::minimum_address_payment(&chain.params, &to, &tokens)?;
+            let lovelace = lovelace_of(l)?.max(minimum);
+            paid.push(Paid {
+                to: p.to.trim().to_string(),
+                lovelace: lovelace.to_string(),
+                minimum: Some(minimum.to_string()),
+                tokens: tokens.items.iter().map(token_amount).collect(),
+            });
+            to_pay.push(AddressPayment {
+                to,
+                lovelace,
+                tokens,
+            });
+        }
+        Ok(Withdrawing::Amounts(paid, to_pay))
+    }
+
+    /// The withdrawal, proven, and how many UTxOs Max left out.
     fn withdraw_spend(
         sk: Scalar,
         request: &WithdrawRequest,
-        seed: &[u8; 32],
-    ) -> Result<(ScriptSpend, usize, Option<Vec<Paid>>)> {
-        let chain = chain_of(&request.network, &request.params)?;
-        check_spendable(sk, &chain, &request.utxos)?;
-        check_recipients(request.payments.len())?;
+        chain: &Chain,
+        what: &Withdrawing,
+        signer: Hash<28>,
+    ) -> Result<(ScriptSpend, usize)> {
         let owner = Register::create(sk)?;
-        let signer = key_hash(&one_time_key(&sk, seed));
-        let (spend, left, paid) = match request.payments.as_slice() {
-            [only] if only.lovelace.is_none() => {
-                let to = payable_address(chain.network_flag, &only.to)?;
-                if !only.tokens.is_empty() {
-                    bail!("Max sends every token, so it takes no token amounts");
-                }
-                if request.utxos.is_empty() {
-                    bail!("There's nothing in the Seedelf balance to withdraw");
-                }
+        let (spend, left) = match what {
+            Withdrawing::Everything(to) => {
                 // Of those whose tokens add up, the largest first, as many as fit.
-                let (mut utxos, overflowing) =
-                    seedelf_core::utxos::fitting(&request.utxos, &Assets::new(), |_| false)?;
-                utxos.sort_by_key(|u| std::cmp::Reverse(u.value.parse::<u64>().unwrap_or(0)));
-                let left = overflowing.len() + utxos.len().saturating_sub(MAX_WITHDRAW_UTXOS);
-                utxos.truncate(MAX_WITHDRAW_UTXOS);
+                let (utxos, left) =
+                    build::max_inputs(&request.utxos, &Assets::new(), MAX_WITHDRAW_UTXOS)?;
+                (build::sweep_all(chain, &utxos, to, &owner, signer)?, left)
+            }
+            Withdrawing::Most(to, tokens) => {
+                let (utxos, left) = build::max_inputs(&request.utxos, tokens, MAX_WITHDRAW_UTXOS)?;
                 (
-                    build::sweep_all(&chain, &utxos, &to, &owner, signer)?,
+                    build::sweep_most(chain, &utxos, to, tokens, &owner, signer)?,
                     left,
-                    None,
                 )
             }
-            payments => {
-                let mut to_pay = Vec::with_capacity(payments.len());
-                let mut paid = Vec::with_capacity(payments.len());
-                for p in payments {
-                    let Some(l) = &p.lovelace else {
-                        bail!("Max pays a single recipient: give each of several an amount");
-                    };
-                    let to = payable_address(chain.network_flag, &p.to)?;
-                    let tokens = assets_of(&p.tokens)?;
-                    let minimum = build::minimum_address_payment(&chain.params, &to, &tokens)?;
-                    let lovelace = lovelace_of(l)?.max(minimum);
-                    paid.push(Paid {
-                        to: p.to.trim().to_string(),
-                        lovelace: lovelace.to_string(),
-                        minimum: Some(minimum.to_string()),
-                        tokens: tokens.items.iter().map(token_amount).collect(),
-                    });
-                    to_pay.push(AddressPayment {
-                        to,
-                        lovelace,
-                        tokens,
-                    });
-                }
+            Withdrawing::Amounts(_, to_pay) => {
                 let purpose = match &request.funding {
                     Some(f) => Purpose::Fund {
                         session: f.session.clone(),
@@ -2572,24 +2743,28 @@ pub mod api {
                     None => Purpose::Pay,
                 };
                 let spend = build::sweep_many_apart(
-                    &chain,
+                    chain,
                     &request.utxos,
                     &histories(purpose, &request.classes)?,
-                    &to_pay,
+                    to_pay,
                     &owner,
                     signer,
                 )?;
-                (spend, 0, Some(paid))
+                (spend, 0)
             }
         };
-        Ok((prove_with(sk, spend)?, left, paid))
+        Ok((prove_with(sk, spend)?, left))
     }
 
     /// Step 1 of a withdrawal: checks the addresses, picks the UTxOs, proves
     /// them, and drafts the transaction for Ogmios, under a new one-time key.
     pub fn draft_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<SpendDraft> {
         let seed = new_seed();
-        let (spend, _, _) = withdraw_spend(sk, &request, &seed)?;
+        let chain = chain_of(&request.network, &request.params)?;
+        check_spendable(sk, &chain, &request.utxos)?;
+        let what = withdrawal_of(&chain, &request)?;
+        let signer = key_hash(&one_time_key(&sk, &seed));
+        let (spend, _) = withdraw_spend(sk, &request, &chain, &what, signer)?;
         draft_of(&spend, &seed)
     }
 
@@ -2600,38 +2775,85 @@ pub mod api {
             request.seed.as_deref(),
             request.evaluation.as_ref(),
         )?;
-        let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
+        let chain = chain_of(&request.network, &request.params)?;
+        check_spendable(sk, &chain, &request.utxos)?;
+        let what = withdrawal_of(&chain, &request)?;
+        let signer = key_hash(&one_time_key(&sk, &seed));
+        let (spend, left) = withdraw_spend(sk, &request, &chain, &what, signer)?;
         let built = spend.finalize(&budgets)?;
-        withdraw_result(&request, &spend, left, paid, &built, &seed)
+        withdraw_result(&request, &chain, &spend, left, what, &built, &seed)
     }
 
     /// Paying addresses from the Seedelf balance in one step, measured in the
-    /// wallet ([`measured`]).
+    /// wallet ([`measured`]). Amounts that picking calls short are measured on
+    /// the largest UTxOs before they're refused, as a transfer's are
+    /// ([`build_transfer`], [`measured_or_more`]); not a session's funding,
+    /// whose picking keeps another session's money out.
     pub fn build_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
         let seed = new_seed();
-        let (spend, left, paid) = withdraw_spend(sk, &request, &seed)?;
-        let built = measured(&spend)?;
-        withdraw_result(&request, &spend, left, paid, &built, &seed)
+        let chain = chain_of(&request.network, &request.params)?;
+        check_spendable(sk, &chain, &request.utxos)?;
+        let what = withdrawal_of(&chain, &request)?;
+        let signer = key_hash(&one_time_key(&sk, &seed));
+        let (spend, left, built) = match withdraw_spend(sk, &request, &chain, &what, signer) {
+            Ok((spend, left)) => {
+                let built = measured(&spend)?;
+                (spend, left, built)
+            }
+            Err(short) if build::is_short(&short) && request.funding.is_none() => {
+                let Withdrawing::Amounts(_, to_pay) = &what else {
+                    return Err(short);
+                };
+                let needed = to_pay
+                    .iter()
+                    .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
+                let owner = Register::create(sk)?;
+                let (spend, built) = measured_or_more(short, &request.utxos, &needed, |inputs| {
+                    let spend = build::sweep_many_from(&chain, inputs, to_pay, &owner, signer)?;
+                    prove_with(sk, spend)
+                })?;
+                (spend, 0, built)
+            }
+            Err(e) => return Err(e),
+        };
+        withdraw_result(&request, &chain, &spend, left, what, &built, &seed)
     }
 
     fn withdraw_result(
         request: &WithdrawRequest,
+        chain: &Chain,
         spend: &ScriptSpend,
         left: usize,
-        paid: Option<Vec<Paid>>,
+        what: Withdrawing,
         built: &build::FinalSpend,
         seed: &[u8; 32],
     ) -> Result<WithdrawResult> {
-        let max = paid.is_none();
-        // Max's one payment is everything the inputs held, less the fee.
-        let payments = paid.unwrap_or_else(|| {
-            vec![Paid {
-                to: request.payments[0].to.trim().to_string(),
-                lovelace: built.change_lovelace.to_string(),
-                minimum: None,
-                tokens: built.change_tokens.items.iter().map(token_amount).collect(),
-            }]
-        });
+        let to = || request.payments[0].to.trim().to_string();
+        let (payments, max, change) = match what {
+            Withdrawing::Amounts(paid, _) => (paid, false, true),
+            // Max's one payment is everything the inputs held, less the fee.
+            Withdrawing::Everything(_) => (
+                vec![Paid {
+                    to: to(),
+                    lovelace: built.change_lovelace.to_string(),
+                    minimum: None,
+                    tokens: built.change_tokens.items.iter().map(token_amount).collect(),
+                }],
+                true,
+                false,
+            ),
+            // The most: all but the fee and what the tokens that stay need.
+            Withdrawing::Most(_, tokens) => (
+                vec![Paid {
+                    to: to(),
+                    lovelace: built.rest_lovelace.unwrap_or_default().to_string(),
+                    minimum: None,
+                    tokens: tokens.items.iter().map(token_amount).collect(),
+                }],
+                true,
+                true,
+            ),
+        };
         Ok(WithdrawResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
@@ -2639,17 +2861,23 @@ pub mod api {
             payments,
             max,
             fee: fee_out(&built.fee),
-            change_lovelace: if max {
-                "0".into()
-            } else {
+            change_lovelace: if change {
                 built.change_lovelace.to_string()
-            },
-            change_tokens: if max {
-                0
             } else {
-                built.change_tokens.items.len()
+                "0".into()
             },
-            change_outputs: if max { 0 } else { built.change_outputs },
+            change_tokens: if change {
+                built.change_tokens.items.len()
+            } else {
+                0
+            },
+            change_outputs: if change { built.change_outputs } else { 0 },
+            change_minimum: if change {
+                change_minimum(chain, built)?
+            } else {
+                build::minimum_deposit(&chain.params, &Assets::new())?
+            }
+            .to_string(),
             inputs: out_refs(spend),
             left,
             classes_mixed: classes_mixed(&request.classes, spend)?,

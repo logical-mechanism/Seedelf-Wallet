@@ -19,7 +19,7 @@ import type {
   SwapQuote,
 } from "../src/shared/rpc";
 import { HandleWarning } from "../src/ui/components/HandleWarning";
-import { LovejoinNote } from "../src/ui/components/LovejoinReturn";
+import { LovejoinNote, LovejoinSwitch } from "../src/ui/components/LovejoinReturn";
 import { PendingBanner, validUntil } from "../src/ui/components/PendingBanner";
 import { ReturnLeftOut } from "../src/ui/components/SessionLeft";
 import { SessionRefusedFoot } from "../src/ui/components/SessionRefused";
@@ -32,6 +32,7 @@ import {
   boxesAffordable,
   Chains,
   detailOf as lovejoinDetail,
+  mixCosts,
   NotMixed,
   poolRoom,
   PrivateReview,
@@ -369,6 +370,7 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     changeLovelace: "3600000",
     changeTokens: 0,
     changeOutputs: 1,
+    changeMinimum: "0",
     inputs: 1,
     left: 0,
   };
@@ -407,13 +409,15 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(line).not.toContain("Less than a box's worth");
   });
 
-  it("says the slippage, that it relies on Minswap for the minimum, and what For the swap pays for (chunk 23's second review, DX-2, DX-3)", () => {
+  it("says the slippage, that it relies on Minswap for the minimum, and what the swap and its costs pay for (chunk 23's second review, DX-2, DX-3)", () => {
     const line = approval(through);
     expect(line).toContain("Asks for at least 4.158 tUSDM · 1% slippage · 0.3% price impact");
     expect(line).toContain(
       "Seedelf Wallet relies on Minswap for the minimum of 4.158 tUSDM: it asks Minswap for it, but can't read it back from the order Minswap builds.",
     );
-    expect(line).toContain("For the swap 16 ₳ The swap 10 ₳ DEX fee 2 ₳ Order deposit 2 ₳, back with the proceeds Room for network fees 2 ₳, what's left comes back");
+    expect(line).toContain(
+      "The swap and its costs 16 ₳ The swap 10 ₳ DEX fee 2 ₳ Order deposit 2 ₳, back with the proceeds Room for network fees 2 ₳, what's left comes back",
+    );
     // The approval's own words no longer bury the minimum, and its button is the act.
     expect(line).not.toContain("the order's own minimum it can't read");
     expect(line).toContain("Start swap approves the whole run");
@@ -448,6 +452,35 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(line).toContain("The proceeds and everything left, directly");
     // The switch, on, says it applies only if the pool has room by then (chunk 23's second review, DX-3).
     expect(line).toContain("Only if Lovejoin's pool has room by the time it comes back: it has none now");
+  });
+
+  it("says what leaves now, what it all costs and what comes back, adding up (blind test §9.8, T10)", () => {
+    // T10's swap: 10 ₳ for tUSDM, 16 ₳ for it and its costs and 5 ₳ kept aside, a 0.233208 ₳ fee, from 28 ₳.
+    const t10: SessionOutSummary = { ...summary, fee: { ...summary.fee, total: "233208" }, changeLovelace: "3766792" };
+    const review = (lovejoin: SwapLovejoin | undefined, on = true) =>
+      text(
+        shown(
+          createElement(SwapApproval, { summary: t10, quote, lovejoin, pay, get, through: on, onThrough: () => undefined, busy: false, before: "28000000" }),
+        ),
+      );
+    const line = review({ ...through, boxes: 0, mixes: 0, mixFees: "0", withdrawFees: "0" });
+    // What leaves, as every review says it: 16 + 5 + 0.233208, and the balance after, not the change.
+    expect(line).toContain("Network fee 0.233208 ₳ Total leaving your private balance 21.233208 ₳ Private balance after 6.766792 ₳");
+    expect(line).not.toContain("Change, back to your private balance");
+    // "The swap and its costs" isn't bold: the total is.
+    expect(line).not.toContain("For the swap");
+    // The whole swap: the DEX's 2 ₳, and three network fees, this one's exact, about 0.25 ₳ each for the order and the
+    // return: 2 + 0.233208 + 0.5 = 2.733208, about 2.73 ₳. What comes back: 21.233208 − 10 swapped − 2.733208 = 8.5 ₳,
+    // the 5 ₳ kept aside, the 2 ₳ deposit and what the fees leave of the 2 ₳ room.
+    expect(line).toContain("DEX fee 2 ₳ Network fees, about 0.73 ₳ Costs in all, about 2.73 ₳ Comes back, about 4.2 tUSDM and 8.5 ₳");
+    expect(line).toContain("Network fees: this payment's 0.233208 ₳, and about 0.25 ₳ each for the order and the return, from the room");
+    expect(line).not.toContain("The collateral, the order's deposit");
+    // Through Lovejoin, with a box: its mixes and the box's way back are costs too, and the deposit a fourth fee.
+    const mixed = review({ ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" });
+    expect(mixed).toContain("Network fees, about 0.98 ₳ Through Lovejoin, about 4.1 ₳ Costs in all, about 7.08 ₳");
+    expect(mixed).toContain("about 0.25 ₳ each for the order, Lovejoin's deposit and the return");
+    // Turned off, it comes back directly, as the switch says: Lovejoin's costs go.
+    expect(review({ ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" }, false)).toContain("Costs in all, about 2.73 ₳");
   });
 
   it("offers Stop through Lovejoin, with what it takes, or directly, by the approval's switch", () => {
@@ -609,11 +642,40 @@ describe("what the swap and session screens say sites and chain watchers see (pr
       inputs: 2,
       lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) },
     };
-    const line = text(createElement(LovejoinNote, { back, busy: false, onDirect: () => undefined }));
+    const line = text(createElement(LovejoinNote, { back }));
     expect(line).toContain("so what comes back is harder to tie to this session on chain");
     expect(line).not.toContain("isn't tied");
     expect(line).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
     expect(line).toContain("Spending boxes that came back together, or with the change the session's funding left, narrows it.");
+  });
+
+  it("offers the way back directly as a switch, on through Lovejoin, never a link (blind test §9.8; 5289dcf)", () => {
+    const back: SessionBackSummary = {
+      network: "preprod",
+      index: 4,
+      txHash: "cd".repeat(32),
+      fee: "8300000",
+      lovelace: "5200000",
+      tokens: [],
+      depositOutputs: 1,
+      inputs: 2,
+      lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) },
+    };
+    const sw = (b: SessionBackSummary, through: boolean) =>
+      renderToStaticMarkup(createElement(LovejoinSwitch, { back: b, through, busy: false, onThrough: () => undefined }));
+    const on = sw(back, true);
+    expect(on).toMatch(/role="switch"[^>]*aria-checked="true"/);
+    expect(on).toContain("Bring it back through Lovejoin");
+    expect(on).toContain("harder to tie to this session");
+    // Built directly, it stays, off, saying what that ties: the user can turn it back on.
+    const { lovejoin: _, ...direct } = back;
+    const off = sw(direct, false);
+    expect(off).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    expect(off).toContain("anyone can tie it on chain to this session and its funding");
+    // With nothing for Lovejoin to take, there's no choice to make.
+    expect(sw(direct, true)).toBe("");
+    // And the note under the rows no longer carries a way out of its own.
+    expect(renderToStaticMarkup(createElement(LovejoinNote, { back }))).not.toContain('class="link"');
   });
 });
 
@@ -752,6 +814,33 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
       }),
     );
 
+  it("offers bringing them back directly as a switch, first, never a link (blind test §9.8; 5289dcf)", () => {
+    const chain = { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) };
+    const markup = (returns: SessionBackSummary[], direct: boolean) =>
+      renderToStaticMarkup(
+        createElement(ClaimReview, {
+          built: { returns, skipped: [] },
+          chosen: new Set(returns.map((r) => r.index)),
+          sessions: [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 2 } })],
+          direct,
+          busy: false,
+          onToggle: () => undefined,
+          onDirect: () => undefined,
+        }),
+      );
+    const through = markup([back({ lovejoin: chain })], false);
+    expect(through).toMatch(/role="switch"[^>]*aria-checked="true"/);
+    expect(through.indexOf('role="switch"')).toBeLessThan(through.indexOf('data-testid="claim-returns"'));
+    expect(through).toContain("Bring them back through Lovejoin");
+    expect(through).not.toContain('class="link"');
+    // Built directly, it stays, off, saying what that ties.
+    const direct = markup([back()], true);
+    expect(direct).toMatch(/role="switch"[^>]*aria-checked="false"/);
+    expect(direct).toContain("anyone can tie each on chain to its session and its funding");
+    // Nothing through Lovejoin, and nothing turned off: no switch.
+    expect(markup([back()], false)).not.toContain('role="switch"');
+  });
+
   it("names which transaction of a chain it shows, and it's the deposit", () => {
     const chain = { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) };
     // One return through Lovejoin: ten transactions, and the one shown is named.
@@ -772,15 +861,16 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
   it("offers to bring them back directly when some go through Lovejoin, and says it has had no audit (privacy review §4.1)", () => {
     const line = review([back({ lovejoin: { boxes: 2, depth: 2, mixes: 8, fees: "8000000", txs: 10, delay: "1-6", entry: "11".repeat(32) } })]);
     expect(line).toContain("Through Lovejoin 2 boxes of 10 ₳, each back after 1 to 6 hours");
-    expect(line).toContain("Bring them back directly instead");
+    // By its switch, now, not a link (blind test §9.8).
+    expect(line).toContain("Bring them back through Lovejoin");
     expect(line).toContain("Lovejoin hasn't had a third-party audit");
     // Sent together, their deposits and mixes share blocks (privacy review §6).
     expect(line).toContain("their deposits land in the same block or two and their mixes share blocks");
     expect(line).toContain("Bringing each back from its own page, hours apart, avoids both.");
     expect(line).not.toContain("so those don't land together");
-    // Built again directly: nothing more to offer, and it says what that ties.
+    // Built again directly: the switch, off, and it says what that ties.
     const direct = review([back()], true);
-    expect(direct).not.toContain("Bring them back directly instead");
+    expect(direct).toContain("Bring them back through Lovejoin");
     expect(direct).not.toContain("third-party audit");
     expect(direct).toContain("They come back directly, as you chose: anyone can tie each on chain to its session and its funding.");
   });
@@ -910,6 +1000,14 @@ describe("what Lovejoin's page says a box's way back hides (privacy review §2.4
     expect(line).not.toContain("nothing ties it");
   });
 
+  it("says what a mix's funding takes from the private balance, and what it holds after, not its change (blind test §9.8)", () => {
+    const line = text(shown(createElement(PrivateReview, { summary: { ...summary, mix: funding } as never, before: "28000000" })));
+    // 20.4 + 5 + 0.2 leave the 28 ₳.
+    expect(line).toContain("For the boxes, their mixes and network fees 20.4 ₳ Kept aside for contracts 5 ₳, comes back Network fee 0.2 ₳");
+    expect(line).toContain("Total leaving your private balance 25.6 ₳ Private balance after 2.4 ₳");
+    expect(line).not.toContain("Change, back to your private balance");
+  });
+
   it("says how far a box hides on a mix's review, never that the mixes hide which boxes are yours", () => {
     const reviews = [
       text(createElement(PrivateReview, { summary: { ...summary, mix: funding } as never })),
@@ -984,6 +1082,29 @@ describe("Lovejoin's page before Review (chunk 23's second review, LJ-1, LJ-3)",
     expect(poolRoom({ others: 12, floor: 30 }, 1, 1)).toMatchObject({ floorShort: true, have: 12 });
   });
 
+  it("says what a mix takes, all told, and the rows add up (blind test §9.8, T11)", () => {
+    // One box two waves deep from the private balance: WebAssembly's 15.3 ₳ is the 10 ₳ box, its four mixes at 0.95 ₳
+    // and a 1.5 ₳ reserve for the deposit's fee and the change.
+    const one = mixCosts({ boxes: 1, lovelace: "15300000", mixFees: "3800000" }, "private");
+    expect(one).toMatchObject({ boxes: 10_000_000n, mixFees: 3_800_000n, reserve: 1_500_000n, txs: 3 });
+    // Used up: the mixes, three network fees (this payment, the deposit, the return) at about 0.25 ₳, and 0.3 ₳ to
+    // bring the box back: 4.85 ₳, 48.5% of the 10 ₳.
+    expect(one.cost).toBe(3_800_000n + 750_000n + 300_000n);
+    // Leaving now: 15.3 + 5 kept aside + this payment's fee, about 20.55 ₳. Back once it's mixed: the 5 ₳ and what the
+    // reserve leaves (1.5 − 0.5), 6 ₳; back later: the box, less its way back, 9.7 ₳.
+    expect(one.leaving).toBe(20_550_000n);
+    expect(one.soon).toBe(6_000_000n);
+    expect(one.later).toBe(9_700_000n);
+    expect(one.cost + one.soon + one.later).toBe(one.leaving);
+    // From the public account: the box, its mixes and the deposit's fee leave; nothing comes back but the box.
+    const pub = mixCosts({ boxes: 1, lovelace: "15300000", mixFees: "3800000" }, "public");
+    expect(pub).toMatchObject({ txs: 1, cost: 4_350_000n, leaving: 14_050_000n, soon: 0n, later: 9_700_000n });
+    expect(pub.cost + pub.later).toBe(pub.leaving);
+    // Two boxes: 29.1 ₳ planned, every figure per box but the reserve and the fees.
+    const two = mixCosts({ boxes: 2, lovelace: "29100000", mixFees: "7600000" }, "private");
+    expect(two).toMatchObject({ reserve: 1_500_000n, cost: 8_950_000n, leaving: 34_350_000n, soon: 6_000_000n, later: 19_400_000n });
+  });
+
   it("offers no more boxes than the private balance pays for, with the collateral and the fee aside", () => {
     // One box two waves deep takes 15.3 ₳: 13.8 ₳ a box, and 1.5 ₳ besides.
     const one = { boxes: 1, lovelace: "15300000", mixFees: "3800000" };
@@ -1006,6 +1127,17 @@ describe("a session's funding refused at Send (chunk 23's second review, DX-1)",
     expect(changed).toContain("Details " + detail);
     expect(changed).toContain("Build it again");
     expect(foot({ kind: "again", detail })).toContain("Nothing was sent, and this review can't go again");
+  });
+
+  it("names giveme.my when it refused, says the money didn't move, and what to try if it does again (blind test §9.5)", () => {
+    const detail = "giveme.my, which lends the collateral, refused this transaction: Transaction Fails Validation.";
+    const refused = foot({ kind: "again", by: "giveme", detail });
+    expect(refused).toMatch(/^Nothing was sent, so none of your money moved: giveme\.my, the service that lends the collateral, turned it down\./);
+    expect(refused).toContain("If it's turned down again, wait a few minutes and try once more.");
+    expect(refused).not.toContain("something it spends");
+    expect(refused).toContain("Details " + detail);
+    expect(refused).toContain("Build it again");
+    expect(foot({ kind: "again", by: "givemeBusy", detail })).toContain("couldn't take it just now. Wait a few minutes, then build it again");
   });
 
   it("isn't built again when it may have gone out: its page watches for it", () => {

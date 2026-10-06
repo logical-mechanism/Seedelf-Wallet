@@ -22,7 +22,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { type I18nKey, joinList, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView, TxVote } from "../../shared/rpc";
+import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView, TxVote, TxYours } from "../../shared/rpc";
+import { nameOf, useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
@@ -281,6 +282,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         <Section
           title={d.collateral.length ? tr("tx.collateralCount", { count: d.collateral.length }) : tr("utxos.tag.collateral")}
           id={`${testId}-collateral`}
+          // Whose collateral, and what "Comes back" means: T04b asked whose money it was (blind test §9.5).
+          hint={tr("tx.privacy.collateralHint")}
         >
           {d.collateral.length > 0 && <Outpoints list={d.collateral} testId={`${testId}-collateral-list`} />}
           <ReviewRows testId={`${testId}-collateral-rows`}>
@@ -289,6 +292,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               <Row label={tr("tx.comesBack")} value={adaText(d.collateralReturn.lovelace)} />
             )}
           </ReviewRows>
+          {d.collateralReturn?.yours && <YoursTag yours={d.collateralReturn.yours} testId={`${testId}-collateral-yours`} />}
         </Section>
       )}
 
@@ -596,6 +600,10 @@ function Output({
         </span>
         <CopyButton value={o.address.bech32} label={tr("tx.copyAddress")} />
       </span>
+      {/* Whose it is, where it's the user's: testers told their own change by an address's last letters, as the
+          words below describe an address by its shape alone (blind test §9.9, T18). The worker works it out on
+          the device (tx-view.ts). */}
+      {o.yours && <YoursTag yours={o.yours} testId="tx-output-yours" />}
       <span className="note">
         {`#${o.index} · ${addressWords(o.address.kind, o.address.payment)}`}
         {/* `form` isn't shown: the CDDL calls the list and the map forms "equally
@@ -629,6 +637,27 @@ function Output({
         />
       )}
     </li>
+  );
+}
+
+/** An output's owner, where it's the user: the account by name when there's more than one, as the windows do. */
+function YoursTag({ yours, testId }: { yours: TxYours; testId: string }) {
+  const tr = useT();
+  const { accounts, several } = useAccounts();
+  let words: string;
+  if (yours.kind === "account") {
+    words = several ? tr("tx.yours.named", { account: nameOf(accounts, yours.account) }) : tr("tx.yours.account");
+  } else if (yours.kind === "session") {
+    words = tr("tx.yours.session", { number: yours.index + 1 });
+  } else {
+    words = tr(yours.kind === "seedelf" ? "tx.yours.seedelf" : "tx.yours.private");
+  }
+  return (
+    <span className="tx-detail__line tx-detail__line--wide">
+      <span className="utxo-tag" data-testid={testId}>
+        {words}
+      </span>
+    </span>
   );
 }
 

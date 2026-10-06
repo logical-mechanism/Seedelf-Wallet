@@ -210,14 +210,14 @@ describe("Koios client", () => {
       new Response("", { status: 503 }),
     ]);
     await expect(koios.credentialUtxos(["94bc"])).rejects.toThrow(
-      new KoiosError("Koios is having trouble right now (503 for credential_utxos). Try again in a minute.", "silent"),
+      new KoiosError("Koios, the service the wallet reads Cardano from, is having trouble right now (503 for credential_utxos). Try again in a minute.", "silent"),
     );
     expect(calls).toHaveLength(3);
   });
 
   it("doesn't retry a request Koios rejects", async () => {
     const { koios, calls } = scripted([new Response("bad", { status: 400 })]);
-    await expect(koios.credentialUtxos(["x"])).rejects.toThrow("Koios refused the request (400 for credential_utxos).");
+    await expect(koios.credentialUtxos(["x"])).rejects.toThrow("Koios, the service the wallet reads Cardano from, refused the request (400 for credential_utxos).");
     expect(calls).toHaveLength(1);
   });
 });
@@ -283,7 +283,7 @@ describe("Koios client: transactions", () => {
     expect(await koios.evaluate("84a4")).toEqual(error);
     expect(delays).toEqual([1000]);
     const refused = scripted([new Response("", { status: 404 })]);
-    await expect(refused.koios.evaluate("84a4")).rejects.toThrow("Koios refused the request (404 for ogmios)");
+    await expect(refused.koios.evaluate("84a4")).rejects.toThrow("Koios, the service the wallet reads Cardano from, refused the request (404 for ogmios)");
   });
 
   it("says whether a submit Koios didn't answer may have gone through: not when it only asked to slow down", async () => {

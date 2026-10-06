@@ -44,6 +44,17 @@ export function TotalRows({ side, leaving, before, tokens = 0 }: { side: Side; l
   );
 }
 
+/**
+ * Home's balance for a side a form was handed spendable (format.ts
+ * `unlocked`, which keeps what it took out in `locked`): what's spendable
+ * and what's locked, together, as Home shows it. A screen that gets the
+ * spendable side alone (the dApps page's, a site's session) gives its review
+ * "… after" from it (blind test §9.8).
+ */
+export function homeBalance(side: { lovelace: string; locked: { lovelace: string } }): string {
+  return (BigInt(side.lovelace) + BigInt(side.locked.lovelace)).toString();
+}
+
 /** "Private balance after": what a side holds once the transaction lands. */
 export function AfterRow({ side, lovelace }: { side: Side; lovelace: bigint }) {
   const t = useT();

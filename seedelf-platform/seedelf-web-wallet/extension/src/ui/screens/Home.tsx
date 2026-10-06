@@ -25,6 +25,17 @@
 // a Make private's deposit: background/incoming.ts), and says so, so a pending
 // payment no longer reads as a loss (HM-1, HM-2). After an action Home opens
 // on the side it spent from, and a reload keeps the tab (HM-6).
+//
+// Right after a send Home reads again, from the worker's kept reading alone
+// with no request: less what the send spent, with what it pays back on its
+// way and the rewards it withdrew in that, not counted twice (blind test §9.1,
+// §9.3). So both balances read the review's "after" at once, and nothing reads
+// the public account in the same second as a private spend (privacy review
+// §2.9). It said nothing until a Refresh, and a Refresh showed T08 its
+// rewards twice.
+//
+// The blind test: each tab has a row for the other side, its balance and what
+// it's for, which opens its tab (§9.4); Home opens at its top (§9.10).
 
 import { useCallback, useEffect, useState } from "react";
 import { type I18nKey, joinList, joinSentences, t, useT } from "../../i18n";
@@ -53,7 +64,6 @@ import {
   DoneIcon,
   EyeIcon,
   EyeOffIcon,
-  GridIcon,
   HistoryIcon,
   MoveInIcon,
   PieIcon,
@@ -61,8 +71,10 @@ import {
   SendIcon,
   ShieldIcon,
   SproutIcon,
+  WalletIcon,
   WithdrawIcon,
 } from "../components/Icons";
+import { OpensAtTop } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
 import { TokenList, type TokenAction } from "../components/TokenList";
 import {
@@ -82,7 +94,7 @@ import { assetFingerprint } from "../tokens";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
-import { Dapps, type DappStart } from "./Dapps";
+import { Dapps, DappsRow, type DappStart } from "./Dapps";
 import { MoveIn } from "./MoveIn";
 import { Receive, ReceiveSeedelf } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
@@ -205,8 +217,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const amounts = useAmounts();
   const [price, setPrice] = useState<AdaPrice | null>(null);
   const [removing, setRemoving] = useState<SeedelfInfo>();
-  // An address Send handed to Make public, which pays it (chunk 23's review, P-1).
-  const [payTo, setPayTo] = useState<string>();
+  // An address private Send handed on, with the amount typed: to Make public or the public account's Send, as the
+  // user chose (chunk 23's review, P-1; blind test §9.7).
+  const [payTo, setPayTo] = useState<{ to: string; amount: string }>();
   // A token a token's details started a payment with, picked in the form (chunk 23's review, T-1).
   const [picked, setPicked] = useState<Record<string, string>>();
   const [tokensOf, setTokensOf] = useState<Tab>();
@@ -228,7 +241,18 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     try {
       const b = await call("balances", { refresh });
       setBalances(b);
-      setError((was) => (was && b.updatedAt < was.at ? was : undefined));
+      // The worker's last failed reading since this one, when there is one: the alert follows it, so coming back
+      // from Settings, which replaced Home and its state, or a reload, keeps it until a reading succeeds (blind
+      // test E05; HM-5 meant it to clear only then). Without it, a failure this page met still stands against an
+      // older reading.
+      const failed = b.failed;
+      setError((was) =>
+        failed
+          ? { message: failed.message ?? (was && was.at >= failed.at ? was.message : ""), at: failed.at }
+          : was && b.updatedAt < was.at
+            ? was
+            : undefined,
+      );
       return b;
     } catch (e) {
       setError({ message: (e as Error).message, at: Date.now() });
@@ -386,14 +410,23 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const seedelfFirst = !!balances && seedelfs.length === 0;
   const publicEmpty = !!balances && balances.cardano.utxos === 0 && !balances.cardano.incoming;
 
-  // Home opens on the side the transaction spent from (HM-6): a Seedelf's creation says which paid.
+  // Home opens on the side the transaction spent from (HM-6): a Seedelf's creation says which paid. Its balances are
+  // read again from the worker's kept reading alone, which asks Koios nothing (blind test §9.3, privacy review §2.9):
+  // what the send spent is out of them, and what it pays back is on its way. With none kept (one too large to keep,
+  // or dropped by a public mix), Home keeps what it shows until the watch reads again.
   const sent = (p: PendingTx, from: Tab = SPENT_FROM[p.kind]) => {
-    setPending(p);
+    sentHere(p);
     setScreen("home");
     setTab(from);
     setRemoving(undefined);
     setPicked(undefined);
     setBackTo("home");
+  };
+  // A transaction sent from a screen that stays open (a DRep's vote, a Lovejoin withdraw or mix): watched, and the
+  // balances read again the same way.
+  const sentHere = (p: PendingTx) => {
+    setPending(p);
+    call("balances", { kept: true }).then(setBalances, () => undefined);
   };
   const home = () => {
     setScreen("home");
@@ -426,6 +459,12 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const dapps = (start?: DappStart) => {
     setDappStart(start);
     setScreen("dapps");
+  };
+  // The other side's row: its tab, which opens at its top, and its tab button takes the focus, as the arrow keys
+  // leave it, since the row pressed goes with the panel (blind test §9.4).
+  const toSide = (side: Tab) => {
+    document.getElementById(`tab-${side}`)?.focus({ preventScroll: true });
+    setTab(side);
   };
   // Remove is reached from Receive, and Back returns there.
   if (removing) {
@@ -467,7 +506,22 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   }
   if (screen === "send" && free) {
     return (
-      <CardanoSend cardano={free.cardano} rewards={rewardsProp} total={totals?.public} picked={picked} onCancel={home} onSent={sent} />
+      <CardanoSend
+        cardano={free.cardano}
+        rewards={rewardsProp}
+        total={totals?.public}
+        picked={picked}
+        to={payTo?.to}
+        amount={payTo?.amount}
+        onCancel={() => {
+          setPayTo(undefined);
+          home();
+        }}
+        onSent={(p) => {
+          setPayTo(undefined);
+          sent(p);
+        }}
+      />
     );
   }
   if ((screen === "staking" || screen === "staking-vote") && balances) {
@@ -492,7 +546,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         }
         onBack={home}
         onSent={sent}
-        onPending={setPending}
+        onPending={sentHere}
       />
     );
   }
@@ -514,10 +568,14 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         seedelf={free.seedelf}
         total={totals?.private}
         picked={picked}
-        onPayAddress={(to) => {
-          setPayTo(to);
-          setScreen("withdraw");
+        onPayAddress={(route, to, amount) => {
+          setPayTo({ to, amount });
+          // A token picked in the private balance isn't the public account's to send.
+          if (route === "public") setPicked(undefined);
+          setScreen(route === "public" ? "send" : "withdraw");
         }}
+        // The public account's Send, offered beside Make public, says why it can't pay now instead of opening.
+        publicBlocked={publicReason}
         onCancel={home}
         onSent={sent}
       />
@@ -528,7 +586,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
       <Withdraw
         seedelf={free.seedelf}
         total={totals?.private}
-        to={payTo}
+        to={payTo?.to}
+        amount={payTo?.amount}
         picked={picked}
         onCancel={() => {
           setPayTo(undefined);
@@ -552,7 +611,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
           pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} onCheck={watch} /> : undefined
         }
         onBack={home}
-        onPending={setPending}
+        onPending={sentHere}
       />
     );
   }
@@ -562,6 +621,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
       <Activity
         of={activityOf}
         pendingHash={pendingHash}
+        banner={
+          pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} onCheck={watch} /> : undefined
+        }
         onBack={() => setActivityOf(undefined)}
         onRead={() => void load(false)}
       />
@@ -586,6 +648,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
 
   return (
     <>
+      {/* At its top coming back from anything, so a sent transaction's banner is the first thing seen (blind test
+          T03), on another tab, and on the top bar's mark. */}
+      <OpensAtTop page={`${tab}:${goHome}`} />
       <Splash phase={splash} />
       <div className={splash === "wait" || splash === "show" ? "home home--hidden" : "home"}>
         {/* What it means for the screen, and the way on; the service's own words, its name and status code, wait
@@ -597,13 +662,18 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             <Callout tone="warn" role="alert">
               <div className="stack-tight">
                 <strong>{balances ? t("home.warn.stale") : t("home.warn.readFailed")}</strong>
+                {/* What's true and useful when it keeps failing: only reading failed, and nothing needs doing
+                    (blind test §4 entry 25). */}
+                <span>{t("home.warn.readSafe")}</span>
                 <button type="button" className="link align-start" onClick={() => void load(true)} disabled={reading}>
                   {reading ? t("home.trying") : t("common.tryAgain")}
                 </button>
-                <details className="disclosure">
-                  <summary>{t("common.details")}</summary>
-                  <p className="note">{error.message}</p>
-                </details>
+                {error.message && (
+                  <details className="disclosure">
+                    <summary>{t("common.details")}</summary>
+                    <p className="note">{error.message}</p>
+                  </details>
+                )}
               </div>
             </Callout>
           </div>
@@ -702,6 +772,12 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 {joinSentences([handleWarning(handlesIn(balances.seedelf.tokens)), t("home.handles.makePublic")])}
               </Callout>
             )}
+
+            {/* The public side from the tab Home opens on: 11 of 29 blind runs looked here first for what lives there,
+                and once Get started was gone nothing here said it existed (blind test §9.4). After Get started and the
+                handle warning, which are this tab's next step and what to act on, and so under the hero when neither
+                shows. */}
+            <OtherSide side="cardano" lovelace={balances && shownAccountTotal(balances.cardano)} onOpen={() => toSide("cardano")} />
 
             {privateTokens && privateTokens.tokens.length > 0 && (
               <section className="section" aria-labelledby="seedelf-tokens-title">
@@ -824,6 +900,11 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               </Callout>
             )}
 
+            {/* And the private side from here, whichever tab Home opens on (the owner's call, GS-3). Under staking,
+                which stays where this tab's users found it, and under the note whose Create a Seedelf is a new
+                wallet's next step (H-4); a swap was looked for here (blind test T10). */}
+            <OtherSide side="seedelf" lovelace={balances && privateTotal(balances.seedelf)} onOpen={() => toSide("seedelf")} />
+
             {publicTokens && publicTokens.tokens.length > 0 && (
               <section className="section" aria-labelledby="cardano-tokens-title">
                 <h2 id="cardano-tokens-title">{t("home.tokens")}</h2>
@@ -839,7 +920,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               </section>
             )}
 
-            <Links onActivity={() => setActivityOf("cardano")} onUtxos={() => setUtxosOf("cardano")} />
+            {/* dApps here too: sites connect to the public account, and T15 looked for them on this tab (blind test
+                §9.2). */}
+            <Links onActivity={() => setActivityOf("cardano")} onUtxos={() => setUtxosOf("cardano")} onDapps={() => dapps()} />
           </section>
         )}
       </div>
@@ -858,14 +941,25 @@ function lockedMeta(side: Balances["seedelf" | "cardano"], ada: (lovelace: strin
 }
 
 /**
- * "1.2 ₳ of this is on its way" under a balance, while the wallet's own sent transaction pays some back to it that
- * the chain doesn't show yet: a payment's change, a Make private's deposit (chunk 23's second review, HM-1, HM-2).
+ * "Includes 1.2 ₳ on its way to this balance" under a balance, while the wallet's own sent transaction pays some
+ * back to it that the chain doesn't show yet: a payment's change, a Make private's deposit (chunk 23's second review,
+ * HM-1, HM-2). Which way it goes is said: T08 couldn't tell whether "35.300614 ₳ of this is on its way" was leaving or
+ * coming back. And the staking rewards it withdrew, which are in it: their line goes at once (blind test §9.1).
  */
-function incomingMeta(side: Balances["seedelf" | "cardano"], testId: string) {
-  return side.incoming ? <IncomingMeta incoming={side.incoming} testId={testId} /> : null;
+function incomingMeta(side: Balances["seedelf"] | Balances["cardano"], testId: string) {
+  const rewards = "withdrawing" in side ? side.withdrawing : undefined;
+  return side.incoming ? <IncomingMeta incoming={side.incoming} rewards={rewards} testId={testId} /> : null;
 }
 
-function IncomingMeta({ incoming, testId }: { incoming: NonNullable<Balances["cardano"]["incoming"]>; testId: string }) {
+function IncomingMeta({
+  incoming,
+  rewards,
+  testId,
+}: {
+  incoming: NonNullable<Balances["cardano"]["incoming"]>;
+  rewards?: string;
+  testId: string;
+}) {
   const t = useT();
   const amounts = useAmounts();
   const what = incoming.tokens.length
@@ -873,7 +967,7 @@ function IncomingMeta({ incoming, testId }: { incoming: NonNullable<Balances["ca
     : `${amounts.ada(incoming.lovelace)}\u00a0₳`;
   return (
     <span className="hero__meta" data-testid={testId}>
-      {t("home.incoming", { what })}
+      {rewards ? t("home.incomingRewards", { what, rewards: amounts.ada(rewards) }) : t("home.incoming", { what })}
     </span>
   );
 }
@@ -963,6 +1057,46 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
               </span>
               <span className="menu-row__sub" data-testid="staking-row-vote">
                 {t("home.votingPower", { what: voteLabel(staking.drep, staking.ownDrep ? t("drep.yourOwn") : undefined) })}
+              </span>
+            </span>
+            <ChevronRightIcon size={16} />
+          </button>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * The wallet's other side, on the tab that's showing: its balance as its own tab shows it (hidden with the eye, "—"
+ * until a reading), what it's for, and its tab. Home opens on Private, and 11 of 29 blind runs looked there first for
+ * an ordinary payment, an address to be paid at, staking or a vote; once Get started was gone, nothing there said a
+ * public side existed (blind test §9.4). The actions keep their short names, "Send" and "Receive", with the side in
+ * their accessible names only (chunk 14); this row says it on the page. Exported for its tests.
+ */
+export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "cardano"; lovelace?: string; onOpen: () => void }) {
+  const t = useT();
+  const amounts = useAmounts();
+  // Named as the Public tab's heading names it: the account's name, once there's more than one.
+  const accounts = useAccounts();
+  const id = side === "cardano" ? "home-public-row" : "home-private-row";
+  const name = side === "seedelf" ? t("home.private.title") : accounts.several ? accounts.name : t("home.public.title");
+  return (
+    <section className="section">
+      <ul className="list">
+        <li>
+          <button type="button" className="menu-row" onClick={onOpen} data-testid={id}>
+            <span className="menu-row__icon">{side === "cardano" ? <WalletIcon size={16} /> : <ShieldIcon size={16} />}</span>
+            <span className="menu-row__text">
+              <span className="menu-row__head">
+                <span>{name}</span>
+                <span className="menu-row__figure" data-testid={`${id}-lovelace`}>
+                  {lovelace === undefined ? "—" : amounts.ada(lovelace)}
+                  {"\u00a0₳"}
+                </span>
+              </span>
+              <span className="menu-row__sub menu-row__sub--wrap">
+                {t(side === "cardano" ? "home.otherSide.public" : "home.otherSide.private")}
               </span>
             </span>
             <ChevronRightIcon size={16} />
@@ -1069,21 +1203,16 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
 /** What every Lovejoin box holds. */
 const LOVEJOIN_BOX = 10_000_000n;
 
-/** Opens this tab's Activity, or its UTxOs, and on the private tab the dApp browser. */
+/** Opens this tab's Activity, or its UTxOs, and the dApp browser. */
 function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtxos: () => void; onDapps?: () => void }) {
   const t = useT();
   return (
     <section className="section">
       <ul className="list">
+        {/* With whether sites can see the wallet, and how many are connected, under it (blind test §9.2). */}
         {onDapps && (
           <li>
-            <button type="button" className="menu-row" onClick={onDapps}>
-              <span className="menu-row__icon">
-                <GridIcon size={16} />
-              </span>
-              <span>{t("home.dapps")}</span>
-              <ChevronRightIcon size={16} />
-            </button>
+            <DappsRow onOpen={onDapps} />
           </li>
         )}
         <li>

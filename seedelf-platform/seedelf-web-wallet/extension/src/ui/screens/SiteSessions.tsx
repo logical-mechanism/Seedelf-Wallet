@@ -15,10 +15,19 @@
 import { useState, type FormEvent } from "react";
 import { joinList, joinSentences, t, useT } from "../../i18n";
 
-import type { Balances, DappSite, PendingTx, SessionBackSummary, SessionOutSummary, SessionView } from "../../shared/rpc";
-import { call, isStale } from "../background";
+import type {
+  Balances,
+  DappSite,
+  PendingTx,
+  RefusedBy,
+  SessionBackSummary,
+  SessionOutSummary,
+  SessionView,
+} from "../../shared/rpc";
+import { call, isStale, refusedByOf } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { PaidRows } from "../components/PaidRows";
@@ -28,6 +37,7 @@ import {
   LovejoinNote,
   LovejoinRows,
   LovejoinSkipped,
+  LovejoinSwitch,
   ReturnLinks,
   useSendingLabel,
 } from "../components/LovejoinReturn";
@@ -37,6 +47,7 @@ import { GlobeIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { unsentWhyText } from "../components/SessionRefused";
 import { StaleFoot } from "../components/StaleReview";
@@ -161,6 +172,8 @@ export function SiteSession({
   const amounts = useAmounts();
   const [page, setPage] = useState<Page>("main");
   const [back, setBack] = useState<SessionBackSummary>();
+  // Which way the return shown was built: through Lovejoin as Settings has it, or directly, by its switch.
+  const [backThrough, setBackThrough] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [disconnecting, setDisconnecting] = useState(false);
@@ -195,11 +208,19 @@ export function SiteSession({
     );
   }
 
+  /** Builds the return through Lovejoin, as Settings has it, or directly: Bring it back, then its review's switch. */
+  const buildBack = (through: boolean) =>
+    void act(async () => {
+      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }) }));
+      setBackThrough(through);
+    });
+
   if (back) {
     return (
       <Screen
         title={tr("swaps.back.title")}
         titleId="site-back-review"
+        review
         onBack={() => setBack(undefined)}
         backDisabled={busy}
         aside={tr("review.nothingSent")}
@@ -221,6 +242,8 @@ export function SiteSession({
           </button>
         }
       >
+        {/* The way back first, a switch, where it can't be missed (blind test §9.8; Stop's, 5289dcf). */}
+        <LovejoinSwitch back={back} through={backThrough} busy={busy} onThrough={buildBack} />
         <ReviewRows testId="site-back-review">
           <LovejoinRows back={back} />
           <Row
@@ -241,11 +264,7 @@ export function SiteSession({
         <TxDetailButton txHash={back.txHash} testId="site-back-tx" />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
-        <LovejoinNote
-          back={back}
-          busy={busy}
-          onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
-        />
+        <LovejoinNote back={back} />
         <p className="note">{tr("sites.back.staysConnected")}</p>
         <ReturnLinks back={back} />
       </Screen>
@@ -256,7 +275,7 @@ export function SiteSession({
   const empty = !!holding && holding.utxos === 0;
   const failed = s.stage === "failed";
   const wait = disconnectWait(s);
-  const bringBack = () => void act(async () => setBack(await call("session-back-build", { index: s.index })));
+  const bringBack = () => buildBack(true);
   // Asked first; the worker checks again, and its refusal shows here.
   const disconnect = () => {
     setDisconnecting(false);
@@ -472,8 +491,8 @@ function TopUp({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   // The worker's words for a top-up that can't go as it is: Send gives way to building it again (chunk 23's
-  // second review, DX-1, as private Send's does).
-  const [stale, setStale] = useState<string>();
+  // second review, DX-1, as private Send's does), and who refused it when that's giveme.my (blind test §9.5).
+  const [stale, setStale] = useState<{ detail: string; by?: RefusedBy }>();
 
   const tokens = tokenChoices(useNetwork(), seedelf.tokens, typed);
   const withTokens = tokens.sent.length > 0;
@@ -507,7 +526,7 @@ function TopUp({
     try {
       onSent(await call("session-top-up-submit", { txHash: review.txHash }));
     } catch (err) {
-      if (isStale(err)) setStale((err as Error).message);
+      if (isStale(err)) setStale({ detail: (err as Error).message, by: refusedByOf(err) });
       else setError((err as Error).message);
       setBusy(false);
     }
@@ -519,6 +538,7 @@ function TopUp({
       <Screen
         title={tr("sites.topUp.reviewTitle")}
         titleId="top-up-review"
+        review
         onBack={() => {
           setReview(undefined);
           setStale(undefined);
@@ -529,7 +549,7 @@ function TopUp({
         error={error}
         foot={
           stale ? (
-            <StaleFoot detail={stale} busy={busy} onAgain={() => void make()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void make()} />
           ) : (
             <button type="button" className="primary" onClick={() => void send()} disabled={busy}>
               {busy ? tr("common.sending") : tr("common.send")}
@@ -540,9 +560,16 @@ function TopUp({
         <ReviewRows testId="top-up-review">
           <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
           <PaidRows label={tr("sites.topUp.amount")} paid={paid} />
-          {collateral && <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral.lovelace)}\u00a0₳`} />}
+          {collateral && <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })} />}
           <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
-          <Row label={tr("review.backToPrivate")} value={`${formatAda(review.changeLovelace)}\u00a0₳`} />
+          {/* What leaves the private balance, and what it holds after, as a session's funding says them, not its change
+              (blind test §9.8, T16). */}
+          <TotalRows
+            side="private"
+            leaving={review.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(review.fee.total))}
+            before={homeBalance(seedelf)}
+            tokens={paid?.tokens.length ?? 0}
+          />
         </ReviewRows>
         <TxDetailButton txHash={review.txHash} testId="top-up-tx" />
         {collateral && (
@@ -552,7 +579,7 @@ function TopUp({
         )}
         <Callout tone="privacy">{tr("sites.topUp.privacy.links")}</Callout>
         <HistoriesNote histories={review.histories} session={review.index} testId="top-up-histories" />
-        <p className="note">{tr("swaps.review.givemeNote")}</p>
+        <GivemeNote funding />
       </Screen>
     );
   }

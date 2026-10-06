@@ -78,6 +78,22 @@ export function activityDetail(e: ActivityEntry): string | undefined {
   return e.detail;
 }
 
+/**
+ * An entry's amount, with its sign: "+25 ₳", "−5 ₳ and 1 token", or "1.74986 ₳" for a Seedelf's locked ADA. What
+ * moved, the fee apart (the details say it): a payment is what it paid (blind test §9.1). One that moved nothing but
+ * its fee, a vote or rewards withdrawn into the balance that counted them, is what it cost. `ada` writes an amount:
+ * a page passes `useAmounts().ada`, so hidden balances stay hidden.
+ */
+export function activityAmount(e: ActivityEntry, ada: (lovelace: string) => string = formatAda): string {
+  if (feeOnly(e)) return `−${ada(e.fee!)}\u00a0₳`;
+  const sign = e.direction === "in" ? "+" : e.direction === "out" ? "−" : "";
+  const held = e.tokens ? t("format.adaAndTokens", { ada: ada(e.lovelace), count: e.tokens }) : `${ada(e.lovelace)}\u00a0₳`;
+  return `${sign}${held}`;
+}
+
+/** Whether an entry moved nothing but the fee it paid: its details then say the fee alone, not an amount beside it. */
+export const feeOnly = (e: ActivityEntry) => BigInt(e.lovelace) === 0n && !e.tokens && !!e.fee;
+
 /** A DRep's name, from the list that ships with the wallet. */
 export function drepName(network: NetworkName, id: string): string | undefined {
   return drepList(network).dreps.find((d) => d.id === id)?.name;
@@ -166,13 +182,16 @@ const DIRECTION: Record<ActivityEntry["direction"], I18nKey> = {
 
 /**
  * The entries as CSV, newest first, for a spreadsheet or a tax tool: amounts
- * in ADA with a sign ("-" out, none for a Seedelf's locked ADA), each token
- * with its own sign, and the transaction's ID. Starts with a byte-order mark
- * so a spreadsheet reads it as UTF-8.
+ * in ADA with a sign ("-" out, none for a Seedelf's locked ADA), the fee apart
+ * in its own column, as the rewards withdrawn are in theirs, so ADA less the
+ * fee is what the balance did (blind test §9.1), each token with its own sign,
+ * and the transaction's ID. Not what's pending: it isn't on chain yet, and may
+ * never be (`exported`). Starts with a byte-order mark so a spreadsheet reads
+ * it as UTF-8.
  */
 export function activityCsv(network: NetworkName, entries: ActivityEntry[]): string {
   const ada = (lovelace?: string) => (lovelace ? formatAda(lovelace).replaceAll(",", "") : "");
-  const rows = entries.map((e) => {
+  const rows = exported(entries).map((e) => {
     const sign = e.direction === "in" ? "" : e.direction === "out" ? "-" : "";
     // Name first: a token's name is its own, and never a formula (csvCell).
     const tokens = (e.assets ?? [])
@@ -199,3 +218,6 @@ export function activityCsv(network: NetworkName, entries: ActivityEntry[]): str
   });
   return `\uFEFF${[COLUMNS().join(","), ...rows].join("\r\n")}\r\n`;
 }
+
+/** What Save as CSV writes: the entries on chain, not those still pending. */
+export const exported = (entries: ActivityEntry[]) => entries.filter((e) => !e.pending);

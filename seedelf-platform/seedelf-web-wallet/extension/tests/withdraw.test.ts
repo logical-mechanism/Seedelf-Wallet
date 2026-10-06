@@ -192,6 +192,22 @@ describe("withdraw", () => {
     expect(BigInt(token!.minimum!)).toBeGreaterThan(BigInt(short!.minimum!));
   });
 
+  it("says how much an amount can be and what has to stay, and pays anything up to it (blind test §4.4)", async () => {
+    // 25 ₳, and 3 ₳ holding tUSDM that isn't being sent: it stays, with the least ADA it needs.
+    const t = await unlocked();
+    const pay = (lovelace: bigint) => t.withdraw.build("preprod", [{ to: THEIRS, lovelace: lovelace.toString(), tokens: [] }]);
+    const message = ((await pay(27_000_000n).catch((e: unknown) => e)) as Error).message;
+    const [, whole, decimals] = /^Not enough ADA: with the fee, your private balance can pay up to about (\d+)\.(\d+)\u00a0₳ here, since 1\.\d+\u00a0₳ has to stay with the tokens you keep/.exec(message) ?? [];
+    expect(whole, message).toBeDefined();
+    const most = BigInt(whole!) * 1_000_000n + BigInt(decimals!.padEnd(6, "0"));
+    // Measured, not guessed: a hair under it pays, where the guessed fee refused it.
+    const under = await pay(most - 5_000n);
+    expect(under.payments[0]!.lovelace).toBe((most - 5_000n).toString());
+    expect(under.changeTokens).toBe(1);
+    // Max is still everything, the token too.
+    expect((await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).payments[0]!.tokens).toHaveLength(1);
+  });
+
   it("explains what stops a withdrawal", async () => {
     const t = await unlocked();
     await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "30000000", tokens: [] }])).rejects.toThrow("Not enough ADA");

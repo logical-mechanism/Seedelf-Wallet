@@ -64,6 +64,20 @@ describe("a refused review built again (PY-1)", () => {
     expect(foot(true)).toContain("Nothing was sent.");
   });
 
+  it("names giveme.my when it refused, says the money didn't move and what to try, and keeps Nothing was sent first (blind test §9.5)", () => {
+    const said = (by?: "giveme" | "givemeBusy") =>
+      text(createElement(StaleFoot, { detail: "giveme.my refused it", by, busy: false, onAgain: () => undefined }));
+    // Nobody named: something it spends changed, or it waited too long.
+    expect(said()).toMatch(/^Nothing was sent\. Something it spends may have been spent or changed/);
+    expect(said("giveme")).toMatch(/^Nothing was sent, so none of your money moved: giveme\.my, the service that lends the collateral, turned this down\./);
+    expect(said("giveme")).toContain("If it's turned down again, wait a few minutes and try once more.");
+    expect(said("giveme")).not.toContain("Something it spends");
+    expect(said("givemeBusy")).toContain("couldn't take it just now. Wait a few minutes, then refresh and review it again.");
+    // giveme.my's own words stay under Details, and the one way on stays.
+    expect(said("giveme")).toContain("Details giveme.my refused it");
+    expect(said("giveme")).toContain("Refresh and review again");
+  });
+
   it("says the review is new once it's in", () => {
     expect(text(createElement(RenewedNote, { renewed: true }))).toBe("Review updated just now. Check it again.");
     expect(text(createElement(RenewedNote, { renewed: false }))).toBe("");

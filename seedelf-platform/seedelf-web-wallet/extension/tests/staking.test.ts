@@ -206,8 +206,15 @@ describe("staking transactions", () => {
     expect(withdraw.withdrawal).toBe(REWARDS);
     expect((await t.staking.submit("preprod", withdraw.txHash)).kind).toBe("withdraw-rewards");
 
+    // Koios still reports the rewards the withdrawal on its way takes: neither it again, nor a stop, which withdraws
+    // them too, until it lands (the fix round's review of blind test §9.1).
+    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("can be withdrawn only once");
+    await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("can be withdrawn only once");
+    const info = stakingPreprod.account_info[0]!;
+    t.koios.stakes.set(info.stake_address, { ...info, rewards_available: "0" });
+
     const stop = await t.staking.build("preprod", { kind: "stop" });
-    expect(stop).toMatchObject({ refund: "2000000", withdrawal: REWARDS });
+    expect(stop).toMatchObject({ refund: "2000000", withdrawal: "0" });
     expect((await t.staking.submit("preprod", stop.txHash)).kind).toBe("unstake");
   });
 

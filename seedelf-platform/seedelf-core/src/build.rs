@@ -1284,6 +1284,9 @@ pub struct FinalSpend {
     /// Needs the one-time key's signature and giveme.my's witness.
     pub tx: BuiltTransaction,
     pub fee: ScriptFee,
+    /// What [`ScriptSpend::pay_rest`] paid, in lovelace, with the tokens it
+    /// was given; `None` without it.
+    pub rest_lovelace: Option<u64>,
     /// Back into the wallet contract, under fresh registers.
     pub change_lovelace: u64,
     pub change_tokens: Assets,
@@ -1332,6 +1335,23 @@ struct AccountPart {
     collateral_addr: Address,
 }
 
+/// Who [`ScriptSpend::pay_rest`] pays what's left.
+#[derive(Debug, Clone)]
+pub enum RestTo {
+    /// A Seedelf: into the contract, in one output, under a fresh
+    /// re-randomization of its register, which must be [`is_payable`].
+    Seedelf(Register),
+    /// A key address on this network ([`is_payable_address`]), in one output.
+    Address(Address),
+}
+
+/// [`ScriptSpend::pay_rest`]'s payee, and the tokens it's sent.
+#[derive(Clone)]
+struct Rest {
+    to: RestTo,
+    tokens: Assets,
+}
+
 /// A Seedelf script spend, before its execution budgets are known. See the
 /// section comment above.
 #[derive(Clone)]
@@ -1347,6 +1367,8 @@ pub struct ScriptSpend {
     change_owner: Register,
     /// Where the change goes instead of the contract, if anywhere.
     change_addr: Option<Address>,
+    /// Who's paid what's left rather than the change, if anyone ([`Self::pay_rest`]).
+    rest: Option<Rest>,
     signer: Hash<28>,
     /// A key account spent alongside, with its collateral ([`Self::with_account`]).
     account: Option<AccountPart>,
@@ -1391,6 +1413,7 @@ impl ScriptSpend {
             mint: None,
             change_owner: change_owner.clone(),
             change_addr: None,
+            rest: None,
             signer,
             account: None,
         })
@@ -1476,6 +1499,29 @@ impl ScriptSpend {
     pub fn change_to(mut self, addr: &Address) -> Self {
         self.change_addr = Some(addr.clone());
         self
+    }
+
+    /// Pays `to` everything left after the outputs and the fee, with
+    /// `tokens`, rather than keeping it as change: the most these inputs can
+    /// pay (Max, as [`AccountAmount::Max`] is for the Cardano account). The
+    /// tokens it doesn't send stay as change with the least ADA they need
+    /// ([`minimum_deposit`], or what an output at [`Self::change_to`]'s
+    /// address needs), and no other ADA stays. With none to keep there's no
+    /// change at all. Short ([`is_short`]) when what's left can't carry
+    /// `tokens` to `to`.
+    pub fn pay_rest(mut self, to: RestTo, tokens: &Assets) -> Result<Self> {
+        match &to {
+            RestTo::Seedelf(register) => check_register(register)?,
+            RestTo::Address(addr) => check_address(&self.chain, addr)?,
+        }
+        if tokens.items.iter().any(|a| a.amount == 0) {
+            bail!("A payment can't send none of a token");
+        }
+        self.rest = Some(Rest {
+            to,
+            tokens: tokens.clone(),
+        });
+        Ok(self)
     }
 
     /// Adds an output. `tokens` must be what the output holds.
@@ -1594,7 +1640,7 @@ impl ScriptSpend {
             )?;
             Budgets::from_ogmios(&answer)
         };
-        let budgets = measure(&self.draft()?)?;
+        let budgets = measure(&self.measuring_draft()?)?;
         let finished = self.finalize(&budgets)?;
         let again = measure(&finished.tx)?;
         if budgets.covers(&again) {
@@ -1606,6 +1652,60 @@ impl ScriptSpend {
             bail!("The scripts' budgets did not settle");
         }
         Ok(finished)
+    }
+
+    /// The draft [`Self::measure_locally`] measures: [`Self::draft`], or, when
+    /// the guessed budgets call these inputs short, the same staged with the
+    /// most fee they can pay. The guess runs about 1.3× what the scripts use,
+    /// so a spend it calls short may pay once measured: that check refused
+    /// amounts the review's own fee allowed, so the most a private Send could
+    /// pay couldn't be worked out from the screen (blind test T05). The
+    /// scripts read neither the fee nor the outputs, so they use the same.
+    fn measuring_draft(&self) -> Result<BuiltTransaction> {
+        let short = match self.draft() {
+            Err(e) if is_short(&e) => e,
+            other => return other,
+        };
+        let redeemers = self.proofs()?;
+        let Some(fee) = self.most_fee()? else {
+            return Err(short);
+        };
+        // A fee the collateral can't cover: the guess wasn't what fell short.
+        match self.stage(fee, None, redeemers) {
+            Ok(staged) => staged
+                .build_conway_raw()
+                .context("Failed To Build The Draft Transaction"),
+            Err(_) => Err(short),
+        }
+    }
+
+    /// The largest fee these inputs can pay along with their outputs, what
+    /// [`Self::pay_rest`] must carry, and valid change; `None` when they
+    /// can't pay any. Even, as a sent fee is (its collateral is 3/2 of it),
+    /// but when nothing need stay: then it's all that's left, so there's no
+    /// change at all. An even one there could leave a lovelace of change,
+    /// which is never valid, and every amount leaving an odd remainder in the
+    /// window the guess calls short was refused (cross-area review). The
+    /// draft is only measured, never sent, so its fee needn't be even.
+    fn most_fee(&self) -> Result<Option<u64>> {
+        let (left, tokens) = match self.remainder(0) {
+            Ok(left) => left,
+            Err(e) if is_short(&e) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let needs = match &self.rest {
+            Some(rest) => {
+                let kept = tokens
+                    .separate(rest.tokens.clone())
+                    .context("The UTxOs spent don't hold the tokens being sent")?;
+                self.change_minimum(&kept)? + self.rest_minimum(rest)?
+            }
+            None => self.change_minimum(&tokens)?,
+        };
+        Ok(left
+            .checked_sub(needs)
+            .map(|fee| if needs == 0 { fee } else { fee - fee % 2 })
+            .filter(|fee| *fee > 0))
     }
 
     fn proofs(&self) -> Result<&[Vec<u8>]> {
@@ -1703,8 +1803,10 @@ impl ScriptSpend {
             |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets), redeemers),
         )?;
-        let (change_lovelace, change_tokens) = self.remainder(fee)?;
-        let change_outputs = staged.outputs.as_ref().map_or(0, Vec::len) - self.outputs.len();
+        let (rest_lovelace, change_lovelace, change_tokens) = self.split(fee)?;
+        let change_outputs = staged.outputs.as_ref().map_or(0, Vec::len)
+            - self.outputs.len()
+            - usize::from(rest_lovelace.is_some());
         Ok(FinalSpend {
             tx: staged
                 .build_conway_raw()
@@ -1715,10 +1817,51 @@ impl ScriptSpend {
                 script_reference,
                 total: fee,
             },
+            rest_lovelace,
             change_lovelace,
             change_tokens,
             change_outputs,
         })
+    }
+
+    /// What's left when the fee is `fee`, split: what [`Self::pay_rest`]
+    /// pays (`None` without it), and the change.
+    fn split(&self, fee: u64) -> Result<(Option<u64>, u64, Assets)> {
+        let (lovelace, tokens) = self.remainder(fee)?;
+        let Some(rest) = &self.rest else {
+            return Ok((None, lovelace, tokens));
+        };
+        let kept = tokens
+            .separate(rest.tokens.clone())
+            .context("The UTxOs spent don't hold the tokens being sent")?;
+        let kept_lovelace = self.change_minimum(&kept)?;
+        let paid = lovelace.checked_sub(kept_lovelace).ok_or(SEEDELF_SHORT)?;
+        if paid < self.rest_minimum(rest)? {
+            bail!(SEEDELF_SHORT);
+        }
+        Ok((Some(paid), kept_lovelace, kept))
+    }
+
+    /// The least ADA change holding `tokens` needs: none without tokens,
+    /// since then there needn't be any change.
+    fn change_minimum(&self, tokens: &Assets) -> Result<u64> {
+        if tokens.is_empty() {
+            return Ok(0);
+        }
+        match &self.change_addr {
+            Some(addr) => minimum_change(&self.chain.params, addr, tokens),
+            None => minimum_deposit(&self.chain.params, tokens),
+        }
+    }
+
+    /// The least ADA [`Self::pay_rest`]'s payment needs.
+    fn rest_minimum(&self, rest: &Rest) -> Result<u64> {
+        match &rest.to {
+            RestTo::Seedelf(_) => minimum_seedelf_payment(&self.chain.params, &rest.tokens),
+            RestTo::Address(addr) => {
+                minimum_address_payment(&self.chain.params, addr, &rest.tokens)
+            }
+        }
     }
 
     /// What goes back into the contract when the fee is `fee`.
@@ -1763,8 +1906,17 @@ impl ScriptSpend {
             network_flag,
             config,
         } = &self.chain;
-        let (change_lovelace, change_tokens) = self.remainder(fee)?;
+        let (rest_lovelace, change_lovelace, change_tokens) = self.split(fee)?;
         let wallet_addr = wallet_contract(*network_flag, config.contract.wallet_contract_hash);
+        let rest = match (&self.rest, rest_lovelace) {
+            (Some(Rest { to, tokens }), Some(lovelace)) => Some(match to {
+                RestTo::Seedelf(register) => {
+                    deposit_output(&wallet_addr, register, lovelace, tokens)?
+                }
+                RestTo::Address(addr) => pay_address(params, addr, lovelace, tokens)?,
+            }),
+            _ => None,
+        };
         let change = if change_lovelace == 0 && change_tokens.is_empty() {
             Vec::new()
         } else if let Some(addr) = &self.change_addr {
@@ -1794,7 +1946,13 @@ impl ScriptSpend {
         // registers, so a fixed order was all that said which one is the
         // change (privacy review §3.7). No redeemer points at an output, and
         // the order changes neither the size nor the fee.
-        let mut outputs: Vec<Output> = self.outputs.iter().cloned().chain(change).collect();
+        let mut outputs: Vec<Output> = self
+            .outputs
+            .iter()
+            .cloned()
+            .chain(rest)
+            .chain(change)
+            .collect();
         crate::lovejoin::shuffle(&mut outputs);
         for output in outputs {
             tx = tx.output(output);
@@ -2402,6 +2560,57 @@ fn apart<T>(
     })
 }
 
+/// Whether `e` says the UTxOs a spend was given can't pay for it, its fee
+/// and its change (core's "Not enough ADA" errors): more UTxOs might, and an
+/// amount may fit once less is asked.
+pub fn is_short(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<NotEnough>().is_some()
+}
+
+/// The UTxOs a spend that takes all it can takes from `available`: Max, or
+/// a payment nothing smaller pays. Those holding `needed` first ([`holding`]:
+/// as few as hold enough), then the rest, the most lovelace first, `at_most`
+/// in all; never one the wallet's evaluator can't take
+/// ([`crate::eval::refusal`]), nor one whose tokens would push a total past
+/// what one output holds ([`fitting`]). Returns them, and how many of
+/// `available` it left.
+pub fn max_inputs(
+    available: &[UtxoResponse],
+    needed: &Assets,
+    at_most: usize,
+) -> Result<(Vec<UtxoResponse>, usize)> {
+    let holds_needed = |u: &UtxoResponse| {
+        needed.items.iter().any(|want| {
+            quantity_in(
+                u,
+                &hex::encode(want.policy_id),
+                &hex::encode(&want.token_name),
+            ) > 0
+        })
+    };
+    let evaluable: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| crate::eval::refusal(u).is_none())
+        .cloned()
+        .collect();
+    let (fits, _) = fitting(&evaluable, &Assets::new(), holds_needed)?;
+    let mut taken = holding(&fits, needed)?;
+    if taken.len() > at_most {
+        bail!(
+            "The tokens being sent are spread over more than {at_most} UTxOs, more than one transaction spends: send less of them at once"
+        );
+    }
+    let mut rest: Vec<UtxoResponse> = fits
+        .into_iter()
+        .filter(|u| !taken.iter().any(|t| same_utxo(t, u)))
+        .collect();
+    rest.sort_by_key(|u| std::cmp::Reverse(lovelace_of(u)));
+    rest.truncate(at_most - taken.len());
+    taken.extend(rest);
+    let left = available.len() - taken.len();
+    Ok((taken, left))
+}
+
 fn same_utxo(a: &UtxoResponse, b: &UtxoResponse) -> bool {
     a.tx_hash == b.tx_hash && a.tx_index == b.tx_index
 }
@@ -2560,6 +2769,8 @@ pub fn mint_from(
 // itself is never written back: re-randomizing is what keeps payments to the
 // same seedelf unlinkable, and it refuses points outside the prime-order
 // subgroup. The rest goes back under fresh re-randomizations of the payer's.
+// `transfer_most` is Max: one seedelf is paid everything but the fee and what
+// the tokens that stay need (`ScriptSpend::pay_rest`).
 // ---------------------------------------------------------------------------
 
 /// A payment to a seedelf.
@@ -2649,6 +2860,25 @@ pub fn transfer_from(
     paying(chain, inputs, &outputs, change_owner, signer)
 }
 
+/// Max for a transfer: pays the seedelf under `to` everything `inputs` hold
+/// but the fee, with `tokens`, spending exactly `inputs` ([`max_inputs`]
+/// picks them). The tokens it doesn't send stay in the Seedelf balance under
+/// fresh re-randomizations of `change_owner`, with the least ADA they need,
+/// and no other ADA stays ([`ScriptSpend::pay_rest`]). So its payment is the
+/// most a transfer of `tokens` from `inputs` can pay. `to` must be
+/// [`is_payable`], and is re-randomized as every payment is.
+pub fn transfer_most(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    to: &Register,
+    tokens: &Assets,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    ScriptSpend::new(chain, inputs, change_owner, signer)?
+        .pay_rest(RestTo::Seedelf(to.clone()), tokens)
+}
+
 fn paying(
     chain: &Chain,
     inputs: &[UtxoResponse],
@@ -2712,7 +2942,8 @@ fn ada(lovelace: u64) -> String {
 // Withdraw: paying an address from the Seedelf balance, or removing a seedelf
 //
 // `sweep` pays an address a fixed amount, and the change goes back into the
-// contract; `sweep_all` sends everything the inputs hold, less the fee.
+// contract; `sweep_all` sends everything the inputs hold, less the fee;
+// `sweep_most` the most a payment of some tokens can be, the others staying.
 // `remove` burns a seedelf, and what its UTxO held goes back into the
 // contract, or to an address with `ScriptSpend::change_to`.
 // ---------------------------------------------------------------------------
@@ -2847,18 +3078,7 @@ pub fn sweep_many_apart(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<ScriptSpend> {
-    if payments.is_empty() {
-        bail!("A withdrawal pays at least one address");
-    }
-    let outputs: Vec<(Output, Assets)> = payments
-        .iter()
-        .map(|p| {
-            Ok((
-                address_output(chain, &p.to, p.lovelace, &p.tokens)?,
-                p.tokens.clone(),
-            ))
-        })
-        .collect::<Result<_>>()?;
+    let outputs = address_outputs(chain, payments)?;
     let needed = payments
         .iter()
         .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
@@ -2873,6 +3093,50 @@ pub fn sweep_many_apart(
             Ok(spend)
         },
     )
+}
+
+/// One output per payment, each to its address and above its minimum.
+fn address_outputs(chain: &Chain, payments: &[AddressPayment]) -> Result<Vec<(Output, Assets)>> {
+    if payments.is_empty() {
+        bail!("A withdrawal pays at least one address");
+    }
+    payments
+        .iter()
+        .map(|p| {
+            Ok((
+                address_output(chain, &p.to, p.lovelace, &p.tokens)?,
+                p.tokens.clone(),
+            ))
+        })
+        .collect()
+}
+
+/// [`sweep_many`] spending exactly `inputs`. They must hold the tokens being
+/// sent.
+pub fn sweep_many_from(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    payments: &[AddressPayment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let outputs = address_outputs(chain, payments)?;
+    paying(chain, inputs, &outputs, change_owner, signer)
+}
+
+/// [`transfer_most`] to `to`, a key address: the most a withdrawal of
+/// `tokens` can pay from `inputs`, the other tokens staying in the Seedelf
+/// balance with the least ADA they need. ([`sweep_all`] sends every token.)
+pub fn sweep_most(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    to: &Address,
+    tokens: &Assets,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    ScriptSpend::new(chain, inputs, change_owner, signer)?
+        .pay_rest(RestTo::Address(to.clone()), tokens)
 }
 
 /// A sweep spending exactly `inputs`. They must hold the tokens being sent.

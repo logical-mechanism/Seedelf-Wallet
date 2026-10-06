@@ -5,10 +5,13 @@
 // submit exactly it.
 import { describe, expect, it } from "vitest";
 
-import { Collateral, StaleReviewError } from "../src/background/collateral";
+import { txInputs } from "../src/background/cbor";
+import { Collateral, CollateralRefusedError, refusedBy, StaleReviewError } from "../src/background/collateral";
 import { SESSION_CONTRACT_PREFIX } from "../src/background/contract-scan";
 import { Koios } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
+import { rememberSpent, SESSION_SPENT } from "../src/background/spent";
+import { adaWords } from "../src/background/short";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { SEEDELF_NAME_RULE } from "../src/shared/seedelf-name";
 import { txIdOf } from "./fixtures/cbor";
@@ -162,8 +165,84 @@ describe("transfer", () => {
     for (const asked of ["0", "1000000"]) {
       const [paid] = (await t.transfer.build("preprod", [{ to: THEIRS, lovelace: asked, tokens: tokens }])).payments;
       expect(paid!.lovelace).toBe(paid!.minimum);
-      expect(BigInt(paid!.minimum)).toBeGreaterThan(1_000_000n);
+      expect(BigInt(paid!.minimum!)).toBeGreaterThan(1_000_000n);
     }
+  });
+
+  it("pays the most there is with Max: everything but the fee and what the token kept needs (blind test §9.6)", async () => {
+    // T05's private balance: 25 ₳, and 3 ₳ holding 1,234.56 tUSDM, which the tester never wanted to send.
+    const t = await unlocked();
+    const max = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(max).toMatchObject({ max: true, inputs: 2, left: 0, changeTokens: 1, changeOutputs: 1 });
+    expect(max.changeMinimum).toBe(max.changeLovelace);
+    expect(BigInt(max.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(max.fee.total) - BigInt(max.changeLovelace));
+    expect(max.payments[0]).toMatchObject({ to: THEIRS, minimum: null, tokens: [] });
+    expect(max.leftOut).toBeUndefined();
+    // Read once, and measured in the wallet: Max asks Koios nothing more than an amount does.
+    expect(t.koios.calls.map((c) => c.path).sort()).toEqual(["credential_utxos", "epoch_params"]);
+
+    // With the token added, it goes too, and nothing stays.
+    const all = [{ ...transferPreprod.tokens[0]!, quantity: "1234560000" }];
+    const everything = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: all }]);
+    expect(BigInt(everything.payments[0]!.lovelace)).toBe(28_000_000n - BigInt(everything.fee.total));
+    expect(everything).toMatchObject({ changeLovelace: "0", changeOutputs: 0 });
+
+    // Max is for one Seedelf.
+    await expect(
+      t.transfer.build("preprod", [
+        { to: THEIRS, lovelace: null, tokens: [] },
+        { to: MINE, lovelace: "2000000", tokens: [] },
+      ]),
+    ).rejects.toThrow("Max pays a single recipient");
+  });
+
+  it("says the most that can go and what has to stay, and pays anything up to it (blind test §4.4)", async () => {
+    const t = await unlocked();
+    const max = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    const most = BigInt(max.payments[0]!.lovelace);
+    const pay = (lovelace: bigint, tokens = [] as typeof transferPreprod.tokens) =>
+      t.transfer.build("preprod", [{ to: THEIRS, lovelace: lovelace.toString(), tokens }]);
+    // T05's 26.07 ₳ and 26.081594 ₳: under Max, so they go, at the fee the review shows. The old check's guessed
+    // fee, about 0.29 ₳, refused anything past about 26.06 ₳.
+    let calls = t.koios.calls.length;
+    const under = await pay(most - 5_000n);
+    const perBuild = t.koios.calls.length - calls;
+    expect(under.payments[0]!.lovelace).toBe((most - 5_000n).toString());
+    expect(BigInt(under.changeLovelace)).toBeGreaterThanOrEqual(BigInt(max.changeLovelace));
+    // Past it: about how much can go, and that the token's ADA has to stay with it, and how to send that too. "About":
+    // each build's fee moves a few hundred lovelace with its one-time key (short.ts).
+    /** The figure a shortfall gives, in lovelace, and the message around it. */
+    const said = async (paying: Promise<unknown>) => {
+      const message = ((await paying.catch((e: unknown) => e)) as Error).message;
+      const [, whole, decimals = ""] = /up to about ([\d,]+)(?:\.(\d+))?\u00a0₳/.exec(message) ?? [];
+      return { message, figure: BigInt(whole!.replaceAll(",", "")) * 1_000_000n + BigInt(decimals.padEnd(6, "0") || "0") };
+    };
+    calls = t.koios.calls.length;
+    const past = await said(pay(27_000_000n));
+    expect(past.message).toMatch(
+      `here, since ${adaWords(max.changeLovelace)}\u00a0₳ has to stay with the tokens you keep: the least ADA the network accepts with them.`,
+    );
+    // Within a few hundred lovelace of Max's own figure.
+    expect(past.figure > most - 2_000n && past.figure < most + 2_000n).toBe(true);
+    // Max's figure came from the reading already made: no Koios request beyond the build's own.
+    expect(t.koios.calls.length - calls).toBe(perBuild);
+    await expect(pay(most + 5_000n)).rejects.toThrow(`Send the tokens too, and that ADA can go with them.`);
+    // With the token sent, nothing has to stay: up to all of it, or what's left must be enough to stay.
+    const all = [{ ...transferPreprod.tokens[0]!, quantity: "1234560000" }];
+    const top = BigInt((await t.transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: all }])).payments[0]!.lovelace);
+    const over = await said(pay(top + 5_000n, all));
+    expect(over.message).toMatch(/^Not enough ADA: with the fee, your private balance can pay up to about [\d.]+\u00a0₳ here\. Use Max to send all of it\.$/);
+    expect(over.figure > top - 2_000n && over.figure < top + 2_000n).toBe(true);
+    const short = pay(top - 500_000n, all);
+    await expect(short).rejects.toThrow(/^Not enough ADA: after this payment and its fee, what stays in your private balance would be less than 1\.\d+\u00a0₳, the least ADA the network accepts\. Use Max to send all of it, or send less\.$/);
+    // Several: no Max measures them.
+    await expect(
+      t.transfer.build("preprod", [
+        { to: THEIRS, lovelace: "20000000", tokens: [] },
+        { to: MINE, lovelace: "20000000", tokens: [] },
+      ]),
+    ).rejects.toThrow("these come to more than your private balance can pay");
+    expect(new Set(t.koios.calls.map((c) => c.path))).toEqual(new Set(["credential_utxos", "epoch_params"]));
   });
 
   it("explains what stops a transfer", async () => {
@@ -196,6 +275,78 @@ describe("transfer", () => {
     expect(t.koios.submitted).toHaveLength(0);
     expect(await t.session.get(SESSION_TRANSFER)).toBeDefined(); // Send can be tried again
     expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
+  });
+
+  it("names giveme.my as who refused, unless the device knows it spent something since (blind test §9.5)", async () => {
+    const t = await unlocked();
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    // giveme.my's recorded refusal, with nothing the device knows of spent: a refusal of giveme.my's, not a guess
+    // at the user's money, and the screen says who (ui-port.ts `refusedBy`).
+    const refused = await t.transfer.submit("preprod", summary.txHash).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(CollateralRefusedError);
+    expect(refusedBy(refused)).toBe("giveme");
+    // An outage: giveme.my's, which waiting fixes.
+    t.collateral.answer = { status: 503, body: {} };
+    const down = await t.transfer.submit("preprod", summary.txHash).catch((e: unknown) => e);
+    expect(refusedBy(down)).toBe("givemeBusy");
+    expect((down as Error).message).toContain("couldn't take this transaction just now (503)");
+    expect(t.collateral.asked).toHaveLength(2);
+
+    // Something it spends went out since, in another of this wallet's transactions (another page's Send): said as
+    // that, a stale review with nobody named, and giveme.my isn't asked.
+    const built = (await t.session.get<Stored>(SESSION_TRANSFER))!;
+    const [input] = txInputs(bytes(built.txCbor));
+    await t.session.set(SESSION_SPENT, { [input!]: t.clock.now });
+    const stale = await t.transfer.submit("preprod", summary.txHash).catch((e: unknown) => e);
+    expect(stale).toBeInstanceOf(StaleReviewError);
+    expect(refusedBy(stale)).toBeUndefined();
+    expect((stale as Error).message).toContain("went out in another of this wallet's transactions after this review");
+    expect(t.collateral.asked).toHaveLength(2);
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  it("never calls a review stale for inputs its own Send spent: says it was sent, so nothing is built twice (cross-area review)", async () => {
+    // Route one: another Send of this same review wrote it ahead (rememberSpent, which keeps it as sent too) after
+    // this one read the kept review.
+    const t = await unlocked();
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const built = (await t.session.get<Stored>(SESSION_TRANSFER))!;
+    await rememberSpent(t.session, "preprod", bytes(built.txCbor), t.clock.now);
+    const first = await t.transfer.submit("preprod", summary.txHash).catch((e: unknown) => e);
+    expect(first).not.toBeInstanceOf(StaleReviewError);
+    expect((first as Error).message).toContain("That was sent already");
+    expect(t.collateral.asked).toHaveLength(0);
+
+    // Route two: the kept review put back as it was, its inputs held as spent, and the watch holding it as sent.
+    const u = await unlocked();
+    const again = await u.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const kept = (await u.session.get<Stored>(SESSION_TRANSFER))!;
+    const [input] = txInputs(bytes(kept.txCbor));
+    await u.session.set(SESSION_SPENT, { [input!]: u.clock.now });
+    await u.session.set(pendingKey("preprod"), {
+      kind: "transfer",
+      network: "preprod",
+      txHash: again.txHash,
+      submittedAt: u.clock.now,
+      confirmations: 0,
+    });
+    const second = await u.transfer.submit("preprod", again.txHash).catch((e: unknown) => e);
+    expect(second).not.toBeInstanceOf(StaleReviewError);
+    expect((second as Error).message).toContain("That was sent already");
+    expect(u.collateral.asked).toHaveLength(0);
+    expect(u.koios.submitted).toHaveLength(0);
+  });
+
+  it("reads the contract in full again after giveme.my's refusal, not its outage (cross-area review)", async () => {
+    const t = await unlocked();
+    const contract = `${SESSION_CONTRACT_PREFIX}preprod`;
+    const summary = await t.transfer.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const fullAt = (await t.session.get<{ fullAt: number }>(contract))!.fullAt;
+    expect(fullAt).toBeGreaterThan(0);
+    // An outage says nothing about the kept view: no full read on every retry.
+    t.collateral.answer = { status: 503, body: {} };
+    await expect(t.transfer.submit("preprod", summary.txHash)).rejects.toThrow("couldn't take this transaction just now");
+    expect((await t.session.get<{ fullAt: number }>(contract))!.fullAt).toBe(fullAt);
   });
 
   it("reads the contract in full for the next review once giveme.my refuses (launch review #53)", async () => {

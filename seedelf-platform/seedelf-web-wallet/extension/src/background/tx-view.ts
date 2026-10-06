@@ -14,12 +14,25 @@
 // transaction hash, which every review already has, and the worker looks it up
 // where it lives. Nothing else changes: the signed bytes still never live in a
 // component, so opening or closing the view can't strand a signed transaction.
+//
+// It also says which outputs pay the user (blind test §9.9, T18): the change
+// read only as "a key that stakes", so testers told their own outputs by an
+// address's last letters. That is worked out from what the device knows, the
+// wallet's own keys and its records, and asks nobody anything either: an
+// output under one of the public accounts' payment keys (the first 20 of each
+// chain, and those the last reading found, as balances count them), one under
+// the user's own register in the wallet contract, or a private session's
+// one-time account. A stake key alone doesn't make an output the user's: its
+// payment key is someone else's, who can spend it.
 
 import type * as Wasm from "@seedelf/wasm";
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
-import type { TxDetail, TxView } from "../shared/rpc";
+import type { TxAddress, TxDetail, TxOutput, TxRegister, TxView } from "../shared/rpc";
+import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
+import { CONTRACT_V1 } from "./balances";
+import { GAP_LIMIT } from "./chain";
 import { SESSION_MINT } from "./mint";
 import { SESSION_BUILT } from "./move-in";
 import { SESSION_LOVEJOIN_PUBLIC } from "./lovejoin";
@@ -37,12 +50,17 @@ import { SESSION_STAKE } from "./staking";
 import { SESSION_TRANSFER } from "./transfer";
 import { SESSION_REMOVE, SESSION_WITHDRAW } from "./withdraw";
 import type { Area } from "./storage";
-import type { Wallet } from "./wallet";
+import type { Keys, Wallet } from "./wallet";
+import { isTrap } from "./wasm";
 
 export interface TxViewDeps {
   wasm: typeof Wasm;
   wallet: Wallet;
   session: Area;
+  /** The public accounts the wallet knows of, by index (accounts.ts): an output to any of them is the user's. */
+  knownAccounts?: () => Promise<number[]>;
+  /** The private sessions used on a network, by index (sessions.ts `indices`): so is one to their one-time accounts. */
+  sessionIndices?: (network: NetworkName) => Promise<number[]>;
 }
 
 /**
@@ -104,7 +122,79 @@ export async function txView(
   const cbor = kept ?? waiting?.(wanted);
   if (!cbor) throw new Error(NOT_HELD());
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-  return { detail: JSON.parse(wasm.decodeTx(net, cbor)) as TxDetail, cbor };
+  const detail = JSON.parse(wasm.decodeTx(net, cbor)) as TxDetail;
+  // Never in the way of the view: locked, or with nothing known, nothing is marked.
+  await markYours(deps, network, detail).catch((e: unknown) => {
+    if (isTrap(e)) throw e;
+  });
+  return { detail, cbor };
+}
+
+/** An address's payment key hash (hex), when a key and not a script pays it: none for a reward or Byron address. */
+function paymentKey(address: TxAddress): string | undefined {
+  if (address.payment !== "key" || !["base", "enterprise", "pointer"].includes(address.kind)) return undefined;
+  const hash = address.hex.slice(2, 58);
+  return hash.length === 56 ? hash.toLowerCase() : undefined;
+}
+
+/** An account's payment key hashes as balances count them: the first GAP_LIMIT of each chain, and `found`. */
+function accountKeys(cardano: Wasm.CardanoAccount, found: readonly string[] = []): Set<string> {
+  const keys = new Set(found.map((k) => k.toLowerCase()));
+  for (let i = 0; i < GAP_LIMIT; i++) {
+    keys.add(cardano.paymentKeyHash(0, i));
+    keys.add(cardano.paymentKeyHash(1, i));
+  }
+  return keys;
+}
+
+/** Whether `register` is the user's: the Seedelf key's discrete log of it (balances.ts `ownedUtxos`). */
+function ownRegister(wasm: typeof Wasm, keys: Keys, register: TxRegister): boolean {
+  const r = new wasm.Register(register.generator, register.publicValue);
+  try {
+    return keys.seedelf.isOwned(r);
+  } catch {
+    // Points that don't decode, or aren't in the prime-order subgroup, can't be anyone's to spend.
+    return false;
+  } finally {
+    r.free();
+  }
+}
+
+/**
+ * Marks each output of `d` (its collateral's return too) that pays the user,
+ * with whose: the active account and the private balance in one turn of the
+ * wallet's lock, then any other account the wallet knows, each in its own.
+ */
+async function markYours(deps: TxViewDeps, network: NetworkName, d: TxDetail): Promise<void> {
+  const { wasm, wallet, session } = deps;
+  const outputs: TxOutput[] = [...d.outputs, ...(d.collateralReturn ? [d.collateralReturn] : [])];
+  if (!outputs.length) return;
+  const [indices, known] = await Promise.all([
+    deps.sessionIndices?.(network).catch(() => []) ?? [],
+    deps.knownAccounts?.().catch(() => []) ?? [],
+  ]);
+  const active = await wallet.withKeys(async (keys) => {
+    const found = await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
+    const account = accountKeys(keys.cardano, found?.keys);
+    const sessions = new Map(indices.map((index) => [keys.oneTime.keyHash(index).toLowerCase(), index]));
+    for (const o of outputs) {
+      const key = paymentKey(o.address);
+      if (key && account.has(key)) o.yours = { kind: "account", account: keys.account };
+      else if (key && sessions.has(key)) o.yours = { kind: "session", index: sessions.get(key)! };
+      else if (o.address.seedelf && o.register?.payable && ownRegister(wasm, keys, o.register)) {
+        const seedelf = o.assets.some((a) => a.policyId === CONTRACT_V1.seedelfPolicyId);
+        o.yours = { kind: seedelf ? "seedelf" : "private" };
+      }
+    }
+    return keys.account;
+  });
+  for (const index of known) {
+    const rest = outputs.filter((o) => !o.yours && paymentKey(o.address));
+    if (!rest.length) return;
+    if (index === active) continue;
+    const theirs = await wallet.withAccount(index, (keys) => accountKeys(keys.cardano));
+    for (const o of rest) if (theirs.has(paymentKey(o.address)!)) o.yours = { kind: "account", account: index };
+  }
 }
 
 /**

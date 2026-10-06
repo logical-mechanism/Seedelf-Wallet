@@ -37,7 +37,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { AtStake, DappSite, SessionView, Status } from "../../shared/rpc";
+import type { AtStake, DappSite, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -61,7 +61,6 @@ import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, phraseProblem, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
 import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides, mixFeesText } from "../components/LovejoinReturn";
 import { HintButton, HintText, Hinted, useHint } from "../components/Hint";
-import { Modal } from "../components/Modal";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
@@ -74,7 +73,7 @@ import { asSentence } from "../sentence";
 import { connectorBlockedText, useConnectorSwitch } from "../sites";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
-import { disconnectWait } from "./SiteSessions";
+import { ConnectedSites } from "./ConnectedSites";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
 /** Where a wrong translation is reported: no native speaker has checked them (chunk 19). */
@@ -926,6 +925,10 @@ function LockAfter() {
  * scripts out of the wallet's local storage, where the sealed vault is, so
  * the worker keeps the connector off (launch review #60). The switch is off
  * and can't be turned on, and the note says why.
+ *
+ * On, it says pages open already see the wallet too (the worker puts its
+ * scripts in them), and to reload a site that looked for wallets only as it
+ * loaded (blind test §9.2, T15); and Connected sites says how many there are.
  */
 export function DappConnector({
   blocked,
@@ -941,6 +944,11 @@ export function DappConnector({
   const { prefs, loaded, set } = usePreferences();
   // The section's other settings say their own refusals in the same place.
   const { on, allowed, error, setError, toggle } = useConnectorSwitch(blocked);
+  // How many are connected, from the sealed list on the device: no Koios request.
+  const [sites, setSites] = useState<DappSite[]>();
+  useEffect(() => {
+    call("dapp-sites", {}).then(setSites, () => undefined);
+  }, []);
 
   return (
     <section className="section" aria-labelledby="dapp-settings-title">
@@ -967,6 +975,11 @@ export function DappConnector({
           disabled={!!blocked || !loaded || allowed === undefined}
         />
       </div>
+      {on && (
+        <p className="note" data-testid="dapp-connector-open-pages">
+          {t("settings.sites.privacy.openPages")}
+        </p>
+      )}
       {/* Which account sites use, where there is more than one to choose
           between: one account is the dApp account, and it does not follow the
           picker (Eternl's model; the owner, 2026-10-02). */}
@@ -1021,7 +1034,12 @@ export function DappConnector({
         />
       </div>
       <ul className="list">
-        <MenuRow icon={<PlugIcon size={16} />} label={t("sites.title")} onClick={onSites} />
+        <MenuRow
+          icon={<PlugIcon size={16} />}
+          label={t("sites.title")}
+          sub={sites && (sites.length ? t("sites.count", { count: sites.length }) : t("sites.none"))}
+          onClick={onSites}
+        />
       </ul>
       {error && (
         <p className="error" role="alert">
@@ -1032,161 +1050,9 @@ export function DappConnector({
   );
 }
 
-/** Why the connector stays off on a Chrome that won't protect the wallet's storage from sites (`connectorBlocked: "storage"`). */
-
-/**
- * The sites connected on this network, each with Disconnect. A site's
- * private session ends with it, so its Disconnect waits while anything is on
- * its way to the session's account or from it, says why, and asks first, as
- * the session's page on the dApps page does (launch review H7). The worker
- * checks again, reading the account, and its refusal shows here. The list is
- * sealed on the device; the sessions are read from the device's record, not
- * Koios.
- */
-function ConnectedSites({ onBack }: { onBack: () => void }) {
-  const [sites, setSites] = useState<DappSite[]>();
-  const [sessions, setSessions] = useState<SessionView[]>();
-  const [asking, setAsking] = useState<DappSite>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const readSessions = () =>
-    call("sessions", {}).then(setSessions, (e: Error) => {
-      // The worker's own check still stands between Disconnect and a session on its way.
-      setSessions([]);
-      // A refusal from the worker, shown already, stays.
-      setError((shown) => shown ?? e.message);
-    });
-  useEffect(() => {
-    call("dapp-sites", {}).then(setSites, (e: Error) => setError(e.message));
-    void readSessions();
-  }, []);
-
-  async function forget(origin: string) {
-    setAsking(undefined);
-    setBusy(true);
-    setError(undefined);
-    try {
-      setSites(await call("dapp-forget", { origin }));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-      void readSessions();
-    }
-  }
-
-  return (
-    <Screen title={t("sites.title")} titleId="sites-title" onBack={onBack} aside={t("settings.encryptedHere")} error={error}>
-      {sites?.length === 0 && (
-        <p className="note center" data-testid="sites-empty">
-          {t("sites.empty")}
-        </p>
-      )}
-      {!!sites?.length && <SiteRows sites={sites} sessions={sessions} busy={busy} onDisconnect={setAsking} />}
-      <p className="note">
-        {t("sites.note")}
-      </p>
-      {asking && (
-        <Modal
-          title={t("sites.disconnectAsk", { site: host(asking) })}
-          titleId="sites-disconnect-title"
-          onClose={() => setAsking(undefined)}
-          foot={
-            <>
-              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                {t("sites.keepIt")}
-              </button>
-              <button
-                type="button"
-                className="danger"
-                onClick={() => void forget(asking.origin)}
-                data-testid="sites-disconnect-confirm"
-              >
-                {t("sites.disconnectIt")}
-              </button>
-            </>
-          }
-        >
-          <p className="note">{disconnectText(host(asking), asking.session)}</p>
-        </Modal>
-      )}
-    </Screen>
-  );
-}
-
-const host = (site: DappSite) => new URL(site.origin).host;
-
-/**
- * The connected sites' rows. A site's Disconnect is off while its private
- * session has something on its way, or holds something (as last read), with
- * why; and until the sessions are read.
- */
-export function SiteRows({
-  sites,
-  sessions,
-  busy,
-  onDisconnect,
-}: {
-  sites: DappSite[];
-  /** The sessions on this network, from the device's record; undefined until read. */
-  sessions?: SessionView[];
-  busy: boolean;
-  onDisconnect: (site: DappSite) => void;
-}) {
-  return (
-    <ul className="list section" data-testid="sites">
-      {sites.map((s) => {
-        const session = s.session === undefined ? undefined : sessions?.find((x) => x.index === s.session);
-        const wait = session && disconnectWait(session, { canRefresh: false });
-        const unread = s.session !== undefined && !sessions;
-        return (
-          <li key={s.origin} className="list__row">
-            <span className="stack-tight">
-              <strong>{host(s)}</strong>
-              <span className="note">
-                {s.session === undefined ? t("collateral.yourPublicAccount") : t("claim.session", { number: s.session + 1 })} ·{" "}
-                {t("sites.since", { date: new Date(s.connectedAt).toLocaleDateString() })}
-              </span>
-              {s.cip95 && (
-                <span className="note" data-testid="site-governance">
-                  {t("sites.governance")}
-                </span>
-              )}
-              {s.cip95Declined && (
-                <span className="note" data-testid="site-governance-declined">
-                  {t("sites.governanceDeclined")}
-                </span>
-              )}
-              {wait && (
-                <span className="note" data-testid="site-wait">
-                  {/* The button's own title elsewhere, a sentence here: its full stop is the language's. */}
-                  {t("common.sentence", { text: wait })}
-                </span>
-              )}
-            </span>
-            <button
-              type="button"
-              className="chip"
-              disabled={busy || unread || !!wait}
-              title={wait}
-              onClick={() => onDisconnect(s)}
-              data-testid="sites-disconnect"
-            >
-              {t("sites.disconnect")}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-/** What disconnecting a site does, said before it's done: to the public account, or ending its private session `session`. */
-export function disconnectText(site: string, session?: number): string {
-  return session === undefined
-    ? t("sites.disconnectText", { site })
-    : t("sites.disconnectTextSession", { number: session + 1, site });
-}
+// Connected sites, its rows and its Disconnect question live in ConnectedSites.tsx, which the dApps page shows too
+// (blind test §9.2); these stay exported here for their tests.
+export { disconnectText, SiteRows } from "./ConnectedSites";
 
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */
 function SpendRewards() {

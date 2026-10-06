@@ -289,11 +289,19 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   // Your seedelfs live in Receive, not on Home.
   await expect(page.getByTestId("seedelfs")).toHaveCount(0);
 
-  // The real preprod account of this public test phrase: its UTxOs and its staking rewards.
-  await cardanoTab(page);
+  // The real preprod account of this public test phrase: its UTxOs and its staking rewards. The Private tab Home opens
+  // on names it, with that balance and what it's for, and its row opens the Public tab (blind test §9.4).
   const account = koiosPreprod.accounts[v.preprod.stake];
   const rewards = BigInt(stakingPreprod.account_info[0].rewards_available);
-  await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${ada(BigInt(lovelaceOf(account.account_utxos)) + rewards)} ₳`);
+  const publicTotal = `${ada(BigInt(lovelaceOf(account.account_utxos)) + rewards)} ₳`;
+  await expect(page.getByTestId("home-public-row-lovelace")).toHaveText(publicTotal);
+  await expect(page.getByTestId("home-public-row")).toContainText("Pay any address, get paid by any wallet, stake and vote");
+  await page.getByTestId("home-public-row").click();
+  await expect(page.getByRole("tab", { name: "Public", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Public", exact: true })).toBeFocused();
+  await expect(page.getByTestId("cardano-lovelace")).toHaveText(publicTotal);
+  // And the Public tab names the private balance, where swaps and mixing are (blind test T10).
+  await expect(page.getByTestId("home-private-row-lovelace")).toHaveText("28 ₳");
   await expect(page.getByTestId("cardano-tokens")).toContainText("LINK");
   // The rewards are in the balance, said under it; the staking row no longer shows them as if on top (chunk 23's
   // second review, ST-6).
@@ -403,12 +411,27 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   await restore(page, vector(12).phrase);
   // Said in the screen's terms; the service's own words wait under Details (chunk 23's review, L-2).
   await expect(page.getByRole("alert")).toContainText("Couldn't read your balances");
-  await expect(page.getByTestId("home-read-failed")).toContainText("Koios refused the request (400");
+  await expect(page.getByTestId("home-read-failed")).toContainText("Koios, the service the wallet reads Cardano from, refused the request (400");
+  // What's true when it keeps failing: only reading failed (blind test §4 entry 25).
+  await expect(page.getByTestId("home-read-failed")).toContainText("Your money is safe on chain: only reading it failed");
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
 
   koios.failWith = undefined;
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  // A refresh that fails over a reading a few seconds old: the alert follows the worker's last reading, so a trip to
+  // Settings, which replaces Home, doesn't drop it; a good reading does (blind test E05).
+  koios.failWith = 400;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("home-read-failed")).toContainText("Couldn't refresh: these are your balances as last read");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("home-read-failed")).toContainText("Couldn't refresh: these are your balances as last read");
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  koios.failWith = undefined;
+  await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
@@ -436,6 +459,43 @@ test("the browser's Back is the screen's own Back (chunk 23's review, N-1)", asy
   await expect.poll(() => page.evaluate(() => (history.state as { seedelfBack?: boolean } | null)?.seedelfBack ?? false)).toBe(false);
 });
 
+test("every screen opens at its top, and so does Home coming back (blind test §9.10)", async ({ context }) => {
+  // The side panel's size: screens swap inside one page that scrolls, and each kept the last one's offset.
+  const page = await openApp(context);
+  await page.setViewportSize({ width: 360, height: 640 });
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  const offset = () => page.evaluate(() => window.scrollY);
+
+  // An action opened from the foot of the list starts at its title, where the list's offset hid its title and
+  // amount (T14r).
+  await page.getByTestId("home-public-row").click();
+  await page.getByTestId("staking-row").click();
+  await page.getByTestId("drep-card").getByRole("button", { name: "Governance actions" }).click();
+  const rows = page.getByTestId("gov-action-row");
+  await expect(rows).toHaveCount(7);
+  await rows.last().scrollIntoViewIfNeeded();
+  expect(await offset()).toBeGreaterThan(0);
+  await rows.last().click();
+  await expect(page.getByRole("heading", { level: 1 })).toBeInViewport();
+  expect(await offset()).toBe(0);
+
+  // The browser's Back leads to the list's top, not to the offset the browser kept for it.
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.goBack();
+  await expect(rows).toHaveCount(7);
+  expect(await offset()).toBe(0);
+
+  // And Home, left from far down a screen, comes back at its top, where a sent transaction's banner is (T03).
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Staking and governance", level: 1 })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  expect(await offset()).toBeGreaterThan(0);
+  await page.goBack();
+  await expect(page.getByTestId("cardano-lovelace")).toBeInViewport();
+  expect(await offset()).toBe(0);
+});
+
 test("a token's details start a payment with it (chunk 23's review, T-1)", async ({ context }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
@@ -457,17 +517,70 @@ test("a token's details start a payment with it (chunk 23's review, T-1)", async
   await expect(page.getByTestId("review-wait")).toHaveCount(0);
 });
 
-test("Send from the private balance hands an ordinary address to Make public (chunk 23's review, P-1)", async ({ context }) => {
+test("Send from the private balance offers both ways to pay an ordinary address (chunk 23's review, P-1; blind test §9.7)", async ({ context }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "Send privately" }).click();
+  // What a Seedelf's name is, behind the label's ⓘ: two testers stopped at the word (T04b, T06).
+  await page.getByTestId("transfer-to-name-hint-hint").click();
+  await expect(page.getByTestId("transfer-to-name-hint")).toContainText("the 64-character name, starting 5eed0e1f");
   const address = vector(15).preprod.receive_0;
-  await page.getByLabel("Seedelf name").fill(address);
-  await expect(page.getByTestId("transfer-to-note")).toContainText("That's an ordinary address, not a Seedelf's name");
-  await page.getByRole("button", { name: "Pay it with Make public" }).click();
-  await expect(page.getByTestId("withdraw-lead")).toHaveText("Pays any Cardano address or $handle from your private balance.");
+  const pasteIt = async () => {
+    await page.getByLabel("Seedelf name").fill(address);
+    await page.getByLabel("Amount", { exact: true }).fill("12");
+    await expect(page.getByTestId("transfer-to-note")).toContainText("That's an ordinary address, not a Seedelf's name");
+  };
+  await pasteIt();
+  // Two buttons, each saying what it shows, the private one first.
+  const routes = page.getByTestId("transfer-to-routes");
+  await expect(routes.getByRole("button")).toHaveText(["Pay from your private balance", "Pay from your public account"]);
+  await expect(routes).toContainText("It shows at their end as coming from the Seedelf contract.");
+  await expect(routes).toContainText("it shows as coming from your public account.");
+  // From the private balance: Make public, which says what it does and shows, with the address and the amount.
+  await routes.getByRole("button", { name: "Pay from your private balance" }).click();
+  await expect(page.getByTestId("withdraw-lead")).toHaveText(
+    "Pays any Cardano address or $handle from your private balance. The payment shows at their end as coming from the Seedelf contract.",
+  );
   await expect(page.getByLabel("To", { exact: true })).toHaveValue(address);
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("12");
+  await expect(page.getByText("If this is where the money came from, such as the account that made it private")).toBeVisible();
+  // From the public account: its own Send, with the same.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Send privately" }).click();
+  await pasteIt();
+  await page.getByTestId("transfer-to-routes").getByRole("button", { name: "Pay from your public account" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue(address);
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("12");
+  await expect(page.getByTestId("send-to-note")).toContainText("Sends to");
+  // With Max on, the 12 typed before it stays in the box, unused: it isn't handed on, and the other form asks.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Send privately" }).click();
+  await pasteIt();
+  await page.getByRole("button", { name: "Max", exact: true }).click();
+  await page.getByTestId("transfer-to-routes").getByRole("button", { name: "Pay from your private balance" }).click();
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue(address);
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("");
+});
+
+test("Send from the private balance has a Max: all but the fee and what the token kept needs (blind test §9.6)", async ({ context, koios }) => {
+  koios.evaluation = transferPreprod.evaluation;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Send privately" }).click();
+  await page.getByLabel("Seedelf name").fill(transferPreprod.to);
+  await expect(page.getByTestId("transfer-to-note")).toContainText("Found: This is a test.");
+  await page.getByRole("button", { name: "Max", exact: true }).click();
+  await expect(page.getByTestId("transfer-max-note")).toContainText("up to 20 of your private UTxOs");
+  await expect(page.getByTestId("transfer-max-note")).toContainText("Spending those UTxOs together ties them to each other.");
+  await page.getByRole("button", { name: "Review" }).click();
+  // The 1,234.56 tUSDM stays, with the least ADA the network accepts with it; everything else goes.
+  await expect(page.getByTestId("transfer-max-kept")).toHaveText(
+    "1.64642 ₳ stays in your private balance with the token you keep: the least ADA the network accepts with it.",
+  );
+  await expect(page.getByTestId("transfer-review")).toContainText(/Private balance after1\.64642\s₳/);
+  expect(koios.calls).not.toContain("ogmios");
 });
 
 test("the dApps page says when sites can't see the wallet, with the switch's own note (chunk 23's review, D-1)", async ({ context }) => {
@@ -818,7 +931,7 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   koios.usedStakes.add(second.preprod.stake);
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Public accounts" }).click();
-  await expect(page.getByTestId("accounts-cost-note")).toContainText("each ask Koios about one account");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("each ask Koios, the service the wallet reads Cardano from, about one account");
   await expect(page.getByTestId("accounts-cost-note")).toContainText("would tell Koios those twenty accounts are one wallet's");
   await expect(page.getByTestId("accounts-cost-note")).toContainText("Add it");
   const asked = koios.stakesAsked.length;
@@ -1139,11 +1252,15 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(review).toContainText("Network fee");
   // Collected into the account, whose balance on Home counts them already: not spent (chunk 23's review, S-2).
   // Moved into it, not "collected", which beside a payment read as a charge; and the setting that does it (PY-6).
-  await expect(review).toContainText("Staking rewards moved into your balance57.475311 ₳, already counted in it");
+  // Which balance, and that nothing extra leaves: "moved into your balance" read as rewards moving away (blind test
+  // §9.9, T07).
+  await expect(review).toContainText("Staking rewards57.475311 ₳, already in your public account's balance: nothing extra leaves");
   await expect(page.getByTestId("rewards-setting")).toContainText("turn off “Use staking rewards when spending” in Settings");
   // The total counts the token going with the ADA (PY-5).
   await expect(review.getByTestId("review-total")).toContainText(/₳ and 1 token$/);
   await snap(page, "move-in-review");
+  const publicAfter = /([\d,.]+)\s₳/.exec((await review.getByTestId("review-after-public").textContent()) ?? "")?.[1];
+  const beforeSend = koios.calls.length;
   expect(koios.submitted).toHaveLength(0);
   // The button names the token too: "Make 25 ₳ private" left it out (chunk 23's second review, PY-5).
   await page.getByRole("button", { name: "Make 25 ₳ and 1 token private" }).click();
@@ -1158,6 +1275,14 @@ test("move in: amount and a token, review, send, then watch it confirm", async (
   await expect(banner.getByTestId("explorer-note")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Make private" })).toBeDisabled();
   await snap(page, "move-in-sent");
+  // Home reads again at once, from the worker's kept reading with no balance request: the review's after, the change
+  // on its way back to the public account with the rewards it collected in it, which no longer count on top (blind
+  // test §9.1, §9.3).
+  expect(publicAfter).toBeDefined();
+  await expect(page.getByTestId("cardano-lovelace")).toHaveText(`${publicAfter} ₳`);
+  await expect(page.getByTestId("cardano-incoming")).toContainText("on its way to this balance, with the 57.475311 ₳ of staking rewards");
+  await expect(page.getByTestId("cardano-rewards")).toHaveCount(0);
+  expect(koios.calls.slice(beforeSend).filter((c) => ["credential_utxos", "account_addresses", "account_info"].includes(c))).toEqual([]);
 
   // Reopening the wallet resumes the watch; once confirmed, balances are read again.
   koios.confirmations = 2;
@@ -1395,6 +1520,15 @@ test("send from the public account: a token with only the ADA it needs, review, 
   await expect(page.getByTestId("minimum-note")).not.toContainText("Raised");
   await snap(page, "send-review");
   expect(koios.submitted).toHaveLength(0);
+
+  // In a short window Send follows the review's rows, so "Total leaving" and "… after" come before it: kept in view
+  // there, it sat over them, clickable (blind test T04, §9.10).
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: 360, height: 480 });
+  const after = (await page.getByTestId("review-after-public").boundingBox())!;
+  const sendButton = (await page.getByRole("button", { name: "Send", exact: true }).boundingBox())!;
+  expect(sendButton.y).toBeGreaterThanOrEqual(after.y + after.height);
+  await page.setViewportSize(size);
 
   // Too little ADA is raised to that least, and the review says from what.
   await page.getByRole("button", { name: "Back", exact: true }).click();
@@ -1810,7 +1944,10 @@ test("create a Seedelf from the private balance: tag rules, review, and nothing 
   // giveme.my refuses (its answer to a transaction it can't validate): nothing is sent, and Create gives way to
   // building it again from the chain, giveme.my's words under Details (chunk 23's review, P-3).
   await page.getByRole("button", { name: "Create Seedelf" }).click();
-  await expect(page.getByRole("alert")).toContainText("Nothing was sent. Something it spends may have been spent or changed");
+  // Said as giveme.my's refusal, with the money unmoved, not a guess at something it spends (blind test §9.5).
+  await expect(page.getByRole("alert")).toContainText(
+    "Nothing was sent, so none of your money moved: giveme.my, the service that lends the collateral, turned this down",
+  );
   await expect(page.getByTestId("review-stale")).toContainText("refused this transaction: Transaction Fails Validation");
   await expect(page.getByRole("button", { name: "Create Seedelf" })).toHaveCount(0);
   // A witness that isn't giveme.my's key over this transaction is caught in WebAssembly.
@@ -1893,11 +2030,16 @@ test("send to a Seedelf: paste its name, see it found, review, and nothing sent 
   expect(koios.collateralAsked).toBe(0);
   // Koios was only ever asked about the whole contract, never the recipient's token.
   expect(koios.calls.filter((c) => c.startsWith("asset"))).toEqual([]);
+  // Who giveme.my is, whose the collateral is and what it costs, on the review (blind test §9.5).
+  await expect(page.getByTestId("giveme-note")).toContainText("giveme.my lends the collateral a contract needs: 5 ₳ of its own, and it charges nothing");
+  await expect(page.getByTestId("giveme-note")).toContainText("with your IP address");
   await snap(page, "transfer-review");
 
-  // giveme.my refuses: nothing is sent, and Send gives way to building it again (chunk 23's review, P-3).
+  // giveme.my refuses: nothing is sent, and Send gives way to building it again (chunk 23's review, P-3). The
+  // headline names giveme.my, not something it spends, since the device knows of nothing spent (blind test §9.5).
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("alert")).toContainText("Nothing was sent");
+  await expect(page.getByRole("alert")).toContainText("giveme.my, the service that lends the collateral, turned this down");
   await expect(page.getByTestId("review-stale")).toContainText("refused this transaction: Transaction Fails Validation");
   await expect(page.getByRole("button", { name: "Send" })).toHaveCount(0);
   koios.collateral = { status: 200, body: { witness: `a10081825820${"11".repeat(32)}5840${"22".repeat(64)}` } };
@@ -2044,11 +2186,21 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await expect(page.getByTestId("swap-steps")).toContainText("Minswap builds it, asked for at least 902.083681 MIN");
   const fund = page.getByTestId("swap-fund-review");
   await expect(fund).toContainText("ToPrivate session 1");
-  await expect(fund).toContainText("For the swap16 ₳");
-  await expect(fund).toContainText("Kept aside for contracts5 ₳");
-  // What "For the swap" pays for adds up to it, and the slippage and the minimum's trust in Minswap are said
+  await expect(fund).toContainText("The swap and its costs16 ₳");
+  await expect(fund).toContainText("Kept aside for contracts5 ₳, comes back");
+  // What the swap and its costs pay for adds up to it, and the slippage and the minimum's trust in Minswap are said
   // (chunk 23's second review, DX-2, DX-3).
   await expect(fund).toContainText("The swap10 ₳");
+  // What leaves the 28 ₳ now, 16 + 5 + the fee, and the balance after, as every other review says them; then what the
+  // whole swap costs, about 0.25 ₳ for each later fee, and what comes back: the 5 ₳, the 2 ₳ deposit and the room's
+  // rest, 8.5 ₳ whatever this payment's fee (blind test §9.8, T10).
+  await expect(fund).toContainText(/Total leaving your private balance21\.\d+\s₳/);
+  await expect(fund).toContainText(/Private balance after6\.\d+\s₳/);
+  const costs = page.getByTestId("swap-costs");
+  await expect(costs).toContainText("DEX fee2 ₳");
+  await expect(costs).toContainText(/Costs in all, about2\.7\d\s₳/);
+  await expect(costs).toContainText("Comes back, about906.5941 MIN and 8.5 ₳");
+  await expect(page.getByTestId("swap-costs-note")).toContainText("about 0.25 ₳ each for the order and the return");
   await expect(summary).toContainText("2% slippage");
   await expect(page.getByTestId("swap-minimum-trust")).toContainText("Seedelf Wallet relies on Minswap for the minimum of 902.083681 MIN");
   await snap(page, "swap-fund-review");
@@ -2184,14 +2336,30 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect(page.getByTestId("lovejoin-boxes")).toHaveText("1 box, 10 ₳");
   const cost = page.getByTestId("lovejoin-mix-cost");
   await expect(cost).toContainText("Mixed2 waves deep, 4 mixes");
-  await expect(cost).toContainText("Into a one-time account15.3 ₳, and 5 ₳ of collateral");
+  // What it costs, all told, and the rows under it add up to it: the four mixes at about 0.95 ₳, three network fees
+  // (this payment, the deposit, the return) at about 0.25 ₳, and 0.3 ₳ to bring the box back (blind test §9.8, T11).
+  await expect(cost).toContainText("Mixing 10 ₳ costs about4.85 ₳, 48.5% of it");
+  await expect(cost).toContainText("Mix fees, about3.8 ₳");
+  await expect(cost).toContainText("Network fees, about0.75 ₳: this payment, the deposit and the return");
+  await expect(cost).toContainText("Bringing it back, about0.3 ₳");
+  // What leaves now and what comes back: 15.3 ₳ is the box, its mixes and a 1.5 ₳ reserve, named; 5 ₳ kept aside.
+  const moves = page.getByTestId("lovejoin-mix-moves");
+  await expect(moves).toContainText("Into a one-time account15.3 ₳: the box, its mixes, and 1.5 ₳ for network fees, whose rest comes back");
+  await expect(moves).toContainText("Kept aside for contracts5 ₳, comes back");
+  await expect(moves).toContainText("Total leaving your private balance, about20.55 ₳");
+  await expect(moves).toContainText("Comes back once it's mixed, about6 ₳: the 5 ₳ kept aside, and what the fees don't use");
+  // What "waves deep" means, behind its ⓘ on the page, where a short pool never reaches the review (T11).
+  await page.getByTestId("lovejoin-waves-hint").click();
+  await expect(page.getByTestId("lovejoin-waves")).toContainText("your box is one of up to 9 coming out");
   // Whether the pool has others enough, before Review; and 28 ₳ pays for one box, so the stepper stops there, and
   // says why (chunk 23's second review, LJ-1, LJ-3).
   await expect(cost).toContainText(/Lovejoin's pool\d+ other boxes to mix with: enough/);
   await expect(page.getByRole("button", { name: "One box more" })).toBeDisabled();
   await expect(page.getByTestId("lovejoin-boxes-cap")).toContainText("1 box is as many as your private balance pays for");
-  // When it comes back: only while the wallet is unlocked (LJ-2).
-  await expect(cost).toContainText("Back laterEach box on its own, after 1 to 6 hours, while Seedelf Wallet is unlocked");
+  // When it comes back, and less what bringing it back costs: only while the wallet is unlocked (LJ-2).
+  await expect(moves).toContainText(
+    "Back laterThe box, about 9.7 ₳ once it's brought back, after 1 to 6 hours, while Seedelf Wallet is unlocked",
+  );
   // The public account's balance isn't capped here: two boxes, eight mixes.
   await page.getByRole("tab", { name: "Public account" }).click();
   await page.getByRole("button", { name: "One box more" }).click();
@@ -2205,8 +2373,11 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await page.getByTestId("lovejoin-mix").click();
   const funding = page.getByTestId("lovejoin-private-review");
   await expect(funding).toContainText("ToPrivate session 1");
-  await expect(funding).toContainText("For the boxes and their mixes15.3 ₳");
-  await expect(funding).toContainText("Kept aside for contracts5 ₳");
+  await expect(funding).toContainText("For the boxes, their mixes and network fees15.3 ₳");
+  await expect(funding).toContainText("Kept aside for contracts5 ₳, comes back");
+  // What leaves the 28 ₳ and what it holds after, not the change (blind test §9.8).
+  await expect(funding).toContainText(/Total leaving your private balance20\.\d+\s₳/);
+  await expect(funding).toContainText(/Private balance after7\.\d+\s₳/);
   await expect(page.getByTestId("lovejoin-private-then")).toContainText("Into Lovejoin1 box of 10 ₳");
   await snap(page, "lovejoin-private-review");
   // giveme.my refuses (its recorded answer): nothing is sent, Start mix gives way to building it again (chunk 23's
@@ -2220,11 +2391,17 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("lovejoin-mixes")).toContainText("1 box of 10 ₳Not fundedIts funding didn't go through");
-  await expect(page.getByTestId("lovejoin-mixes")).toContainText("Something it spends had changed since the review.");
+  // Why: giveme.my turned it away, said as that, not as something the user's money did (blind test §9.5).
+  await expect(page.getByTestId("lovejoin-mixes")).toContainText("giveme.my, the service that lends its collateral, turned it down.");
 
   // From the public account: the deposit and every mix, sent one after another.
   await page.getByRole("tab", { name: "Public account" }).click();
-  await expect(cost).toContainText("From your public account15.3 ₳, its collateral backing the mixes");
+  await expect(page.getByTestId("lovejoin-mix-moves")).toContainText(
+    "From your public accountNeeds 15.3 ₳ of ADA alone, beside the collateral that backs the mixes; what isn't used stays",
+  );
+  // The box, its mixes and the deposit's fee leave it; nothing else comes back but the box.
+  await expect(page.getByTestId("lovejoin-mix-moves")).toContainText("Total leaving your public account, about14.05 ₳");
+  await expect(cost).toContainText("Mixing 10 ₳ costs about4.35 ₳, 43.5% of it");
   await page.getByTestId("lovejoin-mix").click();
   const review = page.getByTestId("lovejoin-public-review");
   await expect(review).toContainText("Into Lovejoin1 box of 10 ₳");
@@ -2275,7 +2452,7 @@ test("Lovejoin: mix my boxes again, paid from the private balance: the review sa
   await expect(page.getByRole("heading", { name: "Review mixing again" })).toBeVisible();
   const funding = page.getByTestId("lovejoin-again-review");
   await expect(funding).toContainText("ToPrivate session 1");
-  await expect(funding).toContainText("For the mixes9.1 ₳");
+  await expect(funding).toContainText("For the mixes and network fees9.1 ₳");
   await expect(funding).toContainText("Kept aside for contracts5 ₳");
   const then = page.getByTestId("lovejoin-again-then");
   await expect(then).toContainText("Mixed again2 of your 3 boxes in the pool");
@@ -2661,6 +2838,9 @@ test("staking: the page, the pool browser, a change of pool reviewed and sent, t
   await expect(page.getByTestId("your-pool-facts")).toContainText("Saturation18.8%");
   await expect(page.getByTestId("your-pool-facts")).toContainText("Margin2%");
   await expect(page.getByTestId("staking-rewards")).toHaveText("57.475311 ₳");
+  // When withdrawing by hand matters, and the setting that decides it, by name (blind test §9.9, E04).
+  await expect(page.getByTestId("staking-rewards-note")).toContainText("with “Use staking rewards when spending” on in Settings");
+  await expect(page.getByTestId("staking-rewards-note")).toContainText("Withdrawing them here only matters for a site");
   await expect(page.getByTestId("vote-now")).toContainText("Always abstain");
   await expect(page.getByTestId("rewards-locked")).toHaveCount(0);
   await expect(page.getByTestId("drep-deposit-note")).toContainText("Registering locks up 500 ₳");
@@ -2961,6 +3141,8 @@ test("staking: locked rewards send you to the vote; an account that isn't stakin
   await page.getByRole("button", { name: "Back", exact: true }).click();
   // Withdrawing and stopping wait for the vote.
   await expect(page.getByTestId("rewards-locked")).toBeVisible();
+  // Locked, the note that payments take them along would be wrong: the warning says what's true.
+  await expect(page.getByTestId("staking-rewards-note")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Withdraw rewards" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Stop staking" })).toBeDisabled();
   // A payment goes ahead without them.
@@ -3062,10 +3244,13 @@ test("hide balances: the eye masks what the wallet holds, but not what a form se
   // Nothing's locked, so there's no line under the balance (chunk 23's review, H-5: no UTxO count).
   await expect(page.getByTestId("seedelf-meta")).toHaveCount(0);
   await expect(page.getByTestId("seedelf-tokens")).toContainText("••••");
+  // The other side's row too, on each tab (blind test §9.4).
+  await expect(page.getByTestId("home-public-row-lovelace")).toHaveText("•••• ₳");
   await snap(page, "home-hidden");
   await cardanoTab(page);
   await expect(page.getByTestId("cardano-lovelace")).toHaveText("•••• ₳");
   await expect(page.getByTestId("cardano-rewards")).toHaveText("Includes •••• ₳ of staking rewards");
+  await expect(page.getByTestId("home-private-row-lovelace")).toHaveText("•••• ₳");
   // Hiding asks no one anything.
   expect(koios.calls).toHaveLength(reads);
 
@@ -3370,6 +3555,10 @@ test.describe("the dApp connector", () => {
     await expect(page.getByTestId("dapp-connector-note")).toContainText("you choose what it sees: your public account, or a private session");
     // A site's signature needs the password too, until the user says otherwise.
     await expect(page.getByRole("switch", { name: "Ask for your password to sign for a site" })).toHaveAttribute("aria-checked", "true");
+    // The page open before it was turned on sees the wallet too, with no reload (blind test §9.2, T15), and the switch
+    // says to reload a site that looked for wallets only as it loaded.
+    await expect.poll(() => dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("object");
+    await expect(page.getByTestId("dapp-connector-open-pages")).toContainText("Pages already open see Seedelf Wallet too.");
 
     await dapp.reload();
     expect(await dapp.evaluate(() => (window as any).cardano.seedelf.name)).toBe("Seedelf Wallet");
@@ -3476,6 +3665,8 @@ test.describe("the dApp connector", () => {
     await expect(page.getByRole("dialog")).toContainText("dapp.example has to ask again before it sees anything more. It keeps what it already saw.");
     await page.getByTestId("sites-disconnect-confirm").click();
     await expect(page.getByTestId("sites-empty")).toBeVisible();
+    // CIP-30 can't tell the open page: the wallet says it may still look connected (blind test E03).
+    await expect(page.getByTestId("sites-disconnected")).toContainText("A page of it that's still open may show itself connected");
     expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
 
     // Off again: new pages get nothing.
@@ -3484,6 +3675,70 @@ test.describe("the dApp connector", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await dapp.reload();
     expect(await dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("undefined");
+  });
+
+  test("a declined site: Decline says how long it waits, the window says what it did, and dApps lets it ask now (blind test §9.2)", async ({
+    context,
+  }) => {
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+    // Home's dApps row says sites can't see the wallet, where users look first (T15).
+    await expect(page.getByTestId("home-dapps-sites")).toHaveText("Sites can't see Seedelf Wallet");
+    await page.getByRole("button", { name: "dApps", exact: true }).click();
+    // Turned on from the dApps page itself.
+    await page.getByTestId("dapp-sites-off").getByRole("button", { name: "Let sites connect" }).click();
+    await expect(page.getByTestId("dapp-sites-on")).toContainText("On: sites can ask to connect");
+    const dapp = await openDapp(context);
+    const enable = () =>
+      dapp.evaluate(() =>
+        (window as any).cardano.seedelf.enable().then(
+          () => "connected",
+          (e: { info?: string }) => e.info,
+        ),
+      );
+
+    // Decline says what it does before it's pressed, and the window says what it did (T17, T17r).
+    let opened = connectorWindow(context);
+    let enabling = enable();
+    let connect = await opened;
+    await expect(connect.getByTestId("dapp-decline-note")).toHaveText(
+      "Decline, or closing this window, turns dapp.example away: it can ask again in 10 s.",
+    );
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("button", { name: "Decline" }).click();
+    expect(await enabling).toBe("The user declined.");
+    await expect(connect.getByTestId("dapp-declined")).toContainText("You declined dapp.example. It can ask again in 10 s");
+
+    // The dApps page lists it with the wait left, and that it asked again, which the site alone used to say.
+    const declined = page.getByTestId("sites-declined");
+    await expect(declined).toContainText("You declined it: it can ask again in");
+    expect(await enable()).toMatch(/^The user declined this site just now\. It can ask again in \d+ s\.$/);
+    await expect(declined).toContainText("and it asked again");
+    await snap(page, "dapp-sites-declined");
+    await closed;
+
+    // Let it ask now ends the wait: the next connect opens the window at once.
+    await declined.getByRole("button", { name: "Let it ask now" }).click();
+    await expect(page.getByTestId("sites-declined")).toHaveCount(0);
+    opened = connectorWindow(context);
+    enabling = enable();
+    connect = await opened;
+    const done = connect.waitForEvent("close");
+    await connect.getByRole("radio", { name: "Your public account" }).click();
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe("connected");
+    await done;
+
+    // Listed under Sites with its page's title and Disconnect, which says what the open page may still show (E03).
+    const sites = page.getByTestId("dapp-sites");
+    await expect(sites).toContainText("dapp.example");
+    await expect(sites).toContainText("Your public account");
+    await sites.getByRole("button", { name: "Disconnect" }).click();
+    await page.getByTestId("sites-disconnect-confirm").click();
+    await expect(page.getByTestId("sites-disconnected")).toContainText("dapp.example is disconnected");
+    await expect(page.getByTestId("dapp-sites-hint")).toBeVisible();
+    expect(await dapp.evaluate(() => (window as any).cardano.seedelf.isEnabled())).toBe(false);
   });
 
   test("a site connects to a private session instead: funded from the window, and listed under dApps' Sites", async ({
@@ -3517,13 +3772,27 @@ test.describe("the dApp connector", () => {
     await expect(connect.getByLabel("What to put in it")).toBeFocused();
     await expect(connect.getByRole("button", { name: "Enter an amount" })).toBeDisabled();
     await expect(connect.getByTestId("dapp-private-held")).toContainText("28 ₳ in your private balance");
+    // The way back, in plain words, with what Lovejoin costs as Settings has it on (blind test §9.8, T16).
+    await expect(connect.getByTestId("dapp-private-way-back")).toContainText(
+      "goes through Lovejoin first, a mixer: in 10 ₳ boxes mixed with other people's, so it's harder to tie to this session, for about 4.1 ₳ a box",
+    );
     await connect.getByLabel("What to put in it").fill("15");
     await snap(connect, "dapp-connect-private");
     await connect.getByRole("button", { name: "Review" }).click();
     const rows = connect.getByTestId("dapp-funding-rows");
     await expect(rows).toContainText("ToPrivate session 1");
     await expect(rows).toContainText("For the site15 ₳");
-    await expect(rows).toContainText("Kept aside for contracts5 ₳");
+    await expect(rows).toContainText("Kept aside for contracts5 ₳, comes back");
+    // What leaves the 28 ₳, 15 + 5 + the fee, and what it holds after, not the change of the UTxO it spends (T16); then
+    // the way back's fee, about 0.25 ₳, and Lovejoin's, about 4.1 ₳ a box (blind test §9.8).
+    await expect(rows).toContainText(/Total leaving your private balance20\.\d+\s₳/);
+    await expect(rows).toContainText(/Private balance after7\.\d+\s₳/);
+    const back = connect.getByTestId("dapp-funding-back");
+    // Lovejoin's on, as Settings starts it: the way back is its deposit, the mixes and the return, two fees besides
+    // the mixes'.
+    await expect(back).toContainText("Its network fees, about0.5 ₳: Lovejoin's deposit and the return");
+    await expect(back).toContainText("Through Lovejoin first, about4.1 ₳ a 10 ₳ box");
+    await expect(back).toContainText(/Network fees both ways, about0\.7\d\s₳/);
     // Sending needs the password, as a signature does.
     await expect(connect.getByRole("button", { name: "Send" })).toBeDisabled();
     await connect.getByLabel("Your password, to send").fill(PASSWORD);
@@ -3534,10 +3803,12 @@ test.describe("the dApp connector", () => {
     await expect(connect.getByTestId("review-stale")).toContainText("refused this transaction");
     await expect(connect.getByRole("button", { name: "Send" })).toHaveCount(0);
     expect(koios.submitted).toHaveLength(0);
-    const closed = connect.waitForEvent("close");
-    await connect.getByRole("button", { name: "Cancel" }).click();
+    // Its Decline says no to the site, and how long that turns it away, as the choice's does (the cross-area review).
+    await expect(connect.getByTestId("dapp-decline-note")).toContainText("turns dapp.example away: it can ask again in 10 s");
+    await connect.getByRole("button", { name: "Decline" }).click();
     expect(await enabling).toBe("The user declined.");
-    await closed;
+    // The window says so, then closes by itself a few seconds on: nothing here waits for that.
+    await expect(connect.getByTestId("dapp-declined")).toContainText("You declined dapp.example.");
     // Asked again at once, it's refused unasked, in words that say when it can ask again (chunk 23's second review,
     // CW-3).
     expect(
@@ -3591,10 +3862,9 @@ test.describe("the dApp connector", () => {
     await connect.getByLabel("Your password, to send").fill(PASSWORD);
     await connect.getByRole("button", { name: "Send" }).click();
     await expect(connect.getByTestId("review-stale")).toContainText("refused this transaction");
-    const closed = connect.waitForEvent("close");
-    await connect.getByRole("button", { name: "Cancel" }).click();
+    // The window closes by itself a few seconds after the decline: nothing here waits for that.
+    await connect.getByRole("button", { name: "Decline" }).click();
     expect(await enabling).toBe("The user declined.");
-    await closed;
 
     // Say its account holds 40 ₳ and its 5 ₳ collateral anyway: its spare ADA pays for two boxes.
     const held = (tx: string, index: number, value: string) => ({
@@ -3645,12 +3915,17 @@ test.describe("the dApp connector", () => {
     await expect(review).toContainText("Through Lovejoin2 boxes of 10 ₳");
     await expect(review).toContainText("Mixed2 waves deep, 8 mixes");
     await expect(review).toContainText("IntoNew private UTxOs");
+    // The way back is a switch, first on the review and on as Settings has it, never a link under the costs (blind
+    // test §9.8; Stop's, 5289dcf).
+    const way = page.getByRole("switch", { name: "Bring it back through Lovejoin" });
+    await expect(way).toHaveAttribute("aria-checked", "true");
     await snap(page, "site-back-lovejoin");
-    // Directly instead: one transaction, everything now.
-    await page.getByTestId("lovejoin-direct").click();
+    // Directly instead: one transaction, everything now. The switch stays, off, to turn it back on.
+    await way.click();
     await expect(review).not.toContainText("Through Lovejoin");
     await expect(review).toContainText("Into your private balance");
-    await expect(page.getByTestId("lovejoin-direct")).toHaveCount(0);
+    await expect(way).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByTestId("lovejoin-way")).toContainText("anyone can tie it on chain to this session and its funding");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect.poll(() => koios.submitted.length).toBe(1);
 

@@ -11,12 +11,28 @@
 // on the chain (privacy review §2.21). Saving says how many rows it holds. A
 // read that fails says so in plain words, with Try again (chunk 23's second
 // review, AC-2, AC-3).
+//
+// The blind test: an entry's amount is what moved, the fee apart, so a payment
+// reads as what it paid, never "Sent +32.300614 ₳" for 25 ₳ (§9.1, T08); the
+// public side lists what the wallet sent before Koios does, marked Pending,
+// the details say so on both sides, and Home's banner shows here too (§9.3).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type I18nKey, joinSentences, Rich, t, useT } from "../../i18n";
 
 import { entrySession, type ActivityEntry } from "../../shared/rpc";
-import { activityCsv, activityDetail, activityTitle as title, poolOf, signedQuantity, stakingLine, voteOf } from "../activity";
+import {
+  activityAmount as amount,
+  activityCsv,
+  activityDetail,
+  activityTitle as title,
+  exported,
+  feeOnly,
+  poolOf,
+  signedQuantity,
+  stakingLine,
+  voteOf,
+} from "../activity";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyButton } from "../components/CopyButton";
@@ -69,13 +85,6 @@ function icon(e: ActivityEntry): ReactNode {
   }
 }
 
-/** "+25 ₳", "−5 ₳ and 1 token", or "1.74986 ₳" for a seedelf's locked ADA; masked while balances are hidden. */
-function amount(e: ActivityEntry, ada: (lovelace: string) => string): string {
-  const sign = e.direction === "in" ? "+" : e.direction === "out" ? "−" : "";
-  const held = e.tokens ? t("format.adaAndTokens", { ada: ada(e.lovelace), count: e.tokens }) : `${ada(e.lovelace)}\u00a0₳`;
-  return `${sign}${held}`;
-}
-
 /** Saves `text` as a file on the device, as the browser saves any download. */
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
@@ -114,11 +123,14 @@ export function ExportNote({ of, listed, more }: { of: Of; listed: number; more:
 export function Activity({
   of,
   pendingHash,
+  banner,
   onBack,
   onRead,
 }: {
   of: Of;
   pendingHash?: string;
+  /** Home's banner for the transaction it watches: the payment is still on its way here too (blind test T08). */
+  banner?: ReactNode;
   onBack: () => void;
   /** After Refresh: the balances may have been read again. */
   onRead: () => void;
@@ -163,6 +175,9 @@ export function Activity({
 
   const now = new Date();
   const openDetail = open && activityDetail(open);
+  // Sent and not in a block yet: Private activity's entry from its history while Home watches it, Public activity's
+  // from what the device keeps (the worker marks it), until Koios lists it (blind test §9.3).
+  const pending = (e: ActivityEntry) => !!e.pending || e.txHash === pendingHash;
   const groups: Array<[string, ActivityEntry[]]> = [];
   for (const e of entries ?? []) {
     const label = dayHeading(e.at, now);
@@ -173,6 +188,7 @@ export function Activity({
 
   return (
     <Screen title={t(of === "seedelf" ? "activity.titlePrivate" : "activity.titlePublic")} titleId="activity-title" onBack={onBack}>
+      {banner}
       {of === "seedelf" ? (
         <Callout tone="privacy">{t("activity.privacy.kept")}</Callout>
       ) : (
@@ -215,7 +231,7 @@ export function Activity({
                         {amount(e, amounts.ada)}
                       </span>
                       <EntryLine
-                        lead={[e.txHash === pendingHash ? t("activity.pending") : "", time(e.at)]}
+                        lead={[pending(e) ? t("activity.pending") : "", time(e.at)]}
                         entry={e}
                         otherwise={stakingLine(network, e.staking)}
                       />
@@ -241,7 +257,8 @@ export function Activity({
             onClick={() => {
               const day = new Date().toISOString().slice(0, 10);
               download(`seedelf-wallet-${of === "seedelf" ? "private" : "public"}-activity-${network}-${day}.csv`, activityCsv(network, entries));
-              setSaved(entries.length);
+              // What's pending isn't in the file: it isn't on chain yet.
+              setSaved(exported(entries).length);
             }}
           >
             <DownloadIcon size={16} />
@@ -259,7 +276,9 @@ export function Activity({
       {open && (
         <Modal title={title(open)} titleId="activity-details-title" onClose={() => setOpen(undefined)}>
           <ReviewRows testId="activity-details">
-            <Row label={t("activity.row.amount")} value={amount(open, amounts.ada)} strong />
+            {/* What it paid, or what came in, the fee apart below; one that moved nothing but its fee says the fee alone
+                (blind test §9.1: T08's read "Amount +32.300614 ₳" for 25 ₳ paid). */}
+            {!feeOnly(open) && <Row label={t("activity.row.amount")} value={amount(open, amounts.ada)} strong />}
             {open.assets?.map((t) => (
               <TokenAmountRow
                 key={`${t.policyId}.${t.assetName}`}
@@ -287,6 +306,8 @@ export function Activity({
               />
             )}
             <Row label={t("activity.row.when")} value={open.at ? new Date(open.at).toLocaleString("en-GB") : t("activity.row.beforeWallet")} />
+            {/* The list said Pending, and the details dropped it (blind test T07). */}
+            {pending(open) && <Row label={t("activity.row.status")} value={t("activity.row.pending")} />}
           </ReviewRows>
           {/* Why it's called that: found already there, so who paid it isn't known (AC-3). */}
           {open.kind === "received" && open.origin?.origin === "unknown" && (

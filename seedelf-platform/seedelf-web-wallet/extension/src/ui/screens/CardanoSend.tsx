@@ -54,6 +54,8 @@ export function CardanoSend({
   rewards,
   total,
   picked,
+  to,
+  amount,
   onCancel,
   onSent,
 }: {
@@ -65,11 +67,14 @@ export function CardanoSend({
   total?: string;
   /** Tokens picked already, from a token's details: each asks for its amount. */
   picked?: Record<string, string>;
+  /** An address, and the amount typed, handed on from private Send, which pays only Seedelfs (blind test §9.7). */
+  to?: string;
+  amount?: string;
   onCancel: () => void;
   onSent: (pending: PendingTx) => void;
 }) {
   const network = useNetwork();
-  const list = useRecipients("", picked);
+  const list = useRecipients(to, picked, amount);
   const t = useT();
   const [reads, setReads] = useState<Record<number, KnownRead>>({});
   const [max, setMax] = useState(false);
@@ -191,6 +196,7 @@ export function CardanoSend({
       <Screen
         title={t("withdraw.review.title")}
         titleId="send-review"
+        review
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
         aside={t("review.nothingSent")}

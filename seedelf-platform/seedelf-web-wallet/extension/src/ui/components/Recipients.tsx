@@ -29,12 +29,12 @@ export interface Draft {
 const blank = (id: number): Draft => ({ id, to: "", amount: "", tokens: {} });
 
 /**
- * The recipients on a form, and ways to change them; `to` fills the first, as
- * a payment handed on from another form, and `tokens` picks tokens for it, as
- * a token's details do.
+ * The recipients on a form, and ways to change them; `to` and `amount` fill
+ * the first, as a payment handed on from another form, and `tokens` picks
+ * tokens for it, as a token's details do.
  */
-export function useRecipients(to = "", tokens: Record<string, string> = {}) {
-  const [drafts, setDrafts] = useState<Draft[]>([{ ...blank(0), to, tokens }]);
+export function useRecipients(to = "", tokens: Record<string, string> = {}, amount = "") {
+  const [drafts, setDrafts] = useState<Draft[]>([{ ...blank(0), to, amount, tokens }]);
   const next = useRef(1);
   return {
     drafts,

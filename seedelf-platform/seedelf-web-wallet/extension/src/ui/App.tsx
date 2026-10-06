@@ -13,6 +13,7 @@ import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
 import { AccountPicker } from "./components/AccountPicker";
 import { LockCountdown } from "./components/LockCountdown";
 import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
+import { useOpensAtTop } from "./components/Screen";
 import { DappApprovals } from "./screens/DappApprovals";
 import { forgetHomeTab, Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
@@ -170,6 +171,25 @@ export function App() {
   } else {
     screen = <Home goHome={goHome} />;
   }
+  // Each of these opens at its top, as every screen does (blind test §9.10): Unlock, the welcome and the startup
+  // error aren't a `Screen`, which does it for the rest.
+  useOpensAtTop(
+    error
+      ? "error"
+      : !status
+        ? "starting"
+        : status.state === "no-wallet"
+          ? `welcome:${start ?? ""}`
+          : status.state === "locked"
+            ? resetting
+              ? "reset"
+              : "unlock"
+            : connectorWindow
+              ? "connector"
+              : settings
+                ? "settings"
+                : "home",
+  );
 
   const brand = (
     <>

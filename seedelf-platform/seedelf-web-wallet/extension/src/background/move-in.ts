@@ -47,6 +47,8 @@ interface Built extends MoveInSummary {
    * summary a submit hands on (activity.ts `classOf`).
    */
   origin: HistoryClass;
+  /** That account's index too, for what's kept as sent (pending.ts `Sending`, sent-txs.ts). */
+  account: number;
 }
 
 export interface MoveInDeps {
@@ -117,6 +119,7 @@ export class MoveInService {
         builtAt: now(),
         invalidHereafter,
         origin: madePrivate(keys.account),
+        account: keys.account,
       } satisfies Built);
       return summary;
     });
@@ -138,7 +141,7 @@ export class MoveInService {
       }
       await settleMaybeSent(this.deps, network);
     }
-    const { txCbor, builtAt: _builtAt, sentCbor: _sentCbor, ...summary } = built;
+    const { txCbor, builtAt: _builtAt, sentCbor: _sentCbor, account, ...summary } = built;
     return submitWatched(this.deps, {
       network,
       txHash,
@@ -150,6 +153,8 @@ export class MoveInService {
       contract: false,
       invalidHereafter: built.invalidHereafter,
       again,
+      // A review kept before the account was: the one active now.
+      ...(typeof account === "number" ? { account } : {}),
     });
   }
 }

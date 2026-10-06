@@ -1,13 +1,15 @@
 // Send, on the private side: pay seedelfs from the private (Seedelf) balance,
-// up to 20 at once.
+// up to 20 at once, or the most possible (Max) to one, as the other Sends and
+// Make public do (blind test §9.6).
 // Each recipient is pasted by full name (tags aren't unique), looked up in the
 // wallet contract, and shown before anything is built. With tokens, an amount
-// may stay empty: only the ADA they need goes. The worker builds the
-// transfer, with Ogmios measuring its spends, and nothing is sent until the
-// user has reviewed it and pressed Send.
+// may stay empty: only the ADA they need goes. An ordinary address pasted
+// instead is offered both ways to pay it (blind test §9.7). The worker builds
+// the transfer, measuring its spends in the wallet, and nothing is sent until
+// the user has reviewed it and pressed Send.
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useT } from "../../i18n";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { joinSentences, useT } from "../../i18n";
 
 import type { Balances, PendingTx, SeedelfLookup, TransferSummary } from "../../shared/rpc";
 import { SEEDELF_NAME_RULE, seedelfName } from "../../shared/seedelf-name";
@@ -15,8 +17,11 @@ import { call, isStale } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, amountText, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { Clearable } from "../components/Clearable";
 import { ContactEditor, ContactPicker, useContacts } from "../components/Contacts";
+import { HintButton, HintText, useHint } from "../components/Hint";
+import { LeftOutNote } from "../components/LeftOut";
 import {
   AddRecipient,
   fieldId,
@@ -39,24 +44,45 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { TokenAmounts } from "../components/TokenAmounts";
 import { TokenAmountRow } from "../components/TokenList";
-import { adaText, lockedAside, shortHex, tokenKey as key } from "../format";
+import { adaText, formatAda, lockedAside, shortHex, tokenKey as key } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
+import { withoutStop } from "../sentence";
 import { tokenQuantity } from "../tokens";
 
 type Found = { state: "idle" } | { state: "looking" } | { state: "found"; seedelf: SeedelfLookup } | { state: "error"; message: string };
+
+/** Where an ordinary address pasted into Send is paid from instead: Make public, or the public account's Send. */
+export type AddressRoute = "private" | "public";
+
+/** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
+const MAX_UTXOS = 20;
+
+/**
+ * The amount an address's route hands on: what's typed, or nothing with Max on. The box keeps the figure typed
+ * before Max, unused and out of sight, and Max isn't carried either: the public account is another balance, and
+ * Make public's Max sends every token too, so the other form asks for its own amount (cross-area review).
+ */
+export const handedOnAmount = (typed: string, max: boolean): string => (max ? "" : typed);
 
 export function Transfer({
   seedelf,
   total,
   onPayAddress,
+  publicBlocked,
   picked,
   onCancel,
   onSent,
 }: {
   seedelf: Balances["seedelf"];
-  /** An ordinary address was pasted: pay it with Make public instead, which pays any address (P-1). */
-  onPayAddress?: (to: string) => void;
+  /**
+   * An ordinary address was pasted: pay it from `route` instead, with the amount typed (P-1). Make public was the
+   * only way offered, and two blind testers found the public account's Send only after it failed, or never (blind
+   * test §9.7, T04b, T06).
+   */
+  onPayAddress?: (route: AddressRoute, to: string, amount: string) => void;
+  /** Why the public account's Send can't pay now (nothing in it, a transaction on its way): said on its choice, which is off. */
+  publicBlocked?: string;
   /** Tokens picked already, from a token's details: each asks for its amount. */
   picked?: Record<string, string>;
   /** The whole private balance, as Home shows it (locked UTxOs in): the review's balance after. */
@@ -68,16 +94,21 @@ export function Transfer({
   const t = useT();
   const list = useRecipients("", picked);
   const [found, setFound] = useState<Record<number, Found>>({});
+  const [max, setMax] = useState(false);
   const [summary, setSummary] = useState<TransferSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   // The worker's words for a review that can't go as it is: Send gives way to building it again.
   const stale = useStale();
+  // A refusal is about what was asked: once the form changes, it's gone, not left to read as the new answer (T05).
+  useEffect(() => setError(undefined), [list.drafts, max]);
 
-  const amounts = recipientAmounts(network, seedelf.tokens, list.drafts, false);
+  // Max pays a single Seedelf: everything but the fee and what the tokens that stay need. Tokens added go too.
+  const maxed = max && !list.several;
+  const amounts = recipientAmounts(network, seedelf.tokens, list.drafts, maxed);
   const foundOf = (id: number): Found => found[id] ?? { state: "idle" };
   // The builder decides exactly (fee, change); this catches the obvious case early.
-  const tooMuch = amounts.total > BigInt(seedelf.lovelace);
+  const tooMuch = !maxed && amounts.total > BigInt(seedelf.lovelace);
   const ready = list.drafts.every((d) => foundOf(d.id).state === "found") && amounts.ok && !tooMuch;
   const available = t(seedelf.locked.utxos ? "withdraw.available" : "withdraw.inPrivate");
   // The form's balance lines, hidden with the balances; the review shows what's sent in full (HM-9).
@@ -94,6 +125,7 @@ export function Transfer({
       amount: e.draft.amount,
       tokensPicked: Object.keys(e.draft.tokens).length > 0,
       tokensOk: e.tokens.ok,
+      max: maxed,
       emptyTo: "review.why.seedelf",
     }),
   );
@@ -106,7 +138,7 @@ export function Transfer({
     try {
       const payments = amounts.each.map(({ draft, lovelace, tokens }) => {
         const f = foundOf(draft.id);
-        return { to: f.state === "found" ? f.seedelf.name : draft.to, lovelace: lovelace!, tokens: tokens.sent };
+        return { to: f.state === "found" ? f.seedelf.name : draft.to, lovelace: lovelace ?? null, tokens: tokens.sent };
       });
       setSummary(await call("transfer-build", { payments }));
       stale.built();
@@ -129,7 +161,7 @@ export function Transfer({
     try {
       onSent(await call("transfer-submit", { txHash: summary.txHash }));
     } catch (err) {
-      if (isStale(err)) stale.refused((err as Error).message);
+      if (isStale(err)) stale.refused(err);
       else setError((err as Error).message);
       setBusy(false);
     }
@@ -172,6 +204,7 @@ export function Transfer({
       <Screen
         title={t("withdraw.review.title")}
         titleId="transfer-review"
+        review
         onBack={() => {
           // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
           setSummary(undefined);
@@ -183,7 +216,7 @@ export function Transfer({
         error={error}
         foot={
           stale.detail !== undefined ? (
-            <StaleFoot detail={stale.detail} busy={busy} onAgain={() => void build()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void build()} />
           ) : (
             <>
               <RenewedNote renewed={stale.renewed} />
@@ -199,7 +232,26 @@ export function Transfer({
           <TotalRows side="private" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="transfer-tx" />
-        <HistoriesNote histories={summary.histories} testId="transfer-histories" />
+        <HistoriesNote histories={summary.histories} max={summary.max} testId="transfer-histories" />
+        {/* What Max leaves, and why it can't go: the balance after said it with no reason, and T05's tester took
+            it for a bug (blind test §4.4). */}
+        {summary.max && summary.changeTokens > 0 && (
+          <p className="note" data-testid="transfer-max-kept">
+            {t("transfer.maxKept", { amount: formatAda(summary.changeLovelace), count: summary.changeTokens })}
+          </p>
+        )}
+        {summary.left > 0 && (
+          <p className="note" data-testid="transfer-left">
+            {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
+            {joinSentences([
+              t("withdraw.left", { count: summary.left }),
+              summary.inputs < MAX_UTXOS
+                ? t("withdraw.leftTokens", { count: summary.left })
+                : t("withdraw.leftLimit", { max: MAX_UTXOS }),
+            ])}
+          </p>
+        )}
+        <LeftOutNote leftOut={summary.leftOut} testId="transfer-left-out" />
         {summary.payments.map((p, i) => (
           <MinimumNote
             key={i}
@@ -222,6 +274,7 @@ export function Transfer({
         <p className="note">
           {t(several ? "transfer.review.noteEach" : "transfer.review.noteThis")}
         </p>
+        <GivemeNote />
       </Screen>
     );
   }
@@ -267,8 +320,11 @@ export function Transfer({
               value={d.to}
               onChange={(to) => list.update(d.id, { to })}
               onFound={(result) => setFound((all) => ({ ...all, [d.id]: result }))}
-              // One recipient only: Make public's form takes the address over, and others here would be lost.
-              onPayAddress={list.several ? undefined : onPayAddress}
+              // One recipient only: the other form takes the address and the amount over, and others here would be lost.
+              onPayAddress={
+                list.several || !onPayAddress ? undefined : (route, to) => onPayAddress(route, to, handedOnAmount(d.amount, maxed))
+              }
+              publicBlocked={publicBlocked}
             />
             {f.state === "found" && f.seedelf.own && (
               <Callout tone="warn" testId="transfer-own">
@@ -282,16 +338,32 @@ export function Transfer({
                 id={fieldId("transfer-amount", d, i)}
                 value={d.amount}
                 onChange={(amount) => list.update(d.id, { amount })}
+                disabled={maxed}
+                shown={t("common.maxUpTo", { amount: shown.ada(seedelf.lovelace) })}
                 placeholder={withTokens ? t("common.minimum") : "0"}
                 autoFocus={false}
-              />
+              >
+                {/* The most there is, as the other Sends and Make public have: T05's tester found it in about 15
+                    guesses, without (blind test §9.6). */}
+                {!list.several && (
+                  <button type="button" className="chip" aria-pressed={max} onClick={() => setMax(!max)}>
+                    {t("common.max")}
+                  </button>
+                )}
+              </AdaInput>
               {!list.several && tooMuch && (
                 <p className="field-note" data-testid="transfer-too-much">
                   {t("transfer.tooMuch", { amount: shown.ada(seedelf.lovelace) })}
                 </p>
               )}
             </div>
-            {withTokens && <MinimumHint />}
+            {maxed ? (
+              <p className="note" data-testid="transfer-max-note">
+                {t(seedelf.locked.utxos ? "transfer.privacy.maxLocked" : "transfer.privacy.max", { max: MAX_UTXOS })}
+              </p>
+            ) : (
+              withTokens && <MinimumHint />
+            )}
 
             <TokenAmounts
               held={heldFor(network, seedelf.tokens, list.drafts, d)}
@@ -302,7 +374,13 @@ export function Transfer({
           </RecipientCard>
         );
       })}
-      <AddRecipient count={list.drafts.length} onAdd={list.add} />
+      <AddRecipient
+        count={list.drafts.length}
+        onAdd={() => {
+          setMax(false);
+          list.add();
+        }}
+      />
       {list.several && (
         <TooMuchTogether total={amounts.total} available={seedelf.lovelace} testId="transfer-too-much" where={available} />
       )}
@@ -314,28 +392,36 @@ export function Transfer({
   );
 }
 
-/** An ordinary address or a $handle, which Send can't pay: Make public can. */
+/** An ordinary address or a $handle, which Send can't pay: Make public and the public account's Send can. */
 const ADDRESS_LIKE = /^(addr1|addr_test1)[0-9a-z]+$|^\$[a-z0-9_.-]+$/i;
 
 /**
  * A seedelf's name, looked up once it's whole, with Contacts to pick from and to save it to; reports what it
- * found. An ordinary address pasted here is said to be one, with the way to pay it (chunk 23's review, P-1):
+ * found. An ordinary address pasted here is said to be one, with the ways to pay it (chunk 23's review, P-1):
  * the rule for a Seedelf's name was all it said before, and the feature the user wanted was a screen away.
+ * Both ways, each saying what it shows, as buttons: Make public alone was offered, and a tester who'd have paid
+ * through it would never have learned the public account has an ordinary Send (blind test §9.7, T04b). What a
+ * Seedelf's name is sits behind the label's ⓘ: two testers stopped at the word (T04b, T06).
  */
-function SeedelfNameInput({
+export function SeedelfNameInput({
   id,
   value,
   onChange,
   onFound,
   onPayAddress,
+  publicBlocked,
 }: {
   id: string;
   value: string;
   onChange: (to: string) => void;
   onFound: (found: Found) => void;
-  onPayAddress?: (to: string) => void;
+  onPayAddress?: (route: AddressRoute, to: string) => void;
+  /** Why the public account's Send can't pay now, said before its note, its button off. */
+  publicBlocked?: string;
 }) {
   const t = useT();
+  const hint = useHint();
+  const routeId = useId();
   const [found, setFound] = useState<Found>({ state: "idle" });
   const [contacts, reloadContacts] = useContacts();
   const [contactModal, setContactModal] = useState<"pick" | "save">();
@@ -368,7 +454,16 @@ function SeedelfNameInput({
   return (
     <div className="field">
       <div className="field-row">
-        <label htmlFor={id}>{t("utxos.seedelfName")}</label>
+        <span className="hinted">
+          <label htmlFor={id}>{t("utxos.seedelfName")}</label>
+          <HintButton
+            text={t("transfer.nameHint")}
+            open={hint.open}
+            onToggle={hint.toggle}
+            controls={hint.id}
+            testId={`${id}-name-hint-hint`}
+          />
+        </span>
         {hasContacts && (
           <button type="button" className="link" onClick={() => setContactModal("pick")}>
             {t("destination.contacts")}
@@ -392,16 +487,12 @@ function SeedelfNameInput({
           aria-describedby={`${id}-note`}
         />
       </Clearable>
+      {hint.open && <HintText text={t("transfer.nameHint")} id={hint.id} testId={`${id}-name-hint`} />}
       <div id={`${id}-note`} data-testid={`${id}-note`}>
         {nameProblem && ADDRESS_LIKE.test(value.trim()) ? (
-          <div className="stack-tight">
-            <p className="field-note">{t("transfer.anAddress")}</p>
-            {onPayAddress && (
-              <button type="button" className="link align-start" onClick={() => onPayAddress(value.trim())}>
-                {t("transfer.payAddress")}
-              </button>
-            )}
-          </div>
+          <p className="field-note">
+            {joinSentences([t("transfer.anAddress"), t(onPayAddress ? "transfer.anAddressRoutes" : "transfer.anAddressSeveral")])}
+          </p>
         ) : nameProblem ? (
           <p className="field-note">{nameProblem}</p>
         ) : found.state === "looking" ? (
@@ -433,6 +524,44 @@ function SeedelfNameInput({
           <p className="note">{t("transfer.pasteName")}</p>
         )}
       </div>
+      {nameProblem && ADDRESS_LIKE.test(value.trim()) && onPayAddress && (
+        // Two ways, each a button saying what it shows, the more private first (the owner's rule: choices, not
+        // links). The address, and the amount typed, go over to the form chosen.
+        <div className="stack" role="group" aria-label={t("transfer.routes")} data-testid={`${id}-routes`}>
+          <div className="stack-tight">
+            <button
+              type="button"
+              className="secondary"
+              aria-describedby={`${routeId}-private`}
+              onClick={() => onPayAddress("private", value.trim())}
+            >
+              {t("transfer.route.private")}
+            </button>
+            <p className="note" id={`${routeId}-private`}>
+              {t("transfer.privacy.routePrivate")}
+            </p>
+          </div>
+          <div className="stack-tight">
+            <button
+              type="button"
+              className="secondary"
+              aria-describedby={`${routeId}-public`}
+              disabled={publicBlocked !== undefined}
+              onClick={() => onPayAddress("public", value.trim())}
+            >
+              {t("transfer.route.public")}
+            </button>
+            <p className="note" id={`${routeId}-public`} data-testid={`${id}-route-public-note`}>
+              {/* Why it can't pay now, first: the button is off, though it says what it would show. Home's reasons
+                  end with no full stop, as a line under the actions does: this one ends as a sentence. */}
+              {joinSentences([
+                publicBlocked && t("common.sentence", { text: withoutStop(publicBlocked) }),
+                t("transfer.privacy.routePublic"),
+              ])}
+            </p>
+          </div>
+        </div>
+      )}
       {contactModal === "pick" && (
         <ContactPicker
           contacts={contacts ?? []}

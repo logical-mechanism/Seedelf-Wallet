@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { TxDetail, TxPlutus } from "../src/shared/rpc";
 import { plutusJson } from "../src/ui/components/PlutusTree";
 import { TxDetailBody, addressWords, certificateWords, proposalWords, redeemerWords } from "../src/ui/components/TxDetail";
+import { AccountsContext } from "../src/ui/accounts";
 import { NetworkContext } from "../src/ui/network";
 import { loadTestWasm, transferPreprod } from "./fakes";
 
@@ -74,6 +75,38 @@ describe("the transaction view's page", () => {
     expect(page.indexOf("Pays 2 outputs")).toBeLessThan(page.indexOf("Network fee"));
     // An input is named, and nothing else takes up the room.
     expect(page).toContain(`${detail.inputs[0]!.txHash.slice(0, 12)}`);
+  });
+
+  it("marks the user's own outputs, where the worker found them, by account when there's more than one (blind test §9.9)", () => {
+    const detail = read(transferPreprod.final.txCbor);
+    const [first, second] = detail.outputs;
+    const marked: TxDetail = {
+      ...detail,
+      outputs: [{ ...first!, yours: { kind: "private" } }, { ...second!, yours: { kind: "account", account: 0 } }],
+    };
+    const page = text(createElement(TxDetailBody, { detail: marked, network: "preprod", testId: "tx" }));
+    expect(page).toContain("Yours, in your private balance");
+    expect(page).toContain("Yours, in your public account");
+    // With several accounts, the account by its name.
+    const several = {
+      accounts: [{ index: 0 }, { index: 1, name: "Savings" }],
+      active: 0,
+      loaded: true,
+      name: "Account 1",
+      several: true,
+      reload: async () => undefined,
+    };
+    const named: TxDetail = { ...detail, outputs: [{ ...first!, yours: { kind: "account", account: 1 } }] };
+    const html = renderToStaticMarkup(
+      createElement(
+        AccountsContext.Provider,
+        { value: several },
+        createElement(NetworkContext.Provider, { value: "preprod" }, createElement(TxDetailBody, { detail: named, network: "preprod", testId: "tx" })),
+      ),
+    );
+    expect(html).toContain("Yours, in Savings");
+    // Unmarked, nothing says whose: the words describe the address alone.
+    expect(shown(transferPreprod.final.txCbor)).not.toContain("Yours");
   });
 
   it("says a Seedelf output is one, and that its register could be spent", () => {

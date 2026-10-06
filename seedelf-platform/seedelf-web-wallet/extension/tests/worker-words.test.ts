@@ -124,10 +124,13 @@ describe("giveme.my's refusal", () => {
     await i18n.changeLanguage("ja");
     const refused = new Collateral(URL_, async () => Response.json({ detail: "Transaction Fails Validation" }, { status: 400 }));
     await expect(refused.witness("84a4")).rejects.toThrow(
-      "コラテラルを貸す giveme.my がこのトランザクションを拒否しました（Transaction Fails Validation）。確認時から",
+      "コラテラルを貸す giveme.my がこのトランザクションを拒否しました（Transaction Fails Validation）。giveme.my は貸し出す前に",
     );
+    // An outage is said as one (blind test §9.5), its status placed as the language places it.
     const down = new Collateral(URL_, async () => new Response("<html>", { status: 502 }));
-    await expect(down.witness("84a4")).rejects.toThrow("このトランザクションを拒否しました（502）。");
+    await expect(down.witness("84a4")).rejects.toThrow("今はこのトランザクションを受け付けられませんでした（502）。");
+    const bare = new Collateral(URL_, async () => new Response("", { status: 400 }));
+    await expect(bare.witness("84a4")).rejects.toThrow("このトランザクションを拒否しました（400）。");
   });
 });
 

@@ -99,6 +99,7 @@ export function MoveIn({
       <Screen
         title={t("moveIn.review.title")}
         titleId="move-in-review"
+        review
         hint={t("moveIn.review.note")}
         hintTestId="move-in-review-note"
         onBack={() => setSummary(undefined)}

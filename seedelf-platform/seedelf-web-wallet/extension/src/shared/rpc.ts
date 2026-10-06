@@ -83,7 +83,11 @@ export interface ActivityEntry {
   kind: "received" | "sent" | PendingTx["kind"];
   /** Into the balance, out of it, or neither (a seedelf's locked ADA). */
   direction: "in" | "out" | "none";
-  /** ADA moved, as lovelace (a decimal string, no sign). */
+  /**
+   * ADA moved, as lovelace (a decimal string, no sign), the fee apart: what was paid to others, or came in. On the
+   * Cardano account's side, the balance as Home counts it, staking rewards included: rewards a payment withdrew
+   * aren't money in (blind test §9.1, T08's "Sent +32.300614 ₳" for 25 ₳ paid).
+   */
   lovelace: string;
   /** How many kinds of token moved with it. */
   tokens: number;
@@ -109,6 +113,11 @@ export interface ActivityEntry {
   note?: string;
   /** The Cardano account's only: what the transaction did with its stake key. */
   staking?: ActivityStaking;
+  /**
+   * The Cardano account's only: sent by this wallet and not on chain yet, read from what the device keeps (the
+   * transaction itself, background/incoming.ts `pendingEntries`), until Koios lists it (blind test §9.3).
+   */
+  pending?: boolean;
   /**
    * The Seedelf history's only: the history of what the transaction left in
    * the private balance, its change included, for coin selection and the
@@ -242,7 +251,10 @@ export interface StakeInfo {
   pool: PoolRef | null;
   /** Its vote delegation: a DRep's ID (CIP-129), `drep_always_abstain` or `drep_always_no_confidence`; null for none. */
   drep: string | null;
-  /** Rewards that can be withdrawn. */
+  /**
+   * Rewards that can be withdrawn: less what one of the wallet's own transactions on its way withdraws, which its
+   * change holds (background/incoming.ts, blind test §9.1).
+   */
   rewards: string;
   /** The deposit paid to register it: stopping staking gets it back. */
   deposit: string;
@@ -256,11 +268,11 @@ export interface Balances {
   /** When the chain was read (ms since the epoch). */
   updatedAt: number;
   /**
-   * When the reading of its private side began (ms since the epoch), before it took what the wallet had spent to
-   * leave out: a transaction sent before then is left out of it (background/incoming.ts). Not `updatedAt`, which is
-   * when it ended: a send that landed between the two is still in it (chunk 23's second review, fix round).
+   * The last reading that failed since this one was made, when one did: Home's alert follows it, whichever page
+   * asked and however Home came back, until a reading succeeds (background/balances.ts `readingNoted`, blind test
+   * E05). `message`: its words, while the worker that failed still holds them.
    */
-  spentAsOf?: number;
+  failed?: { at: number; message?: string };
   /** UTxOs in the wallet contract this wallet owns, except those holding a seedelf (as in the CLI's `balance`). */
   seedelf: { lovelace: string; tokens: TokenAmount[]; utxos: number; seedelfs: SeedelfInfo[]; locked: Locked; incoming?: Incoming };
   /** The Cardano account (CIP-1852 account 0): `lovelace` is its UTxOs', without the rewards in `staking`. */
@@ -272,6 +284,11 @@ export interface Balances {
     locked: Locked;
     staking: StakeInfo;
     incoming?: Incoming;
+    /**
+     * The rewards the wallet's own transactions on their way withdrew (lovelace): out of `staking.rewards`, as
+     * what they pay back holds them (background/incoming.ts, blind test §9.1).
+     */
+    withdrawing?: string;
   };
 }
 
@@ -589,7 +606,11 @@ export interface MintSummary {
 }
 
 /** A token and an amount to send. `quantity` is the raw integer, as a decimal string. */
-export type TokenQuantity = TokenRef & { quantity: string };
+/**
+ * A token and how many. `decimals`, where it's known: Koios's, as the last balance reading has them, on an
+ * Activity entry's tokens (background/activity.ts, blind test E01).
+ */
+export type TokenQuantity = TokenRef & { quantity: string; decimals?: number };
 
 /** A seedelf found on chain, for the forms that pay one: Send to a seedelf, and Send from the Cardano account. */
 export interface SeedelfLookup {
@@ -624,7 +645,6 @@ export interface SeedelfPaid extends Paid {
   label?: string;
   /** One of your own seedelfs: the payment comes back to your Seedelf balance. */
   toSelf: boolean;
-  minimum: string;
 }
 
 /** A finished transfer, waiting for the user to send it. Amounts are lovelace strings. */
@@ -633,13 +653,21 @@ export interface TransferSummary {
   txHash: string;
   /** The seedelfs paid, in order. */
   payments: SeedelfPaid[];
+  /** The most possible (Max) to a single Seedelf: all but the fee and what the tokens that stay need (blind test §9.6). */
+  max: boolean;
   fee: { size: string; compute: string; scriptReference: string; total: string };
-  /** Back into the Seedelf balance. */
+  /** Back into the Seedelf balance: for Max, only the tokens that stay, with the least ADA they need. */
   changeLovelace: string;
   changeTokens: number;
   changeOutputs: number;
+  /** The least ADA what stays in the Seedelf balance needs: the tokens that stay, or with none an output of ADA alone. */
+  changeMinimum: string;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
+  /** Seedelf UTxOs Max left for another payment: past the 20 it takes at most, or holding a token that would total more with the rest than an output can hold. */
+  left: number;
+  /** Max's: private UTxOs no payment takes (a reference script), or one a return through Lovejoin being sent spends. */
+  leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
   histories?: HistoryClass[];
 }
@@ -678,6 +706,8 @@ export interface WithdrawSummary {
   changeLovelace: string;
   changeTokens: number;
   changeOutputs: number;
+  /** The least ADA what stays in the Seedelf balance needs (`TransferSummary.changeMinimum`). */
+  changeMinimum: string;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
   /**
@@ -1003,7 +1033,24 @@ export interface TxOutput {
   scriptRef: TxScript | null;
   /** How it's written: the CDDL's `alonzo_transaction_output` list, or Babbage's map. */
   form: "legacy" | "postAlonzo";
+  /**
+   * Whose it is, where it pays the user (blind test §9.9, T18): worked out on the device by the worker
+   * (background/tx-view.ts), never by WebAssembly from the bytes alone, and never asked of anyone. None for anyone
+   * else's, and none at all while the wallet is locked.
+   */
+  yours?: TxYours;
 }
+
+/**
+ * An output that pays the user: one of the wallet's public accounts (by index), the private balance (the wallet
+ * contract under the user's own register), a Seedelf of the user's (the same, holding its token), or a private
+ * session's one-time account (by index).
+ */
+export type TxYours =
+  | { kind: "account"; account: number }
+  | { kind: "private" }
+  | { kind: "seedelf" }
+  | { kind: "session"; index: number };
 
 export interface TxCredential {
   kind: "key" | "script";
@@ -1214,6 +1261,13 @@ export type DappAsk =
       governance?: boolean;
       /** Connected already: it asks for governance alone. */
       connected?: boolean;
+      /**
+       * How long Decline, or closing the window, turns the site away: 10 s,
+       * then a minute, then five for declines in a row (dapp.ts `REFUSE_MS`).
+       * The window says it before either is done (blind test §9.2, T17).
+       * Not for a site connected already, which a no leaves connected.
+       */
+      declineWaitMs?: number;
     }
   | {
       kind: "sign-tx";
@@ -1255,12 +1309,27 @@ export type DappApproval = { id: string; origin: string; title?: string } & Dapp
 export interface DappSite {
   origin: string;
   connectedAt: number;
+  /** Its page's title as it asked to connect: the site's own words, so shown after its address (blind test E03). */
+  title?: string;
   /** Connected to this private session (private CIP-30), not a public account. */
   session?: number;
   /** Given governance (CIP-95, chunk 21): the dApp account's DRep key. Never with `session`. */
   cip95?: true;
   /** It asked for governance and the user said no: it isn't asked again until it connects anew. */
   cip95Declined?: true;
+}
+
+/**
+ * A site the user declined, or closed the window on, turned away unasked
+ * until `until` (the worker's clock, ms): the dApps page and Connected sites
+ * list it, with Let it ask now (blind test §9.2, T17r). `retried`: it asked
+ * again meanwhile, and was turned away.
+ */
+export interface DappDeclined {
+  origin: string;
+  until: number;
+  title?: string;
+  retried?: true;
 }
 
 /** "lovelace", or a token's policy ID and name in hex, run together (Minswap's form). */
@@ -1504,10 +1573,12 @@ export interface SessionView {
 /**
  * Why a session's funding was turned away, as a code the page words:
  * `changed`, something it spends changed since the review; `unreachable`,
- * the collateral service couldn't be reached; `busy`, the network turned it
- * away for now; `network`, the network refused it.
+ * the collateral service couldn't be reached; `refused`, it answered and
+ * didn't lend its collateral, with nothing the device knows of spent (blind
+ * test §9.5); `givemeBusy`, it answered with an outage or a limit; `busy`,
+ * the network turned it away for now; `network`, the network refused it.
  */
-export type UnsentWhy = "changed" | "unreachable" | "busy" | "network";
+export type UnsentWhy = "changed" | "unreachable" | "refused" | "givemeBusy" | "busy" | "network";
 
 /**
  * A UTxO at a session's account that no return of the wallet's takes:
@@ -1773,7 +1844,8 @@ export interface Requests {
   "lock-deadline": { payload: None; result: { at: number | null; lockAfterMs: number } };
   account: { payload: None; result: Account };
   /** The last reading, or a new one if there is none or `refresh` is set. */
-  balances: { payload: { refresh?: boolean }; result: Balances };
+  /** `kept`: the worker's kept reading alone, never read again: Home's look right after a send (blind test §9.3). */
+  balances: { payload: { refresh?: boolean; kept?: boolean }; result: Balances };
   wordlist: { payload: None; result: string[] };
   /** Builds and signs a move-in without submitting it. `lovelace` null moves the most possible; below what the deposit needs, it's raised to that. */
   "move-in-build": { payload: { lovelace: string | null; tokens: TokenQuantity[] }; result: MoveInSummary };
@@ -1785,8 +1857,8 @@ export interface Requests {
   "mint-submit": { payload: { txHash: string }; result: PendingTx };
   /** Finds a seedelf by its full name in the wallet contract, as read from Koios. */
   "seedelf-lookup": { payload: { to: string }; result: SeedelfLookup };
-  /** Builds a transfer to one or more seedelfs (Ogmios measures its spends) without sending it. A `lovelace` below what a payment needs is raised to that. */
-  "transfer-build": { payload: { payments: PaymentAsk<string>[] }; result: TransferSummary };
+  /** Builds a transfer to one or more seedelfs (measured in the wallet) without sending it. A `lovelace` below what a payment needs is raised to that; null is Max, to one. */
+  "transfer-build": { payload: { payments: PaymentAsk[] }; result: TransferSummary };
   /** Submits the transfer built last, if its hash matches, once giveme.my has witnessed it. */
   "transfer-submit": { payload: { txHash: string }; result: PendingTx };
   /** Reads a withdrawal's or a send's destination: an address, or `$handle` looked up through Koios. */
@@ -1944,8 +2016,10 @@ export interface Requests {
     /**
      * `code`, as a refused request's reply carries it (`ReplyCode`): a private session's funding that building
      * again fixes. Whether one that failed otherwise is built again, the window reads from its session (DX-1).
+     * `waitMs`: a connect declined, how long its site is turned away (blind test T17).
+     * `by`: who refused a stale one, as a reply says it (`RefusedBy`, blind test §9.5).
      */
-    result: { error?: string; code?: ReplyCode };
+    result: { error?: string; code?: ReplyCode; by?: RefusedBy; waitMs?: number };
   };
   /** Ends a site's private session, once its account is empty, and disconnects the site that has it. */
   "dapp-disconnect-session": { payload: { index: number }; result: null };
@@ -1958,6 +2032,10 @@ export interface Requests {
   "dapp-sites": { payload: None; result: DappSite[] };
   /** Disconnects a site; returns the rest. */
   "dapp-forget": { payload: { origin: string }; result: DappSite[] };
+  /** The sites turned away unasked now, after the user declined them; in the worker's memory only. Throws if locked. */
+  "dapp-declined": { payload: None; result: DappDeclined[] };
+  /** Lets a declined site ask again now (Let it ask now); returns the rest. Throws if locked. */
+  "dapp-let-ask": { payload: { origin: string }; result: DappDeclined[] };
   /** This network's private sessions, newest first; `refresh` reads their accounts (one Koios request, two with a transaction waiting). */
   sessions: { payload: { refresh?: boolean }; result: SessionView[] };
   /** Tokens on Minswap's list matching `query` (a ticker, a name or an ID); Minswap sees what's searched for. */
@@ -2079,9 +2157,18 @@ export type Message = {
  */
 export type ReplyCode = "stale";
 
+/**
+ * Who turned a `stale` refusal away, where the device can tell (blind test
+ * §9.5): `giveme`, giveme.my refused it and nothing the device knows of spent
+ * what it spends; `givemeBusy`, giveme.my answered with an outage or a limit.
+ * Without it, something it spends was spent or changed since the review, or
+ * it waited too long (background/collateral.ts `refusedBy`).
+ */
+export type RefusedBy = "giveme" | "givemeBusy";
+
 export type Reply<K extends RequestName> =
   | { ok: true; value: Requests[K]["result"] }
-  | { ok: false; error: string; code?: ReplyCode };
+  | { ok: false; error: string; code?: ReplyCode; by?: RefusedBy };
 
 const REQUEST_LIST = [
   "status",
@@ -2157,6 +2244,8 @@ const REQUEST_LIST = [
   "dapp-disconnect-session",
   "dapp-sites",
   "dapp-forget",
+  "dapp-declined",
+  "dapp-let-ask",
   "sessions",
   "swap-tokens",
   "swap-quote",

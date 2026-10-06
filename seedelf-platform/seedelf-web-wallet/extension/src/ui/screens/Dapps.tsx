@@ -4,28 +4,34 @@
 // Minswap is the first: its tile opens its swaps (Swaps.tsx). The next
 // contract gets a tile of its own.
 //
-// Under the tiles, Sites: each site connected to a private session (chunk
-// 15c, private CIP-30), which opens its page (SiteSessions.tsx), and says
-// when its site talks to something else. Above them, when sessions hold
+// Under the tiles, Sites: whether sites can see the wallet at all, with Let
+// sites connect while they can't; the sites declined just now, with Let it
+// ask now; and every connected site: one on the public account with its
+// Disconnect, as Settings' Connected sites has it, and one on a private
+// session (chunk 15c, private CIP-30), which opens its page (SiteSessions.tsx)
+// and says when its site talks to something else. Users look for sites here
+// first, not in Settings (blind test §9.2: T15, T17, T17r, E03). Home's dApps
+// row says the same in a line (`DappsRow`). Above the tiles, when sessions hold
 // money and nothing of theirs is on its way, Bring everything back
 // (ClaimAll.tsx): each in its own transaction. What they hold is hidden with
 // the balances (launch review #56).
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { type I18nKey, useT } from "../../i18n";
 
 import { lovejoinOn } from "../../networks";
-import type { Balances, PendingTx, SessionView, Status } from "../../shared/rpc";
-import { call } from "../background";
+import type { Balances, DappSite, PendingTx, SessionView, Status } from "../../shared/rpc";
+import { call, onDappChanged } from "../background";
 import { Callout } from "../components/Callout";
-import { ShieldIcon, SwapIcon } from "../components/Icons";
+import { ChevronRightIcon, GridIcon, ShieldIcon, SwapIcon } from "../components/Icons";
 import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
 
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { ClaimAll, isClaimable } from "./ClaimAll";
-import { connectorBlockedText, useConnectorSwitch } from "../sites";
+import { connectorBlockedText, useConnectorSwitch, useDeclined, useSiteAccount, useSitesSummary } from "../sites";
+import { DeclinedSites, Disconnected, DisconnectModal, hostOf, SiteItem } from "./ConnectedSites";
 import { Lovejoin } from "./Lovejoin";
 import { attachedTo, type ConnectedSites, isSiteSession, SiteRow, SiteSession, siteConnected } from "./SiteSessions";
 import { fundingUnseen, isRunningSwap, Swaps, SwapTag } from "./Swaps";
@@ -75,6 +81,12 @@ export function Dapps({
   // The connected sites, from the device's record: which session each talks to.
   const [connected, setConnected] = useState<ConnectedSites>();
   const [site, setSite] = useState<number>();
+  // A site on the public account, asked about before it's disconnected; then which one went.
+  const [asking, setAsking] = useState<DappSite>();
+  const [gone, setGone] = useState<string>();
+  const [forgetting, setForgetting] = useState(false);
+  const account = useSiteAccount();
+  const declined = useDeclined();
   const [claiming, setClaiming] = useState(false);
   const [reading, setReading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
@@ -101,10 +113,43 @@ export function Dapps({
     if (!open) void load(false).then(() => load(true));
   }, [open, load]);
 
+  // A site connected or disconnected meanwhile, from its window or Settings: the device's record again, no Koios, and
+  // nothing else. Every site request broadcasts, so this mustn't clear the page's error or end its Refresh, or drop
+  // what the last read of the accounts found for a session still listed (the cross-area review).
+  const reread = useCallback(async () => {
+    const [list, sites] = await Promise.all([
+      call("sessions", {}).catch(() => undefined),
+      call("dapp-sites", {}).catch(() => undefined),
+    ]);
+    if (list) {
+      setSessions((before) =>
+        list.map((s) => (s.holding ? s : { ...s, holding: before.find((b) => b.index === s.index)?.holding ?? null })),
+      );
+    }
+    if (sites) setConnected(sites);
+  }, []);
+  useEffect(() => (open ? undefined : onDappChanged(() => void reread())), [open, reread]);
+
   // A site's page reads what its account holds when it opens.
   useEffect(() => {
     if (site !== undefined) void load(true);
   }, [site, load]);
+
+  /** Disconnects a site on the public account, as Settings' Connected sites does; a session's goes from its page. */
+  async function forget(origin: string) {
+    setAsking(undefined);
+    setForgetting(true);
+    setError(undefined);
+    setGone(undefined);
+    try {
+      setConnected(await call("dapp-forget", { origin }));
+      setGone(hostOf(origin));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setForgetting(false);
+    }
+  }
 
   if (open === "lovejoin") {
     return <Lovejoin seedelf={seedelf} banner={banner} onBack={() => setOpen(undefined)} onPending={onPending} />;
@@ -164,9 +209,11 @@ export function Dapps({
   // Paused, or a funding the chain hasn't shown yet: either waits on the user.
   const waiting = running.filter((s) => s.auto?.paused || fundingUnseen(s)).length;
   const sites = sessions.filter(isSiteSession);
+  // Sites on the public account: a private session's are listed by their session, which ends with them.
+  const publicSites = connected?.filter((s) => s.session === undefined) ?? [];
 
   return (
-    <Screen title={t("dapps.title")} titleId="dapps-title" onBack={onBack} aside={t("dapps.aside")} error={error}>
+    <Screen title={t("dapps.title")} titleId="dapps-title" onBack={onBack} aside={t("dapps.aside")} error={error ?? declined.error}>
       {sessions.some((s) => s.stage !== "closed") && (
         <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load(true)} />
       )}
@@ -192,38 +239,43 @@ export function Dapps({
       {/* A line, not a tile: as a tile it took a slot and looked like a dApp that wouldn't open (chunk 23's review,
           D-4). */}
       <p className="note center">{t("dapps.moreSoon")}</p>
-      {sites.length > 0 && (
-        <section className="section" aria-label={t("settings.sites")}>
-          <h2>{t("settings.sites")}</h2>
+      <Callout tone="privacy">
+        {t("dapps.privacy.oneTime")}
+      </Callout>
+      <section className="section" aria-labelledby="dapp-sites-title">
+        <h2 id="dapp-sites-title">{t("settings.sites")}</h2>
+        <SitesState />
+        <Disconnected host={gone} />
+        <DeclinedSites declined={declined.declined} now={declined.now} onLetAsk={declined.letAsk} />
+        {publicSites.length + sites.length > 0 ? (
           <ul className="list" data-testid="dapp-sites">
+            {publicSites.map((s) => (
+              <SiteItem key={s.origin} site={s} account={account} busy={forgetting} onDisconnect={setAsking} />
+            ))}
             {sites.map((s) => (
               <li key={s.index}>
                 <SiteRow session={s} attached={attachedTo(s, connected)} onOpen={() => setSite(s.index)} />
               </li>
             ))}
           </ul>
-        </section>
-      )}
-      <Callout tone="privacy">
-        {t("dapps.privacy.oneTime")}
-      </Callout>
-      {sites.length === 0 && <SitesOff />}
-      {sites.length === 0 && (
-        <p className="note" data-testid="dapp-sites-hint">
-          {t("dapps.sitesHint")}
-        </p>
-      )}
+        ) : (
+          <p className="note" data-testid="dapp-sites-hint">
+            {t("dapps.privacy.sitesHint")}
+          </p>
+        )}
+      </section>
+      {asking && <DisconnectModal site={asking} onKeep={() => setAsking(undefined)} onDisconnect={() => void forget(asking.origin)} />}
     </Screen>
   );
 }
 
 /**
- * Sites can't see the wallet yet: the line above says to connect on a site, and
- * the switch is off by default (a privacy decision, which stays). Said here,
- * with the same disclosure Settings → Sites shows, and the switch's own way to
- * turn it on (chunk 23's review, D-1).
+ * Whether sites can see the wallet. Off by default (a privacy decision, which
+ * stays): said here, with the same disclosure Settings → Sites shows, and the
+ * switch's own way to turn it on (chunk 23's review, D-1). On, it says so, and
+ * that pages open already see it too (blind test §9.2, T15).
  */
-function SitesOff() {
+function SitesState() {
   const t = useT();
   const [status, setStatus] = useState<Status>();
   useEffect(() => {
@@ -231,7 +283,15 @@ function SitesOff() {
   }, []);
   const blocked = status?.connectorBlocked;
   const sites = useConnectorSwitch(blocked);
-  if (!status || !sites.ready || sites.on) return null;
+  if (!status || !sites.ready) return null;
+  if (sites.on) {
+    return (
+      <div className="stack-tight" data-testid="dapp-sites-on">
+        <span>{t("settings.sites.stateOn")}</span>
+        <span className="note">{t("settings.sites.privacy.openPages")}</span>
+      </div>
+    );
+  }
   return (
     <div className="stack-tight" data-testid="dapp-sites-off">
       <Callout tone="privacy">{blocked ? connectorBlockedText() : t("settings.sites.privacy.off")}</Callout>
@@ -246,6 +306,51 @@ function SitesOff() {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Home's dApps row, with what sites can do under it: they can't see the
+ * wallet, or how many are connected, or that they can ask. Users start at a
+ * site, and the switch was 850 px into Settings (blind test §9.2, T15). Its
+ * name stays "dApps"; the line under it is its description.
+ */
+export function DappsRow({ onOpen }: { onOpen: () => void }) {
+  const t = useT();
+  const { on, connected } = useSitesSummary();
+  const id = useId();
+  const sub =
+    on === undefined
+      ? undefined
+      : !on
+        ? t("home.dapps.sitesOff")
+        : connected
+          ? t("home.dapps.sitesConnected", { count: connected })
+          : t("home.dapps.sitesOn");
+  return (
+    <button
+      type="button"
+      className="menu-row"
+      onClick={onOpen}
+      aria-label={t("home.dapps")}
+      aria-describedby={sub ? id : undefined}
+      data-testid="home-dapps"
+    >
+      <span className="menu-row__icon">
+        <GridIcon size={16} />
+      </span>
+      {sub ? (
+        <span className="menu-row__text">
+          <span>{t("home.dapps")}</span>
+          <span className="menu-row__sub menu-row__sub--wrap" id={id} data-testid="home-dapps-sites">
+            {sub}
+          </span>
+        </span>
+      ) : (
+        <span>{t("home.dapps")}</span>
+      )}
+      <ChevronRightIcon size={16} />
+    </button>
   );
 }
 

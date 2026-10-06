@@ -5,6 +5,7 @@
 // this client only carries the request and explains failures.
 
 import { t } from "../i18n";
+import type { RefusedBy } from "../shared/rpc";
 import { SERVICE_FETCH, type FetchLike } from "./koios";
 
 const TIMEOUT_MS = 20_000;
@@ -22,9 +23,26 @@ export class StaleReviewError extends Error {}
 /**
  * giveme.my answered, and refused. It checks a transaction against the chain
  * first, so one reason is an input spent since the review: a stale review.
+ * Send asks the device first (script-spend.ts), and one it knows was spent
+ * since never gets here, so the screen names giveme.my as who refused rather
+ * than guessing at the user's own money (blind test §9.5, T09). `busy`: an
+ * outage or a limit (5xx, 429), which waiting fixes and a new review alone
+ * doesn't.
  */
 export class CollateralRefusedError extends CollateralError {
   readonly stale = true;
+  constructor(
+    message: string,
+    readonly busy = false,
+  ) {
+    super(message);
+  }
+}
+
+/** Who turned a stale-coded refusal away, as its reply says it (shared/rpc.ts `RefusedBy`): giveme.my, or nobody named. */
+export function refusedBy(error: unknown): RefusedBy | undefined {
+  if (!(error instanceof CollateralRefusedError)) return undefined;
+  return error.busy ? "givemeBusy" : "giveme";
 }
 
 export class Collateral {
@@ -59,12 +77,17 @@ export class Collateral {
     }
     if (!response.ok) {
       // giveme.my's own words, as they come, or its status when it gave none: each sentence places them, so a
-      // language sets its own brackets and colon around them.
+      // language sets its own brackets and colon around them. An outage or a limit says so: the user waits, rather
+      // than reading that something they own changed (blind test T09's verifier).
+      const busy = response.status >= 500 || response.status === 429;
       const detail = (answer as { detail?: unknown } | undefined)?.detail;
       throw new CollateralRefusedError(
-        typeof detail === "string"
-          ? t("worker.collateral.refused.detail", { detail })
-          : t("worker.collateral.refused.status", { status: response.status }),
+        busy
+          ? t("worker.collateral.busy", { status: response.status })
+          : typeof detail === "string"
+            ? t("worker.collateral.refused.detail", { detail })
+            : t("worker.collateral.refused.status", { status: response.status }),
+        busy,
       );
     }
     if (answer === undefined) throw new CollateralError(t("worker.collateral.notJson"));

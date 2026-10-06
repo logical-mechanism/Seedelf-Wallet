@@ -16,7 +16,7 @@ vi.mock("../src/ui/background", async (original) => ({
   },
 }));
 
-const { refusalOf } = await import("../src/ui/components/SessionRefused");
+const { refusalOf, unsentWhyText } = await import("../src/ui/components/SessionRefused");
 const { RpcError } = await import("../src/ui/background");
 
 const stale = new RpcError("That payment isn't ready to send. Review it again.", "stale");
@@ -44,5 +44,24 @@ describe("a refused funding's way on", () => {
     book.fails = true;
     expect(await refusalOf(stale, 3)).toEqual({ kind: "again", changed: true, detail: stale.message });
     book.fails = false;
+  });
+
+  it("names giveme.my when it refused, from the refusal or the record, but still watches one that may have gone (blind test §9.5)", async () => {
+    const giveme = new RpcError("giveme.my, which lends the collateral, refused this transaction (400).", "stale", "giveme");
+    const busy = new RpcError("giveme.my, which lends the collateral, couldn't take this transaction just now (503).", "stale", "givemeBusy");
+    book.sessions = [];
+    expect(await refusalOf(giveme, 3)).toEqual({ kind: "again", changed: false, by: "giveme", detail: giveme.message });
+    expect(await refusalOf(busy, 3)).toEqual({ kind: "again", changed: false, by: "givemeBusy", detail: busy.message });
+    // Recorded as giveme.my's refusal: named, as busy when the refusal says so.
+    book.sessions = [{ index: 3, stage: "failed", unsent: true, unsentWhy: "refused", txs: funding }];
+    expect(await refusalOf(plain, 3, FUNDING)).toEqual({ kind: "again", changed: false, by: "giveme", detail: plain.message });
+    expect(await refusalOf(busy, 3, FUNDING)).toMatchObject({ kind: "again", by: "givemeBusy" });
+    // Recorded as giveme.my's outage: said as one, whatever the refusal in hand says.
+    book.sessions = [{ index: 3, stage: "failed", unsent: true, unsentWhy: "givemeBusy", txs: funding }];
+    expect(await refusalOf(plain, 3, FUNDING)).toMatchObject({ kind: "again", by: "givemeBusy" });
+    expect(unsentWhyText("givemeBusy")).toBe("giveme.my, the service that lends its collateral, couldn't take it just then.");
+    // A recorded funding that may have gone out is watched, whoever the refusal names: built again, it would pay twice.
+    book.sessions = [{ index: 3, stage: "funding", txs: funding }];
+    expect(await refusalOf(giveme, 3, FUNDING)).toEqual({ kind: "watch", detail: giveme.message });
   });
 });

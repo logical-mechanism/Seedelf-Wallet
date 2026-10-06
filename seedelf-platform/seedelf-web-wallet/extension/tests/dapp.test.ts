@@ -172,6 +172,25 @@ describe("the dApp connector", () => {
     expect(JSON.stringify([...t.local.data.values()])).not.toContain("example.com");
   });
 
+  it("keeps the page's title with the site, sealed, on one line and 80 characters at most (blind test E03)", async () => {
+    const t = await on();
+    const long = { ...site(), title: `  Example\n Market ${"x".repeat(100)}` };
+    const enabling = t.dapp.call(long, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    const [kept] = await t.dapp.sites();
+    expect(kept!.title).toBe(`Example Market ${"x".repeat(64)}…`);
+    expect(kept!.title).toHaveLength(80);
+    expect(JSON.stringify([...t.local.data.values()])).not.toContain("Example Market");
+    // A page with no title keeps none.
+    const untitled = t.dapp.call({ id: "untitled", origin: "https://other.example" }, "enable", []);
+    await until(() => t.dapp.approvals().length === 1);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await untitled).toBe(true);
+    expect((await t.dapp.sites()).find((x) => x.origin === "https://other.example")).not.toHaveProperty("title");
+  });
+
   it("reads the public account in CIP-30's encodings, from one reading of it", async () => {
     const t = await on();
     withCollateral(t);
@@ -1071,7 +1090,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(t.koios.submitted).toHaveLength(0);
     expect(await dapp.answer(connect.id, true, PASSWORD, { txHash: out.txHash })).toEqual({});
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([out.txHash]);
-    expect(await dapp.sites()).toEqual([{ origin: s.origin, connectedAt: expect.any(Number), session: 0 }]);
+    expect(await dapp.sites()).toEqual([{ origin: s.origin, connectedAt: expect.any(Number), title: "Example", session: 0 }]);
 
     // It waits for the money: the window shows it, the site hasn't heard, and closing the window doesn't undo it.
     expect(dapp.approvals()).toMatchObject([{ kind: "connect", funding: { index: 0, txHash: out.txHash } }]);
@@ -1105,7 +1124,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(await second).toBe(true);
     expect(t.koios.submitted.map((x) => txIdOf(x))).toEqual([out.txHash]);
     expect(await sessions.list("preprod")).toHaveLength(1);
-    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number), session: 0 }]);
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number), title: "Example", session: 0 }]);
     expect(dapp.approvals()).toEqual([]);
   });
 
@@ -1123,7 +1142,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     await until(() => dapp.approvals().length === 1 && dapp.approvals()[0]!.id !== a!.id);
     expect(await dapp.answer(dapp.approvals()[0]!.id, true)).toEqual({});
     expect(await second).toBe(true);
-    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number) }]);
+    expect(await dapp.sites()).toEqual([{ origin: site().origin, connectedAt: expect.any(Number), title: "Example" }]);
   });
 
   it("gives the site the session's account alone: its address, its reward address, its money and its collateral", async () => {

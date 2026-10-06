@@ -45,6 +45,7 @@ import type {
 import { call } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { ExplorerLink, ExplorerNote } from "../components/ExplorerLink";
 import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -57,6 +58,7 @@ import {
   LovejoinNote,
   LovejoinRows,
   LovejoinSkipped,
+  LovejoinSwitch,
   ReturnLinks,
   useSendingLabel,
   useSessionsWhile,
@@ -78,12 +80,14 @@ import {
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
 import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
   ADA_RULES,
+  adaText,
   type AmountRules,
   formatAda,
   formatFiat,
@@ -99,6 +103,7 @@ import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { withStop } from "../sentence";
 import {
+  aboutAda,
   adaShort,
   fundParts,
   halfOf,
@@ -110,6 +115,9 @@ import {
   SLIPPAGE_HIGH,
   SLIPPAGE_MAX,
   SLIPPAGE_MIN,
+  SESSION_FEE_ESTIMATE,
+  swapCosts,
+  toCents,
   wholeUnits,
 } from "../swap";
 import {
@@ -759,6 +767,7 @@ export function NewSwap({
       <Screen
         title={tr("swaps.review.title")}
         titleId="swap-fund-review"
+        review
         onBack={() => {
           // The review's alert doesn't follow the user back to the form (DX-1).
           setOut(undefined);
@@ -783,7 +792,7 @@ export function NewSwap({
           )
         }
       >
-        <SwapApproval {...out} pay={pay} get={get} through={through} onThrough={setThrough} busy={busy} />
+        <SwapApproval {...out} pay={pay} get={get} through={through} onThrough={setThrough} busy={busy} before={homeBalance(seedelf)} />
         <TxDetailButton txHash={out.summary.txHash} testId="swap-out-tx" />
       </Screen>
     );
@@ -1078,6 +1087,8 @@ export function NewSwap({
  * A swap's approval, under its Send: the swap, the funding payment, what
  * then happens by itself, and how it comes back (LovejoinChoice).
  * `lovejoin`: the quote's Lovejoin, checked against the pool at Review.
+ * `before`: the private balance as Home shows it, for "Private balance
+ * after".
  */
 export function SwapApproval({
   summary,
@@ -1088,6 +1099,7 @@ export function SwapApproval({
   through,
   onThrough,
   busy,
+  before,
 }: {
   summary: SessionOutSummary;
   quote: SwapQuote;
@@ -1097,6 +1109,7 @@ export function SwapApproval({
   through: boolean;
   onThrough: (through: boolean) => void;
   busy: boolean;
+  before?: string;
 }) {
   const tr = useT();
   const network = useNetwork();
@@ -1105,6 +1118,13 @@ export function SwapApproval({
   const adaOut = quote.ask.tokenOut === "lovelace";
   // Lovejoin would take something, now or after a stop or a refund: the approval says which way it comes back.
   const any = !!l && (l.boxes > 0 || !!l.of || !!l.ifStopped);
+  // Its return goes through Lovejoin, and the pool takes a box: its mixes and their way back are costs too.
+  const mixes = through && !!l && !l.skipped && l.boxes > 0;
+  // What leaves now, what it all costs and what comes back, as the other reviews say it (blind test §9.8, T10: one
+  // Start swap approves three transactions, and the tester added up Transaction details to find what left).
+  const paid = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), 0n);
+  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, mixes ? l : undefined);
+  const tokensOut = new Set(summary.payments.flatMap((p) => p.tokens.map(tokenKey))).size;
   return (
     <>
       <div className="swap-summary" data-testid="swap-summary">
@@ -1146,18 +1166,22 @@ export function SwapApproval({
       <ReviewRows testId="swap-fund-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label={tr("swaps.review.forSwap")} value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} strong />
+        {/* Not bold, and not "For the swap": above the 5 ₳ and the fee, it read as the total (blind test T10). The
+            total is its own row now. */}
+        <Row label={tr("swaps.review.forSwap")} value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} />
         <FundParts quote={quote} funded={swapPart!.lovelace} />
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
-        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)}\u00a0₳`} />
+        {/* What leaves, and the balance after, as every other review says them. The change isn't a row, as it isn't
+            on theirs: beside the balance, "back to your private balance" read as what would be left (ReviewTotals). */}
+        <TotalRows side="private" leaving={costs.leaving} before={before} tokens={tokensOut} />
       </ReviewRows>
+      <SwapCosts quote={quote} get={get} fee={summary.fee.total} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
-      <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={any && through && !l!.skipped && l!.boxes > 0} adaOut={adaOut} />
+      <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={mixes} adaOut={adaOut} />
       <p className="note" data-testid="swap-approves">
         {tr("swaps.review.approves", { least: amountOf(quote.minAmountOut, get) })}
       </p>
-      <p className="note">{tr("swaps.review.threeFees")}</p>
       {any && (
         <LovejoinChoice
           lovejoin={l!}
@@ -1175,7 +1199,59 @@ export function SwapApproval({
       )}
       <Callout tone="privacy">{tr("swaps.review.privacy.links")}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="swap-histories" />
-      <p className="note">{tr("swaps.review.givemeNote")}</p>
+      <GivemeNote funding />
+    </>
+  );
+}
+
+/**
+ * What a swap costs, all told, and what comes back (blind test §9.8, T10):
+ * the DEX's fee, Minswap's, the network fees of its transactions (this
+ * payment's exact, the later ones' about SESSION_FEE_ESTIMATE each, as
+ * nothing has built them yet), and Lovejoin's when its return goes through
+ * it; then what comes back into the private balance: what's received, and
+ * the ADA that isn't used up. `fee`: this payment's. Exported for its test.
+ */
+export function SwapCosts({
+  quote,
+  get,
+  fee,
+  costs,
+}: {
+  quote: SwapQuote;
+  get: Pick;
+  fee: string;
+  costs: ReturnType<typeof swapCosts>;
+}) {
+  const tr = useT();
+  const about = (lovelace: bigint) => adaText(toCents(lovelace));
+  return (
+    <>
+      <h2>{tr("swaps.costs.title")}</h2>
+      <ReviewRows testId="swap-costs">
+        <Row label={tr("swaps.detail.dexFee")} value={adaText(quote.dexFee)} />
+        {quote.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={adaText(quote.aggregatorFee)} />}
+        <Row label={tr("swaps.costs.network")} value={about(costs.networkFees)} />
+        {costs.lovejoin > 0n && <Row label={tr("swaps.costs.lovejoin")} value={about(costs.lovejoin)} />}
+        <Row label={tr("swaps.costs.total")} value={about(costs.cost)} strong testId="swap-cost-total" />
+        <Row
+          label={tr("swaps.costs.back")}
+          value={
+            get.id === "lovelace"
+              ? tr("swaps.costs.backAda", { ada: aboutAda(costs.back) })
+              : tr("swaps.costs.backToken", { token: amountOf(quote.amountOut, get), ada: aboutAda(costs.back) })
+          }
+          testId="swap-comes-back"
+        />
+      </ReviewRows>
+      {/* Which transactions the network fees are, and that the later ones come out of the room for them: "Three
+          transactions, three network fees" gave a figure for the first only (blind test T10). */}
+      <p className="note" data-testid="swap-costs-note">
+        {tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", {
+          now: formatAda(fee),
+          each: aboutAda(SESSION_FEE_ESTIMATE),
+        })}
+      </p>
     </>
   );
 }
@@ -1675,6 +1751,8 @@ export function Session({
   const [orders, setOrders] = useState<SessionOrder[]>();
   const [review, setReview] = useState<SessionTxReview>();
   const [back, setBack] = useState<SessionBackSummary>();
+  // Which way the return shown was built: as the swap was approved, or directly, by its switch.
+  const [backThrough, setBackThrough] = useState(true);
   const [stopping, setStopping] = useState(false);
   // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
   const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
@@ -1747,6 +1825,12 @@ export function Session({
       setBusy(false);
     }
   };
+  /** Builds its return as approved, or directly: Bring it back, then its review's switch. */
+  const buildBack = (through: boolean) =>
+    void act(async () => {
+      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }) }));
+      setBackThrough(through);
+    });
   /** After a step sent by hand: a swap that runs itself goes on from there; one from before is read again. */
   const sent = async () => {
     setReview(undefined);
@@ -1761,6 +1845,7 @@ export function Session({
       <Screen
         title={tr(review.kind === "swap" ? "swaps.tx.reviewOrder" : "swaps.tx.reviewCancel")}
         titleId="session-tx-review"
+        review
         onBack={() => setReview(undefined)}
         backDisabled={busy}
         aside={tr("swaps.tx.aside")}
@@ -1831,6 +1916,7 @@ export function Session({
       <Screen
         title={tr("swaps.back.title")}
         titleId="session-back-review"
+        review
         onBack={() => setBack(undefined)}
         backDisabled={busy}
         aside={tr("review.nothingSent")}
@@ -1851,6 +1937,8 @@ export function Session({
           </button>
         }
       >
+        {/* The way back first, a switch, where it can't be missed (blind test §9.8; Stop's, 5289dcf). */}
+        <LovejoinSwitch back={back} through={backThrough} busy={busy} onThrough={buildBack} />
         <ReviewRows testId="session-back-review">
           <LovejoinRows back={back} />
           <Row
@@ -1877,11 +1965,7 @@ export function Session({
         />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
-        <LovejoinNote
-          back={back}
-          busy={busy}
-          onDirect={() => void act(async () => setBack(await call("session-back-build", { index: s.index, direct: true })))}
-        />
+        <LovejoinNote back={back} />
         <ReturnLinks back={back} after={back.leftOut?.length ? undefined : tr("swaps.back.privacy.neverAgain")} />
       </Screen>
     );
@@ -2065,7 +2149,7 @@ export function Session({
           busy={busy}
           onSwap={() => void act(async () => setReview(await call("session-swap-build", { index: s.index })))}
           onCancel={() => void act(async () => setReview(await call("session-cancel-build", { index: s.index })))}
-          onBack={() => void act(async () => setBack(await call("session-back-build", { index: s.index })))}
+          onBack={() => buildBack(true)}
           onForget={forget}
         />
       }

@@ -8,6 +8,7 @@ import {
   isStateChanged,
   UI_PORT,
   type BuildStage,
+  type RefusedBy,
   type Reply,
   type ReplyCode,
   type RequestName,
@@ -16,15 +17,22 @@ import {
 
 const NO_ANSWER = () => t("worker.noAnswer");
 
-/** A refusal from the worker, with what it is when a screen acts on it (shared/rpc.ts `ReplyCode`). */
+/**
+ * A refusal from the worker, with what it is when a screen acts on it (shared/rpc.ts `ReplyCode`), and who refused
+ * a stale one when that's giveme.my (`RefusedBy`, blind test §9.5).
+ */
 export class RpcError extends Error {
   constructor(
     message: string,
     readonly code?: ReplyCode,
+    readonly by?: RefusedBy,
   ) {
     super(message);
   }
 }
+
+/** Who refused `error`, where the worker named giveme.my. */
+export const refusedByOf = (error: unknown): RefusedBy | undefined => (error instanceof RpcError ? error.by : undefined);
 
 /** A reviewed transaction that building again fixes: giveme.my refused it, or it waited too long. */
 export const isStale = (error: unknown) => error instanceof RpcError && error.code === "stale";
@@ -55,7 +63,7 @@ export function call<K extends RequestName>(type: K, payload: Requests[K]["paylo
       port.disconnect();
       done();
       if (reply?.ok) resolve(reply.value);
-      else reject(new RpcError(reply?.error ?? NO_ANSWER(), reply?.code));
+      else reject(new RpcError(reply?.error ?? NO_ANSWER(), reply?.code, reply?.by));
     });
     port.onDisconnect.addListener(() => {
       // Read, so Chrome doesn't log it as unchecked: the worker couldn't be reached.

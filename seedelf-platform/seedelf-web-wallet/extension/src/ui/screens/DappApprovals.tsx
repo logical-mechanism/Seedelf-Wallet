@@ -11,6 +11,11 @@
 // gets it. Its funding is reviewed and sent from this window, which then
 // waits for the network; closing it then doesn't undo the payment.
 //
+// Declining a connect turns the site away for a while (10 s, then a minute,
+// then five; the worker's `REFUSE_MS`): its Decline says so before it's
+// pressed, and the window says what it did before it closes, where it said
+// only "Nothing's waiting." (blind test §9.2, T17, T17r).
+//
 // A signature's foot (the password, Decline and Sign) follows the request
 // rather than staying in view: kept in view at 400×605, it covered who the
 // transaction pays and the warning that signing ties two accounts together,
@@ -20,50 +25,43 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { joinSentences, t, useT } from "../../i18n";
 
+import { lovejoinOn } from "../../networks";
 import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
-import { accountNumberAndName, useAccounts } from "../accounts";
 import { call, onDappChanged, RpcError } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { PaidRows } from "../components/PaidRows";
 import { RadioCards } from "../components/RadioCards";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GlobeIcon, ShieldIcon, SpinnerIcon, WalletIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
+import { boxCost } from "../components/LovejoinReturn";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/SessionRefused";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
-import { formatAda, formatQuantity, shortHex } from "../format";
+import { adaText, formatAda, formatQuantity, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { usePreferences } from "../preferences";
+import { aboutAda, SESSION_FEE_ESTIMATE, toCents } from "../swap";
+import { useSiteAccount, waitText } from "../sites";
 import { tokenDecimals, tokenText } from "../tokens";
 
 /** How long an empty list waits before the window closes: a site's next request may be on its way. */
 const CLOSE_AFTER_MS = 800;
+/** How long it stays, once the user declined a site, saying so: long enough to read it (blind test T17). */
+const DECLINED_CLOSE_MS = 4_000;
 /**
  * How long the buttons wait when another request takes the shown one's
  * place, so a click meant for that one can't answer this one.
  */
 const HOLD_MS = 1_000;
-
-/**
- * Which public account a site connected to it gets, by its number and name,
- * when the wallet has more than one: sites always use the one Settings →
- * Sites chooses, whichever is on screen, so "your public account" alone
- * could mean an account the screen isn't showing (chunk 23). Undefined with
- * one account, where there's nothing to tell apart.
- */
-function useSiteAccount(): string | undefined {
-  const { accounts, several } = useAccounts();
-  const { prefs, loaded } = usePreferences();
-  if (!several || !loaded) return undefined;
-  return accountNumberAndName(accounts.find((a) => a.index === prefs.dappAccount) ?? { index: prefs.dappAccount });
-}
 
 /** How the request shown came to be: the next after the user's answer, or in the place of one that's gone. */
 type Change = "next" | "replaced";
@@ -82,6 +80,9 @@ export function DappApprovals() {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const closing = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // What the user just declined: a site, and how long it's turned away, or everything at once with Decline all, and
+  // whether a site was among it. Said once nothing's left (T17), where it said only "Nothing's waiting.".
+  const [declined, setDeclined] = useState<{ host: string; waitMs: number } | { all: true; sites: boolean }>();
 
   const load = useCallback(() => {
     call("dapp-approvals", {}).then(setApprovals, (e: Error) => setError(e.message));
@@ -97,14 +98,17 @@ export function DappApprovals() {
   useEffect(() => {
     clearTimeout(closing.current);
     if (approvals?.length === 0 && !error) {
-      closing.current = setTimeout(() => {
-        call("dapp-close", {}).then((closed) => {
-          if (!closed) load();
-        }, load);
-      }, CLOSE_AFTER_MS);
+      closing.current = setTimeout(
+        () => {
+          call("dapp-close", {}).then((closed) => {
+            if (!closed) load();
+          }, load);
+        },
+        declined ? DECLINED_CLOSE_MS : CLOSE_AFTER_MS,
+      );
     }
     return () => clearTimeout(closing.current);
-  }, [approvals, error, load]);
+  }, [approvals, error, load, declined]);
 
   const current = approvals?.[0];
   const needsPassword = !!current && current.kind !== "connect" && current.password;
@@ -112,6 +116,10 @@ export function DappApprovals() {
   // Each request starts with an empty box.
   const currentId = current?.id;
   useEffect(() => setPassword(""), [currentId]);
+  // Another request in front of the user: what was declined before it isn't the news any more.
+  useEffect(() => {
+    if (currentId) setDeclined(undefined);
+  }, [currentId]);
 
   // Another request in the place of the one shown (the next, or one whose
   // page went away): it says so, and its buttons wait a moment.
@@ -149,10 +157,11 @@ export function DappApprovals() {
       if (result.error) {
         setPassword("");
         // A private session's funding: its review works out what the refusal leaves it (DX-1).
-        if (extra.fund) return { refused: new RpcError(result.error, result.code) };
+        if (extra.fund) return { refused: new RpcError(result.error, result.code, result.by) };
         setError(result.error);
         return false;
       }
+      if (!approve && result.waitMs !== undefined) setDeclined({ host: new URL(current.origin).host, waitMs: result.waitMs });
       return true;
     } catch (e) {
       setError((e as Error).message);
@@ -174,12 +183,15 @@ export function DappApprovals() {
     answered.current = current?.id;
     setBusy(true);
     setError(undefined);
+    let sites = false;
     try {
       for (const a of approvals) {
         if (a.kind === "connect" && a.funding) continue;
         // One the site took back meanwhile is gone already: nothing to say.
-        await call("dapp-answer", { id: a.id, approve: false }).catch(() => undefined);
+        const answered = await call("dapp-answer", { id: a.id, approve: false }).catch(() => undefined);
+        if (answered?.waitMs !== undefined) sites = true;
       }
+      setDeclined({ all: true, sites });
     } finally {
       setBusy(false);
       load();
@@ -189,9 +201,17 @@ export function DappApprovals() {
   if (!current) {
     return (
       <Screen title="Seedelf Wallet" titleId="dapp-title" error={error}>
-        <p className="note center" data-testid="dapp-empty">
-          {tr(approvals ? "dappUi.nothingWaiting" : "dappUi.loading")}
-        </p>
+        {declined && approvals ? (
+          <p className="note center" role="status" data-testid="dapp-declined">
+            {"all" in declined
+              ? tr(declined.sites ? "dappUi.declinedAllSites" : "dappUi.declinedAll")
+              : tr("dappUi.declined", { host: declined.host, wait: waitText(declined.waitMs) })}
+          </p>
+        ) : (
+          <p className="note center" data-testid="dapp-empty">
+            {tr(approvals ? "dappUi.nothingWaiting" : "dappUi.loading")}
+          </p>
+        )}
       </Screen>
     );
   }
@@ -217,6 +237,9 @@ export function DappApprovals() {
 
   return (
     <Screen
+      // Each request a screen of its own, which opens at its top, as a connect's does: two signatures in a row share
+      // a title (blind test §9.10).
+      key={current.id}
       title={title}
       titleId="dapp-title"
       aside={tr("dappUi.nothingUntil", { action })}
@@ -378,6 +401,48 @@ export function fundingPrivacy(changeLovelace: string): string {
 }
 
 /**
+ * A private session's way back, on its funding's review, which the funding's
+ * fee alone left out: "A fee each way" gave no figure for it, and "through
+ * Lovejoin, as Settings has it" meant nothing to the tester (blind test §9.8,
+ * T16). The return's fee as the reviews estimate one (ui/swap.ts), the
+ * network fees both ways with this one's exact, and, when Settings brings
+ * sessions back through Lovejoin (`lovejoin`), what a 10 ₳ box of it costs
+ * (`perBox`, in ₳) and what Lovejoin is, in plain words. `fee`: the
+ * funding's. Exported for its test.
+ *
+ * Through Lovejoin the way back is a chain (sessions.ts backBuild): a deposit,
+ * the mixes, then the return, so two network fees besides the mixes', as a
+ * swap's and a mix's costs count them (swapCosts, mixCosts); `perBox` is the
+ * mixes and the box's own way back.
+ */
+export function FundingWayBack({ fee, lovejoin, perBox }: { fee: string; lovejoin: boolean; perBox: string }) {
+  const tr = useT();
+  const back = (lovejoin ? 2n : 1n) * SESSION_FEE_ESTIMATE;
+  return (
+    <>
+      <h2>{tr("dappUi.back.title")}</h2>
+      <ReviewRows testId="dapp-funding-back">
+        {lovejoin ? (
+          <Row label={tr("dappUi.back.fees")} value={tr("dappUi.back.feesValue", { ada: aboutAda(back) })} />
+        ) : (
+          <Row label={tr("dappUi.back.fee")} value={adaText(toCents(back))} />
+        )}
+        {lovejoin && <Row label={tr("dappUi.back.lovejoin")} value={tr("dappUi.back.lovejoinValue", { ada: perBox })} />}
+        <Row
+          label={tr("dappUi.back.bothWays")}
+          value={adaText(toCents(BigInt(fee) + back))}
+          strong
+          testId="dapp-funding-both-ways"
+        />
+      </ReviewRows>
+      <p className="note" data-testid="dapp-funding-way-back">
+        {tr(lovejoin ? "dappUi.back.privacy.noteLovejoin" : "dappUi.back.noteDirect")}
+      </p>
+    </>
+  );
+}
+
+/**
  * A site asks to connect: to the public account, or to a private session
  * funded here first. Neither is chosen for the user (privacy review §3.3):
  * each says what it costs, and Connect waits for a choice, since what a
@@ -413,6 +478,11 @@ export function ConnectRequest({
   // Asked for, governance goes with the public account only when switched on: off, as the most private choice is.
   const [governance, setGovernance] = useState(false);
   const [seedelf, setSeedelf] = useState<Balances["seedelf"]>();
+  // How a private session would come back, as Settings has it: through Lovejoin, and what a 10 ₳ box of it costs at
+  // Settings' depth, said in plain words with a figure where it's chosen (blind test §9.8, T16).
+  const { prefs } = usePreferences();
+  const lovejoinBack = prefs.lovejoinReturns && lovejoinOn(network);
+  const perBox = aboutAda(boxCost(prefs.lovejoinDepth));
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [review, setReview] = useState<SessionOutSummary>();
@@ -444,6 +514,13 @@ export function ConnectRequest({
 
   const host = new URL(approval.origin).host;
   const site = <Site origin={approval.origin} title={approval.title} />;
+  // Over every Decline that turns the site away, so it's read before either it or closing the window: Cancel didn't
+  // say it refuses the site, or that the site then waits before it can ask again (blind test §9.2, T17, T17r).
+  const declineNote = approval.declineWaitMs !== undefined && (
+    <p className="note" data-testid="dapp-decline-note">
+      {tr("dappUi.declineNote", { host, wait: waitText(approval.declineWaitMs) })}
+    </p>
+  );
   // Asking for governance alone, it's connected already: to the dApp account, named as a signature's window names it.
   const connectedSite = <Site origin={approval.origin} title={approval.title} account={siteAccount} />;
 
@@ -483,8 +560,9 @@ export function ConnectRequest({
         error={error}
         foot={
           <div className="actions">
+            {/* Decline, as the signing screens say it: the site stays connected, without governance (blind test T17). */}
             <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy || held}>
-              {tr("dappUi.cancel")}
+              {tr("dappUi.decline")}
             </button>
             <button type="button" className="primary" onClick={() => void onAnswer(true)} disabled={busy || held}>
               {busy ? "…" : tr("dappUi.allow")}
@@ -557,6 +635,7 @@ export function ConnectRequest({
         onSubmit={send}
         title={tr("dappUi.reviewFunding")}
         titleId="dapp-title"
+        review
         hint={tr("dappUi.ordinaryWallet")}
         hintTestId="dapp-funding-note"
         onBack={() => {
@@ -571,11 +650,13 @@ export function ConnectRequest({
         foot={
           refusal ? (
             // Refused, its session is used up: Send again only said "That session was started already". The way
-            // on is a swap's and a mix's (SessionRefused.tsx), and Cancel still says no to the site (DX-1).
+            // on is a swap's and a mix's (SessionRefused.tsx), and Decline still says no to the site (DX-1), and says
+            // how long that turns it away, as the choice's does (the blind test's cross-area review).
             <>
               <SessionRefusedFoot refusal={refusal} busy={building} onAgain={() => void buildReview()} />
+              {declineNote}
               <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy || building}>
-                {tr("dappUi.cancel")}
+                {tr("dappUi.decline")}
               </button>
             </>
           ) : (
@@ -589,9 +670,10 @@ export function ConnectRequest({
                   onChange={setPassword}
                 />
               )}
+              {declineNote}
               <div className="actions">
                 <button type="button" className="secondary" onClick={() => void onAnswer(false)} disabled={busy}>
-                  {tr("dappUi.cancel")}
+                  {tr("dappUi.decline")}
                 </button>
                 <button type="submit" className="primary" disabled={busy || (approval.password && !password)}>
                   {busy ? tr("common.sending") : tr("common.send")}
@@ -608,16 +690,24 @@ export function ConnectRequest({
             <PaidRows label={tr("dappUi.forTheSite")} paid={forSite} />
             {/* What it's for, not "collateral", a word the wallet uses for three things (chunk 23's second review,
                 CW-8). */}
-            <Row label={tr("dappUi.keptAside")} value={`${formatAda(collateral?.lovelace ?? "0")}\u00a0₳`} />
+            <Row label={tr("dappUi.keptAside")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral?.lovelace ?? "0") })} />
             <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
-            <Row label={tr("review.backToPrivate")} value={`${formatAda(review.changeLovelace)}\u00a0₳`} />
+            {/* What leaves the private balance and what it holds after, as every other review says them: the change
+                (3.766792 ₳ of a 25 ₳ UTxO) didn't match what the tester worked out from 28 ₳ (blind test T16). */}
+            <TotalRows
+              side="private"
+              leaving={review.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(review.fee.total))}
+              before={seedelf?.lovelace}
+              tokens={forSite?.tokens.length ?? 0}
+            />
           </ReviewRows>
+          <FundingWayBack fee={review.fee.total} lovejoin={lovejoinBack} perBox={perBox} />
           <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}
           </Callout>
           <HistoriesNote histories={review.histories} session={review.index} testId="dapp-funding-histories" />
-          <p className="note">{tr("swaps.review.givemeNote")}</p>
+          <GivemeNote funding />
         </div>
       </Screen>
     );
@@ -628,7 +718,8 @@ export function ConnectRequest({
       onSubmit={connection === "private" ? build : undefined}
       title={tr("dappUi.connectTitle")}
       titleId="dapp-title"
-      hint={tr("dappUi.disconnectInSettings")}
+      // What each choice means, Decline's too, and where a connection ends: it said only the last (blind test T16).
+      hint={tr("dappUi.privacy.connectHint")}
       hintTestId="dapp-disconnect-note"
       aside={
         connection
@@ -637,38 +728,48 @@ export function ConnectRequest({
       }
       error={error}
       foot={
-        <div className="actions">
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void onAnswer(false)}
-            disabled={busy || building || held}
-          >
-            {tr("dappUi.cancel")}
-          </button>
-          {connection === "private" ? (
-            // With no amount yet it says so, rather than a Review that's disabled for no reason given (CW-2).
-            <button type="submit" className="primary" disabled={!canReview || building || held}>
-              {tr(building ? "common.building" : lovelace ? "common.review" : "dappUi.enterAmount")}
-            </button>
-          ) : (
-            // Only once the public account is chosen: never one press from the window opening.
+        <>
+          {declineNote}
+          <div className="actions">
             <button
               type="button"
-              className="primary"
-              onClick={() => void onAnswer(true, approval.governance ? { governance } : {})}
-              disabled={busy || held || connection !== "public"}
+              className="secondary"
+              onClick={() => void onAnswer(false)}
+              disabled={busy || building || held}
             >
-              {busy ? "…" : tr("dappUi.connect")}
+              {tr("dappUi.decline")}
             </button>
-          )}
-        </div>
+            {connection === "private" ? (
+              // With no amount yet it says so, rather than a Review that's disabled for no reason given (CW-2).
+              <button type="submit" className="primary" disabled={!canReview || building || held}>
+                {tr(building ? "common.building" : lovelace ? "common.review" : "dappUi.enterAmount")}
+              </button>
+            ) : (
+              // Only once the public account is chosen: never one press from the window opening.
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void onAnswer(true, approval.governance ? { governance } : {})}
+                disabled={busy || held || connection !== "public"}
+              >
+                {busy ? "…" : tr("dappUi.connect")}
+              </button>
+            )}
+          </div>
+        </>
       }
     >
       <div className="stack" data-testid="dapp-connect">
         {queue}
         <Changed change={change} />
         {site}
+        {/* Which account "your public account" is, before choosing it: said only once it was chosen, below the fold,
+            a tester reconnecting with Account 2 on screen was surprised to give Account 1 (blind test T15). */}
+        {siteAccount && (
+          <p className="note" data-testid="dapp-connect-account">
+            {tr("dappUi.public.which", { account: siteAccount })}
+          </p>
+        )}
         {/* Two cards, what each costs inside it: a pill switch with its explanations in a list apart read as a tab,
             and nothing said a choice was needed (chunk 23's review, CW-3). Still nothing chosen for the user. */}
         <RadioCards<Connection>
@@ -691,7 +792,7 @@ export function ConnectRequest({
             {
               value: "private",
               label: tr("dappUi.privateSession"),
-              text: tr("dappUi.cost.private"),
+              text: tr("dappUi.cost.private", { fee: aboutAda(SESSION_FEE_ESTIMATE) }),
               icon: <ShieldIcon size={16} />,
             },
           ]}
@@ -699,7 +800,6 @@ export function ConnectRequest({
         {connection === "public" ? (
           <>
             <ul className="dapp-points">
-              {siteAccount && <li data-testid="dapp-connect-account">{tr("dappUi.public.which", { account: siteAccount })}</li>}
               <li>{tr("dappUi.public.asks")}</li>
             </ul>
             <Callout tone="privacy" testId="dapp-connect-privacy">
@@ -735,7 +835,9 @@ export function ConnectRequest({
           <>
             <ul className="dapp-points" data-testid="dapp-private-points">
               <li>{tr("dappUi.private.account")}</li>
-              <li>{tr("dappUi.private.stays")}</li>
+              <li data-testid="dapp-private-way-back">
+                {tr(lovejoinBack ? "dappUi.private.privacy.staysLovejoin" : "dappUi.private.staysDirect", { box: perBox })}
+              </li>
               {approval.governance && <li data-testid="dapp-private-no-governance">{tr("dappUi.private.noGovernance")}</li>}
             </ul>
             <div className="field" ref={amountField}>

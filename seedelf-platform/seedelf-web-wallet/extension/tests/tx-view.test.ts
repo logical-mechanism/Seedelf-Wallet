@@ -87,6 +87,42 @@ describe("the transaction view", () => {
     expect(t.collateral.asked).toHaveLength(0);
   });
 
+  it("marks what pays the user, by account, from what the device knows, and asks nobody (blind test §9.9, T18)", async () => {
+    const t = await unlocked();
+    const net = t.deps.wasm.Network.Preprod;
+    // Account 2 of the same phrase, which the wallet knows of: paying it is paying yourself.
+    const second = await t.wallet.withAccount(1, (keys) => keys.cardano.receiveAddress(net, 0));
+    const summary = await t.send.build("preprod", [
+      { to: THEIRS, lovelace: "3000000", tokens: [] },
+      { to: second, lovelace: "2000000", tokens: [] },
+    ]);
+    const before = t.koios.calls.length;
+    const { detail } = await txView({ ...deps(t), knownAccounts: async () => [0, 1] }, "preprod", summary.txHash);
+    // Someone else's payment isn't marked; Account 2's is, by its index; the change is the active account's.
+    expect(detail.outputs.find((o) => o.address.bech32 === THEIRS)?.yours).toBeUndefined();
+    expect(detail.outputs.find((o) => o.address.bech32 === second)?.yours).toEqual({ kind: "account", account: 1 });
+    const change = detail.outputs.filter((o) => o.address.bech32 !== THEIRS && o.address.bech32 !== second);
+    expect(change.length).toBeGreaterThan(0);
+    for (const o of change) expect(o.yours).toEqual({ kind: "account", account: 0 });
+    // Not knowing Account 2, the wallet doesn't guess.
+    const alone = await txView(deps(t), "preprod", summary.txHash);
+    expect(alone.detail.outputs.find((o) => o.address.bech32 === second)?.yours).toBeUndefined();
+    expect(t.koios.calls.length).toBe(before);
+  });
+
+  it("marks a private payment's change into the private balance, and not the Seedelf it pays (blind test §9.9)", async () => {
+    const t = await unlocked();
+    t.koios.evaluation = transferPreprod.evaluation;
+    const summary = await t.transfer.build("preprod", [{ to: transferPreprod.to, lovelace: "2000000", tokens: [] }]);
+    const { detail } = await txView(deps(t), "preprod", summary.txHash);
+    const contract = detail.outputs.filter((o) => o.address.seedelf);
+    // The payment, under the recipient's register, and the change, under a new one of the user's.
+    expect(contract).toHaveLength(2);
+    expect(contract.map((o) => o.yours?.kind ?? "theirs").sort()).toEqual(["private", "theirs"]);
+    // giveme.my's collateral comes back to giveme.my, not the user.
+    expect(detail.collateralReturn?.yours).toBeUndefined();
+  });
+
   it("refuses a hash it isn't holding, and one built on another network", async () => {
     const t = await unlocked();
     const summary = await built(t);

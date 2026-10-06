@@ -31,6 +31,8 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import { discoverChain } from "./chain";
+import { rewardAccountHex, withdrawingOf } from "./incoming";
+import { heldSent } from "./sent-txs";
 import type { CoinControlService } from "./coin-control";
 import type { Koios, KoiosAccountInfo, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
@@ -142,6 +144,11 @@ export interface SpendingAccount {
   stake?: KoiosAccountInfo;
   /** The rewards to withdraw along with the payment (lovelace), when the user spends them and can. */
   withdrawal?: string;
+  /**
+   * One of the wallet's own transactions on its way withdraws the rewards `stake` still reports: nothing built now
+   * may withdraw them again, as the ledger takes one withdrawal of them (staking.ts).
+   */
+  rewardsOnTheWay?: boolean;
 }
 
 /**
@@ -157,11 +164,12 @@ export async function readAccount(
 ): Promise<SpendingAccount> {
   const { wasm, wallet } = deps;
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-  const [spent, stakeAddress, preferences, reserved] = await Promise.all([
+  const [spent, stakeAddress, preferences, reserved, sent] = await Promise.all([
     wallet.withKeys(() => spentSet(deps.session)),
     wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
     deps.preferences?.get(),
     wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
+    wallet.withKeys(() => heldSent(deps.session, network)),
   ]);
   const spendRewards = preferences?.spendRewards ?? false;
   const koios = deps.koios(network);
@@ -171,8 +179,18 @@ export async function readAccount(
     readStake || spendRewards ? koios.accountInfo(stakeAddress) : undefined,
   ]);
   const { spendable, collateral } = await deps.coins.account(network, utxos);
+  // Not the rewards one of the wallet's own transactions on its way withdraws: Koios reports them until its block,
+  // its change holds them, and only one withdrawal of them can land. Home's forms leave them out too (balances.ts,
+  // blind test §9.1).
+  // One whose change these fresh UTxOs list has landed, and taken the rewards with it: what Koios reports now is
+  // new, and can be withdrawn. Kept as sent for as long as what it spent is held back, it held an epoch's new
+  // rewards back for up to two hours, and had Withdraw and Stop staking say it wasn't confirmed (the fix round's
+  // second review). Should account_info be behind the UTxOs, the withdrawal is refused at Send, nothing lost.
+  const landed = new Set(utxos.map((p) => p.utxo.tx_hash));
+  const taking = stake ? withdrawingOf(sent.filter((s) => !landed.has(s.txHash)), spent, rewardAccountHex(wasm, stakeAddress)) : 0n;
+  const onTheWay = !!stake && taking > 0n && BigInt(stake.rewards_available) >= taking;
   const withdrawable =
-    spendRewards && stake?.status === "registered" && stake.delegated_drep && BigInt(stake.rewards_available) > 0n;
+    spendRewards && stake?.status === "registered" && stake.delegated_drep && BigInt(stake.rewards_available) > 0n && !onTheWay;
   return {
     params,
     // A mix being sent puts up its collateral, even one no longer the account's: it's never spent meanwhile.
@@ -181,6 +199,7 @@ export async function readAccount(
     held: utxos.length,
     stake,
     ...(withdrawable ? { withdrawal: stake.rewards_available } : {}),
+    ...(onTheWay ? { rewardsOnTheWay: true } : {}),
   };
 }
 

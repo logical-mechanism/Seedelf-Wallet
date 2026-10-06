@@ -73,6 +73,7 @@ export function Collateral({ onBack }: { onBack: () => void }) {
       <Screen
         title={t("collateral.review.title")}
         titleId="collateral-review"
+        review
         onBack={() => setSummary(undefined)}
         backDisabled={busy}
         aside={t("review.nothingSent")}

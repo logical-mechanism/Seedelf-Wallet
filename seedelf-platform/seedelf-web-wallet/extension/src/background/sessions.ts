@@ -739,12 +739,16 @@ function maybeSent(e: unknown): boolean {
 /**
  * Why a funding or a top-up was turned away (`e`), as a code: told from what
  * failed, never from its message, which is in the language the worker had
- * then. Something it spends changed since the review (giveme.my's refusal,
- * which checks the chain first, or the node's); the collateral service out
- * of reach; the network busy; or the network refusing it otherwise.
+ * then. Something it spends changed since the review (the device knew it
+ * spent, or the node said so); giveme.my answered and didn't lend its
+ * collateral, which says who, not why (blind test §9.5); the collateral
+ * service out of reach; the network busy; or the network refusing it
+ * otherwise.
  */
 function unsentWhyOf(e: unknown): UnsentWhy | undefined {
-  if (e instanceof StaleReviewError || e instanceof CollateralRefusedError || e instanceof SpentInputError) return "changed";
+  // An outage or a limit of giveme.my's is kept apart, so the page says wait, not that it was turned down.
+  if (e instanceof CollateralRefusedError) return e.busy ? "givemeBusy" : "refused";
+  if (e instanceof StaleReviewError || e instanceof SpentInputError) return "changed";
   if (e instanceof CollateralError) return "unreachable";
   if (e instanceof KoiosBusyError) return "busy";
   if (e instanceof KoiosError) return "network";

@@ -40,16 +40,24 @@ import {
   unknownIn,
   type HistoryClass,
 } from "../shared/histories";
-import { entrySession, type ActivityEntry, type ActivityStaking, type PendingTx, type TokenQuantity } from "../shared/rpc";
+import { entrySession, type ActivityEntry, type ActivityStaking, type Balances, type PendingTx, type TokenQuantity } from "../shared/rpc";
+import type * as Wasm from "@seedelf/wasm";
+
+import type { PathedUtxo } from "./account";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
+import { SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
 import { ownDrepId } from "./governance";
+import { pendingEntries, rewardAccountHex } from "./incoming";
 import type { Koios, KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "./koios";
+import { pendingKey } from "./pending";
 import type { PrivateStore } from "./private-store";
-import { outpoint } from "./spent";
+import { heldSent } from "./sent-txs";
+import { outpoint, reservedSet, spentSet } from "./spent";
 import { knownPool } from "./staking";
 import type { Area } from "./storage";
-import type { Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
+import { isTrap } from "./wasm";
 
 /** chrome.storage.session: the Cardano account's stake address and addresses, from the last balance reading. */
 export const SESSION_ACCOUNT_ADDRESSES_PREFIX = "seedelf.accountAddresses.";
@@ -156,6 +164,8 @@ export interface ActivityDeps {
   local?: Area;
   /** The clock a new history's start is read from: `Date.now` unless given. */
   now?: () => number;
+  /** Reads the account's transactions on their way (incoming.ts `pendingEntries`); without it, none are listed. */
+  wasm?: typeof Wasm;
 }
 
 /** Each token's quantity, signed by `sign`, from anything listing tokens. */
@@ -179,7 +189,27 @@ export class ActivityService {
   /** The Seedelf history, newest first. */
   async seedelf(network: NetworkName): Promise<ActivityEntry[]> {
     const history = await this.deps.store.get<History>(`history.${network}`);
-    return [...(history?.entries ?? [])].sort(newestFirst);
+    return this.withDecimals(network, [...(history?.entries ?? [])].sort(newestFirst));
+  }
+
+  /**
+   * `entries` with each token's decimals as the last balance reading has them from Koios, read on the device: a
+   * token off the wallet's list read "1,234.56" on Home and "+1,234,560,000" in Activity (blind test E01, §7). Not
+   * kept with the entries, which are sealed for good: a token no longer held keeps its whole units.
+   */
+  private async withDecimals(network: NetworkName, entries: ActivityEntry[]): Promise<ActivityEntry[]> {
+    if (!entries.some((e) => e.assets?.length)) return entries;
+    const { wallet, session } = this.deps;
+    const reading = await wallet.withKeys(() => session.get<Balances>(SESSION_BALANCES_PREFIX + network)).catch(() => undefined);
+    const known = new Map<string, number>();
+    for (const x of [...(reading?.seedelf.tokens ?? []), ...(reading?.cardano.tokens ?? [])]) {
+      if (x.decimals) known.set(`${x.policyId}.${x.assetName}`, x.decimals);
+    }
+    if (!known.size) return entries;
+    const of = (a: TokenQuantity) => known.get(`${a.policyId}.${a.assetName}`);
+    return entries.map((e) =>
+      e.assets?.some((a) => of(a) !== undefined) ? { ...e, assets: e.assets.map((a) => (of(a) !== undefined ? { ...a, decimals: of(a) } : a)) } : e,
+    );
   }
 
   /**
@@ -391,7 +421,51 @@ export class ActivityService {
       };
     }
     await wallet.withKeys(() => session.set(key, pages));
-    return { entries: pages.entries, more: pages.more };
+    // Ahead of them, what the wallet sent that Koios doesn't list yet, as Private activity lists its own at once.
+    const pending = await this.pendingOf(network, account, own, new Set(pages.entries.map((e) => e.txHash)));
+    const entries = pending.length ? [...pending, ...pages.entries].sort(newestFirst) : pages.entries;
+    return { entries: await this.withDecimals(network, entries), more: pages.more };
+  }
+
+  /**
+   * The account's transactions the wallet sent that Koios doesn't list yet, marked pending: from the transactions
+   * the device keeps (sent-txs.ts) and the last reading, asking no one (blind test §9.3, T07, T08: Public activity
+   * showed nothing until the block). Not kept with the pages: each read works them out again, so one Koios lists
+   * gives way to its confirmed entry, and one that never went out, freed, goes. It never breaks the list.
+   */
+  private async pendingOf(
+    network: NetworkName,
+    account: AccountAddresses,
+    own: ReadonlyMap<string, ActivityEntry>,
+    listed: ReadonlySet<string>,
+  ): Promise<ActivityEntry[]> {
+    const { wasm, wallet, session } = this.deps;
+    if (!wasm) return [];
+    try {
+      const entries = await wallet.withKeys(async (keys) => {
+        const sent = await heldSent(session, network);
+        if (!sent.length) return [];
+        const utxos = (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network)) ?? [];
+        const watched = await session.get<PendingTx>(pendingKey(network));
+        return pendingEntries(wasm, network, sent, {
+          active: keys.account,
+          keys: new Set(account.keys ?? []),
+          stake: account.stake,
+          stakeKey: rewardAccountHex(wasm, account.stake)?.slice(2),
+          account: new Set(utxos.map((p) => outpoint(p.utxo))),
+          spent: await spentSet(session),
+          reserved: (await reservedSet(session, network)).inputs,
+          listed,
+          own,
+          ...(watched ? { watched: { txHash: watched.txHash, kind: watched.kind } } : {}),
+        });
+      });
+      // Outside the wallet's lock, which the pool lookup takes itself.
+      return await this.tickers(network, entries);
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      return [];
+    }
   }
 
   /** Staking entries' pool tickers, from what's on the device only. */
@@ -544,7 +618,14 @@ const DREP_KIND = {
 
 /**
  * What each transaction did to the account: its outputs to the account's
- * keys (`ours`) less its inputs from them, in ADA, and which tokens changed.
+ * keys (`ours`) less its inputs from them, less the rewards it withdrew and
+ * with the fee it paid said apart, in ADA, and which tokens changed. The
+ * rewards are in the balance as Home counts it, so collecting them is no
+ * money in: a 25 ₳ payment whose change held 57.475311 ₳ of rewards read
+ * "Sent +32.300614 ₳", the change less the coin it spent (blind test §9.1,
+ * T08). It's "Sent −25 ₳", the 25 ₳ paid, with the fee and the rewards
+ * collected in its details, as the launch review's H1 counted the rewards in
+ * a site's signing prompt. A deposit is money out, and one back money in.
  * One of this wallet's own flows (a move-in, an account-paid mint, a
  * withdrawal to the account) is named as such; otherwise a transaction that
  * staked, delegated the vote, stopped staking, or only withdrew the rewards
@@ -577,8 +658,10 @@ export function describe(
     for (const o of tx.outputs) add(o, 1n);
     const spent = tx.inputs.some(ours);
     const mine = own.get(tx.tx_hash);
-    const direction = net > 0n ? "in" : net < 0n ? "out" : "none";
     const staking = stake ? stakingOf(tx, stake, drep) : undefined;
+    // What the balance did but for the fee: the account's own coins less the rewards withdrawn into them.
+    const change = net - BigInt(staking?.rewards ?? "0") + (spent ? BigInt(tx.fee) : 0n);
+    const direction = change > 0n ? "in" : change < 0n ? "out" : "none";
     if (!spent && !tx.outputs.some(ours) && !staking && !mine) return [];
     const paysOthers = tx.outputs.some((o) => !ours(o));
     const kind: ActivityEntry["kind"] = mine
@@ -593,7 +676,8 @@ export function describe(
             ? "vote"
             : staking?.rewards && !paysOthers
               ? "withdraw-rewards"
-              : direction === "in" && !spent
+              : // One that left the account better off isn't "Sent", even when it spent some of its coins to.
+                direction === "in"
                 ? "received"
                 : "sent";
     const moved = [...assets].filter(([, q]) => q !== 0n);
@@ -610,7 +694,7 @@ export function describe(
       at: tx.tx_timestamp * 1000,
       kind,
       direction,
-      lovelace: (net < 0n ? -net : net).toString(),
+      lovelace: (change < 0n ? -change : change).toString(),
       tokens: moved.length,
       ...(spent ? { fee: tx.fee } : {}),
       ...who,

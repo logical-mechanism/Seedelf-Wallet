@@ -84,6 +84,8 @@ describe("a staking review's button says the act (ST-2)", () => {
     expect(html).toMatch(/<button type="button" class="primary">Withdraw 57\.475311\u00a0₳<\/button>/);
     expect(shown).not.toMatch(/\bSend\b/);
     expect(shown).toContain("Your balance stays the same, but for the fee: these rewards were already counted in it.");
+    // What withdrawing does that matters, since the balance doesn't change (blind test §4 entry 19, E04).
+    expect(shown).toContain("Withdrawn, they're ordinary money in your public account: payments spend them whatever Settings says, and sites see them.");
   });
 
   it("stopping: what ends, what's lost, the deposit back, on a red Stop staking (ST-3)", () => {

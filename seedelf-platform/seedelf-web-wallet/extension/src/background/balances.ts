@@ -18,9 +18,13 @@
 // the balance and reported apart (coin-control.ts), fresh on every request,
 // since locking a UTxO doesn't read the chain again. So is what the wallet's
 // own sent transactions pay back to each side before a reading lists it, a
-// payment's change or a Make private's deposit (incoming.ts): the balance
-// leaves out what was spent at once. Each Seedelf says who
-// paid for it, when the device knows (minted-by.ts), for Remove's default.
+// payment's change or a Make private's deposit (incoming.ts), and each side
+// is answered less what the wallet has spent since it was read: a kept
+// reading reads right after a send, with no request, as one made then would
+// (blind test §9.3). The rewards those transactions withdraw are taken out of
+// the account's, as their change holds them (blind test §9.1). Each Seedelf
+// says who paid for it, when the device knows (minted-by.ts), for Remove's
+// default.
 //
 // The reading is cached per network in chrome.storage.session and wiped on lock.
 // Once a private spend that pays nothing to the public account lands, only
@@ -38,7 +42,7 @@
 import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
-import type { Balances, Locked, SeedelfInfo, StakeInfo } from "../shared/rpc";
+import type { Balances, Locked, SeedelfInfo, StakeInfo, TokenAmount } from "../shared/rpc";
 import { readAccountUtxos, type Account, type PathedUtxo } from "./account";
 import { registerOf, seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import {
@@ -54,15 +58,15 @@ import {
   type ReadingUtxos,
 } from "./coin-control";
 import { keptContractView, readContractView } from "./contract-scan";
-import { incomingOf, type Incoming } from "./incoming";
+import { incomingOf, lessSpent, rewardAccountHex } from "./incoming";
 import type { Koios, KoiosUtxo } from "./koios";
 import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
 import type { PrivateStore } from "./private-store";
-import { recentlySent } from "./sent-txs";
+import { heldSent } from "./sent-txs";
 import { outpoint, reservedSet, spentSet } from "./spent";
 import { readStake } from "./staking";
 import type { Area } from "./storage";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Keys, type Wallet } from "./wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Keys, type Wallet } from "./wallet";
 import { isTrap } from "./wasm";
 
 export interface ContractConfig {
@@ -101,22 +105,74 @@ type Held = Omit<Parameters<typeof paidByOf>[2], "owned">;
 
 const NOTHING: Locked = { lovelace: "0", tokens: [], utxos: 0 };
 
+/** Why there's no kept reading to answer from: never shown, Home keeps what it has (`get`'s `kept`). */
+const NOTHING_KEPT = "No balance reading is kept.";
+
 /** A reading, with its own UTxOs when it was too large to keep. */
 interface Reading {
   balances: Balances;
   unkept?: ReadingUtxos;
 }
 
+/** chrome.storage.session: when the last reading on a network failed (ms), e.g. `seedelf.readFailed.preprod`. */
+export const SESSION_READ_FAILED_PREFIX = "seedelf.readFailed.";
+
 export class BalanceService {
   private readonly inFlight = new Map<NetworkName, Promise<Reading>>();
   private readonly inFlightPrivate = new Map<NetworkName, Promise<Reading>>();
+  /** The last failed reading's words per network: in memory only (`readingNoted`). */
+  private readonly failedWords = new Map<NetworkName, { at: number; message: string }>();
 
   constructor(private readonly deps: BalanceDeps) {}
 
-  /** The cached reading, or a new one when there's none or `refresh` is set. Throws if locked. */
-  async get(network: NetworkName, refresh = false): Promise<Balances> {
-    const { balances, unkept } = await this.reading(network, refresh);
-    return this.withIncoming(network, await this.withLocked(network, balances, unkept), unkept);
+  /**
+   * The cached reading, or a new one when there's none or `refresh` is set. Throws if locked. `kept`: the cached
+   * reading alone, never read: Home's look right after a send, which asks Koios nothing, so a private spend never
+   * has the account read in the same second (privacy review §2.9, blind test §9.3). Throws with none kept.
+   */
+  async get(network: NetworkName, refresh = false, { kept = false }: { kept?: boolean } = {}): Promise<Balances> {
+    const { balances, unkept } = kept ? await this.keptReading(network) : await this.readingNoted(network, refresh);
+    const b = await this.withIncoming(network, await this.withLocked(network, balances, unkept), unkept);
+    const failed = await this.failedSince(network, balances.updatedAt);
+    return failed ? { ...b, failed } : b;
+  }
+
+  /**
+   * `reading`, noting a failure: when, kept in session storage (wiped on lock) so Home's alert follows the
+   * worker's last reading rather than its own state, which Settings dropped by replacing Home (blind test E05,
+   * which HM-5 meant to clear only on a good reading); its words in memory alone, as a language's words are never
+   * kept. A good reading after it is newer, which is what clears it.
+   */
+  private async readingNoted(network: NetworkName, refresh: boolean): Promise<Reading> {
+    try {
+      return await this.reading(network, refresh);
+    } catch (e) {
+      if (!(e instanceof WalletLocked) && !isTrap(e)) {
+        const at = this.deps.now();
+        this.failedWords.set(network, { at, message: e instanceof Error ? e.message : String(e) });
+        await this.deps.wallet
+          .withKeys(() => this.deps.session.set(SESSION_READ_FAILED_PREFIX + network, at))
+          .catch(() => undefined);
+      }
+      throw e;
+    }
+  }
+
+  /** The last failed reading on `network` if it came after the reading made at `updatedAt`, with its words when held. */
+  private async failedSince(network: NetworkName, updatedAt: number): Promise<Balances["failed"]> {
+    const at = await this.deps.wallet
+      .withKeys(() => this.deps.session.get<number>(SESSION_READ_FAILED_PREFIX + network))
+      .catch(() => undefined);
+    if (typeof at !== "number" || at <= updatedAt) return undefined;
+    const words = this.failedWords.get(network);
+    return { at, ...(words?.at === at ? { message: words.message } : {}) };
+  }
+
+  /** The cached reading as it is, even with its private side behind: what's sent since is counted against it. */
+  private async keptReading(network: NetworkName): Promise<Reading> {
+    const cached = await this.deps.wallet.withKeys(() => this.deps.session.get<Balances>(SESSION_BALANCES_PREFIX + network));
+    if (!cached) throw new Error(NOTHING_KEPT);
+    return { balances: cached };
   }
 
   /** When the kept reading was made, without reading anything; undefined when there's none. Throws if locked. */
@@ -177,9 +233,7 @@ export class BalanceService {
    * last block seen, as any reading does; the account isn't asked about.
    */
   private async readPrivate(network: NetworkName, cached: Balances): Promise<Reading> {
-    const { wallet, session, now, contract = CONTRACT_V1 } = this.deps;
-    // Before the read takes what's spent: what was sent since may still be in it (incoming.ts).
-    const spentAsOf = now();
+    const { wallet, session, contract = CONTRACT_V1 } = this.deps;
     const view = await readContractView(this.deps, network);
     const recorded = await this.mintRecord(network);
     const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
@@ -190,7 +244,7 @@ export class BalanceService {
         utxos.map((p) => p.utxo),
         keys.account,
       );
-      const balances: Balances = { ...cached, spentAsOf, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
+      const balances: Balances = { ...cached, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
       try {
         await session.set(SESSION_BALANCES_PREFIX + network, balances);
         await session.remove(SESSION_PRIVATE_STALE_PREFIX + network);
@@ -214,52 +268,66 @@ export class BalanceService {
   }
 
   /**
-   * The reading with what the wallet's own sent transactions pay back to each
-   * side and it doesn't list yet (incoming.ts), fresh on every request from
-   * what the device keeps: no request. It never breaks a reading.
+   * The reading as it stands now, from what the device keeps, fresh on every
+   * request, with no request of its own (incoming.ts). Each side less what the
+   * wallet has spent since it was read, as a reading made now would leave it
+   * out; what the wallet's own sent transactions pay back to it that no
+   * reading lists yet; and the account's rewards less what those withdraw,
+   * which their change holds (blind test §9.1, §9.3). The private side is the
+   * kept view of the contract, the newest the device has. It never breaks a
+   * reading.
    */
   private async withIncoming(network: NetworkName, b: Balances, unkept?: ReadingUtxos): Promise<Balances> {
     const { wasm, wallet, session, contract = CONTRACT_V1 } = this.deps;
-    let coming: Incoming;
     try {
-      coming = await wallet.withKeys(async (keys): Promise<Incoming> => {
-        const sent = await recentlySent(session, network);
-        if (!sent.length) return {};
-        // None kept (session storage was full): what a side lists isn't known, and nothing is counted on it rather
-        // than a landed transaction's outputs twice (chunk 23's second review, fix round).
+      return await wallet.withKeys(async (keys): Promise<Balances> => {
+        const spent = await spentSet(session);
+        // None kept (session storage was full): what a side lists isn't known. It's left as read, and nothing is
+        // counted on it rather than a landed transaction's outputs twice (chunk 23's second review, fix round).
         const owned = unkept?.owned ?? (await keptContractView(session, network, contract))?.owned;
         const account = unkept?.account ?? (await session.get<PathedUtxo[]>(SESSION_ACCOUNT_UTXOS_PREFIX + network));
+        const seedelf = owned ? { ...b.seedelf, ...lessSpent(spendableOwned(owned, contract.seedelfPolicyId), spent) } : b.seedelf;
+        const cardano = account ? { ...b.cardano, ...lessSpent(account.map((p) => p.utxo), spent) } : b.cardano;
+        // As long as what they spend is held back, not only 20 minutes (sent-txs.ts).
+        const sent = await heldSent(session, network);
+        if (!sent.length) return { ...b, seedelf, cardano };
         const addresses = await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
-        return incomingOf(wasm, sent, {
-          // A reading kept from before it was noted: none of the private side's sends counts as left out.
-          startedAt: b.spentAsOf ?? 0,
+        const { incoming, withdrawn } = incomingOf(wasm, sent, {
           account: account && new Set(account.map((p) => outpoint(p.utxo))),
           owned: owned && new Set(owned.map(outpoint)),
-          spent: await spentSet(session),
+          spent,
           reserved: (await reservedSet(session, network)).inputs,
           keys: new Set(addresses?.keys ?? []),
+          stake: rewardAccountHex(wasm, addresses?.stake),
+          rewards: BigInt(b.cardano.staking.rewards),
           contract,
           ours: (utxos) => ownedUtxos(wasm, keys, utxos),
-          decimals: decimalsOf([...(account ?? []).map((p) => p.utxo), ...(owned ?? [])]),
+          // The reading's own tokens too: a coin spent since took its token out of the lists, and its change has it.
+          decimals: decimalsOf([...(account ?? []).map((p) => p.utxo), ...(owned ?? [])], [...b.cardano.tokens, ...b.seedelf.tokens]),
         });
+        // What's withdrawn is in what's on its way: the rewards left are what can still be withdrawn, and what the
+        // forms may spend with a payment (Home's spentRewards), and Home says only those are in the balance.
+        const rewards = (BigInt(b.cardano.staking.rewards) - withdrawn).toString();
+        return {
+          ...b,
+          seedelf: { ...seedelf, ...(incoming.seedelf ? { incoming: incoming.seedelf } : {}) },
+          cardano: {
+            ...cardano,
+            ...(incoming.cardano ? { incoming: incoming.cardano } : {}),
+            ...(withdrawn > 0n ? { staking: { ...cardano.staking, rewards }, withdrawing: withdrawn.toString() } : {}),
+          },
+        };
       });
     } catch (e) {
       if (isTrap(e)) throw e;
       return b;
     }
-    return {
-      ...b,
-      ...(coming.seedelf ? { seedelf: { ...b.seedelf, incoming: coming.seedelf } } : {}),
-      ...(coming.cardano ? { cardano: { ...b.cardano, incoming: coming.cardano } } : {}),
-    };
   }
 
   private async read(network: NetworkName): Promise<Reading> {
     const { wasm, wallet, session, now, contract = CONTRACT_V1 } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
 
-    // Before what's spent is taken: a send after this may still be in the reading (incoming.ts).
-    const spentAsOf = now();
     // Network calls happen outside withKeys, so they never hold up a lock.
     const [spent, stake] = await Promise.all([
       wallet.withKeys(() => spentSet(session)),
@@ -284,7 +352,6 @@ export class BalanceService {
       const balances: Balances = {
         network,
         updatedAt: now(),
-        spentAsOf,
         seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held),
         cardano: this.cardanoSide(account, utxos, staking),
       };
@@ -301,7 +368,6 @@ export class BalanceService {
   /** `owned`: this wallet's contract UTxOs. `held`: what says who paid for each Seedelf. */
   private seedelfSide(owned: KoiosUtxo[], policyId: string, held: Held): Balances["seedelf"] {
     const seedelfs: SeedelfInfo[] = [];
-    const spendable: KoiosUtxo[] = [];
     for (const utxo of owned) {
       const name = seedelfTokenOf(utxo, policyId);
       if (name) {
@@ -314,9 +380,8 @@ export class BalanceService {
           ...(paid?.account !== undefined ? { paidByAccount: paid.account } : {}),
         });
       }
-      // One carrying a reference script can't be spent yet: see script-spend.ts's spendable.
-      else if (!utxo.reference_script) spendable.push(utxo);
     }
+    const spendable = spendableOwned(owned, policyId);
     seedelfs.sort((a, b) => (a.label ?? "￿").localeCompare(b.label ?? "￿") || a.assetName.localeCompare(b.assetName));
     const { lovelace, tokens } = sumValue(spendable);
     return { lovelace: lovelace.toString(), tokens, utxos: spendable.length, seedelfs, locked: NOTHING };
@@ -366,9 +431,19 @@ async function keep(
   }
 }
 
+/**
+ * What the private balance counts of the wallet's contract UTxOs: those holding no seedelf (a seedelf's UTxO is
+ * listed, not counted, as in the CLI), and none carrying a reference script, which can't be spent yet (see
+ * script-spend.ts's spendable).
+ */
+function spendableOwned(owned: KoiosUtxo[], policyId: string): KoiosUtxo[] {
+  return owned.filter((utxo) => !seedelfTokenOf(utxo, policyId) && !utxo.reference_script);
+}
+
 /** Each token's decimals as Koios gave them in `utxos`, by `policy.asset`: what a transaction's outputs don't carry. */
-function decimalsOf(utxos: KoiosUtxo[]): Map<string, number> {
+function decimalsOf(utxos: KoiosUtxo[], tokens: TokenAmount[] = []): Map<string, number> {
   const found = new Map<string, number>();
+  for (const x of tokens) if (x.decimals) found.set(`${x.policyId}.${x.assetName}`, x.decimals);
   for (const u of utxos) {
     for (const a of u.asset_list ?? []) if (a.decimals) found.set(`${a.policy_id}.${a.asset_name}`, a.decimals);
   }

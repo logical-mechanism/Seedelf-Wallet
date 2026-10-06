@@ -11,7 +11,8 @@
 // disabled (a transaction being sent) stays, and keeps its entry.
 //
 // Nothing is kept in the URL: a reload still starts at Home, and no form's
-// contents go into the history.
+// contents go into the history. Nor the scroll offset: the screen Back leads
+// to opens at its top, as every screen does (blind test §9.10).
 
 import { useEffect, useRef } from "react";
 
@@ -64,6 +65,9 @@ export function useBrowserBack(onBack: (() => void) | undefined, disabled = fals
     if (!has) return;
     if (!listening) {
       window.addEventListener("popstate", onPop);
+      // The screens say where they open (Screen's `useOpensAtTop`): the browser's own restore, which comes after the
+      // popstate, would put back over the screen Back drew the offset its entry was left at (blind test §9.10).
+      history.scrollRestoration = "manual";
       listening = true;
     }
     const entry: Entry = {

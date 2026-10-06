@@ -1,7 +1,7 @@
 // What a session return's review says about where its money goes (roadmap
 // chunk 16): into the private UTxO the session's funding made, or new ones;
 // and, when its spare ADA goes through Lovejoin first, the boxes, the
-// fan-out, when each comes back, and a way to bring this one back directly.
+// fan-out, when each comes back, and a switch to bring this one back directly.
 // Then, as its chain goes, how far it has got: sent, then on chain; and,
 // when a return left Lovejoin out, why (launch review #23). Wherever the
 // user chooses Lovejoin, it says Lovejoin has had no third-party audit:
@@ -13,6 +13,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { formatAda } from "../format";
 import { withoutStop } from "../sentence";
+import { BOX_BACK_ESTIMATE } from "../swap";
 import { Callout } from "./Callout";
 import { Row } from "./ReviewRows";
 
@@ -51,6 +52,14 @@ const MIX_FEE_ESTIMATE = 950_000;
 
 /** About what `mixes` mixes cost, in ₳, as every screen that prices Lovejoin says it. */
 export const mixFeesText = (mixes: number): string => formatAda(String(mixes * MIX_FEE_ESTIMATE));
+
+/**
+ * About what one 10 ₳ box costs on a session's way back at `depth`: its
+ * mixes, and bringing it back (BOX_BACK_ESTIMATE), in lovelace. What the
+ * connector says a private session's return through Lovejoin adds (blind
+ * test §9.8, T16: "adds Lovejoin's fees" gave no figure).
+ */
+export const boxCost = (depth: number): bigint => BigInt(mixesPerBox(depth) * MIX_FEE_ESTIMATE) + BOX_BACK_ESTIMATE;
 
 /**
  * How well Lovejoin hides a box at `depth`, said wherever the user chooses
@@ -133,8 +142,55 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
   );
 }
 
-/** Why, and the way out: `onDirect` rebuilds the return without Lovejoin. Or why Lovejoin was left out this time. */
-export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummary; busy: boolean; onDirect: () => void }) {
+/**
+ * A return's way back, first on its review, as a swap's approval and Stop's
+ * dialog have it: the switch, on through Lovejoin as built, off directly.
+ * Bringing it back directly was a link under the costs ("Bring it back
+ * directly instead"), and the owner, stopping a real swap after a price
+ * drop, never saw Stop's (5289dcf): a cheaper, less private way is a switch
+ * seen first, the private way still the default. `through`: which way the
+ * review shown was built; `onThrough` builds it the other way. Shown only
+ * where Lovejoin took the return, or was turned off here: with no box to
+ * take, there's no choice to make.
+ */
+export function LovejoinSwitch({
+  back,
+  through,
+  busy,
+  onThrough,
+}: {
+  back: SessionBackSummary;
+  through: boolean;
+  busy: boolean;
+  onThrough: (through: boolean) => void;
+}) {
+  const tr = useT();
+  if (!back.lovejoin && through) return null;
+  return (
+    <div className="setting-row" data-testid="lovejoin-way">
+      <span className="stack-tight">
+        <span id="lovejoin-way-label">{tr("swaps.lovejoin.label")}</span>
+        <span className="note" id="lovejoin-way-note">
+          {tr(through ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.off")}
+        </span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        className="switch"
+        aria-checked={through}
+        aria-labelledby="lovejoin-way-label"
+        aria-describedby="lovejoin-way-note"
+        onClick={() => onThrough(!through)}
+        disabled={busy}
+        data-testid="lovejoin-way-switch"
+      />
+    </div>
+  );
+}
+
+/** What going through Lovejoin takes and hides, under a return's rows (LovejoinSwitch chooses it). Or why it was left out this time. */
+export function LovejoinNote({ back }: { back: SessionBackSummary }) {
   const tr = useT();
   const l = back.lovejoin;
   if (back.lovejoinSkipped) {
@@ -160,9 +216,6 @@ export function LovejoinNote({ back, busy, onDirect }: { back: SessionBackSummar
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
       </p>
-      <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="lovejoin-direct">
-        {tr("lovejoin.directInstead")}
-      </button>
     </>
   );
 }

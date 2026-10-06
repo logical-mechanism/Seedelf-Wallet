@@ -40,7 +40,7 @@ import type { PreferencesService } from "./preferences";
 import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
-import { outpoint, reservedSet } from "./spent";
+import { outpoint, reservedSet, spentSet } from "./spent";
 import type { Keys, Wallet } from "./wallet";
 
 /** A built transaction is only sent within this long; after that, build again. */
@@ -122,6 +122,8 @@ export interface Kept {
   sentCbor?: string;
   /** The history of what it leaves in the private balance, for the Seedelf history once it's sent (activity.ts). */
   origin?: HistoryClass;
+  /** The public account active when it was built: the one a payment from the account spends (pending.ts `Sending`). */
+  account?: number;
 }
 
 /**
@@ -284,7 +286,7 @@ export async function measure<F>(
 
 /** Keeps a built transaction, with its summary, for Send. Refused once locked. */
 export function keep(deps: ScriptSpendDeps, key: string, built: Omit<Kept, "builtAt"> & object): Promise<void> {
-  return deps.wallet.withKeys(() => deps.session.set(key, { ...built, builtAt: deps.now() }));
+  return deps.wallet.withKeys((keys) => deps.session.set(key, { ...built, builtAt: deps.now(), account: keys.account }));
 }
 
 /**
@@ -319,14 +321,20 @@ export async function send(
 
   let txCbor = built.sentCbor ?? built.txCbor;
   if (built.seed !== undefined && !again) {
+    // Something it spends went out since the review, in another of this wallet's transactions (another page's
+    // Send, say): said as that, before giveme.my is asked, so a refusal from giveme.my is never put down to the
+    // user's own money when the device knows of nothing spent (blind test §9.5, T09).
+    await refuseSpentSince(deps, network, txHash, built.txCbor);
     let collateral: unknown;
     try {
       collateral = await deps.collateral(network).witness(built.txCbor);
     } catch (e) {
       // giveme.my checks the chain first, so this refusal may be a UTxO the
       // kept view still has as ours: read the contract in full next time, as
-      // the "refresh, then review it again" it asks for expects.
-      if (e instanceof CollateralRefusedError) await forgetContractView(deps, network);
+      // the "refresh, then review it again" it asks for expects. Not for an
+      // outage or a limit, which says nothing about the view: a full read on
+      // every retry would only spend Koios's budget (cross-area review).
+      if (e instanceof CollateralRefusedError && !e.busy) await forgetContractView(deps, network);
       throw e;
     }
     const signed = await wallet.withKeys(
@@ -342,7 +350,7 @@ export async function send(
   // funding change its last transaction merges into. Only one of the two could land, so this one waits for a
   // review that leaves it out (independent review L18). Checked last, just before it goes.
   if (!again) await refuseReserved(deps, network, built.txCbor, what);
-  const { txCbor: _txCbor, seed: _seed, sentCbor: _sentCbor, builtAt: _builtAt, ...summary } = built;
+  const { txCbor: _txCbor, seed: _seed, sentCbor: _sentCbor, builtAt: _builtAt, account: _account, ...summary } = built;
   return submitWatched(deps, {
     network,
     txHash,
@@ -355,7 +363,34 @@ export async function send(
     contract: built.seed !== undefined,
     invalidHereafter: built.invalidHereafter,
     again,
+    ...(built.account !== undefined ? { account: built.account } : {}),
   });
+}
+
+/**
+ * Refuses, as a stale review, a kept transaction that spends what this wallet
+ * has spent since it was built (spent.ts: what it submitted lately, kept
+ * until a refusal takes it back). The build leaves out what was spent then,
+ * so one here went out after the review. Asks nobody anything.
+ *
+ * Unless what spent it is this very transaction: another Send of the same
+ * review (a second page, or a submit put back as it was after the first went)
+ * holds its inputs as spent from the moment it's written ahead, and a stale
+ * review's "Refresh and review again" would build a second payment beside it.
+ * That one is refused as sent already (pending.ts `refuseSent`, cross-area
+ * review of the blind test's fix round), as a missing review is.
+ */
+async function refuseSpentSince(
+  deps: ScriptSpendDeps,
+  network: NetworkName,
+  txHash: string,
+  txCbor: string,
+): Promise<void> {
+  const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
+  const spent = await deps.wallet.withKeys(() => spentSet(deps.session, deps.now()));
+  if (!inputs.some((o) => spent.has(o))) return;
+  await refuseSent(deps, network, txHash);
+  throw new StaleReviewError(t("worker.spend.spentSince"));
 }
 
 /**

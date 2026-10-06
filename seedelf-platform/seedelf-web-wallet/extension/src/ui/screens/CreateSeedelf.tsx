@@ -19,6 +19,7 @@ import type { Balances, MintSource, MintSummary, PendingTx } from "../../shared/
 import { call, isStale } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { ShieldIcon, WalletIcon } from "../components/Icons";
 import { RadioCards } from "../components/RadioCards";
 import { HistoriesNote } from "../components/HistoriesNote";
@@ -97,7 +98,7 @@ export function CreateSeedelf({
     try {
       onSent(await call("mint-submit", { txHash: summary.txHash }), summary.from);
     } catch (err) {
-      if (isStale(err)) stale.refused((err as Error).message);
+      if (isStale(err)) stale.refused(err);
       else setError((err as Error).message);
       setBusy(false);
     }
@@ -108,6 +109,7 @@ export function CreateSeedelf({
       <Screen
         title={t("mint.review.title")}
         titleId="mint-review"
+        review
         onBack={() => {
           // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
           setSummary(undefined);
@@ -119,7 +121,7 @@ export function CreateSeedelf({
         error={error}
         foot={
           stale.detail !== undefined ? (
-            <StaleFoot detail={stale.detail} busy={busy} onAgain={() => void build()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void build()} />
           ) : (
             <>
               <RenewedNote renewed={stale.renewed} />
@@ -152,6 +154,8 @@ export function CreateSeedelf({
         <p className="note">
           {t(summary.from === "seedelf" ? "mint.review.notePrivate" : "mint.review.noteAccount")}
         </p>
+        {/* Paid from the private balance, giveme.my lends the collateral; from the account, the account's own. */}
+        {summary.from === "seedelf" && <GivemeNote />}
       </Screen>
     );
   }

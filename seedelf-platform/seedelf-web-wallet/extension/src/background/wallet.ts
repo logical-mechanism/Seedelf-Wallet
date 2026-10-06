@@ -70,6 +70,15 @@ export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
  */
 export const SESSION_SENDS = "seedelf.sends";
 /**
+ * chrome.storage.session: the sites the user declined, turned away unasked
+ * for a while (dapp.ts `keepRefusals`): origins, waits, counts, networks,
+ * never a page's title, and nothing about money. A lock keeps it too, as it
+ * is: one made by a worker that hadn't read it yet would otherwise take it,
+ * and let a declined site ask the moment the wallet unlocked, its count back
+ * at one (the blind test's cross-area review). Removing the wallet doesn't.
+ */
+export const SESSION_DAPP_REFUSED = "seedelf.dapp.refused";
+/**
  * What the wallet knows of its own sends beyond what it spent: its last send
  * before the last lock, or the last try of a payment let go since, whose
  * spent UTxOs were freed (`last`, noteSend); and when session storage began
@@ -452,7 +461,7 @@ export class Wallet {
    */
   reset(): Promise<void> {
     return this.serial(async () => {
-      await this.wipe();
+      await this.wipe({ refusals: false });
       const records = PRIVATE_RECORDS.filter((name) => !KEPT_ON_RESET.includes(name)).map((name) => PRIVATE_PREFIX + name);
       await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...LOCAL_CACHES);
       this.deps.changed();
@@ -671,13 +680,17 @@ export class Wallet {
    * wallet unlocked. What it knows of its own sends outlasts the lock, two
    * times and nothing of what was sent, so a Lovejoin box never goes back
    * minutes after a send the lock would have made it forget (SESSION_SENDS,
-   * independent review M10).
+   * independent review M10). So do the sites the user declined, unless the
+   * wallet is being removed (`refusals: false`), whose sites go with it
+   * (SESSION_DAPP_REFUSED).
    */
-  private async wipe(): Promise<void> {
+  private async wipe({ refusals = true }: { refusals?: boolean } = {}): Promise<void> {
     try {
       const sends = await this.lockKeeps().catch(() => undefined);
+      const refused = refusals ? await this.deps.session.get<unknown>(SESSION_DAPP_REFUSED).catch(() => undefined) : undefined;
       await this.deps.session.clear();
       if (sends) await this.deps.session.set(SESSION_SENDS, sends).catch(() => undefined);
+      if (refused !== undefined) await this.deps.session.set(SESSION_DAPP_REFUSED, refused).catch(() => undefined);
       await this.deps.autoLock.stop();
     } finally {
       this.free();

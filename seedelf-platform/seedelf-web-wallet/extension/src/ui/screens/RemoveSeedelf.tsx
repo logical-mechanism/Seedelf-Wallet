@@ -27,6 +27,7 @@ import { useAccounts } from "../accounts";
 import { call, isStale } from "../background";
 import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
 import { ShieldIcon, WalletIcon } from "../components/Icons";
 import { RadioCards } from "../components/RadioCards";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -171,7 +172,7 @@ export function RemoveSeedelf({
     try {
       onSent(await call("remove-submit", { txHash: summary.txHash }));
     } catch (err) {
-      if (isStale(err)) stale.refused((err as Error).message);
+      if (isStale(err)) stale.refused(err);
       else setError((err as Error).message);
       setBusy(false);
     }
@@ -182,6 +183,7 @@ export function RemoveSeedelf({
       <Screen
         title={t("remove.review.title")}
         titleId="remove-review"
+        review
         onBack={() => {
           // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
           setSummary(undefined);
@@ -193,7 +195,7 @@ export function RemoveSeedelf({
         error={error}
         foot={
           stale.detail !== undefined ? (
-            <StaleFoot detail={stale.detail} busy={busy} onAgain={() => void build()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void build()} />
           ) : (
             <>
               <RenewedNote renewed={stale.renewed} />
@@ -218,6 +220,7 @@ export function RemoveSeedelf({
         <p className="note">
           {t("remove.review.note")}
         </p>
+        <GivemeNote />
       </Screen>
     );
   }

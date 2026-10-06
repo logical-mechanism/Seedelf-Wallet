@@ -6,7 +6,7 @@
 // (state-changed, dapp-changed) carry nothing, so they stay messages.
 
 import { isMessage, UI_PORT, type BuildStage, type Message, type Reply, type ReplyCode, type RequestName } from "../shared/rpc";
-import { CollateralRefusedError, StaleReviewError } from "./collateral";
+import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
 
 /** What the UI acts on in a refusal: a review to build again (chunk 23's review, P-3). */
 function codeOf(error: unknown): ReplyCode | undefined {
@@ -58,7 +58,10 @@ export function serveUi(
       (value) => reply({ ok: true, value } as Reply<RequestName>),
       (error: unknown) => {
         const code = codeOf(error);
-        reply({ ok: false, error: error instanceof Error ? error.message : String(error), ...(code ? { code } : {}) });
+        // Who refused, where that's giveme.my: the screen names it, not the user's own money (blind test §9.5).
+        const by = refusedBy(error);
+        const said = error instanceof Error ? error.message : String(error);
+        reply({ ok: false, error: said, ...(code ? { code } : {}), ...(by ? { by } : {}) });
       },
     );
   });
