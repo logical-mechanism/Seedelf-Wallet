@@ -7,7 +7,7 @@
 // with hundreds of tokens never lists them all in the form.
 
 import { useMemo, useState } from "react";
-import { t, useT } from "../../i18n";
+import { currentLanguage, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type { TokenAmount, TokenQuantity } from "../../shared/rpc";
@@ -47,12 +47,14 @@ export function tokenRules(
  * of them. Each is read with the decimals its box shows (`tokenDecimals` on
  * `network`), so what's sent is what was typed. A token picked and left at
  * nothing is a problem too: it used to be left behind with no word, and the
- * review didn't list it (chunk 23's review, MP-3).
+ * review didn't list it (chunk 23's review, MP-3). `shown` writes what's held
+ * in a problem: masked while balances are hidden (HM-9).
  */
 export function tokenChoices(
   network: NetworkName,
   held: TokenAmount[],
   typed: Record<string, string>,
+  shown = (amount: string) => amount,
 ): { sent: TokenQuantity[]; problems: Record<string, string>; ok: boolean } {
   const sent: TokenQuantity[] = [];
   const problems: Record<string, string> = {};
@@ -69,7 +71,7 @@ export function tokenChoices(
     } else if (quantity === undefined) {
       problems[key(token)] = decimals ? t("token.amount.atMostDecimals", { decimals }) : t("token.amount.wholeNumber");
     } else if (BigInt(quantity) > BigInt(token.quantity)) {
-      problems[key(token)] = t("token.amount.tooMuchPlain", { amount: formatQuantity(token.quantity, decimals) });
+      problems[key(token)] = t("token.amount.tooMuchPlain", { amount: shown(formatQuantity(token.quantity, decimals)) });
     } else {
       sent.push({ policyId: token.policyId, assetName: token.assetName, quantity });
     }
@@ -102,7 +104,7 @@ export function TokenAmounts({
   // as a mistake already made. Review still waits for it, and its reason says why (chunk 23's second review, PY-9).
   const [touched, setTouched] = useState<Record<string, true>>({});
   if (held.length === 0) return null;
-  const { problems } = tokenChoices(network, held, typed);
+  const { problems } = tokenChoices(network, held, typed, amounts.text);
   const picked = held.filter((t) => key(t) in typed);
   const left = held.length - picked.length;
 
@@ -189,8 +191,8 @@ export function TokenAmounts({
   );
 }
 
-/** Lace's "Add assets": search, tap to select, then add them all at once. */
-function TokenPicker({
+/** Lace's "Add assets": search, tap to select, then add them all at once. Exported for its tests. */
+export function TokenPicker({
   tokens,
   onClose,
   onPick,
@@ -204,7 +206,9 @@ function TokenPicker({
   const amounts = useAmounts();
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<Set<string>>(new Set());
-  const views = useMemo(() => sortTokens(tokens.map((t) => viewToken(network, t)), "name"), [network, tokens]);
+  // A lookalike's second line is words: made again when another page switches the language.
+  const language = currentLanguage();
+  const views = useMemo(() => sortTokens(tokens.map((t) => viewToken(network, t)), "name"), [network, tokens, language]);
   const found = searchTokens(views, query);
   const toggle = (k: string) => {
     const next = new Set(chosen);

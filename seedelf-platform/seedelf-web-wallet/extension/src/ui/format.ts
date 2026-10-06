@@ -1,7 +1,7 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
-import { t } from "../i18n";
+import { currentLanguage, t } from "../i18n";
 import { epochStart, type NetworkName } from "../networks";
 import {
   ALWAYS_ABSTAIN,
@@ -113,12 +113,16 @@ export function whenOf(at: number, now: Date): string {
 }
 
 /**
- * The day epoch `epoch` ends on `network`, when the next starts: "9 Oct 2026".
- * Counted from Shelley's start (networks.ts), so no request. Pinned to en-GB
- * as every date in the wallet is, for now (a known gap, chunk 19's plan).
+ * When epoch `epoch` ends on `network`, as the next starts: "9 Oct 2026, 21:44". The time too, since voting closes
+ * then, part-way through the day: mainnet's epochs end at 21:44:51 UTC (release review C43). Its seconds are
+ * dropped, so it's never late.
+ * Counted from Shelley's start (networks.ts), so no request. Pinned to en-GB as every date in the wallet is, for now
+ * (a known gap, chunk 19's plan).
  */
 export function epochEnds(network: NetworkName, epoch: number): string {
-  return dayText(epochStart(network, epoch + 1));
+  const ms = epochStart(network, epoch + 1);
+  const time = new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return t("format.dateAndTime", { date: dayText(ms), time });
 }
 
 /**
@@ -165,6 +169,9 @@ const WELL_GROUPED = /^(\d+|[1-9]\d{0,2}(,\d{3})+)$/;
  * the wallet in the user's language — and would stay English for the session.
  */
 export const commaNote = () => t("format.commaNote");
+/** Spanish writes 1,125 for 1.125, so there a paste like it reads both ways: both readings, for the user to pick. */
+export const ambiguousCommaNote = (typed: string) =>
+  t("format.warn.ambiguousComma", { typed, thousands: typed.replace(",", ""), decimal: typed.replace(",", ".") });
 
 /**
  * What an edit put into `previous` to make `typed`: where, and the text
@@ -252,6 +259,9 @@ export function sanitizeAmount(previous: string, typed: string, rules: AmountRul
     if (commaTyped && /^[\d,.]*$/.test(text)) return { value: previous, note: commaNote() };
     return { value: typed.trim(), note: rules.notANumber };
   }
+  // In Spanish a comma is the decimal mark, so a paste of d,ddd could be either: change nothing and say both.
+  if (commaTyped && !decimalComma && rules.decimals > 0 && currentLanguage() === "es" && /^\d{1,3},\d{3}$/.test(text))
+    return { value: previous, note: ambiguousCommaNote(text) };
   if (commaTyped && !decimalComma && !WELL_GROUPED.test(match[1]!)) return { value: previous, note: commaNote() };
   let fraction = match[2];
   let note: string | undefined;

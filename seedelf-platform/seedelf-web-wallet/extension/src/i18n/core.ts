@@ -128,6 +128,11 @@ function follow(): void {
 /** What a `t()` call takes: one of our keys, and the values to put in it. */
 export type Translate = (key: I18nKey, values?: Record<string, unknown>) => string;
 
+/** What `t()` puts in a value's place: a noncharacter, so no bundle has it. */
+const STAND_IN = "\uFDD0";
+const NEEDS_STAND_IN = /[{\uFDD0]/;
+const STOOD_IN = /\uFDD0(\d+)\uFDD0/g;
+
 /**
  * The wallet's words, outside React: the worker's messages, and anything a
  * plain function writes. Screens use `useT` from `./index.tsx` instead, so
@@ -137,8 +142,22 @@ export type Translate = (key: I18nKey, values?: Record<string, unknown>) => stri
  * base key and i18next's own types only know the `_one`/`_other` entries that
  * are really in the JSON. `Translate` accepts the base, which is what a call
  * site writes, and the cast is here — once — instead of at every call.
+ *
+ * A value stays in its own slot. i18next fills `{{x}}` by replacing the first copy of that text in the sentence, and
+ * a value put in before it can carry one: a token named "ADA {{real}}" took the wallet's "ADA" into its own name, and
+ * a site picks its own title. So a value with a brace goes in as a stand-in and comes back as it was once i18next is
+ * done. One holding the stand-in's character goes in as one too, so no value can pass for another.
  */
-export const t: Translate = (key, values) => i18next.t(key as never, values as never) as unknown as string;
+export const t: Translate = (key, values) => {
+  const held: string[] = [];
+  let given = values;
+  for (const [name, value] of Object.entries(values ?? {})) {
+    if (typeof value !== "string" || !NEEDS_STAND_IN.test(value)) continue;
+    given = { ...given, [name]: `${STAND_IN}${held.push(value) - 1}${STAND_IN}` };
+  }
+  const text = i18next.t(key as never, given as never) as unknown as string;
+  return held.length ? text.replace(STOOD_IN, (_, i: string) => held[Number(i)]!) : text;
+};
 
 /**
  * What goes between two whole sentences: a space in English and Spanish,

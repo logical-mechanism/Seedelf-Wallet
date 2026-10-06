@@ -126,7 +126,20 @@ export async function activeAccount(local: Area): Promise<number> {
 }
 
 export class AccountsService {
+  private queue: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly deps: AccountsDeps) {}
+
+  /**
+   * Runs the record's read-modify-writes one at a time, as Contacts' and coin control's are: a look that asks Koios
+   * for seconds, a restore's in the background, must not write over a name or an account added meanwhile (release
+   * review C32). Koios is asked outside it.
+   */
+  private serial<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
 
   /** The accounts this phrase is known to have used, account 0 first. Throws if locked. */
   async known(): Promise<KnownAccount[]> {
@@ -181,8 +194,13 @@ export class AccountsService {
       throw new Error(t("worker.accounts.unknownAdd"));
     }
     if ((await this.active()) === index) return index;
-    await this.deps.local.set(LOCAL_ACCOUNT, index);
-    await this.wipe(networks);
+    // In one turn of the wallet's queue: a reading takes the account with what's kept, and keeps what it read only
+    // while that account is still active, each in a turn of its own. So it lands before the switch, and is wiped, or
+    // after it, and is dropped: never the account left's as the new one's (balances.ts, release review C11).
+    await this.deps.wallet.withKeys(async () => {
+      await this.deps.local.set(LOCAL_ACCOUNT, index);
+      await this.wipe(networks);
+    });
     return index;
   }
 
@@ -195,11 +213,13 @@ export class AccountsService {
   /** Names account `index`, or clears the name with an empty one. Throws if locked. */
   async rename(index: number, name: string): Promise<KnownAccount[]> {
     const trimmed = name.trim().slice(0, NAME_MAX);
-    const known = await this.known();
-    if (!known.some((a) => a.index === index)) throw new Error(t("worker.accounts.unknown"));
-    const next = known.map((a) => (a.index === index ? { ...a, ...(trimmed ? { name: trimmed } : { name: undefined }) } : a));
-    await this.keep(next);
-    return sorted(next);
+    return this.serial(async () => {
+      const known = await this.known();
+      if (!known.some((a) => a.index === index)) throw new Error(t("worker.accounts.unknown"));
+      const next = known.map((a) => (a.index === index ? { ...a, ...(trimmed ? { name: trimmed } : { name: undefined }) } : a));
+      await this.keep(next);
+      return sorted(next);
+    });
   }
 
   /**
@@ -218,7 +238,7 @@ export class AccountsService {
    * Called after the wallet is unlocked, since it seals.
    */
   async recordFirst(): Promise<void> {
-    await this.keep([FIRST]);
+    await this.serial(() => this.keep([FIRST]));
   }
 
   /**
@@ -249,8 +269,21 @@ export class AccountsService {
       found.push({ index, foundAt: this.deps.now() });
       index += 1;
     }
-    if (found.length) await this.keep([...known, ...found]);
+    if (found.length) await this.merge(found);
     return found;
+  }
+
+  /**
+   * Adds `found` to the record as it is now, not as it was when the look began: what was added or named while Koios
+   * answered stays, and an account already there keeps its entry.
+   */
+  private merge(found: KnownAccount[]): Promise<void> {
+    return this.serial(async () => {
+      const now = await this.known();
+      const have = new Set(now.map((a) => a.index));
+      const fresh = found.filter((a) => !have.has(a.index)).slice(0, Math.max(0, MAX_KEPT - now.length));
+      if (fresh.length) await this.keep([...now, ...fresh]);
+    });
   }
 
   /**
@@ -276,11 +309,14 @@ export class AccountsService {
    */
   async check(network: NetworkName, index: number): Promise<{ index: number; used: boolean }> {
     if (!isIndex(index)) throw new Error(notPublic(index));
-    const known = await this.known();
     const used = await this.used(network, index);
-    if (used && !known.some((a) => a.index === index)) {
-      if (known.length >= MAX_KEPT) throw new Error(tooMany());
-      await this.keep([...known, { index, foundAt: this.deps.now() }]);
+    if (used) {
+      await this.serial(async () => {
+        const known = await this.known();
+        if (known.some((a) => a.index === index)) return;
+        if (known.length >= MAX_KEPT) throw new Error(tooMany());
+        await this.keep([...known, { index, foundAt: this.deps.now() }]);
+      });
     }
     return { index, used };
   }
@@ -298,12 +334,14 @@ export class AccountsService {
    */
   async add(index: number): Promise<KnownAccount[]> {
     if (!isIndex(index)) throw new Error(notPublic(index));
-    const known = await this.known();
-    if (known.some((a) => a.index === index)) return known;
-    if (known.length >= MAX_KEPT) throw new Error(tooMany());
-    const next = [...known, { index }];
-    await this.keep(next);
-    return sorted(next);
+    return this.serial(async () => {
+      const known = await this.known();
+      if (known.some((a) => a.index === index)) return known;
+      if (known.length >= MAX_KEPT) throw new Error(tooMany());
+      const next = [...known, { index }];
+      await this.keep(next);
+      return sorted(next);
+    });
   }
 
   private async keep(known: KnownAccount[]): Promise<void> {

@@ -22,10 +22,11 @@ import { TxBanner } from "./TxBanner";
 /**
  * The kinds whose transaction only this wallet can tell is the user's: a
  * Seedelf spend, a session's step, a Lovejoin box or mix. Their banner's
- * link says what opening it tells (ExplorerLink). A move-in, an
- * account-paid mint and the public account's own payments are signed by
- * the account in the open, so theirs stay plain. Not the worker's
- * SEEDELF_KINDS, which says what the private history notes.
+ * link says what opening it tells (ExplorerLink). A move-in and the public
+ * account's own payments are signed by the account in the open, so theirs
+ * stay plain; so does a mint the account paid, which `privateBanner` tells
+ * from a stealth mint. Not the worker's SEEDELF_KINDS, which says what the
+ * private history notes.
  */
 export const PRIVATE_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
   "transfer",
@@ -38,6 +39,16 @@ export const PRIVATE_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
   "lovejoin-withdraw",
   "lovejoin-mix",
 ]);
+
+/**
+ * Whether a sent transaction's link says what opening it tells: a private kind, or a stealth mint. Both mints are
+ * one kind, and only the account's carries a slot (mint.ts, account.ts `validUntil`), as the worker tells them
+ * apart (pending.ts `forgetReading`): one without is paid from the private balance, the very mint meant to hide
+ * who paid, and its banner linked to Cardanoscan without the note.
+ */
+export function privateBanner(pending: PendingTx): boolean {
+  return PRIVATE_KINDS.has(pending.kind) || (pending.kind === "mint" && pending.invalidHereafter === undefined);
+}
 
 /** How the banner names a sent transaction, and says it's confirmed. */
 export const SENT: Record<PendingTx["kind"], I18nKey> = {
@@ -212,7 +223,7 @@ export function PendingBanner({
     network: pending.network,
     txHash: pending.txHash,
     testId: "pending-tx",
-    private: PRIVATE_KINDS.has(pending.kind),
+    private: privateBanner(pending),
   };
   if (pending.confirmations !== null) {
     return <TxBanner {...shared} state="done" title={tr(CONFIRMED[pending.kind])} onDismiss={watching ? undefined : onDismiss} />;

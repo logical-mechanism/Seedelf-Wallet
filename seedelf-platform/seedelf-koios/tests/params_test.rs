@@ -1,6 +1,7 @@
 //! The protocol parameters as Koios gives them (`ProtocolParameters::from_koios`):
 //! the wallet trusts Koios for them, and the ledger takes any overpayment, so
-//! a parameter far off the network's is refused.
+//! a parameter far off the network's is refused. The DRep deposit, which only
+//! a registration needs, reads as unknown instead.
 
 use seedelf_koios::koios::{
     MAX_COINS_PER_UTXO_SIZE, MAX_DREP_DEPOSIT, MAX_KEY_DEPOSIT, MAX_MIN_FEE_A, MAX_MIN_FEE_B,
@@ -89,7 +90,6 @@ fn a_parameter_far_off_the_networks_is_refused() {
             json!((MAX_COINS_PER_UTXO_SIZE + 1).to_string()),
         ),
         ("key_deposit", json!((MAX_KEY_DEPOSIT + 1).to_string())),
-        ("drep_deposit", json!((MAX_DREP_DEPOSIT + 1).to_string())),
         ("price_mem", json!(0.6)),
         ("price_mem", json!(-0.0577)),
         ("price_step", json!(0.001)),
@@ -113,7 +113,7 @@ fn a_parameter_far_off_the_networks_is_refused() {
 }
 
 #[test]
-fn a_missing_drep_deposit_is_none_not_a_guess() {
+fn a_drep_deposit_missing_or_off_is_none_not_a_guess() {
     // Only registering a DRep needs it, and that refuses without it.
     let mut params = recorded();
     params.as_object_mut().unwrap().remove("drep_deposit");
@@ -123,7 +123,19 @@ fn a_missing_drep_deposit_is_none_not_a_guess() {
             .drep_deposit,
         None
     );
-    // Written but not a number is refused, not read as missing.
-    params["drep_deposit"] = json!("five hundred");
-    assert!(ProtocolParameters::from_koios(&params).is_err());
+    // Off the network's, it's unknown too: every other build parses this row,
+    // and failed over a figure only a registration uses.
+    for wrong in [
+        json!("five hundred"),
+        json!((MAX_DREP_DEPOSIT + 1).to_string()),
+        json!(MAX_DREP_DEPOSIT + 1),
+        json!(500_000_000.5),
+        json!(-500_000_000),
+        json!([500_000_000]),
+    ] {
+        params["drep_deposit"] = wrong.clone();
+        let read = ProtocolParameters::from_koios(&params).unwrap();
+        assert_eq!(read.drep_deposit, None, "{wrong}");
+        assert_eq!(read.key_deposit, 2_000_000, "{wrong}");
+    }
 }

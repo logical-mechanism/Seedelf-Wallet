@@ -3,7 +3,7 @@
 // sort. Rows open the same details as Home's. After Lace's portfolio.
 
 import { useMemo, useState } from "react";
-import { useT } from "../../i18n";
+import { currentLanguage, useT } from "../../i18n";
 
 import type { TokenAmount } from "../../shared/rpc";
 import { SearchIcon } from "../components/Icons";
@@ -39,7 +39,9 @@ export function Tokens({
   blocked?: string;
 }) {
   const network = useNetwork();
-  const views = useMemo(() => tokens.map((t) => viewToken(network, t)), [network, tokens]);
+  // A lookalike's second line is words: made again when another page switches the language.
+  const language = currentLanguage();
+  const views = useMemo(() => tokens.map((t) => viewToken(network, t)), [network, tokens, language]);
   const fungible = views.filter((v) => !v.nft);
   const nfts = views.filter((v) => v.nft);
   const t = useT();

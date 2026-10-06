@@ -69,8 +69,9 @@ export const COLLATERAL_LOVELACE = 5_000_000n;
 const WAIT_MS = 10 * 60_000;
 
 /**
- * What the user chose on one network, for the public account the wallet is
- * working on: the shape every caller sees, flattened out of `Stored`.
+ * What the user chose on one network, for one public account (the one the
+ * wallet is working on, unless named): the shape every caller sees,
+ * flattened out of `Stored`.
  */
 export interface Choices {
   /** Locked outpoints (`txhash#index`), per side. */
@@ -197,18 +198,25 @@ export class CoinControlService {
     return (await this.deps.activeAccount?.()) ?? 0;
   }
 
-  /** What the user chose on `network`, for the account the wallet is working on. Throws if locked. */
-  async choices(network: NetworkName): Promise<Choices> {
-    const [stored, account] = await Promise.all([this.deps.store.get<Stored>(`coins.${network}`), this.activeIndex()]);
-    return choicesOf(stored, account);
+  /**
+   * What the user chose on `network`, for public account `account`, or the one the wallet is working on: the dApp
+   * connector names the dApp account, whose UTxOs it serves whichever account is on screen. Throws if locked.
+   */
+  async choices(network: NetworkName, account?: number): Promise<Choices> {
+    const [stored, index] = await Promise.all([
+      this.deps.store.get<Stored>(`coins.${network}`),
+      account ?? this.activeIndex(),
+    ]);
+    return choicesOf(stored, index);
   }
 
-  /** The account's UTxOs that may be spent, and its collateral (never among them). */
+  /** The account's UTxOs that may be spent, and its collateral (never among them): `account`'s choices, as `choices`. */
   async account(
     network: NetworkName,
     utxos: PathedUtxo[],
+    account?: number,
   ): Promise<{ spendable: PathedUtxo[]; collateral?: PathedUtxo }> {
-    const choices = await this.choices(network);
+    const choices = await this.choices(network, account);
     const collateral = collateralOf(choices, utxos)?.utxo;
     const locked = new Set(choices.cardano);
     const spendable = utxos.filter((p) => p !== collateral && !locked.has(outpoint(p.utxo)));

@@ -76,7 +76,7 @@ export const READ_METHODS: ReadonlySet<DappMethod> = new Set<DappMethod>([
  * is undefined — so i18next, which reads `chrome.i18n` and
  * `chrome.storage.local` as it initialises, must not be reachable from here.
  * It isn't a loss: these go to the site, not to a wallet surface.
- * `tests/content-script.test.ts` holds the rule.
+ * `tests/import-boundaries.test.ts` holds the rule.
  */
 export function cutOff(method: DappMethod): string {
   return method === "submitTx"

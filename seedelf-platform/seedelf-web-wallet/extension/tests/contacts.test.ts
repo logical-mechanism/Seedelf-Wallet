@@ -2,8 +2,10 @@
 // phrase) and the contacts kept in it.
 import { describe, expect, it } from "vitest";
 
+import { ContactsService } from "../src/background/contacts";
 import { PRIVATE_PREFIX, PrivateStore, UnreadableRecordError } from "../src/background/private-store";
-import { testBalances, testWallet, transferPreprod, vectors } from "./fakes";
+import { isTrap } from "../src/background/wasm";
+import { loadTestWasm, testBalances, testWallet, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const phrase = (words: number) =>
@@ -73,6 +75,21 @@ describe("contacts", () => {
     );
     await t.contacts.save("preprod", { name: "Test", value: seedelf });
     await expect(t.contacts.save("preprod", { name: "Again", value: seedelf })).rejects.toThrow("already saved, as Test");
+  });
+
+  it("hands on a trap in the address check, so the wallet locks, never as a refusal", async () => {
+    // A trap is the instance broken, not the address (wasm.ts): wrapped as "isn't an address you can pay", the
+    // worker's answer didn't lock the wallet, and it went on with the broken instance (release review).
+    const t = await unlocked();
+    const trap = new WebAssembly.RuntimeError("unreachable");
+    const wasm = loadTestWasm();
+    const broken = { ...wasm, checkPayableAddress: () => { throw trap; } } as typeof wasm;
+    const contacts = new ContactsService({ wasm: broken, store: t.store });
+    const value = phrase(15).preprod.receive_0;
+    const e = await contacts.save("preprod", { name: "Alice", value }).catch((x: unknown) => x);
+    expect(e).toBe(trap);
+    expect(isTrap(e)).toBe(true);
+    expect(await contacts.list("preprod")).toEqual([]);
   });
 
   it("renames, re-points and removes a contact, one network at a time", async () => {

@@ -31,6 +31,13 @@ export const LOCAL_NETWORK = "seedelf.network";
 export const LOCAL_ACCOUNT = "seedelf.account";
 
 /**
+ * chrome.storage.local: the sealed record of the phrase's public accounts (background/private-store.ts's
+ * `PRIVATE_PREFIX` and "accounts", written out here so the pages don't import the cipher). The pages follow its
+ * name, never its sealed value: a restore's look writes only this, in the background (ui/accounts.tsx).
+ */
+export const LOCAL_ACCOUNTS_RECORD = "seedelf.private.accounts";
+
+/**
  * chrome.storage.local: which language the wallet is in (chunk 19), as a code
  * one of the bundled locales declares ("en", "es", "ja"). Kept beside the
  * network and the account, and for the same reason: onboarding, Unlock and

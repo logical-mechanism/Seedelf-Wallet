@@ -60,18 +60,48 @@ function crates() {
   return [...seen.values()];
 }
 
-/** npm packages the build bundles: everything in the lockfile that isn't a dev dependency. */
-function npmPackages() {
-  const lock = JSON.parse(readFileSync(join(extension, "package-lock.json"), "utf8"));
+/** Where node finds `name` from the package at lockfile path `from` ("" is ours): its node_modules, then outer ones. */
+function where(packages, from, name) {
+  for (let dir = from; ; dir = dir.slice(0, Math.max(dir.lastIndexOf("/node_modules/"), 0))) {
+    const path = `${dir ? `${dir}/` : ""}node_modules/${name}`;
+    if (Object.hasOwn(packages, path)) return path;
+    if (!dir) return undefined;
+  }
+}
+
+/**
+ * npm packages the build bundles: package.json's dependencies, theirs, and so
+ * on. The lockfile's flags can't say: i18next's optional peer on TypeScript, for
+ * its types, made TypeScript and this machine's native binary of it non-dev,
+ * and the notices then depended on the machine, though neither ships.
+ */
+export function npmPackages(
+  lock = JSON.parse(readFileSync(join(extension, "package-lock.json"), "utf8")),
+  installed = (path) => existsSync(join(extension, path)),
+) {
+  const found = new Set();
+  const walk = (from) => {
+    const { dependencies = {}, optionalDependencies = {}, peerDependencies = {}, peerDependenciesMeta = {} } =
+      lock.packages[from];
+    // npm installs a peer the package needs, and the bundle takes it; one it can do without, as i18next's, isn't.
+    const peers = Object.keys(peerDependencies).filter((name) => !peerDependenciesMeta[name]?.optional);
+    for (const name of new Set([...Object.keys(dependencies), ...Object.keys(optionalDependencies), ...peers])) {
+      const path = where(lock.packages, from, name);
+      // A missing dependency is a broken install: fail, naming it. An optional
+      // one or a peer that isn't installed (one for another platform) ships nothing.
+      const needed = Object.hasOwn(dependencies, name) && !Object.hasOwn(optionalDependencies, name);
+      if (!path && needed) throw new Error(`${from || "package.json"} needs ${name}, which package-lock.json lacks`);
+      if (!path || found.has(path) || (!needed && !installed(path))) continue;
+      found.add(path);
+      walk(path);
+    }
+  };
+  walk("");
+  // In the lockfile's order, as before, so the notices' order doesn't hang on the walk's.
   return Object.entries(lock.packages)
-    .filter(([path, p]) => path.startsWith("node_modules/") && !p.dev)
-    // An optional dependency for another platform isn't installed here and so
-    // ships nothing: TypeScript 7 lists one binary per platform, 19 of which
-    // this machine never fetches. A non-optional one that's missing is a broken
-    // install, and licenceFiles() still fails loudly on it.
-    .filter(([path, p]) => !p.optional || existsSync(join(extension, path)))
+    .filter(([path]) => found.has(path))
     .map(([path, p]) => ({
-      name: `${path.slice("node_modules/".length)} v${p.version}`,
+      name: `${p.name ?? path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length)} v${p.version}`,
       licence: p.license,
       dir: join(extension, path),
     }));

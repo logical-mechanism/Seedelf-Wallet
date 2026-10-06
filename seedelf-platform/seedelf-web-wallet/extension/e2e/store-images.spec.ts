@@ -162,7 +162,7 @@ test("the Web Store listing's images", async ({ context, koios }) => {
 
   await popup.getByRole("button", { name: "Create a Seedelf" }).click();
   await expect(popup.getByTestId("mint-from-note")).toBeVisible();
-  await popup.getByLabel("Personal tag (optional)").fill("alice");
+  await popup.getByLabel("Tag (optional, anyone can read it)").fill("alice");
   shots.push([
     await shoot(),
     "Get paid privately",
@@ -184,7 +184,6 @@ test("the Web Store listing's images", async ({ context, koios }) => {
   await cardanoTab(popup);
   await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await expect(popup.getByTestId("staking-row-pool")).toHaveText("Staking with LOGIC");
-  await expect(popup.getByTestId("cardano-meta")).toHaveText("4 addresses used");
   await expect(popup.getByTestId("cardano-tokens")).toContainText("DJED");
   shots.push([
     await shoot(),

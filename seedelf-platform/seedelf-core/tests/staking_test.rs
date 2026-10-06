@@ -732,6 +732,31 @@ fn the_drep_is_named_as_lace_names_it() {
 }
 
 #[test]
+fn reads_cip_105s_current_key_form_too() {
+    // CIP-105's test vector 1 three ways: its drep_vkh1…, its deprecated bare
+    // drep1…, and CIP-129's. Pasted drep_vkh1… was "not a DRep ID".
+    let hash: [u8; 28] = hex::decode("a5b45515a3ff8cb7c02ce351834da324eb6dfc41b5779cb5e6b832aa")
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let cip129 = "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a";
+    for id in [
+        "drep_vkh15k6929drl7xt0spvudgcxndryn4kmlzpk4meed0xhqe254czjh2",
+        "drep15k6929drl7xt0spvudgcxndryn4kmlzpk4meed0xhqe25nle07s",
+        cip129,
+    ] {
+        let read = parse_drep(id).unwrap();
+        assert_eq!(read, DRep::Key(Hash::new(hash)), "{id}");
+        // Named as Koios names it, whichever form was given (WebAssembly's `drepId`).
+        assert_eq!(drep_id(&read), cip129, "{id}");
+    }
+    use bech32::{ToBase32, Variant};
+    let short = bech32::encode("drep_vkh", (&hash[..27]).to_base32(), Variant::Bech32).unwrap();
+    let err = parse_drep(&short).unwrap_err().to_string();
+    assert!(err.contains("wrong length"), "{err}");
+}
+
+#[test]
 fn registering_pays_the_deposit_and_delegates_the_accounts_own_vote() {
     let w = world();
     let me = drep_key(&w);
@@ -776,22 +801,24 @@ fn registering_pays_the_deposit_and_delegates_the_accounts_own_vote() {
         "the stake key's is apart"
     );
 
-    // Kept apart, or already its own: the registration alone, the DRep key alone.
-    for alone in [
-        register(false, registered(0, true), DrepState::default()),
-        register(
-            true,
-            registered(0, true),
-            DrepState {
-                own_vote: true,
-                ..DrepState::default()
-            },
-        ),
-    ] {
-        assert_eq!(alone.certificates.len(), 1);
-        assert!(!alone.stake_signs() && alone.drep_signs());
-        assert_eq!(alone.signers(), 1);
-    }
+    // Kept apart: the registration alone, the DRep key alone.
+    let alone = register(false, registered(0, true), DrepState::default());
+    assert_eq!(alone.certificates.len(), 1);
+    assert!(!alone.stake_signs() && alone.drep_signs());
+    assert_eq!(alone.signers(), 1);
+
+    // Koios saying the vote is on it already is stale, as it isn't registered:
+    // the delegation goes all the same, as the review says. It was left out.
+    let stale = register(
+        true,
+        registered(0, true),
+        DrepState {
+            own_vote: true,
+            ..DrepState::default()
+        },
+    );
+    assert_eq!(stale.certificates, both.certificates);
+    assert_eq!(stale.signers(), 2);
 
     // A profile rides in the registration.
     let named = as_drep(

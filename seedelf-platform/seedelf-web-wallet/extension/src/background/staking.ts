@@ -280,11 +280,14 @@ export class StakingService {
     const { wasm, wallet } = this.deps;
     await settleMaybeSent(this.deps, network);
     const koios = this.deps.koios(network);
-    const [{ params, utxos, held, stake, rewardsOnTheWay }, invalidHereafter, drepRow] = await Promise.all([
+    const [{ params, utxos, held, stake, rewardsOnTheWay }, invalidHereafter, own] = await Promise.all([
       readAccount(this.deps, network, { stake: true }),
       validUntil(koios),
-      isDrepAction(action) ? ownDrepId(this.deps).then((id) => koios.drepStanding(id)) : undefined,
+      isDrepAction(action)
+        ? ownDrepId(this.deps).then(async (id) => ({ id, row: await koios.drepStanding(id) }))
+        : undefined,
     ]);
+    const drepRow = own?.row;
     const drepRegistered = drepRow?.drep_status === "registered";
     if (action.kind === "drep-register" && drepRegistered) throw new Error(t("worker.governance.alreadyDrep"));
     if (isDrepAction(action) && action.kind !== "drep-register" && !drepRegistered) {
@@ -327,7 +330,11 @@ export class StakingService {
       (keys) => JSON.parse(wasm.buildStaking(keys.cardano, JSON.stringify(request))) as StakingSummary & { txCbor: string },
     );
     const { txCbor, ...rest } = result;
-    const summary: StakingSummary = { ...rest, network };
+    // Whether retiring moves the account's own vote to always abstain: WebAssembly's condition, on the same fresh
+    // read it was given. The review said so from the page's older one, and could leave out a move it signs (release
+    // review C35).
+    const ownVoteMoves = action.kind === "drep-retire" && state.registered && state.drep === own?.id;
+    const summary: StakingSummary = { ...rest, network, ...(ownVoteMoves ? { ownVoteMoves } : {}) };
     await keep(this.deps, SESSION_STAKE, { ...summary, txCbor, invalidHereafter: request.invalidHereafter });
     return summary;
   }

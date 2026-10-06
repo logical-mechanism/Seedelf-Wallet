@@ -547,7 +547,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     );
   }
   // Both balances as Home shows them, for a review's "balance after" (chunk 23's review, S-1).
-  const totals = balances && { public: accountTotal(balances.cardano), private: balances.seedelf.lovelace };
+  const totals = balances && reviewTotals(balances);
   if (screen === "move-in" && free) {
     return <MoveIn cardano={free.cardano} rewards={rewardsProp} totals={totals} picked={picked} onCancel={home} onSent={sent} />;
   }
@@ -1071,6 +1071,14 @@ function privateTotal(seedelf: Balances["seedelf"]): string {
 /** The public account as Home shows it: its UTxOs, its rewards and what's on its way back. */
 function shownAccountTotal(cardano: Balances["cardano"]): string {
   return (BigInt(accountTotal(cardano)) + BigInt(cardano.incoming?.lovelace ?? "0")).toString();
+}
+
+/**
+ * Both balances as Home shows them, for a review's "… after": each side's figure on Home, what's on its way back
+ * included. Without it, a review read short of Home by all of it, a session's return or a payment's change say.
+ */
+export function reviewTotals(balances: Balances): { public: string; private: string } {
+  return { public: shownAccountTotal(balances.cardano), private: privateTotal(balances.seedelf) };
 }
 
 /**

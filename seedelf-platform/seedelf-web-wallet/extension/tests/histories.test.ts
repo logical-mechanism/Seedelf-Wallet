@@ -17,9 +17,10 @@ import {
   sessionClass,
   UNKNOWN,
 } from "../src/shared/histories";
-import type { UtxoInfo } from "../src/shared/rpc";
+import type { KnownAccount, UtxoInfo } from "../src/shared/rpc";
+import { AccountsContext, nameOf } from "../src/ui/accounts";
 import { HistoriesNote } from "../src/ui/components/HistoriesNote";
-import { historyOf } from "../src/ui/screens/Utxos";
+import { historyOf, UtxoDetails } from "../src/ui/screens/Utxos";
 
 const box = (n: number) => boxFrom(String(n).padStart(2, "0").repeat(32));
 /** Money made private from the one public account a wallet had before chunk 18. */
@@ -93,6 +94,26 @@ describe("the UTxOs screen's tags", () => {
     const u: UtxoInfo = { txHash: "ab".repeat(32), index: 0, lovelace: "9710000", tokens: [], locked: false };
     expect(historyOf(u)).toBeUndefined();
     expect(historyOf({ ...u, history: merged([sessionClass(2), receivedIn("cd")]) })).toBe("Received, Private session 3");
+  });
+
+  it("name the account in a UTxO's details too, where Lock is (release review C26)", () => {
+    const utxo: UtxoInfo = { txHash: "ab".repeat(32), index: 0, lovelace: "9710000", tokens: [], locked: false };
+    const noop = () => undefined;
+    /** The details' "Came from" note, in a wallet that knows `accounts`. */
+    const note = (history: UtxoInfo["history"], accounts: KnownAccount[]) => {
+      const several = accounts.length > 1;
+      const value = { accounts, active: 0, loaded: true, name: nameOf(accounts, 0), several, reload: async () => {} };
+      const props = { of: "seedelf" as const, utxo: { ...utxo, history }, busy: false, onLock: noop, onClose: noop };
+      const html = renderToStaticMarkup(createElement(AccountsContext.Provider, { value }, createElement(UtxoDetails, props)));
+      return html.match(/data-testid="utxo-history-note">([^<]*)</)?.[1];
+    };
+    const two = [{ index: 0 }, { index: 1 }];
+    expect(note(merged([MADE_PRIVATE, madePrivate(1)]), two)).toMatch(
+      /^Came from: Made private \(account 1\), Made private \(account 2\)\./,
+    );
+    expect(note(madePrivate(1), two)).toMatch(/^Came from: Made private \(account 2\)\./);
+    // With one account there is nothing to tell apart.
+    expect(note(madePrivate(0), [{ index: 0 }])).toMatch(/^Came from: Made private\./);
   });
 });
 

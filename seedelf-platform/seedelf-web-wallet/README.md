@@ -27,7 +27,7 @@ So money that sits stays staked in the public account, and is made private when 
 - **Public account** (the Cardano account): the wallet's normal, non-private side: a standard Cardano account that any wallet or exchange can pay. For a restored Lace or Yoroi phrase, it's that wallet's first account.
 - **Make private** (a move-in): move funds from the public account into your private balance.
 - **Send** (public): pay any addresses or Seedelfs from the public account, in the open, as any Cardano wallet does.
-- **Several public accounts** (chunk 18): the recovery phrase's Cardano accounts, one at a time, with a picker in the top bar and names of your own. Each has its own addresses, staking and collateral; the private balance is one for the whole phrase, and money made private from different accounts is kept apart so a private payment doesn't tie them together.
+- **Several public accounts** (chunk 18): the recovery phrase's Cardano accounts, one at a time, with a picker as Home's Public heading ("Public account 2 ▾") and names of your own. Each has its own addresses, staking and collateral; the private balance is one for the whole phrase, and each account's money made private is its own history: a private payment avoids spending two accounts' money together, and when it can't, or with Max, its review names the accounts it ties together.
 - **Staking** (chunk 13): stake the public account with one pool, from a browser of every live pool. Rewards are spent along with anything the account pays, or withdrawn by hand. Stop staking returns the 2 ₳ deposit.
 - **Voting delegation** (chunk 13): Always abstain, Always no confidence, or a DRep, searched by name in a list that ships with the wallet, or by its ID. Conway pays out no rewards until the vote is delegated, and the wallet says so.
 - **Be your own DRep** (chunk 21): register the public account as a DRep, with its own vote behind it, and vote Yes, No or Abstain on the live governance actions, in the wallet's own screens. A profile only if you want one: the wallet writes the file, you publish it, and the wallet never fetches it. Retiring returns the 500 ₳ deposit. A DRep is public and tied to the account, and the screens say so. Governance sites such as GovTool work too, through CIP-95 in the dApp connector, once you allow it for that site.
@@ -81,6 +81,8 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [i18n/glossary.md](docs/i18n/glossary.md) | The translations: the words fixed in every language, and how each Spanish and Japanese string is recorded |
 | [roadmap.md](docs/roadmap.md) | How v1 was built: the 17 chunks and a one-line handoff note each ([archive/](docs/archive/roadmap-v1.md) keeps every note in full), then the handoff note of every chunk since |
 | [post-release-roadmap.md](docs/post-release-roadmap.md) | What comes after v1: the order (parity, then the look and feel), where Cardano parity stands against Lace, and what's declined and why |
+| [usability-review.md](docs/usability-review.md) | Chunk 23's second adversarial usability review of the built wallet, and what its fix round did |
+| [blind-task-usability-test.md](docs/blind-task-usability-test.md) | Chunk 23's blind task-completion test: fresh testers given goals, what they hit, and what the fix round did with it |
 
 ## Reference: Lace
 

@@ -11,7 +11,10 @@ import { Koios, type KoiosUtxo } from "../src/background/koios";
 import { MintService } from "../src/background/mint";
 import { mintedBy, paidByOf, rememberMint } from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
-import type { SeedelfInfo } from "../src/shared/rpc";
+import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
+import type { KnownAccount, SeedelfInfo } from "../src/shared/rpc";
+import { AccountsContext } from "../src/ui/accounts";
+import { PreferencesContext } from "../src/ui/preferences";
 import { removeNote, removeOption, RemoveSeedelf } from "../src/ui/screens/RemoveSeedelf";
 import { accountMintPreprod, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
@@ -210,5 +213,86 @@ describe("Remove a Seedelf", () => {
     );
     // And the private balance is unaffected either way.
     expect(removeNote("seedelf", "seedelf", { paidByAccount: undefined, active: 1, several: true }).tone).toBe("privacy");
+  });
+
+  /** The form as the wallet shows it: on account `active` of `known`, with the balances hidden or not. */
+  const page = (seedelf: SeedelfInfo, known: KnownAccount[], active: number, hideBalances = false) => {
+    const several = known.length > 1;
+    const accounts = { accounts: known, active, loaded: true, name: "", several, reload: async () => {} };
+    const prefs = { prefs: { ...DEFAULT_PREFERENCES, hideBalances }, loaded: true, set: async () => undefined };
+    return renderToStaticMarkup(
+      createElement(
+        AccountsContext.Provider,
+        { value: accounts },
+        createElement(
+          PreferencesContext.Provider,
+          { value: prefs },
+          createElement(RemoveSeedelf, { seedelf, onCancel: () => undefined, onSent: () => undefined }),
+        ),
+      ),
+    ).replaceAll("&#x27;", "'");
+  };
+  /** Each card's label and line, the checked one first. */
+  const cards = (html: string) =>
+    [...html.matchAll(/aria-checked="(true|false)".*?<\/button>/g)]
+      .map(([card, on]) => ({
+        checked: on === "true",
+        label: /token-row__label">([^<]+)/.exec(card)![1],
+        line: /token-row__sub wrap">([^<]*)/.exec(card)?.[1],
+      }))
+      .sort((a, b) => Number(b.checked) - Number(a.checked));
+  const NOTHING_NEW = "Links nothing new";
+
+  it("says on the account's card, as the note under it does, that another account paying ties the two accounts", () => {
+    // Account 1 paid (a bare "account" record from 1.1.0 reads so too), and the wallet is on Account 2: the card
+    // that starts checked said "Links nothing new" right over the note's warning.
+    const other = { paidByAccount: 0, active: 1, several: true };
+    const ties = "Ties Account 2 to Account 1, which paid for this Seedelf";
+    expect(removeOption("account", "account", other)).toBe(ties);
+    // On the account that paid, or with one account, nothing new is linked, as before.
+    expect(removeOption("account", "account", { paidByAccount: 1, active: 1, several: true })).toContain(NOTHING_NEW);
+    expect(removeOption("account", "account", { paidByAccount: 0, active: 0, several: false })).toContain(NOTHING_NEW);
+    // The private balance's card is about the name, whichever account paid.
+    expect(removeOption("seedelf", "account", other)).toBe(removeOption("seedelf", "account"));
+
+    const html = page({ ...info("account"), paidByAccount: 0 }, [{ index: 0 }, { index: 1 }], 1);
+    const [checked, rest] = cards(html);
+    // Nothing starts checked where another account paid (the owner's call, 2026-10-06).
+    expect(checked).toEqual({ checked: false, label: "Public account", line: ties });
+    expect(rest).toMatchObject({ checked: false, label: "Private balance" });
+    expect(html).toContain("Account 1 paid for this Seedelf. Sending its ADA to Account 2 lets anyone tie");
+    expect(html).not.toContain(NOTHING_NEW);
+  });
+
+  it("names a renamed account as the picker shows it, its number first", () => {
+    // The picker and Settings show "Savings" and "Business", never their numbers: "Switch to Account 1" named no
+    // choice on screen.
+    const known = [{ index: 0, name: "Savings" }, { index: 1 }, { index: 2, name: "Business" }];
+    const other = removeNote("account", "account", { paidByAccount: 0, active: 2, several: true, known });
+    expect(other.text).toContain("Account 1 · Savings paid for this Seedelf. Sending its ADA to Account 3 · Business");
+    expect(other.text).toContain("Switch to Account 1 · Savings, or send it to your private balance");
+    expect(removeOption("account", "account", { paidByAccount: 0, active: 2, several: true, known })).toBe(
+      "Ties Account 3 · Business to Account 1 · Savings, which paid for this Seedelf",
+    );
+    expect(removeNote("account", "account", { paidByAccount: 0, active: 0, several: true, known }).text).toContain(
+      "Account 1 · Savings paid for it, so this links nothing new",
+    );
+    // An unnamed one, or one not listed, keeps its number alone.
+    expect(removeNote("account", "account", { paidByAccount: 1, active: 2, several: true, known }).text).toContain(
+      "Account 2 paid for this Seedelf. Sending its ADA to Account 3 · Business",
+    );
+    expect(removeNote("account", "account", { paidByAccount: 5, active: 0, several: true, known }).text).toContain(
+      "Account 6 paid for this Seedelf. Sending its ADA to Account 1 · Savings",
+    );
+
+    const html = page({ ...info("account"), paidByAccount: 0 }, known, 2);
+    expect(cards(html)[0]!.line).toBe("Ties Account 3 · Business to Account 1 · Savings, which paid for this Seedelf");
+    expect(html).toContain("Switch to Account 1 · Savings");
+  });
+
+  it("hides what's locked with it while balances are hidden, as Receive's list does", () => {
+    const aside = (html: string) => /<p class="screen__aside">([^<]*)<\/p>/.exec(html)![1];
+    expect(aside(page(info("seedelf"), [{ index: 0 }], 0, true))).toBe("•••• ₳ locked with it");
+    expect(aside(page(info("seedelf"), [{ index: 0 }], 0))).toBe("1.5 ₳ locked with it");
   });
 });

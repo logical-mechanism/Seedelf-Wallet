@@ -152,6 +152,15 @@ const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${he
  */
 const several = (names: string[]): Pick<ActivityEntry, "detail" | "more"> =>
   names.length > 1 ? { detail: names[0], more: names.length - 1 } : { detail: names[0] };
+/**
+ * A payment to several from 1.1.0, which kept "alice and 2 more" in English, read as the first and a count, so the
+ * page says it in its own language: only as read, the sealed entry is never written again (release review C33).
+ */
+const withMore = (e: ActivityEntry): ActivityEntry => {
+  if ((e.kind !== "transfer" && e.kind !== "withdraw") || e.more !== undefined) return e;
+  const m = /^(.+) and (\d+) more$/.exec(e.detail ?? "");
+  return m ? { ...e, detail: m[1], more: Number(m[2]) } : e;
+};
 const feeOf = (fee: unknown) => (typeof fee === "string" ? fee : (fee as { total?: string } | undefined)?.total);
 
 export interface ActivityDeps {
@@ -189,7 +198,7 @@ export class ActivityService {
   /** The Seedelf history, newest first. */
   async seedelf(network: NetworkName): Promise<ActivityEntry[]> {
     const history = await this.deps.store.get<History>(`history.${network}`);
-    return this.withDecimals(network, [...(history?.entries ?? [])].sort(newestFirst));
+    return this.withDecimals(network, (history?.entries ?? []).map(withMore).sort(newestFirst));
   }
 
   /**
@@ -381,9 +390,11 @@ export class ActivityService {
   async cardano(network: NetworkName, more = false): Promise<{ entries: ActivityEntry[]; more: boolean }> {
     const { wallet, session } = this.deps;
     const key = SESSION_ACCOUNT_ACTIVITY_PREFIX + network;
-    const [account, kept] = await wallet.withKeys(
-      async () =>
+    // Which public account these are, read with them: a switch is one turn of the wallet's queue too (accounts.ts `use`).
+    const [index, account, kept] = await wallet.withKeys(
+      async (keys) =>
         [
+          keys.account,
           await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network),
           await session.get<AccountPages>(key),
         ] as const,
@@ -420,7 +431,8 @@ export class ActivityService {
         offset: kept.offset + fresh.length,
       };
     }
-    await wallet.withKeys(() => session.set(key, pages));
+    // Not kept once the user has switched account while Koios answered: they'd be listed as the new account's.
+    await wallet.withKeys(async (keys) => (keys.account === index ? session.set(key, pages) : undefined));
     // Ahead of them, what the wallet sent that Koios doesn't list yet, as Private activity lists its own at once.
     const pending = await this.pendingOf(network, account, own, new Set(pages.entries.map((e) => e.txHash)));
     const entries = pending.length ? [...pending, ...pages.entries].sort(newestFirst) : pages.entries;

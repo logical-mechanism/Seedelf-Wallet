@@ -15,10 +15,27 @@ import { describe, expect, it } from "vitest";
 import { withdrawalsOf } from "../src/background/governance";
 import { IPFS_GATEWAY } from "../src/networks";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import { ALWAYS_NO_CONFIDENCE, type PoolDetails, type PoolRow, type StakeInfo, type StakingSummary } from "../src/shared/rpc";
+import {
+  ALWAYS_NO_CONFIDENCE,
+  type GovAction,
+  type GovernanceView,
+  type GovVote,
+  type OwnDrep,
+  type PoolDetails,
+  type PoolRow,
+  type StakeInfo,
+  type StakingSummary,
+} from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
-import { readableUrl, rememberVote, sentVote } from "../src/ui/screens/Governance";
+import {
+  forgetUnlisted,
+  GovActions,
+  readableUrl,
+  rememberVote,
+  sentVote,
+  votesOut,
+} from "../src/ui/screens/Governance";
 import { paysNothing, PoolListRow, sortPools } from "../src/ui/screens/Pools";
 import { noFundsReason, oversaturation, poolWarnings, Staking, StakingReview } from "../src/ui/screens/Staking";
 
@@ -223,6 +240,89 @@ describe("a governance action's text and a vote sent (GV-2, GV-6)", () => {
     expect(sentVote("mainnet", 0, "gov_action1test")).toBeUndefined();
     // Another public account is another DRep: account 0's vote isn't its own.
     expect(sentVote("preprod", 1, "gov_action1test")).toBeUndefined();
+  });
+});
+
+describe("a vote sent, once Home stops watching it (GV-6)", () => {
+  const action: GovAction = {
+    id: "gov_action1landing",
+    txHash: "cc".repeat(32),
+    index: 0,
+    type: "InfoAction",
+    proposedEpoch: 314,
+    expiresEpoch: 100_000,
+    deposit: "100000000000",
+    anchor: null,
+    anchorValid: null,
+  };
+  const drep: OwnDrep = {
+    id: "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a",
+    status: "registered",
+    deposit: "500000000",
+    active: true,
+    expiresEpoch: 340,
+    votingPower: "61211118",
+    delegators: 1,
+    profile: null,
+  };
+  const view = (votes: Record<string, GovVote> = {}): GovernanceView => ({
+    list: { actions: [action], updatedAt: 0 },
+    drep,
+    votes,
+  });
+  // The action open after its Yes was sent from it; nothing blocked, as once Home's watch has ended.
+  const page = (over: Record<string, unknown>) =>
+    markup(
+      createElement(GovActions, {
+        onBack: noop,
+        onBecome: noop,
+        onVote: noop,
+        onView: noop,
+        onOpen: noop,
+        open: action,
+        sent: { id: action.id, vote: "yes" },
+        ...over,
+      }),
+    );
+  const buttons = (html: string) => /data-testid="gov-vote-buttons">(.*?)<\/div>/.exec(html)![1]!;
+  rememberVote("preprod", 0, action.id, "yes");
+
+  it("stays on its way while the list is read again, every vote held back", () => {
+    // The list kept from before the vote says nothing of it: it said "Not voted" here, under "Your Yes vote is on its
+    // way", with Yes live again for a second fee and a second vote on chain.
+    const html = page({ view: view(), waiting: true });
+    expect(text(html)).toContain("Your vote Yes, on its way");
+    expect(html).toContain('data-testid="gov-vote-sent"');
+    expect(buttons(html).match(/disabled=""/g)).toHaveLength(3);
+  });
+
+  it("then says what the list says: the vote, or no vote and no word of one on its way", () => {
+    const landed = page({ view: view({ [action.id]: "yes" }), waiting: false });
+    expect(text(landed)).toContain("Your vote Yes");
+    expect(text(landed)).not.toContain("on its way");
+    expect(buttons(landed)).toMatch(/class="secondary" disabled=""[^>]*>Yes<\/button>/);
+    // Not on chain (dropped): the sent line went with it, where it sat over "Not voted".
+    const dropped = page({ view: view(), waiting: false });
+    expect(text(dropped)).toContain("Your vote Not voted");
+    expect(dropped).not.toContain('data-testid="gov-vote-sent"');
+    expect(text(dropped)).not.toContain("on its way");
+  });
+
+  it("knows a vote the list doesn't show yet, which the page reads again for, and forgets it once read again", () => {
+    rememberVote("preprod", 3, "gov_action1a", "yes");
+    rememberVote("preprod", 3, "gov_action1b", "no");
+    expect(votesOut("preprod", 3, {})).toBe(true);
+    // A vote replaced is out until the list has the new one.
+    expect(votesOut("preprod", 3, { gov_action1a: "no", gov_action1b: "no" })).toBe(true);
+    expect(votesOut("preprod", 3, { gov_action1a: "yes", gov_action1b: "no" })).toBe(false);
+    // Another account's, or another network's, is nothing to read again for.
+    expect(votesOut("preprod", 4, {})).toBe(false);
+    expect(votesOut("mainnet", 3, {})).toBe(false);
+    // Read again after its watch ended and still not listed: no longer said to be on its way, in a later watch either.
+    forgetUnlisted("preprod", 3, { gov_action1a: "yes" });
+    expect(sentVote("preprod", 3, "gov_action1b")).toBeUndefined();
+    expect(sentVote("preprod", 3, "gov_action1a")).toBe("yes");
+    expect(votesOut("preprod", 3, { gov_action1a: "yes" })).toBe(false);
   });
 });
 

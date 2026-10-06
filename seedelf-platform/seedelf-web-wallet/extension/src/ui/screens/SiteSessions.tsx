@@ -50,7 +50,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { unsentWhyText } from "../components/SessionRefused";
-import { StaleFoot } from "../components/StaleReview";
+import { againOrForm, StaleFoot } from "../components/StaleReview";
 import { TxDetailButton } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
@@ -532,6 +532,12 @@ function TopUp({
     }
   }
 
+  function toForm() {
+    setReview(undefined);
+    setStale(undefined);
+    setError(undefined);
+  }
+
   if (review) {
     const [paid, collateral] = review.payments;
     return (
@@ -539,17 +545,13 @@ function TopUp({
         title={tr("sites.topUp.reviewTitle")}
         titleId="top-up-review"
         review
-        onBack={() => {
-          setReview(undefined);
-          setStale(undefined);
-          setError(undefined);
-        }}
+        onBack={toForm}
         backDisabled={busy}
         aside={tr("review.nothingSent")}
         error={error}
         foot={
           stale ? (
-            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void make()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={againOrForm(ready, make, toForm)} />
           ) : (
             <button type="button" className="primary" onClick={() => void send()} disabled={busy}>
               {busy ? tr("common.sending") : tr("common.send")}

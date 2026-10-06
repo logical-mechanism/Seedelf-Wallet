@@ -39,5 +39,9 @@ export function searchDreps(dreps: DrepEntry[], query: string): DrepEntry[] {
   return dreps.filter((d) => d.name.toLowerCase().includes(q) || d.id.includes(q));
 }
 
-/** Whether `text` looks like a whole DRep ID (CIP-129 or CIP-105), to look up as pasted. */
-export const isDrepId = (text: string) => /^drep(_script)?1[02-9ac-hj-np-z]{50,}$/.test(text.trim().toLowerCase());
+/**
+ * Whether `text` looks like a whole DRep ID, to look up as pasted: CIP-129's `drep1…`, or CIP-105's `drep_vkh1…`,
+ * `drep_script1…` and deprecated `drep1…`. A `drep_vkh1…` was said to match nothing, though it was a whole ID
+ * (release review C36).
+ */
+export const isDrepId = (text: string) => /^drep(_vkh|_script)?1[02-9ac-hj-np-z]{50,}$/.test(text.trim().toLowerCase());

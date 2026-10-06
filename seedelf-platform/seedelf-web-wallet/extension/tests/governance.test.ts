@@ -6,8 +6,10 @@
 import { describe, expect, it } from "vitest";
 
 import { stakingOf } from "../src/background/activity";
+import { certificateKinds } from "../src/background/cbor";
 import { GOV_ACTIONS_TTL_MS, LOCAL_GOV_ACTIONS_PREFIX, shownText } from "../src/background/governance";
 import type { KoiosDrepStanding, KoiosTxInfo } from "../src/background/koios";
+import { SESSION_STAKE } from "../src/background/staking";
 import { epochAt, epochStart } from "../src/networks";
 import type { StakingAction } from "../src/shared/rpc";
 import { governanceFixture, koiosPreprod, loadTestWasm, stakingPreprod, testBalances, vectors } from "./fakes";
@@ -48,6 +50,15 @@ function registered(over: Partial<KoiosDrepStanding> = {}): KoiosDrepStanding {
 function rich(t: ReturnType<typeof testBalances>) {
   const [some] = koiosPreprod.accounts[STAKE]!.account_utxos;
   t.koios.addedToAccounts.push({ ...some!, tx_hash: "77".repeat(32), tx_index: 0, value: "600000000", asset_list: [] });
+}
+
+/**
+ * The certificates of the staking transaction built last, as kept for Send, by the ledger's numbers: 9 delegates
+ * the vote, 16 registers a DRep, 17 retires one.
+ */
+async function builtCertificates(t: ReturnType<typeof testBalances>): Promise<number[]> {
+  const kept = (await t.session.get<{ txCbor: string }>(SESSION_STAKE))!;
+  return certificateKinds(Uint8Array.from(Buffer.from(kept.txCbor, "hex")));
 }
 
 describe("the account's own DRep", () => {
@@ -234,6 +245,46 @@ describe("the DRep's transactions", () => {
     const retire = await t.staking.build("preprod", { kind: "drep-retire" });
     expect(retire.refund).toBe("500000000");
     expect((await t.staking.submit("preprod", retire.txHash)).kind).toBe("drep-retire");
+  });
+
+  it("registers with the vote delegated as reviewed, even when Koios says it's on the DRep already", async () => {
+    const t = await unlocked();
+    rich(t);
+    // A DRep that isn't registered holds no delegations: Koios saying so is stale (a delegation from before the
+    // ledger dropped them). The registration left the delegation out, while its review said the vote went to it.
+    const info = t.koios.stakes.get(STAKE)!;
+    t.koios.stakes.set(STAKE, { ...info, delegated_drep: OWN });
+    await t.staking.build("preprod", { kind: "drep-register", delegate: true });
+    expect(await builtCertificates(t)).toEqual([16, 9]);
+    await t.staking.build("preprod", { kind: "drep-register", delegate: false });
+    expect(await builtCertificates(t)).toEqual([16]);
+  });
+
+  it("says a retirement moves the account's own vote from the build's own read, as its transaction does", async () => {
+    const t = await unlocked();
+    rich(t);
+    t.koios.dreps.set(OWN, registered());
+    const info = t.koios.stakes.get(STAKE)!;
+    // The vote elsewhere: the retirement alone, and nothing said of a move.
+    const elsewhere = await t.staking.build("preprod", { kind: "drep-retire" });
+    expect(elsewhere.ownVoteMoves).toBeUndefined();
+    expect(await builtCertificates(t)).toEqual([17]);
+    // On its own DRep, whatever the page read before: moved to Always abstain in the same transaction, and said so.
+    t.koios.stakes.set(STAKE, { ...info, delegated_drep: OWN });
+    const own = await t.staking.build("preprod", { kind: "drep-retire" });
+    expect(own.ownVoteMoves).toBe(true);
+    expect(await builtCertificates(t)).toEqual([17, 9]);
+  });
+
+  it("looks up a DRep pasted in CIP-105's own form, drep_vkh1…, as Koios names it", async () => {
+    // CIP-105's test vector 1: its drep_vkh1… and CIP-129's drep1… are the same key hash.
+    const vkh = "drep_vkh15k6929drl7xt0spvudgcxndryn4kmlzpk4meed0xhqe254czjh2";
+    const id = "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a";
+    expect(wasm.drepId(vkh)).toBe(id);
+    expect(wasm.drepId("drep15k6929drl7xt0spvudgcxndryn4kmlzpk4meed0xhqe25nle07s")).toBe(id);
+    const t = await unlocked();
+    t.koios.dreps.set(id, registered({ drep_id: id }));
+    expect(await t.staking.drep("preprod", vkh)).toMatchObject({ id, status: "registered" });
   });
 
   it("writes a profile in WebAssembly, asking no one", async () => {

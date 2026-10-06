@@ -83,7 +83,9 @@ describe("turning the connector on reaches the pages open then", () => {
     expect(queried).toEqual([{ url: DAPP_ORIGINS }]);
     // Each page it could reach is asked first; the one that has the entry gets nothing more.
     expect(probed.sort()).toEqual([1, 3, 7]);
-    const both = (tabId: number) => CONTENT_SCRIPTS.map((s) => ({ tabId, file: s.file, world: s.world }));
+    const script = (world: string) => CONTENT_SCRIPTS.find((s) => s.world === world)!;
+    // The bridge before the page's entry: a site that calls as soon as Seedelf appears has a bridge to hear it.
+    const both = (tabId: number) => ["ISOLATED", "MAIN"].map((world) => ({ tabId, file: script(world).file, world }));
     // Not a sleeping tab (it loads the registered ones as it wakes), the Web Store, a tab it can't read, or plain http.
     // Tabs are reached side by side; each one's two scripts in turn.
     expect(injected.filter((x) => x.tabId === 1)).toEqual(both(1));

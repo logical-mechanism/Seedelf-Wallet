@@ -13,6 +13,7 @@ import type { Contact } from "../shared/rpc";
 import { seedelfName } from "../shared/seedelf-name";
 import type { PrivateStore } from "./private-store";
 import { checkPayable, HANDLE } from "./destination";
+import { isTrap } from "./wasm";
 
 /** The longest name a contact can have. */
 export const CONTACT_NAME_MAX = 40;
@@ -75,6 +76,8 @@ export class ContactsService {
       // Why, in the user's words: the other network's, a stake address, a script's (chunk 23's second review, PY-10).
       checkPayable(wasm, network, trimmed);
     } catch (e) {
+      // A trap is the instance broken, not the address: thrown as it is, so the wallet locks (destination.ts).
+      if (isTrap(e)) throw e;
       throw new Error(t("worker.contacts.notPayable", { why: (e as Error).message }));
     }
     return { kind: "address", value: trimmed };

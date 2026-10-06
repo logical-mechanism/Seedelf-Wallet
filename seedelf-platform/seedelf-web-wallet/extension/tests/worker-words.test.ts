@@ -19,7 +19,7 @@ import { NETWORKS } from "../src/networks";
 import { merged, receivedIn, sessionClass } from "../src/shared/histories";
 import type { ActivityEntry, PendingTx, RetryReason } from "../src/shared/rpc";
 import { activityCsv, activityDetail } from "../src/ui/activity";
-import { dayHeading, ExportNote } from "../src/ui/screens/Activity";
+import { dayHeading, ExportNote, Who } from "../src/ui/screens/Activity";
 import { retryReason } from "../src/ui/screens/Swaps";
 import { account, CHAINS, lovejoinOf, PASSWORD, publicFunded, sessionsOf, withSession, type Tested } from "./chain-fixtures";
 import { busyFor, testBalances } from "./fakes";
@@ -266,6 +266,30 @@ describe("the private history", () => {
     expect(entry).toMatchObject({ detail: "alice", more: 2 });
     await i18n.changeLanguage("ja");
     expect(activityDetail(entry!)).toBe("alice ほか 2 件");
+  });
+
+  it("still reads a payment to several written before, as 1.1.0's English 'and 2 more', as the first and a count", async () => {
+    const t = await unlocked();
+    // 1.1.0 kept the count in English inside `detail` (release review C33).
+    const shared = { at: 1, direction: "out", lovelace: "8000000", tokens: 0 } as const;
+    const several: ActivityEntry = { ...shared, txHash: "ab".repeat(32), kind: "transfer", detail: "salt and pepper and 2 more" };
+    const made: ActivityEntry = { ...shared, txHash: "ac".repeat(32), kind: "withdraw", detail: "$bob and 1 more" };
+    const one: ActivityEntry = { ...shared, txHash: "ad".repeat(32), kind: "mint", direction: "none", detail: "fish and 3 more" };
+    await t.store.set("history.preprod", { entries: [several, made, one], seen: [] });
+    const read = await t.activity.seedelf("preprod");
+    const of = (e: ActivityEntry) => read.find((r) => r.txHash === e.txHash)!;
+    expect(of(several)).toMatchObject({ detail: "salt and pepper", more: 2 });
+    expect(of(made)).toMatchObject({ detail: "$bob", more: 1 });
+    // A Seedelf's own name is data, whatever its words.
+    expect(of(one)).toEqual(one);
+    await i18n.changeLanguage("ja");
+    expect(activityDetail(of(several))).toBe("salt and pepper ほか 2 件");
+    expect(activityCsv("preprod", read)).toContain("$bob ほか 1 件");
+    expect(renderToStaticMarkup(createElement(Who, { name: of(made).detail!, more: of(made).more }))).toContain(
+      '<span class="activity__more">',
+    );
+    // Only as it's read: the sealed entry stays as 1.1.0 wrote it.
+    expect((await t.store.get<{ entries: ActivityEntry[] }>("history.preprod"))!.entries[0]!.detail).toBe("salt and pepper and 2 more");
   });
 
   it("heads each day in the page's language", async () => {

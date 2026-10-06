@@ -36,7 +36,7 @@ import {
   waitingFor,
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
-import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
+import { againOrForm, RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
 import { TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
@@ -167,6 +167,13 @@ export function Transfer({
     }
   }
 
+  /** Back from the review: its error is the review's, so the form it goes back to starts clean, as a swap's does. */
+  function toForm() {
+    setSummary(undefined);
+    setError(undefined);
+    stale.clear();
+  }
+
   if (summary) {
     const several = summary.payments.length > 1;
     // A payment to one of your own Seedelfs comes back to the private balance: it isn't leaving.
@@ -205,18 +212,13 @@ export function Transfer({
         title={t("withdraw.review.title")}
         titleId="transfer-review"
         review
-        onBack={() => {
-          // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
-          setSummary(undefined);
-          setError(undefined);
-          stale.clear();
-        }}
+        onBack={toForm}
         backDisabled={busy}
         aside={t("review.nothingSent")}
         error={error}
         foot={
           stale.detail !== undefined ? (
-            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void build()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={againOrForm(ready, build, toForm)} />
           ) : (
             <>
               <RenewedNote renewed={stale.renewed} />

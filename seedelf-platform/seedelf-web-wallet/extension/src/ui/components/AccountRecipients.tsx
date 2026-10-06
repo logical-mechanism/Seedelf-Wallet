@@ -1,4 +1,5 @@
-// Your own public accounts, as recipients of a public Send (chunk 18).
+// Your own public accounts, as recipients of a public Send or a Make public
+// (chunk 18).
 //
 // **Why it is offered at all.** Moving money between your own accounts is a
 // thing people do, and the wallet's job is to say what that reveals, not to
@@ -28,11 +29,34 @@ import { Modal } from "./Modal";
 type WithAddress = KnownAccount & { address: string };
 
 /**
+ * Which of the user's accounts a warning means, for its "Account {{number}}": the number, and the name after it when
+ * it has one ("2 · Savings"), so it reads as accountNumberAndName does. The picker, Settings and this list show a
+ * renamed account by its name alone, where a number alone named an account no screen showed.
+ */
+export function ownAccountNumber(known: KnownAccount[], index: number): string {
+  const name = known.find((a) => a.index === index)?.name?.trim();
+  return name ? `${index + 1} · ${name}` : String(index + 1);
+}
+
+/**
  * The accounts that can be picked: every one the wallet knows but the one it
  * is working on. Paying the account you are on sends the money straight back
  * less the fee, which is the collateral payment's job, not a recipient.
+ *
+ * `from`: the balance the payment leaves, which decides what picking one
+ * shows. From the private balance (Make public), it links the account picked
+ * to this money: the public Send's "sending from your private balance avoids
+ * that" said the opposite there.
  */
-export function AccountRecipients({ onPick, onClose }: { onPick: (address: string) => void; onClose: () => void }) {
+export function AccountRecipients({
+  from,
+  onPick,
+  onClose,
+}: {
+  from: "public" | "private";
+  onPick: (address: string) => void;
+  onClose: () => void;
+}) {
   const { active } = useAccounts();
   const t = useT();
   const [accounts, setAccounts] = useState<WithAddress[]>();
@@ -73,7 +97,9 @@ export function AccountRecipients({ onPick, onClose }: { onPick: (address: strin
         </ul>
       )}
       {accounts?.length === 0 && <p className="note center empty">{t("accountRecipients.only")}</p>}
-      <p className="note">{t("accountRecipients.privacy.ownAccounts")}</p>
+      <p className="note">
+        {t(from === "private" ? "accountRecipients.privacy.makePublic" : "accountRecipients.privacy.ownAccounts")}
+      </p>
     </Modal>
   );
 }

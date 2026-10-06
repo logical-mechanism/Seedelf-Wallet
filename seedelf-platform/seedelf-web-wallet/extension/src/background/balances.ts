@@ -118,8 +118,9 @@ interface Reading {
 export const SESSION_READ_FAILED_PREFIX = "seedelf.readFailed.";
 
 export class BalanceService {
-  private readonly inFlight = new Map<NetworkName, Promise<Reading>>();
-  private readonly inFlightPrivate = new Map<NetworkName, Promise<Reading>>();
+  /** Readings under way, by network and public account: a page on another account never joins one (release review C11). */
+  private readonly inFlight = new Map<string, Promise<Reading>>();
+  private readonly inFlightPrivate = new Map<string, Promise<Reading>>();
   /** The last failed reading's words per network: in memory only (`readingNoted`). */
   private readonly failedWords = new Map<NetworkName, { at: number; message: string }>();
 
@@ -144,14 +145,22 @@ export class BalanceService {
    * kept. A good reading after it is newer, which is what clears it.
    */
   private async readingNoted(network: NetworkName, refresh: boolean): Promise<Reading> {
+    let account: number | undefined;
     try {
-      return await this.reading(network, refresh);
+      const read = await this.reading(network, refresh);
+      account = read.account;
+      return await read.reading;
     } catch (e) {
       if (!(e instanceof WalletLocked) && !isTrap(e)) {
         const at = this.deps.now();
-        this.failedWords.set(network, { at, message: e instanceof Error ? e.message : String(e) });
+        const message = e instanceof Error ? e.message : String(e);
         await this.deps.wallet
-          .withKeys(() => this.deps.session.set(SESSION_READ_FAILED_PREFIX + network, at))
+          .withKeys(async (keys) => {
+            // Not a reading of the account the user switched from while it ran: it says nothing of the one shown now.
+            if (account !== undefined && keys.account !== account) return;
+            this.failedWords.set(network, { at, message });
+            await this.deps.session.set(SESSION_READ_FAILED_PREFIX + network, at);
+          })
           .catch(() => undefined);
       }
       throw e;
@@ -183,28 +192,32 @@ export class BalanceService {
     return cached?.updatedAt;
   }
 
-  private async reading(network: NetworkName, refresh: boolean): Promise<Reading> {
-    if (!refresh) {
-      const { session } = this.deps;
-      const [cached, privateStale] = await this.deps.wallet.withKeys(
-        async () =>
-          [
-            await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
-            (await session.get(SESSION_PRIVATE_STALE_PREFIX + network)) !== undefined,
-          ] as const,
-      );
-      if (cached && !privateStale) return { balances: cached };
-      if (cached) return this.shared(this.inFlightPrivate, network, () => this.readPrivate(network, cached));
-    }
-    return this.shared(this.inFlight, network, () => this.read(network));
+  /**
+   * The reading to answer with, and the public account it's of: taken with the cached one in one turn of the
+   * wallet's queue, as a switch is one (accounts.ts `use`), so the two always agree.
+   */
+  private async reading(network: NetworkName, refresh: boolean): Promise<{ account: number; reading: Promise<Reading> }> {
+    const { session } = this.deps;
+    const [account, cached, privateStale] = await this.deps.wallet.withKeys(
+      async (keys) =>
+        [
+          keys.account,
+          refresh ? undefined : await session.get<Balances>(SESSION_BALANCES_PREFIX + network),
+          !refresh && (await session.get(SESSION_PRIVATE_STALE_PREFIX + network)) !== undefined,
+        ] as const,
+    );
+    const key = `${network}:${account}`;
+    if (cached && !privateStale) return { account, reading: Promise.resolve({ balances: cached }) };
+    if (cached) return { account, reading: this.shared(this.inFlightPrivate, key, () => this.readPrivate(network, cached, account)) };
+    return { account, reading: this.shared(this.inFlight, key, () => this.read(network, account)) };
   }
 
-  /** Pages asking at the same time share one reading. */
-  private shared(inFlight: Map<NetworkName, Promise<Reading>>, network: NetworkName, read: () => Promise<Reading>): Promise<Reading> {
-    let reading = inFlight.get(network);
+  /** Pages asking at the same time, on the same network and account, share one reading. */
+  private shared(inFlight: Map<string, Promise<Reading>>, key: string, read: () => Promise<Reading>): Promise<Reading> {
+    let reading = inFlight.get(key);
     if (!reading) {
-      reading = read().finally(() => inFlight.delete(network));
-      inFlight.set(network, reading);
+      reading = read().finally(() => inFlight.delete(key));
+      inFlight.set(key, reading);
     }
     return reading;
   }
@@ -231,8 +244,9 @@ export class BalanceService {
    * The private side read again, the account's side as `cached` has it:
    * after a private spend landed (pending.ts). The contract is read from the
    * last block seen, as any reading does; the account isn't asked about.
+   * `account`: the public account `cached` is.
    */
-  private async readPrivate(network: NetworkName, cached: Balances): Promise<Reading> {
+  private async readPrivate(network: NetworkName, cached: Balances, account: number): Promise<Reading> {
     const { wallet, session, contract = CONTRACT_V1 } = this.deps;
     const view = await readContractView(this.deps, network);
     const recorded = await this.mintRecord(network);
@@ -242,9 +256,11 @@ export class BalanceService {
         network,
         recorded,
         utxos.map((p) => p.utxo),
-        keys.account,
+        account,
       );
       const balances: Balances = { ...cached, seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held) };
+      // The user switched account while it read: `cached` is the account left, never to be kept as the new one's.
+      if (keys.account !== account) return { balances };
       try {
         await session.set(SESSION_BALANCES_PREFIX + network, balances);
         await session.remove(SESSION_PRIVATE_STALE_PREFIX + network);
@@ -324,30 +340,31 @@ export class BalanceService {
     }
   }
 
-  private async read(network: NetworkName): Promise<Reading> {
+  /** A whole reading of public account `index`, the one active as it began: every key it uses is that account's. */
+  private async read(network: NetworkName, index: number): Promise<Reading> {
     const { wasm, wallet, session, now, contract = CONTRACT_V1 } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
 
     // Network calls happen outside withKeys, so they never hold up a lock.
     const [spent, stake] = await Promise.all([
       wallet.withKeys(() => spentSet(session)),
-      wallet.withKeys(({ cardano }) => cardano.stakeAddress(net)),
+      wallet.withAccount(index, ({ cardano }) => cardano.stakeAddress(net)),
     ]);
     const [{ account, utxos }, view, staking] = await Promise.all([
-      readAccountUtxos(this.deps, network, spent),
+      readAccountUtxos(this.deps, network, spent, { account: index }),
       // The contract: in full when due, otherwise only what's new (contract-scan.ts).
       readContractView(this.deps, network),
       readStake(this.deps, network, stake),
     ]);
     const recorded = await this.mintRecord(network);
 
-    // The result is cached only while still unlocked.
+    // The result is cached only while still unlocked, and still on the account it read.
     const reading = await wallet.withKeys(async (keys): Promise<Reading> => {
       const held = await this.held(
         network,
         recorded,
         utxos.map((p) => p.utxo),
-        keys.account,
+        index,
       );
       const balances: Balances = {
         network,
@@ -355,10 +372,14 @@ export class BalanceService {
         seedelf: this.seedelfSide(view.owned, contract.seedelfPolicyId, held),
         cardano: this.cardanoSide(account, utxos, staking),
       };
+      const unkept = { owned: view.owned, account: utxos, updatedAt: balances.updatedAt };
+      // The user switched account while it read: kept, it would read as the new account's until Refresh (release
+      // review C11). Only the page that switched away awaits it.
+      if (keys.account !== index) return { balances, unkept };
       // Activity reads the account's transactions against these.
       const addresses: AccountAddresses = { stake: account.stake, addresses: account.addresses, keys: [...account.paths.keys()] };
       if (await keep(session, network, balances, utxos, addresses)) return { balances };
-      return { balances, unkept: { owned: view.owned, account: utxos, updatedAt: balances.updatedAt } };
+      return { balances, unkept };
     });
     // The history never holds up, or breaks, a balance reading.
     await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);

@@ -13,7 +13,7 @@ It can create or restore a wallet, lock it with a password, and show what the wa
 | Restore | Onboarding | 12, 15 or 24 words, one box each with BIP39 autocomplete; pasting a phrase fills every box. Then a password. |
 | Unlock | Locked | Password (with Show), the back-off countdown after wrong attempts, and "Forgot password? Restore from your phrase" |
 | Restore from your phrase | From Unlock | Deletes the wallet after typing `delete wallet`, then goes to Restore |
-| Home | Unlocked | Two tabs. **Private:** the private balance with round **Receive** (your Seedelfs' names), **Send** (to Seedelfs), **Make public** and **Create** (a Seedelf); the first five tokens and **View all**; **Swaps in progress** and what's **In Lovejoin**, when there are any; and **dApps**. **Public:** the public account with **Receive**, **Send** and **Make private**, tokens, and the **Staking and governance** row (the pool, the rewards, and where the voting power goes). Until the first reading arrives, a splash covers it. A new wallet gets *Get started* (fund, create, make private). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The eye beside each balance hides the amounts; on mainnet, each balance's value in the chosen currency sits under it. An ADA Handle in the private balance gets a warning. The lock button is in the top bar, and so is the account picker once there's more than one public account. |
+| Home | Unlocked | Two tabs. **Private:** the private balance with round **Receive** (your Seedelfs' names), **Send** (to Seedelfs), **Make public** and **Create** (a Seedelf); the first five tokens and **View all**; **Swaps in progress** and what's **In Lovejoin**, when there are any; and **dApps**. **Public:** the public account with **Receive**, **Send** and **Make private**, tokens, the **Staking and governance** row (the pool, the rewards, and where the voting power goes), and **dApps**. Until the first reading arrives, a splash covers it. A new wallet gets *Get started* (fund, create, make private). Refresh sits under the tabs, and a sent transaction shows as a banner until it confirms. The eye beside each balance hides the amounts; on mainnet, each balance's value in the chosen currency sits under it. An ADA Handle in the private balance gets a warning. The lock button is in the top bar; with more than one public account, the Public tab's heading is the account picker ("Public account 2 ▾"). |
 | UTxOs | The row under Activity on each Home tab | That balance's UTxOs from the last reading, kept ones first (locked, the collateral, a Seedelf's). A lock at the end of each row toggles it at once; the row opens its tokens, transaction, output and address, with **Lock** or **Unlock** too. A locked UTxO is left out of every payment, Max included. No requests, except **Refresh** (Home's). |
 | Collateral | Settings | The public account's 5 ₳ collateral, after Lace's: who set it, **Reclaim collateral**, or **Set collateral** (from a 5 ₳ UTxO it holds, or a 5 ₳ payment to itself, reviewed first). |
 | Activity | The row near the bottom of each Home tab | Newest first, grouped by day; an entry opens its details (its tokens, and on the public side its staking and its note) and Cardanoscan. **Private:** from the device, encrypted, no requests. **Public:** 20 at a time from Koios, with Load more, staking changes included. **Refresh** reads again without going back to Home. **Save as CSV** saves what's listed to a file. |
@@ -33,7 +33,7 @@ It can create or restore a wallet, lock it with a password, and show what the wa
 | Voting power | **Delegate** or **Change** under Voting power on Staking | **Always abstain**, **Always no confidence**, **Your own DRep**, or **A DRep**: searched by name or ID in the wallet's own list, or pasted by ID, then looked up live (two requests). Conway pays no rewards until the vote is delegated, so Home and Staking send you here while rewards are locked. |
 | Become a DRep | **Become a DRep** on Staking's DRep card | Registers the public account as a DRep, its voting power delegated to it by default, with a profile only if you want one: the wallet writes the file and its hash, you publish it, and the wallet never fetches it. Then **Profile** changes or removes it, and **Retire as a DRep** gives the deposit back. Each is reviewed on Staking. |
 | Governance actions | **Governance actions** on Staking's DRep card | The live governance actions, newest proposed first, and a DRep's vote on each; one opens its details and, for a DRep, **Vote**: **Yes**, **No** or **Abstain**, reviewed on Staking. Two requests, or three for a DRep; the list itself is kept on the device for an hour. |
-| dApps | The **dApps** row on the Private tab | Tiles for the dApps the wallet uses privately, from one-time accounts funded from the private balance: **Minswap** and **Lovejoin**. Under them, **Sites**: each site connected to a private session. While sessions still hold something, **Bring everything back**. |
+| dApps | The **dApps** row on either Home tab | Tiles for the dApps the wallet uses privately, from one-time accounts funded from the private balance: **Minswap** and **Lovejoin**. Under them, **Sites**: whether sites can see the wallet (with **Let sites connect**), a declined site's wait (with **Let it ask now**), and every connected site: the public account's with **Disconnect**, a private session's opening its page. While sessions still hold something, **Bring everything back**. |
 | Swaps | The Minswap tile, or Home's **Swaps in progress** | **New swap**, in a private session: a one-time account is funded from the private balance, Minswap's aggregator builds the swap, and after one approval it runs by itself: the order, the fill, and everything back into the private balance, through Lovejoin by default. A swap can be stopped, and what it holds comes back. |
 | Lovejoin | The Lovejoin tile, or Home's **In Lovejoin** | The wallet's boxes in Lovejoin's pool, found by the Seedelf key, when each is due back, and **Bring one back now**. **Mix** puts ADA in, in 10 ₳ boxes, from the private balance or the public account, and **Mix my boxes again** mixes them further. On mainnet it mixes only once the pool holds 30 boxes that aren't yours. |
 | A site's private session | A site under the dApps page's **Sites** | What its one-time account holds, **Top up** (another payment from the private balance), **Bring it back** (everything at the account into the private balance; the site stays connected), and **Disconnect** once it's empty. |
@@ -94,7 +94,8 @@ src/
   shared/password.ts    the password rule and strength hint (UI and worker)
   shared/label.ts       the Seedelf tag rule and token-name preview (the worker's WASM enforces it too)
   shared/seedelf-name.ts  what a whole Seedelf name is (UI and worker)
-  shared/histories.ts   where each private UTxO's money came from, so a spend doesn't tie histories together
+  shared/histories.ts   where each private UTxO's money came from, so selection keeps histories apart where it
+                        can, and a review says what a spend ties together
   shared/dapp.ts        the dApp connector (CIP-30), shared by the content scripts, the worker and the UI
   shared/preferences.ts, open-in.ts, handles.ts, recipients.ts
                         the settings and what each may be; tab or side panel; ADA Handles; how many recipients
@@ -123,6 +124,8 @@ src/
     governance.ts       the account as its own DRep: where it stands, the live governance actions, its votes
     pending.ts          the submitted transaction being watched, until it confirms
     spent.ts, sent-txs.ts  what this wallet has spent, and what it sent in the last few minutes, whole
+    incoming.ts         what the wallet's own transactions on their way pay back to it, before the chain shows it
+    short.ts            core's NotEnough (a payment its inputs can't pay for) in the user's words
     collateral.ts       the giveme.my client
     koios.ts, chain.ts  the Koios client; pure helpers (registers, gap limit, sums, Seedelf tags)
     prices.ts           ADA's value in a currency, from CoinGecko (mainnet only)
@@ -152,7 +155,7 @@ src/
     screens/            Onboarding, Create, Restore, Unlock (and reset), Home, Tokens, Receive, MoveIn,
                         CreateSeedelf, Transfer, CardanoSend, Withdraw, RemoveSeedelf, Utxos, Collateral, Settings,
                         Activity, Staking, Pools, Voting, Governance, Dapps, Swaps, Lovejoin, SiteSessions,
-                        ClaimAll, DappApprovals (the connector's window)
+                        ClaimAll, ConnectedSites, DappApprovals (the connector's window)
     components/         Screen (every flow's layout), Splash, Tabs, Modal, TokenList, ReviewRows, Callout,
                         ActionButton, Choice, PhraseInput (per-word autocomplete), PhraseGrid, SetPassword,
                         PasswordField, AdaInput, AmountField, TokenAmounts, CopyField, CopyButton, QrCode,
@@ -160,7 +163,8 @@ src/
                         AccountPicker, AccountRecipients, Destination, Recipients, Contacts, Clearable,
                         HistoriesNote, HandleWarning, LeftOut, PaidRows, SessionLeft, LovejoinReturn,
                         BuildStage, PendingBanner, TxBanner, RefreshRow, LockCountdown, MiddleEllipsis,
-                        ExplorerLink, NetworkBadge, NetworkPicker
+                        ExplorerLink, NetworkBadge, NetworkPicker, GivemeNote, RadioCards, ReviewTotals,
+                        SessionRefused, StaleReview
     styles.css          the design tokens, then every style
     format.ts           ADA and token amounts, token names
     tokens.ts           tokens as the lists show them: the token list's ticker and logo, NFT or not, sort, search
@@ -169,6 +173,8 @@ src/
     dapp.ts             the connector window's words for a site's transaction
     swap.ts             the swap form's arithmetic
     nft-images.ts       the NFT images shown, kept in this page's memory until the wallet locks
+    history.ts          the browser's Back as the screen's own Back
+    sites.ts            the sites switch, shared by Settings and the dApps page
     delete-phrase.ts, sentence.ts  the words typed to delete the wallet; a message's full stop in any language
   tokens/               list.json (the tokens the wallet knows by name) and registry.<network>.json (npm run tokens)
   dreps/                <network>.json: the registered DReps with a name, for the vote page's search (npm run dreps)

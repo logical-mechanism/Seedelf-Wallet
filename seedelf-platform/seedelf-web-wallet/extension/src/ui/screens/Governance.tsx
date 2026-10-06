@@ -85,9 +85,10 @@ export function useVoteLabel(): (vote: GovVote) => string {
 
 /**
  * Votes this page sent, by network, public account and action, until a list
- * read from Koios shows them (chunk 23's second review, GV-6). Koios lists a
- * vote once it's on chain, so for the minutes between, the action said "Not
- * voted". Kept for the page's life only: after a reload the list says what
+ * read from Koios shows them (chunk 23's second review, GV-6), or one read
+ * after their watch ended still doesn't. Koios lists a vote once it's on
+ * chain, so for the minutes between, the action said "Not voted". Kept for
+ * the page's life only: after a reload the list says what
  * Koios says. The account is in the key because the map outlives the screens,
  * which start afresh on another account: each account is its own DRep, and one's
  * vote showed as another's.
@@ -110,6 +111,24 @@ function forgetShown(network: NetworkName, account: number, votes: Record<string
   for (const [id, vote] of Object.entries(votes)) {
     if (sentVotes.get(sentKey(network, account, id)) === vote) sentVotes.delete(sentKey(network, account, id));
   }
+}
+
+/** The sent votes from `account` that `shown`, a list read from Koios, doesn't list. */
+function unlisted(network: NetworkName, account: number, shown: Record<string, GovVote>): string[] {
+  const prefix = sentKey(network, account, "");
+  return [...sentVotes].flatMap(([key, vote]) =>
+    key.startsWith(prefix) && shown[key.slice(prefix.length)] !== vote ? [key] : [],
+  );
+}
+
+/** Whether a vote sent from `account` isn't in `shown` yet: the Staking page reads the list again once it's watched. */
+export function votesOut(network: NetworkName, account: number, shown: Record<string, GovVote>): boolean {
+  return unlisted(network, account, shown).length > 0;
+}
+
+/** Forgets the sent votes `shown`, read after their watch ended, doesn't list: no longer said to be on their way. */
+export function forgetUnlisted(network: NetworkName, account: number, shown: Record<string, GovVote>): void {
+  for (const key of unlisted(network, account, shown)) sentVotes.delete(key);
 }
 
 /** A CID a gateway takes: v0 (`Qm…`), or v1 in base32 (`b…`), as anchors give them. */
@@ -304,6 +323,30 @@ export function DrepCard({
   );
 }
 
+/** The profile form's text, the file written from it, and where it's published. */
+export interface ProfileView {
+  profile: DrepProfileRequest;
+  file?: DrepProfileFile;
+  /** Edited since the file was written. */
+  stale: boolean;
+  /** Written again, with an address given, and the file came out different. */
+  changed: boolean;
+  url: string;
+}
+
+/**
+ * What a DRep form held, kept by the Staking page so Back from its review finds it as it was (as ST-11 keeps
+ * Voting power's; release review C15). It came back empty with the switch on again, and a profile typed again a
+ * byte apart no longer matched the file already published. The anchor isn't kept: the form works it out again from
+ * the file and address.
+ */
+export interface DrepFormView {
+  /** Become a DRep's switch, and whether a profile was asked for. */
+  delegate?: boolean;
+  withProfile?: boolean;
+  form?: ProfileView;
+}
+
 /** Becoming the account's own DRep: the self-delegation (on), and a profile only if one is asked for. */
 export function BecomeDrep({
   drep,
@@ -312,6 +355,8 @@ export function BecomeDrep({
   blocked,
   busy,
   error,
+  view,
+  onView,
   onBack,
   onReview,
 }: {
@@ -322,14 +367,19 @@ export function BecomeDrep({
   blocked?: string;
   busy: boolean;
   error?: string;
+  /** What the form held before its review, to show again. */
+  view?: DrepFormView;
+  onView?: (view: DrepFormView) => void;
   onBack: () => void;
   onReview: (delegate: boolean, anchor?: Anchor) => void;
 }) {
   const t = useT();
   const amounts = useAmounts();
-  const [delegate, setDelegate] = useState(true);
-  const [withProfile, setWithProfile] = useState(false);
+  const [delegate, setDelegate] = useState(view?.delegate ?? true);
+  const [withProfile, setWithProfile] = useState(view?.withProfile ?? false);
+  const [form, setForm] = useState<ProfileView | undefined>(view?.form);
   const [anchor, setAnchor] = useState<Anchor>();
+  useEffect(() => onView?.({ delegate, withProfile, ...(form ? { form } : {}) }), [delegate, withProfile, form]);
   const ready = !withProfile || anchor !== undefined;
   // Too little for the deposit, said before Review rather than after a 10 s build with no amounts (GV-7).
   const need = drep.depositNow ? drepNeeds(drep.depositNow, delegate, staking.registered) : undefined;
@@ -353,15 +403,24 @@ export function BecomeDrep({
       backDisabled={busy}
       error={error}
       foot={
-        <button
-          type="button"
-          className="primary"
-          onClick={() => onReview(delegate, withProfile ? anchor : undefined)}
-          disabled={!!why || busy}
-          title={why}
-        >
-          {busy ? t("common.building") : t("drep.register.review")}
-        </button>
+        <>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => onReview(delegate, withProfile ? anchor : undefined)}
+            disabled={!!why || busy}
+            title={why}
+          >
+            {busy ? t("common.building") : t("drep.register.review")}
+          </button>
+          {/* Why it can't be pressed, under it, as Voting power says it: the tooltip alone reached no touch screen or
+              keyboard (PY-9, release review C47). Too little to pay is said above it already. */}
+          {why && why !== short && (
+            <p className="note foot-note" data-testid="drep-register-why">
+              {why}
+            </p>
+          )}
+        </>
       }
     >
       <p className="note">
@@ -402,13 +461,14 @@ export function BecomeDrep({
         </Hinted>
         {withProfile ? (
           <>
-            <ProfileForm onAnchor={setAnchor} busy={busy} />
+            <ProfileForm onAnchor={setAnchor} busy={busy} view={form} onView={setForm} />
             <button
               type="button"
               className="secondary"
               onClick={() => {
                 setWithProfile(false);
                 setAnchor(undefined);
+                setForm(undefined);
               }}
               disabled={busy}
             >
@@ -436,6 +496,8 @@ export function DrepProfileEdit({
   blocked,
   building,
   error,
+  view,
+  onView,
   onBack,
   onReview,
 }: {
@@ -444,12 +506,19 @@ export function DrepProfileEdit({
   /** Which of the two buttons a build was started from: only it says so (ST-1). */
   building?: Building;
   error?: string;
+  /** What the form held before its review, to show again. */
+  view?: DrepFormView;
+  onView?: (view: DrepFormView) => void;
   onBack: () => void;
   onReview: (anchor?: Anchor) => void;
 }) {
   const t = useT();
   const busy = building !== undefined;
   const [anchor, setAnchor] = useState<Anchor>();
+  const [form, setForm] = useState<ProfileView | undefined>(view?.form);
+  useEffect(() => onView?.(form ? { form } : {}), [form]);
+  // Why Review can't be pressed, said under the buttons: it was in a tooltip alone (PY-9, release review C47).
+  const why = blocked ?? (anchor ? undefined : t("drep.form.finishFirst"));
   return (
     <Screen title={t("drep.update.title")} titleId="drep-update-title" onBack={onBack} backDisabled={busy} error={error}>
       <ReviewRows testId="drep-profile-now">
@@ -462,14 +531,14 @@ export function DrepProfileEdit({
       </ReviewRows>
       {drep.profile && <CopyField label={t("drep.update.url")} copyLabel={t("gov.copyAddress")} value={drep.profile.url} testId="drep-profile-url" />}
       <p className="note">{t("drep.update.note")}</p>
-      <ProfileForm onAnchor={setAnchor} busy={busy} />
+      <ProfileForm onAnchor={setAnchor} busy={busy} view={form} onView={setForm} />
       <div className="actions">
         <button
           type="button"
           className="primary"
           onClick={() => anchor && onReview(anchor)}
-          disabled={!anchor || !!blocked || busy}
-          title={blocked ?? (anchor ? undefined : t("drep.form.finishFirst"))}
+          disabled={!anchor || !!why || busy}
+          title={why}
         >
           {building === "review" ? t("common.building") : t("drep.update.review")}
         </button>
@@ -479,6 +548,11 @@ export function DrepProfileEdit({
           </button>
         )}
       </div>
+      {why && (
+        <p className="note" data-testid="drep-update-why">
+          {why}
+        </p>
+      )}
       {/* The profile's privacy note is the form's own, above: it said the same twice on this screen. */}
     </Screen>
   );
@@ -495,17 +569,32 @@ const EMPTY_PROFILE: DrepProfileRequest = { givenName: "", objectives: "", motiv
  * (GV-7); written again, a file that came out different says so, since the
  * one published at that address no longer matches.
  */
-function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; busy: boolean }) {
+function ProfileForm({
+  onAnchor,
+  busy,
+  view,
+  onView,
+}: {
+  onAnchor: (anchor?: Anchor) => void;
+  busy: boolean;
+  /** What it held before a review, kept by the Staking page (`DrepFormView`). */
+  view?: ProfileView;
+  onView?: (view: ProfileView) => void;
+}) {
   const t = useT();
-  const [profile, setProfile] = useState<DrepProfileRequest>(EMPTY_PROFILE);
-  const [file, setFile] = useState<DrepProfileFile>();
+  const [profile, setProfile] = useState<DrepProfileRequest>(view?.profile ?? EMPTY_PROFILE);
+  const [file, setFile] = useState<DrepProfileFile | undefined>(view?.file);
   // The text changed since the file was written: the file isn't the profile any more.
-  const [stale, setStale] = useState(false);
+  const [stale, setStale] = useState(view?.stale ?? false);
   // Written again with an address already given, and the file came out different.
-  const [changed, setChanged] = useState(false);
-  const [url, setUrl] = useState("");
+  const [changed, setChanged] = useState(view?.changed ?? false);
+  const [url, setUrl] = useState(view?.url ?? "");
   const [writing, setWriting] = useState(false);
   const [error, setError] = useState<string>();
+  useEffect(
+    () => onView?.({ profile, ...(file ? { file } : {}), stale, changed, url }),
+    [profile, file, stale, changed, url],
+  );
 
   const chars = (s?: string) => [...(s ?? "")].length;
   const problem: I18nKey | undefined = !profile.givenName.trim()
@@ -663,7 +752,7 @@ function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; 
   );
 }
 
-/** "12 Sept 2026", as the wallet writes an epoch's end (format.ts `epochEnds`). */
+/** "12 Sept 2026", the day an action was proposed. An epoch's end has its time too (format.ts `epochEnds`). */
 const dayOf = dayText;
 
 /**
@@ -698,7 +787,10 @@ export function GovActions({
   /** The vote a build was started from, if any: only its button says so (ST-1). */
   building?: Building;
   blocked?: string;
-  /** A transaction is on its way: a vote this page sent and Koios doesn't list yet is said to be (GV-6). */
+  /**
+   * A transaction is on its way, or its watch just ended and the list is being read again: a vote this page sent and
+   * Koios doesn't list yet is said to be (GV-6).
+   */
   waiting?: boolean;
   /** The vote just sent from the action open. */
   sent?: { id: string; vote: GovVote };
@@ -830,8 +922,9 @@ export function GovActions({
         {registered ? (
           <section className="section" aria-labelledby="gov-vote-title">
             <h2 id="gov-vote-title">{t("gov.vote.title")}</h2>
-            {/* Sent, it stays here and says so, where it went to Home and the action still said "Not voted" (GV-6). */}
-            {sent?.id === open.id ? (
+            {/* Sent, it stays here and says so, where it went to Home and the action still said "Not voted" (GV-6);
+                only while it's on its way, so it never sits over a list that says otherwise (release review C16). */}
+            {sent?.id === open.id && coming ? (
               <p className="note" role="status" data-testid="gov-vote-sent">
                 {t("gov.vote.sent", { vote: voteOf(sent.vote) })}
               </p>
@@ -850,7 +943,8 @@ export function GovActions({
                   type="button"
                   className={v === mine ? "secondary" : "primary"}
                   onClick={() => onVote(open, v, mine)}
-                  disabled={closed || v === mine || !!blocked || busy}
+                  // A vote on its way holds the others back until the list is read again (GV-6).
+                  disabled={closed || v === mine || !!coming || !!blocked || busy}
                   title={blocked ?? (closed ? t("gov.closed") : v === mine ? t("gov.vote.already") : undefined)}
                 >
                   {/* The pressed one says so; the others keep their names (ST-1). */}

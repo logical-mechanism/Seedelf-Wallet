@@ -704,22 +704,31 @@ function sentIn(book: Book, txHash: string): boolean {
 }
 
 /**
- * Whether the funding `txHash` started a session already: one's record holds
- * it, or `built`, the review kept for it on `network`, has an index used
- * since. Asked before whether the review is still kept or too old: a funding
- * that went out isn't kept any more (pending.ts takes it), and called stale,
- * its page would build it again and fund a second session (chunk 23's second
- * review, fix round). A funding turned away counts too: its index is never
- * used again.
+ * Refuses, in the words `started` names, the funding `txHash` once it started
+ * a session: one's record holds it, or `built`, the review kept for it on
+ * `network`, was sent and its record has gone since. Asked before whether the
+ * review is still kept or too old: a funding that went out isn't kept any
+ * more (pending.ts takes it), and called stale, its page would build it again
+ * and fund a second session (chunk 23's second review, fix round). A funding
+ * turned away counts too: its index is never used again. A review never sent,
+ * whose index another funding took since (a swap's in the side panel, a
+ * site's in the connector), is only stale: built again, on the next unused
+ * account (DX-1).
  */
-function started(
+function refuseStarted(
   book: Book,
   txHash: string,
-  built: { network: NetworkName; txHash: string; index: number } | undefined,
+  built: { network: NetworkName; txHash: string; index: number; sentCbor?: string } | undefined,
   network: NetworkName,
-): boolean {
-  if (book.sessions.some((s) => s.txs.some((x) => x.kind === "out" && x.txHash === txHash))) return true;
-  return built?.txHash === txHash && built.network === network && built.index < book.next;
+  started: "sess.alreadyStarted" | "sess.mixStarted",
+): void {
+  if (book.sessions.some((s) => s.txs.some((x) => x.kind === "out" && x.txHash === txHash))) {
+    throw new Error(t(started));
+  }
+  if (built?.txHash !== txHash || built.network !== network || built.index >= book.next) return;
+  // Sent once, it may have gone out whatever became of its record since (Forget, Disconnect).
+  if (built.sentCbor !== undefined) throw new Error(t(started));
+  throw new StaleReviewError(t("sess.indexTaken"));
 }
 
 /** A step's transaction that's gone: Koios never took it, or the chain never saw it. */
@@ -1067,7 +1076,7 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_SITE_OUT));
       const book = await this.book(network);
-      if (started(book, txHash, built, network)) throw new Error(t("sess.alreadyStarted"));
+      refuseStarted(book, txHash, built, network, "sess.alreadyStarted");
       if (!built || built.txHash !== txHash || built.network !== network || built.site?.origin !== origin) {
         throw new StaleReviewError(t("sess.outNotReady"));
       }
@@ -1162,7 +1171,7 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptMix>(SESSION_MIX_OUT));
       const book = await this.book(network);
-      if (started(book, txHash, built, network)) throw new Error(t("sess.mixStarted"));
+      refuseStarted(book, txHash, built, network, "sess.mixStarted");
       if (!built || built.txHash !== txHash || built.network !== network) {
         throw new StaleReviewError(t("lj.mixNotReady"));
       }
@@ -1252,7 +1261,9 @@ export class SessionService {
       try {
         return await send(this.deps, network, txHash, SESSION_TOP_UP, "session-out", "topUp");
       } catch (e) {
-        await this.markUnsent(network, built.index, txHash, e);
+        // Sent again, an earlier try may have gone and the watch still sends it: whatever this one met (a 429, a
+        // node down), it stays on its way, and Disconnect waits for it (sendRecorded's `unanswered`).
+        if (!again) await this.markUnsent(network, built.index, txHash, e);
         throw e;
       }
     });
@@ -1533,10 +1544,11 @@ export class SessionService {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptOut>(SESSION_OUT));
       // What a new review fixes crosses as a stale review: the page offers to build it again, on the next unused
-      // account, rather than a Send that can't go (chunk 23's second review, DX-1). "Started already" doesn't:
-      // that try may have gone out, and the page reads the record to tell. It's asked first (`started`).
+      // account, rather than a Send that can't go (chunk 23's second review, DX-1), and so does an account another
+      // funding took meanwhile. "Started already" doesn't: that try may have gone out, and the page reads the
+      // record to tell. It's asked first (`refuseStarted`).
       const book = await this.book(network);
-      if (started(book, txHash, built, network)) throw new Error(t("sess.alreadyStarted"));
+      refuseStarted(book, txHash, built, network, "sess.alreadyStarted");
       if (!built || built.txHash !== txHash || built.network !== network) {
         throw new StaleReviewError(t("sess.outNotReady"));
       }

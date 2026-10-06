@@ -98,7 +98,9 @@ export interface ActivityEntry {
   /**
    * How many more it paid beside `detail`, which is the first: a transfer or
    * a withdrawal to several. The page says "and 2 more" in its own language
-   * (ui/activity.ts activityDetail).
+   * (ui/activity.ts activityDetail). 1.1.0 kept "alice and 2 more" in
+   * `detail`, in English: the worker reads that back as these two
+   * (background/activity.ts withMore).
    */
   more?: number;
   /**
@@ -131,7 +133,7 @@ export interface ActivityEntry {
  * records, if it's one: its `session`, or, on an entry written before the
  * worker kept the number, the name its `detail` holds ("Private session 3").
  * The worker wrote that name in English then, the only language it had, so
- * this is the one place an English name is read back, and only for those.
+ * this and 1.1.0's "and 2 more" (`more`) are the only English read back, and only for those.
  */
 export function entrySession(entry: ActivityEntry): number | undefined {
   if (entry.kind !== "session-out" && entry.kind !== "session-back") return undefined;
@@ -487,6 +489,11 @@ export interface StakingSummary {
   deposit: string;
   /** Of `deposit`, what registering the account's DRep locks up: back when the DRep retires. Only for a DRep action. */
   drepDeposit?: string;
+  /**
+   * A retirement moves the account's own vote, which was on its DRep, to always abstain: from the build's own fresh
+   * read, which the review says. Absent: it doesn't.
+   */
+  ownVoteMoves?: boolean;
   /** Returned by unregistering it. */
   refund: string;
   /** Rewards withdrawn. */
@@ -1771,11 +1778,17 @@ export interface LovejoinStatus {
    */
   deposits?: Array<{ txHash: string; txIndex: number }>;
   /**
-   * Its boxes a mix from the public account put where they are: the
-   * account's, which paid for it in the open. Mixed again, the account pays,
+   * Its boxes a mix from any of its public accounts put where they are: that
+   * account's, which paid for it in the open. Mixed again, that account pays,
    * or the private balance ties itself to it (privacy review §2.10).
    */
   fromPublic: Array<{ txHash: string; txIndex: number }>;
+  /**
+   * Of `fromPublic`, those a mix from a public account other than the active
+   * one put in, and which account (its index): that account mixes them again.
+   * Paid from this one, they'd tie the two accounts together.
+   */
+  otherAccounts?: Array<{ txHash: string; txIndex: number; account: number }>;
   /** Its chains that aren't all sent: being sent (no withdraw meanwhile), or stopped partway. */
   chains: LovejoinChainView[];
 }

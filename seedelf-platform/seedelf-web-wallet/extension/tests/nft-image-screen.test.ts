@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../src/i18n/core";
 
 import type { TokenAmount } from "../src/shared/rpc";
+import { beforeShowing } from "../src/ui/components/NftImage";
 import { TokenDetails, TokenRow } from "../src/ui/components/TokenList";
 import { NetworkContext } from "../src/ui/network";
 import { forgetImages, rememberImage } from "../src/ui/nft-images";
@@ -62,6 +63,17 @@ describe("an NFT's details before anything is asked", () => {
     expect(shown).toContain("Nothing is asked until you show its image.");
   });
 
+  it("says Chrome asks first only when it will: not once the access given for connecting sites covers the gateway", () => {
+    // Release review C24: that access is never handed back, so Chrome then answers Show image with no dialog at all.
+    const asks = "The first time, Chrome asks you to let the wallet reach ipfs.blockfrost.dev.";
+    expect(beforeShowing("cardano")).toContain(asks);
+    expect(beforeShowing("seedelf", false)).toContain(asks);
+    for (const of of ["cardano", "seedelf"] as const) {
+      expect(beforeShowing(of, true)).not.toContain("Chrome");
+      expect(beforeShowing(of, true)).toMatch(/^Nothing is asked until you show its image\. .*about this NFT/);
+    }
+  });
+
   it("offers nothing for a fungible token, or for a Seedelf, which has no image and mustn't be asked about", () => {
     const fungible: TokenAmount = { ...nft, assetName: "464f4f", quantity: "500", decimals: 0 };
     expect(details(fungible, "cardano")).not.toContain("Show image");
@@ -102,6 +114,19 @@ describe("an NFT's details once its image was asked for", () => {
     expect(html).toContain('data-value="https://tracker.example/1.png"');
     expect(text(html)).toContain("Its image isn't on IPFS but on a server its sender chose, so the wallet won't fetch it.");
     expect(text(html)).toContain("Opening the address below tells that server your IP address.");
+  });
+
+  it("says what came in a status region that was there before it, so a screen reader says it (release review C48)", () => {
+    expect(details(nft, "cardano")).toContain('<div role="status"></div>');
+    const results = [
+      [{ none: "metadata" }, '<div role="status"><p class="note center" data-testid="nft-image-none">'],
+      [{ image: IMAGE, from: "ipfs" }, '<div role="status"><p class="note center" data-testid="nft-image-from">'],
+      [{ elsewhere: "https://tracker.example/1.png" }, '<div role="status"><div class="stack-tight" data-testid="nft-image-elsewhere">'],
+    ] as const;
+    for (const [found, region] of results) {
+      rememberImage("preprod", nft, found);
+      expect(details(nft, "cardano")).toContain(region);
+    }
   });
 
   it("says why there's no image", () => {

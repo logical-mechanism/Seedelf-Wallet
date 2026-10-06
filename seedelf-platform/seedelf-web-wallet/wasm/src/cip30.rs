@@ -1874,7 +1874,8 @@ impl DataFor {
 }
 
 /// A DRep ID as a site may give it to `signData` (CIP-95): its key hash in
-/// hex, or CIP-129's or CIP-105's `drep1…`. A script DRep is no key's.
+/// hex, or any ID `parse_drep` reads (CIP-129's `drep1…`, CIP-105's
+/// `drep_vkh1…` and its deprecated `drep1…`). A script DRep is no key's.
 fn drep_key_of(text: &str) -> Option<Hash<28>> {
     let text = text.trim();
     if text.len() == 56 && text.bytes().all(|b| b.is_ascii_hexdigit()) {

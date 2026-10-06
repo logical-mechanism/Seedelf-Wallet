@@ -36,7 +36,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { AtStake, DappSite, Status } from "../../shared/rpc";
+import type { AtStake, DappSite, KnownAccount, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -65,7 +65,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
 import { SetPassword } from "../components/SetPassword";
 import {  } from "../format";
-import { accountName, useAccounts } from "../accounts";
+import { accountName, nextInOrder, restoreFinds, useAccounts } from "../accounts";
 import { confirmsDelete, deletePhrase } from "../delete-phrase";
 import { usePreferences } from "../preferences";
 import { asSentence } from "../sentence";
@@ -257,8 +257,8 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
   const [busy, setBusy] = useState<"switch" | "check" | "name" | "look">();
   const [error, setError] = useState<string>();
   // What the last look or check found, said beside the button that asked (`by`), not at the foot of the page
-  // (chunk 23's second review, PA-1).
-  const [found, setFound] = useState<{ text: string; by: Asked }>();
+  // (chunk 23's second review, PA-1). `unreached`: an account it added that a restore won't find by itself.
+  const [found, setFound] = useState<{ text: string; by: Asked; unreached?: number }>();
   const [naming, setNaming] = useState<number>();
   const [draft, setDraft] = useState("");
   // The account number to look up or add. Any CIP-1852 index: a custom or
@@ -293,18 +293,20 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
     }
   };
 
+  // A restore looks only in order, so an account it can't reach is said, with its number to note (release review C09).
+  const unreached = (now: KnownAccount[], index: number) => (restoreFinds(now, index) ? {} : { unreached: index });
+
   /** The next account in the sequential run, which is what most wallets have. */
-  const look = () => {
-    // The one the worker looks at: the first gap in the run up from account 0 (accounts.ts nextSequential).
-    const known = new Set(accounts.map((a) => a.index));
-    let next = 0;
-    while (known.has(next)) next += 1;
-    return run("look", async () => {
-      const { found: indexes } = await call("account-discover", { limit: 1 });
+  const look = () =>
+    run("look", async () => {
+      const { found: indexes, accounts: now } = await call("account-discover", { limit: 1 });
       if (indexes.length) {
-        setFound({ text: t("accounts.foundAccount", { number: indexes[0]! + 1 }), by: "look" });
+        setFound({ text: t("accounts.foundAccount", { number: indexes[0]! + 1 }), by: "look", ...unreached(now, indexes[0]!) });
         return;
       }
+      // The one the worker looked at: the first gap in its list, not this page's, which a restore's look may have
+      // grown since (accounts.ts nextSequential, release review C12).
+      const next = nextInOrder(now);
       // Never used: adding it is the next step, so it's the main button, not a number to type below (PA-1).
       setFound({
         text: t("accounts.nextNeverUsed", { number: next + 1, network: NETWORKS[network].label }),
@@ -312,7 +314,6 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
       });
       setUnused({ index: next, by: "look" });
     });
-  };
 
   /** The number typed, as an index from 0; undefined when it isn't a number a person would mean. */
   const typed = () => {
@@ -324,12 +325,13 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
     const index = typed();
     if (index === undefined) return;
     void run("check", async () => {
-      const { used } = await call("account-check", { index });
+      const { used, accounts: now } = await call("account-check", { index });
       setFound({
         text: used
           ? t("accounts.hasBeenUsed", { number: index + 1, network: NETWORKS[network].label })
           : t("accounts.neverUsed", { number: index + 1, network: NETWORKS[network].label }),
         by: "own",
+        ...(used ? unreached(now, index) : {}),
       });
       if (!used) setUnused({ index, by: "own" });
     });
@@ -337,8 +339,8 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
 
   const addOne = (index: number, by: Asked) =>
     run("check", async () => {
-      await call("account-add", { index });
-      setFound({ text: t("accounts.inListNow", { number: index + 1 }), by });
+      const { accounts: now } = await call("account-add", { index });
+      setFound({ text: t("accounts.inListNow", { number: index + 1 }), by, ...unreached(now, index) });
       setNumber("");
     });
 
@@ -349,6 +351,11 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
         <p className="note" role="status" data-testid="accounts-found">
           {found.text}
         </p>
+      )}
+      {found?.by === by && found.unreached !== undefined && (
+        <Callout tone="warn" testId="accounts-note-number">
+          {t("accounts.warn.noteNumber", { number: found.unreached + 1 })}
+        </Callout>
       )}
       {unused?.by === by && (
         <div className="actions" data-testid={by === "look" ? "accounts-add-next" : "accounts-add-unused"}>

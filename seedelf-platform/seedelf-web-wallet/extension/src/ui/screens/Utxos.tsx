@@ -15,7 +15,7 @@
 // and a public UTxO's details say whose its address is.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { joinList, joinSentences, Rich, sentenceGap, t, useT } from "../../i18n";
+import { currentLanguage, joinList, joinSentences, Rich, sentenceGap, t, useT } from "../../i18n";
 
 import { historyTags } from "../../shared/histories";
 import type { Incoming, UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
@@ -314,6 +314,8 @@ export function UtxoDetails({
   onClose: () => void;
 }) {
   const amounts = useAmounts();
+  // The account its money was made private from, as its row names it: here is where locking it is decided.
+  const { accounts } = useAccounts();
   const foot = lockable(utxo) ? (
     <>
       {error && (
@@ -373,7 +375,7 @@ export function UtxoDetails({
         />
         {utxo.history && (
           <p className="note" data-testid="utxo-history-note">
-            {t("utxos.privacy.cameFrom", { history: historyOf(utxo) })}
+            {t("utxos.privacy.cameFrom", { history: historyOf(utxo, accounts.length) })}
           </p>
         )}
         <ReviewRows testId="utxo-output">
@@ -417,11 +419,14 @@ const SEARCH_FROM = 10;
  * many. So a UTxO holding hundreds doesn't stretch its details.
  */
 function UtxoTokens({ tokens }: { tokens: UtxoInfo["tokens"] }) {
+  const t = useT();
   const network = useNetwork();
   const amounts = useAmounts();
   const [all, setAll] = useState(false);
   const [query, setQuery] = useState("");
-  const views = useMemo(() => sortTokens(tokens.map((t) => viewToken(network, t)), "name"), [network, tokens]);
+  // A lookalike's second line is words: made again when another page switches the language.
+  const language = currentLanguage();
+  const views = useMemo(() => sortTokens(tokens.map((t) => viewToken(network, t)), "name"), [network, tokens, language]);
   if (!views.length) return null;
   const shown = all ? searchTokens(views, query) : views.slice(0, PREVIEW);
   return (

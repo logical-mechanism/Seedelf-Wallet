@@ -5,7 +5,7 @@
 // until the wallet locks it's its avatar too.
 
 import { useMemo, useState } from "react";
-import { joinList, useT } from "../../i18n";
+import { currentLanguage, joinList, useT } from "../../i18n";
 
 import type { TokenAmount, TokenRef } from "../../shared/rpc";
 import { tokenKey } from "../format";
@@ -94,13 +94,15 @@ export function TokenList({
   const tr = useT();
   const network = useNetwork();
   const [open, setOpen] = useState<TokenView>();
+  // A view's second line can be words (a lookalike's warning): another page's switch of language makes them again.
+  const language = currentLanguage();
   const views = useMemo(() => {
     const sorted = sortTokens(
       tokens.map((t) => viewToken(network, t)),
       "name",
     );
     return [...sorted.filter((v) => !v.nft), ...sorted.filter((v) => v.nft)];
-  }, [network, tokens]);
+  }, [network, tokens, language]);
   if (!views.length) return null;
   return (
     <div className="stack-tight" data-testid={testId}>
