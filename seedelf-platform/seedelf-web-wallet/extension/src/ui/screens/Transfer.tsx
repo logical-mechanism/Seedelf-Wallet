@@ -272,7 +272,7 @@ export function Transfer({
             ),
         )}
         <p className="note">
-          {t(several ? "transfer.review.noteEach" : "transfer.review.noteThis")}
+          {joinSentences([t(several ? "send.review.onlyOwnerEach" : "send.review.onlyOwnerThis"), t("send.review.confirmTime")])}
         </p>
         <GivemeNote />
       </Screen>

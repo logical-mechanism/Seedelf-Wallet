@@ -222,11 +222,8 @@ export function DestinationField({
             <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
             {(savedAs || !read.destination.own) && saveLink}
           </p>
-        ) : seedelfs ? (
-          <p className="note">
-            {t("destination.privacy.hintSeedelf")}
-          </p>
         ) : (
+          // What may go in the field is the placeholder's to say: this says only what looking it up tells Koios.
           <p className="note">{t("destination.privacy.hint")}</p>
         )}
       </div>

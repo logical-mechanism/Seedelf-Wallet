@@ -178,7 +178,8 @@ export function ReceiveSeedelf({
           </button>
         )}
       </div>
-      <p className="note">{t("receive.seedelfs.note")}</p>
+      {/* No note on sharing the whole name, not the tag: each card's label and tag line say it, and the privacy
+          callout below says payments to it aren't tied to anything (the copy-trim pass, 2026-10-06). */}
       <ul className="receive-cards" data-testid="seedelfs" aria-label={t("receive.seedelfs.title")}>
         {seedelfs.map((s) => (
           <SeedelfCard key={s.assetName} seedelf={s} only={seedelfs.length === 1} onRemove={onRemove} removeTitle={removeTitle} />

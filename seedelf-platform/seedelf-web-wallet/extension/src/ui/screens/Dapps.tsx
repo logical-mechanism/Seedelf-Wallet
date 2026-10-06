@@ -296,7 +296,7 @@ function SitesState() {
     <div className="stack-tight" data-testid="dapp-sites-off">
       <Callout tone="privacy">{blocked ? connectorBlockedText() : t("settings.sites.privacy.off")}</Callout>
       {!blocked && (
-        <button type="button" className="secondary align-start" onClick={sites.toggle}>
+        <button type="button" className="secondary align-center" onClick={sites.toggle}>
           {t("dapps.letSitesConnect")}
         </button>
       )}

@@ -572,7 +572,7 @@ export function ReadFailed({
         <p className="note">{detail}</p>
       </details>
       {onRetry && (
-        <button type="button" className="secondary primary--compact align-start" onClick={onRetry}>
+        <button type="button" className="secondary primary--compact align-center" onClick={onRetry}>
           {t("common.tryAgain")}
         </button>
       )}
@@ -891,8 +891,12 @@ export function StakingReview({
           {t("staking.warn.retireOwnVote")}
         </Callout>
       )}
-      {action.kind === "drep-vote" && <Callout tone="privacy">{t("gov.privacy.vote")}</Callout>}
-      <Callout tone="privacy">{t(drepAction ? "drep.privacy.public" : "staking.privacy.namesAccount")}</Callout>
+      {/* A vote's own note ties it to the public account: the DRep's beside it said so again. */}
+      {action.kind === "drep-vote" ? (
+        <Callout tone="privacy">{t("gov.privacy.vote")}</Callout>
+      ) : (
+        <Callout tone="privacy">{t(drepAction ? "drep.privacy.public" : "staking.privacy.namesAccount")}</Callout>
+      )}
       <p className="note">{t("send.review.confirmTime")}</p>
     </Screen>
   );

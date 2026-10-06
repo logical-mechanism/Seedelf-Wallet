@@ -220,7 +220,7 @@ describe("the transaction view's page", () => {
     // (wasm/tests/decode_test.rs pins the reading itself).
     const detail = { ...read(cborOf("payment")), unknown: [{ at: "body", field: "23", hex: "820102" }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("has no name for");
+    expect(page).toContain("this version of the wallet can't name");
     expect(page).toContain("The body's field 23");
     expect(page).toContain("820102");
   });
@@ -354,7 +354,7 @@ describe("nothing the decoder found is left off the page", () => {
   it("says when metadata isn't what the body commits to", () => {
     const detail: TxDetail = { ...read(cborOf("certificates")), metadataHashMatches: false };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("isn't the hash of the metadata it carries");
+    expect(page).toContain("Its metadata doesn't match the hash in its body");
     // And it still shows the metadata, as it shows everything else.
     expect(page).toContain("Label 674");
   });
@@ -384,7 +384,7 @@ describe("the explanations behind their icons", () => {
   const HINTS = [
     "looking them up would tell whoever was asked which transaction you are reading",
     "Read, not spent: a contract's script or its settings usually sit in one.",
-    "It doesn't take one apart",
+    "The wallet doesn't interpret what a contract does",
     "Metadata is in the open",
   ];
 
@@ -416,7 +416,7 @@ describe("the explanations behind their icons", () => {
     const detail: TxDetail = { ...read(cborOf("payment")), valid: false, unknown: [{ at: "body", field: "23", hex: "00" }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
     expect(page).toContain("marked to fail its contracts");
-    expect(page).toContain("has no name for");
+    expect(page).toContain("this version of the wallet can't name");
   });
 });
 

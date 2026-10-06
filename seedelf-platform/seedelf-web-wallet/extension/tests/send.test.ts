@@ -250,15 +250,15 @@ describe("send", () => {
     }
     const most = BigInt((await t.send.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).payments[0]!.lovelace);
     const pay = (...amounts: bigint[]) => t.send.build("preprod", amounts.map((a) => ({ to: THEIRS, lovelace: a.toString(), tokens: [] })));
-    const left = "what stays in your public account would be less than the least ADA the network accepts";
+    const left = "what stays in your public account would be under the network's minimum";
     // Half an ADA under Max: it fits, and the half left over can't stay.
     const short = pay(most - 500_000n);
-    await expect(short).rejects.toThrow(`Not enough ADA: after this payment and its fee, ${left}. Use Max to send all of it, or send less.`);
+    await expect(short).rejects.toThrow(`Not enough ADA: ${left}. Use Max to send all of it, or send less.`);
     await expect(short).rejects.not.toThrow("up to");
     // Over Max, it's still how much can go.
     await expect(pay(most + 1n)).rejects.toThrow("up to");
     // Two that fit together and leave too little, and two that come to more than the account holds.
-    await expect(pay(2_000_000n, most - 2_500_000n)).rejects.toThrow(`after these payments and their fee, ${left}`);
+    await expect(pay(2_000_000n, most - 2_500_000n)).rejects.toThrow(`Not enough ADA: ${left}. Lower an amount`);
     await expect(pay(2_000_000n, most)).rejects.toThrow("these come to more than your public account can pay");
   });
 

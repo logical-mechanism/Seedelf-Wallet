@@ -124,7 +124,7 @@ describe("why the Private tab's actions can't be pressed (blind test T03)", () =
     expect(why.lines).toEqual(["home.busy.fundFirstAll"]);
     // Create by its Seedelf, Send privately and Make public by the names they show: a reason the tooltips alone carried.
     expect(t("home.busy.fundFirstAll")).toBe(
-      "Fund your public account first: it pays for your Seedelf, and what Send privately and Make public spend comes from it too",
+      "Fund your public account first: your Seedelf, Send privately and Make public need it",
     );
   });
 
@@ -137,7 +137,7 @@ describe("why the Private tab's actions can't be pressed (blind test T03)", () =
   it("with a Seedelf and no private money, names Send and Make public, not “these”", () => {
     const why = privateWhy(reading({ publicAda: "100000000", publicUtxos: 1, seedelfs: 1 }), false);
     expect(why.lines).toEqual(["home.busy.makePrivateFirst"]);
-    expect(t("home.busy.makePrivateFirst")).toBe("Make some ADA private first: Send privately and Make public pay from your private balance");
+    expect(t("home.busy.makePrivateFirst")).toBe("Make some ADA private to Send privately or Make public");
   });
 
   it("gives Create its own line when its reason differs, and that line names the Seedelf", () => {
@@ -203,7 +203,7 @@ describe("a restore is confirmed on Home (blind test T20a, T20b)", () => {
 
   it("says an empty phrase is what a phrase never used holds, on this network", () => {
     expect(note(reading())).toBe(
-      "Wallet restored This phrase holds nothing on Preprod yet. That's expected for a phrase never used: one you've used would show its balances here. Dismiss",
+      "Wallet restored This phrase holds nothing on Preprod yet, as expected for a new one. Dismiss",
     );
   });
 
@@ -216,24 +216,24 @@ describe("a restore is confirmed on Home (blind test T20a, T20b)", () => {
     // nothing… never used", then that the phrase had used two accounts).
     const said = note(reading(), { accounts: [{ index: 0 }, { index: 1, foundAt: 5 }] });
     expect(said).toBe(
-      "Wallet restored Account 1 holds 0 ₳, and the private balance holds 0 ₳. This phrase has used 1 more public account: the picker at the top switches to it. Dismiss",
+      "Wallet restored Account 1 holds 0 ₳, and the private balance holds 0 ₳. It has used 1 more public account: switch to it on the Public tab. Dismiss",
     );
-    expect(said).not.toContain("never used");
+    expect(said).not.toContain("a new one");
     expect(note(reading({ publicAda: "5000000", publicUtxos: 1 }), { accounts: [{ index: 0 }, { index: 1, foundAt: 5 }, { index: 2, foundAt: 5 }] })).toContain(
-      "Account 1 holds 5 ₳, and the private balance holds 0 ₳. This phrase has used 2 more public accounts: the picker at the top switches to them.",
+      "Account 1 holds 5 ₳, and the private balance holds 0 ₳. It has used 2 more public accounts: switch to them on the Public tab.",
     );
   });
 
   it("counts only the accounts the look found used: one added by hand isn't one", () => {
     expect(note(reading(), { accounts: [{ index: 0 }, { index: 1337 }] })).toBe(
-      "Wallet restored This phrase holds nothing on Preprod yet. That's expected for a phrase never used: one you've used would show its balances here. Dismiss",
+      "Wallet restored This phrase holds nothing on Preprod yet, as expected for a new one. Dismiss",
     );
   });
 
   it("sets its sentences the Japanese way, with nothing between them", async () => {
     await i18n.changeLanguage("ja");
     expect(note(reading(), { accounts: [{ index: 0 }, { index: 1, foundAt: 5 }, { index: 2, foundAt: 5 }] })).toMatch(
-      /あります。このフレーズは、ほかに公開アカウントを 2 個/,
+      /あります。ほかに公開アカウントを 2 個/,
     );
   });
 });

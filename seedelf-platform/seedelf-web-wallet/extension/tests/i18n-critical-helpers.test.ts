@@ -40,7 +40,7 @@ const REACHED = keysThroughHelpers({ keys: Object.keys(en) });
  * named for it.
  */
 const SHARED_WORDS: Record<string, string> = {
-  "accountPicker.numbered": "an account's name, as the account picker shows it",
+  "accountPicker.numbered": "an account's name, as Make public and Remove a Seedelf name it",
   "claim.aSession": "a private session's name, when its own can't be read",
   "claim.sessionLower": "a private session's name, as Bring everything back lists it",
   "format.noName": "a token's name, when it has none",
@@ -161,7 +161,7 @@ describe("what the back-translation of these warnings corrected, through the hel
     ];
     const english = Settings.atStakeLines(stake);
     expect(english).toHaveLength(2);
-    for (const line of english) expect(line).toContain("but making or restoring another wallet here first deletes that record.");
+    for (const line of english) expect(line).toContain("Another wallet made or restored here first deletes its record");
     await i18n.changeLanguage("ja");
     const lines = Settings.atStakeLines(stake);
     expect(lines).toHaveLength(2);
@@ -183,11 +183,11 @@ describe("what the back-translation of these warnings corrected, through the hel
 
   it("says in Spanish that opening a swap's transactions opens these links, not this", async () => {
     expect(t(explorerWarningKey("transactions"))).toBe(
-      "Opening these on Cardanoscan tells that site, and your browser history, that these transactions are yours.",
+      "Opening these tells Cardanoscan and your browser history that these transactions are yours.",
     );
     await i18n.changeLanguage("es");
     expect(t(explorerWarningKey("transactions"))).toBe(
-      "Abrir estos enlaces en Cardanoscan le dice a ese sitio, y al historial de tu navegador, que estas transacciones son tuyas.",
+      "Abrir estos enlaces le dice a Cardanoscan y al historial de tu navegador que estas transacciones son tuyas.",
     );
   });
 });

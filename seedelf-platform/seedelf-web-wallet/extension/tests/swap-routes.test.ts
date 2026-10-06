@@ -34,7 +34,7 @@ describe("SundaeSwapV3 on mainnet (independent review M16)", () => {
     const t = await unlocked();
     t.minswap.estimate = via("SundaeSwapV3");
     await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
-      "Minswap routes this swap through SundaeSwapV3, whose orders the wallet can't check yet",
+      "Minswap routes this swap through SundaeSwapV3, which the wallet can't check yet, so it won't swap this way",
     );
   });
 });

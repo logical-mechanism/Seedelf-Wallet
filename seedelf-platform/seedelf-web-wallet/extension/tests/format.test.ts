@@ -90,7 +90,7 @@ describe("sanitizeAda", () => {
     const { sanitizeAda } = await import("../src/ui/format");
     expect(sanitizeAda("", "10.1234567890")).toEqual({
       value: "10.123456",
-      note: "ADA has at most 6 decimal places (0.000001\u00a0₳ is one lovelace), so the extra digits were dropped.",
+      note: "ADA has at most 6 decimal places, so the extra digits were dropped.",
     });
     expect(sanitizeAda("", "0.9999999")).toMatchObject({ value: "0.999999" });
     expect(sanitizeAda("", "10.123456")).toEqual({ value: "10.123456" });

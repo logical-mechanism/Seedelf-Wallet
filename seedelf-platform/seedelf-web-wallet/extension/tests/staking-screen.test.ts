@@ -85,9 +85,9 @@ describe("a staking review's button says the act (ST-2)", () => {
     expect(shown).toContain("Nothing is sent until you press Withdraw 57.475311 ₳");
     expect(html).toMatch(/<button type="button" class="primary">Withdraw 57\.475311\u00a0₳<\/button>/);
     expect(shown).not.toMatch(/\bSend\b/);
-    expect(shown).toContain("Your balance stays the same, but for the fee: these rewards were already counted in it.");
+    expect(shown).toContain("Your balance stays the same, but for the fee.");
     // What withdrawing does that matters, since the balance doesn't change (blind test §4 entry 19, E04).
-    expect(shown).toContain("Withdrawn, they're ordinary money in your public account: payments spend them whatever Settings says, and sites see them.");
+    expect(shown).toContain("Once withdrawn, payments spend them whatever Settings says, and sites see them.");
   });
 
   it("stopping: what ends, what's lost, the deposit back, on a red Stop staking (ST-3)", () => {
@@ -95,9 +95,9 @@ describe("a staking review's button says the act (ST-2)", () => {
     const shown = text(html);
     expect(shown).toContain("Review: stop staking");
     expect(html).toContain('data-testid="staking-stop-ends"');
-    expect(shown).toContain("Your pool and your voting power's delegation end, and no more rewards come.");
-    expect(shown).toContain("Your 57.475311 ₳ of rewards are withdrawn with it");
-    expect(shown).toContain("hasn't paid out yet are lost");
+    expect(shown).toContain("Your pool and voting power delegations end, and rewards stop.");
+    expect(shown).toContain("Your 57.475311 ₳ of rewards are withdrawn too.");
+    expect(shown).toContain("Rewards not yet paid out, from the last epoch or two, are lost.");
     expect(shown).toContain("The 2 ₳ deposit comes back to your public account.");
     expect(shown).toContain("You can start staking again any time");
     expect(html).toMatch(/<button type="button" class="danger">Stop staking<\/button>/);
@@ -108,7 +108,7 @@ describe("a staking review's button says the act (ST-2)", () => {
     const shown = text(html);
     expect(shown).toContain("Review: change pool");
     expect(html).toMatch(/<button type="button" class="primary">Stake with TPREP<\/button>/);
-    expect(shown).toContain("at about 4.6 times its limit: every delegator's rewards shrink to about 22% of what they'd be.");
+    expect(shown).toContain("about 4.6 times its limit: delegators earn about 22% of normal rewards.");
     // Behind the title's icon: the switch's own words, not the first stake's.
     expect(html).toContain("so there&#x27;s no gap");
     const first = review(summary({ kind: "delegate", pool: LOGIC }, { pool: LOGIC }), { pool: details({ saturation: 50 }) });
@@ -123,7 +123,7 @@ describe("a staking review's button says the act (ST-2)", () => {
     expect(inactive).toContain("Delegate your vote");
     expect(inactive).toContain("This DRep hasn't voted lately");
     const pinned = text(review(summary({ kind: "vote", drep: ALWAYS_NO_CONFIDENCE }, { drep: ALWAYS_NO_CONFIDENCE })));
-    expect(pinned).toContain("A standing vote against the constitutional committee");
+    expect(pinned).toContain("Your stake votes Yes on every motion of no confidence in the committee");
     expect(pinned).not.toContain("hasn't voted lately");
   });
 });
@@ -133,7 +133,7 @@ describe("an oversaturated pool, in numbers (ST-8)", () => {
     expect(oversaturation(458.39)).toEqual({ times: "4.6", share: "22%" });
     expect(oversaturation(125)).toEqual({ times: "1.3", share: "80%" });
     expect(poolWarnings(details({ saturation: 200 }))).toEqual([
-      "This pool is oversaturated, at about 2.0 times its limit: every delegator's rewards shrink to about 50% of what they'd be.",
+      "This pool is oversaturated, about 2.0 times its limit: delegators earn about 50% of normal rewards.",
     ]);
     expect(poolWarnings(details({ saturation: 99 }))).toEqual([]);
   });
@@ -182,7 +182,7 @@ describe("an account with nothing to pay a fee with (ST-9)", () => {
     expect(noFundsReason(undefined)).toBeUndefined();
     expect(noFundsReason(side(2, 1))).toBeUndefined();
     expect(noFundsReason(side(0, 0))).toBe(
-      "You need about 1\u00a0₳ of spendable ADA in your public account to pay a fee here: rewards can't pay it on their own.",
+      "You need about 1\u00a0₳ of spendable ADA in your public account for the fee. Rewards can't pay it.",
     );
     expect(noFundsReason(side(3, 3))).toContain("Everything in your public account is locked");
   });
@@ -250,16 +250,14 @@ describe("the rewards' switch, beside the note it decides (blind test §9.9, E04
     // The note named the setting "in Settings" and gave no way there (blind test §9.9): the switch is here now, and
     // explained as Settings explains it, not in words of its own (the pass-two visual review).
     expect(text(on)).toContain(
-      "Use staking rewards when spending Anything your public account pays (a send, making money private, a Seedelf) withdraws the rewards too.",
+      "Use staking rewards when spending Each payment from your public account also withdraws your rewards.",
     );
-    expect(text(on)).toContain(
-      "Already counted in your public account's balance, so withdrawing them here only matters for a site, which counts your balance without them",
-    );
+    expect(text(on)).toContain("Already in your balance. Withdraw them only for a site, which can't see them until then.");
     expect(text(on)).not.toContain("in Settings");
     const off = page(false);
     expect(theSwitch(off)).toContain('aria-checked="false"');
     expect(text(off)).toContain("Rewards wait until you withdraw them");
-    expect(text(off)).toContain("withdraw them here to spend them, or for a site");
+    expect(text(off)).toContain("Payments and sites can use them once withdrawn.");
   });
 
   it("gives way, with its note, to the warning while the rewards are locked", () => {

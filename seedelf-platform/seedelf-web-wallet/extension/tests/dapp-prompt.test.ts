@@ -155,7 +155,7 @@ describe("a private session's way back, on its funding's review (blind test §9.
     const direct = wayBack(false);
     // 0.233208 + about 0.25: about 0.48 ₳.
     expect(direct).toContain("Its network fee, about 0.25 ₳ Network fees both ways, about 0.48 ₳");
-    expect(direct).toContain("everything there comes straight back into your private balance, the 5 ₳ kept aside with it");
+    expect(direct).toContain("From the dApps page, straight into your private balance, the 5 ₳ kept aside too.");
     expect(direct).not.toContain("Lovejoin");
   });
 
@@ -167,8 +167,8 @@ describe("a private session's way back, on its funding's review (blind test §9.
     expect(through).toContain("Its network fees, about 0.5 ₳: Lovejoin's deposit and the return");
     expect(through).toContain("Network fees both ways, about 0.73 ₳");
     expect(through).not.toContain("Its network fee, about 0.25 ₳");
-    expect(through).toContain("goes through Lovejoin first, a mixer: in 10 ₳ boxes mixed with other people's, so it's harder to tie");
-    expect(through).toContain("Settings, Lovejoin turns that off.");
+    expect(through).toContain("Lovejoin mixes the spare ADA so it's harder to tie to this session, back in 10 ₳ boxes hours later.");
+    expect(through).toContain("Settings → Lovejoin turns that off.");
     expect(through).not.toContain("as Settings has it");
   });
 });
@@ -193,14 +193,14 @@ describe("a site's connect window", () => {
     expect(/<button[^>]*>Connect<\/button>/.exec(html)![0]).toContain("disabled");
     const page = text(html);
     expect(page).toContain("Choose what the site sees");
-    expect(page).toContain("Nothing happens until you choose, and press Connect or Review");
-    expect(page).toContain("Your public account The site sees its addresses, its balance and its UTxOs, and keeps what it saw. No fee.");
+    expect(page).toContain("Nothing happens until you choose");
+    expect(page).toContain("Your public account The site sees its addresses and balance, and keeps them. No fee.");
     // The more private choice isn't the harder one to read (chunk 23's second review, CW-7): what it costs in one
-    // line, the 5 ₳ said for what it's for rather than as "collateral" (CW-8), the fee each way with a figure, and
-    // what the wallet gives the site, not "sees only", which the note on what anyone can follow qualifies (blind test
-    // §9.8, §7, T16).
+    // line, the fee each way with a figure, and what the site gets, not "sees only", which the note on what anyone can
+    // follow qualifies (blind test §9.8, §7, T16). The 5 ₳ kept aside, which comes back, is said under its amount once
+    // it's chosen (the copy-trim pass), for what it's for rather than as "collateral" (CW-8).
     expect(page).toContain(
-      "A private session The wallet gives the site only a new one-time account, funded from your private balance. A network fee each way, about 0.25 ₳ each, 5 ₳ kept aside that comes back, and about a minute.",
+      "A private session Only a new one-time account, funded from your private balance. A fee each way, about 0.25 ₳, and a minute.",
     );
     expect(page).not.toContain("The site sees only");
     // What each shows once chosen isn't said yet.
@@ -267,9 +267,9 @@ describe("a site's connect window", () => {
 
   it("says which account the public account is before it's chosen, with several (blind test T15)", () => {
     expect(withAccounts([{ index: 0 }, { index: 2, name: "Savings" }], 2)).toContain(
-      "With your public account, the site gets Account 3 · Savings: sites always use the account Settings → Sites chooses",
+      "Sites always get Account 3 · Savings, whichever is on screen. Change it in Settings → Sites.",
     );
-    expect(withAccounts([{ index: 0 }], 0)).not.toContain("the site gets");
+    expect(withAccounts([{ index: 0 }], 0)).not.toContain("Sites always get");
   });
 
   it("names the account a site would get, by number and name, when there's more than one", () => {
@@ -282,15 +282,17 @@ describe("a site's connect window", () => {
   });
 
   it("says what a site can still find out: the browser, the funding on chain, and its change (privacy review §2.12)", () => {
-    expect(PUBLIC_PRIVACY()).toContain("it can recognize this browser later, even if you connect it to a private session then");
-    expect(PRIVATE_SESSION_PRIVACY()).toContain("Your public account isn't in these transactions, but anyone, the site included, can follow the money back");
-    expect(PRIVATE_SESSION_PRIVACY()).toContain("if it has seen your public account here, it can tell the session is yours");
+    expect(PUBLIC_PRIVACY()).toContain("The site never sees your private balance.");
+    expect(PUBLIC_PRIVACY()).toContain("can recognize this browser later, even in a private session");
+    expect(PRIVATE_SESSION_PRIVACY()).toContain("Anyone can follow this money, and money you made private leads back to your public account.");
+    expect(PRIVATE_SESSION_PRIVACY()).toContain("If the site saw that account in this browser, it knows the session is yours.");
+    expect(PRIVATE_SESSION_PRIVACY()).toContain("Another Chrome profile and a VPN avoid that.");
     expect(PRIVATE_SESSION_PRIVACY()).not.toContain("never appears");
     expect(fundingPrivacy("12300000")).toBe(
-      "This payment links the private UTxOs it spends to the one-time account, as any payment from your private balance to an address does, and so does the 12.3\u00a0₳ it leaves in your private balance as change. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain and follow that change.",
+      "This payment ties the private UTxOs it spends, and its 12.3\u00a0₳ private change, to the one-time account. Anyone can see it on chain, the site too.",
     );
     expect(fundingPrivacy("0")).toBe(
-      "This payment links the private UTxOs it spends to the one-time account, as any payment from your private balance to an address does. The wallet gives the site only that account, but anyone, the site included, can read this payment on chain.",
+      "This payment ties the private UTxOs it spends to the one-time account. Anyone can see it on chain, the site too.",
     );
   });
 });
@@ -318,7 +320,7 @@ describe("the lists of sites", () => {
 
   it("say a disconnected site's open page may still look connected, though it can't use the wallet", () => {
     expect(text(renderToStaticMarkup(createElement(Disconnected, { host: "dapp.example" }))).trim()).toBe(
-      "dapp.example is disconnected: it can't use Seedelf Wallet until it asks again and you choose. A page of it that's still open may show itself connected, with what it read, until it's reloaded.",
+      "dapp.example is disconnected until it asks again and you agree. Its open pages may look connected until reloaded.",
     );
     expect(renderToStaticMarkup(createElement(Disconnected, {}))).toBe("");
   });

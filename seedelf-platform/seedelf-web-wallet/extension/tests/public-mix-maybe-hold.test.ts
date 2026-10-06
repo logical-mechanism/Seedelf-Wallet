@@ -75,7 +75,7 @@ describe("a mix from the public account stopped at a transaction that may have g
   it("says when it will be settled at the latest, if the network never shows it: two hours after it was sent", async () => {
     const { t } = await stoppedAt(1);
     await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(
-      "If it never went through, the wallet can only be sure two hours after it was sent, in about 2 hours.",
+      "The next waits until the wallet knows: minutes if it did, about 2 hours if not.",
     );
     // The clock's jumps lock the wallet (its auto-lock): unlocked again each time, as the user would.
     const later = async (ms: number) => {
@@ -83,11 +83,11 @@ describe("a mix from the public account stopped at a transaction that may have g
       await t.wallet.unlock(PASSWORD);
     };
     await later(28 * MINUTE);
-    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("in about 1 hour 32 minutes.");
+    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("about 1 hour 32 minutes if not.");
     await later(61 * MINUTE);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("in about 31 minutes.");
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("about 31 minutes if not.");
     await later(30 * MINUTE);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("in about 1 minute.");
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("about 1 minute if not.");
     await later(MINUTE);
     await t.lovejoin.publicBuild("preprod", 1);
   });

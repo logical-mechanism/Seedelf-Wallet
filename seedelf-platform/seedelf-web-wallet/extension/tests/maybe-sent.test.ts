@@ -536,7 +536,7 @@ describe("Home's banner", () => {
   it("says plainly not to pay it again, that it may have gone through, and that sending it again is safe", () => {
     // What to do first, then why (chunk 23's second review, HM-4).
     expect(text({ ...sent, maybeSent: true }, true)).toContain(
-      "Payment not confirmed yet: don't pay it again Koios didn't answer when it was sent, so it may have gone through. The wallet keeps sending it now and then, which is safe",
+      "Payment not confirmed yet: don't pay it again Koios didn't answer, so it may have gone through. The wallet keeps resending it, which is safe",
     );
     // It waits until the worker settles it, whatever Home's clock says: no Dismiss for a payment that may still land.
     const later = text({ ...sent, maybeSent: true }, false);
@@ -547,10 +547,10 @@ describe("Home's banner", () => {
 
   it("says that nothing was sent when one expired, and what's likely when one was never seen", () => {
     expect(text({ ...sent, dropped: "expired" }, false)).toContain(
-      "Payment expired: nothing was sent The network didn't take it in the time it was valid for, so it can't go through any more. Its UTxOs are back in your balance.",
+      "Payment expired: nothing was sent It can't go through any more. Its UTxOs are back in your balance.",
     );
     expect(text({ ...sent, kind: "transfer", dropped: "unseen" }, false)).toContain(
-      "Private payment not seen on the network Koios didn't answer when it was sent, and 20 minutes on the network still hasn't shown it, so it most likely never went out.",
+      "Private payment not seen on the network After 20 minutes the network still hasn't seen it, so it most likely never went out.",
     );
     expect(text({ ...sent, dropped: "expired" }, false)).toContain("Dismiss");
   });

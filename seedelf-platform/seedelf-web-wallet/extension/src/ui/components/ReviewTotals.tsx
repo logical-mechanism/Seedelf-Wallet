@@ -10,6 +10,7 @@
 
 import { useT } from "../../i18n";
 
+import { publicAccountName, useAccounts } from "../accounts";
 import { adaText, adaWithTokens } from "../format";
 import { useAmounts } from "../preferences";
 import { Row } from "./ReviewRows";
@@ -31,10 +32,13 @@ export type Side = "public" | "private";
  */
 export function TotalRows({ side, leaving, before, tokens = 0 }: { side: Side; leaving: bigint; before?: string; tokens?: number }) {
   const t = useT();
+  const account = useNamedAccount(side);
   return (
     <>
       <Row
-        label={t(side === "public" ? "review.total.public" : "review.total.private")}
+        label={
+          account ? t("review.total.publicNamed", { account }) : t(side === "public" ? "review.total.public" : "review.total.private")
+        }
         value={adaWithTokens(leaving.toString(), tokens)}
         strong
         testId="review-total"
@@ -55,14 +59,26 @@ export function homeBalance(side: { lovelace: string; locked: { lovelace: string
   return (BigInt(side.lovelace) + BigInt(side.locked.lovelace)).toString();
 }
 
+/**
+ * With several accounts, the public one a review's money leaves, by name ("Public account 2"): the picker is Home's
+ * Public heading now, not a row on every screen, so a public review says which account pays (the copy-trim
+ * pass's review, 2026-10-06). Undefined with one account, or for the private side.
+ */
+function useNamedAccount(side: Side): string | undefined {
+  const { accounts, active, several } = useAccounts();
+  if (side !== "public" || !several) return undefined;
+  return publicAccountName(accounts.find((a) => a.index === active) ?? { index: active });
+}
+
 /** "Private balance after": what a side holds once the transaction lands. */
 export function AfterRow({ side, lovelace }: { side: Side; lovelace: bigint }) {
   const t = useT();
   const amounts = useAmounts();
+  const account = useNamedAccount(side);
   const after = lovelace > 0n ? lovelace : 0n;
   return (
     <Row
-      label={t(side === "public" ? "review.after.public" : "review.after.private")}
+      label={account ? t("review.after.publicNamed", { account }) : t(side === "public" ? "review.after.public" : "review.after.private")}
       value={`${amounts.ada(after.toString())}\u00a0₳`}
       testId={`review-after-${side}`}
     />

@@ -241,7 +241,7 @@ export function DrepCard({
           {staking.drep !== drep.id && (
             <div className="stack-tight" data-testid="drep-not-own-vote">
               <p className="note">{t("drep.notOwnVote", { current: voteLabel(staking.drep) })}</p>
-              <button type="button" className="secondary align-start" onClick={onDelegateOwn} disabled={!!blocked || busy} title={blocked}>
+              <button type="button" className="secondary align-center" onClick={onDelegateOwn} disabled={!!blocked || busy} title={blocked}>
                 {building === "delegate-own" ? t("drep.building.delegateOwn") : t("drep.delegateOwn")}
               </button>
             </div>
@@ -479,7 +479,7 @@ export function DrepProfileEdit({
           </button>
         )}
       </div>
-      <Callout tone="privacy">{t("drep.privacy.profile")}</Callout>
+      {/* The profile's privacy note is the form's own, above: it said the same twice on this screen. */}
     </Screen>
   );
 }

@@ -218,7 +218,7 @@ describe("move-in", () => {
     const all = BigInt((await t.moveIn.build("preprod", null, [])).lovelace);
     const left = t.moveIn.build("preprod", (all - 500_000n).toString(), []);
     await expect(left).rejects.toThrow(
-      "Not enough ADA: after this and its fee, what stays in your public account would be less than the least ADA the network accepts. Use Max to make all of it private, or make less private.",
+      "Not enough ADA: what stays in your public account would be under the network's minimum. Use Max to make all of it private, or make less private.",
     );
     await expect(left).rejects.not.toThrow("up to");
     await t.wallet.lock();

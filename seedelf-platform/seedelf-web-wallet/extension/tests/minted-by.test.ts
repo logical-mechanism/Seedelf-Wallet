@@ -162,7 +162,7 @@ describe("Remove a Seedelf", () => {
     expect(pressed(html)).toEqual([]);
     expect(review(html)).toContain("disabled");
     expect(html).toContain("doesn&#x27;t know who paid for this Seedelf");
-    expect(html).toContain("your private balance is the safer of the two");
+    expect(html).toContain("If unsure, choose your private balance");
   });
 
   it("says in a line on each side's card what sending there links", () => {
@@ -181,11 +181,12 @@ describe("Remove a Seedelf", () => {
     expect(removeNote("account", "account")).toMatchObject({ tone: "privacy", text: expect.stringContaining("links nothing new") });
     expect(removeNote("account", "seedelf")).toMatchObject({
       tone: "warn",
-      text: expect.stringContaining("ties the account to the Seedelf's name, and through the mint to the private UTxOs"),
+      text: expect.stringContaining("ties the account to the Seedelf's name and the private UTxOs that paid"),
     });
     expect(removeNote("seedelf", "account")).toMatchObject({ tone: "warn", text: expect.stringContaining("Your public account paid") });
-    expect(removeNote("account", undefined).text).toContain("links nothing new only if your public account paid for this Seedelf");
-    expect(removeNote("seedelf", undefined).text).toContain("ties the Seedelf's name to the new UTxO");
+    // What each would link if the other side paid: when each links nothing new is on its card (removeOption).
+    expect(removeNote("account", undefined).text).toContain("If your private balance paid for it, this ties your public account to the Seedelf's name");
+    expect(removeNote("seedelf", undefined).text).toContain("If your public account paid for it, this ties the account to the new UTxO");
   });
 
   it("warns when another of the wallet's accounts paid for it (chunk 18)", () => {
@@ -194,9 +195,9 @@ describe("Remove a Seedelf", () => {
     // together through the name. The default would have done it quietly.
     const note = removeNote("account", "account", { paidByAccount: 1, active: 0, several: true });
     expect(note.tone).toBe("warn");
-    expect(note.text).toContain("Account 2 paid for this Seedelf, and the wallet is on Account 1");
-    expect(note.text).toContain("tie your two accounts together");
-    expect(note.text).toContain("Switch to Account 2 first, or send it to your private balance instead");
+    expect(note.text).toContain("Account 2 paid for this Seedelf. Sending its ADA to Account 1");
+    expect(note.text).toContain("lets anyone tie the two accounts together");
+    expect(note.text).toContain("Switch to Account 2, or send it to your private balance");
 
     // On the account that paid, it links nothing new — and says which account that is.
     const same = removeNote("account", "account", { paidByAccount: 1, active: 1, several: true });

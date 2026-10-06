@@ -245,7 +245,7 @@ const noop = () => undefined;
 describe("whole sentences, one after another", () => {
   it("run on in Japanese with nothing between them, and keep English's space", async () => {
     const spent = [madePrivate(0), madePrivate(1)];
-    const lines = () => [historiesNote(spent)!, Settings.talksTo(true, true), signingTies([], true)];
+    const lines = () => [historiesNote(spent)!, signingTies([], true)];
     for (const line of lines()) expect(line).toMatch(/\. [A-Z]/);
     await japanese();
     for (const line of lines()) {
@@ -293,20 +293,17 @@ describe("whole sentences, one after another", () => {
 
   it("run on into a link after them, and in a page's own words put after a note", async () => {
     const status = { state: "unlocked" as const, version: "1.0.0", network: "preprod" as const, networks: ["mainnet" as const, "preprod" as const], retryAfterMs: 0 };
-    const settings = () => words(createElement(Settings.Settings, { status, onBack: noop, onRemoved: noop, onNetwork: noop }));
     const onNetwork = () => words(createElement(OnNetwork, { status, doing: "restore", onChange: noop }));
     const back: SessionBackSummary = { network: "preprod", index: 2, txHash: "cd".repeat(32), fee: "1", lovelace: "1", tokens: [], depositOutputs: 1, inputs: 1 };
     const links = () => words(createElement(ReturnLinks, { back, after: t("swaps.back.privacy.neverAgain") }));
     const seedelf: UtxoInfo = { txHash: "34".repeat(32), index: 0, lovelace: "2000000", tokens: [], locked: false, seedelf: { name: "5eed0e1f00", label: "web-wallet" } };
     const holds = () => words(createElement(UtxoDetails, { of: "seedelf", utxo: seedelf, busy: false, onLock: noop, onClose: noop }));
-    expect(settings()).toContain("to compare against. Report a translation error");
     expect(onNetwork()).toContain("Restoring a wallet on Preprod. Change network");
-    expect(links()).toContain("as Make private does. The account is never used again.");
+    expect(links()).toContain("to the new private UTxOs. The account is never used again.");
     expect(holds()).toContain("It holds your Seedelf web-wallet. Only removing the Seedelf spends it.");
     await japanese();
-    expect(settings()).toContain("比較のために英語はいつでも選べます。翻訳の誤りを報告する");
     expect(onNetwork()).toContain("Preprod でウォレットを復元しています。ネットワークを変更");
-    expect(links()).toContain("同じです。このアカウントは二度と使われません。");
+    expect(links()).toContain("結び付けます。このアカウントは二度と使われません。");
     expect(holds()).toContain("あなたの Seedelf web-wallet を保持しています。Seedelf を削除したときだけ使われます。");
   });
 

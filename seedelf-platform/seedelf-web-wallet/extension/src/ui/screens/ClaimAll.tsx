@@ -171,7 +171,7 @@ export function ClaimAll({
       review
       onBack={onBack}
       backDisabled={busy}
-      aside={t("claim.aside")}
+      aside={t("review.nothingSent")}
       error={error}
       foot={
         <button type="button" className="primary" onClick={() => void send()} disabled={!built || busy || !picked.length}>
@@ -358,12 +358,9 @@ export function ClaimReview({
           testId={`claim-tx-${r.index}`}
         />
       ))}
+      {/* Coming back directly, the switch's own note says what that ties: once. */}
       <Callout tone="privacy">
-        {joinSentences([
-          t("claim.privacy.ownTransactions"),
-          boxes > 0 && t("claim.privacy.throughLovejoin"),
-          direct && t("claim.privacy.directly"),
-        ])}
+        {joinSentences([t("claim.privacy.ownTransactions"), boxes > 0 && t("claim.privacy.throughLovejoin")])}
       </Callout>
       {boxes > 0 && (
         <p className="note" data-testid="lovejoin-unaudited">

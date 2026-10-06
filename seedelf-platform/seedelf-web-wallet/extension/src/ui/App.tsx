@@ -10,7 +10,6 @@ import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
-import { AccountPicker } from "./components/AccountPicker";
 import { LockCountdown } from "./components/LockCountdown";
 import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
 import { useOpensAtTop } from "./components/Screen";
@@ -252,9 +251,6 @@ export function App() {
             </button>
           )}
         </header>
-        {/* A row of its own, not in the top bar: there it pushed Lock and Open in tab off a 360 px side panel, and
-            had room for "Account" only, not which one (chunk 23's review, HD-1). */}
-        {unlocked && !connectorWindow && <AccountPicker />}
         {network && !connectorWindow && <TestNetworkStrip network={network.name} />}
 
         <main>

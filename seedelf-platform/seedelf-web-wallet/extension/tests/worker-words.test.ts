@@ -124,7 +124,7 @@ describe("giveme.my's refusal", () => {
     await i18n.changeLanguage("ja");
     const refused = new Collateral(URL_, async () => Response.json({ detail: "Transaction Fails Validation" }, { status: 400 }));
     await expect(refused.witness("84a4")).rejects.toThrow(
-      "コラテラルを貸す giveme.my がこのトランザクションを拒否しました（Transaction Fails Validation）。giveme.my は貸し出す前に",
+      "コラテラルを貸す giveme.my がこのトランザクションを拒否しました（Transaction Fails Validation）。",
     );
     // An outage is said as one (blind test §9.5), its status placed as the language places it.
     const down = new Collateral(URL_, async () => new Response("<html>", { status: 502 }));
@@ -144,7 +144,7 @@ describe("Lovejoin's pool under its floor", CHAINS, () => {
       await i18n.changeLanguage("ja");
       const e = (await t.lovejoin.fits("preprod", 1).catch((x: unknown) => x)) as Error;
       expect(e.message).toBe(`${tr("lj.floorShortSentence", { count: 20, floor: 25 })}${tr("lj.poolSeedable")}`);
-      expect(e.message).toContain("たまってからです。代わりに");
+      expect(e.message).toContain("今は 20 件です。代わりに");
     } finally {
       preprod.poolFloor = floor;
     }
@@ -180,7 +180,7 @@ describe("a mix from the public account a lock cut", CHAINS, () => {
 
     // Half an hour on, the wallet can only be sure in an hour and a half: hours and minutes joined with "y".
     await busyFor(t, 30 * 60_000);
-    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("dentro de aproximadamente 1 hora y 30 minutos.");
+    await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("aproximadamente 1 hora y 30 minutos si no.");
 
     // The user switched to English since. Its deposit lands, and the mix says a lock cut it, not that it stopped.
     await i18n.changeLanguage("en");

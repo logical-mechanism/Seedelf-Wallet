@@ -50,20 +50,16 @@ describe("an NFT's details before anything is asked", () => {
     expect(html).not.toContain("<img");
     const shown = text(html);
     expect(shown).toContain(
-      "Showing its image asks Koios for this NFT's metadata, then fetches the image from ipfs.blockfrost.dev, an IPFS gateway Blockfrost runs.",
+      "Nothing is asked until you show its image. Then Koios and ipfs.blockfrost.dev see your IP address asking about this NFT.",
     );
-    expect(shown).toContain("Both see your IP address asking about this NFT. Nothing is asked until you choose.");
     expect(shown).toContain("The first time, Chrome asks you to let the wallet reach ipfs.blockfrost.dev.");
     expect(shown).not.toContain("private balance");
   });
 
   it("says on the private side that the click can tie this IP address to the UTxO holding it", () => {
     const shown = text(details(nft, "seedelf"));
-    expect(shown).toContain("This NFT is in your private balance.");
-    expect(shown).toContain(
-      "the chain shows which UTxO holds it, so either of them could tie your IP address to that part of your private balance.",
-    );
-    expect(shown).toContain("Nothing is asked until you choose.");
+    expect(shown).toContain("see your IP address asking about this NFT, and either could tie it to this part of your private balance.");
+    expect(shown).toContain("Nothing is asked until you show its image.");
   });
 
   it("offers nothing for a fungible token, or for a Seedelf, which has no image and mustn't be asked about", () => {
@@ -81,7 +77,7 @@ describe("an NFT's details once its image was asked for", () => {
     expect(html).toContain(`<img class="nft-image" src="${IMAGE}"`);
     expect(html).not.toContain("Show image");
     expect(text(html)).toContain(
-      "From IPFS, through ipfs.blockfrost.dev. It stays in this window until the wallet locks, and isn't saved on this device.",
+      "From IPFS, through ipfs.blockfrost.dev. Kept in this window until the wallet locks, never saved.",
     );
     const row = markup(createElement(TokenRow, { view: viewToken("preprod", nft), onOpen: noop }));
     expect(row).toContain(`class="avatar avatar--nft avatar--image" src="${IMAGE}"`);
@@ -104,8 +100,8 @@ describe("an NFT's details once its image was asked for", () => {
     const html = details(nft, "cardano");
     expect(html).not.toContain("<a ");
     expect(html).toContain('data-value="https://tracker.example/1.png"');
-    expect(text(html)).toContain("Its image isn't on IPFS, so the wallet doesn't fetch it.");
-    expect(text(html)).toContain("opening it yourself tells that server your IP address.");
+    expect(text(html)).toContain("Its image isn't on IPFS but on a server its sender chose, so the wallet won't fetch it.");
+    expect(text(html)).toContain("Opening the address below tells that server your IP address.");
   });
 
   it("says why there's no image", () => {
@@ -129,7 +125,7 @@ describe("an NFT's details in Spanish and Japanese", () => {
     Object.entries(values).reduce((v, [name, value]) => v.replaceAll(`{{${name}}}`, value), words[key]!);
   const host = { host: "ipfs.blockfrost.dev" };
   /** English the screen must never show once it speaks another language. */
-  const ENGLISH = [/Show image/, /Nothing is asked/, /IP address/, /The first time/, /From IPFS/, /isn't saved/, /Copy the/, /Koios has no/];
+  const ENGLISH = [/Show image/, /Nothing is asked/, /IP address/, /The first time/, /From IPFS/, /never saved/, /Copy the/, /Koios has no/];
   /** How the language joins two sentences: a space in Spanish, nothing in Japanese. */
   const GAP: Record<string, string> = { es: " ", ja: "" };
 

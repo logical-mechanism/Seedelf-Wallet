@@ -1176,16 +1176,15 @@ export function SwapApproval({
             on theirs: beside the balance, "back to your private balance" read as what would be left (ReviewTotals). */}
         <TotalRows side="private" leaving={costs.leaving} before={before} tokens={tokensOut} />
       </ReviewRows>
-      <SwapCosts quote={quote} get={get} fee={summary.fee.total} costs={costs} />
+      <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
-      <Plan least={amountOf(quote.minAmountOut, get)} lovejoin={mixes} adaOut={adaOut} />
+      <Plan lovejoin={mixes} adaOut={adaOut} />
       <p className="note" data-testid="swap-approves">
-        {tr("swaps.review.approves", { least: amountOf(quote.minAmountOut, get) })}
+        {tr("swaps.review.approves")}
       </p>
       {any && (
         <LovejoinChoice
           lovejoin={l!}
-          adaOut={adaOut}
           funded={quote.fund.lovelace}
           through={through}
           onThrough={onThrough}
@@ -1210,17 +1209,15 @@ export function SwapApproval({
  * payment's exact, the later ones' about SESSION_FEE_ESTIMATE each, as
  * nothing has built them yet), and Lovejoin's when its return goes through
  * it; then what comes back into the private balance: what's received, and
- * the ADA that isn't used up. `fee`: this payment's. Exported for its test.
+ * the ADA that isn't used up. Exported for its test.
  */
 export function SwapCosts({
   quote,
   get,
-  fee,
   costs,
 }: {
   quote: SwapQuote;
   get: Pick;
-  fee: string;
   costs: ReturnType<typeof swapCosts>;
 }) {
   const tr = useT();
@@ -1246,12 +1243,10 @@ export function SwapCosts({
         />
       </ReviewRows>
       {/* Which transactions the network fees are, and that the later ones come out of the room for them: "Three
-          transactions, three network fees" gave a figure for the first only (blind test T10). */}
+          transactions, three network fees" gave a figure for the first only (blind test T10). This payment's own is
+          its row above. */}
       <p className="note" data-testid="swap-costs-note">
-        {tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", {
-          now: formatAda(fee),
-          each: aboutAda(SESSION_FEE_ESTIMATE),
-        })}
+        {tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", { each: aboutAda(SESSION_FEE_ESTIMATE) })}
       </p>
     </>
   );
@@ -1261,12 +1256,13 @@ export function SwapCosts({
  * What happens after Send, as the swap's own page then shows it: the
  * timeline's four steps, none taken yet. `lovejoin`: the return goes through
  * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
+ * The least the order asks for is said above it, once.
  */
-export function Plan({ least, lovejoin, adaOut }: { least: string; lovejoin: boolean; adaOut: boolean }) {
+export function Plan({ lovejoin, adaOut }: { lovejoin: boolean; adaOut: boolean }) {
   const tr = useT();
   const steps = [
     [tr("swaps.plan.funded"), tr("swaps.plan.fundedSub")],
-    [tr("swaps.plan.ordered"), tr("swaps.plan.orderedSub", { least })],
+    [tr("swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
     [tr("swaps.plan.filled"), tr("swaps.plan.filledSub")],
     [
       tr("swaps.plan.back"),
@@ -1300,14 +1296,12 @@ export function Plan({ least, lovejoin, adaOut }: { least: string; lovejoin: boo
  */
 export function LovejoinChoice({
   lovejoin: l,
-  adaOut,
   funded,
   through,
   onThrough,
   busy,
 }: {
   lovejoin: SwapLovejoin;
-  adaOut: boolean;
   funded: string;
   through: boolean;
   onThrough: (through: boolean) => void;
@@ -1344,13 +1338,12 @@ export function LovejoinChoice({
           {tr("swaps.lovejoin.warn.pool", { why: l.skipped })}
         </Callout>
       )}
-      {cost && <LovejoinCost lovejoin={l} adaOut={adaOut} />}
+      {cost && <LovejoinCost lovejoin={l} />}
       {stopped && (
         <p className="note" data-testid="swap-lovejoin-stopped">
           {tr("swaps.lovejoin.ifStopped", {
             ada: formatAda(funded),
             boxes: boxesText(stopped),
-            mixes: tr("amount.mixes", { count: stopped.mixes }),
             mixFees: formatAda(stopped.mixFees),
             backFees: formatAda(stopped.withdrawFees),
             delay: delayText(l.delay),
@@ -1377,10 +1370,11 @@ function boxesText(l: { boxes: number; of?: number }): string {
  * What bringing the session back through Lovejoin is expected to take, from
  * the worker's quote: the boxes (at most: the pool may take fewer, or none;
  * or as many as the pool has room for at Review), their mixes and fees, and
- * the fees to bring each back, after its wait. The proceeds go through it
- * too when they're ADA (launch review #26).
+ * the fees to bring each back, after its wait. Which money goes through it
+ * (the proceeds too when they're ADA, launch review #26) is the Plan's last
+ * step, said once.
  */
-export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; adaOut: boolean }) {
+export function LovejoinCost({ lovejoin: l }: { lovejoin: SwapLovejoin }) {
   const tr = useT();
   return (
     <>
@@ -1398,16 +1392,10 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
         <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(l.withdrawFees)}\u00a0₳`} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} stack />
       </ReviewRows>
+      {/* The rows say the boxes, their fees and their wait: the note says only what they hide, and that this swap
+          keeps them whatever Settings says later (independent review L21). */}
       <p className="note" data-testid="swap-lovejoin">
-        {joinSentences([
-          tr(adaOut ? "swaps.cost.wayBackAda" : "swaps.cost.wayBackToken", {
-            boxes: boxesText(l),
-            mixes: tr("amount.mixes", { count: l.mixes }),
-            mixFees: formatAda(l.mixFees),
-          }),
-          lovejoinHides(l.depth),
-          tr("swaps.cost.eachBack", { delay: delayText(l.delay), backFees: formatAda(l.withdrawFees) }),
-        ])}
+        {joinSentences([lovejoinHides(l.depth), tr("swaps.cost.settingsLater")])}
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
@@ -2271,7 +2259,6 @@ export function StopDialog({
               !placed && IF_ORDERED(),
               tr("swaps.stop.throughCost", {
                 boxes: boxesText(cost),
-                mixes: tr("amount.mixes", { count: cost.mixes }),
                 mixFees: formatAda(cost.mixFees),
                 backFees: formatAda(cost.withdrawFees),
                 delay: delayText(cost.delay),

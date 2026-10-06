@@ -88,14 +88,14 @@ describe("the UTxOs list while a transaction is on its way (T08)", () => {
 
   it("says what's coming back to it, and that what was spent is gone", () => {
     const shown = shownWith({ lovelace: "35300614", tokens: [], utxos: 1 });
-    expect(shown).toContain("On its way here from what you've sent that isn't in a block yet: 35.300614\u00a0₳, in 1 UTxO.");
-    expect(shown).toContain("what was spent from here is off the list already");
+    expect(shown).toContain("35.300614\u00a0₳ on its way here, in 1 UTxO, listed once it's in a block.");
+    expect(shown).toContain("What was spent from here is already off the list.");
   });
 
   it("names the tokens with the ADA, and the UTxOs by their number", () => {
     const token = { policyId: "ab", assetName: "cd", quantity: "5" };
     const shown = shownWith({ lovelace: "2000000", tokens: [token as never, token as never], utxos: 2 });
-    expect(shown).toContain("2\u00a0₳ and 2\u00a0tokens, in 2 UTxOs. They're listed once they're in a block");
+    expect(shown).toContain("2\u00a0₳ and 2\u00a0tokens on its way here, in 2 UTxOs, listed once they're in a block");
   });
 
   it("keeps the amount hidden when the balances are", () => {

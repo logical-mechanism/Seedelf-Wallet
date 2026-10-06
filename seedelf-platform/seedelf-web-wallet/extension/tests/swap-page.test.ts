@@ -91,7 +91,7 @@ describe("a swap whose order was refunded (independent review M18)", () => {
 
   it("says a swap partly filled went partly through", () => {
     const partly = over({ filled: true, partly: true });
-    expect(page(partly)).toContain("Partly filled: part of the swap went through and the rest was refunded.");
+    expect(page(partly)).toContain("Partly filled, the rest refunded. Both are back in your private balance.");
     expect(text(createElement(SwapRow, { session: partly, onOpen: () => undefined }))).toContain("Partly filled");
     // A whole fill reads as before.
     expect(page(over({ filled: true }))).toContain("Done: the swap is in your private balance.");
@@ -106,15 +106,15 @@ describe("Stop's dialog (independent review L22)", () => {
   it("never promises no order is placed: the runner may be placing it as the dialog shows", () => {
     for (const cost of [null, through]) {
       const line = dialog(false, cost);
-      expect(line).toContain("If no order has gone out yet, none is placed, and everything comes back into your private balance");
-      expect(line).toContain("If the wallet is placing one right now, it's cancelled, unless a batcher fills it first.");
-      expect(line).not.toContain("No order is placed.");
+      expect(line).toContain("If no order has gone out yet, none will, and everything comes back to your private balance");
+      expect(line).toContain("If one is being placed right now, it's cancelled unless it fills first.");
+      expect(line).not.toContain("No order is placed");
     }
-    expect(dialog(true, null)).toContain("The order is cancelled, unless a batcher fills it first");
+    expect(dialog(true, null)).toContain("The order is cancelled, unless it fills first");
   });
 
   it("isn't followed by a note about an order that went first until Stop says one did", () => {
-    expect(page(swapSession())).not.toContain("An order had gone out before Stop took effect");
+    expect(page(swapSession())).not.toContain("before Stop took effect");
   });
 });
 

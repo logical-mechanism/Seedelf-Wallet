@@ -33,12 +33,11 @@ describe("an ordinary address pasted into private Send", () => {
   it("offers both ways as buttons, the private one first, each saying what it shows", () => {
     const html = render({ onPayAddress: noop });
     const shown = text(html);
-    expect(shown).toContain("That's an ordinary address, not a Seedelf's name: Send here pays only Seedelfs.");
-    expect(shown).toContain("Pay the address from your private balance or your public account instead:");
+    expect(shown).toContain("That's an ordinary address, not a Seedelf's name. Pay it another way:");
     const buttons = [...html.matchAll(/<button type="button" class="secondary"[^>]*>([^<]+)<\/button>/g)].map((m) => m[1]);
     expect(buttons).toEqual(["Pay from your private balance", "Pay from your public account"]);
-    expect(shown).toContain("With Make public. It shows at their end as coming from the Seedelf contract.");
-    expect(shown).toContain("With your public account's Send, as any wallet pays: it shows as coming from your public account.");
+    expect(shown).toContain("Through Make public: it shows as coming from the Seedelf contract.");
+    expect(shown).toContain("Through your public account's Send: it shows as coming from your public account.");
     // Each button is described by its own line, which a screen reader reads with it.
     for (const [, described] of html.matchAll(/aria-describedby="([^"]+)"[^>]*>Pay from/g)) {
       expect(html).toContain(`id="${described}"`);
@@ -51,11 +50,11 @@ describe("an ordinary address pasted into private Send", () => {
     expect(html).toMatch(/<button type="button" class="secondary"[^>]*disabled=""[^>]*>Pay from your public account<\/button>/);
     expect(html).not.toMatch(/disabled=""[^>]*>Pay from your private balance/);
     expect(text(html)).toContain(
-      "Fund your public account first: Receive publicly shows its address. With your public account's Send, as any wallet pays: it shows as coming from your public account.",
+      "Fund your public account first: Receive publicly shows its address. Through your public account's Send: it shows as coming from your public account.",
     );
     // One that ends a sentence already keeps its one full stop.
     expect(text(render({ onPayAddress: noop, publicBlocked: `${t("home.busy.wait")}.` }))).toContain(
-      "Wait for the last transaction to confirm. With your public account's Send",
+      "Wait for the last transaction to confirm. Through your public account's Send",
     );
   });
 
@@ -72,7 +71,7 @@ describe("an ordinary address pasted into private Send", () => {
 
   it("with several recipients, says to pay it on its own, with no buttons", () => {
     const html = render({});
-    expect(text(html)).toContain("Pay it on its own: with no other recipient here, Send offers to pay it from your private balance or your public account.");
+    expect(text(html)).toContain("To pay an address, take the other recipients off.");
     expect(html).not.toContain("Pay from your");
   });
 
@@ -86,8 +85,8 @@ describe("an ordinary address pasted into private Send", () => {
   it("says what a Seedelf's name is behind the label's ⓘ, and that an address works too", () => {
     const html = render({ value: "", onPayAddress: noop });
     expect(html).toContain('data-testid="transfer-to-name-hint-hint"');
-    expect(html).toContain("the 64-character name, starting 5eed0e1f, that someone using Seedelf Wallet gives out to be paid privately");
-    expect(text(html)).toContain("Paste the whole name the recipient gave you, or an ordinary address to choose how to pay it.");
+    expect(html).toContain("The 64-character name, starting 5eed0e1f, that someone using Seedelf Wallet gives out to be paid privately");
+    expect(text(html)).toContain("Paste the whole name the recipient gave you, or an address.");
     expect(html).not.toContain("Pay from your");
   });
 });

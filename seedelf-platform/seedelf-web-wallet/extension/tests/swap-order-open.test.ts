@@ -263,9 +263,8 @@ const rowOf = (s: SessionView) => createElement(SwapRow, { session: s, onOpen: (
 const row = (s: SessionView) => text(rowOf(s));
 
 const WAITS =
-  "Stopped, but one of this swap's orders is still open at a DEX, and Minswap doesn't list it, so it can't be cancelled yet. " +
-  "What's left waits at the swap's account: it comes back once that order is filled or refunded, or cancelled once Minswap " +
-  "lists it. Nothing is lost meanwhile.";
+  "Stopped, but an order Minswap doesn't list is still open at a DEX, so it can't be cancelled yet. " +
+  "The rest comes back once it's filled, refunded or cancelled.";
 
 describe("the page of a swap waiting on an order Minswap doesn't list (independent review L16)", () => {
   it("says plainly what it waits for, never that it's cancelling or done", () => {

@@ -23,19 +23,17 @@ const text = (html: string) =>
 const markup = (element: ReactElement) =>
   renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, element));
 
-const WARNING = "Opening this on Cardanoscan tells that site, and your browser history, that this transaction is yours.";
+const WARNING = "Opening this tells Cardanoscan and your browser history that this transaction is yours.";
 const HASH = "ab".repeat(32);
 
 describe("the Activity CSV's note", () => {
   it("says, on the private side, what the file ties together for whoever has it", () => {
     const shown = text(markup(createElement(ExportNote, { of: "seedelf", listed: 3, more: false })));
     expect(shown).toContain("The file isn't encrypted.");
-    expect(shown).toContain("Each row has its transaction's ID, so whoever has it can find every one on the chain.");
     expect(shown).toContain(
-      "It ties your private payments, your private sessions and your Lovejoin boxes to each other and to your public account",
+      "Whoever has it can tie your private payments, sessions and Lovejoin boxes to each other, to your public account",
     );
-    expect(shown).toContain("shows which Seedelf each payment went to");
-    expect(shown).toContain("Give it only to someone you'd show all of that.");
+    expect(shown).toContain("and to the Seedelf each payment went to.");
   });
 
   it("says the public side's is on the chain anyway, and what Load more adds", () => {
@@ -98,7 +96,7 @@ describe("Home's banner for a sent transaction", () => {
   it("stays plain for what the public account signs in the open", () => {
     for (const kind of ["move-in", "mint", "send", "collateral", "stake", "vote"] as const) {
       expect(PRIVATE_KINDS.has(kind)).toBe(false);
-      expect(banner(kind), kind).not.toContain("Cardanoscan tells");
+      expect(banner(kind), kind).not.toContain("tells Cardanoscan");
     }
   });
 });

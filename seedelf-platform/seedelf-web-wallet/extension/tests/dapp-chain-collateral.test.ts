@@ -65,7 +65,7 @@ describe("the collateral of a Lovejoin chain being sent", () => {
     await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { public: { inputs: [held!], collateral: [collateral] } });
     expect(await t.dapp.call(s, "getCollateral", [])).toBeNull();
     await expect(t.dapp.call(s, "signTx", [siteTx([free!], [collateral]), false])).rejects.toMatchObject({
-      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining(`a UTxO (${collateral}) that a chain still being sent through Lovejoin needs`) },
+      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining(`a UTxO (${collateral}) that a Lovejoin chain still holds`) },
     });
     expect(t.dapp.approvals()).toEqual([]);
 

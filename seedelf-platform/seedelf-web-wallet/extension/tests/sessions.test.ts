@@ -345,7 +345,7 @@ describe("a swap's quote", () => {
     // One Minswap routes through, but the wallet doesn't know its orders: refused before anything is funded.
     via("MinswapV2", "CswapV1");
     await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
-      "Minswap routes this swap through CswapV1, whose orders the wallet can't check yet, so it won't swap this way.",
+      "Minswap routes this swap through CswapV1, which the wallet can't check yet, so it won't swap this way.",
     );
     // On preprod, the check alone stands.
     await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["MinswapV2", "CswapV1"] });

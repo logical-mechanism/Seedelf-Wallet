@@ -220,13 +220,13 @@ describe("transfer", () => {
     calls = t.koios.calls.length;
     const past = await said(pay(27_000_000n));
     expect(past.message).toMatch(
-      `here, since ${adaWords(max.changeLovelace)}\u00a0₳ has to stay with the tokens you keep: the least ADA the network accepts with them.`,
+      `here, since ${adaWords(max.changeLovelace)}\u00a0₳ has to stay with the tokens you keep.`,
     );
     // Within a few hundred lovelace of Max's own figure.
     expect(past.figure > most - 2_000n && past.figure < most + 2_000n).toBe(true);
     // Max's figure came from the reading already made: no Koios request beyond the build's own.
     expect(t.koios.calls.length - calls).toBe(perBuild);
-    await expect(pay(most + 5_000n)).rejects.toThrow(`Send the tokens too, and that ADA can go with them.`);
+    await expect(pay(most + 5_000n)).rejects.toThrow(`Send them too to free it.`);
     // With the token sent, nothing has to stay: up to all of it, or what's left must be enough to stay.
     const all = [{ ...transferPreprod.tokens[0]!, quantity: "1234560000" }];
     const top = BigInt((await t.transfer.build("preprod", [{ to: THEIRS, lovelace: null, tokens: all }])).payments[0]!.lovelace);
@@ -234,7 +234,7 @@ describe("transfer", () => {
     expect(over.message).toMatch(/^Not enough ADA: with the fee, your private balance can pay up to about [\d.]+\u00a0₳ here\. Use Max to send all of it\.$/);
     expect(over.figure > top - 2_000n && over.figure < top + 2_000n).toBe(true);
     const short = pay(top - 500_000n, all);
-    await expect(short).rejects.toThrow(/^Not enough ADA: after this payment and its fee, what stays in your private balance would be less than 1\.\d+\u00a0₳, the least ADA the network accepts\. Use Max to send all of it, or send less\.$/);
+    await expect(short).rejects.toThrow(/^Not enough ADA: what stays in your private balance would be under the 1\.\d+\u00a0₳ minimum\. Use Max to send all of it, or send less\.$/);
     // Several: no Max measures them.
     await expect(
       t.transfer.build("preprod", [
@@ -300,7 +300,7 @@ describe("transfer", () => {
     const stale = await t.transfer.submit("preprod", summary.txHash).catch((e: unknown) => e);
     expect(stale).toBeInstanceOf(StaleReviewError);
     expect(refusedBy(stale)).toBeUndefined();
-    expect((stale as Error).message).toContain("went out in another of this wallet's transactions after this review");
+    expect((stale as Error).message).toContain("Another of your transactions spent part of it since this review");
     expect(t.collateral.asked).toHaveLength(2);
     expect(t.koios.submitted).toHaveLength(0);
   });

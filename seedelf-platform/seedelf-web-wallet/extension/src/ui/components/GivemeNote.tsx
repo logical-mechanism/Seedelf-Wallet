@@ -10,8 +10,7 @@
 // which returns to its own address), nothing in the transaction pays it, and
 // the network takes collateral only if a contract fails, which the wallet
 // checks as it builds the review (seedelf-core's `eval` runs the scripts, and
-// a failing one is no review). What collateral is waits behind the ⓘ, with
-// where Settings says it.
+// a failing one is no review). What collateral is waits behind the ⓘ.
 //
 // `funding`: the payment that funds a one-time account (a swap, a site's
 // private session, a top-up, a mix), whose review also shows that account's

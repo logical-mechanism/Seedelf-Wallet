@@ -241,7 +241,7 @@ export function Withdraw({
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {/* With several, each of the user's own by its number: the warning didn't say which it meant (PY-5). */}
         {summary.payments.map((p, i) => p.own && <OwnWarning key={i} account={p.ownAccount} nth={several ? i + 1 : undefined} />)}
-        <p className="note">{t("withdraw.review.note")}</p>
+        <p className="note">{t("send.review.confirmTime")}</p>
         <GivemeNote />
       </Screen>
     );

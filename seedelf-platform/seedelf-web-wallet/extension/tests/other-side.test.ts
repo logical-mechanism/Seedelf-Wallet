@@ -45,12 +45,12 @@ describe("Home's row for the other side (blind test §9.4)", () => {
     expect(html).toContain('data-testid="home-public-row-lovelace"');
   });
 
-  it("names the account as the Public tab's heading does, once there's more than one", () => {
+  it("names the account as the Public tab's heading does, said to be public, once there's more than one (the owner, 2026-10-06)", () => {
     const several = createElement(
       AccountsContext.Provider,
       {
         value: {
-          accounts: [{ index: 0 }, { index: 1 }],
+          accounts: [{ index: 0 }, { index: 1, name: "Savings" }, { index: 2 }],
           active: 1,
           loaded: true,
           name: "Savings",
@@ -60,7 +60,7 @@ describe("Home's row for the other side (blind test §9.4)", () => {
       },
       shown(row("cardano", "1000000")),
     );
-    expect(text(several)).toMatch(/^Savings 1 ₳ /);
+    expect(text(several)).toMatch(/^Public account · Savings 1 ₳ /);
     expect(text(shown(row("cardano", "1000000")))).toMatch(/^Public account 1 ₳ /);
   });
 

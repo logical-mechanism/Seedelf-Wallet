@@ -551,11 +551,11 @@ describe("the dApp connector", () => {
       siteTx({ inputs: [free!], collateral: [collateral] }),
     ]) {
       await expect(t.dapp.call(s, "signTx", [tx, false])).rejects.toMatchObject({
-        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") },
+        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("that a Lovejoin chain still holds") },
       });
     }
     await expect(t.dapp.call(s, "signTx", [siteTx({ inputs: [held!] }), false])).rejects.toMatchObject({
-      failure: { info: `This transaction uses a UTxO (${held}) that a chain still being sent through Lovejoin needs, or that one which stopped at a transaction that may have gone through still holds, so the wallet won't sign it. Wait for the chain to finish, or for the wallet to learn whether that transaction went (two hours at most), then try again.` },
+      failure: { info: `This transaction uses a UTxO (${held}) that a Lovejoin chain still holds, so the wallet won't sign it. Try again once the chain settles, two hours at most.` },
     });
     expect(t.koios.calls.length).toBe(calls);
     expect(t.dapp.approvals()).toEqual([]);
@@ -1222,7 +1222,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     const input = `${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`;
     await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { [chainOwner(0)]: { inputs: [input], collateral: [] } });
     await expect(dapp.call(s, "signTx", [siteTx({ inputs: [input] }), false])).rejects.toMatchObject({
-      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") },
+      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("that a Lovejoin chain still holds") },
     });
     expect(dapp.approvals()).toEqual([]);
   });
@@ -1256,7 +1256,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     expect(await answer(t.dapp, publicSite, [stranger])).toEqual(publicHears);
     expect(await answer(t.dapp, publicSite, [contract])).toEqual(publicHears);
     // Its own account's chain is still kept whole.
-    expect(await answer(t.dapp, publicSite, [account])).toMatchObject({ info: expect.stringContaining("still being sent through Lovejoin") });
+    expect(await answer(t.dapp, publicSite, [account])).toMatchObject({ info: expect.stringContaining("that a Lovejoin chain still holds") });
     expect(dapp.approvals()).toEqual([]);
     expect(t.dapp.approvals()).toEqual([]);
   });
@@ -1344,7 +1344,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     const { unregister, ...staking } = certificates(stakeKeyHash(reward));
     for (const [kind, certificate] of Object.entries(staking)) {
       await expect(dapp.call(s, "signTx", [siteTx({ inputs: [input], certificates: [certificate] }), false]), kind).rejects.toMatchObject({
-        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("stays unregistered") },
+        failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("leaving its deposit and rewards behind") },
       });
     }
     expect(dapp.approvals()).toEqual([]);

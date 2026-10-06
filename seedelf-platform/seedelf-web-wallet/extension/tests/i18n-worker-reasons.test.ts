@@ -856,11 +856,10 @@ describe("what the back-translation of these reasons corrected, as the worker sa
       // "Other than yours" (あなた以外) said the same, but with no negation for the critical set's check to read.
       const review = await sessions.backBuild("preprod", 0);
       expect(review.lovejoinSkipped).toBe(
-        "Lovejoin のプールにはあなたのものではないボックスが 20 件あります。" +
-          "ウォレットがミックスするのは、混ぜる相手が十分そろう 25 件がたまってからです",
+        "Lovejoin のプールにはあなたのものではないボックスが 20 件あり、ウォレットがミックスするのは 25 件からです",
       );
       expect(tr("lovejoin.warn.skippedThis", { why: withoutStop(review.lovejoinSkipped!) })).toContain(
-        "この返却では Lovejoin が除外されます: Lovejoin のプールにはあなたのものではないボックスが 20 件あります。",
+        "この返却では Lovejoin が除外されます: Lovejoin のプールにはあなたのものではないボックスが 20 件あり、",
       );
       // A swap's approval, as its pool reading says it.
       expect(tr("swaps.lovejoin.warn.pool", { why: tr("sess.skip.warn.poolFloor", { count: 12, floor: 30 }) })).toContain(

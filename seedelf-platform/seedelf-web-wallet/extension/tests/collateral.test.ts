@@ -49,7 +49,7 @@ describe("giveme.my client", () => {
     expect(e).toBeInstanceOf(CollateralError);
     expect(e).not.toBeInstanceOf(CollateralRefusedError);
     expect(refusedBy(e)).toBeUndefined();
-    expect((e as Error).message).toContain("Couldn't reach giveme.my, the service that lends private payments their collateral (Failed to fetch)");
+    expect((e as Error).message).toContain("Couldn't reach giveme.my, which lends the collateral (Failed to fetch)");
 
     const garbled = new Collateral(URL_, async () => new Response("ok"));
     await expect(garbled.witness("84a4")).rejects.toThrow("isn't JSON");

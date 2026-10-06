@@ -871,8 +871,9 @@ export function ConnectRequest({
           </>
         ) : connection === "private" ? (
           <>
+            {/* What the site gets is the card's own line: said again here, it was the screen's second "one-time
+                account" (the copy-trim pass). */}
             <ul className="dapp-points" data-testid="dapp-private-points">
-              <li>{tr("dappUi.private.account")}</li>
               <li data-testid="dapp-private-way-back">
                 {tr(lovejoinBack ? "dappUi.private.privacy.staysLovejoin" : "dappUi.private.staysDirect", { box: perBox })}
               </li>
@@ -1031,9 +1032,10 @@ export function SignTx({
           ])}
         </Callout>
       )}
+      {/* Which outputs, the Pays list says each: one sentence, not a count. */}
       {ownKey > 0 && (
         <Callout tone="warn" testId="dapp-own-key">
-          {tr("dappUi.warn.ownKey", { count: ownKey })}
+          {tr("dappUi.warn.ownKey")}
         </Callout>
       )}
       {s.paid.some((p) => p.seedelf === "none") && (

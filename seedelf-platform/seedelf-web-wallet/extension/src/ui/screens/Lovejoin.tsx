@@ -1073,13 +1073,10 @@ export function Lovejoin({
               />
             </ReviewRows>
           )}
-          {/* Where each part ends up, said for the side chosen (LJ-7), and that the wallet has to be unlocked for any
-              of it to happen (LJ-2). */}
+          {/* That the wallet has to be unlocked for any of it to happen (LJ-2). Where each part ends up (LJ-7) is
+              the rows' to say: what comes back once it's mixed, and what isn't used stays (copy-trim pass). */}
           <p className="note" data-testid="lovejoin-mix-rest">
-            {joinSentences([
-              tr(source === "private" ? "lovejoin.mix.restPrivate" : "lovejoin.mix.restPublic"),
-              tr("lovejoin.mix.whileUnlocked"),
-            ])}
+            {tr("lovejoin.mix.whileUnlocked")}
           </p>
           {/* Before Review, not at the page's foot under everything else (D-3). */}
           <Callout tone="warn" testId="lovejoin-unaudited">

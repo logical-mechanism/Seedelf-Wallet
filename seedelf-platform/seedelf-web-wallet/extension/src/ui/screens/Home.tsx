@@ -57,6 +57,7 @@ import type {
   TokenAmount,
 } from "../../shared/rpc";
 import { call } from "../background";
+import { AccountPicker } from "../components/AccountPicker";
 import { ActionButton } from "../components/ActionButton";
 import { Callout } from "../components/Callout";
 import { RefreshRow } from "../components/RefreshRow";
@@ -92,7 +93,7 @@ import {
   whenOf,
   withRewards,
 } from "../format";
-import { useAccounts } from "../accounts";
+import { publicAccountName, useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { assetFingerprint } from "../tokens";
 import { Activity } from "./Activity";
@@ -248,6 +249,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   // The public tab says which account it is showing, once there is more than
   // one: the balance below it is that account's alone, never a total.
   const accounts = useAccounts();
+  const activeAccount = accounts.accounts.find((a) => a.index === accounts.active) ?? { index: accounts.active };
+  // A switch the worker refused, said under the heading that is the picker.
+  const [accountError, setAccountError] = useState<string>();
   const [account, setAccount] = useState<Account>();
   const [balances, setBalances] = useState<Balances>();
   const [reading, setReading] = useState(false);
@@ -891,12 +895,20 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         ) : (
           <section key="cardano" className="stack" role="tabpanel" id="panel-cardano" aria-labelledby="tab-cardano">
             <div className="hero">
+              {/* With several accounts, the heading is the switch between them: "Public account 2 ▾" (the owner,
+                  2026-10-06). It was a row of its own under the top bar, on every screen. */}
               <div className="hero__head">
-                <h1 id="cardano-account" className="hero__label">
-                  {accounts.several ? accounts.name : t("home.public.title")}
+                <h1 id="cardano-account" className={accounts.several ? "sr-only" : "hero__label"}>
+                  {accounts.several ? publicAccountName(activeAccount) : t("home.public.title")}
                 </h1>
+                <AccountPicker onError={setAccountError} />
                 <HideToggle />
               </div>
+              {accountError && (
+                <p className="error hero__error" role="alert">
+                  {accountError}
+                </p>
+              )}
               <Amount lovelace={balances && shownAccountTotal(balances.cardano)} price={price} testId="cardano-lovelace" />
               {balances && lockedMeta(balances.cardano, amounts.ada, "cardano-meta")}
               {balances && incomingMeta(balances.cardano, "cardano-incoming")}
@@ -968,7 +980,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                       (chunk 23's second review, HM-3). */}
                   <button
                     type="button"
-                    className={canCreate ? "primary primary--compact align-start" : "link align-start"}
+                    className={canCreate ? "primary primary--compact align-center" : "link align-start"}
                     onClick={() => setScreen("create")}
                     disabled={watching}
                     title={watching ? busy : undefined}
@@ -1158,10 +1170,16 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
 export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "cardano"; lovelace?: string; onOpen: () => void }) {
   const t = useT();
   const amounts = useAmounts();
-  // Named as the Public tab's heading names it: the account's name, once there's more than one.
+  // Named as the Public tab's heading names it: "Public account 2" once there's more than one, as this side is
+  // "Private balance" there (the owner, 2026-10-06).
   const accounts = useAccounts();
   const id = side === "cardano" ? "home-public-row" : "home-private-row";
-  const name = side === "seedelf" ? t("home.private.title") : accounts.several ? accounts.name : t("home.public.title");
+  const name =
+    side === "seedelf"
+      ? t("home.private.title")
+      : accounts.several
+        ? publicAccountName(accounts.accounts.find((a) => a.index === accounts.active) ?? { index: accounts.active })
+        : t("home.public.title");
   return (
     <section className="section">
       <ul className="list">

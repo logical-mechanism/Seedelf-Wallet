@@ -262,8 +262,8 @@ describe("a payment that collects the staking rewards (blind test §9.1, T08)", 
     await t.balances.get("preprod");
     const first = await t.send.build("preprod", [{ to: THEIRS, lovelace: "25000000", tokens: [] }]);
     await t.send.submit("preprod", first.txHash);
-    await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("can be withdrawn only once");
-    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("can be withdrawn only once");
+    await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("collected these rewards and isn't confirmed yet");
+    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("collected these rewards and isn't confirmed yet");
     // Freed, it never went out: they can be withdrawn.
     await t.wallet.withKeys(() => forgetSpent(t.session, txInputs(t.koios.submitted[0]!)));
     expect((await t.staking.build("preprod", { kind: "stop" })).withdrawal).toBe("57475311");

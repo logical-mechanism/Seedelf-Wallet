@@ -151,9 +151,7 @@ export function CreateSeedelf({
         </ReviewRows>
         <TxDetailButton txHash={summary.txHash} testId="mint-tx" />
         <HistoriesNote histories={summary.histories} testId="mint-histories" />
-        <p className="note">
-          {t(summary.from === "seedelf" ? "mint.review.notePrivate" : "mint.review.noteAccount")}
-        </p>
+        <p className="note">{t("mint.review.note")}</p>
         {/* Paid from the private balance, giveme.my lends the collateral; from the account, the account's own. */}
         {summary.from === "seedelf" && <GivemeNote />}
       </Screen>

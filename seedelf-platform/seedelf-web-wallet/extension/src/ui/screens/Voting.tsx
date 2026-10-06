@@ -359,7 +359,7 @@ function DrepSearch({
         </button>
       )}
       <p className="note" data-testid="drep-list-note">
-        {t("vote.listNote", { count: dreps.length, date: dateOf(recorded) })}
+        {t("vote.listFrom", { date: dateOf(recorded) })}
       </p>
     </form>
   );

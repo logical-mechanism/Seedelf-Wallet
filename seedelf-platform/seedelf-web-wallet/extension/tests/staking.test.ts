@@ -208,8 +208,8 @@ describe("staking transactions", () => {
 
     // Koios still reports the rewards the withdrawal on its way takes: neither it again, nor a stop, which withdraws
     // them too, until it lands (the fix round's review of blind test §9.1).
-    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("can be withdrawn only once");
-    await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("can be withdrawn only once");
+    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("collected these rewards and isn't confirmed yet");
+    await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("collected these rewards and isn't confirmed yet");
     const info = stakingPreprod.account_info[0]!;
     t.koios.stakes.set(info.stake_address, { ...info, rewards_available: "0" });
 
@@ -222,8 +222,8 @@ describe("staking transactions", () => {
     // The 15-word phrase's account has no recorded UTxOs, and a stake key Koios doesn't know.
     const t = await unlocked(15);
     // A withdrawal, a retirement or a vote pays a fee and locks up nothing: no deposit is named.
-    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("this needs about 1");
-    await expect(t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).rejects.toThrow("this locks up a deposit");
+    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("no ADA for the fee, about 1");
+    await expect(t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).rejects.toThrow("no ADA for the deposit and fee");
     expect(takesDeposit({ kind: "drep-retire" }, true)).toBe(false);
     expect(takesDeposit({ kind: "drep-vote", votes: [] }, true)).toBe(false);
     expect(takesDeposit({ kind: "vote", drep: LOGIC_DREP }, true)).toBe(false);

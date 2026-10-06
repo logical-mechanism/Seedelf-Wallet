@@ -530,6 +530,12 @@ main {
   align-self: flex-start;
 }
 
+/* A button of its own under a note: centred, as the screens' other buttons are (the owner, 2026-10-06). A link stays
+   with the text it follows (align-start). */
+.align-center {
+  align-self: center;
+}
+
 .icon {
   display: flex;
 }
@@ -892,9 +898,12 @@ html:has(.screen__head--sticky) {
   flex: 1;
 }
 
+/* Over the body as it scrolls under: the swap review's numbered steps, and the swap form's switch, are positioned
+   with a z-index of their own, and showed through the button (the owner, 2026-10-06). Under a sticky head (4). */
 .screen__foot {
   position: sticky;
   bottom: 0;
+  z-index: 3;
   display: flex;
   flex-direction: column;
   gap: var(--s2);
@@ -1152,30 +1161,30 @@ html:has(.screen__head--sticky) {
   margin-top: var(--s5);
 }
 
-/* The public account the wallet is working on, on a row under the top bar:
-   hidden with one account, so a wallet that never had a second looks exactly
-   as it did. The select takes the row, so a long name shows whole. */
-.account-picker {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s1) var(--s2);
-}
-.account-picker__label {
-  flex: none;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-.account-picker select {
-  flex: 1;
-  min-width: 0;
+/* The public account's switch, drawn as the Public tab's heading it replaces (components/AccountPicker.tsx): the
+   label's size and colour, the select's own arrow, no box until it's hovered or focused. */
+.hero__head .account-picker {
+  grid-column: 2;
   width: auto;
-  padding: 6px 10px;
-  font-size: var(--text-sm);
+  max-width: 230px;
+  padding: 2px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
 }
-.account-picker__error {
-  flex-basis: 100%;
-  margin: 0;
+.hero__head .account-picker:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+.hero__error {
+  margin: var(--s1) var(--s4) 0;
+  text-align: center;
 }
 
 /* Settings → Public accounts: one row an account.

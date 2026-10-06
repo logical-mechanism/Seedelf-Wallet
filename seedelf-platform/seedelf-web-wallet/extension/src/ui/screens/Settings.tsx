@@ -19,7 +19,6 @@ import {
   joinSentences,
   type LanguageCode,
   Rich,
-  sentenceGap,
   setLanguage,
   t,
   useT,
@@ -76,7 +75,7 @@ import { Collateral } from "./Collateral";
 import { ConnectedSites } from "./ConnectedSites";
 
 const SOURCE = "https://github.com/logical-mechanism/Seedelf-Wallet";
-/** Where a wrong translation is reported: no native speaker has checked them (chunk 19). */
+/** Where a wrong translation is reported (chunk 19). */
 const ISSUES = "https://github.com/logical-mechanism/Seedelf-Wallet/issues";
 const PRIVACY =
   "https://github.com/logical-mechanism/Seedelf-Wallet/blob/main/seedelf-platform/seedelf-web-wallet/docs/store/privacy-policy.md";
@@ -125,7 +124,6 @@ export function Settings({
   const [phraseFrom, setPhraseFrom] = useState<"menu" | "remove">("menu");
   const { prefs } = usePreferences();
   const sites = useConnectorSwitch(status.connectorBlocked);
-  const prices = !!NETWORKS[status.network].prices && prefs.currency !== "off";
   const menu = () => setPage("menu");
   if (page === "accounts") return <Accounts onBack={menu} network={status.network} />;
   if (page === "contacts") return <Contacts onBack={menu} />;
@@ -232,9 +230,6 @@ export function Settings({
         <a className="menu-link" href={PRIVACY} target="_blank" rel="noreferrer">
           {t("settings.privacyPolicy")} <ExternalIcon size={12} />
         </a>
-        <p className="note" data-testid="talks-to">
-          {talksTo(prices, lovejoinOn(status.network))}
-        </p>
       </section>
     </Screen>
   );
@@ -575,21 +570,6 @@ function Accounts({ onBack, network }: { onBack: () => void; network: NetworkNam
 }
 
 /**
- * Whom the wallet talks to, and what each sees, under About (privacy review
- * §2.4, §2.5): `prices` when it asks CoinGecko for ADA's price, `lovejoin`
- * where Lovejoin is. giveme.my is the makers' own service, and Koios sends
- * every transaction from the IP address that reads the public account.
- */
-export function talksTo(prices: boolean, lovejoin: boolean): string {
-  return joinSentences([
-    t(prices ? "settings.privacy.talksToPrices" : "settings.privacy.talksTo"),
-    t("settings.privacy.eachSeesIp"),
-    t("settings.privacy.giveme"),
-    lovejoin && LOVEJOIN_SEEN(),
-  ]);
-}
-
-/**
  * What moving to each network says first, before the wallet moves, in a
  * warning callout. Both keys say so in their names (`.privacy.`, `.warn.`):
  * the callout shows `MOVE_TO[asking]`, which the critical-set deriver can't
@@ -717,8 +697,6 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
           ))}
         </select>
         <p className="note" data-testid="language-note">
-          {t("settings.language.warn.unchecked")}
-          {sentenceGap()}
           <a className="link" href={ISSUES} target="_blank" rel="noreferrer">
             {t("settings.language.report")}
           </a>
