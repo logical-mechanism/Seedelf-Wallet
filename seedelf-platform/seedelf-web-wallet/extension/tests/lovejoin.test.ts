@@ -528,7 +528,7 @@ describe("a session's collateral (privacy review §2.15)", CHAINS, () => {
     t.koios.addedToAccounts = t.koios.addedToAccounts.filter((u) => u.tx_hash !== "c2".repeat(32));
     const review = await sessions.backBuild("preprod", 0);
     expect(review.lovejoin).toBeUndefined();
-    expect(review.lovejoinSkipped).toBe("its 5 ₳ collateral isn't at its account anymore, and the mixes need it");
+    expect(review.lovejoinSkipped).toBe("its 5\u00a0₳ collateral isn't at its account anymore, and the mixes need it");
     await sessions.backSubmit("preprod", review.txHash);
     expect((await sessions.list("preprod"))[0]!.lovejoinSkipped).toBe(review.lovejoinSkipped);
 
@@ -695,9 +695,9 @@ describe("the pool the chains draw from", CHAINS, () => {
       const review = await sessions.backBuild("preprod", 0);
       expect(review.lovejoin).toBeUndefined();
       expect(review.lovejoinSkipped).toBe(
-        "Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 25, so there's enough to mix with",
+        "Lovejoin's pool holds 20 boxes not yours, and the wallet mixes only from 25",
       );
-      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("holds 20 boxes that aren't yours");
+      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("pool holds 25 boxes not yours. It holds 20");
     } finally {
       preprod.poolFloor = floor;
     }
@@ -710,7 +710,7 @@ describe("the pool the chains draw from", CHAINS, () => {
     t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
     // The tile's own mix says the public account could seed the pool instead.
     await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow(
-      `Lovejoin's pool holds 20 boxes that aren't yours, and the wallet mixes only once it holds 30, so there's enough to mix with. ${POOL_SEEDABLE()}`,
+      `The wallet mixes only once Lovejoin's pool holds 30 boxes not yours. It holds 20. ${POOL_SEEDABLE()}`,
     );
     expect(t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials[0])).toContain(mainnetBox);
     // Preprod's pool of the same size has no floor.
@@ -912,12 +912,12 @@ describe("chains the wallet sends at once", CHAINS, () => {
     // With the rest locked, nothing pays, and the error says what the private balance waits for.
     await t.coins.setLocked("preprod", "seedelf", `${"a2".repeat(32)}#0`, true);
     await expect(t.withdraw.build("preprod", [{ to, lovelace: "1000000", tokens: [] }])).rejects.toThrow(
-      "Every UTxO in your private balance is locked, or waits for a return through Lovejoin that's still being sent.",
+      "Every UTxO in your private balance is locked, or waits for a return through Lovejoin.",
     );
     // And with nothing else in it, that it's all waiting for the return.
     const only = { ...read.view, owned: read.view.owned.filter((u) => outpoint(u) === change) };
     expect(nothingToSpend({}, only, "Your private balance is empty.", read.returning).message).toBe(
-      "Your private balance waits for a return through Lovejoin that's still being sent: its last transaction adds to what's there, so nothing else spends it meanwhile. Try again once it's all sent.",
+      "Your private balance waits for a return through Lovejoin that's still being sent. Try again once it's all sent.",
     );
   });
 });
@@ -1200,7 +1200,7 @@ describe("a chain's boxes", CHAINS, () => {
     expect(status.notMixed).toHaveLength(2);
     expect(status.fromPublic).toEqual(status.notMixed);
     // The private balance won't pay for their mixes: that would tie it to the account.
-    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("came from a mix from your public account");
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("came from your public account: mixing them from your private balance would tie the two");
     expect(await t.lovejoin.againBoxes("preprod", true)).toEqual({ boxes: 2, owned: 2 });
 
     // The account pays: no deposit, every mix signed by its keys, the change left in it.
@@ -1797,7 +1797,7 @@ describe("mixing from the tile", CHAINS, () => {
       });
 
       // A mix is refused on this pool; a seed isn't.
-      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("mixes only once it holds 30");
+      await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("mixes only once Lovejoin's pool holds 30");
       const out = await sessions.mixOutBuild("preprod", 1, true);
       expect(out.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
       await sessions.mixOutSubmit("preprod", out.txHash);
@@ -1854,6 +1854,11 @@ describe("mixing from the tile", CHAINS, () => {
     expect(BigInt(seeded.mix.lovelace)).toBe(11_500_000n);
     expect(seeded.payments.map((p) => p.lovelace)).toEqual(["11500000", "5000000"]);
     expect(t.koios.calls.length).toBeGreaterThan(asked);
+    // More than the private balance holds: said in the screens' words, not core's "Seedelf balance" (chunk 23's
+    // second review, LJ-6).
+    await expect(sessions.mixOutBuild("preprod", 30, true)).rejects.toThrow(
+      /^Not enough ADA in your private balance for this, its fee and the change\.$/,
+    );
 
     // One box at depth 2: the box, four mixes and the deposit's change, and 5 ₳ of collateral.
     const out = await sessions.mixOutBuild("preprod", 1);
@@ -2047,7 +2052,7 @@ describe("mixing from the tile", CHAINS, () => {
     t.koios.addedToAccounts.push(await ownedBox(t, D, 1));
     await t.store.set("lovejoin.preprod", { due: [], chains: [cut] });
     const { sessions } = mixRunner(t);
-    await expect(sessions.againBuild("preprod")).rejects.toThrow("Mix them again from your public account instead");
+    await expect(sessions.againBuild("preprod")).rejects.toThrow("Use Mix again from my public account");
     const out = await sessions.againBuild("preprod", true);
     expect(out.mix).toMatchObject({ boxes: 1, again: true, publicToo: true });
     await sessions.mixOutSubmit("preprod", out.txHash);
@@ -2227,7 +2232,9 @@ describe("mixing from the tile", CHAINS, () => {
     const t = await wallet();
     // The recorded pool's 20 boxes are other people's; preprod has no floor.
     const listed = await t.lovejoin.status("preprod");
-    expect(listed).toMatchObject({ available: true, others: 20, floor: 0 });
+    // And how many a mix could draw on now, none held by a chain of the wallet's, so the page says before Review
+    // whether one fits (chunk 23's second review, LJ-1).
+    expect(listed).toMatchObject({ available: true, others: 20, free: 20, floor: 0 });
     expect(listed.boxes).toHaveLength(0);
     // Mainnet's floor is what the page compares against: nothing of the pool sits there.
     const onMainnet = await t.lovejoin.status("mainnet");

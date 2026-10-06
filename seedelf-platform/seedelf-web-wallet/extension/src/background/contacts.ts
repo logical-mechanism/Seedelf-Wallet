@@ -12,7 +12,7 @@ import type { NetworkName } from "../networks";
 import type { Contact } from "../shared/rpc";
 import { seedelfName } from "../shared/seedelf-name";
 import type { PrivateStore } from "./private-store";
-import { HANDLE } from "./destination";
+import { checkPayable, HANDLE } from "./destination";
 
 /** The longest name a contact can have. */
 export const CONTACT_NAME_MAX = 40;
@@ -72,7 +72,8 @@ export class ContactsService {
     }
     const { wasm } = this.deps;
     try {
-      wasm.checkPayableAddress(trimmed, network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod);
+      // Why, in the user's words: the other network's, a stake address, a script's (chunk 23's second review, PY-10).
+      checkPayable(wasm, network, trimmed);
     } catch (e) {
       throw new Error(t("worker.contacts.notPayable", { why: (e as Error).message }));
     }

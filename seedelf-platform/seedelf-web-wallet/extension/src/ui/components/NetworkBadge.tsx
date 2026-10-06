@@ -15,11 +15,17 @@ export function NetworkBadge({ network }: { network: NetworkName }) {
   );
 }
 
-export function TestNetworkStrip({ network }: { network: NetworkName }) {
+/**
+ * One line at the side panel's width: two lines cost every view about 50 px
+ * (chunk 23's review, W-4). The badge beside the mark names the network.
+ * `inBar`: in the top bar itself, beside the badge, where the connector's
+ * window has no buttons (blind test T18).
+ */
+export function TestNetworkStrip({ network, inBar = false }: { network: NetworkName; inBar?: boolean }) {
   const t = useT();
   if (network !== "preprod") return null;
   return (
-    <p className="network-strip" role="note" data-testid="test-network">
+    <p className={inBar ? "network-strip network-strip--bar" : "network-strip"} role="note" data-testid="test-network">
       {t("network.testStrip")}
     </p>
   );

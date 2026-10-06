@@ -24,6 +24,7 @@ import type { MintSource, MintSummary, PendingTx, BuildStage } from "../shared/r
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { rememberMint } from "./minted-by";
 import { settleMaybeSent } from "./pending";
+import { isPublicShort, privateShort } from "./short";
 import {
   changeHistory,
   keep,
@@ -90,7 +91,10 @@ export class MintService {
       request,
       (keys, r) => wasm.draftAccountMint(keys.cardano, keys.seedelf, r),
       (keys, r) => wasm.finishAccountMint(keys.cardano, keys.seedelf, r),
-    );
+    ).catch((e: unknown) => {
+      // Core's shortfall in the user's words, naming the public account (chunk 23's second review, PY-10).
+      throw isPublicShort(e) ? new Error(t("worker.short.mint")) : e;
+    });
     // Its Seedelf's ADA comes back into the private balance, when it's
     // removed there, as money the account paid: the account that paid it, so
     // a later spend doesn't co-spend it with another account's (chunk 18).
@@ -117,7 +121,11 @@ export class MintService {
     }
 
     progress?.("measuring");
-    const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r));
+    const finished = await measureLocally<MintResult>(this.deps, request, (keys, r) => wasm.buildMint(keys.seedelf, r)).catch(
+      (e: unknown) => {
+        throw privateShort(e);
+      },
+    );
     const histories = spentHistories(classes, finished.inputs, finished.classesMixed);
     return this.keep(network, label, "seedelf", finished, changeHistory(classes, finished.inputs), histories);
   }

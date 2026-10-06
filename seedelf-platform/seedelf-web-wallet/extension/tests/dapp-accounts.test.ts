@@ -50,7 +50,7 @@ describe("the account connected sites use", () => {
     expect((await t.preferences.get()).dappAccount).toBe(0);
 
     const s = await connect(t);
-    expect(await t.dapp.sites()).toEqual([{ origin: s.origin, connectedAt: t.clock.now }]);
+    expect(await t.dapp.sites()).toEqual([{ origin: s.origin, connectedAt: t.clock.now, title: "Example" }]);
     const [first] = (await t.dapp.call(s, "getUsedAddresses", [])) as string[];
     expect(first).toBe(t.deps.wasm.cip30Address(phrase(0).preprod.receive_0 as string));
   });

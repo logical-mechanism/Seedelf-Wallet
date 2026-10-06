@@ -154,15 +154,20 @@ export function DestinationField({
           : read.destination.address
         : undefined;
   const savedAs = saveable ? contacts?.find((c) => c.value === saveable) : undefined;
+  // Each "·" starts what it leads to, never ends a line: a no-break space after it, and Save to contacts wraps whole
+  // with it (the visual review of pass two: the dot was left at a line's end).
   const saveLink = savedAs ? (
-    <>{" · "}{t("destination.yourContact", { name: savedAs.name })}</>
+    <>{" ·\u00a0"}{t("destination.yourContact", { name: savedAs.name })}</>
   ) : (
     contacts && (
       <>
-        {" · "}
-        <button type="button" className="link" onClick={() => setContactModal("save")}>
-          {t("destination.saveToContacts")}
-        </button>
+        {" "}
+        <span className="note-part">
+          {"·\u00a0"}
+          <button type="button" className="link" onClick={() => setContactModal("save")}>
+            {t("destination.saveToContacts")}
+          </button>
+        </span>
       </>
     )
   );
@@ -207,7 +212,7 @@ export function DestinationField({
         ) : read.state === "seedelf" ? (
           <p className="note">
             {t("destination.found")}{" "}
-            {read.seedelf.label && <><strong>{read.seedelf.label}</strong> · </>}
+            {read.seedelf.label && <><strong>{read.seedelf.label}</strong>{" ·\u00a0"}</>}
             <code title={read.seedelf.name}>{shortHex(read.seedelf.name, 12, 6)}</code>
             {saveLink}
           </p>
@@ -217,11 +222,8 @@ export function DestinationField({
             <code title={read.destination.address}>{shortHex(read.destination.address, 14, 8)}</code>
             {(savedAs || !read.destination.own) && saveLink}
           </p>
-        ) : seedelfs ? (
-          <p className="note">
-            {t("destination.privacy.hintSeedelf")}
-          </p>
         ) : (
+          // What may go in the field is the placeholder's to say: this says only what looking it up tells Koios.
           <p className="note">{t("destination.privacy.hint")}</p>
         )}
       </div>

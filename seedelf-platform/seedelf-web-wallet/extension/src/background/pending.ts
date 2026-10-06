@@ -46,10 +46,10 @@ import { txInputs } from "./cbor";
 import { forgetContractView } from "./contract-scan";
 import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
-import { forgetSent, recentlySent } from "./sent-txs";
+import { forgetSent, keptAsSent, recentlySent } from "./sent-txs";
 import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
 import type { Area } from "./storage";
-import { noteSend, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, type Wallet } from "./wallet";
+import { noteSend, SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Wallet } from "./wallet";
 
 /**
  * chrome.storage.session: the submitted transaction being watched, one per
@@ -107,6 +107,11 @@ interface Watched extends PendingTx {
   restored?: boolean;
   /** A private spend that pays the public account (`paysAccount`): its landing reads the account again too. */
   toAccount?: boolean;
+  /**
+   * The public account active when it was sent: kept with what it spends (sent-txs.ts), so only that account's
+   * Public activity lists it as its own on its way (blind test §9.3, the fix round's review).
+   */
+  account?: number;
 }
 
 /**
@@ -185,6 +190,11 @@ export interface Sending {
   invalidHereafter?: number;
   /** Sent before, and Koios didn't answer. */
   again: boolean;
+  /**
+   * The public account its review was built on (script-spend.ts `keep`): the one it spends from, whichever is
+   * active by the time it's sent. None kept, the active one.
+   */
+  account?: number;
 }
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -275,7 +285,7 @@ async function restoreNow(deps: PendingDeps, network: NetworkName): Promise<Watc
   const fresh = now() - was.submittedAt <= UNSEEN_AFTER_MS;
   const w: Watched = { ...was, resentAt: now(), ...(fresh ? { restored: true } : {}) };
   await wallet.withKeys(async () => {
-    await rememberSpent(session, network, hexBytes(w.txCbor!));
+    await rememberSpent(session, network, hexBytes(w.txCbor!), undefined, w.account);
     await session.set(key, w);
   });
   // What the kept view has of the contract is behind whatever happened meanwhile.
@@ -335,6 +345,7 @@ function shown(watched: Watched): PendingTx {
     resentAt: _resentAt,
     restored: _restored,
     toAccount: _toAccount,
+    account: _account,
     ...pending
   } = watched;
   return pending;
@@ -389,10 +400,18 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
   // The inputs of one that can expire, to free them if it does; a private one to the account says so.
   const watched: Watched = s.invalidHereafter === undefined ? { ...pending, ...toAccount(s) } : { ...pending, inputs: txInputs(bytes) };
-  await take(deps, watched, async () => {
-    await rememberSpent(session, s.network, bytes);
-    await session.remove(s.key);
-  });
+  try {
+    await take(deps, watched, async () => {
+      await rememberSpent(session, s.network, bytes);
+      await session.remove(s.key);
+    });
+  } catch (e) {
+    // Koios took it: what stopped the watch taking it over (a lock, session storage full) leaves it as written
+    // ahead, maybe sent and sealed, and it's settled as any such one is. A lock is said; nothing else is thrown,
+    // so no caller takes one that went out for one refused, as a session's funding marked unsent would be
+    // (chunk 23's second review, fix round).
+    if (e instanceof WalletLocked) throw e;
+  }
   await deps.activity?.sent(s.network, pending, s.summary).catch(() => undefined);
   return pending;
 }
@@ -448,9 +467,12 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
   };
   return inTurn(deps, s.network, async () => {
     await restoreNow(deps, s.network);
-    const { was, before } = await wallet.withKeys(async () => {
+    const { was, before } = await wallet.withKeys(async (keys) => {
       const was = await session.get<Watched>(key);
       if (unsettled(was) && was.txHash !== s.txHash) return { was };
+      // Whose it is: the account its review was built on, which another window may have switched from since (the
+      // fix round's second review); with none kept, the one active now.
+      record.account = s.account ?? keys.account;
       // What's there already, for a refusal to put back as it was.
       const before = {
         watched: was,
@@ -458,7 +480,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
         sent: (await recentlySent(session, s.network)).some((t) => t.txHash === s.txHash),
         at: Date.now(),
       };
-      await rememberSpent(session, s.network, bytes, before.at);
+      await rememberSpent(session, s.network, bytes, before.at, record.account);
       // Send sends these very bytes again, and asks giveme.my nothing.
       await session.set(s.key, { ...s.kept, sentCbor: s.txCbor });
       if (!unsettled(was)) await session.set(key, record);
@@ -649,6 +671,10 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
           await noteSend(session, Math.max(w.resentAt ?? w.submittedAt, ...tries));
         }
         if (w.inputs) await forgetSpent(session, w.inputs);
+        // Past its slot it can't land: its outputs aren't on their way (incoming.ts), and a payment built again on
+        // what it spent counts alone. One unseen still could, and stays kept as sent: neither it nor one built again
+        // on what it spent counts then, as only one can land (chunk 23's second review, fix round).
+        if (expired) await forgetSent(session, w.network, w.txHash);
         await session.remove(key);
         await forgetReading(session, w);
         await dropKept(session, w);
@@ -675,7 +701,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         if (!unchanged(cur)) return { cur };
         // Each time it goes again is the wallet's send, when that may be the one the network takes: Lovejoin's
         // withdraws keep away from it (lastSpentAt) as from any other, never in the same run (independent review L8).
-        await rememberSpent(session, w.network, hexBytes(w.txCbor!), now());
+        await rememberSpent(session, w.network, hexBytes(w.txCbor!), now(), w.account);
         return undefined;
       }),
     );
@@ -704,7 +730,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         // Taken after the watch let it go (unseen meanwhile): on its way after
         // all, so its UTxOs are held back again, and it's watched if nothing
         // else is.
-        await rememberSpent(session, w.network, hexBytes(w.txCbor!));
+        await rememberSpent(session, w.network, hexBytes(w.txCbor!), undefined, w.account);
         if (cur && !ours(cur)) return cur;
         await session.set(key, current);
         return current;
@@ -717,11 +743,15 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     });
   }
 
-  // A private one Koios took: watched for 10 minutes.
+  // A private one Koios took: watched for 10 minutes. It may land unseen after that, so the next reading reads the
+  // private side again, as a landing has it do: its change stayed on its way only while it was kept as sent, and the
+  // reading never read the contract again (the fix round's review of blind test §9.3).
   if (!w.maybeSent && w.invalidHereafter === undefined && age > WATCH_MS) {
     await turn(() =>
       wallet.withKeys(async () => {
-        if (unchanged(await session.get<Watched>(key))) await session.remove(key);
+        if (!unchanged(await session.get<Watched>(key))) return;
+        await session.remove(key);
+        await forgetReading(session, w);
       }),
     );
   }
@@ -757,6 +787,35 @@ async function dropKept(session: Area, w: Watched): Promise<void> {
   if (!w.kept) return;
   const kept = await session.get<{ txHash?: string }>(w.kept);
   if (kept?.txHash === w.txHash) await session.remove(w.kept);
+}
+
+/**
+ * Whether this wallet sent `txHash` on `network` already, as far as the device knows: among the transactions sent
+ * lately (sent-txs.ts, kept just before each submit and taken back if it's refused), in the watch or its sealed
+ * copy, or in the Seedelf history. Send's kept copy goes once Koios takes it, so a Send that finds none, from a
+ * page that missed the answer (the worker restarted, the wallet locked mid-submit, another page pressed Send),
+ * asks here before it calls its review stale: a stale review is built again, and both would pay (chunk 23's
+ * second review, fix round). Asks Koios nothing. Throws if locked.
+ */
+export async function sentBefore(deps: PendingDeps, network: NetworkName, txHash: string): Promise<boolean> {
+  const { wallet, session } = deps;
+  const known = await wallet.withKeys(async () => {
+    if (await keptAsSent(session, network, txHash)) return true;
+    return (await session.get<Watched>(pendingKey(network)))?.txHash === txHash;
+  });
+  if (known) return true;
+  if ((await sealed(deps, network).catch(() => undefined))?.txHash === txHash) return true;
+  const history = (await deps.activity?.seedelf(network).catch(() => undefined)) ?? [];
+  return history.some((e) => e.txHash === txHash);
+}
+
+/**
+ * Throws, as a plain refusal, when `txHash` went out already (`sentBefore`): Send's kept copy of it is gone, and
+ * the review mustn't be told it's stale, whose "Refresh and review again" under "Nothing was sent" would build a
+ * second payment (chunk 23's second review, fix round).
+ */
+export async function refuseSent(deps: PendingDeps, network: NetworkName, txHash: string): Promise<void> {
+  if (await sentBefore(deps, network, txHash)) throw new Error(t("worker.spend.sentAlready"));
 }
 
 /**

@@ -19,6 +19,7 @@ import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activ
 import type { Koios } from "./koios";
 import type { Area } from "./storage";
 import type { Wallet } from "./wallet";
+import { isTrap } from "./wasm";
 
 export { ADA_HANDLE_POLICY, HANDLE };
 
@@ -41,7 +42,6 @@ export async function resolveDestination(
   to: string,
 ): Promise<WithdrawDestination> {
   const { wasm } = deps;
-  const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const text = to.trim();
   // Send pays a seedelf before it gets here; Withdraw can't.
   if (seedelfName(text)) throw new Error(SEEDELF_NOT_AN_ADDRESS());
@@ -59,11 +59,37 @@ export async function resolveDestination(
     if (!found) throw new Error(t("worker.handle.notFound", { handle, network }));
     address = found;
   }
-  // Throws the reason: not an address, a script, a stake address, the other network.
-  wasm.checkPayableAddress(address, net);
+  checkPayable(wasm, network, address);
   const { own, account } = await ownAccount(deps, network, address);
   const mine = { own, ...(account !== undefined ? { ownAccount: account } : {}) };
   return handle ? { address, handle, ...mine } : { address, ...mine };
+}
+
+/** The text of WebAssembly's refusal of something that doesn't read as an address at all (api::payable_address). */
+const NOT_BECH32 = /isn't a Cardano address/;
+
+/**
+ * Throws why `address` can't be paid on `network`, in the user's language and naming the thing that's wrong:
+ * the other network's address, a stake address, a script's, or no address at all. WebAssembly's one English
+ * sentence for all of them ("Payments go to a normal preprod address: not a script, stake or other network's
+ * address") left the user to work out which (chunk 23's second review, PY-10). The prefix says the first two;
+ * WebAssembly still checks the rest, and anything else it refuses on this network's prefix is a script.
+ */
+export function checkPayable(wasm: typeof Wasm, network: NetworkName, address: string): void {
+  const text = address.trim().toLowerCase();
+  const testnet = text.startsWith("addr_test1");
+  const prefix = network === "mainnet" ? "addr1" : "addr_test1";
+  if (/^stake(_test)?1/.test(text)) throw new Error(t("worker.address.stake", { prefix }));
+  if (network !== "mainnet" && text.startsWith("addr1")) throw new Error(t("worker.address.mainnetHere"));
+  if (network === "mainnet" && testnet) throw new Error(t("worker.address.testnetHere"));
+  try {
+    wasm.checkPayableAddress(address, network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod);
+  } catch (e) {
+    // A trap is the instance broken, not the address: thrown as it is, so the wallet locks (wasm.ts).
+    if (isTrap(e)) throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(NOT_BECH32.test(message) ? t("worker.address.notAddress") : t("worker.address.script"));
+  }
 }
 
 /**

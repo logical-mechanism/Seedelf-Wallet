@@ -102,10 +102,12 @@ describe("a mix from the public account stopped at a mix that may have gone thro
     await until(() => t.dapp.approvals().length === 1);
     await t.dapp.answer(t.dapp.approvals()[0]!.id, false);
     await expect(signing).rejects.toMatchObject({ failure: { code: TxSignError.UserDeclined } });
-    // One spending what the mix spends is refused unasked, and says the chain may have stopped there.
-    await expect(t.dapp.call(s, "signTx", [siteTx([held[0]!], []), false])).rejects.toMatchObject({
-      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("or that one which stopped at a transaction that may have gone through still holds") },
+    // One spending what the mix spends is refused unasked, saying the chain holds it, never that it's still being sent.
+    const refused = t.dapp.call(s, "signTx", [siteTx([held[0]!], []), false]);
+    await expect(refused).rejects.toMatchObject({
+      failure: { code: TxSignError.ProofGeneration, info: expect.stringContaining("that a Lovejoin chain still holds") },
     });
+    await expect(refused).rejects.not.toMatchObject({ failure: { info: expect.stringContaining("being sent") } });
     expect(t.dapp.approvals()).toEqual([]);
   });
 

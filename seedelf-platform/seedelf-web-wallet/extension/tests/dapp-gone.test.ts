@@ -122,7 +122,7 @@ describe("a site's page that goes away while its request waits", () => {
       ({ ...(sessionSwap.utxo as unknown as KoiosUtxo), tx_hash, tx_index, value, payment_cred: sessionSwap.keyHash, stake_address: null, block_height: 1, asset_list: [] }) as KoiosUtxo;
     t.koios.addedToAccounts.push(atSession(out.txHash, 0, "15000000"), atSession(out.txHash, 1, "5000000"));
     expect(await dapp.call(page(), "enable", [])).toBe(true);
-    expect(await dapp.sites()).toEqual([{ origin: ORIGIN, connectedAt: expect.any(Number), session: 0 }]);
+    expect(await dapp.sites()).toEqual([{ origin: ORIGIN, connectedAt: expect.any(Number), title: "Example", session: 0 }]);
   });
 
   it("never asks for a page that went away while its transaction was being read", async () => {

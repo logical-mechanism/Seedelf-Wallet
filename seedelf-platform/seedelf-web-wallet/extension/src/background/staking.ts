@@ -176,6 +176,13 @@ const PENDING_KIND: Record<StakingAction["kind"], PendingTx["kind"]> = {
 /** Whether `action` is the account's own DRep's, signed with the DRep key. */
 const isDrepAction = (action: StakingAction) => action.kind.startsWith("drep-");
 
+/**
+ * Whether `action` locks up a deposit: registering a DRep, and the stake key's
+ * first pool or vote delegation, which registers it. The rest pay a fee only.
+ */
+export const takesDeposit = (action: StakingAction, registered: boolean) =>
+  action.kind === "drep-register" || (!registered && (action.kind === "delegate" || action.kind === "vote"));
+
 export class StakingService {
   constructor(private readonly deps: StakingDeps) {}
 
@@ -273,7 +280,7 @@ export class StakingService {
     const { wasm, wallet } = this.deps;
     await settleMaybeSent(this.deps, network);
     const koios = this.deps.koios(network);
-    const [{ params, utxos, held, stake }, invalidHereafter, drepRow] = await Promise.all([
+    const [{ params, utxos, held, stake, rewardsOnTheWay }, invalidHereafter, drepRow] = await Promise.all([
       readAccount(this.deps, network, { stake: true }),
       validUntil(koios),
       isDrepAction(action) ? ownDrepId(this.deps).then((id) => koios.drepStanding(id)) : undefined,
@@ -287,10 +294,19 @@ export class StakingService {
     if (action.kind === "drep-retire" && !/^[1-9]\d*$/.test(drepRow?.deposit ?? "")) {
       throw new Error(t("worker.governance.noDeposit"));
     }
-    if (utxos.length === 0) {
-      throw nothingInAccount(held, t("worker.staking.accountEmpty"));
+    // Withdrawing the rewards, or stopping, which withdraws them too, while a payment that withdrew them is on its
+    // way: Koios still reports them, and the ledger would refuse one of the two (the fix round's review of blind
+    // test §9.1). Home shows them gone already.
+    if ((action.kind === "withdraw" || action.kind === "stop") && rewardsOnTheWay) {
+      throw new Error(t("worker.staking.warn.rewardsOnTheWay"));
     }
     const state = stakeInfoOf(stake, null);
+    if (utxos.length === 0) {
+      // Only what this action needs: a withdrawal, a retirement or a vote pays a fee and no deposit, and rewards
+      // can't pay it alone (chunk 23's second review, ST-9).
+      const empty = takesDeposit(action, state.registered) ? "worker.staking.accountEmpty" : "worker.staking.accountEmptyFee";
+      throw nothingInAccount(held, t(empty));
+    }
     if (action.kind === "delegate" && state.registered && stake?.delegated_pool === wasm.poolId(action.pool)) {
       throw new Error(t("worker.staking.samePool"));
     }

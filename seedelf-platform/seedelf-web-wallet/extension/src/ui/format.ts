@@ -118,7 +118,15 @@ export function whenOf(at: number, now: Date): string {
  * as every date in the wallet is, for now (a known gap, chunk 19's plan).
  */
 export function epochEnds(network: NetworkName, epoch: number): string {
-  return new Date(epochStart(network, epoch + 1)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return dayText(epochStart(network, epoch + 1));
+}
+
+/**
+ * A day as the wallet writes one, "23 Sept 2026": pinned to en-GB with the rest. The browser's own short date was
+ * "10/5/2026" on the connected sites, which reads as either month (the pass-two visual review).
+ */
+export function dayText(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */
@@ -211,15 +219,20 @@ export interface AmountRules {
  *   (`commaNote`): a comma never just disappears.
  * - Decimal places past `decimals` are dropped, not rounded: the amount never
  *   grows.
- * - Anything that isn't a number, or is more than `max`, keeps the previous
- *   value.
+ * - Anything that isn't a number (a letter, a "-", two points) stays as
+ *   typed, with the note, and isn't an amount: `parseQuantity` reads nothing
+ *   from it, so the form's Review waits until it's put right. It used to keep
+ *   the previous value, which left Review on with a number the user had typed
+ *   over (chunk 23's second review, PY-9). Text like that has no commas of
+ *   the field's own, so the next edit reads all of it as typed.
+ * - More than `max` keeps the previous value.
  *
  * `note` says what was changed or refused.
  */
 export function sanitizeAmount(previous: string, typed: string, rules: AmountRules): { value: string; note?: string } {
   let text = typed.trim();
   if (text === "") return { value: "" };
-  const edit = editOf(previous, text);
+  const edit = previous === "" || parseQuantity(previous, rules.decimals) !== undefined ? editOf(previous, text) : { start: 0, text };
   const commaTyped = edit.text.includes(",");
   let decimalComma = false;
   if (commaTyped && !text.includes(".")) {
@@ -234,7 +247,11 @@ export function sanitizeAmount(previous: string, typed: string, rules: AmountRul
   }
   if (text.startsWith(".")) text = `0${text}`;
   const match = /^([\d,]*)(?:\.(\d*))?$/.exec(text);
-  if (!match || !/\d/.test(match[1]!)) return { value: previous, note: commaTyped ? commaNote() : rules.notANumber };
+  if (!match || !/\d/.test(match[1]!)) {
+    // Digits and commas a comma typed can't make sense of keep the number before it, as below.
+    if (commaTyped && /^[\d,.]*$/.test(text)) return { value: previous, note: commaNote() };
+    return { value: typed.trim(), note: rules.notANumber };
+  }
   if (commaTyped && !decimalComma && !WELL_GROUPED.test(match[1]!)) return { value: previous, note: commaNote() };
   let fraction = match[2];
   let note: string | undefined;
@@ -317,8 +334,14 @@ export function deleteBesideComma(
 
 /** An ADA amount, and how many tokens come with it: "22.7 ₳ and 1 token". */
 export function adaWithTokens(lovelace: string, tokens: number): string {
-  return tokens ? t("format.adaAndTokens", { ada: formatAda(lovelace), count: tokens }) : `${formatAda(lovelace)} ₳`;
+  return tokens ? t("format.adaAndTokens", { ada: formatAda(lovelace), count: tokens }) : adaText(lovelace);
 }
+
+/**
+ * "22.7 ₳", with a no-break space: a review's row, or a line beside a long
+ * label, put the ₳ on a line of its own (chunk 23's second review, V-7).
+ */
+export const adaText = (lovelace: string) => `${formatAda(lovelace)} ₳`;
 
 /** A token's key in maps and React lists: `policy.name`. */
 export const tokenKey = (t: { policyId: string; assetName: string }) => `${t.policyId}.${t.assetName}`;
@@ -334,9 +357,12 @@ export function unlocked<S extends { lovelace: string; tokens: TokenAmount[]; ut
   return { ...side, lovelace, tokens, utxos: side.utxos - side.locked.utxos };
 }
 
-/** " · 5 ₳ locked" when some of a balance side is locked, for a form's line under its title. */
-export function lockedAside(side: { locked: Locked }): string {
-  return side.locked.utxos ? t("home.lockedMeta", { amount: formatAda(side.locked.lovelace) }) : "";
+/**
+ * " · 5 ₳ locked" when some of a balance side is locked, for a form's line under its title. `ada` writes the
+ * amount: a form passes `useAmounts().ada`, so hidden balances stay hidden there too (chunk 23's second review, HM-9).
+ */
+export function lockedAside(side: { locked: Locked }, ada: (lovelace: string) => string = formatAda): string {
+  return side.locked.utxos ? t("home.lockedMeta", { amount: ada(side.locked.lovelace) }) : "";
 }
 
 /** A percentage to at most two places: "18.79%", "2%". */
@@ -361,9 +387,9 @@ export function withRewards<S extends { lovelace: string }>(side: S, rewards: bi
   return rewards > 0n ? { ...side, lovelace: (BigInt(side.lovelace) + rewards).toString() } : side;
 }
 
-/** ", with 57.47 ₳ of rewards" after what a form can pay, when rewards ride along. */
-export function rewardsAside(rewards?: string): string {
-  return rewards ? t("format.withRewards", { amount: formatAda(rewards) }) : "";
+/** ", with 57.47 ₳ of rewards" after what a form can pay, when rewards ride along; `ada` as for `lockedAside`. */
+export function rewardsAside(rewards?: string, ada: (lovelace: string) => string = formatAda): string {
+  return rewards ? t("format.withRewards", { amount: ada(rewards) }) : "";
 }
 
 /**

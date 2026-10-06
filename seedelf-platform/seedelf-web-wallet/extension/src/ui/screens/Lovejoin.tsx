@@ -42,6 +42,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type {
+  Balances,
   LovejoinChainView,
   LovejoinFunding,
   LovejoinPublicSummary,
@@ -52,18 +53,31 @@ import type {
 } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
+import { GivemeNote } from "../components/GivemeNote";
+import { HintButton, useHint } from "../components/Hint";
 import { HistoriesNote } from "../components/HistoriesNote";
 import { ShieldIcon } from "../components/Icons";
-import { chainText, delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides, useSessionsWhile } from "../components/LovejoinReturn";
+import {
+  chainText,
+  delayText,
+  LOVEJOIN_SEEN,
+  LOVEJOIN_UNAUDITED,
+  lovejoinHides,
+  mixesPerBox,
+  useSessionsWhile,
+} from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
+import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
+import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
 import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { Tabs } from "../components/Tabs";
-import { formatAda, shortHex, whenOf } from "../format";
+import { adaText, formatAda, formatPercent, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
 import { withoutStop } from "../sentence";
+import { aboutAda, BOX_BACK_ESTIMATE, SESSION_FEE_ESTIMATE, toCents } from "../swap";
 import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
@@ -78,11 +92,127 @@ const MAX_SEED_BOXES = 96;
 const ADVANCE_EVERY_MS = 20_000;
 
 type Source = "private" | "public";
+type PrivateSummary = SessionOutSummary & { mix: LovejoinFunding };
 type Review =
-  | { source: "private"; summary: SessionOutSummary & { mix: LovejoinFunding } }
+  /** `again`: builds it afresh, on the next unused account, when Send is refused (chunk 23's second review, DX-1). */
+  | { source: "private"; summary: PrivateSummary; again: () => Promise<PrivateSummary> }
   | { source: "public"; summary: LovejoinPublicSummary };
 
+/** A box's ADA. */
+const BOX = 10_000_000n;
+/** A one-time account's own collateral (sessions.ts SESSION_COLLATERAL). */
+const COLLATERAL = 5_000_000n;
+/** Left aside for the funding's network fee: the build decides exactly. */
+const FEE_ROOM = 1_000_000n;
 
+/**
+ * Whether a mix of `boxes` boxes at `depth` can go now, as the last pool read
+ * has it (chunk 23's second review, LJ-1): the network's floor of other
+ * people's boxes, and two of them for each of its mixes (lovejoin.ts fits).
+ * `fits`: how many boxes the pool has room for at that depth; `shallower`:
+ * whether one wave deep would take them all.
+ */
+export function poolRoom(status: Pick<LovejoinStatus, "others" | "free" | "floor">, boxes: number, depth: number) {
+  const have = status.free ?? status.others;
+  const perBox = mixesPerBox(depth) * 2;
+  return {
+    have,
+    need: boxes * perBox,
+    floorShort: status.others < status.floor,
+    fits: Math.floor(have / perBox),
+    shallower: depth > 1 && have >= boxes * mixesPerBox(1) * 2,
+  };
+}
+
+/**
+ * The most boxes `held` lovelace pays a mix from the private balance for
+ * (LJ-3): each box more takes the same, its 10 ₳ and its mixes (`funding`,
+ * for `funding.boxes`), beside the account's 5 ₳ collateral and room for the
+ * network fee. The build decides exactly; this keeps the stepper from
+ * offering what plainly can't be paid.
+ */
+export function boxesAffordable(held: string, funding: Pick<LovejoinFunding, "boxes" | "lovelace" | "mixFees">): number {
+  const perBox = BOX + BigInt(funding.mixFees) / BigInt(funding.boxes);
+  const besides = BigInt(funding.lovelace) - perBox * BigInt(funding.boxes);
+  const spare = BigInt(held) - COLLATERAL - FEE_ROOM - besides;
+  return spare < 0n ? 0 : Number(spare / perBox);
+}
+
+/**
+ * What a mix of `funding.boxes` boxes takes, all told, before anything is
+ * built, from the page's side of it (blind test §9.8, T11: "costs about
+ * 3.8 ₳" and "Into a one-time account 15.3 ₳, and 5 ₳ of collateral" didn't
+ * reconcile, and the box's way back wasn't on the page). WebAssembly's plan
+ * (`funding`, seedelf-core `funding_for`) is the boxes, their mixes at
+ * MIX_FEE_ESTIMATE each, and a reserve (DEPOSIT_RESERVE, 1.5 ₳) for the
+ * deposit's network fee and the change the chain leaves; what isn't built
+ * yet is priced at ui/swap.ts's estimates. What the fees don't use comes
+ * back.
+ *
+ * - `reserve`: the plan's ADA besides the boxes and their mixes.
+ * - `networkFees`: SESSION_FEE_ESTIMATE for each transaction besides the
+ *   mixes (`txs`): from the private balance, this payment, the deposit and
+ *   the return of what's left; from the public account, the deposit.
+ * - `backFees`: bringing each box back (BOX_BACK_ESTIMATE), from the box.
+ * - `cost`: the mixes, those network fees and the boxes' way back.
+ * - `leaving`: from the private balance, the plan, the 5 ₳ kept aside and
+ *   this payment's fee; from the public account, the boxes, their mixes and
+ *   the deposit's fee. What else the account needs to start it stays there.
+ * - `later`: what comes back hours later, each box less its way back.
+ *   `soon`: what comes back once it's mixed, the 5 ₳ kept aside and what the
+ *   reserve leaves; none from the public account, whose change stays in it.
+ */
+export function mixCosts(funding: Pick<LovejoinFunding, "boxes" | "lovelace" | "mixFees">, source: Source) {
+  const boxes = BigInt(funding.boxes) * BOX;
+  const mixFees = BigInt(funding.mixFees);
+  const reserve = BigInt(funding.lovelace) - boxes - mixFees;
+  const txs = source === "private" ? 3 : 1;
+  const networkFees = BigInt(txs) * SESSION_FEE_ESTIMATE;
+  const backFees = BigInt(funding.boxes) * BOX_BACK_ESTIMATE;
+  const cost = mixFees + networkFees + backFees;
+  const leaving = (source === "private" ? BigInt(funding.lovelace) + COLLATERAL : boxes + mixFees) + SESSION_FEE_ESTIMATE;
+  const later = boxes - backFees;
+  const soon = leaving - cost - later;
+  return { boxes, mixFees, reserve, txs, networkFees, backFees, cost, leaving, later, soon: soon > 0n ? soon : 0n };
+}
+
+/**
+ * A row whose label has an ⓘ, the text opening in the row, under it:
+ * "Mixed 2 waves deep, 4 mixes", with what a wave is (it was explained only
+ * in Settings and on the review, which a short pool never reaches: blind
+ * test T11), and the network fees, with which transactions they are, which
+ * as part of the value squeezed the label to a word a line (visual review).
+ * `testId` names the text; the icon is `${testId}-hint`.
+ */
+function HintedRow({
+  label,
+  value,
+  hint,
+  testId,
+  part,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  testId: string;
+  part?: boolean;
+}) {
+  const { open, toggle, id } = useHint();
+  return (
+    <div className={`review__row review__row--hinted${part ? " review__row--part" : ""}`}>
+      <dt className="hinted">
+        {label}
+        <HintButton text={hint} open={open} onToggle={toggle} controls={id} testId={`${testId}-hint`} />
+      </dt>
+      <dd>{value}</dd>
+      {open && (
+        <dd className="note hint__text review__hint" id={id} data-testid={testId}>
+          {hint}
+        </dd>
+      )}
+    </div>
+  );
+}
 
 /** A mix that's over: back, or never funded. */
 const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
@@ -143,6 +273,9 @@ export function detailOf(s: SessionView): string | undefined {
     lines.push(t("lovejoin.detail.triesAgain", { at, error: withoutStop(s.auto.retry.error) }));
   }
   if (unseen(s)) lines.push(t("lovejoin.detail.mayLand"));
+  // Turned away: why, when the worker knew (chunk 23's second review, DX-5).
+  const why = s.stage === "failed" && s.unsent ? unsentWhyText(s.unsentWhy) : undefined;
+  if (why) lines.push(why);
   if (s.leftBehind?.length) lines.push(t("lovejoin.detail.leftBehind", { count: s.leftBehind.length }));
   return lines.length ? joinSentences(lines) : undefined;
 }
@@ -300,10 +433,13 @@ export function NotMixed({
 }
 
 export function Lovejoin({
+  seedelf,
   banner,
   onBack,
   onPending,
 }: {
+  /** The private balance: the stepper offers no more boxes than it pays for (chunk 23's second review, LJ-3). */
+  seedelf: Balances["seedelf"];
   /** Home's banner for the transaction it's watching: a withdraw or a mix sent from here shows in it. */
   banner?: ReactNode;
   onBack: () => void;
@@ -327,6 +463,12 @@ export function Lovejoin({
   const [seedBoxes, setSeedBoxes] = useState<number>();
   const [funding, setFunding] = useState<LovejoinFunding>();
   const [review, setReview] = useState<Review>();
+  // A refused mix's funding: built again, or watched where it may have gone out (chunk 23's second review, DX-1).
+  const [refusal, setRefusal] = useState<Refusal>();
+  // The last pool read failed: what the page showed from before isn't the pool now (LJ-5).
+  const [readFailed, setReadFailed] = useState(false);
+  // Seeding, behind its own link under Mix: it gives the seeder nothing (LJ-6).
+  const [seedOpen, setSeedOpen] = useState(false);
 
   // One pool read on open, and on Refresh; the mixes from the device's record.
   const load = useCallback(async () => {
@@ -337,8 +479,10 @@ export function Lovejoin({
       setMixes(all.filter((x) => x.mix));
       setUpdatedAt(Date.now());
       setError(undefined);
+      setReadFailed(false);
     } catch (e) {
       setError((e as Error).message);
+      setReadFailed(true);
     } finally {
       setReading(false);
     }
@@ -395,6 +539,17 @@ export function Lovejoin({
     };
   }, [boxes]);
 
+  // What a mix can take now, said before Review (chunk 23's second review, LJ-1, LJ-3): no more boxes than the
+  // pool has others for at the set depth, nor, from the private balance, than it pays for. From the last pool read
+  // and WebAssembly's price of the boxes: no request of its own.
+  const room = status?.available && funding && !readFailed ? poolRoom(status, boxes, funding.depth) : undefined;
+  const affordable = source === "private" && funding ? boxesAffordable(seedelf.lovelace, funding) : MAX_BOXES;
+  const most = Math.min(MAX_BOXES, affordable, room && !room.floorShort ? room.fits : MAX_BOXES);
+  // Fewer fit now than the stepper shows (another side chosen, a new read): it comes down to what does.
+  useEffect(() => {
+    if (most >= 1 && boxes > most) setBoxes(most);
+  }, [most, boxes]);
+
   async function act(task: () => Promise<void>, button?: "now" | "again" | "again-public" | "anyway") {
     setBusy(true);
     setPressed(button);
@@ -436,12 +591,14 @@ export function Lovejoin({
     });
   };
 
+  /** A mix from the private balance, reviewed: `build` builds it, now and again after a refusal (DX-1). */
+  const privateReview = async (build: () => Promise<PrivateSummary>) =>
+    setReview({ source: "private", summary: await build(), again: build });
+
   /** Mixes the boxes again from the private balance: `anyway`, those a mix from the public account put in too. */
   const again = (anyway = false) => {
     setAsking(undefined);
-    return act(async () => {
-      setReview({ source: "private", summary: await call("lovejoin-again-build", anyway ? { anyway: true } : {}) });
-    }, "again");
+    return act(() => privateReview(() => call("lovejoin-again-build", anyway ? { anyway: true } : {})), "again");
   };
 
   /** Mixes the boxes a mix from the public account put in again, paid by the account (§2.10). */
@@ -457,18 +614,24 @@ export function Lovejoin({
       setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
     });
 
+  /** A seed puts boxes in with no mixes, from either side. */
+  const seeds = (r: Review) => !!(r.source === "private" ? r.summary.mix.seed : r.summary.seed);
   const reviewTitle = (r: Review) => {
-    if (r.source === "public" && r.summary.seed) return tr("lovejoin.review.seed");
+    if (seeds(r)) return tr("lovejoin.review.seed");
     return tr((r.source === "private" ? r.summary.mix.again : r.summary.again) ? "lovejoin.review.again" : "lovejoin.review.mix");
+  };
+  // How the reviewed mix runs once sent, behind the icon by the title (chunk 23): what it costs, hides and
+  // ties stays in the review's rows and callouts.
+  const howItRuns = (r: Review) => {
+    if (r.source === "private") return tr(r.summary.mix.again ? "lovejoin.review.againNote" : "lovejoin.review.privateNote");
+    if (r.summary.again) return tr("lovejoin.review.publicAgainNote");
+    return tr(r.summary.seed ? "lovejoin.review.seedNote" : "lovejoin.review.publicNote");
   };
 
   const build = () =>
     act(async () => {
-      setReview(
-        source === "private"
-          ? { source, summary: await call("lovejoin-mix-private-build", { boxes }) }
-          : { source, summary: await call("lovejoin-mix-public-build", { boxes }) },
-      );
+      if (source === "private") await privateReview(() => call("lovejoin-mix-private-build", { boxes }));
+      else setReview({ source, summary: await call("lovejoin-mix-public-build", { boxes }) });
     });
 
   /**
@@ -486,16 +649,15 @@ export function Lovejoin({
    */
   const seed = () =>
     act(async () => {
-      setReview(
-        source === "private"
-          ? { source, summary: await call("lovejoin-mix-private-build", { boxes: seeding, seed: true }) }
-          : { source, summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) },
-      );
+      if (source === "private") await privateReview(() => call("lovejoin-mix-private-build", { boxes: seeding, seed: true }));
+      else setReview({ source, summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) });
     });
 
-  const send = () =>
-    act(async () => {
-      if (!review) return;
+  const send = async () => {
+    if (!review || busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
       if (review.source === "private") {
         const { pending } = await call("lovejoin-mix-private-submit", { txHash: review.summary.txHash });
         onPending(pending);
@@ -505,28 +667,81 @@ export function Lovejoin({
       }
       setReview(undefined);
       await load();
-    });
+    } catch (e) {
+      // A mix from the private balance recorded its session before it was sent, so Send can't go again: it's
+      // built again, or watched from the page's list of mixes (DX-1).
+      const refused = review.source === "private" ? await refusalOf(e, review.summary.index, review.summary.txHash) : undefined;
+      if (refused) setRefusal(refused);
+      else setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** A refused mix, built afresh on the next unused account; back to the page when it can't be (DX-1). */
+  const buildAgain = async () => {
+    if (review?.source !== "private" || busy) return;
+    // The refusal stays until the new review is in, so the button says Building…, never Sending….
+    setBusy(true);
+    setError(undefined);
+    try {
+      setReview({ ...review, summary: await review.again() });
+    } catch (e) {
+      setReview(undefined);
+      setError((e as Error).message);
+    } finally {
+      setRefusal(undefined);
+      setBusy(false);
+    }
+  };
+
+  /** Leaves a review, and its alert with it (DX-1). */
+  const leaveReview = () => {
+    setReview(undefined);
+    setRefusal(undefined);
+    setError(undefined);
+  };
 
   if (review) {
+    const isSeed = seeds(review);
     return (
       <Screen
         title={reviewTitle(review)}
         titleId="lovejoin-review-title"
-        onBack={() => setReview(undefined)}
+        review
+        hint={howItRuns(review)}
+        hintTestId="lovejoin-review-note"
+        onBack={leaveReview}
         backDisabled={busy}
-        aside={tr("review.nothingSent")}
+        aside={tr(isSeed ? "lovejoin.review.nothingSentSeed" : "lovejoin.review.nothingSent")}
         error={error}
         foot={
-          <button type="button" className="primary" disabled={busy} onClick={() => void send()} data-testid="lovejoin-send">
-            {!busy
-              ? tr("common.send")
-              : sending
-                ? tr("lovejoin.sendingOf", { sent: sending.sent, total: sending.total })
-                : tr("common.sending")}
-          </button>
+          refusal ? (
+            <SessionRefusedFoot
+              refusal={refusal}
+              busy={busy}
+              onAgain={() => void buildAgain()}
+              onWatch={() => {
+                leaveReview();
+                void load();
+              }}
+            />
+          ) : (
+            <button type="button" className="primary" disabled={busy} onClick={() => void send()} data-testid="lovejoin-send">
+              {!busy
+                ? tr(isSeed ? "lovejoin.review.seedStart" : "lovejoin.review.start")
+                : sending
+                  ? tr("lovejoin.sendingOf", { sent: sending.sent, total: sending.total })
+                  : tr("common.sending")}
+            </button>
+          )
         }
       >
-        {review.source === "private" ? <PrivateReview summary={review.summary} /> : <PublicReview summary={review.summary} />}
+        {review.source === "private" ? (
+          <PrivateReview summary={review.summary} before={homeBalance(seedelf)} />
+        ) : (
+          <PublicReview summary={review.summary} />
+        )}
         {/* The chain's first transaction, not the one Send names: the account's
             money goes in there, and every mix after it only moves what that put
             in the pool, under rules nothing here could change (the owner,
@@ -571,6 +786,43 @@ export function Lovejoin({
   // worth at most, and the user can type any of it.
   const needed = short ? Math.min(status!.floor - status!.others, MAX_SEED_BOXES) : 0;
   const seeding = Math.min(Math.max(seedBoxes ?? needed, 1), MAX_SEED_BOXES);
+  // Seeding from the private balance: the boxes, the collateral and the fee are more than it holds.
+  const seedShort = source === "private" && BigInt(seeding) * BOX + COLLATERAL + FEE_ROOM > BigInt(seedelf.lovelace);
+  // A box's share of the funding (its 10 ₳ and its mixes), and the first box's, which carries the rest (LJ-3).
+  const perBox = funding ? BOX + BigInt(funding.mixFees) / BigInt(funding.boxes) : 0n;
+  const firstBox = funding ? BigInt(funding.lovelace) - perBox * BigInt(funding.boxes - 1) : 0n;
+  // Why no more boxes than this, when the stepper stops short of ten.
+  const capped =
+    most >= 1 && boxes >= most && most < MAX_BOXES
+      ? affordable === most
+        ? tr("lovejoin.mix.capBalance", { count: most, per: formatAda(perBox.toString()) })
+        : tr("lovejoin.mix.capPool", { count: most })
+      : undefined;
+  // Not even one box can go, so − and + are both off (blind test T11): the pool's room, or the private balance.
+  const stuck =
+    funding && most < 1
+      ? tr(room && !room.floorShort && room.fits < 1 ? "lovejoin.mix.noneFitPool" : "lovejoin.mix.noneAfford")
+      : undefined;
+  // What the mix takes, all told, and what comes back (blind test §9.8).
+  const costs = funding ? mixCosts(funding, source) : undefined;
+  // Why Review can't be pressed now (LJ-1, LJ-5, LJ-6): the pool unread, under its floor, without enough other
+  // boxes for one at this depth (and whether one wave deep would do), or a private balance short of one box.
+  const cannot = readFailed
+    ? tr("lovejoin.status.unread")
+    : room?.floorShort
+      ? joinSentences([t("lj.floorShortSentence", { count: status!.others, floor: status!.floor }), tr("lovejoin.pool.seedBelow")])
+      : room && room.fits < 1
+        ? joinSentences([
+            tr("lovejoin.pool.tooFew", {
+              count: room.have,
+              need: mixesPerBox(funding!.depth) * 2,
+              deep: tr("lovejoin.deep", { count: funding!.depth }),
+            }),
+            tr(room.shallower ? "lovejoin.pool.shallower" : "lj.tryLater"),
+          ])
+        : funding && affordable < 1
+          ? tr("lovejoin.mix.cantAfford", { first: formatAda(firstBox.toString()), held: amounts.ada(seedelf.lovelace) })
+          : undefined;
   return (
     <Screen
       title="Lovejoin"
@@ -583,7 +835,13 @@ export function Lovejoin({
       {banner}
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void load()} />
       {status && !status.available && <p className="note">{tr("lj.notOnNetwork")}</p>}
-      {status?.available && (
+      {/* Reading, or a read that failed: said so, never "None" from before or from nothing (LJ-5). */}
+      {(!status || (status.available && readFailed)) && (
+        <p className="note" data-testid="lovejoin-status-unread">
+          {tr(readFailed && !reading ? "lovejoin.status.unread" : "lovejoin.status.reading")}
+        </p>
+      )}
+      {status?.available && !readFailed && (
         <ReviewRows testId="lovejoin-status">
           {/* What the wallet has in the pool is a balance, and so is how many boxes: hidden while balances are (launch review #56, privacy review §2.16). */}
           <Row
@@ -606,47 +864,6 @@ export function Lovejoin({
             />
           )}
         </ReviewRows>
-      )}
-      {short && (
-        <div className="stack" data-testid="lovejoin-seed-offer">
-          <Callout tone="warn">
-            {tr("lovejoin.seed.warn.floor", { count: status!.others, floor: status!.floor })}
-          </Callout>
-          <Callout tone="privacy">
-            {joinSentences([
-              tr("lovejoin.seed.privacy.hidesNothing"),
-              tr(source === "private" ? "lovejoin.seed.privacy.fromPrivate" : "lovejoin.seed.privacy.fromPublic"),
-            ])}
-          </Callout>
-          <div className="field">
-            <label htmlFor="lovejoin-seed-boxes">{tr("lovejoin.seed.boxesLabel")}</label>
-            <input
-              id="lovejoin-seed-boxes"
-              type="number"
-              min={1}
-              max={MAX_SEED_BOXES}
-              step={1}
-              inputMode="numeric"
-              value={seedBoxes ?? needed}
-              disabled={busy}
-              onChange={(e) => setSeedBoxes(e.target.value === "" ? undefined : Math.floor(Number(e.target.value)))}
-              data-testid="lovejoin-seed-boxes"
-            />
-            <p className="note" data-testid="lovejoin-seed-cost">
-              {joinSentences([
-                tr(source === "private" ? "lovejoin.seed.costPrivate" : "lovejoin.seed.costPublic", {
-                  count: seeding,
-                  ada: formatAda((BigInt(seeding) * 10_000_000n).toString()),
-                }),
-                tr("lovejoin.seed.needs", { count: needed }),
-                tr("lovejoin.seed.atMost", { most: MAX_SEED_BOXES }),
-              ])}
-            </p>
-          </div>
-          <button type="button" className="secondary" disabled={busy} onClick={() => void seed()} data-testid="lovejoin-seed">
-            {tr("lovejoin.seed.button", { count: seeding })}
-          </button>
-        </div>
       )}
       <NotMixed
         count={notMixed}
@@ -741,44 +958,206 @@ export function Lovejoin({
                 −
               </button>
               <output id="lovejoin-boxes" className="stepper__value" data-testid="lovejoin-boxes">
-                {tr("lovejoin.mix.boxesAda", { count: boxes, ada: formatAda((BigInt(boxes) * 10_000_000n).toString()) })}
+                {tr("lovejoin.mix.boxesAda", { count: boxes, ada: formatAda((BigInt(boxes) * BOX).toString()) })}
               </output>
               <button
                 type="button"
                 className="icon-button"
                 aria-label={tr("lovejoin.mix.more")}
-                disabled={boxes >= MAX_BOXES}
+                disabled={boxes >= most}
                 onClick={() => setBoxes((b) => b + 1)}
               >
                 +
               </button>
             </div>
+            {/* At its most below ten: why no more (LJ-3). */}
+            {capped && (
+              <p className="note" data-testid="lovejoin-boxes-cap">
+                {capped}
+              </p>
+            )}
+            {/* Neither button can be pressed: why, beside them, not only under Review a screen further down (blind
+                test T11). */}
+            {stuck && (
+              <p className="note" data-testid="lovejoin-boxes-none">
+                {stuck}
+              </p>
+            )}
           </div>
-          {funding && (
+          {funding && costs && (
             <ReviewRows testId="lovejoin-mix-cost">
-              <Row
+              {/* What the pool has to mix with, before Review, not after it (LJ-1). */}
+              {room && (
+                <Row
+                  label={tr("lovejoin.pool.label")}
+                  value={
+                    room.floorShort
+                      ? tr("lovejoin.pool.belowFloor", { count: status.others, floor: status.floor })
+                      : room.have >= room.need
+                        ? tr("lovejoin.pool.enough", { count: room.have })
+                        : tr("lovejoin.pool.short", { count: room.have, need: room.need })
+                  }
+                />
+              )}
+              <HintedRow
                 label={tr("lovejoin.mixedLabel")}
-                value={tr("lovejoin.mix.depthAndMixes", {
+                value={tr("lovejoin.mix.depthAndMixes", { count: funding.depth, mixes: tr("amount.mixes", { count: funding.mixes }) })}
+                hint={tr("lovejoin.mix.privacy.waves", {
                   count: funding.depth,
-                  mixes: tr("amount.mixes", { count: funding.mixes }),
+                  one: 3 ** funding.depth,
+                  mixes: mixesPerBox(funding.depth),
                 })}
+                testId="lovejoin-waves"
               />
-              <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(funding.mixFees)} ₳`} />
-              {source === "private" && (
-                <Row label={tr("lovejoin.mix.intoOneTime")} value={tr("lovejoin.mix.andCollateral", { ada: formatAda(funding.lovelace) })} />
-              )}
-              {source === "public" && (
-                <Row label={tr("lovejoin.mix.fromPublic")} value={tr("lovejoin.mix.collateralBacks", { ada: formatAda(funding.lovelace) })} />
-              )}
-              <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(funding.delay) })} />
+              {/* In proportion: what mixing this much costs, as a share of it (chunk 23's review, D-3), and all of it:
+                  the mixes alone left out the network fees and the way back (blind test §9.8, T11). The rows set in
+                  under it are what it's made of, and add up to it. */}
+              <Row
+                label={tr("lovejoin.mix.costOf", { ada: formatAda(costs.boxes.toString()) })}
+                value={tr("lovejoin.mix.feesShare", {
+                  ada: aboutAda(costs.cost),
+                  percent: formatPercent((Number(toCents(costs.cost)) / Number(costs.boxes)) * 100),
+                })}
+                strong
+                testId="lovejoin-mix-total"
+              />
+              <Row label={tr("lovejoin.mix.feesLabel")} value={adaText(funding.mixFees)} part />
+              <HintedRow
+                label={tr("lovejoin.mix.networkLabel")}
+                value={adaText(toCents(costs.networkFees))}
+                hint={tr(source === "private" ? "lovejoin.mix.networkHintPrivate" : "lovejoin.mix.networkHintPublic", {
+                  each: aboutAda(SESSION_FEE_ESTIMATE),
+                  reserve: formatAda(costs.reserve.toString()),
+                })}
+                testId="lovejoin-network"
+                part
+              />
+              <Row label={tr("lovejoin.mix.backLabel", { count: funding.boxes })} value={adaText(costs.backFees.toString())} part />
             </ReviewRows>
           )}
-          <p className="note">{tr(source === "private" ? "lovejoin.mix.restPrivate" : "lovejoin.mix.restPublic")}</p>
-          <button type="button" className="primary" disabled={busy || !funding} onClick={() => void build()} data-testid="lovejoin-mix">
+          {/* What leaves now and what comes back, adding up to what it costs, in the reviews' words; the reserve
+              in the 15.3 ₳ named (blind test §9.8, T11). The review gives this payment's fee exactly. */}
+          {funding && costs && (
+            <ReviewRows testId="lovejoin-mix-moves">
+              {source === "private" ? (
+                <>
+                  {/* The 15.3 ₳ and what it's made of, the reserve named (T11 asked whether 15.3 was 10 + 3.8 + 1.5). */}
+                  <Row label={tr("lovejoin.mix.intoOneTime")} value={adaText(funding.lovelace)} />
+                  <Row label={tr("lovejoin.mix.partBoxes", { count: funding.boxes })} value={adaText(costs.boxes.toString())} part />
+                  <Row label={tr("lovejoin.mix.feesLabel")} value={adaText(funding.mixFees)} part />
+                  <Row
+                    label={tr("swaps.review.part.room")}
+                    value={tr("swaps.review.part.roomValue", { ada: formatAda(costs.reserve.toString()) })}
+                    part
+                  />
+                  <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(COLLATERAL.toString()) })} />
+                  <Row label={tr("lovejoin.mix.feeLabel")} value={adaText(toCents(SESSION_FEE_ESTIMATE))} />
+                  <Row label={tr("lovejoin.mix.totalPrivate")} value={adaText(toCents(costs.leaving))} strong testId="lovejoin-mix-leaving" />
+                  {/* What it's made of is the note under the rows. */}
+                  <Row label={tr("lovejoin.mix.backSoon")} value={adaText(toCents(costs.soon))} />
+                </>
+              ) : (
+                <>
+                  <Row label={tr("lovejoin.mix.fromPublic")} value={tr("lovejoin.mix.publicNeeds", { ada: formatAda(funding.lovelace) })} stack />
+                  <Row label={tr("lovejoin.mix.totalPublic")} value={adaText(toCents(costs.leaving))} strong testId="lovejoin-mix-leaving" />
+                </>
+              )}
+              <Row
+                label={tr("lovejoin.backLater")}
+                value={tr("lovejoin.mix.eachBoxBack", {
+                  count: funding.boxes,
+                  ada: aboutAda(costs.later / BigInt(funding.boxes)),
+                  delay: delayText(funding.delay),
+                })}
+                stack
+              />
+            </ReviewRows>
+          )}
+          {/* That the wallet has to be unlocked for any of it to happen (LJ-2). Where each part ends up (LJ-7) is
+              the rows' to say: what comes back once it's mixed, and what isn't used stays (copy-trim pass). */}
+          <p className="note" data-testid="lovejoin-mix-rest">
+            {tr("lovejoin.mix.whileUnlocked")}
+          </p>
+          {/* Before Review, not at the page's foot under everything else (D-3). */}
+          <Callout tone="warn" testId="lovejoin-unaudited">
+            {LOVEJOIN_UNAUDITED()}
+          </Callout>
+          <button type="button" className="primary" disabled={busy || !funding || !!cannot} onClick={() => void build()} data-testid="lovejoin-mix">
             {busy ? tr("common.building") : tr("common.review")}
           </button>
+          {/* Why Review can't be pressed, under it, rather than found out after it (LJ-1, LJ-6). */}
+          {cannot && (
+            <p className="field-note" data-testid="lovejoin-mix-why">
+              {cannot}
+            </p>
+          )}
         </section>
       )}
+      {/* Seeding, under Mix and behind its own link: it starts a pool, and gives the seeder nothing (LJ-6). */}
+      {short && !seedOpen && (
+        <div className="stack-tight">
+          <button type="button" className="link align-start" onClick={() => setSeedOpen(true)} data-testid="lovejoin-seed-open">
+            {tr("lovejoin.seed.open")}
+          </button>
+          <p className="note" data-testid="lovejoin-seed-short">
+            {tr("lovejoin.seed.privacy.short")}
+          </p>
+        </div>
+      )}
+      {short && seedOpen && (
+        <div className="stack" data-testid="lovejoin-seed-offer">
+          <Callout tone="warn">
+            {tr("lovejoin.seed.warn.floor", { count: status!.others, floor: status!.floor })}
+          </Callout>
+          <Callout tone="privacy">
+            {joinSentences([
+              tr("lovejoin.seed.privacy.hidesNothing"),
+              tr(source === "private" ? "lovejoin.seed.privacy.fromPrivate" : "lovejoin.seed.privacy.fromPublic"),
+            ])}
+          </Callout>
+          <div className="field">
+            <label htmlFor="lovejoin-seed-boxes">{tr("lovejoin.seed.boxesLabel")}</label>
+            <input
+              id="lovejoin-seed-boxes"
+              type="number"
+              min={1}
+              max={MAX_SEED_BOXES}
+              step={1}
+              inputMode="numeric"
+              value={seedBoxes ?? needed}
+              disabled={busy}
+              onChange={(e) => setSeedBoxes(e.target.value === "" ? undefined : Math.floor(Number(e.target.value)))}
+              data-testid="lovejoin-seed-boxes"
+            />
+            <p className="note" data-testid="lovejoin-seed-cost">
+              {joinSentences([
+                tr(source === "private" ? "lovejoin.seed.costPrivate" : "lovejoin.seed.costPublic", {
+                  count: seeding,
+                  ada: formatAda((BigInt(seeding) * BOX).toString()),
+                }),
+                tr("lovejoin.seed.needs", { count: needed }),
+                tr("lovejoin.seed.atMost", { most: MAX_SEED_BOXES }),
+              ])}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy || seedShort}
+            onClick={() => void seed()}
+            data-testid="lovejoin-seed"
+          >
+            {tr("lovejoin.seed.button", { count: seeding })}
+          </button>
+          {/* From the private balance, the obvious shortfall is said here, in its words, before a build (LJ-6). */}
+          {seedShort && (
+            <p className="field-note" data-testid="lovejoin-seed-why">
+              {tr("lovejoin.seed.cantAfford", { held: amounts.ada(seedelf.lovelace) })}
+            </p>
+          )}
+        </div>
+      )}
+
 
       {shown.length > 0 && (
         <section className="section" aria-labelledby="lovejoin-mixes-title">
@@ -831,11 +1210,6 @@ export function Lovejoin({
       )}
 
       <WayBack />
-      {status?.available && (
-        <Callout tone="warn" testId="lovejoin-unaudited">
-          {LOVEJOIN_UNAUDITED()}
-        </Callout>
-      )}
       {asking && "anyway" in asking && (
         <Modal
           title={tr(firstUnsure ? "lovejoin.anyway.titleUnsure" : "lovejoin.anyway.title")}
@@ -920,22 +1294,32 @@ export function WayBack() {
  */
 const PUBLIC_MIX_WAY_BACK = () => t("lovejoin.privacy.publicWayBack");
 
+/**
+ * What a mix's or a mix-again's funding takes from the private balance, and
+ * the balance after, as every other review says them, rather than its change
+ * (blind test §9.8). `before`: the private balance as Home shows it.
+ */
+function FundingTotals({ summary, before }: { summary: SessionOutSummary; before?: string }) {
+  const leaving = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(summary.fee.total));
+  return <TotalRows side="private" leaving={leaving} before={before} />;
+}
+
 /** A mix from the private balance: the one-time account's funding, then what runs by itself. */
-export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
+export function PrivateReview({ summary, before }: { summary: SessionOutSummary & { mix: LovejoinFunding }; before?: string }) {
   const tr = useT();
   const [boxesPart, collateral] = summary.payments;
   const { mix } = summary;
-  if (mix.again) return <AgainReview summary={summary} />;
+  if (mix.again) return <AgainReview summary={summary} before={before} />;
   return (
     <>
       <h2>{tr("lovejoin.review.firstFunded")}</h2>
       <ReviewRows testId="lovejoin-private-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label={tr("lovejoin.review.forBoxes")} value={`${formatAda(boxesPart!.lovelace)} ₳`} strong />
-        <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral!.lovelace)} ₳`} />
-        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
-        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)} ₳`} />
+        <Row label={tr("lovejoin.review.forBoxes")} value={`${formatAda(boxesPart!.lovelace)}\u00a0₳`} />
+        <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        <FundingTotals summary={summary} before={before} />
       </ReviewRows>
       <h2>{tr("lovejoin.review.thenItself")}</h2>
       <ReviewRows testId="lovejoin-private-then">
@@ -948,18 +1332,17 @@ export function PrivateReview({ summary }: { summary: SessionOutSummary & { mix:
             ada: formatAda(mix.mixFees),
           })}
         />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} stack />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.privateNote")}</p>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
-      <p className="note">{tr("lovejoin.review.givemeNote")}</p>
+      <GivemeNote funding />
     </>
   );
 }
 
 /** Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. */
-function AgainReview({ summary }: { summary: SessionOutSummary & { mix: LovejoinFunding } }) {
+function AgainReview({ summary, before }: { summary: SessionOutSummary & { mix: LovejoinFunding }; before?: string }) {
   const tr = useT();
   const [mixesPart, collateral] = summary.payments;
   const { mix } = summary;
@@ -969,10 +1352,10 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
       <ReviewRows testId="lovejoin-again-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label={tr("lovejoin.review.forMixes")} value={`${formatAda(mixesPart!.lovelace)} ₳`} strong />
-        <Row label={tr("lovejoin.review.itsCollateral")} value={`${formatAda(collateral!.lovelace)} ₳`} />
-        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)} ₳`} />
-        <Row label={tr("review.backToPrivate")} value={`${formatAda(summary.changeLovelace)} ₳`} />
+        <Row label={tr("lovejoin.review.forMixes")} value={`${formatAda(mixesPart!.lovelace)}\u00a0₳`} />
+        <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        <FundingTotals summary={summary} before={before} />
       </ReviewRows>
       <h2>{tr("lovejoin.review.thenItself")}</h2>
       <ReviewRows testId="lovejoin-again-then">
@@ -993,9 +1376,8 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
             ada: formatAda(mix.mixFees),
           })}
         />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(mix.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(mix.delay) })} stack />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.againNote")}</p>
       {mix.owned && mix.owned > mix.boxes && (
         <p className="note" data-testid="lovejoin-again-rest">
           {tr("lovejoin.review.asManyAsOneGo", { count: mix.boxes })}
@@ -1009,7 +1391,7 @@ function AgainReview({ summary }: { summary: SessionOutSummary & { mix: Lovejoin
         ])}
       </Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />
-      <p className="note">{tr("lovejoin.review.givemeNote")}</p>
+      <GivemeNote funding />
     </>
   );
 }
@@ -1027,12 +1409,11 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
           label={tr("lovejoin.mixedLabel")}
           value={tr("lovejoin.mix.depthAndMixes", { count: summary.depth, mixes: tr("amount.mixes", { count: summary.mixes }) })}
         />
-        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)} ₳`} />
+        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} />
+        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.publicNote")}</p>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.public"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );
@@ -1049,12 +1430,11 @@ function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
       <ReviewRows testId="lovejoin-seed-review">
         <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: summary.boxes })} strong />
         <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.review.notAtAll")} />
-        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)} ₳`} />
+        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} />
+        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} stack />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.seedNote")}</p>
       <Callout tone="warn" testId="lovejoin-seed-warning">
         {tr("lovejoin.review.warn.seed")}
       </Callout>
@@ -1073,12 +1453,11 @@ function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
           label={tr("lovejoin.mixedLabel")}
           value={tr("lovejoin.mix.depthAndMixes", { count: summary.depth, mixes: tr("amount.mixes", { count: summary.mixes }) })}
         />
-        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)} ₳`} />
+        <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)} ₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} />
+        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
-      <p className="note">{tr("lovejoin.review.publicAgainNote")}</p>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
   );

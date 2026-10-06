@@ -12,7 +12,7 @@ import { ActivityService } from "./activity";
 import { BalanceService } from "./balances";
 import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
-import { applyConnector } from "./connector";
+import { applyConnector, reachOpenPages } from "./connector";
 import { ContactsService } from "./contacts";
 import { answerSite, DappError, DappService, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
@@ -175,7 +175,7 @@ function getContext(): Promise<Worker> {
     const accounts = new AccountsService({ wasm, wallet, store, local, session, koios, now: Date.now });
     const prices = new PriceService({ session, local, preferences, now: Date.now });
     const nftImages = new NftImageService({ koios });
-    const activity = new ActivityService({ wallet, session, store, koios, local });
+    const activity = new ActivityService({ wasm, wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity, activeAccount: () => activeAccount(local) });
     const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
@@ -246,6 +246,7 @@ function getContext(): Promise<Worker> {
       sessions,
       lovejoin,
       connector,
+      reachOpenPages,
       ...(protectedStorage ? {} : { connectorBlocked: "storage" as const }),
       version: __VERSION__,
       networks,

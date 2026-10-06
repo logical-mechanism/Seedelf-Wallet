@@ -72,10 +72,19 @@ describe("reading a destination", () => {
     const t = await unlocked();
     await expect(t.withdraw.resolve("preprod", "nope")).rejects.toThrow("isn't a Cardano address");
     await expect(t.withdraw.resolve("preprod", "$not a handle")).rejects.toThrow("An ADA Handle is $");
-    await expect(t.withdraw.resolve("preprod", account(12).mainnet.receive_0)).rejects.toThrow("normal preprod address");
+    // Each reason named, rather than one sentence for all four (chunk 23's second review, PY-10).
+    await expect(t.withdraw.resolve("preprod", account(12).mainnet.receive_0)).rejects.toThrow(
+      "That's a mainnet address; this wallet is on Preprod.",
+    );
+    await expect(t.withdraw.resolve("mainnet", account(12).preprod.receive_0)).rejects.toThrow(
+      "That's a test network's address; this wallet is on mainnet.",
+    );
+    await expect(t.withdraw.resolve("preprod", account(12).preprod.stake)).rejects.toThrow(
+      "That's a stake address, which can't receive a payment. Use an address that starts addr_test1.",
+    );
     // A handle held by a script (here, the wallet contract itself).
     t.koios.nfts.set(`${ADA_HANDLE_POLICY}.${hex("vault")}`, ownedUtxos[0]!.address);
-    await expect(t.withdraw.resolve("preprod", "$vault")).rejects.toThrow("normal preprod address");
+    await expect(t.withdraw.resolve("preprod", "$vault")).rejects.toThrow("That's a script's address.");
   });
 });
 
@@ -181,6 +190,22 @@ describe("withdraw", () => {
     const [token] = (await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "0", tokens: [{ ...TUSDM[0]!, quantity: "1" }] }])).payments;
     expect(token!.lovelace).toBe(token!.minimum);
     expect(BigInt(token!.minimum!)).toBeGreaterThan(BigInt(short!.minimum!));
+  });
+
+  it("says how much an amount can be and what has to stay, and pays anything up to it (blind test §4.4)", async () => {
+    // 25 ₳, and 3 ₳ holding tUSDM that isn't being sent: it stays, with the least ADA it needs.
+    const t = await unlocked();
+    const pay = (lovelace: bigint) => t.withdraw.build("preprod", [{ to: THEIRS, lovelace: lovelace.toString(), tokens: [] }]);
+    const message = ((await pay(27_000_000n).catch((e: unknown) => e)) as Error).message;
+    const [, whole, decimals] = /^Not enough ADA: with the fee, your private balance can pay up to about (\d+)\.(\d+)\u00a0₳ here, since 1\.\d+\u00a0₳ has to stay with the tokens you keep/.exec(message) ?? [];
+    expect(whole, message).toBeDefined();
+    const most = BigInt(whole!) * 1_000_000n + BigInt(decimals!.padEnd(6, "0"));
+    // Measured, not guessed: a hair under it pays, where the guessed fee refused it.
+    const under = await pay(most - 5_000n);
+    expect(under.payments[0]!.lovelace).toBe((most - 5_000n).toString());
+    expect(under.changeTokens).toBe(1);
+    // Max is still everything, the token too.
+    expect((await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }])).payments[0]!.tokens).toHaveLength(1);
   });
 
   it("explains what stops a withdrawal", async () => {

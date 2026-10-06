@@ -64,3 +64,23 @@ test("flags paying your own seedelf, and explains a bad transfer", () => {
   assert.throws(() => buildTransfer(key, JSON.stringify({ ...request, utxos: owned })), /holds a Seedelf/);
   key.free();
 });
+
+test("Max pays one Seedelf everything but the fee and what the tokens kept need (blind test T05)", () => {
+  const key = SeedelfKey.fromPhrase(phrase, 0);
+  // 25 ₳, and 3 ₳ holding 1,234.56 tUSDM, which stays with the least ADA it needs.
+  const max = JSON.parse(buildTransfer(key, JSON.stringify(paying({ lovelace: null, tokens: [] }))));
+  assert.equal(max.max, true);
+  assert.equal(max.left, 0);
+  assert.equal(max.changeTokens, 1);
+  assert.equal(max.changeMinimum, max.changeLovelace);
+  const most = 28_000_000 - Number(max.fee.total) - Number(max.changeLovelace);
+  assert.equal(max.payments[0].lovelace, String(most));
+  assert.equal(max.payments[0].minimum, null);
+
+  // An amount a hair under it pays, at the fee the review shows; one over it is short.
+  const under = JSON.parse(buildTransfer(key, JSON.stringify(paying({ lovelace: String(most - 5_000), tokens: [] }))));
+  assert.equal(under.max, false);
+  assert.equal(under.payments[0].lovelace, String(most - 5_000));
+  assert.throws(() => buildTransfer(key, JSON.stringify(paying({ lovelace: String(most + 5_000), tokens: [] }))), /Not enough ADA/);
+  key.free();
+});

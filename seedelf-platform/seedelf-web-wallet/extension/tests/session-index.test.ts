@@ -18,7 +18,7 @@ import { loadTestWasm, minswapEstimate, sessionSwap, testBalances, vectors, with
 const PASSWORD = "correct horse battery";
 const ORIGIN = "https://a.example";
 const phrase = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase as string;
-const USED = "That session's one-time account was used meanwhile";
+const USED = "That one-time account was used meanwhile";
 
 type T = Awaited<ReturnType<typeof unlocked>>;
 

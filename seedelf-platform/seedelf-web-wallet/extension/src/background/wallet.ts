@@ -64,11 +64,27 @@ export const SESSION_ACTIVITY = "seedelf.lastActivity";
  */
 export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
 /**
+ * chrome.storage.session: `true` while a restore has made this wallet and no
+ * Home has said so with a reading yet (handlers.ts `restored`; blind test
+ * T20a, T20b). The fact alone. A lock, Remove wallet or a closed browser
+ * wipes it with the rest, so a later unlock never says "restored".
+ */
+export const SESSION_RESTORED = "seedelf.restored";
+/**
  * chrome.storage.session: what the wallet knows of its own sends beyond what
  * it spent (spent.ts), which a lock wipes (KnownSends). The one thing a lock
  * keeps: two times, nothing of what was sent (`sends`).
  */
 export const SESSION_SENDS = "seedelf.sends";
+/**
+ * chrome.storage.session: the sites the user declined, turned away unasked
+ * for a while (dapp.ts `keepRefusals`): origins, waits, counts, networks,
+ * never a page's title, and nothing about money. A lock keeps it too, as it
+ * is: one made by a worker that hadn't read it yet would otherwise take it,
+ * and let a declined site ask the moment the wallet unlocked, its count back
+ * at one (the blind test's cross-area review). Removing the wallet doesn't.
+ */
+export const SESSION_DAPP_REFUSED = "seedelf.dapp.refused";
 /**
  * What the wallet knows of its own sends beyond what it spent: its last send
  * before the last lock, or the last try of a payment let go since, whose
@@ -410,6 +426,23 @@ export class Wallet {
     });
   }
 
+  /**
+   * How many words the recovery phrase has, read off the entropy the unlocked wallet keeps: 16 bytes are 12 words,
+   * 20 are 15, 32 are 24 (BIP39). Settings' check opens on that many boxes (chunk 23's second review, FR-11). The
+   * length is no secret worth keeping from someone at an unlocked browser: every length is at least 128 bits.
+   */
+  phraseWords(): Promise<number> {
+    return this.serial(async () => {
+      if ((await this.load()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+      const kept = fromBase64((await this.deps.session.get<string>(SESSION_ENTROPY))!);
+      try {
+        return (kept.length * 3) / 4;
+      } finally {
+        kept.fill(0);
+      }
+    });
+  }
+
   /** Seals the vault under a new password; the current one proves who's asking. */
   changePassword(current: string, next: string): Promise<void> {
     return this.serial(async () => {
@@ -435,7 +468,7 @@ export class Wallet {
    */
   reset(): Promise<void> {
     return this.serial(async () => {
-      await this.wipe();
+      await this.wipe({ refusals: false });
       const records = PRIVATE_RECORDS.filter((name) => !KEPT_ON_RESET.includes(name)).map((name) => PRIVATE_PREFIX + name);
       await this.deps.local.remove(VAULT_KEY, UNLOCK_FAILURES, LOCAL_PREFERENCES, ...records, ...LOCAL_CACHES);
       this.deps.changed();
@@ -654,13 +687,17 @@ export class Wallet {
    * wallet unlocked. What it knows of its own sends outlasts the lock, two
    * times and nothing of what was sent, so a Lovejoin box never goes back
    * minutes after a send the lock would have made it forget (SESSION_SENDS,
-   * independent review M10).
+   * independent review M10). So do the sites the user declined, unless the
+   * wallet is being removed (`refusals: false`), whose sites go with it
+   * (SESSION_DAPP_REFUSED).
    */
-  private async wipe(): Promise<void> {
+  private async wipe({ refusals = true }: { refusals?: boolean } = {}): Promise<void> {
     try {
       const sends = await this.lockKeeps().catch(() => undefined);
+      const refused = refusals ? await this.deps.session.get<unknown>(SESSION_DAPP_REFUSED).catch(() => undefined) : undefined;
       await this.deps.session.clear();
       if (sends) await this.deps.session.set(SESSION_SENDS, sends).catch(() => undefined);
+      if (refused !== undefined) await this.deps.session.set(SESSION_DAPP_REFUSED, refused).catch(() => undefined);
       await this.deps.autoLock.stop();
     } finally {
       this.free();

@@ -75,11 +75,13 @@ import type {
   SwapSide,
   SwapTokenInfo,
   TokenQuantity,
+  UnsentWhy,
 } from "../shared/rpc";
 import { merged, sessionClass, type HistoryClass } from "../shared/histories";
 import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs } from "./cbor";
+import { CollateralError, CollateralRefusedError, StaleReviewError } from "./collateral";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosTrouble, type KoiosUtxo } from "./koios";
 import {
   builtOutputs,
@@ -207,6 +209,12 @@ function retryReasonOf(e: unknown): RetryReason {
 type RecordedTx = SessionTx & {
   /** Koios never took it: turned away, or never sent. One Koios didn't answer may have gone, and isn't marked. */
   unsent?: boolean;
+  /**
+   * Why a funding or a top-up was turned away, as a code the page words
+   * (unsentWhyOf): a failed session gives its reason (chunk 23's second
+   * review, DX-5). None when it wasn't known.
+   */
+  why?: UnsentWhy;
   /** Recorded, and on its way to Koios. */
   sending?: boolean;
   /**
@@ -354,6 +362,12 @@ interface SessionRecord {
    * signature (siteSigned, independent review M4): the newest SITE_OUTS_KEPT.
    */
   siteOuts?: string[];
+  /**
+   * What its latest return brings back at once, as that return's review said
+   * (a chain's boxes come later): kept past its history's summary, so a
+   * finished swap can say what it got (chunk 23's second review, DX-5).
+   */
+  received?: Pick<SessionBackSummary, "lovelace" | "tokens">;
   closedAt?: number;
 }
 
@@ -383,6 +397,8 @@ interface KeptFunding extends SessionOutSummary {
   /** The site a new session is for; a top-up has none. */
   site?: { origin: string };
   builtAt: number;
+  /** Signed as sent, once a submit went unanswered: Send sends it again as it is (pending.ts writeAhead). */
+  sentCbor?: string;
 }
 
 interface KeptTx {
@@ -519,6 +535,19 @@ export function checkAsk(ask: SwapAsk): SwapAsk {
   return { amount: ask.amount, tokenIn: ask.tokenIn, tokenOut: ask.tokenOut, slippage: ask.slippage };
 }
 
+/**
+ * The most slippage, in percent to four places, that leaves Minswap's
+ * minimum for a quote of `amountOut`, amountOut / (1 + slippage%), at
+ * `least` or more: a step of 0.0001% under the exact bound, so Minswap's
+ * rounding never takes it below. 0 when the quote is barely above `least`.
+ */
+export function slippageKeeping(amountOut: bigint, least: bigint): number {
+  const room = amountOut - least - 1n;
+  if (room <= 0n) return 0;
+  const steps = (room * 1_000_000n) / (least + 1n) - 1n;
+  return steps > 0n ? Number(steps) / 10_000 : 0;
+}
+
 /** A quote from Minswap's estimate, with what a session for it is funded with. */
 export function quoteOf(network: NetworkName, ask: SwapAsk, est: Estimate): SwapQuote {
   const costs = BigInt(est.total_dex_fee) + BigInt(est.deposits) + BigInt(est.aggregator_fee ?? "0") + SWAP_MARGIN;
@@ -632,6 +661,9 @@ const FUNDING_UNSEEN = () => t("sess.fundingUnseen");
  */
 const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace|Not Enough Lovelace|pays for its own way back/i;
 
+/** WebAssembly couldn't fund a payment from the private balance: core's `NotEnough` (build.rs), in its fixed English. */
+const NOT_ENOUGH_PRIVATE = /Not enough ADA in the Seedelf balance/;
+
 /**
  * A UTxO at a session's account its return's chain can put up as collateral
  * (privacy review §2.15): exactly 5 ₳ of ADA alone, as its funding pays one,
@@ -666,6 +698,30 @@ function mixingAgain(s: SessionRecord): boolean {
   );
 }
 
+/** Whether a session's record holds `txHash`, not turned away: it went out, or may have. */
+function sentIn(book: Book, txHash: string): boolean {
+  return book.sessions.some((s) => s.txs.some((x) => x.txHash === txHash && !x.unsent));
+}
+
+/**
+ * Whether the funding `txHash` started a session already: one's record holds
+ * it, or `built`, the review kept for it on `network`, has an index used
+ * since. Asked before whether the review is still kept or too old: a funding
+ * that went out isn't kept any more (pending.ts takes it), and called stale,
+ * its page would build it again and fund a second session (chunk 23's second
+ * review, fix round). A funding turned away counts too: its index is never
+ * used again.
+ */
+function started(
+  book: Book,
+  txHash: string,
+  built: { network: NetworkName; txHash: string; index: number } | undefined,
+  network: NetworkName,
+): boolean {
+  if (book.sessions.some((s) => s.txs.some((x) => x.kind === "out" && x.txHash === txHash))) return true;
+  return built?.txHash === txHash && built.network === network && built.index < book.next;
+}
+
 /** A step's transaction that's gone: Koios never took it, or the chain never saw it. */
 function lost(t: RecordedTx, now: number): boolean {
   return ((t.unsent || t.sending) && now - t.at >= RESEND_AFTER_MS) || now - t.at >= LOST_AFTER_MS;
@@ -681,6 +737,25 @@ function maybeSent(e: unknown): boolean {
 }
 
 /**
+ * Why a funding or a top-up was turned away (`e`), as a code: told from what
+ * failed, never from its message, which is in the language the worker had
+ * then. Something it spends changed since the review (the device knew it
+ * spent, or the node said so); giveme.my answered and didn't lend its
+ * collateral, which says who, not why (blind test §9.5); the collateral
+ * service out of reach; the network busy; or the network refusing it
+ * otherwise.
+ */
+function unsentWhyOf(e: unknown): UnsentWhy | undefined {
+  // An outage or a limit of giveme.my's is kept apart, so the page says wait, not that it was turned down.
+  if (e instanceof CollateralRefusedError) return e.busy ? "givemeBusy" : "refused";
+  if (e instanceof StaleReviewError || e instanceof SpentInputError) return "changed";
+  if (e instanceof CollateralError) return "unreachable";
+  if (e instanceof KoiosBusyError) return "busy";
+  if (e instanceof KoiosError) return "network";
+  return undefined;
+}
+
+/**
  * Marks `r`'s transactions the chain has (`on`) confirmed. A step built
  * again after it went unseen has copies: the replaced ones, then the one
  * after them, if one was built. Once one of them lands, the others can't
@@ -693,6 +768,7 @@ function settle(r: SessionRecord, on: ReadonlySet<string>): boolean {
     if (t.confirmed || !on.has(t.txHash)) continue;
     t.confirmed = true;
     delete t.unsent;
+    delete t.why;
     delete t.sending;
     changed = true;
   }
@@ -990,14 +1066,14 @@ export class SessionService {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_SITE_OUT));
+      const book = await this.book(network);
+      if (started(book, txHash, built, network)) throw new Error(t("sess.alreadyStarted"));
       if (!built || built.txHash !== txHash || built.network !== network || built.site?.origin !== origin) {
-        throw new Error(t("sess.outNotReady"));
+        throw new StaleReviewError(t("sess.outNotReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error(t("sess.outTooOld"));
+        throw new StaleReviewError(t("sess.outTooOld"));
       }
-      const book = await this.book(network);
-      if (built.index < book.next) throw new Error(t("sess.alreadyStarted"));
       await this.stillUnused(network, built.index);
       // Recorded before it's sent: whatever happens next, this index is never used again.
       const record: SessionRecord = {
@@ -1085,12 +1161,12 @@ export class SessionService {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptMix>(SESSION_MIX_OUT));
-      if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error(t("lj.mixNotReady"));
-      }
-      if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("lj.mixTooOld"));
       const book = await this.book(network);
-      if (built.index < book.next) throw new Error(t("sess.mixStarted"));
+      if (started(book, txHash, built, network)) throw new Error(t("sess.mixStarted"));
+      if (!built || built.txHash !== txHash || built.network !== network) {
+        throw new StaleReviewError(t("lj.mixNotReady"));
+      }
+      if (now() - built.builtAt > BUILT_TTL_MS) throw new StaleReviewError(t("lj.mixTooOld"));
       if (built.mix.again && book.sessions.some(mixingAgain)) throw new Error(t("sess.mixingAgain"));
       await this.stillUnused(network, built.index);
       // Recorded before it's sent: whatever happens next, this index is never used again.
@@ -1153,16 +1229,23 @@ export class SessionService {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptFunding>(SESSION_TOP_UP));
-      if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error(t("sess.topUpNotReady"));
-      }
-      if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error(t("sess.topUpTooOld"));
+      const ours = !!built && built.txHash === txHash && built.network === network;
+      // Sent already, by its session's record (and not turned away), before whether it's kept or too old: one that
+      // went out isn't kept any more, and called stale, its page would build a second top-up (chunk 23's second
+      // review, fix round). Unless Send's copy says it may have gone (`sentCbor`): Send sends those bytes again,
+      // however old, as script-spend.ts's send does, and the network takes them once.
+      const again = ours && built.sentCbor !== undefined;
+      if (!again && sentIn(await this.book(network), txHash)) throw new Error(t("worker.spend.sentAlready"));
+      if (!ours) throw new StaleReviewError(t("sess.topUpNotReady"));
+      if (!again && now() - built.builtAt > BUILT_TTL_MS) {
+        throw new StaleReviewError(t("sess.topUpTooOld"));
       }
       await this.live(network, built.index);
       const out = await this.outRecord(network, built.index, txHash, built.txCbor);
       await this.update(network, built.index, (s) => {
-        s.txs.push(out);
+        // Once in the record: a try turned away gives way to this one, and one that may have gone stays as it was.
+        s.txs = s.txs.filter((x) => x.txHash !== txHash || !x.unsent);
+        if (!s.txs.some((x) => x.txHash === txHash)) s.txs.push(out);
       });
       // Looked for until it lands, as a funding is (runAll, final review F13).
       await this.deps.alarm?.start().catch(() => undefined);
@@ -1376,10 +1459,16 @@ export class SessionService {
    * it counts as failed.
    */
   private async markUnsent(network: NetworkName, index: number, txHash: string, e: unknown): Promise<void> {
-    if (maybeSent(e)) return;
+    // A lock may come after Koios took it (pending.ts take, whose own withKeys refuses), and an unlock before
+    // this reads the record: never marked unsent then, as one that went out would be. It's looked for instead,
+    // and counts as failed only once the chain hasn't shown it in time (chunk 23's second review, fix round).
+    if (maybeSent(e) || e instanceof WalletLocked) return;
+    const why = unsentWhyOf(e);
     await this.update(network, index, (s) => {
       const t = s.txs.find((r) => r.txHash === txHash);
-      if (t) t.unsent = true;
+      if (!t) return;
+      t.unsent = true;
+      if (why) t.why = why;
     });
   }
 
@@ -1408,7 +1497,14 @@ export class SessionService {
       classesMixed: string[];
     };
     const request = { network, params, utxos, payments, classes, funding: { session: sessionClass(index).id } };
-    const finished = await measureLocally<Finished>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r));
+    const finished = await measureLocally<Finished>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r)).catch(
+      (e: unknown) => {
+        // Core's own words name the balance the screens call the private balance, and are English whatever the
+        // language: said in the user's words (chunk 23's second review, LJ-6). Core's text is fixed, never translated.
+        if (e instanceof Error && NOT_ENOUGH_PRIVATE.test(e.message)) throw new Error(t("sess.notEnoughPrivate"));
+        throw e;
+      },
+    );
     const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
     const histories = spentHistories(classes, inputs, classesMixed);
     const summary: SessionOutSummary = {
@@ -1436,14 +1532,17 @@ export class SessionService {
     return this.serial(async () => {
       const { wallet, session, now } = this.deps;
       const built = await wallet.withKeys(() => session.get<KeptOut>(SESSION_OUT));
+      // What a new review fixes crosses as a stale review: the page offers to build it again, on the next unused
+      // account, rather than a Send that can't go (chunk 23's second review, DX-1). "Started already" doesn't:
+      // that try may have gone out, and the page reads the record to tell. It's asked first (`started`).
+      const book = await this.book(network);
+      if (started(book, txHash, built, network)) throw new Error(t("sess.alreadyStarted"));
       if (!built || built.txHash !== txHash || built.network !== network) {
-        throw new Error(t("sess.outNotReady"));
+        throw new StaleReviewError(t("sess.outNotReady"));
       }
       if (now() - built.builtAt > BUILT_TTL_MS) {
-        throw new Error(t("sess.outTooOld"));
+        throw new StaleReviewError(t("sess.outTooOld"));
       }
-      const book = await this.book(network);
-      if (built.index < book.next) throw new Error(t("sess.alreadyStarted"));
       await this.stillUnused(network, built.index);
       // Where Lovejoin is, how it comes back is kept with it: through it, as deep and as long as approved.
       const back: Pick<AutoRecord, "direct" | "lovejoin"> = {};
@@ -2145,11 +2244,17 @@ export class SessionService {
     }
     const least = BigInt(approved.minAmountOut);
     if (BigInt(est.amount_out) < least) throw new PriceMoved(est.amount_out);
+    // Minswap puts its own fresh minimum in the order, amount_out / (1 + slippage%), whatever it's asked for, and
+    // won't build one under the minimum it's given (Minswap.buildTx). After a dip the quote is still above the
+    // approved minimum, but the approved slippage puts Minswap's under it, and every build is refused until the
+    // price comes back: asked with only the slippage that keeps it at the approved minimum (seen on mainnet, 1.1.0).
+    const dipped = BigInt(est.min_amount_out) < least;
+    const asked = dipped ? { ...ask, slippage: slippageKeeping(BigInt(est.amount_out), least) } : ask;
     // At least what the user approved, or more when the price has moved their way.
-    const min = BigInt(est.min_amount_out) > least ? est.min_amount_out : approved.minAmountOut;
-    const txCbor = await minswap.buildTx(address, min, ask);
+    const min = dipped ? approved.minAmountOut : est.min_amount_out;
+    const txCbor = await minswap.buildTx(address, min, asked);
     // Minswap's fee is bounded by what was approved, not by what it quotes now.
-    const quote = { ...quoteOf(network, ask, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
+    const quote = { ...quoteOf(network, asked, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
     const built = await this.inspect(network, s, "swap", txCbor, rows, quote);
     withinFunding(paidOut(built.summary, address), built.summary.fee, approved.fund);
     await this.signAndSend(network, built);
@@ -2860,6 +2965,8 @@ export class SessionService {
     // Sent before by a try Koios didn't answer (its `inputs` recorded then): it may be on its way.
     let unanswered = false;
     await this.update(network, index, (s) => {
+      // What this return brings back at once, kept for the finished page (chunk 23's second review, DX-5).
+      if (kind === "back" && summary) s.received = { lovelace: summary.lovelace, tokens: summary.tokens };
       const again = mine(s);
       if (again) {
         sentBefore = !again.unsent;
@@ -3047,7 +3154,18 @@ export class SessionService {
       createdAt: s.createdAt,
       stage,
       txs: txs.map(
-        ({ unsent: _unsent, sending: _sending, replaced: _replaced, inputs: _inputs, orders: _orders, summary: _summary, outs: _outs, minAmountOut: _min, ...t }) => t,
+        ({
+          unsent: _unsent,
+          why: _why,
+          sending: _sending,
+          replaced: _replaced,
+          inputs: _inputs,
+          orders: _orders,
+          summary: _summary,
+          outs: _outs,
+          minAmountOut: _min,
+          ...t
+        }) => t,
       ),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
@@ -3057,8 +3175,11 @@ export class SessionService {
       ...(s.chain ? { chain: chainView(s.chain, txs) } : {}),
       ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}),
       ...leftBehindView(s, utxos),
-      // A funding turned away never went out: only then does the page say it never reached the chain.
-      ...(stage === "failed" && out.unsent ? { unsent: true } : {}),
+      // A funding turned away never went out: only then does the page say it never reached the chain, and why,
+      // when that's known (chunk 23's second review, DX-5).
+      ...(stage === "failed" && out.unsent ? { unsent: true, ...(out.why ? { unsentWhy: out.why } : {}) } : {}),
+      // What its return brought back, once it's over (DX-5).
+      ...(stage === "closed" && s.received ? { received: s.received } : {}),
     };
   }
 
@@ -3196,7 +3317,7 @@ export class SessionService {
       // Used on chain, so skipping it is always safe. The record as it is now, after Koios answered.
       const book = await this.book(network);
       if (book.next <= index) await this.save(network, { ...book, next: index + 1 });
-      throw new Error(t("sess.indexUsed"));
+      throw new StaleReviewError(t("sess.indexUsed"));
     }
   }
 

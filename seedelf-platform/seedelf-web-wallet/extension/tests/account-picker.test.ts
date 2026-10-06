@@ -11,6 +11,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Account, KnownAccount } from "../src/shared/rpc";
 import { AccountsContext, accountName, nameOf } from "../src/ui/accounts";
 import { AccountPicker } from "../src/ui/components/AccountPicker";
+import { TotalRows } from "../src/ui/components/ReviewTotals";
 import { PreferencesContext } from "../src/ui/preferences";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 
@@ -41,19 +42,42 @@ const within = (accounts: KnownAccount[], active: number, child: ReactNode) =>
   );
 
 describe("the account picker", () => {
+  const picker = createElement(AccountPicker, { onError: () => undefined });
+
   it("is not there with one account", () => {
-    expect(renderToStaticMarkup(within([{ index: 0 }], 0, createElement(AccountPicker)))).toBe("");
+    expect(renderToStaticMarkup(within([{ index: 0 }], 0, picker))).toBe("");
   });
 
-  it("lists every account it knows, with the one it is on selected", () => {
-    const html = renderToStaticMarkup(within([{ index: 0 }, { index: 1, name: "Exchange" }, { index: 3 }], 1, createElement(AccountPicker)));
+  it("lists every account it knows, with the one it is on selected, each named as public (the owner, 2026-10-06)", () => {
+    const html = renderToStaticMarkup(within([{ index: 0 }, { index: 1, name: "Exchange" }, { index: 3 }], 1, picker));
     expect(html).toContain('aria-label="Public account"');
     expect(html).toContain("Working on Exchange");
-    // Numbered from 1 where a person reads them, whatever the derivation index.
-    expect(text(html)).toContain("Account 1");
-    expect(text(html)).toContain("Exchange");
-    expect(text(html)).toContain("Account 4");
+    // Numbered from 1 where a person reads them, whatever the derivation index, and said to be public, as the other
+    // side is "Private balance".
+    expect(text(html)).toContain("Public account 1");
+    expect(text(html)).toContain("Public account · Exchange");
+    expect(text(html)).toContain("Public account 4");
     expect(html).toMatch(/<option[^>]*selected[^>]*value="1"|value="1"[^>]*selected/);
+  });
+});
+
+describe("a public review's totals", () => {
+  const rows = (side: "public" | "private") => createElement(TotalRows, { side, leaving: 1_000_000n, before: "5000000" });
+
+  it("name the account that pays once there are several: the picker is only Home's heading now", () => {
+    const named = text(renderToStaticMarkup(within([{ index: 0 }, { index: 1 }], 1, rows("public"))));
+    expect(named).toContain("Total leaving Public account 2");
+    expect(named).toContain("Public account 2 after");
+    expect(text(renderToStaticMarkup(within([{ index: 0 }, { index: 2, name: "Savings" }], 2, rows("public"))))).toContain(
+      "Total leaving Public account · Savings",
+    );
+  });
+
+  it("say \"your public account\" with one, and never name one on the private side", () => {
+    expect(text(renderToStaticMarkup(within([{ index: 0 }], 0, rows("public"))))).toContain("Total leaving your public account");
+    const priv = text(renderToStaticMarkup(within([{ index: 0 }, { index: 1 }], 1, rows("private"))));
+    expect(priv).toContain("Total leaving your private balance");
+    expect(priv).not.toContain("Public account 2");
   });
 });
 

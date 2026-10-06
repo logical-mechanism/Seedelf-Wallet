@@ -19,7 +19,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { Screen } from "../components/Screen";
 import { formatAda, formatPercent, plainName, poolLabel, sharedNames, sharing, shortId } from "../format";
 import { initials, tint } from "../tokens";
-import { PoolFacts } from "./Staking";
+import { formatSaturation, PoolFacts, ReadFailed } from "./Staking";
 
 /** Rows shown at a time; "Show more" adds as many again. */
 const PAGE = 50;
@@ -34,6 +34,21 @@ const SORTS = [
   { value: "pledge", label: "pools.sort.pledge" },
 ] as const satisfies Array<{ value: PoolSort; label: I18nKey }>;
 
+/**
+ * What the browser was showing: the search, the sort, and the pool open with
+ * its details once read. Kept by the Staking page, so Back from a pool's
+ * review returns to the pool, not to the top of the list (chunk 23's second
+ * review, ST-11).
+ */
+export interface PoolsView {
+  query: string;
+  sort: PoolSort;
+  open?: PoolRow;
+  details?: PoolDetails;
+}
+
+export const NEW_POOLS_VIEW: PoolsView = { query: "", sort: "ticker" };
+
 /** Pools whose ticker or ID holds `query`, case aside. */
 export function searchPools(pools: PoolRow[], query: string): PoolRow[] {
   const q = query.trim().toLowerCase();
@@ -41,7 +56,20 @@ export function searchPools(pools: PoolRow[], query: string): PoolRow[] {
   return pools.filter((p) => p.ticker?.toLowerCase().includes(q) || p.id.includes(q));
 }
 
-/** Sorted by `by`; ties, and pools with no ticker, fall back to the ticker, then the ID. */
+/**
+ * A pool its delegators get nothing from: one that keeps every reward (a 100%
+ * margin), or one with no stake in the epoch's snapshot, which can't make a
+ * block. The list has no block counts, so a pool with a little stake and no
+ * luck isn't one of these.
+ */
+export const paysNothing = (p: PoolRow) => p.margin >= 1 || BigInt(p.stake || "0") === 0n;
+
+/**
+ * Sorted by `by`; ties, and pools with no ticker, fall back to the ticker,
+ * then the ID. A pool that pays nothing goes after the rest in every sort:
+ * least saturated opened on empty pools, highest pledge on 100%-margin ones
+ * (ST-5).
+ */
 export function sortPools(pools: PoolRow[], by: PoolSort): PoolRow[] {
   const byTicker = (a: PoolRow, b: PoolRow) =>
     (a.ticker ? 0 : 1) - (b.ticker ? 0 : 1) ||
@@ -54,7 +82,8 @@ export function sortPools(pools: PoolRow[], by: PoolSort): PoolRow[] {
     cost: (a, b) => Number(BigInt(a.cost) - BigInt(b.cost)),
     pledge: (a, b) => Number(BigInt(b.pledge) - BigInt(a.pledge)),
   };
-  return [...pools].sort((a, b) => compare[by](a, b) || byTicker(a, b));
+  const sunk = (p: PoolRow) => (paysNothing(p) ? 1 : 0);
+  return [...pools].sort((a, b) => sunk(a) - sunk(b) || compare[by](a, b) || byTicker(a, b));
 }
 
 export function Pools({
@@ -63,6 +92,8 @@ export function Pools({
   blocked,
   busy,
   error,
+  view,
+  onView,
   onBack,
   onStake,
 }: {
@@ -74,6 +105,8 @@ export function Pools({
   /** Building a delegation. */
   busy: boolean;
   error?: string;
+  view: PoolsView;
+  onView: (view: PoolsView) => void;
   onBack: () => void;
   /** The pool, and how many live pools use its ticker. */
   onStake: (pool: PoolDetails, shared: number) => void;
@@ -82,10 +115,8 @@ export function Pools({
   const [list, setList] = useState<PoolList>();
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState<string>();
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<PoolSort>("ticker");
   const [limit, setLimit] = useState(PAGE);
-  const [open, setOpen] = useState<PoolRow>();
+  const { query, sort, open } = view;
 
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
@@ -107,13 +138,14 @@ export function Pools({
     return (
       <PoolPage
         row={open}
+        known={view.details}
         shared={sharing(tickers, open.ticker)}
         current={current}
         registered={registered}
         blocked={blocked}
         busy={busy}
         error={error}
-        onBack={() => setOpen(undefined)}
+        onBack={() => onView({ query, sort })}
         onStake={onStake}
       />
     );
@@ -124,7 +156,7 @@ export function Pools({
       title={t("staking.choosePool")}
       titleId="pools-title"
       onBack={onBack}
-      aside={list ? t("pools.count", { count: list.pools.length }) : " "}
+      aside={list ? t("pools.count", { count: list.pools.length }) : " "}
     >
       <label className="search">
         <SearchIcon size={16} />
@@ -134,30 +166,43 @@ export function Pools({
           placeholder={t("pools.searchPlaceholder")}
           value={query}
           onChange={(e) => {
-            setQuery(e.target.value);
+            onView({ ...view, query: e.target.value });
             setLimit(PAGE);
           }}
           spellCheck={false}
         />
       </label>
-      <select aria-label={t("pools.sortLabel")} value={sort} onChange={(e) => setSort(e.target.value as PoolSort)}>
+      <select aria-label={t("pools.sortLabel")} value={sort} onChange={(e) => onView({ ...view, sort: e.target.value as PoolSort })}>
         {SORTS.map((s) => (
           <option key={s.value} value={s.value}>
             {t(s.label)}
           </option>
         ))}
       </select>
+      {/* Above the list, not after 50 rows of it (ST-12). */}
+      <RefreshRow reading={reading} updatedAt={list?.updatedAt} onRefresh={() => void load(true)} />
 
+      {/* Plain words, the service's own under Details, and Try again (ST-10). */}
       {readError && (
-        <Callout tone="warn" role="alert">
-          {t("pools.warn.readFailed", { error: readError })}
-        </Callout>
+        <div className="stack-tight">
+          <Callout tone="warn" role="alert">
+            {t("pools.warn.readFailed")}
+          </Callout>
+          <ReadFailed detail={readError} onRetry={() => void load(true)} testId="pools-read-failed" />
+        </div>
       )}
       {list &&
         (found.length ? (
           <ul className="list" data-testid="pool-results">
             {found.slice(0, limit).map((p) => (
-              <PoolListRow key={p.id} pool={p} current={p.id === current} shared={sharing(tickers, p.ticker) > 1} onOpen={setOpen} />
+              <PoolListRow
+                key={p.id}
+                pool={p}
+                current={p.id === current}
+                shared={sharing(tickers, p.ticker) > 1}
+                sort={sort}
+                onOpen={(row) => onView({ ...view, open: row, details: undefined })}
+              />
             ))}
           </ul>
         ) : (
@@ -168,27 +213,46 @@ export function Pools({
           {t("tokens.showMore", { number: Math.min(PAGE, found.length - limit) })}
         </button>
       )}
-      <RefreshRow reading={reading} updatedAt={list?.updatedAt} onRefresh={() => void load(true)} />
     </Screen>
   );
 }
 
-/** One live pool: its ticker, flagged when other live pools use it too, its ID, and its terms. */
+/**
+ * One live pool: its ticker, its ID, how saturated it is, its terms on a line
+ * of their own (with the pledge when that's the sort), and its tags under
+ * them. At 360 px one line cut the terms to "1% m…" and a tag to "K…"; a tag
+ * on a line of its own wraps and is never cut, and never runs into the name
+ * ("LOGICYours": chunk 23's second review, ST-4, V-11).
+ */
 export function PoolListRow({
   pool,
   current,
   shared,
+  sort = "ticker",
   onOpen,
 }: {
   pool: PoolRow;
   current: boolean;
   /** Another live pool uses this ticker, or one that looks the same. */
   shared: boolean;
+  /** The list's sort: a pledge sort shows each pool's pledge. */
+  sort?: PoolSort;
   onOpen: (p: PoolRow) => void;
 }) {
   const t = useT();
   const ticker = pool.ticker ? plainName(pool.ticker) : undefined;
   const label = ticker ?? shortId(pool.id);
+  // A pool its delegators earn nothing or less from says so on its row, not only on its page (chunk 23's review,
+  // ST-1): a 100% margin keeps every reward, and past 100% saturation everyone's shrink.
+  const flags = [
+    pool.margin >= 1 ? t("pools.tag.keepsAll") : "",
+    pool.saturation > 100 ? t("pools.tag.oversaturated") : "",
+  ].filter(Boolean);
+  const terms = [
+    t("pools.row.marginCost", { margin: formatPercent(pool.margin * 100), cost: formatAda(pool.cost) }),
+    ...(sort === "pledge" ? [t("pools.row.pledge", { pledge: formatAda(pool.pledge) })] : []),
+  ].join(" · ");
+  const saturated = t("pools.row.saturated", { percent: formatSaturation(pool.saturation) });
   return (
     <li>
       <button
@@ -198,22 +262,29 @@ export function PoolListRow({
         aria-label={joinList([
           `${label}${shared ? t("pools.row.sharedTicker") : ""}`,
           shortId(pool.id),
-          `${t("pools.row.saturated", { percent: formatPercent(pool.saturation) })}${current ? t("pools.row.yours") : ""}`,
+          `${saturated}${current ? t("pools.row.yours") : ""}`,
+          ...flags,
         ])}
       >
         <span className={`avatar avatar--tint-${tint(pool.id)}`} aria-hidden="true">
           {initials(ticker ?? "?")}
         </span>
-        <span className="token-row__label">
-          {label}
-          {current && <span className="utxo-tag"> {t("pools.yours")}</span>}
-          {shared && <span className="utxo-tag utxo-tag--warn"> {t("pools.sharedTickerTag")}</span>}
-        </span>
-        <span className="token-row__amount">{formatPercent(pool.saturation)}</span>
-        <span className="token-row__sub">
-          {ticker && <span className="mono-id">{shortId(pool.id)} · </span>}
-          {t("pools.row.marginCost", { margin: formatPercent(pool.margin * 100), cost: formatAda(pool.cost) })}
-        </span>
+        <span className="token-row__label">{label}</span>
+        {/* Labelled: a bare percentage beside a pool reads as what it pays (ST-1). */}
+        <span className="token-row__amount">{saturated}</span>
+        {ticker && <span className="token-row__sub mono-id">{shortId(pool.id)}</span>}
+        <span className="token-row__terms">{terms}</span>
+        {(current || shared || flags.length > 0) && (
+          <span className="token-row__tags">
+            {current && <span className="utxo-tag">{t("pools.yours")}</span>}
+            {shared && <span className="utxo-tag utxo-tag--warn">{t("pools.sharedTickerTag")}</span>}
+            {flags.map((f) => (
+              <span key={f} className="utxo-tag utxo-tag--warn">
+                {f}
+              </span>
+            ))}
+          </span>
+        )}
       </button>
     </li>
   );
@@ -222,6 +293,7 @@ export function PoolListRow({
 /** One pool's details, fresh, and Stake. */
 function PoolPage({
   row,
+  known,
   shared,
   current,
   registered,
@@ -232,6 +304,8 @@ function PoolPage({
   onStake,
 }: {
   row: PoolRow;
+  /** Its details as read before its review: Back from the review shows them again without asking. */
+  known?: PoolDetails;
   /** How many live pools use its ticker. */
   shared: number;
   current?: string;
@@ -243,15 +317,19 @@ function PoolPage({
   onStake: (pool: PoolDetails, shared: number) => void;
 }) {
   const t = useT();
-  const [details, setDetails] = useState<PoolDetails>();
+  const [details, setDetails] = useState<PoolDetails | undefined>(known?.id === row.id ? known : undefined);
   const [readError, setReadError] = useState<string>();
-  useEffect(() => {
+  const read = () => {
+    setReadError(undefined);
     call("pool", { id: row.id }).then(setDetails, (e: Error) => setReadError(e.message));
+  };
+  useEffect(() => {
+    if (!details) read();
   }, [row.id]);
 
   const yours = row.id === current;
   const label = poolLabel(details ?? { id: row.id, ticker: row.ticker });
-  const why = blocked ?? (yours ? t("pools.alreadyYours") : details?.status === "retired" ? t("pools.retired") : undefined);
+  const why = blocked ?? (details?.status === "retired" ? t("pools.retired") : undefined);
   return (
     <Screen
       title={label}
@@ -261,26 +339,46 @@ function PoolPage({
       backDisabled={busy}
       error={error}
       foot={
-        <button
-          type="button"
-          className="primary"
-          onClick={() => details && onStake(details, shared)}
-          disabled={!details || !!why || busy}
-          title={why}
-        >
-          {busy ? t("common.building") : yours ? t("staking.yourPool") : t("pools.stakeWith", { label })}
-        </button>
+        // Your own pool says so as a label, not as a button that can't be pressed (ST-12).
+        yours ? (
+          <p className="note center" data-testid="pool-yours">
+            {t("pools.alreadyYours")}
+          </p>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => details && onStake(details, shared)}
+              disabled={!details || !!why || busy}
+              title={why}
+            >
+              {busy ? t("common.building") : t("pools.stakeWith", { label })}
+            </button>
+            {/* Why it can't be pressed, under it, not in a tooltip alone, which no touch screen or keyboard shows
+                (blind test T03's verifier). */}
+            {why && (
+              <p className="note foot-note" data-testid="pool-why">
+                {why}
+              </p>
+            )}
+          </>
+        )
       }
     >
-      <PoolFacts pool={details ?? { id: row.id, ticker: row.ticker }} error={readError} testId="pool-details" named={false} />
+      <PoolFacts
+        pool={details ?? { id: row.id, ticker: row.ticker }}
+        error={readError}
+        onRetry={read}
+        testId="pool-details"
+        named={false}
+      />
       {details?.description && <p className="note">{details.description}</p>}
       <p className="note mono-id" title={row.id}>
         {row.id}
       </p>
       <SharedTicker shared={shared} />
-      {!registered && !yours && (
-        <p className="note">{t("pools.firstDeposit")}</p>
-      )}
+      {!registered && !yours && <p className="note">{t("pools.firstDeposit")}</p>}
     </Screen>
   );
 }

@@ -7,6 +7,12 @@
 // that only reads is asked again once; a signing call fails, since it's
 // unknown whether it was answered; and a send says it may have gone through,
 // since it may have (independent review M3).
+//
+// One bridge a page: turning the connector on puts these scripts in the pages
+// open then (background/connector.ts), and a page that kept them from before
+// it was last turned off keeps its first copy. Two would send every call to
+// the worker twice. The mark is on this isolated world's window, which the
+// page can't see.
 
 import {
   APIError,
@@ -72,7 +78,15 @@ function stopPing() {
   ping = undefined;
 }
 
-window.addEventListener("message", (event: MessageEvent) => {
+const BRIDGED = "seedelfCip30Bridge";
+const world = window as unknown as Record<string, unknown>;
+
+if (!world[BRIDGED]) {
+  world[BRIDGED] = true;
+  window.addEventListener("message", relay);
+}
+
+function relay(event: MessageEvent) {
   if (event.source !== window || event.origin !== location.origin) return;
   const data = event.data as { [PAGE_CHANNEL]?: unknown; id?: unknown; method?: unknown; args?: unknown } | null;
   if (data?.[PAGE_CHANNEL] !== "request" || typeof data.id !== "string") return;
@@ -81,4 +95,4 @@ window.addEventListener("message", (event: MessageEvent) => {
     return;
   }
   send({ id: data.id, method: data.method, args: Array.isArray(data.args) ? data.args : [] });
-});
+}

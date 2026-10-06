@@ -90,7 +90,7 @@ describe("sanitizeAda", () => {
     const { sanitizeAda } = await import("../src/ui/format");
     expect(sanitizeAda("", "10.1234567890")).toEqual({
       value: "10.123456",
-      note: "ADA has at most 6 decimal places (0.000001 ₳ is one lovelace), so the extra digits were dropped.",
+      note: "ADA has at most 6 decimal places, so the extra digits were dropped.",
     });
     expect(sanitizeAda("", "0.9999999")).toMatchObject({ value: "0.999999" });
     expect(sanitizeAda("", "10.123456")).toEqual({ value: "10.123456" });
@@ -100,11 +100,19 @@ describe("sanitizeAda", () => {
     expect(sanitizeAda("12", "")).toEqual({ value: "" });
   });
 
-  it("refuses what isn't a number and keeps the previous value", async () => {
-    const { sanitizeAda } = await import("../src/ui/format");
+  it("keeps what isn't a number as typed, with the note, and reads no amount from it (chunk 23's second review, PY-9)", async () => {
+    const { parseAda, sanitizeAda } = await import("../src/ui/format");
     for (const bad of ["12a", "-5", "1e6", "1.2.3", "₳5"]) {
-      expect(sanitizeAda("12", bad)).toEqual({ value: "12", note: "Enter an amount in ADA, like 25 or 12.5." });
+      expect(sanitizeAda("12", bad)).toEqual({ value: bad, note: "Enter an amount in ADA, like 25 or 12.5." });
+      // What a form reads from it: nothing, so its Review waits rather than going on with the 12 typed over.
+      expect(parseAda(bad), bad).toBeUndefined();
     }
+    // Put right, it's an amount again; a comma typed while it wasn't one is read as any typed comma is, never
+    // dropped as one of the field's own.
+    expect(sanitizeAda("12a", "12")).toEqual({ value: "12" });
+    expect(sanitizeAda("1a,5", "1,5")).toEqual({ value: "1.5" });
+    expect(sanitizeAda("12a,", "12,")).toEqual({ value: "12." });
+    expect(sanitizeAda("1a,234", "1,234")).toEqual({ value: "1,234" });
     // A comma alone is a decimal comma, as a point alone is a point.
     expect(sanitizeAda("12", ",")).toEqual({ value: "0." });
     expect(sanitizeAda("12", ".")).toEqual({ value: "0." });
@@ -115,7 +123,7 @@ describe("sanitizeAda: supply", () => {
   it("refuses more than the 45 billion ADA that exist", async () => {
     const { sanitizeAda, MAX_SUPPLY_LOVELACE } = await import("../src/ui/format");
     expect(MAX_SUPPLY_LOVELACE).toBe(45_000_000_000n * 1_000_000n);
-    const refused = { value: "12", note: "That's more than all the ADA there is: 45 billion ₳." };
+    const refused = { value: "12", note: "That's more than all the ADA there is: 45 billion\u00a0₳." };
     expect(sanitizeAda("12", "99999999999999999999999999999999999999999")).toEqual(refused);
     expect(sanitizeAda("12", "45000000000.000001")).toEqual(refused);
     expect(sanitizeAda("12", "45,000,000,001")).toEqual(refused);
@@ -208,7 +216,7 @@ describe("sanitizeAmount: a token", () => {
     expect(sanitizeAmount("", "12.", whole)).toEqual({ value: "12" });
     expect(sanitizeAmount("", "12.5", whole)).toEqual({ value: "12", note: "precise" });
     expect(sanitizeAmount("", "3000000001", whole)).toEqual({ value: "", note: "too much" });
-    expect(sanitizeAmount("5", "x", whole)).toEqual({ value: "5", note: "number" });
+    expect(sanitizeAmount("5", "x", whole)).toEqual({ value: "x", note: "number" });
   });
 });
 

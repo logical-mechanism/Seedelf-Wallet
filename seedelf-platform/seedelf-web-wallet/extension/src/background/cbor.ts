@@ -162,6 +162,34 @@ export function certificateKinds(tx: Uint8Array): number[] {
   return kinds;
 }
 
+/**
+ * What a transaction withdraws (its body's key 5, a map): each reward
+ * address's bytes (hex) and its lovelace. None without any. The wallet's own
+ * withdraw the whole of the account's rewards, as the ledger has every
+ * withdrawal do (incoming.ts).
+ */
+export function txWithdrawals(tx: Uint8Array): Array<{ account: string; lovelace: bigint }> {
+  const value = bodyField(tx, 5);
+  if (value === undefined) return [];
+  const map = head(tx, value);
+  if (map.major !== 5) throw new Error(t("worker.cbor.notWellFormed"));
+  const found: Array<{ account: string; lovelace: bigint }> = [];
+  let p = map.p;
+  for (let i = 0; map.indefinite ? tx[p] !== 0xff : i < map.n; i++) {
+    const account = head(tx, p);
+    const end = skip(tx, p, 3);
+    const coin = head(tx, end);
+    if (account.major !== 2 || account.indefinite || coin.major !== 0) throw new Error(t("worker.cbor.notWellFormed"));
+    // Read as a bigint: `head` reads an 8-byte count as a number, which loses digits past 2^53.
+    const size = coin.p - end - 1;
+    let lovelace = size === 0 ? BigInt(tx[end]! & 0x1f) : 0n;
+    for (let k = end + 1; k < coin.p; k++) lovelace = (lovelace << 8n) | BigInt(tx[k]!);
+    found.push({ account: hex(tx.subarray(account.p, account.p + account.n)), lovelace });
+    p = coin.p;
+  }
+  return found;
+}
+
 function outpoints(b: Uint8Array, pos: number): string[] {
   let set = head(b, pos);
   if (set.major === 6) set = head(b, set.p); // tag 258: a set

@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
-import { Collateral } from "../src/background/collateral";
+import { Collateral, StaleReviewError } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { MAX_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
 import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
@@ -26,6 +26,7 @@ import { SESSION_SPENT } from "../src/background/spent";
 import { WalletLocked } from "../src/background/wallet";
 import { i18n, t as translate } from "../src/i18n/core";
 import { activityDetail } from "../src/ui/activity";
+import { SESSION_FEE_ESTIMATE } from "../src/ui/swap";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
@@ -344,7 +345,7 @@ describe("a swap's quote", () => {
     // One Minswap routes through, but the wallet doesn't know its orders: refused before anything is funded.
     via("MinswapV2", "CswapV1");
     await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
-      "Minswap routes this swap through CswapV1, whose orders the wallet can't check yet, so it won't swap this way.",
+      "Minswap routes this swap through CswapV1, which the wallet can't check yet, so it won't swap this way.",
     );
     // On preprod, the check alone stands.
     await expect(t.sessions.quote("preprod", selling)).resolves.toMatchObject({ route: ["MinswapV2", "CswapV1"] });
@@ -409,6 +410,8 @@ describe("a private session", () => {
     });
     expect(review).toMatchObject({ kind: "swap", index: 0, quote: { amountOut: "906594100" } });
     expect(review.summary).toMatchObject({ ownInputs: 1, signs: ["0/0"], complete: true, fee: "205189" });
+    // Under what the swap's review says an order costs before it's built (ui/swap.ts, blind test §9.8).
+    expect(BigInt(review.summary.fee)).toBeLessThanOrEqual(SESSION_FEE_ESTIMATE);
     expect(review.summary.paid).toMatchObject([{ lovelace: "14000000", script: true, datum: "hash" }]);
 
     const placed = await sessions.txSubmit("preprod", review.txHash, "swap");
@@ -432,6 +435,8 @@ describe("a private session", () => {
     const back = await sessions.backBuild("preprod", 0);
     expect(back).toMatchObject({ index: 0, inputs: 2, tokens: [{ assetName: "4d494e", quantity: "906594100" }] });
     expect(BigInt(back.lovelace) + BigInt(back.fee)).toBe(133585414n);
+    // A return into new private UTxOs, at preprod's parameters: under the reviews' estimate too.
+    expect(BigInt(back.fee)).toBeLessThanOrEqual(SESSION_FEE_ESTIMATE);
     const returned = await sessions.backSubmit("preprod", back.txHash);
     expect(returned).toMatchObject({ kind: "session-back", txHash: back.txHash });
     // Its page watches the return; Home's banner still has only the funding.
@@ -448,6 +453,9 @@ describe("a private session", () => {
     [view] = await sessions.list("preprod", true);
     expect(view).toMatchObject({ stage: "closed", holding: { lovelace: "0", utxos: 0 } });
     expect(view!.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    // Over, it says what came back, as its return's review said, kept past its history's summary (chunk 23's
+    // second review, DX-5).
+    expect(view!.received).toMatchObject({ tokens: [expect.objectContaining({ assetName: "4d494e", quantity: "906594100" })] });
     await expect(sessions.backBuild("preprod", 0)).rejects.toThrow("That session is over");
     // The next one gets a new account.
     expect((await sessions.outBuild("preprod", quote)).index).toBe(1);
@@ -461,14 +469,32 @@ describe("a private session", () => {
     await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow();
     expect(t.koios.submitted).toHaveLength(0);
     const [failed] = await t.sessions.list("preprod", true);
-    // Turned away, it never went out: the page says so, and offers nothing but Forget.
-    expect(failed).toMatchObject({ index: 0, stage: "failed", unsent: true });
-    // The kept payment for index 0 can't be sent again, and the next session is index 1.
-    await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("started already");
+    // Turned away, it never went out: the page says so, and why (giveme.my refused it, and the device knew of
+    // nothing it spends being spent: who, not a guess at the user's money, blind test §9.5; chunk 23's second review,
+    // DX-5), and offers nothing but Forget.
+    expect(failed).toMatchObject({ index: 0, stage: "failed", unsent: true, unsentWhy: "refused" });
+    // The kept payment for index 0 can't be sent again, and the next session is index 1. That refusal isn't one a
+    // new review is offered for by its type: the page reads the record to tell whether that try went out (DX-1).
+    const again = await t.sessions.outSubmit("preprod", out.txHash).catch((e: unknown) => e);
+    expect(again).toBeInstanceOf(Error);
+    expect((again as Error).message).toContain("started already");
+    expect(again).not.toBeInstanceOf(StaleReviewError);
+    // One that isn't the review kept is stale: building it again fixes it.
+    await expect(t.sessions.outSubmit("preprod", "ab".repeat(32))).rejects.toBeInstanceOf(StaleReviewError);
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(1);
     // A failed session can be forgotten; its index still isn't reused.
     expect(await t.sessions.forget("preprod", 0)).toEqual([]);
     expect((await t.sessions.outBuild("preprod", quote)).index).toBe(1);
+  });
+
+  it("records giveme.my's outage apart from its refusal, so the page says wait (cross-area review)", async () => {
+    const t = await unlocked();
+    t.collateral.answer = { status: 503, body: {} };
+    const out = await t.sessions.outBuild("preprod", await t.sessions.quote("preprod", ASK));
+    await expect(t.sessions.outSubmit("preprod", out.txHash)).rejects.toThrow("couldn't take this transaction just now");
+    expect(t.koios.submitted).toHaveLength(0);
+    const [failed] = await t.sessions.list("preprod", true);
+    expect(failed).toMatchObject({ index: 0, stage: "failed", unsent: true, unsentWhy: "givemeBusy" });
   });
 
   it("waits for a funding Koios didn't answer rather than call it failed, and fails one its gateway turned away at once", async () => {
@@ -496,7 +522,11 @@ describe("a private session", () => {
     await expect(sessions.outSubmit("preprod", next.txHash)).rejects.toThrow("limiting requests");
     undo();
     t.koios.confirmations = null;
-    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({ stage: "failed", unsent: true });
+    expect((await sessions.list("preprod", true)).find((v) => v.index === 1)).toMatchObject({
+      stage: "failed",
+      unsent: true,
+      unsentWhy: "busy",
+    });
   });
 
   it("never takes a one-time account the chain has seen used, whatever this device's record says", async () => {
@@ -1840,6 +1870,9 @@ describe("a session's return", () => {
     expect(back).toMatchObject({ index: 0, inputs: 2, merged: 1 });
     // What the private balance gains is the account's 17 ₳, less the fee.
     expect(BigInt(back.lovelace) + BigInt(back.fee)).toBe(17_000_000n);
+    // Merging is a Seedelf spend, the dearest of a session's own transactions (0.23009 ₳ at preprod's parameters):
+    // still under what the reviews say a return costs before it's built (ui/swap.ts, blind test §9.8).
+    expect(BigInt(back.fee)).toBeLessThanOrEqual(SESSION_FEE_ESTIMATE);
 
     const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string }>(SESSION_BACK)))!;
     const bytes = hex(kept.txCbor);

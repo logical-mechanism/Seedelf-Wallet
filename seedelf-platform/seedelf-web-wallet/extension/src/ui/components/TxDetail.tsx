@@ -22,7 +22,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { type I18nKey, joinList, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView, TxVote } from "../../shared/rpc";
+import type { TxAsset, TxDetail as Detail, TxMetadatum, TxOutpoint, TxOutput, TxView, TxVote, TxYours } from "../../shared/rpc";
+import { nameOf, useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "./Callout";
 import { CopyButton } from "./CopyButton";
@@ -32,23 +33,27 @@ import { ExpandIcon, SpinnerIcon } from "./Icons";
 import { Modal } from "./Modal";
 import { Row, ReviewRows } from "./ReviewRows";
 import { Tabs } from "./Tabs";
-import { formatAda, formatQuantity, shortHex } from "../format";
+import { adaText, formatAda, formatQuantity, shortHex } from "../format";
 import { useNetwork } from "../network";
 import { tokenDecimals, tokenText } from "../tokens";
 
 /**
  * The control that opens the view, for a transaction the wallet is holding:
  * every review's, and a site's waiting for a signature. `label` names it where
- * "Transaction details" doesn't read right.
+ * "Transaction details" doesn't read right. `site`: the site built it and
+ * sends it, and the wallet only adds its signature (the connector's sign
+ * window).
  */
 export function TxDetailButton({
   txHash,
   label,
   testId = "tx-detail",
+  site = false,
 }: {
   txHash: string;
   label?: string;
   testId?: string;
+  site?: boolean;
 }) {
   const tr = useT();
   const [open, setOpen] = useState(false);
@@ -60,7 +65,7 @@ export function TxDetailButton({
           {label ?? tr("tx.detailsButton")}
         </button>
       </div>
-      {open && <TxDetailModal txHash={txHash} testId={testId} onClose={() => setOpen(false)} />}
+      {open && <TxDetailModal txHash={txHash} testId={testId} site={site} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -80,7 +85,17 @@ export function entryLabel({ txs, again }: { txs: number; again?: boolean }): st
 
 type Tab = "transaction" | "cbor";
 
-function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: string; onClose: () => void }) {
+function TxDetailModal({
+  txHash,
+  testId,
+  site,
+  onClose,
+}: {
+  txHash: string;
+  testId: string;
+  site: boolean;
+  onClose: () => void;
+}) {
   const tr = useT();
   const network = useNetwork();
   const [view, setView] = useState<TxView>();
@@ -140,7 +155,7 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
             />
             <div id={`${testId}-panel-${tab}`} role="tabpanel" aria-labelledby={`${testId}-tab-${tab}`} className="stack">
               {tab === "transaction" ? (
-                <TxDetailBody detail={view.detail} network={network} testId={testId} />
+                <TxDetailBody detail={view.detail} network={network} testId={testId} site={site} />
               ) : (
                 <Raw cbor={view.cbor} testId={testId} />
               )}
@@ -226,7 +241,18 @@ function Outpoints({ list, testId }: { list: TxOutpoint[]; testId: string }) {
 }
 
 /** The transaction, field by field: exported for its tests. */
-export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; network: NetworkName; testId: string }) {
+export function TxDetailBody({
+  detail: d,
+  network,
+  testId,
+  site = false,
+}: {
+  detail: Detail;
+  network: NetworkName;
+  testId: string;
+  /** A site's transaction, in the connector's sign window: the wallet neither prepared it nor sends it. */
+  site?: boolean;
+}) {
   const tr = useT();
   const amount = (t: TxAsset) => {
     const q = BigInt(t.quantity);
@@ -281,14 +307,17 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
         <Section
           title={d.collateral.length ? tr("tx.collateralCount", { count: d.collateral.length }) : tr("utxos.tag.collateral")}
           id={`${testId}-collateral`}
+          // Whose collateral, and what "Comes back" means: T04b asked whose money it was (blind test §9.5).
+          hint={tr("tx.privacy.collateralHint")}
         >
           {d.collateral.length > 0 && <Outpoints list={d.collateral} testId={`${testId}-collateral-list`} />}
           <ReviewRows testId={`${testId}-collateral-rows`}>
-            {d.totalCollateral && <Row label={tr("tx.mostTaken")} value={`${formatAda(d.totalCollateral)} ₳`} />}
+            {d.totalCollateral && <Row label={tr("tx.mostTaken")} value={adaText(d.totalCollateral)} />}
             {d.collateralReturn && (
-              <Row label={tr("tx.comesBack")} value={`${formatAda(d.collateralReturn.lovelace)} ₳`} />
+              <Row label={tr("tx.comesBack")} value={adaText(d.collateralReturn.lovelace)} />
             )}
           </ReviewRows>
+          {d.collateralReturn?.yours && <YoursTag yours={d.collateralReturn.yours} testId={`${testId}-collateral-yours`} />}
         </Section>
       )}
 
@@ -318,17 +347,30 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
 
       <Section title={tr("tx.title")} id={`${testId}-body`}>
         <ReviewRows testId={`${testId}-rows`}>
-          <Row label={tr("review.fee")} value={`${formatAda(d.fee)} ₳`} strong />
+          <Row label={tr("review.fee")} value={adaText(d.fee)} strong />
           {d.validFrom !== null && <Row label={tr("tx.validFrom")} value={d.validFrom} />}
           {d.validUntil !== null && <Row label={tr("tx.validUntil")} value={d.validUntil} />}
           {d.networkId !== null && <Row label={tr("network.label")} value={d.networkId === 1 ? "Mainnet" : tr("tx.testNetwork")} />}
           <Row label={tr("tx.size")} value={tr("tx.sizeValue", { size: d.size, body: d.bodySize })} />
           {/* What matters is whether anything has signed it, not what else the
               witness set carries: a transaction with its redeemers and no
-              signature is unsigned. */}
+              signature is unsigned. Signed, it still hasn't gone, and says so:
+              this sheet only shows a transaction the wallet holds, and "2
+              signatures so far" before Send read as sent (chunk 23's second
+              review, PY-7). Counted, not "Signed": on a review, before its
+              button or a password, "Signed 3 signatures" read as consent
+              already given (blind test §4 entry 16; T12, T14, T14r, E04). The
+              wallet signs as it prepares a review, so it can show the exact
+              transaction. A site's arrives as the site prepared it, and the
+              site sends it: the wallet promises only what it does, adding the
+              user's signature on Sign (the pass-two cross-area review). */}
           <Row
             label={tr("tx.signed")}
-            value={d.signatures.length ? tr("tx.signaturesSoFar", { count: d.signatures.length }) : tr("tx.notYet")}
+            value={
+              d.signatures.length
+                ? tr(site ? "tx.siteSignatures" : "tx.signaturesSoFar", { count: d.signatures.length })
+                : tr("tx.notYet")
+            }
           />
           {d.bootstrapWitnesses > 0 && (
             <Row label={tr("tx.byronWitnesses")} value={tr("tx.witnessCount", { count: d.bootstrapWitnesses })} />
@@ -339,8 +381,8 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
           {d.auxiliaryDataHash && (
             <Row label={tr("tx.metadataHash")} value={shortHex(d.auxiliaryDataHash, 10, 6)} title={d.auxiliaryDataHash} />
           )}
-          {d.donation && <Row label={tr("tx.toTreasury")} value={`${formatAda(d.donation)} ₳`} />}
-          {d.treasuryValue && <Row label={tr("tx.treasuryValue")} value={`${formatAda(d.treasuryValue)} ₳`} />}
+          {d.donation && <Row label={tr("tx.toTreasury")} value={adaText(d.donation)} />}
+          {d.treasuryValue && <Row label={tr("tx.treasuryValue")} value={adaText(d.treasuryValue)} />}
         </ReviewRows>
       </Section>
 
@@ -377,7 +419,7 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
                   </span>
                   <CopyButton value={w.address} label={tr("tx.copyRewardAddress")} />
                 </span>
-                <span className="dapp-amount">{formatAda(w.lovelace)} ₳</span>
+                <span className="dapp-amount">{adaText(w.lovelace)}</span>
               </li>
             ))}
           </ul>
@@ -593,6 +635,10 @@ function Output({
         </span>
         <CopyButton value={o.address.bech32} label={tr("tx.copyAddress")} />
       </span>
+      {/* Whose it is, where it's the user's: testers told their own change by an address's last letters, as the
+          words below describe an address by its shape alone (blind test §9.9, T18). The worker works it out on
+          the device (tx-view.ts). */}
+      {o.yours && <YoursTag yours={o.yours} testId="tx-output-yours" />}
       <span className="note">
         {`#${o.index} · ${addressWords(o.address.kind, o.address.payment)}`}
         {/* `form` isn't shown: the CDDL calls the list and the map forms "equally
@@ -607,7 +653,7 @@ function Output({
         {o.scriptRef && ` · ${tr("tx.out.carriesScript", { kind: scriptWords(o.scriptRef.kind) })}`}
       </span>
       <span className="dapp-amount">
-        {formatAda(o.lovelace)} ₳
+        {adaText(o.lovelace)}
         {o.assets.map((t, i) => (
           // The name can be anyone's choice, so the policy and the name in hex
           // stay within reach of it.
@@ -626,6 +672,27 @@ function Output({
         />
       )}
     </li>
+  );
+}
+
+/** An output's owner, where it's the user: the account by name when there's more than one, as the windows do. */
+function YoursTag({ yours, testId }: { yours: TxYours; testId: string }) {
+  const tr = useT();
+  const { accounts, several } = useAccounts();
+  let words: string;
+  if (yours.kind === "account") {
+    words = several ? tr("tx.yours.named", { account: nameOf(accounts, yours.account) }) : tr("tx.yours.account");
+  } else if (yours.kind === "session") {
+    words = tr("tx.yours.session", { number: yours.index + 1 });
+  } else {
+    words = tr(yours.kind === "seedelf" ? "tx.yours.seedelf" : "tx.yours.private");
+  }
+  return (
+    <span className="tx-detail__line tx-detail__line--wide">
+      <span className="utxo-tag" data-testid={testId}>
+        {words}
+      </span>
+    </span>
   );
 }
 
@@ -678,7 +745,7 @@ function fieldText(value: unknown): string {
     }
     if (typeof o.txHash === "string") return `${String(o.txHash)}#${String(o.index)}`;
     if (typeof o.field === "string") return t("tx.numberedField", { field: o.field, hex: String(o.hex) });
-    if (typeof o.address === "string") return `${String(o.address)} ${formatAda(String(o.lovelace))} ₳`;
+    if (typeof o.address === "string") return `${String(o.address)} ${adaText(String(o.lovelace))}`;
     return JSON.stringify(value);
   }
   return String(value);

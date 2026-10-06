@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { TxDetail, TxPlutus } from "../src/shared/rpc";
 import { plutusJson } from "../src/ui/components/PlutusTree";
 import { TxDetailBody, addressWords, certificateWords, proposalWords, redeemerWords } from "../src/ui/components/TxDetail";
+import { AccountsContext } from "../src/ui/accounts";
 import { NetworkContext } from "../src/ui/network";
 import { loadTestWasm, transferPreprod } from "./fakes";
 
@@ -74,6 +75,38 @@ describe("the transaction view's page", () => {
     expect(page.indexOf("Pays 2 outputs")).toBeLessThan(page.indexOf("Network fee"));
     // An input is named, and nothing else takes up the room.
     expect(page).toContain(`${detail.inputs[0]!.txHash.slice(0, 12)}`);
+  });
+
+  it("marks the user's own outputs, where the worker found them, by account when there's more than one (blind test §9.9)", () => {
+    const detail = read(transferPreprod.final.txCbor);
+    const [first, second] = detail.outputs;
+    const marked: TxDetail = {
+      ...detail,
+      outputs: [{ ...first!, yours: { kind: "private" } }, { ...second!, yours: { kind: "account", account: 0 } }],
+    };
+    const page = text(createElement(TxDetailBody, { detail: marked, network: "preprod", testId: "tx" }));
+    expect(page).toContain("Yours, in your private balance");
+    expect(page).toContain("Yours, in your public account");
+    // With several accounts, the account by its name.
+    const several = {
+      accounts: [{ index: 0 }, { index: 1, name: "Savings" }],
+      active: 0,
+      loaded: true,
+      name: "Account 1",
+      several: true,
+      reload: async () => undefined,
+    };
+    const named: TxDetail = { ...detail, outputs: [{ ...first!, yours: { kind: "account", account: 1 } }] };
+    const html = renderToStaticMarkup(
+      createElement(
+        AccountsContext.Provider,
+        { value: several },
+        createElement(NetworkContext.Provider, { value: "preprod" }, createElement(TxDetailBody, { detail: named, network: "preprod", testId: "tx" })),
+      ),
+    );
+    expect(html).toContain("Yours, in Savings");
+    // Unmarked, nothing says whose: the words describe the address alone.
+    expect(shown(transferPreprod.final.txCbor)).not.toContain("Yours");
   });
 
   it("says a Seedelf output is one, and that its register could be spent", () => {
@@ -164,13 +197,22 @@ describe("the transaction view's page", () => {
   });
 
   it("says a transaction isn't signed yet where it isn't, whatever else its witness set holds", () => {
-    expect(shown(cborOf("payment"))).toContain("Signed Not yet");
+    expect(shown(cborOf("payment"))).toContain("Signatures None yet");
     // The wallet's transfer carries its redeemers and no signature yet: still unsigned.
-    expect(shown(transferPreprod.final.txCbor)).toContain("Signed Not yet");
-    // One that has been signed says how many have signed it.
+    expect(shown(transferPreprod.final.txCbor)).toContain("Signatures None yet");
+    // One that has been signed says how many have signed it, and that it hasn't gone: the sheet is only ever
+    // shown for a transaction the wallet holds, before Send (chunk 23's second review, PY-7). Counted, never
+    // "Signed", which on a review read as consent already given (blind test §4 entry 16), and said to come from
+    // preparing it.
     const detail = { ...read(cborOf("payment")), signatures: [{ publicKey: "ab".repeat(32), keyHash: "cd".repeat(28) }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("Signed 1 signature so far");
+    expect(page).toContain("Signatures 1, made while preparing it: not sent until you confirm");
+    expect(page).not.toContain("Signed");
+    // A site's, in the connector's sign window: the site prepared it and sends it, so the wallet says only what it
+    // does itself (the pass-two cross-area review).
+    const site = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx", site: true }));
+    expect(site).toContain("Signatures 1 already in it. Seedelf Wallet adds yours only when you press Sign, and the site sends it");
+    expect(site).not.toContain("not sent until you confirm");
   });
 
   it("reports a field it has no name for rather than leaving it out", () => {
@@ -178,7 +220,7 @@ describe("the transaction view's page", () => {
     // (wasm/tests/decode_test.rs pins the reading itself).
     const detail = { ...read(cborOf("payment")), unknown: [{ at: "body", field: "23", hex: "820102" }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("has no name for");
+    expect(page).toContain("this version of the wallet can't name");
     expect(page).toContain("The body's field 23");
     expect(page).toContain("820102");
   });
@@ -312,7 +354,7 @@ describe("nothing the decoder found is left off the page", () => {
   it("says when metadata isn't what the body commits to", () => {
     const detail: TxDetail = { ...read(cborOf("certificates")), metadataHashMatches: false };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("isn't the hash of the metadata it carries");
+    expect(page).toContain("Its metadata doesn't match the hash in its body");
     // And it still shows the metadata, as it shows everything else.
     expect(page).toContain("Label 674");
   });
@@ -342,7 +384,7 @@ describe("the explanations behind their icons", () => {
   const HINTS = [
     "looking them up would tell whoever was asked which transaction you are reading",
     "Read, not spent: a contract's script or its settings usually sit in one.",
-    "It doesn't take one apart",
+    "The wallet doesn't interpret what a contract does",
     "Metadata is in the open",
   ];
 
@@ -374,7 +416,7 @@ describe("the explanations behind their icons", () => {
     const detail: TxDetail = { ...read(cborOf("payment")), valid: false, unknown: [{ at: "body", field: "23", hex: "00" }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
     expect(page).toContain("marked to fail its contracts");
-    expect(page).toContain("has no name for");
+    expect(page).toContain("this version of the wallet can't name");
   });
 });
 

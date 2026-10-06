@@ -1,4 +1,5 @@
-// What a build is doing, under the button that started it. The worker reports
+// What a build is doing, over the button that started it: under it, the line
+// sat below the fold at a laptop's height (chunk 23's review, L-3). The worker reports
 // each stage on the request's own port (background/ui-port.ts); without it the
 // wallet only greys the button out, and a build that reads the chain, builds
 // and measures scripts looks the same as one that has hung.

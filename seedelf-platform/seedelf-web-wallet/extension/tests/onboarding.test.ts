@@ -58,14 +58,12 @@ describe("the welcome screen's network", () => {
   });
 
   it("keeps the note Settings gives about each network", () => {
-    expect(Picker.NETWORK_NOTE.mainnet).toBe("Mainnet: Cardano's real network. ADA here is real money.");
-    expect(Picker.NETWORK_NOTE.preprod).toContain("Preprod: Cardano's test network");
+    expect(Picker.NETWORK_NOTE.mainnet).toBe("Cardano's real network: ADA here is real money.");
+    expect(Picker.NETWORK_NOTE.preprod).toContain("Cardano's test network: ADA here has no value.");
   });
 
   it("says preprod is for a phrase not used on mainnet, since the keys are the same (privacy review §6)", () => {
-    expect(Picker.NETWORK_NOTE.preprod).toContain(
-      "with a recovery phrase you don't use on mainnet: the same phrase has the same keys on both networks, so anyone comparing them can tell they're one wallet's",
-    );
+    expect(Picker.NETWORK_NOTE.preprod).toContain("Anyone can link one phrase's wallets on both networks, so test with another phrase.");
   });
 });
 

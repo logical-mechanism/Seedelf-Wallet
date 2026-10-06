@@ -12,7 +12,9 @@ import {
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import type { ActivityEntry, PendingTx } from "../src/shared/rpc";
-import { activityCsv, activityDetail, csvCell, tokenMoved } from "../src/ui/activity";
+import { txInputs } from "../src/background/cbor";
+import { forgetSpent } from "../src/background/spent";
+import { activityAmount, activityCsv, activityDetail, csvCell, signedQuantity, tokenMoved } from "../src/ui/activity";
 import { assetFingerprint } from "../src/ui/tokens";
 import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
 
@@ -44,6 +46,17 @@ describe("Seedelf activity", () => {
     t.clock.now += 60_000;
     await t.balances.get("preprod", true);
     expect(await t.activity.seedelf("preprod")).toHaveLength(2);
+  });
+
+  // E01: the same token read "1,234.56" on Home and "+1,234,560,000" in Activity, which kept no decimals.
+  it("gives a token the decimals the balance reading has from Koios, as Home shows it", async () => {
+    const t = await unlocked();
+    const b = await t.balances.get("preprod");
+    const held = b.seedelf.tokens[0]!;
+    expect(held.decimals).toBe(6);
+    const arrived = (await t.activity.seedelf("preprod")).find((e) => e.assets?.length)!;
+    expect(arrived.assets![0]).toMatchObject({ policyId: held.policyId, assetName: held.assetName, decimals: 6 });
+    expect(signedQuantity("preprod", arrived.assets![0]!)).toBe("+1,234.56");
   });
 
   it("writes a move-in down when it's sent, and never counts its deposit as an arrival", async () => {
@@ -194,18 +207,47 @@ describe("Cardano account activity", () => {
 
     for (const e of entries) {
       const tx = activityPreprod.tx_info.find((x) => x.tx_hash === e.txHash) as unknown as {
+        fee: string;
         inputs: Array<{ payment_addr: { bech32: string }; value: string }>;
         outputs: Array<{ payment_addr: { bech32: string }; value: string }>;
+        withdrawals?: Array<{ amount: string; stake_addr: string }> | null;
       };
       const sum = (rows: typeof tx.inputs) =>
         rows.filter((r) => ours.has(r.payment_addr.bech32)).reduce((n, r) => n + BigInt(r.value), 0n);
-      const net = sum(tx.outputs) - sum(tx.inputs);
+      // Less the rewards withdrawn, which the balance counted already, and with the fee it paid said apart.
+      const rewards = (tx.withdrawals ?? []).filter((w) => w.stake_addr === activityPreprod.stake).reduce((n, w) => n + BigInt(w.amount), 0n);
+      const paid = tx.inputs.some((r) => ours.has(r.payment_addr.bech32));
+      const net = sum(tx.outputs) - sum(tx.inputs) - rewards + (paid ? BigInt(tx.fee) : 0n);
       expect(e.direction, e.txHash).toBe(net > 0n ? "in" : net < 0n ? "out" : "none");
       expect(e.lovelace, e.txHash).toBe((net < 0n ? -net : net).toString());
       // A payment in from elsewhere pays no fee of ours.
       if (e.kind === "received") expect(e.fee).toBeUndefined();
     }
     expect(entries.map((e) => e.at)).toEqual([...entries.map((e) => e.at)].sort((a, b) => b - a));
+  });
+
+  // Read from the chain, a payment this device didn't make still says who: the addresses it paid, or that paid
+  // it, from the transaction already read, with no request (chunk 23's review, A-1).
+  it("names who a payment from elsewhere paid, or who paid it, from the transaction already read", async () => {
+    const t = await unlocked();
+    await t.balances.get("preprod");
+    const before = t.koios.calls.length;
+    const { entries } = await t.activity.cardano("preprod");
+    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.addresses);
+    const named = entries.filter((e) => e.kind === "sent" || e.kind === "received");
+    expect(named.length).toBeGreaterThan(0);
+    for (const e of named) {
+      const tx = activityPreprod.tx_info.find((x) => x.tx_hash === e.txHash) as unknown as {
+        inputs: Array<{ payment_addr: { bech32: string } }>;
+        outputs: Array<{ payment_addr: { bech32: string } }>;
+      };
+      const others = [...new Set((e.kind === "sent" ? tx.outputs : tx.inputs).map((r) => r.payment_addr.bech32))].filter(
+        (a) => !ours.has(a),
+      );
+      expect(e.detail, e.txHash).toBe(others[0]);
+      expect(e.more ?? 0, e.txHash).toBe(Math.max(0, others.length - 1));
+    }
   });
 
   it("needs a balance reading first, for the account's addresses", async () => {
@@ -239,10 +281,11 @@ describe("the Cardano account's staking and notes", () => {
         ],
       }),
     );
+    // The deposit is what left, the fee apart.
     expect(staked).toMatchObject({
       kind: "stake",
       direction: "out",
-      lovelace: "2200000",
+      lovelace: "2000000",
       fee: "200000",
       staking: { deposit: "2000000", pool: "pool1logic", drep: "drep_always_abstain" },
     });
@@ -378,7 +421,7 @@ describe("the CSV export", () => {
   it("writes one row an entry, signed amounts in ADA, and the transaction", () => {
     const csv = activityCsv("preprod", [
       entry({ fee: "170000", assets: [{ ...TUSDM, quantity: "-1500000" }], note: "rent, September" }),
-      entry({ kind: "stake", direction: "out", lovelace: "2170000", staking: { pool: "pool1x", ticker: "LOGIC", deposit: "2000000" } }),
+      entry({ kind: "stake", direction: "out", lovelace: "2000000", fee: "170000", staking: { pool: "pool1x", ticker: "LOGIC", deposit: "2000000" } }),
       entry({ kind: "received", direction: "in", lovelace: "5000000" }),
     ]);
     expect(csv.startsWith("﻿")).toBe(true);
@@ -391,7 +434,7 @@ describe("the CSV export", () => {
     expect(sent).toBe(
       `2026-09-25T12:30:00.000Z,Sent,out,-1234.56789,0.17,"${fake} (not on the wallet's list: it calls itself tUSDM, but it isn't the listed tUSDM): -1500000",,"rent, September",,,,,,${"cd".repeat(32)}`,
     );
-    expect(staked).toContain(",Staked,out,-2.17,,,,,LOGIC pool1x,,2,,,");
+    expect(staked).toContain(",Staked,out,-2,0.17,,,,LOGIC pool1x,,2,,,");
     expect(received).toContain(",Received,in,5,");
   });
 
@@ -413,5 +456,189 @@ describe("the CSV export", () => {
     expect(csvCell("-5")).toBe("-5");
     const csv = activityCsv("preprod", [entry({ note: "=cmd|' /C calc'!A0", detail: "@SUM(A1)" })]);
     expect(csv).toContain(",'@SUM(A1),'=cmd|' /C calc'!A0,");
+  });
+});
+
+// T08: 25 ₳ paid from the public account, its 57.475311 ₳ of rewards collected into the change: one 3 ₳ coin in,
+// 25 ₳ to the recipient and 35.300614 ₳ back, a 0.174697 ₳ fee. Activity listed it "Sent +32.300614 ₳", the change
+// less the coin, and its details "Amount +32.300614 ₳" (blind test §9.1); T04's 12 ₳ would have read "+45.300614 ₳".
+describe("a payment that collected the staking rewards (blind test §9.1, T08)", () => {
+  const STAKE = activityPreprod.stake;
+  const ME = "addr_test1_me";
+  const MY_KEY = "11".repeat(28);
+  const ours = accountMatcher({ addresses: [ME], keys: [MY_KEY] });
+  type Out = KoiosTxInfo["outputs"][number];
+  const at = (bech32: string, cred: string, value: string, asset_list: Out["asset_list"] = []): Out =>
+    ({ payment_addr: { bech32, cred }, value, asset_list }) as Out;
+  const mine = (value: string, assets: Out["asset_list"] = []) => at(ME, MY_KEY, value, assets);
+  const theirs = (n: number, value: string, assets: Out["asset_list"] = []) => at(`addr_test1_them${n}`, `2${n}`.repeat(28), value, assets);
+  const tx = (outputs: Out[], extra: Partial<KoiosTxInfo> = {}): KoiosTxInfo => ({
+    tx_hash: "ab".repeat(32),
+    block_height: 1,
+    tx_timestamp: 1_800_000_000,
+    fee: "174697",
+    inputs: [mine("3000000")],
+    outputs,
+    withdrawals: [{ amount: "57475311", stake_addr: STAKE }],
+    ...extra,
+  });
+  const read = (t: KoiosTxInfo, own: ReadonlyMap<string, ActivityEntry> = new Map()) => describeTxs([t], ours, own, STAKE)[0]!;
+
+  it("lists what was paid, never with a plus, the fee and the rewards collected apart", () => {
+    const sent = read(tx([theirs(1, "25000000"), mine("35300614")]));
+    expect(sent).toMatchObject({
+      kind: "sent",
+      direction: "out",
+      lovelace: "25000000",
+      fee: "174697",
+      detail: "addr_test1_them1",
+      staking: { rewards: "57475311" },
+    });
+    expect(activityAmount(sent)).toBe("−25 ₳");
+    // T04's 12 ₳: its change held 48.300614 ₳.
+    expect(read(tx([theirs(1, "12000000"), mine("48300614")]))).toMatchObject({ kind: "sent", direction: "out", lovelace: "12000000" });
+  });
+
+  it("adds up several recipients, says the first and how many more, and the tokens that went", () => {
+    const token = (quantity: string) => [{ policy_id: TUSDM.policyId, asset_name: TUSDM.assetName, quantity, decimals: 0, fingerprint: "" }];
+    const t = tx([theirs(1, "5000000"), theirs(2, "1500000", token("4")), mine("53800614", token("6"))], {
+      inputs: [mine("3000000", token("10"))],
+    });
+    expect(read(t)).toMatchObject({
+      kind: "sent",
+      direction: "out",
+      lovelace: "6500000",
+      detail: "addr_test1_them1",
+      more: 1,
+      assets: [{ ...TUSDM, quantity: "-4" }],
+    });
+  });
+
+  it("counts a payment to another of the user's own accounts or Seedelfs as paid: it left this account", () => {
+    // Another account's key, and the wallet contract: neither is this account's.
+    const other = at("addr_test1_my_other_account", "33".repeat(28), "25000000");
+    expect(read(tx([other, mine("35300614")]))).toMatchObject({ kind: "sent", direction: "out", lovelace: "25000000" });
+    const seedelf = at("addr_test1_contract", "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469", "25000000");
+    expect(read(tx([seedelf, mine("35300614")]))).toMatchObject({ kind: "sent", direction: "out", lovelace: "25000000" });
+  });
+
+  // T07: 20 ₳ made private from the account, rewards collected: 40.296962 ₳ back from one 3 ₳ coin, a 0.178349 ₳ fee.
+  it("lists a Make private as what went into the private balance (T07)", () => {
+    const madePrivate: ActivityEntry = { txHash: "ab".repeat(32), at: 1, kind: "move-in", direction: "in", lovelace: "20000000", tokens: 0 };
+    const contract = at("addr_test1_contract", "94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469", "20000000");
+    const e = read(tx([contract, mine("40296962")], { fee: "178349" }), new Map([[madePrivate.txHash, madePrivate]]));
+    expect(e).toMatchObject({ kind: "move-in", direction: "out", lovelace: "20000000", fee: "178349", staking: { rewards: "57475311" } });
+    expect(activityAmount(e)).toBe("−20 ₳");
+  });
+
+  // E04 and T13: what the reviews said, "Your balance stays the same, but for the fee", and the deposit back.
+  it("keeps a withdrawal and a stop right: the fee alone, and the deposit back", () => {
+    const withdrew = read(tx([mine("15173929")], { fee: "171749", withdrawals: [{ amount: "12345678", stake_addr: STAKE }] }));
+    expect(withdrew).toMatchObject({ kind: "withdraw-rewards", direction: "none", lovelace: "0", fee: "171749", staking: { rewards: "12345678" } });
+    expect(activityAmount(withdrew)).toBe("−0.171749 ₳");
+    const stopped = read(
+      tx([mine("62301626")], {
+        fee: "173685",
+        certificates: [{ index: 0, type: "stake_deregistration", info: { stake_address: STAKE, refund: "2000000" } }],
+      }),
+    );
+    expect(stopped).toMatchObject({ kind: "unstake", direction: "in", lovelace: "2000000", staking: { stopped: true, refund: "2000000", rewards: "57475311" } });
+    expect(activityAmount(stopped)).toBe("+2 ₳");
+  });
+
+  it("calls one that left the account better off received, though it spent a coin to", () => {
+    // A site's payout: 100 ₳ from its script, the account's 3 ₳ coin for the fee, no rewards.
+    const payout = tx([mine("102825303")], { inputs: [mine("3000000"), theirs(9, "100000000")], withdrawals: [] });
+    expect(read(payout)).toMatchObject({ kind: "received", direction: "in", lovelace: "100000000", fee: "174697" });
+  });
+
+  it("writes the CSV so ADA less the fee is what the balance did, the rewards in their own column", () => {
+    const [, row] = activityCsv("preprod", [read(tx([theirs(1, "25000000"), mine("35300614")]))]).slice(1).trimEnd().split("\r\n");
+    expect(row).toContain(",Sent,out,-25,0.174697,,addr_test1_them1,,,,,,57.475311,");
+  });
+});
+
+describe("Public activity's payment on its way (blind test §9.3, T08)", () => {
+  const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod.receive_0 as string;
+  /** On a chain tip like preprod's, so the fee is T08's, and the device's real clock, by which a send is kept. */
+  const onPreprod = async () => {
+    const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
+    const t = testBalances();
+    t.koios.tip = 106_000_000;
+    t.clock.now = Date.now();
+    await t.wallet.create(v.phrase, PASSWORD);
+    return t;
+  };
+
+  it("lists the payment the wallet sent before Koios does, pending, from what the device keeps", async () => {
+    const t = await onPreprod();
+    await t.balances.get("preprod");
+    const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "25000000", tokens: [] }]);
+    await t.send.submit("preprod", summary.txHash);
+    const before = t.koios.calls.length;
+    const { entries } = await t.activity.cardano("preprod");
+    // Koios is asked what it always is, and nothing more.
+    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    expect(entries[0]).toMatchObject({
+      txHash: summary.txHash,
+      pending: true,
+      kind: "sent",
+      direction: "out",
+      lovelace: "25000000",
+      fee: "174697",
+      detail: THEIRS,
+      staking: { rewards: "57475311" },
+    });
+    expect(activityAmount(entries[0]!)).toBe("−25 ₳");
+    // Not in the CSV: it isn't on chain yet.
+    expect(activityCsv("preprod", entries)).not.toContain(summary.txHash);
+
+    // Refused or let go, its coins freed: it never went out, and it goes.
+    await t.wallet.withKeys(() => forgetSpent(t.session, txInputs(t.koios.submitted[0]!)));
+    expect((await t.activity.cardano("preprod")).entries.some((e) => e.pending)).toBe(false);
+  });
+
+  it("gives way to the entry Koios lists, once it's in a block", async () => {
+    const t = await onPreprod();
+    await t.balances.get("preprod");
+    const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "25000000", tokens: [] }]);
+    await t.send.submit("preprod", summary.txHash);
+    const account = (await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!;
+    const spent = koiosPreprod.accounts[activityPreprod.stake]!.account_utxos.find((u) => txInputs(t.koios.submitted[0]!).includes(`${u.tx_hash}#${u.tx_index}`))!;
+    const top = activityPreprod.account_txs[0]!;
+    const row = { tx_hash: summary.txHash, block_height: top.block_height + 1, block_time: top.block_time + 60 };
+    const info = {
+      tx_hash: summary.txHash,
+      block_height: row.block_height,
+      tx_timestamp: row.block_time,
+      fee: "174697",
+      inputs: [{ payment_addr: { bech32: spent.address, cred: spent.payment_cred }, value: spent.value, asset_list: [] }],
+      outputs: [
+        { payment_addr: { bech32: THEIRS, cred: "44".repeat(28) }, value: "25000000", asset_list: [] },
+        { payment_addr: { bech32: spent.address, cred: account.keys[0] }, value: "35300614", asset_list: [] },
+      ],
+      withdrawals: [{ amount: "57475311", stake_addr: activityPreprod.stake }],
+    };
+    activityPreprod.account_txs.unshift(row);
+    (activityPreprod.tx_info as unknown[]).push(info);
+    try {
+      const { entries } = await t.activity.cardano("preprod");
+      const listed = entries.filter((e) => e.txHash === summary.txHash);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ kind: "sent", direction: "out", lovelace: "25000000", fee: "174697" });
+      expect(listed[0]!.pending).toBeUndefined();
+    } finally {
+      activityPreprod.account_txs.shift();
+      (activityPreprod.tx_info as unknown[]).pop();
+    }
+  });
+
+  it("lists a Make private as made private, pending, on the public side too", async () => {
+    const t = await onPreprod();
+    await t.balances.get("preprod");
+    const summary = await t.moveIn.build("preprod", "20000000", []);
+    await t.moveIn.submit("preprod", summary.txHash);
+    const { entries } = await t.activity.cardano("preprod");
+    expect(entries[0]).toMatchObject({ txHash: summary.txHash, pending: true, kind: "move-in", direction: "out", lovelace: "20000000", fee: "178349" });
   });
 });

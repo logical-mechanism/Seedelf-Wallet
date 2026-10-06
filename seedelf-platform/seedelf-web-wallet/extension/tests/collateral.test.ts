@@ -1,7 +1,7 @@
 // The giveme.my client: the request it makes, and failures in plain words.
 import { describe, expect, it } from "vitest";
 
-import { Collateral, CollateralError, CollateralRefusedError } from "../src/background/collateral";
+import { Collateral, CollateralError, CollateralRefusedError, refusedBy } from "../src/background/collateral";
 
 const URL_ = "https://www.giveme.my/preprod/collateral/";
 
@@ -29,8 +29,18 @@ describe("giveme.my client", () => {
     // A refusal, which the wallet takes as a sign its view of the contract is behind.
     await expect(refused.witness("84a4")).rejects.toBeInstanceOf(CollateralRefusedError);
 
+    // An outage or a limit is said as one, for the screen to say wait, not that the user's money changed (blind test
+    // §9.5); a refusal with no words of giveme.my's still names its status.
     const down = new Collateral(URL_, async () => new Response("<html>", { status: 502 }));
-    await expect(down.witness("84a4")).rejects.toThrow("refused this transaction (502)");
+    const outage = await down.witness("84a4").catch((e: unknown) => e);
+    expect((outage as Error).message).toBe("giveme.my, which lends the collateral, couldn't take this transaction just now (502).");
+    expect(refusedBy(outage)).toBe("givemeBusy");
+    const limited = new Collateral(URL_, async () => new Response("", { status: 429 }));
+    expect(refusedBy(await limited.witness("84a4").catch((e: unknown) => e))).toBe("givemeBusy");
+    const bare = new Collateral(URL_, async () => new Response("", { status: 400 }));
+    const plain = await bare.witness("84a4").catch((e: unknown) => e);
+    expect((plain as Error).message).toContain("refused this transaction (400)");
+    expect(refusedBy(plain)).toBe("giveme");
 
     const offline = new Collateral(URL_, async () => {
       throw new TypeError("Failed to fetch");
@@ -38,7 +48,8 @@ describe("giveme.my client", () => {
     const e = await offline.witness("84a4").catch((e: unknown) => e);
     expect(e).toBeInstanceOf(CollateralError);
     expect(e).not.toBeInstanceOf(CollateralRefusedError);
-    expect((e as Error).message).toContain("Couldn't reach giveme.my, the service that lends private payments their collateral (Failed to fetch)");
+    expect(refusedBy(e)).toBeUndefined();
+    expect((e as Error).message).toContain("Couldn't reach giveme.my, which lends the collateral (Failed to fetch)");
 
     const garbled = new Collateral(URL_, async () => new Response("ok"));
     await expect(garbled.witness("84a4")).rejects.toThrow("isn't JSON");

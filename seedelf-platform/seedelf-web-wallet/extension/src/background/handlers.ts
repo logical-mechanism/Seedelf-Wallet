@@ -26,7 +26,7 @@ import type { Area } from "./storage";
 import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
-import { WalletLocked, type Wallet } from "./wallet";
+import { SESSION_RESTORED, WalletLocked, type Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
@@ -57,6 +57,12 @@ export interface Context {
   connector: (on: boolean) => Promise<boolean>;
   /** Why the connector can't be turned on, when it can't (storage-access.ts). */
   connectorBlocked?: Status["connectorBlocked"];
+  /**
+   * Puts the connector's scripts in the https pages open now, as it's turned
+   * on (connector.ts `reachOpenPages`; blind test §9.2, T15). Undefined
+   * outside the worker, in tests.
+   */
+  reachOpenPages?: () => Promise<number>;
   version: string;
   /** The network this request is on: the user's choice as the request came in (sw.ts reads it for each one). */
   network: NetworkName;
@@ -93,7 +99,17 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // wallet, as the network does, so a new phrase starts on account 0
       // rather than wherever the last one was left (accounts.ts `useFirst`).
       await ctx.accounts.useFirst();
-      await wallet.create(message.phrase, message.password);
+      // A restore is confirmed by the Home that opens next, in whichever page that is (`restored`, blind test T20a,
+      // T20b): marked before the wallet exists, since its state change opens Home in every open page at once. The
+      // fact alone. A create is never marked: Get started is its welcome.
+      if (message.type === "restore-wallet") await ctx.session.set(SESSION_RESTORED, true);
+      else await ctx.session.remove(SESSION_RESTORED);
+      try {
+        await wallet.create(message.phrase, message.password);
+      } catch (e) {
+        await ctx.session.remove(SESSION_RESTORED).catch(() => undefined);
+        throw e;
+      }
       // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
       await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
       // So does a mix from the public account that may have gone through (final review F1).
@@ -107,6 +123,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         void ctx.accounts.discover(ctx.network).catch(() => undefined);
       }
       return status(ctx);
+    case "restored":
+      // Whether Home is still to say a restore made this wallet; `seen` once it has, with a reading, or was dismissed.
+      if (message.seen) {
+        await ctx.session.remove(SESSION_RESTORED);
+        return false;
+      }
+      return (await ctx.session.get<boolean>(SESSION_RESTORED)) === true;
     case "unlock":
       return wallet.unlock(message.password);
     case "lock":
@@ -120,7 +143,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "account":
       return wallet.account(ctx.network);
     case "balances":
-      return ctx.balances.get(ctx.network, message.refresh ?? false);
+      return ctx.balances.get(ctx.network, message.refresh ?? false, { kept: message.kept ?? false });
     case "wordlist":
       return wasm.bip39Wordlist();
     case "move-in-build":
@@ -178,6 +201,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return { words: await wallet.revealPhrase(message.password) };
     case "check-phrase":
       return { matches: await wallet.checkPhrase(message.phrase) };
+    case "phrase-words":
+      return { words: await wallet.phraseWords() };
     case "change-password":
       await wallet.changePassword(message.current, message.next);
       return null;
@@ -242,6 +267,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         // Turned on without Chrome's access to sites (the switch asks first), it stays off.
         const working = await ctx.connector(prefs.dappConnector);
         if (prefs.dappConnector && !working) return ctx.preferences.set({ dappConnector: false });
+        // On: the https pages open now see the wallet too, not only those loaded after (blind test §9.2, T15). Not
+        // waited for: a page still loading is reached only once it has.
+        if (prefs.dappConnector) void ctx.reachOpenPages?.().catch(() => 0);
       }
       return prefs;
     }
@@ -288,9 +316,20 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       if ((await wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
       return ctx.nftImages.show(ctx.network, message.policyId, message.assetName);
     // The transaction the review or the site's prompt is about, decoded from
-    // its own bytes (tx-view.ts): no Koios request, nothing kept.
+    // its own bytes (tx-view.ts): no Koios request, nothing kept. Which of its
+    // outputs are the user's comes from the device's own record of accounts
+    // and sessions (blind test §9.9).
     case "tx-detail":
-      return txView(ctx, ctx.network, message.txHash, (hash) => ctx.dapp.waitingCbor(hash));
+      return txView(
+        {
+          ...ctx,
+          knownAccounts: () => ctx.accounts.known().then((all) => all.map((a) => a.index)),
+          sessionIndices: (network) => ctx.sessions.indices(network),
+        },
+        ctx.network,
+        message.txHash,
+        (hash) => ctx.dapp.waitingCbor(hash),
+      );
     case "dapp-approvals":
       return ctx.dapp.approvals();
     case "dapp-unlocking":
@@ -308,6 +347,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.dapp.sites();
     case "dapp-forget":
       return ctx.dapp.forget(message.origin);
+    // Which sites the user turned away is as private as which are connected: only for a wallet that's open.
+    case "dapp-declined":
+      if ((await wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
+      return ctx.dapp.declined();
+    case "dapp-let-ask":
+      if ((await wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.locked"));
+      return ctx.dapp.letAsk(message.origin);
     case "sessions":
       return ctx.sessions.list(ctx.network, message.refresh);
     case "swap-tokens":

@@ -47,6 +47,34 @@ describe("balances", () => {
     expect(b.cardano).toMatchObject({ utxos: 6, addressesUsed: 4, lovelace: lovelaceOf(account.account_utxos) });
   });
 
+  it("hands the last failed reading to whoever asks next, until a good one or a lock (blind test E05)", async () => {
+    const t = testBalances();
+    await t.wallet.create(phrase(12).phrase, PASSWORD);
+    const first = await t.balances.get("preprod");
+    expect(first.failed).toBeUndefined();
+    const real = t.koios.fetch;
+    t.koios.fetch = async () => new Response("{}", { status: 400 });
+    t.clock.now += 5_000;
+    await expect(t.balances.get("preprod", true)).rejects.toThrow("refused the request (400");
+    // The kept reading, asked for as Home is when it comes back from Settings: the failure comes with it.
+    const kept = await t.balances.get("preprod");
+    expect(kept.updatedAt).toBe(first.updatedAt);
+    expect(kept.failed).toEqual({ at: t.clock.now, message: expect.stringContaining("refused the request (400") });
+    // A good reading is newer, which clears it.
+    t.koios.fetch = real;
+    t.clock.now += 5_000;
+    expect((await t.balances.get("preprod", true)).failed).toBeUndefined();
+    expect((await t.balances.get("preprod")).failed).toBeUndefined();
+    // A lock wipes it with the reading.
+    t.koios.fetch = async () => new Response("{}", { status: 400 });
+    t.clock.now += 5_000;
+    await expect(t.balances.get("preprod", true)).rejects.toThrow();
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    t.koios.fetch = real;
+    expect((await t.balances.get("preprod")).failed).toBeUndefined();
+  });
+
   it("owns none of the real contract UTxOs, or another phrase's", async () => {
     const t = testBalances();
     await t.wallet.create(phrase(24).phrase, PASSWORD);

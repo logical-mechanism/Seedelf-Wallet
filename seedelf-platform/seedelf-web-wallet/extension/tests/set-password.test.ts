@@ -4,10 +4,11 @@
 // capitalized, as the password boxes elsewhere aren't.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
+import { setLanguage } from "../src/i18n";
 import { PasswordField } from "../src/ui/components/PasswordField";
-import { SetPassword } from "../src/ui/components/SetPassword";
+import { SetPassword, strengthHint } from "../src/ui/components/SetPassword";
 
 /** The inputs rendered; attribute names are case-insensitive in HTML, and React keeps some camel-cased. */
 const inputs = (html: string) => (html.match(/<input[^>]*>/g) ?? []).map((i) => i.toLowerCase());
@@ -38,5 +39,28 @@ describe("the new-password form", () => {
       createElement(SetPassword, { submitLabel: "Change", busy: false, onSubmit: () => undefined, label: "New password" }),
     );
     expect(html).toContain(">New password<");
+  });
+});
+
+// Chunk 19 made the hints keys and rendered them without `t()`, so every new
+// user read `setPassword.hint.weak` under the meter (chunk 23's review, C-1).
+// The only e2e check looked at the too-short message, which was translated.
+describe("the strength hint", () => {
+  afterAll(() => setLanguage("en"));
+  const passwords = ["short", "aaaaaaaaaaaa", "correct horse battery", "correct horse battery staple", "C0rrect-Horse-Battery-Staple-9!"];
+
+  it.each(["en", "es", "ja"] as const)("is a sentence in %s, never a key", async (language) => {
+    await setLanguage(language);
+    for (const password of passwords) {
+      const hint = strengthHint(password);
+      expect(hint).not.toMatch(/^\w+\.\w+/);
+      expect(hint.length).toBeGreaterThan(3);
+    }
+  });
+
+  it("says how strong a password is once it's long enough", async () => {
+    await setLanguage("en");
+    expect(strengthHint("aaaaaaaaaaaa")).toMatch(/^Weak\./);
+    expect(strengthHint("C0rrect-Horse-Battery-Staple-9!")).toBe("Strong.");
   });
 });

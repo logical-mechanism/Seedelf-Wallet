@@ -195,8 +195,8 @@ describe("approving a site's request", () => {
     await until(() => t.dapp.approvals().length === 1);
     await t.session.set(SESSION_RESERVED_PREFIX + "preprod", { public: { inputs: [input!], collateral: [] } });
     const answer = await t.dapp.answer(t.dapp.approvals()[0]!.id, true, PASSWORD);
-    expect(answer.error).toContain("still being sent through Lovejoin");
-    expect(await signing).toMatchObject({ code: TxSignError.ProofGeneration, info: expect.stringContaining("still being sent through Lovejoin") });
+    expect(answer.error).toContain("that a Lovejoin chain still holds");
+    expect(await signing).toMatchObject({ code: TxSignError.ProofGeneration, info: expect.stringContaining("that a Lovejoin chain still holds") });
     await t.lovejoin.release("preprod", "public");
 
     // The user locks the UTxO while the prompt waits.

@@ -252,14 +252,19 @@ export class CoinControlService {
     const choices = await this.choices(network);
     const lockedSeedelf = new Set(choices.seedelf);
     const lockedCardano = new Set(choices.cardano);
+    // Each side less what the wallet has spent since the reading, as the balances count it (incoming.ts `lessSpent`).
+    // The private side's kept view of the contract isn't read again until the spend lands or Refresh, so a private
+    // Send's input stayed listed beside the change the page says is on its way, adding up to more than Home and
+    // contradicting its "off the list already" (pass two of the blind test's fix round, its cross-area review).
     const fresh = account.filter((p) => !spent.has(outpoint(p.utxo)));
+    const ownedNow = owned.filter((u) => !spent.has(outpoint(u)));
     const collateral = collateralOf(choices, fresh)?.utxo;
 
     // A Seedelf spend can't take a UTxO holding a reference script yet (script-spend.ts `spendable`),
     // and the account can't price one whose script Koios doesn't give (`measurable`).
     const script = { unspendable: "script" } as const;
-    const classes = histories ? await this.deps.activity?.classes(network, owned).catch(() => undefined) : undefined;
-    const seedelf = owned.map((u): UtxoInfo => {
+    const classes = histories ? await this.deps.activity?.classes(network, ownedNow).catch(() => undefined) : undefined;
+    const seedelf = ownedNow.map((u): UtxoInfo => {
       const name = seedelfTokenOf(u, contract.seedelfPolicyId);
       const unspendable = u.reference_script ? script : {};
       const history = classes?.get(outpoint(u));
@@ -273,6 +278,7 @@ export class CoinControlService {
       (p): UtxoInfo => ({
         ...info(p.utxo),
         address: p.utxo.address,
+        path: { role: p.role, index: p.index },
         locked: p === collateral || lockedCardano.has(outpoint(p.utxo)),
         ...(p === collateral ? { collateral: true } : {}),
         ...(measurable(p.utxo) ? {} : script),

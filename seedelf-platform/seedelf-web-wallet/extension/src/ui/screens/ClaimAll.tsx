@@ -10,8 +10,9 @@
 // why a return leaves Lovejoin out (another's chain may have taken the
 // pool's boxes: #23), and warns before an ADA Handle comes into the private
 // balance (#57). Returns that go through Lovejoin can all be built again to
-// come back directly instead, as a single return's review can (privacy
-// review §4.1).
+// come back directly instead, by a switch first on the review, as a single
+// return's review has (privacy review §4.1; blind test §9.8: it was a link
+// under the costs).
 
 import { useEffect, useState } from "react";
 import { joinSentences, t, useT } from "../../i18n";
@@ -21,7 +22,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
-import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
+import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
@@ -80,16 +81,16 @@ export function ClaimAll({
     // Built once, for the list it opened with: building again would sign again.
   }, []);
 
-  /** Builds them all again, straight back: signed afresh, and any chain's boxes let go. */
-  async function bringDirectly() {
+  /** Builds them all again, straight back (`direct`) or through Lovejoin again: signed afresh, and any chain's boxes let go. */
+  async function rebuild(straight: boolean) {
     if (!built || busy) return;
     setBusy(true);
     setError(undefined);
     try {
-      const again = await call("session-claim-build", { indexes: sessions.map((s) => s.index), direct: true });
+      const again = await call("session-claim-build", { indexes: sessions.map((s) => s.index), ...(straight ? { direct: true } : {}) });
       setBuilt(again);
       setChosen(new Set(again.returns.map((r) => r.index).filter((i) => chosen.has(i))));
-      setDirect(true);
+      setDirect(straight);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -167,9 +168,10 @@ export function ClaimAll({
     <Screen
       title={t("claim.title")}
       titleId="claim-title"
+      review
       onBack={onBack}
       backDisabled={busy}
-      aside={t("claim.aside")}
+      aside={t("review.nothingSent")}
       error={error}
       foot={
         <button type="button" className="primary" onClick={() => void send()} disabled={!built || busy || !picked.length}>
@@ -186,7 +188,7 @@ export function ClaimAll({
           direct={direct}
           busy={busy}
           onToggle={toggle}
-          onDirect={() => void bringDirectly()}
+          onDirect={(straight) => void rebuild(straight)}
         />
       )}
     </Screen>
@@ -196,9 +198,9 @@ export function ClaimAll({
 /**
  * Bring everything back's review, once its returns are built: each return,
  * which to leave out, why a session was left out, what each leaves behind,
- * and the totals. Through Lovejoin, that it has had no audit, and the way to
- * build them all again to come back directly (`onDirect`; `direct` once
- * they were).
+ * and the totals. Through Lovejoin, that it has had no audit, and, first, a
+ * switch to build them all again to come back directly, or through Lovejoin
+ * again (`onDirect`; `direct` once they were).
  */
 /**
  * What the button says: whose return it is, where more than one is going, and
@@ -227,7 +229,7 @@ export function ClaimReview({
   direct: boolean;
   busy: boolean;
   onToggle: (index: number) => void;
-  onDirect: () => void;
+  onDirect: (direct: boolean) => void;
 }) {
   const t = useT();
   const network = useNetwork();
@@ -242,6 +244,29 @@ export function ClaimReview({
 
   return (
     <>
+      {/* The way back first, a switch, where it can't be missed: it was a link, "Bring them back directly instead",
+          under the costs (blind test §9.8; Stop's, 5289dcf). The private way stays the default. */}
+      {(boxes > 0 || direct) && (
+        <div className="setting-row" data-testid="claim-way">
+          <span className="stack-tight">
+            <span id="claim-way-label">{t("claim.lovejoin.label")}</span>
+            <span className="note" id="claim-way-note">
+              {t(direct ? "claim.privacy.directly" : "claim.lovejoin.privacy.on")}
+            </span>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            className="switch"
+            aria-checked={!direct}
+            aria-labelledby="claim-way-label"
+            aria-describedby="claim-way-note"
+            onClick={() => onDirect(!direct)}
+            disabled={busy}
+            data-testid="claim-way-switch"
+          />
+        </div>
+      )}
       {built.returns.length > 0 && (
         <section className="section" aria-label={t("claim.sessions")}>
           <h2>{t("claim.tapToLeaveOut")}</h2>
@@ -260,7 +285,7 @@ export function ClaimReview({
                       {on && <CheckIcon size={14} />}
                     </span>
                     <span className="token-row__label">{nameOf(network, byIndex.get(r.index))}</span>
-                    <span className="token-row__amount">{formatAda(r.lovelace)} ₳</span>
+                    <span className="token-row__amount">{formatAda(r.lovelace)}{"\u00a0₳"}</span>
                     <span className="token-row__sub">
                       {t("claim.session", { number: r.index + 1 })}
                       {r.tokens.length ? ` · ${t("claim.andTokens", { count: r.tokens.length })}` : ""}
@@ -312,12 +337,14 @@ export function ClaimReview({
       ))}
       <HandleWarning tokens={picked.flatMap((r) => r.tokens)} returning />
       <ReviewRows testId="claim-total">
-        <Row label={t(boxes ? "claim.backNow" : "moveIn.review.into")} value={`${formatAda(total.toString())} ₳`} strong />
+        <Row label={t(boxes ? "claim.backNow" : "moveIn.review.into")} value={`${formatAda(total.toString())}\u00a0₳`} strong />
         {tokens > 0 && <Row label="" value={t("claim.andTokens", { count: tokens })} />}
         {boxes > 0 && delay && (
           <Row label={t("claim.throughLovejoin")} value={t("claim.boxesBackAfter", { count: boxes, delay: delayText(delay) })} />
         )}
-        <Row label={t("claim.fees")} value={`${formatAda(fees.toString())} ₳`} />
+        {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
+        {boxes > 0 && <BoxesBackRow boxes={boxes} />}
+        <Row label={t("claim.fees")} value={`${formatAda(fees.toString())}\u00a0₳`} />
         <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>
       {/* Each session comes back in its own transaction, so each is its own
@@ -331,22 +358,14 @@ export function ClaimReview({
           testId={`claim-tx-${r.index}`}
         />
       ))}
+      {/* Coming back directly, the switch's own note says what that ties: once. */}
       <Callout tone="privacy">
-        {joinSentences([
-          t("claim.privacy.ownTransactions"),
-          boxes > 0 && t("claim.privacy.throughLovejoin"),
-          direct && t("claim.privacy.directly"),
-        ])}
+        {joinSentences([t("claim.privacy.ownTransactions"), boxes > 0 && t("claim.privacy.throughLovejoin")])}
       </Callout>
       {boxes > 0 && (
-        <>
-          <p className="note" data-testid="lovejoin-unaudited">
-            {LOVEJOIN_UNAUDITED()}
-          </p>
-          <button type="button" className="link" disabled={busy} onClick={onDirect} data-testid="claim-direct">
-            {t("claim.directInstead")}
-          </button>
-        </>
+        <p className="note" data-testid="lovejoin-unaudited">
+          {LOVEJOIN_UNAUDITED()}
+        </p>
       )}
     </>
   );

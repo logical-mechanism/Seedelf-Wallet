@@ -82,8 +82,8 @@ describe("looking for a public mix's transaction that may have gone through (ind
       () => undefined,
       (e: unknown) => String(e),
     );
-    expect(error).toMatch("couldn't reach Koios to check whether it did");
-    expect(error).not.toMatch("in about");
+    expect(error).toMatch("may have gone through, and Koios didn't answer to check");
+    expect(error).not.toMatch("if not.");
     // Koios answers again: unseen, and what it spends unspent, two hours on, it never went.
     t.koios.fetch = fetch;
     await t.lovejoin.publicBuild("preprod", 1);

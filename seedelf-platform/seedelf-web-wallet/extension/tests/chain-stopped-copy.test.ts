@@ -30,8 +30,8 @@ const text = (element: ReactElement) =>
     .replace(/\s+/g, " ");
 
 const STOPPED = { total: 10, sent: 4, confirmed: 4, cut: false, stopped: "The wallet locked, or the browser closed, while its chain was being sent." };
-const BY_ITSELF = "once those are on chain, what's left comes back directly";
-const BY_HAND = "once those are on chain, what's left stays at the account until you bring it back";
+const BY_ITSELF = "transactions; the rest comes back directly";
+const BY_HAND = "transactions; the rest stays at the account until you bring it back";
 
 const seedelf = { lovelace: "0", tokens: [], utxos: 0, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
 
@@ -83,16 +83,17 @@ describe("a chain through Lovejoin stopped partway (independent review L23)", ()
   });
 
   it("in Settings, says which sessions bring it back by themselves", () => {
-    const shown = text(
-      createElement(
-        PreferencesContext.Provider,
-        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
-        createElement(Settings.LovejoinSettings, { network: "mainnet" }),
-      ),
+    const settings = createElement(
+      PreferencesContext.Provider,
+      { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+      createElement(Settings.LovejoinSettings, { network: "mainnet" }),
     );
-    expect(shown).toContain("locking partway stops them, and what's left comes back directly.");
-    expect(shown).toContain(
-      "A swap or a mix brings it back by itself; a site's session, or a return you sent from Bring everything back, keeps it at its account until you bring it back.",
+    expect(text(settings)).toContain("Mixes and returns run only while the wallet is unlocked.");
+    // What a lock partway leaves, and whose session brings it back by itself, is the wait's ⓘ (copy-trim pass): its
+    // text is the icon's title until it's opened.
+    const hint = renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, settings)).replaceAll("&#x27;", "'");
+    expect(hint).toContain(
+      "Locked partway, a swap or a mix returns the rest directly; a site's session, or Bring everything back, keeps it until you bring it back.",
     );
   });
 });

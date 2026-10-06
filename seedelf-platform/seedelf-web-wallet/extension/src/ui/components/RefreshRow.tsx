@@ -1,6 +1,13 @@
-// "Updated 2 min ago" and a refresh button: Home's, and each list screen's
+// "Updated 2 min ago" and a Refresh button: Home's, and each list screen's
 // that reads the chain (UTxOs, Activity), so a fresh read doesn't mean going
 // back to Home.
+//
+// The wallet doesn't read again by itself while a page is open, the owner's
+// call (no polling: each read is Koios requests), so Refresh is how money that
+// came in shows. It was a small unlabelled icon, and testers waiting on a
+// deposit didn't find it, or didn't trust pressing it (blind test §4.12, T01,
+// T03): it says "Refresh" now, as a small pill beside when the balances were
+// read, which still fits the 360 px side panel on one line.
 
 import { useEffect, useState } from "react";
 import { useT } from "../../i18n";
@@ -31,17 +38,12 @@ export function RefreshRow({
       <span className="note" data-testid="updated">
         {reading ? t("refresh.reading") : updatedAt !== undefined ? t("refresh.updated", { ago: timeAgo(updatedAt, now) }) : ""}
       </span>
-      <button
-        type="button"
-        className="icon-button"
-        onClick={onRefresh}
-        disabled={reading}
-        aria-label={t("refresh.again")}
-        title={t("refresh.againTitle")}
-      >
+      {/* Its name is its label: "Refresh", as the screen-reader name was. */}
+      <button type="button" className="chip refresh-row__button" onClick={onRefresh} disabled={reading} title={t("refresh.againTitle")}>
         <span className={reading ? "spin" : "icon"}>
-          <RefreshIcon size={15} />
+          <RefreshIcon size={14} />
         </span>
+        {t("refresh.again")}
       </button>
     </div>
   );

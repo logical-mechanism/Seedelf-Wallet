@@ -69,6 +69,11 @@ export function Splash({ phase }: { phase: SplashPhase }) {
         </svg>
         <img className="splash__emblem" src="/brand/emblem.png" alt="" width={84} height={84} />
       </div>
+      {/* Words, not only a spinning ring: right after a create or a restore, a frame with none read as a crash
+          (chunk 23's second review, FR-2). Its timings are the owner's call (L-1), so only the words are new. */}
+      <p className="splash__words" aria-hidden="true">
+        {t("splash.reading")}
+      </p>
     </div>
   );
 }

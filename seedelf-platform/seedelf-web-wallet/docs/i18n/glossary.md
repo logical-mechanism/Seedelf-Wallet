@@ -71,6 +71,7 @@ of them is the owner's to overrule.
 | cost | costo | Lace's; "coste" is Spain's |
 | withdrawal | retiro | Lace's; the verb stays "retirar" |
 | treasury | tesoro | Lace's |
+| retire (a DRep), retirement | retirar tu DRep, retiro de DRep | Lace's "Retiro de DRep", for your own DRep and anyone's; one that has retired "se ha retirado", as a pool has. Never "dar de baja" or "retirarte como DRep" (chunk 23). Beside a withdrawal's "retiro", say whose: "Revisar el retiro del DRep" |
 | no confidence (a governance action) | una moción de desconfianza | Lace's; the DRep vote option stays "Siempre sin confianza", as Lace's |
 | fill an order, place an order | ejecutar, enviar la orden | |
 | Max (the button) | Máx | Lace's, no period; sentences name it the same way |
@@ -91,6 +92,7 @@ of them is the owner's to overrule.
 | register (a Seedelf's) | レジスター | not レジスタ |
 | ADA Handle | ADA Handle | never a bare lowercase "handle" |
 | treasury | トレジャリー | Lace's; not 国庫 |
+| retire (a DRep) | 退任 | Lace's "DRep退任", for your own DRep and anyone's (chunk 23); a stake pool's retirement stays 引退 |
 | Max (named in a sentence) | 「最大」 | the button's own label |
 | funding (a private session's) | 資金提供 | 入金 is paying into the public account from outside; a site session's top-up is 追加入金 |
 | recipient; To (a row label) | 宛先 | 送り先 stays for where freed ADA or rewards go |

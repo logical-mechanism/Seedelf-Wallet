@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { Koios, type FetchLike } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
-import { LOCAL_POOLS_PREFIX, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation } from "../src/background/staking";
+import { LOCAL_POOLS_PREFIX, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation, takesDeposit } from "../src/background/staking";
 import { txIdOf } from "./fixtures/cbor";
 import { stakingPreprod, testBalances, vectors } from "./fakes";
 
@@ -119,8 +119,10 @@ describe("pools", () => {
     expect(paths(t)).toEqual(["pool_info"]);
     expect(await t.staking.pool("preprod", "1e3105f23f2ac91b3fb4c35fa4fe301421028e356e114944e902005b")).toEqual(details);
     await expect(t.staking.pool("preprod", LOGIC_DREP)).rejects.toThrow("stake pool ID");
+    // One picked from the list can be one that retired since: "check its ID" was no help (chunk 23's second review,
+    // ST-10).
     await expect(t.staking.pool("preprod", "pool1547tew8vmuj0g6vj3k5jfddudextcw6hsk2hwgg6pkhk7lwphe6")).rejects.toThrow(
-      "doesn't know that pool",
+      "has no details for this pool right now: it may have retired",
     );
   });
 
@@ -204,9 +206,29 @@ describe("staking transactions", () => {
     expect(withdraw.withdrawal).toBe(REWARDS);
     expect((await t.staking.submit("preprod", withdraw.txHash)).kind).toBe("withdraw-rewards");
 
+    // Koios still reports the rewards the withdrawal on its way takes: neither it again, nor a stop, which withdraws
+    // them too, until it lands (the fix round's review of blind test §9.1).
+    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("collected these rewards and isn't confirmed yet");
+    await expect(t.staking.build("preprod", { kind: "stop" })).rejects.toThrow("collected these rewards and isn't confirmed yet");
+    const info = stakingPreprod.account_info[0]!;
+    t.koios.stakes.set(info.stake_address, { ...info, rewards_available: "0" });
+
     const stop = await t.staking.build("preprod", { kind: "stop" });
-    expect(stop).toMatchObject({ refund: "2000000", withdrawal: REWARDS });
+    expect(stop).toMatchObject({ refund: "2000000", withdrawal: "0" });
     expect((await t.staking.submit("preprod", stop.txHash)).kind).toBe("unstake");
+  });
+
+  it("says what an empty account lacks: the fee alone, or a deposit too (chunk 23's second review, ST-9)", async () => {
+    // The 15-word phrase's account has no recorded UTxOs, and a stake key Koios doesn't know.
+    const t = await unlocked(15);
+    // A withdrawal, a retirement or a vote pays a fee and locks up nothing: no deposit is named.
+    await expect(t.staking.build("preprod", { kind: "withdraw" })).rejects.toThrow("no ADA for the fee, about 1");
+    await expect(t.staking.build("preprod", { kind: "delegate", pool: LOGIC })).rejects.toThrow("no ADA for the deposit and fee");
+    expect(takesDeposit({ kind: "drep-retire" }, true)).toBe(false);
+    expect(takesDeposit({ kind: "drep-vote", votes: [] }, true)).toBe(false);
+    expect(takesDeposit({ kind: "vote", drep: LOGIC_DREP }, true)).toBe(false);
+    expect(takesDeposit({ kind: "vote", drep: LOGIC_DREP }, false)).toBe(true);
+    expect(takesDeposit({ kind: "drep-register", delegate: false }, true)).toBe(true);
   });
 
   it("refuses the same choice again, locked rewards, and what's gone stale", async () => {

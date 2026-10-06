@@ -2,7 +2,7 @@
 // rough strength hint. The worker enforces the same rule.
 
 import { useState, type FormEvent } from "react";
-import { useT, type I18nKey } from "../../i18n";
+import { t, useT, type I18nKey } from "../../i18n";
 
 import { MIN_PASSWORD_LENGTH, passwordProblem, passwordStrength } from "../../shared/password";
 
@@ -20,6 +20,15 @@ const HINTS = {
   good: "setPassword.hint.good",
   strong: "setPassword.hint.strong",
 } as const satisfies Record<string, I18nKey>;
+
+/**
+ * What the meter says under a password: why it can't be used, or how strong it
+ * is. Translated here, never the key: chunk 19 turned the hints into keys and
+ * every new user saw `setPassword.hint.weak` (chunk 23's review, C-1).
+ */
+export function strengthHint(password: string): string {
+  return passwordProblem(password) ?? t(HINTS[passwordStrength(password)]);
+}
 
 export function SetPassword({ submitLabel, busy, onSubmit, label }: SetPasswordProps) {
   const tr = useT();
@@ -68,7 +77,7 @@ export function SetPassword({ submitLabel, busy, onSubmit, label }: SetPasswordP
               <span />
             </div>
             <p className="note" data-testid="password-hint">
-              {problem ?? HINTS[strength]}
+              {strengthHint(password)}
             </p>
           </div>
         )}

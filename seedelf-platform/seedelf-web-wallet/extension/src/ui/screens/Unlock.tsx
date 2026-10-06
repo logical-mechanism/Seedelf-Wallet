@@ -1,8 +1,8 @@
 // Unlock with the password. The worker enforces the back-off after wrong
 // passwords; this screen only shows the countdown. In the connector's
 // window it names the sites waiting, by origin as Chrome reported it: what
-// they ask comes after. When the wallet locked itself because its core
-// stopped working, it says so.
+// they ask comes after. There it has Decline, and no Forgot password. When
+// the wallet locked itself because its core stopped working, it says so.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Rich, t, useT } from "../../i18n";
@@ -88,6 +88,12 @@ export function Unlock({
     }
   }
 
+  const unlockButton = (
+    <button type="submit" className="primary" disabled={busy || waitMs > 0 || !password}>
+      {busy ? tr("unlock.unlocking") : tr("unlock.unlock")}
+    </button>
+  );
+
   return (
     <section className="unlock">
       <img className="unlock__emblem" src="/brand/emblem.png" alt="" width={88} height={88} />
@@ -112,14 +118,39 @@ export function Unlock({
             {tr("unlock.retryAfter", { seconds: Math.ceil(waitMs / 1000) })}
           </p>
         )}
-        <button type="submit" className="primary" disabled={busy || waitMs > 0 || !password}>
-          {busy ? tr("unlock.unlocking") : tr("unlock.unlock")}
-        </button>
+        {connectorWindow ? (
+          // A site's window has a way out that says no to the site: closing it does, which nothing said (chunk
+          // 23's second review, CW-4).
+          <div className="actions">
+            <button type="button" className="secondary" onClick={declineSites} disabled={busy}>
+              {tr("dappUi.decline")}
+            </button>
+            {unlockButton}
+          </div>
+        ) : (
+          unlockButton
+        )}
       </form>
-      <button type="button" className="link" onClick={onForgot}>
-        {tr("unlock.forgot")}
-      </button>
+      {/* Not in a window a site opened: it would teach that a site can lead to typing the recovery phrase.
+          Restore stays a click away in the wallet itself (CW-4). */}
+      {!connectorWindow && (
+        <button type="button" className="link" onClick={onForgot}>
+          {tr("unlock.forgot")}
+        </button>
+      )}
     </section>
+  );
+}
+
+/**
+ * Declines what the sites wait for, by closing the connector's window: the
+ * worker declines everything waiting when the user closes it (dapp.ts
+ * `windowClosed`), and Decline is that, said on a button.
+ */
+function declineSites() {
+  void chrome.windows.getCurrent().then(
+    (w) => (w.id === undefined ? undefined : chrome.windows.remove(w.id)),
+    () => undefined,
   );
 }
 

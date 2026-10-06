@@ -192,21 +192,23 @@ describe("a maybe-sent private payment the network says it has, but not for good
     await expect(withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }])).resolves.toBeDefined();
 
     const text = banner({ ...pendingOf(summary.txHash), dropped: "unseen", inMempool: true });
-    expect(text).toContain("two and a half hours on the chain still hasn't shown it");
+    expect(text).toContain("it still isn't on chain after two and a half hours");
     expect(text).not.toContain("most likely never went out");
   });
 });
 
 describe("Home's banner for one waiting in a mempool", () => {
   it("says until when a private one holds new payments back", () => {
-    const pending = { ...pendingOf("ab".repeat(32)), submittedAt: new Date(2026, 8, 27, 14, 0).getTime(), inMempool: true };
-    expect(banner(pending)).toContain("the wallet waits for it until about 16:30 at most");
+    // Sent today, so the time needs no date.
+    const day = new Date();
+    const pending = { ...pendingOf("ab".repeat(32)), submittedAt: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9, 0).getTime(), inMempool: true };
+    expect(banner(pending)).toContain("New payments wait for it, until about 11:30 at most");
   });
 
   it("says it may still land, and never that it will be let go at 20 minutes", () => {
     const text = banner({ ...pendingOf("ab".repeat(32)), inMempool: true });
-    expect(text).toContain("may have gone through");
-    expect(text).toContain("it's waiting to go into a block, and may still land");
+    expect(text).toContain("not confirmed yet: don't pay it again");
+    expect(text).toContain("it's waiting for a block and may still land");
     expect(text).not.toContain("20 minutes");
     expect(text).not.toContain("Dismiss");
   });

@@ -1791,6 +1791,132 @@ mod transfer {
         );
     }
 
+    #[test]
+    fn max_pays_one_seedelf_everything_but_the_fee_and_what_kept_tokens_need() {
+        // Blind test T05's private balance: 25 ₳, and 3 ₳ holding a token.
+        let w = world();
+        let bob = recipient();
+        let available = [
+            owned(&w, 0x01, 0, 25_000_000, &[]),
+            owned(&w, 0x02, 0, 3_000_000, &[("tok", 5)]),
+        ];
+        let (inputs, left) = build::max_inputs(&available, &Assets::new(), 20).unwrap();
+        assert_eq!((values(&inputs), left), (values(&available), 0));
+
+        // The token stays, with the least ADA it needs, and every other lovelace goes.
+        let spend = build::transfer_most(
+            &w.chain,
+            &inputs,
+            &bob.found,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let built = finish(&w, spend);
+        let kept = build::minimum_deposit(&w.chain.params, &tokens(&[("tok", 5)])).unwrap();
+        let paid = built.rest_lovelace.expect("Max says what it paid");
+        assert_eq!(paid, 28_000_000 - built.fee.total - kept);
+        assert_eq!(
+            (built.change_lovelace, built.change_tokens.clone()),
+            (kept, tokens(&[("tok", 5)]))
+        );
+        assert_eq!(built.change_outputs, 1);
+        assert_transfer(
+            &w,
+            &inputs,
+            &[(bob.sk, &pay(&bob.found, paid, &[]))],
+            &built,
+        );
+
+        // Sent too, the token takes all of it: no change at all.
+        let all = tokens(&[("tok", 5)]);
+        let spend =
+            build::transfer_most(&w.chain, &inputs, &bob.found, &all, &w.owner, w.signer).unwrap();
+        let built = finish(&w, spend);
+        let paid = built.rest_lovelace.unwrap();
+        assert_eq!(paid, 28_000_000 - built.fee.total);
+        assert_eq!((built.change_lovelace, built.change_outputs), (0, 0));
+        assert!(built.change_tokens.is_empty());
+        let tx = assert_transfer(
+            &w,
+            &inputs,
+            &[(bob.sk, &pay(&bob.found, paid, &[("tok", 5)]))],
+            &built,
+        );
+        assert_eq!(tx.outputs.len(), 1);
+
+        // Part of it: the rest stays.
+        let some = tokens(&[("tok", 2)]);
+        let spend =
+            build::transfer_most(&w.chain, &inputs, &bob.found, &some, &w.owner, w.signer).unwrap();
+        let built = finish(&w, spend);
+        assert_eq!(built.change_tokens, tokens(&[("tok", 3)]));
+        let paid = built.rest_lovelace.unwrap();
+        assert_transfer(
+            &w,
+            &inputs,
+            &[(bob.sk, &pay(&bob.found, paid, &[("tok", 2)]))],
+            &built,
+        );
+
+        // Too little to carry the token anywhere, a register that would lose it, or tokens it doesn't hold.
+        let tiny = [owned(&w, 0x03, 0, 1_200_000, &[("tok", 5)])];
+        let spend = build::transfer_most(
+            &w.chain,
+            &tiny,
+            &bob.found,
+            &Assets::new(),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let e = proven(&w, spend)
+            .finalize(&measured_spends(1))
+            .err()
+            .unwrap();
+        assert!(build::is_short(&e), "{e}");
+        let bad = Register::new("00".repeat(48), "00".repeat(48));
+        let e = build::transfer_most(&w.chain, &inputs, &bad, &Assets::new(), &w.owner, w.signer)
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("register isn't valid"), "{e}");
+        let spend = build::transfer_most(
+            &w.chain,
+            &inputs,
+            &bob.found,
+            &tokens(&[("tok", 6)]),
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        assert!(proven(&w, spend).finalize(&measured_spends(2)).is_err());
+    }
+
+    #[test]
+    fn max_takes_the_tokens_sent_first_then_the_largest_as_many_as_fit() {
+        let w = world();
+        let mut available: Vec<UtxoResponse> = (0..22u8)
+            .map(|n| owned(&w, n + 1, 0, 2_000_000 + u64::from(n) * 100_000, &[]))
+            .collect();
+        available.push(owned(&w, 0x40, 0, 1_500_000, &[("tok", 7)]));
+        // The token's UTxO, then the 19 largest: the three smallest stay, and are counted.
+        let (taken, left) = build::max_inputs(&available, &tokens(&[("tok", 1)]), 20).unwrap();
+        assert_eq!(taken.len(), 20);
+        assert_eq!(taken[0].value, "1500000");
+        assert_eq!(taken[1].value, "4100000");
+        assert!(
+            !taken
+                .iter()
+                .any(|u| u.value == "2000000" || u.value == "2200000")
+        );
+        assert_eq!(left, 3);
+        // With nothing sent, the largest 20, the token's UTxO among them only by size.
+        let (taken, left) = build::max_inputs(&available, &Assets::new(), 20).unwrap();
+        assert!(!taken.iter().any(|u| u.value == "1500000"));
+        assert_eq!(left, 3);
+    }
+
     /// A point on the curve outside the prime-order subgroup, compressed.
     fn torsion_point() -> String {
         (0u64..)

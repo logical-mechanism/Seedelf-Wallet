@@ -9,17 +9,21 @@
 // Each private UTxO says where its money came from, as the sealed history
 // has it, so locking one to keep a history apart is an informed choice
 // (privacy review §2.3).
+//
+// Chunk 23's second review, AC-4: a row's toggle is a pin, not the top bar's
+// padlock, which locks the wallet; locking or unlocking one says it's done;
+// and a public UTxO's details say whose its address is.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { joinList, joinSentences, Rich, sentenceGap, t, useT } from "../../i18n";
 
 import { historyTags } from "../../shared/histories";
-import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
+import type { Incoming, UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { CopyField } from "../components/CopyField";
-import { CoinsIcon, LockIcon, LockOpenIcon, SearchIcon, SproutIcon, VaultIcon, WarnIcon } from "../components/Icons";
+import { CoinsIcon, PinIcon, PinOffIcon, SearchIcon, SproutIcon, VaultIcon, WarnIcon } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -73,6 +77,27 @@ export function MixHolding({ progress }: { progress: MixProgress }) {
   );
 }
 
+/**
+ * What the wallet's own transactions on their way pay back to this side, all of them together, which no reading
+ * lists yet: Home's figure (Balances' `incoming`, background/incoming.ts), passed in, so nothing more is asked of the
+ * worker or Koios. Without it, during a pending send the list had dropped the UTxO spent and didn't show the change,
+ * adding up to less than Home with nothing to say why (blind test T08). A line, not rows: none of it can be locked,
+ * opened or spent until it's on chain.
+ */
+export function IncomingHere({ incoming }: { incoming?: Incoming }) {
+  const t = useT();
+  const amounts = useAmounts();
+  if (!incoming || incoming.utxos === 0) return null;
+  const what = incoming.tokens.length
+    ? t("format.adaAndTokens", { ada: amounts.ada(incoming.lovelace), count: incoming.tokens.length })
+    : `${amounts.ada(incoming.lovelace)}\u00a0₳`;
+  return (
+    <Callout tone="info" testId="utxos-incoming">
+      {t("utxos.incoming", { what, count: incoming.utxos })}
+    </Callout>
+  );
+}
+
 /** Why the wallet can't spend a UTxO marked `unspendable`, on its side. */
 export function unspendableWhy(of: UtxoSide): string {
   return t(of === "seedelf" ? "utxos.warn.unspendablePrivate" : "utxos.warn.unspendablePublic");
@@ -81,7 +106,18 @@ export function unspendableWhy(of: UtxoSide): string {
 /** Kept ones first, so they're found among hundreds; each group largest first, as the worker sends them. */
 const arrange = (all: UtxoInfo[]) => [...all.filter((u) => tag(u)), ...all.filter((u) => !tag(u))].map(ref);
 
-export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => void; onChanged: () => void }) {
+export function Utxos({
+  of,
+  incoming,
+  onBack,
+  onChanged,
+}: {
+  of: UtxoSide;
+  /** What's on its way back to this side, as Home has it: said above the list (`IncomingHere`). */
+  incoming?: Incoming;
+  onBack: () => void;
+  onChanged: () => void;
+}) {
   const amounts = useAmounts();
   // Private UTxOs name which public account money was made private from, once
   // there is more than one to tell apart (chunk 18): locking one to keep an
@@ -94,6 +130,13 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState<string>();
   const [error, setError] = useState<string>();
+  // The last lock or unlock, said for a few seconds: it changed nothing else on screen but an icon (AC-4).
+  const [done, setDone] = useState<{ locked: boolean }>();
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(() => setDone(undefined), 6_000);
+    return () => clearTimeout(timer);
+  }, [done]);
   // Home's callback is new on every render; reading it through a ref keeps `read` (and the effect) stable.
   const changed = useRef(onChanged);
   useEffect(() => {
@@ -136,6 +179,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
     setError(undefined);
     try {
       setLists(await call("utxo-lock", { of, utxo: ref(u), locked: lock }));
+      setDone({ locked: lock });
       changed.current();
     } catch (e) {
       setError((e as Error).message);
@@ -149,13 +193,13 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
       title={t(of === "seedelf" ? "utxos.titlePrivate" : "utxos.titlePublic")}
       titleId="utxos-title"
       onBack={onBack}
+      hint={joinSentences([t("utxos.lockNote"), of === "cardano" && t("utxos.lockNoteSite")])}
+      hintTestId="utxos-lock-note"
       aside={list ? `${t("amount.utxos", { count: list.length })}${locked ? t("utxos.lockedMeta", { count: locked }) : ""}` : " "}
       error={shown ? undefined : error}
     >
-      <p className="note" data-testid="utxos-lock-note">
-        {joinSentences([t("utxos.lockNote"), of === "cardano" && t("utxos.lockNoteSite")])}
-      </p>
       {of === "cardano" && <MixHolding progress={mix} />}
+      <IncomingHere incoming={incoming} />
       {stuck > 0 && (
         <Callout tone="warn" testId="utxos-unspendable">
           {t("utxos.warn.someUnspendable", { count: stuck })}
@@ -165,6 +209,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         <Callout tone="privacy">{t("utxos.privacy.onlyThisWallet")}</Callout>
       )}
       <RefreshRow reading={refreshing} updatedAt={lists?.updatedAt} onRefresh={() => void read(true)} />
+      {done && !shown && <LockDone locked={done.locked} />}
       {list === undefined ? (
         <p className="note center empty">{error ? "" : t("activity.reading")}</p>
       ) : list.length === 0 ? (
@@ -173,7 +218,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
         <section className="section" aria-label={t("utxos.listLabel")}>
           <ul className="list" data-testid="utxos">
             {list.map((u) => {
-              const name = joinList([`${amounts.ada(u.lovelace)} ₳`, `${shortHex(u.txHash)}#${u.index}`]);
+              const name = joinList([`${amounts.ada(u.lovelace)}\u00a0₳`, `${shortHex(u.txHash)}#${u.index}`]);
               const history = historyOf(u, accounts.length);
               return (
                 <li key={ref(u)} className="utxo-row">
@@ -182,7 +227,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                     className="token-row"
                     onClick={() => setOpen(ref(u))}
                     aria-label={joinList(
-                      [`${amounts.ada(u.lovelace)} ₳`, tag(u), history, `${shortHex(u.txHash)}#${u.index}`].filter((x): x is string => !!x),
+                      [`${amounts.ada(u.lovelace)}\u00a0₳`, tag(u), history, `${shortHex(u.txHash)}#${u.index}`].filter((x): x is string => !!x),
                     )}
                   >
                     <span className={`avatar activity__icon${tag(u) ? " utxo__icon--kept" : ""}`}>
@@ -191,7 +236,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                     <span className="token-row__label">
                       {u.tokens.length
                         ? t("format.adaAndTokens", { ada: amounts.ada(u.lovelace), count: u.tokens.length })
-                        : `${amounts.ada(u.lovelace)} ₳`}
+                        : `${amounts.ada(u.lovelace)}\u00a0₳`}
                     </span>
                     <span className="token-row__amount">
                       {!lockable(u) && <span className="utxo-tag">{tag(u)}</span>}
@@ -211,7 +256,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
                       onClick={() => void setLocked(u, !u.locked)}
                       disabled={saving === ref(u)}
                     >
-                      {u.locked ? <LockIcon size={16} /> : <LockOpenIcon size={16} />}
+                      <PinIcon size={16} />
                     </button>
                   ) : (
                     <span className="utxo-row__lock" aria-hidden="true" />
@@ -227,6 +272,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
           of={of}
           utxo={shown}
           busy={saving === ref(shown)}
+          done={done}
           error={error}
           onLock={(lock) => void setLocked(shown, lock)}
           onClose={() => {
@@ -239,10 +285,21 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
   );
 }
 
+/** That a lock or an unlock was kept, and what it means. */
+function LockDone({ locked }: { locked: boolean }) {
+  const t = useT();
+  return (
+    <p className="note" role="status" data-testid="utxo-lock-done">
+      {t(locked ? "utxos.lock.done.locked" : "utxos.lock.done.unlocked")}
+    </p>
+  );
+}
+
 export function UtxoDetails({
   of,
   utxo,
   busy,
+  done,
   error,
   onLock,
   onClose,
@@ -250,6 +307,8 @@ export function UtxoDetails({
   of: UtxoSide;
   utxo: UtxoInfo;
   busy: boolean;
+  /** The lock or unlock just kept, to say so. */
+  done?: { locked: boolean };
   error?: string;
   onLock: (lock: boolean) => void;
   onClose: () => void;
@@ -262,14 +321,15 @@ export function UtxoDetails({
           {error}
         </p>
       )}
+      {done && !error && <LockDone locked={done.locked} />}
       <button type="button" className={utxo.locked ? "secondary" : "primary"} onClick={() => onLock(!utxo.locked)} disabled={busy}>
-        {utxo.locked ? <LockOpenIcon size={16} /> : <LockIcon size={16} />}
+        {utxo.locked ? <PinOffIcon size={16} /> : <PinIcon size={16} />}
         {t(busy ? "utxos.lock.saving" : utxo.locked ? "utxos.lock.unlockIt" : "utxos.lock.lockIt")}
       </button>
     </>
   ) : undefined;
   return (
-    <Modal title={`${amounts.ada(utxo.lovelace)} ₳`} titleId="utxo-details-title" onClose={onClose} foot={foot}>
+    <Modal title={`${amounts.ada(utxo.lovelace)}\u00a0₳`} titleId="utxo-details-title" onClose={onClose} foot={foot}>
       <div className="stack" data-testid="utxo-details">
         {utxo.seedelf ? (
           <>
@@ -328,6 +388,18 @@ export function UtxoDetails({
             display={shortHex(utxo.address, 16, 8)}
             testId="utxo-address"
           />
+        )}
+        {/* Whose it is: often not the Receive address, which said nothing of why (AC-4). */}
+        {utxo.address && utxo.path && (
+          <p className="note" data-testid="utxo-address-whose">
+            {t(
+              utxo.path.role === 1
+                ? "utxos.addressWhose.change"
+                : utxo.path.index === 0
+                  ? "utxos.addressWhose.receive"
+                  : "utxos.addressWhose.other",
+            )}
+          </p>
         )}
       </div>
     </Modal>

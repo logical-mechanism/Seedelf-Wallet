@@ -10,11 +10,11 @@ import type { Status } from "../shared/rpc";
 import { call, onStateChanged, reportActivity } from "./background";
 import { Callout } from "./components/Callout";
 import { ExpandIcon, LockIcon, SettingsIcon } from "./components/Icons";
-import { AccountPicker } from "./components/AccountPicker";
 import { LockCountdown } from "./components/LockCountdown";
 import { NetworkBadge, TestNetworkStrip } from "./components/NetworkBadge";
+import { useOpensAtTop } from "./components/Screen";
 import { DappApprovals } from "./screens/DappApprovals";
-import { Home } from "./screens/Home";
+import { forgetHomeTab, Home } from "./screens/Home";
 import { Onboarding } from "./screens/Onboarding";
 import { Settings } from "./screens/Settings";
 import { Reset, Unlock } from "./screens/Unlock";
@@ -32,6 +32,9 @@ export function App() {
   // A Lock that failed: said over the screen, which stays as it is.
   const [lockError, setLockError] = useState<string>();
   const [resetting, setResetting] = useState(false);
+  // Removed from Settings: the welcome screen says it's done, rather than appearing with no word (chunk 23's
+  // review, SET-6).
+  const [removed, setRemoved] = useState(false);
   const [start, setStart] = useState(startFromHash);
   const [settings, setSettings] = useState(false);
   // Counts presses of the top bar's mark: Home leaves whatever flow it's in.
@@ -53,6 +56,23 @@ export function App() {
     return onStateChanged(refresh);
   }, [refresh]);
 
+  // Once a wallet exists, the start screen a tab was opened on (`#create`, `#restore`, or Forgot password's restore)
+  // is spent: kept, removing the wallet later opened Create's first step on a new phrase instead of the welcome and
+  // its "Wallet removed" (chunk 23's second review, FR-8). The URL loses it too, in place: history.ts's own entry
+  // and its state stay as they are. Again on every popstate meanwhile: history.ts takes its entry away once the
+  // flow's last screen goes, which lands on the entry the tab was opened at, hash and all.
+  const walletExists = status !== undefined && status.state !== "no-wallet";
+  useEffect(() => {
+    if (!walletExists) return;
+    setStart(undefined);
+    const drop = () => {
+      if (startFromHash()) history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+    };
+    drop();
+    window.addEventListener("popstate", drop);
+    return () => window.removeEventListener("popstate", drop);
+  }, [walletExists]);
+
   // While unlocked, user input pushes auto-lock back.
   const unlocked = status?.state === "unlocked";
   // Once it's locked, however that came about, a Lock that failed before is
@@ -63,6 +83,12 @@ export function App() {
     setLockError(undefined);
     forgetImages();
   }, [unlocked]);
+  // Locked, or no wallet any more: the next Home starts over on Private. Only a reload, or a trip to Settings, keeps
+  // the tab last chosen (chunk 23's second review, HM-6).
+  const lockedOrGone = status !== undefined && status.state !== "unlocked";
+  useEffect(() => {
+    if (lockedOrGone) forgetHomeTab();
+  }, [lockedOrGone]);
   useEffect(() => {
     if (!unlocked) return;
     reportActivity();
@@ -92,7 +118,19 @@ export function App() {
   } else if (!status) {
     screen = null;
   } else if (status.state === "no-wallet") {
-    screen = <Onboarding key={start ?? "welcome"} status={status} start={start} onDone={setStatus} onNetwork={setStatus} />;
+    screen = (
+      <Onboarding
+        key={start ?? "welcome"}
+        status={status}
+        start={start}
+        removed={removed}
+        onDone={(s) => {
+          setRemoved(false);
+          setStatus(s);
+        }}
+        onNetwork={setStatus}
+      />
+    );
   } else if (status.state === "locked" && resetting) {
     screen = (
       <Reset
@@ -123,6 +161,7 @@ export function App() {
         onBack={() => setSettings(false)}
         onRemoved={(s) => {
           setSettings(false);
+          setRemoved(true);
           setStatus(s);
         }}
         onNetwork={setStatus}
@@ -131,6 +170,25 @@ export function App() {
   } else {
     screen = <Home goHome={goHome} />;
   }
+  // Each of these opens at its top, as every screen does (blind test §9.10): Unlock, the welcome and the startup
+  // error aren't a `Screen`, which does it for the rest.
+  useOpensAtTop(
+    error
+      ? "error"
+      : !status
+        ? "starting"
+        : status.state === "no-wallet"
+          ? `welcome:${start ?? ""}`
+          : status.state === "locked"
+            ? resetting
+              ? "reset"
+              : "unlock"
+            : connectorWindow
+              ? "connector"
+              : settings
+                ? "settings"
+                : "home",
+  );
 
   const brand = (
     <>
@@ -140,7 +198,7 @@ export function App() {
   );
 
   return (
-    // Above the top bar, not only the screens: the picker sits in the header.
+    // Above the top bar, not only the screens: the picker sits under it.
     <AccountsProvider unlocked={unlocked}>
       <div className={`app app--${view}`}>
         <header className="topbar">
@@ -163,8 +221,14 @@ export function App() {
             brand
           )}
           {network && <NetworkBadge network={network.name} />}
-          {unlocked && !connectorWindow && <AccountPicker />}
-          <span className="topbar__spacer" />
+          {/* The connector's window has no buttons up here, so the test network's line takes their room rather than
+              a row of its own: that row put the end of a signature's privacy note under the fold at 400×605 (blind
+              test T18). */}
+          {connectorWindow && network ? (
+            <TestNetworkStrip network={network.name} inBar />
+          ) : (
+            <span className="topbar__spacer" />
+          )}
           {unlocked && !connectorWindow && (
             <button
               className="icon-button"
@@ -187,7 +251,7 @@ export function App() {
             </button>
           )}
         </header>
-        {network && <TestNetworkStrip network={network.name} />}
+        {network && !connectorWindow && <TestNetworkStrip network={network.name} />}
 
         <main>
           {unlocked && <LockCountdown />}

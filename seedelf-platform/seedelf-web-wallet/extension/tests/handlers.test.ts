@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
 import { NetworkChoice } from "../src/background/preferences";
+import { SESSION_RESTORED } from "../src/background/wallet";
 import type { NetworkName } from "../src/networks";
 import type { Account, Balances, Message, Status, UnlockResult, UtxoLists } from "../src/shared/rpc";
 import { isMessage } from "../src/shared/rpc";
@@ -111,13 +112,44 @@ describe("handlers", () => {
     expect(((await handle({ type: "lock" }, ctx)) as Status).lockedBy).toBeUndefined();
   });
 
+  it("marks a restore for whichever page opens Home next, the fact alone, until it's seen (blind test T20a, T20b)", async () => {
+    const v = vectors("cardano_account.json").find((v) => v.account === 0)!;
+    const ctx = context();
+    expect(await handle({ type: "restored" }, ctx)).toBe(false);
+    // Refused, it leaves no mark.
+    await expect(handle({ type: "restore-wallet", phrase: v.phrase, password: "short" }, ctx)).rejects.toThrow();
+    expect(await handle({ type: "restored" }, ctx)).toBe(false);
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    expect(await handle({ type: "restored" }, ctx)).toBe(true);
+    expect(await ctx.session.get(SESSION_RESTORED)).toBe(true);
+    // Seen by one Home, it's seen for all.
+    expect(await handle({ type: "restored", seen: true }, ctx)).toBe(false);
+    expect(await handle({ type: "restored" }, ctx)).toBe(false);
+
+    // Not seen before a lock: the lock wipes it, so the next unlock isn't called a restore.
+    const locked = context();
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, locked);
+    await handle({ type: "lock" }, locked);
+    await handle({ type: "unlock", password: PASSWORD }, locked);
+    expect(await handle({ type: "restored" }, locked)).toBe(false);
+
+    // Nor is a new wallet: Get started is its welcome.
+    const created = context();
+    const { phrase } = (await handle({ type: "generate-phrase" }, created)) as { phrase: string };
+    await handle({ type: "create-wallet", phrase, password: PASSWORD }, created);
+    expect(await handle({ type: "restored" }, created)).toBe(false);
+  });
+
   it("creates a wallet and resets it", async () => {
     const ctx = context();
     const { phrase } = (await handle({ type: "generate-phrase" }, ctx)) as { phrase: string };
     expect(((await handle({ type: "create-wallet", phrase, password: PASSWORD }, ctx)) as Status).state).toBe(
       "unlocked",
     );
+    expect(await handle({ type: "phrase-words" }, ctx)).toEqual({ words: 24 });
     expect(((await handle({ type: "reset-wallet" }, ctx)) as Status).state).toBe("no-wallet");
+    // With no wallet unlocked, there's no phrase to count.
+    await expect(handle({ type: "phrase-words" }, ctx)).rejects.toThrow();
   });
 
   it("validates typed phrases with the Rust core's reason", async () => {
@@ -140,6 +172,9 @@ describe("handlers", () => {
     expect(await handle({ type: "check-phrase", phrase: v.phrase }, ctx)).toEqual({ matches: true });
     expect(await handle({ type: "check-phrase", phrase: other.phrase }, ctx)).toEqual({ matches: false });
     expect(isMessage({ type: "check-phrase", phrase: v.phrase })).toBe(true);
+    // The check opens on as many boxes as this wallet's phrase has words (chunk 23's second review, FR-11).
+    expect(await handle({ type: "phrase-words" }, ctx)).toEqual({ words: 12 });
+    expect(isMessage({ type: "phrase-words" })).toBe(true);
 
     expect(await handle({ type: "preferences-set", hideBalances: true, currency: "eur" }, ctx)).toMatchObject({
       hideBalances: true,

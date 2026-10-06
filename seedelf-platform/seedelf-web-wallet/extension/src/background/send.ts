@@ -33,6 +33,7 @@ import { destinationResolver } from "./destination";
 import type { KoiosUtxo } from "./koios";
 import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
+import { isPublicShort, publicShort, severalShort } from "./short";
 import { holdsOwn, seedelfUtxo } from "./transfer";
 
 /** chrome.storage.session: the payment built last, until it's sent or replaced. */
@@ -130,9 +131,28 @@ export class SendService {
       note: note || undefined,
       invalidHereafter,
     };
-    const result = await wallet.withKeys(
-      (keys) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(request))) as SendResult,
-    );
+    const result = await wallet.withKeys((keys) => {
+      const build = (r: typeof request) => JSON.parse(wasm.buildAccountSend(keys.cardano, JSON.stringify(r))) as SendResult;
+      try {
+        return build(request);
+      } catch (e) {
+        if (!isPublicShort(e)) throw e;
+        // Too much for one recipient: how much could go, by building it as Max would (PY-10). Not for the
+        // collateral's 5 ₳, which has no Max. Or what the payments leave is too little to stay: said so, never
+        // "up to" an amount at least what was asked (chunk 23's second review, fix round).
+        const [one, ...more] = payments;
+        if (key !== SESSION_SEND || !one) throw publicShort(undefined, () => "");
+        if (more.length) {
+          const available = utxos.reduce((sum, p) => sum + BigInt(p.utxo.value), BigInt(withdrawal ?? "0"));
+          throw severalShort(payments.map((p) => p.lovelace), available);
+        }
+        throw publicShort(
+          one.lovelace === null ? undefined : () => build({ ...request, payments: [{ ...one, lovelace: null }] }).payments[0]!.lovelace,
+          (max) => t("worker.short.send", { max }),
+          one.lovelace === null ? {} : { asked: one.lovelace, left: () => t("worker.short.sendLeft") },
+        );
+      }
+    });
     const { txCbor, payments: paid, ...rest } = result;
     const summary: SendSummary = {
       ...rest,

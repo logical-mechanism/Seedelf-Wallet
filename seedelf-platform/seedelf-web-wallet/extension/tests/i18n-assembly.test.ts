@@ -245,7 +245,7 @@ const noop = () => undefined;
 describe("whole sentences, one after another", () => {
   it("run on in Japanese with nothing between them, and keep English's space", async () => {
     const spent = [madePrivate(0), madePrivate(1)];
-    const lines = () => [historiesNote(spent)!, Settings.talksTo(true, true), signingTies([], true)];
+    const lines = () => [historiesNote(spent)!, signingTies([], true)];
     for (const line of lines()) expect(line).toMatch(/\. [A-Z]/);
     await japanese();
     for (const line of lines()) {
@@ -293,20 +293,17 @@ describe("whole sentences, one after another", () => {
 
   it("run on into a link after them, and in a page's own words put after a note", async () => {
     const status = { state: "unlocked" as const, version: "1.0.0", network: "preprod" as const, networks: ["mainnet" as const, "preprod" as const], retryAfterMs: 0 };
-    const settings = () => words(createElement(Settings.Settings, { status, onBack: noop, onRemoved: noop, onNetwork: noop }));
     const onNetwork = () => words(createElement(OnNetwork, { status, doing: "restore", onChange: noop }));
     const back: SessionBackSummary = { network: "preprod", index: 2, txHash: "cd".repeat(32), fee: "1", lovelace: "1", tokens: [], depositOutputs: 1, inputs: 1 };
     const links = () => words(createElement(ReturnLinks, { back, after: t("swaps.back.privacy.neverAgain") }));
     const seedelf: UtxoInfo = { txHash: "34".repeat(32), index: 0, lovelace: "2000000", tokens: [], locked: false, seedelf: { name: "5eed0e1f00", label: "web-wallet" } };
     const holds = () => words(createElement(UtxoDetails, { of: "seedelf", utxo: seedelf, busy: false, onLock: noop, onClose: noop }));
-    expect(settings()).toContain("to compare against. Report a translation error");
     expect(onNetwork()).toContain("Restoring a wallet on Preprod. Change network");
-    expect(links()).toContain("as Make private does. The account is never used again.");
+    expect(links()).toContain("to the new private UTxOs. The account is never used again.");
     expect(holds()).toContain("It holds your Seedelf web-wallet. Only removing the Seedelf spends it.");
     await japanese();
-    expect(settings()).toContain("比較のために英語はいつでも選べます。翻訳の誤りを報告する");
     expect(onNetwork()).toContain("Preprod でウォレットを復元しています。ネットワークを変更");
-    expect(links()).toContain("同じです。このアカウントは二度と使われません。");
+    expect(links()).toContain("結び付けます。このアカウントは二度と使われません。");
     expect(holds()).toContain("あなたの Seedelf web-wallet を保持しています。Seedelf を削除したときだけ使われます。");
   });
 
@@ -323,7 +320,7 @@ describe("whole sentences, one after another", () => {
       lovejoinSkipped: "ボックスが足りません。",
     };
     await japanese();
-    const note = words(createElement(LovejoinNote, { back, busy: false, onDirect: noop }));
+    const note = words(createElement(LovejoinNote, { back }));
     expect(note).toContain(": ボックスが足りません。そのため");
     expect(note).not.toContain("。。");
     const site: SessionView = {
@@ -448,11 +445,11 @@ describe("a dApp's staking, in a sentence", () => {
   it("says each of WebAssembly's kinds as English said it", () => {
     const line = (c: Partial<Certificate>) => certificateLine(own(c), true, "your public account");
     expect(line({})).toBe("Registers your stake key.");
-    expect(line({ deposit: "2000000" })).toBe("Registers your stake key (a 2 ₳ deposit).");
-    expect(line({ kind: "register-delegate", deposit: "2000000", pool })).toBe("Registers your stake key (a 2 ₳ deposit), stakes with pool1abc.");
-    expect(line({ kind: "register-vote", deposit: "2000000", drep })).toBe("Registers your stake key (a 2 ₳ deposit), delegates your vote: Always abstain.");
+    expect(line({ deposit: "2000000" })).toBe("Registers your stake key (a 2\u00a0₳ deposit).");
+    expect(line({ kind: "register-delegate", deposit: "2000000", pool })).toBe("Registers your stake key (a 2\u00a0₳ deposit), stakes with pool1abc.");
+    expect(line({ kind: "register-vote", deposit: "2000000", drep })).toBe("Registers your stake key (a 2\u00a0₳ deposit), delegates your vote: Always abstain.");
     expect(line({ kind: "register-delegate-vote", deposit: "2000000", pool, drep })).toBe(
-      "Registers your stake key (a 2 ₳ deposit), stakes with pool1abc, delegates your vote: Always abstain.",
+      "Registers your stake key (a 2\u00a0₳ deposit), stakes with pool1abc, delegates your vote: Always abstain.",
     );
     expect(line({ kind: "delegate", pool })).toBe("Stakes with pool1abc.");
     expect(line({ kind: "vote", drep })).toBe("Delegates your vote: Always abstain.");
@@ -464,10 +461,10 @@ describe("a dApp's staking, in a sentence", () => {
     await japanese();
     const line = (c: Partial<Certificate>, back = true) => certificateLine(own(c), back, t("dappUi.whose.warn.account"));
     expect(line({ kind: "register-delegate-vote", deposit: "2000000", pool, drep })).toBe(
-      "あなたのステーク鍵を登録し（2 ₳ のデポジット）、pool1abc にステーキングし、投票権を委任します（委任先: 常に棄権）。",
+      "あなたのステーク鍵を登録し（2\u00a0₳ のデポジット）、pool1abc にステーキングし、投票権を委任します（委任先: 常に棄権）。",
     );
     expect(line({ kind: "unregister", refund: "2000000" }, false)).toBe(
-      "あなたのステーキングを停止しますが、その 2 ₳ のデポジットはすべてが公開アカウントへ戻るわけではありません。上に表示された送信額に含まれています。",
+      "あなたのステーキングを停止しますが、その 2\u00a0₳ のデポジットはすべてが公開アカウントへ戻るわけではありません。上に表示された送信額に含まれています。",
     );
     for (const kind of ["register", "delegate", "vote", "delegate-vote", "unregister"]) {
       const said = line({ kind, pool: kind.includes("delegate") ? pool : null, drep: kind.includes("vote") ? drep : null });

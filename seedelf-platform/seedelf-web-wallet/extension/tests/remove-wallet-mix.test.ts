@@ -95,7 +95,7 @@ describe("Remove wallet's line for it", () => {
   it("says what stays, what brings it back, and what could happen meanwhile", async () => {
     const { atStakeLines } = await import("../src/ui/screens/Settings");
     expect(atStakeLines([{ network: "mainnet", sessions: [], chainSending: false, mixMaybeSent: true }])).toEqual([
-      "Mainnet: a mix from your public account stopped at a transaction that may have gone through. An encrypted record of it stays in this browser: restoring this same recovery phrase here looks for it again before another mix from the account is built, but making or restoring another wallet here first deletes that record. While nothing looks for it, the account could pay for a mix twice.",
+      "Mainnet: a mix from your public account may have gone through. Until the same phrase is restored here, nothing checks it, so the account could pay for it twice. Another wallet made or restored here first deletes its record.",
     ]);
   });
 });

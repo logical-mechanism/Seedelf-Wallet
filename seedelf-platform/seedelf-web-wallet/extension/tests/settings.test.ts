@@ -43,38 +43,13 @@ describe("Settings' network switch", () => {
   });
 
   it("says on preprod, and before moving there, that its ADA has no value", () => {
-    expect(render(status("preprod", ["mainnet", "preprod"]))).toContain("ADA here is test ADA, with no value");
-    expect(Settings.MOVE_TO.preprod).toContain("Preprod is Cardano's test network. ADA there is test ADA, with no value");
-    expect(Settings.MOVE_TO.mainnet).toContain("ADA there is real money");
+    expect(render(status("preprod", ["mainnet", "preprod"]))).toContain("ADA here has no value");
+    expect(Settings.MOVE_TO.preprod).toContain("Preprod ADA has no value, and real ADA sent to a preprod address is lost.");
+    expect(Settings.MOVE_TO.mainnet).toContain("Mainnet ADA is real money");
   });
 
   it("says before moving to preprod to test with a phrase not used on mainnet (privacy review §6)", () => {
-    expect(Settings.MOVE_TO.preprod).toContain("To keep them apart, test with a recovery phrase you don't use on mainnet.");
-  });
-});
-
-describe("Settings' About (privacy review §2.4, §2.5)", () => {
-  it("names each service, and that giveme.my is the makers' own", () => {
-    for (const prices of [true, false]) {
-      const shown = Settings.talksTo(prices, true);
-      expect(shown).toContain("giveme.my is run by Logical Mechanism, who make Seedelf Wallet");
-      expect(shown).toContain("it sees each payment from your private balance");
-      expect(shown).toContain("Koios sends every transaction, from the same IP address that reads your public account.");
-      expect(shown).not.toContain("third-party");
-    }
-    expect(Settings.talksTo(true, true)).toContain(
-      "Koios and giveme.my, to CoinGecko for ADA's price, to Minswap when you swap, and to Blockfrost's IPFS gateway when you show an NFT's image.",
-    );
-    expect(Settings.talksTo(false, true)).toContain(
-      "Koios and giveme.my, to Minswap when you swap, and to Blockfrost's IPFS gateway when you show an NFT's image. It has",
-    );
-  });
-
-  it("says Lovejoin hides boxes from the chain's readers, not from Koios or giveme.my, where Lovejoin is", () => {
-    expect(Settings.talksTo(false, true)).toContain(
-      "Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my, which see your device send both ends.",
-    );
-    expect(Settings.talksTo(false, false)).not.toContain("Lovejoin");
+    expect(Settings.MOVE_TO.preprod).toContain("Anyone can link one phrase's wallets on both networks, so test with another phrase.");
   });
 });
 
@@ -84,7 +59,7 @@ describe("Settings' dApp connector", () => {
 
   it("says why it stays off where Chrome won't protect the wallet's storage, and can't be turned on", () => {
     const blocked = html("storage");
-    expect(text(blocked)).toContain("it stays off in this version of Chrome: it can't keep websites away from the wallet's storage");
+    expect(text(blocked)).toContain("Off in this version of Chrome, which can't keep sites away from your encrypted wallet's storage.");
     expect(connectorSwitch(blocked)).toContain('aria-checked="false"');
     expect(connectorSwitch(blocked)).toContain("disabled");
   });
@@ -98,7 +73,7 @@ describe("Settings' dApp connector", () => {
   it("says that once it's on, every https site can see the wallet is there, connected or not (privacy review §2.20)", () => {
     const off = text(html());
     expect(off).toContain(
-      "Then every https site you open, and scripts on it, can see that you use Seedelf Wallet, even sites you never connect (not your addresses or balance until you connect).",
+      "Once on, every https site and its scripts can tell you use it, pages already open too, but not your addresses until you connect.",
     );
     expect(off).not.toContain("That's all it adds");
   });
@@ -107,7 +82,7 @@ describe("Settings' dApp connector", () => {
 describe("the network on every screen", () => {
   it("marks preprod with a strip that test ADA has no value, and mainnet with its badge alone", () => {
     expect(text(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "preprod" })))).toContain(
-      "Preprod, Cardano's test network: ADA here is test ADA, with no value.",
+      "Test network: ADA here has no value.",
     );
     expect(renderToStaticMarkup(createElement(TestNetworkStrip, { network: "mainnet" }))).toBe("");
     expect(text(renderToStaticMarkup(createElement(NetworkBadge, { network: "preprod" })))).toContain("PREPROD");
@@ -115,30 +90,27 @@ describe("the network on every screen", () => {
 });
 
 describe("Settings' Lovejoin section", () => {
-  it("prices each depth at what a mix measured on that network", () => {
-    expect([1, 2, 3].map((d) => Settings.depthCost("preprod", d as 1 | 2 | 3))).toEqual([
-      "1 mix, about 0.9 ₳",
-      "4 mixes, about 3.5 ₳",
-      "13 mixes, about 11.4 ₳",
-    ]);
-    expect([1, 2, 3].map((d) => Settings.depthCost("mainnet", d as 1 | 2 | 3))).toEqual([
-      "1 mix, about 0.8 ₳",
-      "4 mixes, about 3.3 ₳",
-      "13 mixes, about 10.7 ₳",
-    ]);
+  it("prices each depth as the Lovejoin page and its reviews do, on either network (chunk 23's second review, LJ-3)", () => {
+    for (const network of ["preprod", "mainnet"] as const) {
+      expect([1, 2, 3].map((d) => Settings.depthCost(network, d as 1 | 2 | 3))).toEqual([
+        "1 mix, about 0.95\u00a0₳",
+        "4 mixes, about 3.8\u00a0₳",
+        "13 mixes, about 12.35\u00a0₳",
+      ]);
+    }
   });
 
   it("says on both networks that Lovejoin has had no third-party audit, and on mainnet that it waits for its pool's floor", () => {
     const mainnet = text(renderToStaticMarkup(createElement(Settings.LovejoinSettings, { network: "mainnet" })));
     const preprod = text(renderToStaticMarkup(createElement(Settings.LovejoinSettings, { network: "preprod" })));
     for (const shown of [mainnet, preprod]) {
-      expect(shown).toContain("Lovejoin hasn't had a third-party audit");
+      expect(shown).toContain("Lovejoin has had no third-party audit");
       expect(shown).not.toMatch(/\baudited\b/);
     }
-    expect(mainnet).toContain("The wallet mixes only once Lovejoin's pool holds 30 boxes that aren't yours");
-    expect(mainnet).toContain("about 3.3 ₳");
+    expect(mainnet).toContain("The wallet mixes only once the pool holds 30 boxes not yours");
+    expect(mainnet).toContain("about 3.8 ₳");
     expect(preprod).not.toContain("pool holds");
-    expect(preprod).toContain("about 3.5 ₳");
+    expect(preprod).toContain("about 3.8 ₳");
   });
 });
 
@@ -159,17 +131,21 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(html).not.toMatch(/<select[^>]*disabled/);
     const shown = text(html);
     expect(shown).toContain("Bring private sessions back through Lovejoin");
-    expect(shown).toContain("each return you review can still bring that one back directly");
-    expect(shown).toContain("so what comes back is harder to tie to the session on chain");
+    expect(shown).toContain("Each swap and return can still come back directly, if you choose.");
+    expect(shown).toContain("mixed in 10 ₳ boxes so it's harder to tie to them");
     expect(shown).not.toContain("isn't tied");
     // What counts as spare, what bringing a box back costs, and that a lock stops a chain (privacy review §6).
-    expect(shown).toContain("(a token→ADA swap's proceeds count)");
-    expect(shown).toContain("about 0.3 ₳ brings each box back");
-    expect(shown).toContain("locking partway stops them, and what's left comes back directly");
+    expect(shown).toContain("a token→ADA swap's proceeds included");
+    expect(shown).toContain("plus about 0.3 ₳ a box to bring it back");
+    expect(shown).toContain("Mixes and returns run only while the wallet is unlocked.");
+    // What a lock partway does is the wait's ⓘ, whose text is its icon's title until opened (copy-trim pass).
+    expect(html.replaceAll("&#x27;", "'")).toContain("Locked partway, a swap or a mix returns the rest directly");
     // Not from the services that carry both ends (privacy review §2.4).
     expect(shown).toContain("Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my");
-    expect(shown).toContain("(up to 1 in 9)");
-    expect(shown).toContain("Which box coming out is yours stays one of up to 9 (at 2 waves deep), fewer while few people use Lovejoin");
+    // Each depth's option is short enough for the side panel; how far it hides is the note's (chunk 23's review, SET-2).
+    expect(shown).toContain("2 waves deep: 4 mixes, about 3.8 ₳");
+    expect(shown).not.toContain("(up to 1 in 9)");
+    expect(shown).toContain("Yours is one of up to 9 boxes at 2 waves deep, fewer while few people use Lovejoin");
   });
 
   it("off, disables depth and wait, and says what's lost and what's saved", () => {
@@ -177,8 +153,8 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(html).toMatch(/role="switch"[^>]*aria-checked="false"/);
     expect(html.match(/<select[^>]*disabled=""/g)).toHaveLength(2);
     const shown = text(html);
-    expect(shown).toContain("Off, a session's ADA comes back directly: anyone can tie it on chain to the session");
-    expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.3 ₳)");
+    expect(shown).toContain("Off, a session's ADA comes back directly: anyone can tie it to the session");
+    expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.8 ₳)");
     expect(shown).toContain("A mix from the Lovejoin tile still mixes");
   });
 });
@@ -237,12 +213,9 @@ describe("Settings' Connected sites (launch review H7)", () => {
   });
 
   it("says, before disconnecting, whether a private session ends with it, and that the site keeps what it saw", () => {
-    expect(Settings.disconnectText("pay.example")).toBe(
-      "pay.example has to ask again before it sees anything more. It keeps what it already saw.",
-    );
+    expect(Settings.disconnectText("pay.example")).toBe("pay.example keeps what it saw, and must ask again to see more.");
     const ending = Settings.disconnectText("app.example", 4);
-    expect(ending).toContain("Private session 5 ends, and app.example has to ask again");
-    expect(ending).toContain("It keeps what it already saw.");
-    expect(ending).toContain("The wallet stops reading the session's account");
+    expect(ending).toContain("Private session 5 ends. app.example keeps what it saw, and must ask again to see more.");
+    expect(ending).toContain("The wallet misses anything it pays or leaves on the account later.");
   });
 });

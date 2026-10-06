@@ -194,6 +194,14 @@ button:disabled {
   box-shadow: none;
 }
 
+/* A primary inside a card or a callout: the step to take next, at the size of
+   what's around it. */
+.primary--compact {
+  min-height: 36px;
+  padding: 0 var(--s4);
+  font-size: 13px;
+}
+
 .secondary:disabled {
   opacity: 0.45;
 }
@@ -210,6 +218,11 @@ button:disabled {
 
 .link:disabled {
   opacity: 0.45;
+}
+
+/* A link to something that undoes or removes, kept quiet beside the rest. */
+.link--quiet {
+  color: var(--muted);
 }
 
 .icon-button {
@@ -238,7 +251,10 @@ button:disabled {
   height: 30px;
 }
 
-/* A small pill: Copy, Max. */
+/* A small pill: Copy, Max. Its edge and its disabled look say it's a button,
+   and whether it can be pressed now: grey on grey, "Check it" and "Add it" read
+   as disabled until hovered, and a disabled one looked no different (chunk
+   23's second review, V-9). */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -246,6 +262,7 @@ button:disabled {
   height: 28px;
   padding: 0 var(--s3);
   border-radius: var(--r-pill);
+  border-color: var(--accent-line);
   background: var(--surface-2);
   color: var(--accent);
   font-size: 12px;
@@ -257,9 +274,19 @@ button:disabled {
   background: var(--surface-hover);
 }
 
+.chip:disabled {
+  opacity: 0.45;
+}
+
 .chip[aria-pressed="true"] {
   background: var(--accent);
   color: var(--accent-text);
+}
+
+/* On stays on under the pointer: the plain hover's grey, with the dark text of on, read as disabled (the visual
+   review of pass two). */
+.chip[aria-pressed="true"]:not(:disabled):hover {
+  background: var(--accent-hover);
 }
 
 /* A round action with its name below, like Lace's action buttons. */
@@ -268,10 +295,12 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  /* Four fit the side panel's hero: Receive, Send, Make public, Create. */
-  width: 64px;
+  /* As wide as its column in .hero__actions. A name that names its side takes two lines, never cut: "Send" over
+     "privately" (blind test, the owner's call on labels that say their side). */
+  min-width: 0;
   font-size: var(--text-sm);
   font-weight: 500;
+  line-height: 1.3;
   color: var(--text-2);
 }
 
@@ -304,6 +333,37 @@ button:disabled {
 
 .action:disabled {
   opacity: 0.4;
+}
+
+/* Japanese breaks anywhere, so プライベートにする wrapped as プライベ / ートにす / る
+   (chunk 23's review, I-1): break only where the translation allows it, a
+   zero-width space, and let a word stand a little wider than its icon. */
+.action:lang(ja) {
+  word-break: keep-all;
+}
+
+/* Two short lines, verb over side, in English and Spanish: in the column's 76 px "Make public" fitted one line among
+   two-line neighbours (the pass-two visual check). 64 px holds every word of theirs, "Recibir en" too. Japanese keeps
+   the column, since プライベート is one 75 px word, at 12 px, so two side by side don't read as one run. */
+.action__label {
+  max-width: 64px;
+}
+
+.action:lang(ja) .action__label {
+  max-width: none;
+  font-size: 12px;
+  /* As narrow as its widest word, so it breaks at every point the translation allows: two lines for every action,
+     公開 over 受取 as プライベート over 受取 (the pass-two visual check: 2/2/1/2 lines on Private, 1/1/2 on Public). */
+  width: min-content;
+}
+
+/* Filled means available and recommended: a primary action that can't be
+   pressed loses its fill, so the brightest thing on a new wallet's screen is
+   never a button that does nothing (chunk 23's review, H-1). */
+.action--primary:disabled .action__icon {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--accent);
 }
 
 :focus-visible {
@@ -470,6 +530,12 @@ main {
   align-self: flex-start;
 }
 
+/* A button of its own under a note: centred, as the screens' other buttons are (the owner, 2026-10-06). A link stays
+   with the text it follows (align-start). */
+.align-center {
+  align-self: center;
+}
+
 .icon {
   display: flex;
 }
@@ -566,7 +632,19 @@ main {
   text-align: center;
 }
 
+/* In the connector's window, the line sits in the top bar, which has no buttons there, and takes their room: a row
+   of its own pushed a signature's privacy note across the fold at 400×605 (blind test T18). Two lines at most in
+   English and Spanish, about the bar's height. */
+.network-strip--bar {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 10px;
+  line-height: 1.3;
+}
+
+/* Clear of the last card: it sat about 5 px under it (chunk 23's review, RC-2). */
 .footer {
+  padding-top: var(--s2);
   text-align: center;
   font-size: 11.5px;
   color: var(--muted);
@@ -670,6 +748,12 @@ main {
   font-size: var(--text-sm);
 }
 
+/* A part of a note's line that wraps whole with the dot before it ("· Save to contacts"): the dot was left at the end
+   of a line when the part wrapped (the visual review of pass two). */
+.note-part {
+  white-space: nowrap;
+}
+
 /*
  * A refusal, in the sticky foot. It was 13px of bare tinted text, which read
  * as a footnote under a full page and was missed (the owner, on mainnet,
@@ -762,9 +846,39 @@ main {
   gap: var(--s2);
 }
 
+/* A long page's header kept in view, so its Back is there wherever the page is scrolled to: Settings' scrolled away
+   on a page about 2,000 px long, and the tester at its end had nothing in view to leave by (blind test E05). On the
+   page's own background, the rows fading under it as the foot's do; the padding is taken back by the margins, so it
+   sits where an ordinary header does. Under the lock countdown, which keeps to the top too and sets its height while
+   it shows (components/LockCountdown.tsx), so it doesn't cover Back. */
+.screen__head--sticky {
+  position: sticky;
+  top: var(--lock-countdown-h, 0px);
+  z-index: 4;
+  margin: calc(-1 * var(--s2)) 0;
+  padding: var(--s2) 0;
+  background: linear-gradient(to bottom, var(--bg) calc(100% - var(--s2)), transparent);
+}
+
+/* A field brought into view, by Tab or by the browser, stops clear of that header (as the foot's clearance does,
+   Screen's PY-8). */
+html:has(.screen__head--sticky) {
+  scroll-padding-top: calc(52px + var(--lock-countdown-h, 0px));
+}
+
 .screen__title {
   text-align: center;
   overflow-wrap: anywhere;
+}
+
+/* A title with its explanation behind an icon (components/Hint.tsx): the pair
+   stays centred, the icon after the words. */
+.screen__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
 }
 
 .screen__aside {
@@ -784,9 +898,12 @@ main {
   flex: 1;
 }
 
+/* Over the body as it scrolls under: the swap review's numbered steps, and the swap form's switch, are positioned
+   with a z-index of their own, and showed through the button (the owner, 2026-10-06). Under a sticky head (4). */
 .screen__foot {
   position: sticky;
   bottom: 0;
+  z-index: 3;
   display: flex;
   flex-direction: column;
   gap: var(--s2);
@@ -798,6 +915,44 @@ main {
 .screen__foot > .primary,
 .screen__foot > .actions {
   width: 100%;
+}
+
+/* An error in the foot, or a refusal's words under Details, scrolls inside
+   itself past a few lines: a long one grew the foot to a third of the panel,
+   over the rows it was about (chunk 23's second review, PY-8). */
+.screen__foot .error,
+.screen__foot .disclosure > :not(summary) {
+  max-height: 22vh;
+  overflow-y: auto;
+}
+
+/* A foot that follows the body: on a screen read to its end before the button
+   is pressed, such as a new recovery phrase (components/Screen.tsx). */
+.screen__foot--static {
+  position: static;
+  margin-top: 0;
+  padding-top: 0;
+  background: none;
+}
+
+/* A review in a short window: its foot follows its rows, as the sign windows' always does (chunk 23's second
+   review, V-1). Kept in view, at 360×480 the send review's Send sat over "Total leaving …" and "… after", and could
+   be pressed with them unseen (blind test T04, §9.10). A taller window, 360×640 among them, keeps it in view, and so
+   does every screen that isn't a review (Screen's `review`): a foot holding only an error stays where it's seen. */
+@media (max-height: 600px) {
+  .screen--review > .screen__foot {
+    position: static;
+    margin-top: 0;
+    padding-top: 0;
+    background: none;
+  }
+}
+
+/* Why the foot's button can't be pressed yet, said under it rather than in a
+   tooltip no touch screen shows (chunk 23's review, H-1). */
+.foot-note {
+  margin: 0;
+  text-align: center;
 }
 
 /* Review: Lace's detail rows. */
@@ -823,21 +978,113 @@ main {
   border-top: 0;
 }
 
+/* The value keeps its words whole and takes the room it needs, up to 65% of the row; the label takes the rest, and
+   wraps. "3.174697 ₳" fell to "3.174697" over "₳" on every review, as `overflow-wrap: anywhere` let the value shrink
+   to a letter and broke it even at its no-break space; then a label held at 40% split short values ("drep1y2e…" over
+   its tail, "1 token" over "token") beside a one-word label (the visual review of pass two). A value wraps only
+   between words, or inside one too long for the row (a token's name, an ID). An empty label (a review's second
+   token) leaves the value the row. */
 .review__row dt {
+  flex: 1 1 0;
   color: var(--muted);
 }
 
 .review__row dd {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 65%;
   margin: 0;
   text-align: right;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+.review__row dt:empty + dd {
+  max-width: none;
+}
+
+/* A shortened ID ("addr_test1qr3xfa…cs00h9ax", ReviewRows' Row): one word, on one line, beside a label that gives
+   way; it broke at its "…" and left its tail alone. Short by how it's shortened, so it always fits. */
+.review__row--id dd {
+  flex-shrink: 0;
+  max-width: none;
+  white-space: nowrap;
 }
 
 .review__row--strong dd {
   font-size: 17px;
   font-weight: 700;
+}
+
+/* An address or a Seedelf's name: the whole of it, under its label. */
+.review__row--whole {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s1);
+}
+
+.review__row--whole dt,
+.review__row--whole dd {
+  flex: none;
+  max-width: none;
+}
+
+.review__row--whole dd,
+.review__row--whole.review__row--strong dd {
+  text-align: left;
+  font: 500 12.5px/1.5 var(--mono);
+  word-break: break-all;
+}
+
+/* A row whose label has a hint (Lovejoin's "Mixed"): the text opens under the row, across it. */
+.review__row--hinted {
+  flex-wrap: wrap;
+}
+
+.review__row--hinted dt {
+  align-self: center;
+}
+
+.review__row dd.review__hint {
+  flex-basis: 100%;
+  max-width: none;
+  text-align: left;
+  font-weight: 400;
+}
+
+/* A part of the row above it: "The swap and its costs" into the swap, its fees, its deposit and the room left; what
+   a mix costs into its mixes, fees and way back. Set in under it, smaller and quieter, with no rule between, so the
+   column reads as one figure and what it's made of, not as more charges (the blind test's visual review). */
+.review__row--part {
+  padding: 0 0 var(--s2) var(--s3);
+  border-top: 0;
+  font-size: 13px;
+}
+
+.review__row--part dd {
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+/* A value that's a sentence, under its label, so the label isn't squeezed into a word a line ("Back / later"). */
+.review__row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.review__row--stack dt,
+.review__row--stack dd {
+  flex: none;
+  max-width: none;
+}
+
+/* A sentence, read as one: in the value's weight it looked heavier than the bold total above it (the visual review of
+   pass two). */
+.review__row--stack dd {
+  text-align: left;
+  font-weight: 400;
 }
 
 /* Segmented switches: Home's tabs, the word count, who pays. */
@@ -914,17 +1161,30 @@ main {
   margin-top: var(--s5);
 }
 
-/* Which network a new wallet is on, chosen before its phrase (a build with both). */
-/* The public account the wallet is working on, in the top bar: hidden with one
-   account, so a wallet that never had a second looks exactly as it did. */
-.account-picker select {
+/* The public account's switch, drawn as the Public tab's heading it replaces (components/AccountPicker.tsx): the
+   label's size and colour, the select's own arrow, no box until it's hovered or focused. */
+.hero__head .account-picker {
+  grid-column: 2;
   width: auto;
-  max-width: 11ch;
+  max-width: 230px;
   padding: 2px 6px;
-  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
 }
-.account-picker__error {
-  position: absolute;
+.hero__head .account-picker:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+.hero__error {
+  margin: var(--s1) var(--s4) 0;
+  text-align: center;
 }
 
 /* Settings → Public accounts: one row an account.
@@ -1020,7 +1280,7 @@ main {
 }
 
 .onboarding-on-network {
-  margin: 0 0 var(--s3);
+  margin: 0;
 }
 
 /* Unlock */
@@ -1044,23 +1304,44 @@ main {
   margin-top: var(--s2);
 }
 
-/* Recovery phrase grid: three columns in a tab, two in the side panel. */
+/* Recovery phrase grid: as many columns as keep an eight-letter word
+   ("together", "electric") whole, so two in a 360 px side panel, three a little
+   wider, and four in a tab's column, where all 24 words fit a laptop's screen
+   at once (chunk 23's review, C-2). Four fixed in any tab cut the words to
+   "toge" in a narrow one (chunk 23's second review, FR-1). */
 
 .phrase-grid {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
   gap: var(--s2);
-}
-
-.app--tab .phrase-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .phrase-grid[data-count="3"] {
   grid-template-columns: 1fr;
+}
+
+/* A confirm word: its number as a label over the box, where inside it read as
+   a word typed, and a word off the list said under it, not by colour alone
+   (chunk 23's second review, FR-6). */
+.word-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.word-field__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.word-field__error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--danger-text);
 }
 
 .word {
@@ -1082,7 +1363,7 @@ main {
 }
 
 .word__n {
-  width: 28px;
+  width: 24px;
   flex: none;
   text-align: right;
   color: var(--muted);
@@ -1210,6 +1491,8 @@ main {
   display: block;
   font: 12px/1.5 var(--mono);
   word-break: break-all;
+  /* Lines of even length: a stake address left a lone "z" on a line of its own (chunk 23's second review, RX-4). */
+  text-wrap: balance;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -1230,7 +1513,9 @@ main {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: var(--s5) var(--s4) var(--s4);
+  /* No side padding: four actions with two-line names need the panel's whole width. All else in it is centred, and
+     narrower. */
+  padding: var(--s5) 0 var(--s4);
   border-radius: var(--r-lg);
   background: radial-gradient(120% 90% at 50% 0%, rgb(0 196 188 / 0.16), transparent 70%);
 }
@@ -1274,6 +1559,20 @@ main {
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* A long balance: smaller, never on two lines (screens/Home.tsx Amount). */
+.amount--long {
+  font-size: 28px;
+}
+
+.amount--longer {
+  font-size: 24px;
+}
+
+.amount--longest {
+  font-size: 19px;
 }
 
 .amount__unit {
@@ -1291,11 +1590,37 @@ main {
   color: var(--muted);
 }
 
+/* Equal columns, up to 76 px each: four take the 328 px a 360 px side panel leaves, and in them "privately",
+   "Recibir en" and プライベート each fit a line, so no name runs to a third or into its neighbour. */
 .hero__actions {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 76px);
   justify-content: center;
-  gap: var(--s3);
+  align-self: stretch;
+  gap: var(--s2);
   margin-top: var(--s4);
+}
+
+/* Why the actions above can't be pressed (chunk 23's review, H-1). */
+.hero__reason {
+  margin: var(--s2) 0 0;
+  max-width: 320px;
+  text-align: center;
+  /* Even lines: Spanish left "ella" alone on the last (the pass-two visual check). */
+  text-wrap: balance;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* Send's reason and Create's, when they differ, each on its own line (chunk 23's second review, GS-1). */
+.hero__reason-line {
+  display: block;
+}
+
+/* The way on under a new wallet's reason: Show my public address (screens/Home.tsx). */
+.hero__way {
+  margin-top: var(--s3);
 }
 
 /* Tokens (components/TokenList.tsx, screens/Tokens.tsx): a row is the logo or
@@ -1575,6 +1900,12 @@ main {
   transition: background-color 120ms;
 }
 
+/* A row with no icon (Governance actions): its text takes the wide column and its chevron the last, so the chevrons
+   line up; in the icon's column, each one landed where its text ended (the pass-two visual review). */
+.menu-row--plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .menu-row:hover {
   background: var(--surface-2);
 }
@@ -1618,6 +1949,24 @@ main {
   white-space: nowrap;
 }
 
+/* A row's state said as a sentence (Settings' Sites and Lovejoin): it wraps, since cut it lost what it says. */
+.menu-row__sub--wrap {
+  white-space: normal;
+}
+
+/* A row's name with a figure under it: Home's row for the other side's balance (blind test §9.4). Always under: it
+   sat beside a short figure and dropped under a long one, so the row changed shape with the amount (the pass-two
+   visual check). */
+.menu-row__head {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-row__figure {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* An on/off setting (Settings' staking rewards). */
 .switch {
   flex: none;
@@ -1650,11 +1999,18 @@ main {
   background: var(--accent-text);
 }
 
+/* A switch level with its name, not centred on the name and its note: beside a note of five to nine lines it sat
+   70–90 px under the words it switches (the pass-two visual review). */
 .setting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: var(--s3);
+}
+
+/* Centred on the name's first line, which is a little shorter than the switch. */
+.setting-row > .switch {
+  margin-top: -2px;
 }
 
 .menu-link {
@@ -1797,11 +2153,9 @@ main {
   gap: var(--s2);
 }
 
-.refresh-row .icon-button {
-  width: 28px;
-  height: 28px;
-  background: none;
-  border-color: transparent;
+/* Refresh, named: an unlabelled icon went unfound (blind test §4.12). A pill, so the row stays one line at 360 px. */
+.refresh-row__button {
+  flex: none;
 }
 
 .spin {
@@ -1831,6 +2185,9 @@ main {
   z-index: 50;
   display: grid;
   place-items: center;
+  /* The emblem and the words under it, together in the middle. */
+  align-content: center;
+  gap: var(--s4);
   background: radial-gradient(circle at 50% 45%, #0a2a4a 0%, var(--navy) 42%, #000c2c 100%);
   animation: splash-in 200ms ease-out both;
 }
@@ -1872,6 +2229,15 @@ main {
 
 .splash__emblem {
   animation: splash-breathe 1.2s ease-in-out infinite alternate;
+}
+
+/* What it's doing, under the emblem (chunk 23's second review, FR-2). */
+.splash__words {
+  margin: 0;
+  padding: 0 var(--s4);
+  text-align: center;
+  color: var(--text-2);
+  font-size: var(--text-sm);
 }
 
 .splash--leave .splash__emblem {
@@ -2384,6 +2750,17 @@ output.swap-card__amount {
   color: var(--danger-text);
 }
 
+/* The slippage, with its value, at the form's top right (chunk 23's second
+   review, DX-4); amber once it's high. */
+.swap-slippage {
+  align-self: flex-end;
+}
+
+.swap-slippage--high {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
 .swap-asking {
   display: flex;
   align-items: center;
@@ -2795,6 +3172,47 @@ button.dapp-tile:hover {
   justify-content: center;
 }
 
+/* Your Seedelfs on Receive: a card each, its whole name the thing to share
+   (screens/Receive.tsx). */
+.receive-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.receive-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+/* Who can pay a Seedelf, the private Receive's first line (chunk 23's second review, RX-1). */
+.receive__who {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Something to look for, not to see first: Receive's stake address. */
+.disclosure > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--s1) 0;
+}
+
+.disclosure > summary:hover {
+  color: var(--text-2);
+}
+
+.disclosure[open] > summary {
+  margin-bottom: var(--s2);
+}
+
 .qr {
   display: block;
   padding: 10px;
@@ -2837,6 +3255,14 @@ button.dapp-tile:hover {
   box-shadow: none;
 }
 
+/* Max's "Max, up to 10,408.014036", at a size the panel's box shows whole: at
+   the amount's own size it was cut (chunk 23's second review, PY-12). */
+.amount-box input.amount-box__shown {
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
 .amount-box__unit {
   font-size: 18px;
   font-weight: 500;
@@ -2844,6 +3270,23 @@ button.dapp-tile:hover {
 }
 
 /* Tokens to bring along (move in) or send (transfer, withdraw) */
+
+/* An optional addition to a form: Add tokens, Add recipient. Text, not a
+   pill, so it never outweighs the form's own button (chunk 23's review, S-5). */
+.add-more {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.add-more:not(:disabled):hover {
+  text-decoration: underline;
+}
 
 .token-picker {
   border: none;
@@ -2928,13 +3371,6 @@ button.dapp-tile:hover {
   color: var(--text-2);
 }
 
-.add-recipient {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
 .review-recipient {
   display: flex;
   flex-direction: column;
@@ -2984,8 +3420,116 @@ button.dapp-tile:hover {
   overflow-wrap: anywhere;
 }
 
+/* A pool's terms, and a row's tags, each on a line of their own across the row, which wrap: on one line at
+   360 px they were cut to "1% m…" and "K…", and a tag ran into the name, "LOGICYours" (chunk 23's second
+   review, ST-4, V-11). */
+.token-row__terms {
+  grid-column: 2 / -1;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.token-row__tags {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+/* What an option means for this account, under the option itself (Voting.tsx, GV-3). */
+.option-detail {
+  padding: var(--s1) 0 var(--s2) calc(32px + var(--s3));
+}
+
+/* What a destructive act ends, or loses, on its review, above its danger button (V-3): Stop staking's and
+   Retire as a DRep's (ST-3), and any review whose button is `.danger`. Its row is `.menu-row--danger`. */
+.consequences {
+  margin: 0;
+  padding-left: 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+/* A choice with consequences: a card each, with what it means inside
+   (components/RadioCards.tsx). */
+.radio-cards {
+  gap: var(--s2);
+}
+
+.radio-card {
+  margin: 0;
+  width: 100%;
+  padding: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.radio-card[aria-checked="true"] {
+  border-color: var(--accent-line);
+}
+
+.radio-card:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.radio-card:disabled:hover {
+  background: var(--surface);
+}
+
 .token-row__sub.wrap {
   white-space: normal;
+}
+
+/* Activity's entry: its title whole, on two lines if it must, and the line under it cut in the middle of an
+   address, never at its end (screens/Activity.tsx, chunk 23's second review, AC-1, AC-3). */
+.activity__title {
+  white-space: normal;
+}
+
+/* It wraps: in a narrow row, "and 3 more" goes to a line of its own rather than squeeze the address to a letter or
+   two with no ellipsis ("h and 3 more", the pass-two visual check). */
+.activity__sub {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.activity__sub-lead {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+/* Before an address, the time stays whole and the address gives way. */
+.activity__sub-lead--fixed {
+  flex: none;
+}
+
+.activity__sub .middle-ellipsis {
+  font: inherit;
+  color: inherit;
+  /* Squeezed below its tail, it clips rather than paint the tail over "and 2 more" (the pass-two visual check). */
+  overflow: hidden;
+  /* Never less than a few first letters, the "…" and its tail; it fills the line, up to its whole length. */
+  flex: 1 1 9ch;
+  min-width: 9ch;
+  max-width: max-content;
+}
+
+/* "and 2 more" beside a name: whole, its spaces kept, never under the name (screens/Activity.tsx `Who`). */
+.activity__more {
+  flex: none;
+  white-space: pre;
+}
+
+/* A token passing for another: what it calls itself, whole, in the warning's colour (chunk 23's review, H-9). */
+.token-row__sub--warn {
+  color: var(--warn);
 }
 
 
@@ -3181,10 +3725,9 @@ button.dapp-tile:hover {
   user-select: text;
 }
 
-/* What a build is doing, under the button that started it (components/BuildStage.tsx). */
+/* What a build is doing, over the button that started it (components/BuildStage.tsx). */
 .build-stage {
-  margin-top: var(--s2);
-  margin-bottom: 0;
+  margin: 0;
 }
 
 /* The transaction view (components/TxDetail.tsx): the transaction itself, in
@@ -3358,6 +3901,21 @@ button.dapp-tile:hover {
 
 .hint__text {
   margin: 0;
+}
+
+/* An icon at the end of a note's sentence (components/GivemeNote.tsx): in the line, not above it. */
+.note > .hint {
+  width: 18px;
+  height: 18px;
+  vertical-align: text-bottom;
+}
+
+/* A heading or a label with its hint beside it (components/Hint.tsx's Hinted). */
+.hinted {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 
 /* A datum, or a redeemer's argument, as a tree that opens

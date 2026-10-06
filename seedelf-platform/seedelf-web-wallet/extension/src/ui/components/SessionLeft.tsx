@@ -47,7 +47,7 @@ export function LeftBehindNote({ leftBehind, name }: { leftBehind?: LeftBehindUt
       <ul className="dapp-points left-out">
         {leftBehind.map((u) => (
           <li key={`${u.txHash}#${u.txIndex}`}>
-            {outpoint(u)} ({amounts.ada(u.lovelace)} ₳) {leftBehindReason(u.reason)}
+            {outpoint(u)} ({amounts.ada(u.lovelace)}{"\u00a0₳"}) {leftBehindReason(u.reason)}
           </li>
         ))}
       </ul>

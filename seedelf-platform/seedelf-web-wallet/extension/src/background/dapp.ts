@@ -5,7 +5,13 @@
 // Connecting  A site calls `enable()`; the connector's window asks the user
 //             (unlocking first if need be). Connected sites are a sealed
 //             private record (`dapps`), per network: which sites you use
-//             says something about you. Settings lists them, to disconnect.
+//             says something about you. With each, the page's title as it
+//             asked, the site's own words, shown after its address as the
+//             window shows them (blind test E03). The dApps page and Settings
+//             list them, to disconnect. A disconnected site's next call is
+//             refused (CIP-30's Refused, which is how CIP-30 says a wallet
+//             disconnected): CIP-30 has no event to tell an open page sooner,
+//             so the lists say such a page may still look connected.
 // Networks    Each call is on the network the wallet is on as it's made
 //             (Settings switches it): `getNetworkId` says which, and a site
 //             connected on one isn't on the other. What sites were asking
@@ -19,14 +25,24 @@
 //             reading. `enable()`, a signature and a send open the window to
 //             unlock first, which names the sites waiting. Closing it without
 //             unlocking declines them, and that site's signatures and sends
-//             are refused without asking for a minute, so a dApp that asks
-//             again and again doesn't keep opening it: in the words a site
-//             that isn't connected hears unlocked, so they say nothing of
-//             the lock (independent review L36).
+//             are refused without asking for a while (`REFUSE_MS`), so a dApp
+//             that asks again and again doesn't keep opening it: in the words
+//             a site that isn't connected hears unlocked, so they say nothing
+//             of the lock (independent review L36).
 //             A site that isn't connected asks to connect once at a time:
 //             another of its pages' `enable()` has that one's answer. Once
 //             the user says no, or closes the window on it, its `enable()` is
-//             declined unasked for a minute, locked or not. Each site has at
+//             declined unasked for a while, locked or not, in words that say
+//             when it can ask again: 10 s the first time, so a user who
+//             cancelled by mistake isn't shut out, and longer each time after
+//             (chunk 23's second review, CW-3). The wallet's pages say it too:
+//             the connect question says how long Decline turns the site away
+//             (`declineWaitMs`), and the dApps page and Connected sites list
+//             the sites waiting it out (`declined`), whether they asked again
+//             meanwhile, with Let it ask now (`letAsk`), which only the user
+//             can press (blind test §9.2, T17r). The refusals outlast the
+//             worker, which Chrome stops when idle: they're kept in session
+//             storage (`SESSION_DAPP_REFUSED`). Each site has at
 //             most 5 requests waiting at once, of the window's 20
 //             (independent review L35); its pages' `enable()` calls waiting
 //             for the unlock count once, as they'll share one question.
@@ -113,12 +129,23 @@ import {
   type DappFailure,
   type DappMethod,
 } from "../shared/dapp";
-import type { DappApproval, DappAsk, DappSite, DappTxSummary, SessionOutSummary, TokenQuantity } from "../shared/rpc";
+import type {
+  DappApproval,
+  DappAsk,
+  DappDeclined,
+  DappSite,
+  DappTxSummary,
+  RefusedBy,
+  ReplyCode,
+  SessionOutSummary,
+  TokenQuantity,
+} from "../shared/rpc";
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
 import { GAP_LIMIT } from "./chain";
 import type { CoinControlService } from "./coin-control";
+import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
 import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
 import { chainOwner } from "./lovejoin";
 import type { PreferencesService } from "./preferences";
@@ -126,7 +153,7 @@ import type { PrivateStore } from "./private-store";
 import { recentlySent, SENT_KEEP_MS } from "./sent-txs";
 import { SESSION_COLLATERAL, type SessionService } from "./sessions";
 import { outpoint, rememberSiteSpent, reservedSet, SPENT_KEEP_MS, spentSet, wait } from "./spent";
-import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WASM_BROKEN, type Keys } from "./wallet";
+import { SESSION_BALANCES_PREFIX, SESSION_DAPP_REFUSED, SESSION_PRIVATE_STALE_PREFIX, WASM_BROKEN, type Keys } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session, per network: the account as the connector last read it. */
@@ -147,9 +174,16 @@ const MAX_CHAINED = 64;
 /**
  * After the window is closed while locked, a site's signatures and sends are
  * refused for this long, unasked; and after the user declines a site's
- * connect, or closes the window on it, its `enable()` is.
+ * connect, or closes the window on it, its `enable()` is. The first refusal
+ * is short: a flat minute left a user who cancelled by mistake clicking
+ * Connect on a site that silently did nothing (chunk 23's second review,
+ * CW-3). Each one after it, within `REFUSE_RESET_MS` of the last, is longer,
+ * so a dApp that asks again the moment it's refused still can't keep the
+ * window coming back (independent review L35).
  */
-const REFUSE_MS = 60_000;
+const REFUSE_MS = [10_000, 60_000, 5 * 60_000] as const;
+/** A site not refused for this long since its last refusal ended starts again at the first, shortest one. */
+const REFUSE_RESET_MS = 10 * 60_000;
 /** At most this many calls from sites wait for the user at once. */
 const MAX_WAITING = 20;
 /** Of those, at most this many from one site: one can't fill the window's queue for the rest. */
@@ -347,6 +381,44 @@ interface Unlocking {
 
 type SignedTx = { witnessSet: string; summary: DappTxSummary };
 
+/**
+ * A site refused unasked (`refuseFor`): until when, how many refusals in a
+ * row, the network it was declined on (the lists show it there only), the
+ * page's title as it asked, and whether it asked again meanwhile, which the
+ * wallet's pages say once (`askedAgain`).
+ */
+interface Refusal {
+  until: number;
+  count: number;
+  network?: NetworkName;
+  title?: string;
+  retried?: boolean;
+}
+
+/**
+ * The sites refused unasked are kept in chrome.storage.session
+ * (`SESSION_DAPP_REFUSED`, wallet.ts), by origin, with their waits, counts
+ * and networks, never a page's title (`keepRefusals`). Chrome stops an idle
+ * worker after about 30 s, and a refusal kept only in its memory went with
+ * it: a minute's or five minutes' wait, which the wallet now states in
+ * numbers, lasted until then, and the next decline started again at 10 s
+ * (the blind test's cross-area review). Session storage is memory only and
+ * kept from content scripts (storage-access.ts); a lock keeps them, as it
+ * keeps the wallet's sends.
+ */
+export { SESSION_DAPP_REFUSED };
+
+/**
+ * A page's title as the wallet keeps it with its site: the site's own words,
+ * so they're shown after its address, never instead of it; one line, 80
+ * characters at most.
+ */
+function siteTitle(title?: string): string | undefined {
+  const line = title?.replace(/\s+/g, " ").trim();
+  if (!line) return undefined;
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
 const ALREADY_CONNECTED = () => t("dapp.connectedMeanwhile");
 /** What a site that isn't connected hears, and, while the wallet is locked, every site that reads. */
 const NOT_CONNECTED = () => t("dapp.notConnected");
@@ -368,8 +440,15 @@ const NO_GOVERNANCE_SESSION = () => t("dapp.noGovernanceSession");
 export class DappService {
   private readonly waiting: Waiting[] = [];
   private readonly unlocking: Unlocking[] = [];
-  /** Sites whose signatures and sends are refused until then, after the user closed the window instead of unlocking. */
-  private readonly refusedUntil = new Map<string, number>();
+  /**
+   * Sites refused unasked until `until` (`refuseFor`), after the user declined
+   * them or closed the window on them; `count`, the refusals in a row so far.
+   */
+  private readonly refusedUntil = new Map<string, Refusal>();
+  /** The refusals an earlier worker kept, read once, before anything here uses them (`readRefusals`). */
+  private refusalsRead?: Promise<void>;
+  /** The last write of the refusals, which the next waits for, so the newest is the one kept. */
+  private refusalsKept: Promise<unknown> = Promise.resolve();
   /** How many of each site's calls are running. */
   private readonly running = new Map<string, number>();
   /** When each site made the worker ask Koios, by what for (`PER_MINUTE`): the last minute's. */
@@ -411,6 +490,7 @@ export class DappService {
     this.running.set(origin, running + 1);
     this.pageCalls.set(session.id, (this.pageCalls.get(session.id) ?? 0) + 1);
     try {
+      await this.readRefusals();
       return await this.run(session, method, args);
     } finally {
       const left = (this.running.get(origin) ?? 1) - 1;
@@ -484,15 +564,24 @@ export class DappService {
 
   // --- The user --------------------------------------------------------------
 
-  /** What sites wait for, oldest first. */
+  /**
+   * What sites wait for, oldest first. A connect question says how long
+   * Decline, or closing the window, would turn its site away (`declineWaitMs`),
+   * so the window can say it before either is done (blind test §9.2, T17).
+   */
   approvals(): DappApproval[] {
-    return this.waiting.map((w) => w.approval);
+    return this.waiting.map(({ approval: a, session }) =>
+      a.kind === "connect" && !a.connected && !a.funding ? { ...a, declineWaitMs: this.nextRefusal(session.origin).ms } : a,
+    );
   }
 
   /**
    * The user's answer to one; an approved one that fails says why, to the site
    * too. A signature that needs the password is checked first: a wrong or
-   * missing one leaves it waiting, and the site hears nothing.
+   * missing one leaves it waiting, and the site hears nothing. `code`: a
+   * private session's funding refused as stale, which the window builds
+   * again (`fundPrivate`). `waitMs`: a connect declined, how long its site is
+   * turned away, which the window says once it's answered (blind test T17).
    */
   async answer(
     id: string,
@@ -500,7 +589,7 @@ export class DappService {
     password?: string,
     fund?: { txHash: string },
     governance?: boolean,
-  ): Promise<{ error?: string }> {
+  ): Promise<{ error?: string; code?: ReplyCode; by?: RefusedBy; waitMs?: number }> {
     const asked = this.waiting.find((w) => w.approval.id === id);
     if (!asked) return { error: t("dapp.stoppedWaiting") };
     // Turned off while it waited: nothing is connected, funded or signed (independent review L33).
@@ -538,10 +627,10 @@ export class DappService {
         w!.resolve(true);
         return {};
       }
-      // A site the user won't connect doesn't ask again for a minute (independent review L35).
-      if (approval.kind === "connect") this.refuseFor(approval.origin);
+      // A site the user won't connect doesn't ask again for a while (independent review L35).
+      const waitMs = approval.kind === "connect" ? this.refuseFor(approval.origin, approval.title, asked.network) : undefined;
       w!.reject(new DappError(w!.declined));
-      return {};
+      return waitMs === undefined ? {} : { waitMs };
     }
     try {
       w!.resolve(await w!.approve({ governance: governance === true }));
@@ -562,11 +651,17 @@ export class DappService {
     }
   }
 
-  /** The wallet's state changed: an unlock lets the waiting calls on. A removed wallet's sites are forgotten. */
+  /**
+   * The wallet's state changed: an unlock lets the waiting calls on. A removed
+   * wallet's sites are forgotten, the ones it declined too. A lock keeps those
+   * (`Wallet.wipe` carries them across), so it doesn't let a declined site ask
+   * at once, even a lock in a worker that hasn't read them yet.
+   */
   async stateChanged(): Promise<void> {
     const state = await this.deps.wallet.state();
     if (state === "no-wallet") {
       this.lastSites.clear();
+      this.refusedUntil.clear();
       // The wallet was removed, and the connector with it: nothing waits on it (independent review L33).
       this.connectorOff();
     }
@@ -617,13 +712,23 @@ export class DappService {
         // No window to show them in: they're declined, as if closed.
       }
     }
-    for (const u of this.unlocking.splice(0)) {
-      this.refuseFor(u.session.origin);
-      // As a declined request is: nothing more about the wallet.
-      u.reject(refused(DECLINED()));
-    }
+    const unlocking = this.unlocking.splice(0);
     // A private session's funding is sent: it isn't undone, and the site connects once it arrives.
-    for (const w of this.waiting.filter((x) => !funding(x))) {
+    const closed = this.waiting.filter((x) => !funding(x));
+    // What waited for the unlock, and a connect the window closed on, isn't asked again for a while either
+    // (independent review L35, L36): refused before anything is answered, so no site asks again in between,
+    // and once per site, however many of its requests waited: counted per request, three tabs' would have
+    // gone straight to the longest refusal (`REFUSE_MS`).
+    const connects = closed.filter((w) => w.approval.kind === "connect" && !w.approval.connected);
+    // What waited for the unlock was asked on the network the wallet is on.
+    const network = await this.deps.network();
+    const turnedAway = new Map<string, { title?: string; network: NetworkName }>();
+    for (const u of unlocking) turnedAway.set(u.session.origin, { title: u.session.title, network });
+    for (const w of connects) turnedAway.set(w.session.origin, { title: w.session.title, network: w.network });
+    for (const [origin, r] of turnedAway) this.refuseFor(origin, r.title, r.network);
+    // As a declined request is: nothing more about the wallet.
+    for (const u of unlocking) u.reject(refused(DECLINED()));
+    for (const w of closed) {
       remove(this.waiting, (x) => x === w);
       // Governance asked of a connected site, closed on: declined, and the site keeps its connection.
       if (w.approval.kind === "connect" && w.approval.connected) {
@@ -631,10 +736,10 @@ export class DappService {
         w.resolve(true);
         continue;
       }
-      // A connect the window closed on isn't asked again for a minute either (independent review L35).
-      if (w.approval.kind === "connect") this.refuseFor(w.session.origin);
       w.reject(new DappError(w.declined));
     }
+    // The dApps page and Connected sites list the sites now turned away (blind test §9.2).
+    if (turnedAway.size) this.deps.changed();
   }
 
   /**
@@ -711,9 +816,10 @@ export class DappService {
     this.keepSites(all);
     return all
       .filter((s) => s.network === network)
-      .map(({ origin, connectedAt, session, cip95, cip95Declined }) => ({
+      .map(({ origin, connectedAt, title, session, cip95, cip95Declined }) => ({
         origin,
         connectedAt,
+        ...(title ? { title } : {}),
         ...(session === undefined ? {} : { session }),
         ...(cip95 === true && session === undefined ? { cip95 } : {}),
         ...(cip95Declined === true && session === undefined && cip95 !== true ? { cip95Declined } : {}),
@@ -778,19 +884,22 @@ export class DappService {
    * Records a site as connected on `network`, to `session` if given; with
    * governance (`cip95`) when it asked and the user switched it on, or its
    * refusal kept (`cip95Declined`) when they left it off: never for a
-   * session. False when it's connected already.
+   * session. False when it's connected already. `title`: its page's, as it
+   * asked, which the lists show after its address (blind test E03).
    */
   private async connect(
     network: NetworkName,
     origin: string,
     session?: number,
     governance?: "granted" | "declined",
+    title?: string,
   ): Promise<boolean> {
     let added = false;
+    const named = siteTitle(title);
     await this.changeSites((all) => {
       if (all.some((s) => s.origin === origin && s.network === network)) return all;
       added = true;
-      const site: Connected = { origin, network, connectedAt: this.deps.now() };
+      const site: Connected = { origin, network, connectedAt: this.deps.now(), ...(named ? { title: named } : {}) };
       // No account is recorded on a site: every public-account connection is
       // to the one dApp account, which Settings chooses (`dappAccount`).
       if (session !== undefined) return [...all, { ...site, session }];
@@ -837,6 +946,8 @@ export class DappService {
       const next = change(all);
       if (next !== all) await this.deps.store.set("dapps", next);
       this.keepSites(next);
+      // Home's dApps row and the dApps page list the sites: they read again (blind test §9.2).
+      if (next !== all) this.deps.changed();
     });
     this.sitesQueue = run.catch(() => undefined);
     return run;
@@ -856,7 +967,7 @@ export class DappService {
    * asked. One question per site at a time (independent review L35):
    * another of its pages asking meanwhile has that one's answer, and asks
    * itself only if that page went away first. A site the user declined, or
-   * closed the window on, isn't asked again for a minute.
+   * closed the window on, isn't asked again for a while (`REFUSE_MS`).
    */
   /**
    * Connects `origin`, asking the user, with governance (CIP-95) when it
@@ -886,24 +997,154 @@ export class DappService {
       }
       return true;
     }
-    if (this.refusing(origin)) throw refused(DECLINED());
+    if (this.refusing(origin)) {
+      this.askedAgain(origin);
+      throw refused(this.declinedWait(origin));
+    }
     const ask: DappAsk = { kind: "connect", password, ...(wants ? { governance: true } : {}), ...(site ? { connected: true } : {}) };
     await this.ask(session, network, ask, APIError.Refused, async ({ governance }) => {
       if (site) await this.grantGovernance(network, origin);
       // Asked for, governance goes with the connection only when the window's switch says so (off by default).
-      else await this.connect(network, origin, undefined, wants ? (governance ? "granted" : "declined") : undefined);
+      else await this.connect(network, origin, undefined, wants ? (governance ? "granted" : "declined") : undefined, session.title);
     });
+    // Connected: the refusals before it don't count against it any more.
+    if (this.refusedUntil.delete(origin)) this.keepRefusals();
     return true;
   }
 
-  /** The user declined `origin`, or closed the window on it: `REFUSE_MS` of refusals, unasked. */
-  private refuseFor(origin: string): void {
-    this.refusedUntil.set(origin, this.deps.now() + REFUSE_MS);
+  /** The refusal declining `origin` now would start: how many in a row, and how long (`REFUSE_MS`). */
+  private nextRefusal(origin: string): { count: number; ms: number } {
+    const last = this.refusedUntil.get(origin);
+    const count = last && this.deps.now() - last.until < REFUSE_RESET_MS ? last.count + 1 : 1;
+    return { count, ms: REFUSE_MS[Math.min(count, REFUSE_MS.length) - 1]! };
+  }
+
+  /**
+   * The user declined `origin`, or closed the window on it: refused unasked
+   * for a while, longer for each refusal in a row (`REFUSE_MS`). Returns how
+   * long. `title`: its page's, for the wallet's own list of them; `network`,
+   * the one it asked on, where the list shows it.
+   */
+  private refuseFor(origin: string, title?: string, network?: NetworkName): number {
+    const { count, ms } = this.nextRefusal(origin);
+    const named = siteTitle(title) ?? this.refusedUntil.get(origin)?.title;
+    this.refusedUntil.set(origin, {
+      until: this.deps.now() + ms,
+      count,
+      ...(network ? { network } : {}),
+      ...(named ? { title: named } : {}),
+    });
+    this.keepRefusals();
+    return ms;
+  }
+
+  /** Reads back, once, the refusals a worker before this one kept (`SESSION_DAPP_REFUSED`). Never throws. */
+  private readRefusals(): Promise<void> {
+    this.refusalsRead ??= this.deps.session.get<Record<string, Refusal>>(SESSION_DAPP_REFUSED).then(
+      (kept) => {
+        for (const [origin, r] of Object.entries(kept ?? {})) {
+          // One this worker set since it started is newer.
+          if (this.refusedUntil.has(origin) || typeof r?.until !== "number" || typeof r.count !== "number") continue;
+          this.refusedUntil.set(origin, {
+            until: r.until,
+            count: r.count,
+            ...(r.network ? { network: r.network } : {}),
+            ...(r.retried ? { retried: true } : {}),
+          });
+        }
+      },
+      () => undefined,
+    );
+    return this.refusalsRead;
+  }
+
+  /**
+   * Keeps the refusals in session storage for the next worker: origins,
+   * waits, counts and networks, not titles. One whose wait ended more than
+   * `REFUSE_RESET_MS` ago counts for nothing any more, so it goes.
+   */
+  private keepRefusals(): void {
+    const now = this.deps.now();
+    for (const [origin, r] of this.refusedUntil) if (now - r.until >= REFUSE_RESET_MS) this.refusedUntil.delete(origin);
+    const kept = Object.fromEntries(
+      [...this.refusedUntil].map(([origin, { until, count, network, retried }]) => [
+        origin,
+        { until, count, ...(network ? { network } : {}), ...(retried ? { retried } : {}) },
+      ]),
+    );
+    const { session } = this.deps;
+    this.refusalsKept = this.refusalsKept
+      .then(() => (Object.keys(kept).length ? session.set(SESSION_DAPP_REFUSED, kept) : session.remove(SESSION_DAPP_REFUSED)))
+      .catch(() => undefined);
+  }
+
+  /**
+   * `origin` asked to connect again while it's turned away: the wallet's
+   * pages say so, once a refusal, so a page asking again and again can't make
+   * them read again and again (blind test T17r: only the site said anything).
+   */
+  private askedAgain(origin: string): void {
+    const refusal = this.refusedUntil.get(origin);
+    if (!refusal || refusal.retried) return;
+    refusal.retried = true;
+    this.keepRefusals();
+    this.deps.changed();
+  }
+
+  /**
+   * The sites turned away unasked now, the soonest to ask again first: the
+   * dApps page and Connected sites list them, with how long is left (blind
+   * test §9.2, T17r). Only those declined on the network the wallet is on,
+   * none that's connected (a connected site's signatures are turned away the
+   * same way once the unlock window is closed on them, independent review
+   * L36, but it wasn't declined), and none while the connector is off.
+   * Throws if locked: which sites are connected is sealed.
+   */
+  async declined(): Promise<DappDeclined[]> {
+    await this.readRefusals();
+    if (!(await this.deps.preferences.get()).dappConnector) return [];
+    const network = await this.deps.network();
+    const connected = new Set((await this.sitesOn(network)).map((s) => s.origin));
+    const now = this.deps.now();
+    return [...this.refusedUntil]
+      .filter(([origin, r]) => r.until > now && (r.network ?? network) === network && !connected.has(origin))
+      .map(([origin, r]) => ({ origin, until: r.until, ...(r.title ? { title: r.title } : {}), ...(r.retried ? { retried: true as const } : {}) }))
+      .sort((a, b) => a.until - b.until || a.origin.localeCompare(b.origin));
+  }
+
+  /**
+   * The user lets a site they declined ask again now (Let it ask now). Only
+   * the wallet's own pages can, so a site still can't bring the window back
+   * by asking. A decline after it still counts as one in a row.
+   */
+  async letAsk(origin: string): Promise<DappDeclined[]> {
+    await this.readRefusals();
+    const refusal = this.refusedUntil.get(origin);
+    if (refusal && refusal.until > this.deps.now()) {
+      const { retried: _retried, ...rest } = refusal;
+      this.refusedUntil.set(origin, { ...rest, until: this.deps.now() });
+      this.keepRefusals();
+      this.deps.changed();
+    }
+    return this.declined();
   }
 
   /** Whether `origin` is refused unasked now (`refuseFor`). */
   private refusing(origin: string): boolean {
-    return this.deps.now() < (this.refusedUntil.get(origin) ?? 0);
+    return this.deps.now() < (this.refusedUntil.get(origin)?.until ?? 0);
+  }
+
+  /**
+   * What a refused `enable()` hears: that the user declined it, and when it
+   * can ask again, which a dApp can show (CIP-30's `info`). "The user
+   * declined." alone, with nothing in the wallet either, left a user who
+   * cancelled by mistake clicking Connect on a site that did nothing (chunk
+   * 23's second review, CW-3). The same words locked or not, so they say
+   * nothing of the lock (independent review L36).
+   */
+  private declinedWait(origin: string): string {
+    const left = (this.refusedUntil.get(origin)?.until ?? 0) - this.deps.now();
+    return t("dapp.declinedWait", { seconds: Math.max(1, Math.ceil(left / 1000)) });
   }
 
   /**
@@ -995,7 +1236,7 @@ export class DappService {
    * as connected to it, and waits for the money to arrive before the site's
    * `enable()` answers. The window shows it waiting.
    */
-  private async fundPrivate(w: Waiting, txHash: string): Promise<{ error?: string }> {
+  private async fundPrivate(w: Waiting, txHash: string): Promise<{ error?: string; code?: ReplyCode; by?: RefusedBy }> {
     // The network it was asked on, which `answer` checked the wallet is still on.
     const network = w.network;
     // Another of its requests connected it meanwhile (two tabs, or enable() twice):
@@ -1005,9 +1246,16 @@ export class DappService {
     try {
       ({ index } = await this.deps.sessions.siteOutSubmit(network, txHash, w.session.origin));
     } catch (e) {
-      return { error: (e as Error).message };
+      // Its session was recorded before it was sent, so Send again only met "That session was started already".
+      // The window builds it again instead, or, when it may have gone out all the same, says where to look: a
+      // stale review by this code, the rest by the session's record (SessionRefused.tsx; chunk 23's second
+      // review, DX-1).
+      const stale = e instanceof StaleReviewError || e instanceof CollateralRefusedError;
+      // And who refused it, where that's giveme.my: the window names it (blind test §9.5, T16).
+      const by = refusedBy(e);
+      return { error: (e as Error).message, ...(stale ? { code: "stale" as const } : {}), ...(by ? { by } : {}) };
     }
-    if (!(await this.connect(network, w.session.origin, index))) {
+    if (!(await this.connect(network, w.session.origin, index, undefined, w.session.title))) {
       // Connected while the funding was sent: the site talks to that, so its
       // enable() has its answer, and the session's money waits on the dApps page.
       remove(this.waiting, (x) => x === w);
@@ -1069,7 +1317,10 @@ export class DappService {
     // hears what a site that isn't connected does; `enable()` from one, that
     // it was declined. A connected site's `enable()` still opens the window.
     const known = !!this.lastSites.get(await this.deps.network())?.has(origin);
-    if (this.refusing(origin) && (method !== "enable" || !known)) throw refused(method === "enable" ? DECLINED() : NOT_CONNECTED());
+    if (this.refusing(origin) && (method !== "enable" || !known)) {
+      if (method === "enable") this.askedAgain(origin);
+      throw refused(method === "enable" ? this.declinedWait(origin) : NOT_CONNECTED());
+    }
     // Its page went away while this call was on its way: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE());
     // Another of its pages' `enable()` waits already: this one shares its
@@ -1108,7 +1359,8 @@ export class DappService {
     if (this.waiting.length >= MAX_WAITING || this.waitingFrom(session.origin) >= MAX_SITE_WAITING) throw refused(BUSY());
     // Random, not a count: a count starts again when the worker restarts, and a
     // window still showing an older request would then answer a new one.
-    const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: session.title } as DappApproval;
+    // The title capped as the lists keep it: it's the site's own, and the window shows it whole (the cross-area review).
+    const approval = { ...request, id: crypto.randomUUID(), origin: session.origin, title: siteTitle(session.title) } as DappApproval;
     const failure: DappFailure = { code: declined, info: DECLINED() };
     let entry!: Waiting;
     const answered = new Promise<T>((resolve, reject) => {

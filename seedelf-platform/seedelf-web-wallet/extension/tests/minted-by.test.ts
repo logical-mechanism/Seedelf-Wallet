@@ -12,7 +12,7 @@ import { MintService } from "../src/background/mint";
 import { mintedBy, paidByOf, rememberMint } from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import type { SeedelfInfo } from "../src/shared/rpc";
-import { removeNote, RemoveSeedelf } from "../src/ui/screens/RemoveSeedelf";
+import { removeNote, removeOption, RemoveSeedelf } from "../src/ui/screens/RemoveSeedelf";
 import { accountMintPreprod, koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -145,7 +145,9 @@ describe("Remove a Seedelf", () => {
   });
   const form = (paidBy?: SeedelfInfo["paidBy"]) =>
     renderToStaticMarkup(createElement(RemoveSeedelf, { seedelf: info(paidBy), onCancel: () => undefined, onSent: () => undefined }));
-  const pressed = (html: string) => [...html.matchAll(/aria-pressed="true"[^>]*>([^<]+)</g)].map((m) => m[1]);
+  // The chosen card: a radio, checked, and its label (chunk 23's review, V-4: cards, not a pill switch).
+  const pressed = (html: string) =>
+    [...html.matchAll(/role="radio" aria-checked="true".*?class="token-row__label">([^<]+)</g)].map((m) => m[1]);
   const review = (html: string) => html.match(/<button[^>]*type="submit"[^>]*>/)![0];
 
   it("starts on the side that paid for it", () => {
@@ -154,11 +156,24 @@ describe("Remove a Seedelf", () => {
     expect(review(form("seedelf"))).not.toContain("disabled");
   });
 
-  it("chooses nothing when the wallet doesn't know, and Review waits for a choice", () => {
+  it("chooses nothing when the wallet doesn't know, and says which side is the safer guess (privacy review §3.2; chunk 23's second review, RX-3)", () => {
+    // Either side can make a link the user didn't choose, so the wallet doesn't make it for them: Review waits.
     const html = form();
     expect(pressed(html)).toEqual([]);
     expect(review(html)).toContain("disabled");
     expect(html).toContain("doesn&#x27;t know who paid for this Seedelf");
+    expect(html).toContain("If unsure, choose your private balance");
+  });
+
+  it("says in a line on each side's card what sending there links", () => {
+    expect(removeOption("account", "account")).toContain("Links nothing new");
+    expect(removeOption("seedelf", "seedelf")).toContain("Links nothing new");
+    expect(removeOption("account", "seedelf")).toContain("Ties your public account to this Seedelf and the private money that paid for it");
+    expect(removeOption("seedelf", "account")).toContain("to your public account through the Seedelf's name");
+    // Not knowing who paid, neither card says it links nothing: each says when it would.
+    expect(removeOption("account", undefined)).toBe("Links nothing new only if your public account paid for it");
+    expect(removeOption("seedelf", undefined)).toBe("Links nothing new only if your private balance paid for it");
+    expect(form("account")).toContain("Links nothing new: it paid for this Seedelf");
   });
 
   it("says what each side links for this Seedelf, and warns where it's something new", () => {
@@ -166,11 +181,12 @@ describe("Remove a Seedelf", () => {
     expect(removeNote("account", "account")).toMatchObject({ tone: "privacy", text: expect.stringContaining("links nothing new") });
     expect(removeNote("account", "seedelf")).toMatchObject({
       tone: "warn",
-      text: expect.stringContaining("ties the account to the Seedelf's name, and through the mint to the private UTxOs"),
+      text: expect.stringContaining("ties the account to the Seedelf's name and the private UTxOs that paid"),
     });
     expect(removeNote("seedelf", "account")).toMatchObject({ tone: "warn", text: expect.stringContaining("Your public account paid") });
-    expect(removeNote("account", undefined).text).toContain("links nothing new only if your public account paid for this Seedelf");
-    expect(removeNote("seedelf", undefined).text).toContain("ties the Seedelf's name to the new UTxO");
+    // What each would link if the other side paid: when each links nothing new is on its card (removeOption).
+    expect(removeNote("account", undefined).text).toContain("If your private balance paid for it, this ties your public account to the Seedelf's name");
+    expect(removeNote("seedelf", undefined).text).toContain("If your public account paid for it, this ties the account to the new UTxO");
   });
 
   it("warns when another of the wallet's accounts paid for it (chunk 18)", () => {
@@ -179,9 +195,9 @@ describe("Remove a Seedelf", () => {
     // together through the name. The default would have done it quietly.
     const note = removeNote("account", "account", { paidByAccount: 1, active: 0, several: true });
     expect(note.tone).toBe("warn");
-    expect(note.text).toContain("Account 2 paid for this Seedelf, and the wallet is on Account 1");
-    expect(note.text).toContain("tie your two accounts together");
-    expect(note.text).toContain("Switch to Account 2 first, or send it to your private balance instead");
+    expect(note.text).toContain("Account 2 paid for this Seedelf. Sending its ADA to Account 1");
+    expect(note.text).toContain("lets anyone tie the two accounts together");
+    expect(note.text).toContain("Switch to Account 2, or send it to your private balance");
 
     // On the account that paid, it links nothing new — and says which account that is.
     const same = removeNote("account", "account", { paidByAccount: 1, active: 1, several: true });

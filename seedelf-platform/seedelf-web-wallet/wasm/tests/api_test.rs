@@ -1380,7 +1380,7 @@ mod transfer {
             payments: vec![SeedelfPayment {
                 to: r["to"].as_str().unwrap().into(),
                 recipient: serde_json::from_value(r["recipient"].clone()).unwrap(),
-                lovelace: r["lovelace"].as_str().unwrap().into(),
+                lovelace: Some(r["lovelace"].as_str().unwrap().into()),
                 tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
             }],
             classes: Default::default(),
@@ -1541,12 +1541,18 @@ mod transfer {
         // "0" with a token: only the ADA the token needs.
         for asked in ["0", "1000000"] {
             let mut r = request();
-            r.payments[0].lovelace = asked.into();
+            r.payments[0].lovelace = Some(asked.into());
             let result = finish(sk, r);
-            let minimum: u64 = result.payments[0].minimum.parse().unwrap();
+            let minimum: u64 = result.payments[0]
+                .minimum
+                .as_deref()
+                .unwrap()
+                .parse()
+                .unwrap();
             assert!(minimum > 1_000_000 && minimum < 2_000_000, "{minimum}");
             assert_eq!(
-                result.payments[0].lovelace, result.payments[0].minimum,
+                Some(&result.payments[0].lovelace),
+                result.payments[0].minimum.as_ref(),
                 "{asked} goes up to the minimum"
             );
             let paid = outputs(&result.tx_cbor)
@@ -1558,7 +1564,15 @@ mod transfer {
         // More than the minimum is paid as asked.
         let result = finish(sk, request());
         assert_eq!(result.payments[0].lovelace, "5000000");
-        assert!(result.payments[0].minimum.parse::<u64>().unwrap() < 5_000_000);
+        assert!(
+            result.payments[0]
+                .minimum
+                .as_deref()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                < 5_000_000
+        );
     }
 
     fn register_from_utxo(utxo: &UtxoResponse) -> Register {
@@ -1605,7 +1619,7 @@ mod transfer {
         let mut r = request();
         let mut second = r.payments[0].clone();
         second.recipient = under(&Register::create(bob).unwrap().rerandomize().unwrap());
-        second.lovelace = "2000000".into();
+        second.lovelace = Some("2000000".into());
         second.tokens = vec![];
         r.payments.push(second);
         let result = finish(sk, r);
@@ -1638,6 +1652,98 @@ mod transfer {
         none.payments.clear();
         let e = api::draft_transfer(sk, none).unwrap_err().to_string();
         assert!(e.contains("someone to pay"), "{e}");
+    }
+
+    /// Max to the recorded Seedelf, sending `tokens`.
+    fn max(tokens: Vec<TokenAmount>) -> TransferRequest {
+        let mut r = request();
+        r.payments[0].lovelace = None;
+        r.payments[0].tokens = tokens;
+        r
+    }
+
+    #[test]
+    fn max_pays_everything_but_the_fee_and_what_the_tokens_kept_need() {
+        // Blind test T05's balance: 25 ₳, and 3 ₳ holding 1,234.56 tUSDM.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let result = api::build_transfer(sk, max(vec![])).unwrap();
+        assert!(result.max);
+        assert_eq!((result.inputs.len(), result.left), (2, 0));
+        let fee: u64 = result.fee.total.parse().unwrap();
+        let kept: u64 = result.change_lovelace.parse().unwrap();
+        // The token stays, with exactly the least ADA it needs: what a shortfall says must stay.
+        assert_eq!(result.change_minimum, result.change_lovelace);
+        assert!(kept > 1_000_000 && kept < 2_000_000, "{kept}");
+        assert_eq!((result.change_tokens, result.change_outputs), (1, 1));
+        let [paid] = result.payments.as_slice() else {
+            panic!("one payment")
+        };
+        assert_eq!(paid.lovelace, (28_000_000 - fee - kept).to_string());
+        assert_eq!((paid.minimum.as_ref(), paid.tokens.len()), (None, 0));
+        let outs = outputs(&result.tx_cbor);
+        let (ours, theirs): (Vec<_>, Vec<_>) = outs.iter().partition(|o| o.0.is_owned(sk).unwrap());
+        assert_eq!((ours[0].1, ours[0].2), (kept, 1));
+        assert_eq!((theirs[0].1, theirs[0].2), (28_000_000 - fee - kept, 0));
+        assert!(crate::covers(&result.tx_cbor, &request().utxos, &params()));
+
+        // The token sent too: all of it goes, and nothing stays.
+        let all = vec![TokenAmount {
+            policy_id: "c0".repeat(28),
+            asset_name: hex::encode("tUSDM"),
+            quantity: "1234560000".into(),
+        }];
+        let result = api::build_transfer(sk, max(all.clone())).unwrap();
+        let fee: u64 = result.fee.total.parse().unwrap();
+        assert_eq!(result.payments[0].lovelace, (28_000_000 - fee).to_string());
+        assert_eq!(result.payments[0].tokens, all);
+        assert_eq!(
+            (result.change_lovelace.as_str(), result.change_outputs),
+            ("0", 0)
+        );
+        // Nothing stays, but what could: an output of ADA alone.
+        let alone: u64 = result.change_minimum.parse().unwrap();
+        assert!(alone > 1_000_000 && alone < kept, "{alone}");
+
+        // Max is for one Seedelf.
+        let mut two = max(vec![]);
+        two.payments.push(request().payments[0].clone());
+        let e = api::build_transfer(sk, two).unwrap_err().to_string();
+        assert!(e.contains("Max pays a single recipient"), "{e}");
+    }
+
+    #[test]
+    fn an_amount_the_guessed_fee_calls_short_is_measured_up_to_max() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let most: u64 = api::build_transfer(sk, max(vec![])).unwrap().payments[0]
+            .lovelace
+            .parse()
+            .unwrap();
+        let asking = |lovelace: u64| {
+            let mut r = request();
+            r.payments[0].lovelace = Some(lovelace.to_string());
+            r.payments[0].tokens = vec![];
+            r
+        };
+        // A hair under Max: picking with the guessed budgets calls it short, as T05's 26.07 ₳ was…
+        let e = api::draft_transfer(sk, asking(most - 5_000))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
+        // …measured, it pays, at the fee the review shows.
+        let result = api::build_transfer(sk, asking(most - 5_000)).unwrap();
+        assert!(!result.max);
+        assert_eq!(result.payments[0].lovelace, (most - 5_000).to_string());
+        let fee: u64 = result.fee.total.parse().unwrap();
+        assert_eq!(
+            result.change_lovelace.parse::<u64>().unwrap(),
+            28_000_000 - (most - 5_000) - fee
+        );
+        assert_eq!(result.change_tokens, 1);
+        // More than Max is short however it's measured.
+        let e = api::build_transfer(sk, asking(most + 5_000))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
     }
 
     #[test]
@@ -1695,13 +1801,13 @@ mod transfer {
         r.payments[0].tokens[0].quantity = "0".into();
         assert!(err(r).contains("above zero"));
         let mut r = request();
-        r.payments[0].lovelace = "45000000000000001".into();
+        r.payments[0].lovelace = Some("45000000000000001".into());
         assert!(err(r).contains("45 billion"));
         let mut r = request();
         r.payments[0].tokens[0].quantity = "1234560001".into();
         assert!(err(r).contains("holds only 1234560000"));
         let mut r = request();
-        r.payments[0].lovelace = "30000000".into();
+        r.payments[0].lovelace = Some("30000000".into());
         assert!(err(r).contains("Not enough ADA"));
 
         // Finishing needs the draft's seed and Ogmios's answer.
@@ -2126,6 +2232,57 @@ mod withdraw {
         )
         .unwrap();
         assert_eq!(max.payments[0].minimum, None);
+    }
+
+    #[test]
+    fn says_the_most_an_amount_could_be_and_measures_one_the_guess_calls_short() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        // The most a payment of no tokens can be: the tUSDM stays, with the least ADA it needs.
+        let mut most = request("amount");
+        most.payments[0].lovelace = None;
+        most.payments[0].tokens = vec![];
+        most.most = true;
+        let result = api::build_withdraw(sk, most).unwrap();
+        let fee: u64 = result.fee.total.parse().unwrap();
+        let kept: u64 = result.change_lovelace.parse().unwrap();
+        assert_eq!(result.change_minimum, result.change_lovelace);
+        assert_eq!((result.change_tokens, result.left), (1, 0));
+        let top: u64 = result.payments[0].lovelace.parse().unwrap();
+        assert_eq!(top, 28_000_000 - fee - kept);
+        assert!(outputs(&result.tx_cbor).contains(&(theirs(), top)));
+        // Without `most`, a null amount is still Max: every token, nothing back.
+        let mut everything = request("amount");
+        everything.payments[0].lovelace = None;
+        everything.payments[0].tokens = vec![];
+        let all = api::build_withdraw(sk, everything).unwrap();
+        assert_eq!(
+            (all.payments[0].tokens.len(), all.change_lovelace.as_str()),
+            (1, "0")
+        );
+
+        // A hair under it: the guessed budgets call it short; measured, it pays.
+        let asking = |lovelace: u64| {
+            let mut r = request("amount");
+            r.payments[0].lovelace = Some(lovelace.to_string());
+            r.payments[0].tokens = vec![];
+            r
+        };
+        let e = api::draft_withdraw(sk, asking(top - 5_000))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
+        let paid = api::build_withdraw(sk, asking(top - 5_000)).unwrap();
+        assert_eq!(paid.payments[0].lovelace, (top - 5_000).to_string());
+        assert!(paid.change_lovelace.parse::<u64>().unwrap() >= kept);
+        let e = api::build_withdraw(sk, asking(top + 5_000))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
+        // A session's funding keeps its picking: no measuring past it.
+        let mut funding = asking(top - 5_000);
+        funding.funding = Some(Default::default());
+        let e = api::build_withdraw(sk, funding).unwrap_err().to_string();
+        assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
     }
 
     #[test]

@@ -28,7 +28,9 @@ describe("a transaction's banner", () => {
         testId: "pending-tx",
       }),
     );
-    expect(html).toContain('<span class="tx-banner__detail" data-testid="pending-tx-detail">Koios didn&#x27;t answer.</span>');
+    // A block: a payment that may have gone through puts Check now and a Details disclosure in it (chunk 23's second
+    // review, HM-4).
+    expect(html).toContain('<div class="tx-banner__detail" data-testid="pending-tx-detail">Koios didn&#x27;t answer.</div>');
   });
 });
 
@@ -43,7 +45,7 @@ describe("the To field", () => {
         ),
       ).match(/placeholder="([^"]*)"/)![1];
     expect(field("mainnet", false)).toBe("addr1… or $handle");
-    expect(field("mainnet", true)).toBe("addr1…, $handle or 5eed0e1f…");
+    expect(field("mainnet", true)).toBe("addr1…, $handle or a Seedelf name");
     expect(field("preprod", false)).toBe("addr_test1… or $handle");
   });
 });
@@ -63,7 +65,7 @@ describe("Max's review", () => {
     expect(text).toContain("Max leaves 2 UTxOs where they are:");
     expect(text).toContain(`${"a1".repeat(4)}…a1a1#0 comes with a later payment`);
     expect(text).toContain(`${"b2".repeat(4)}…b2b2#3 holds a reference script the wallet can't spend`);
-    expect(text).toContain("would add up to more with the rest than one output can hold");
+    expect(text).toContain("Some tokens won't fit in one output with the rest.");
     expect(renderToStaticMarkup(createElement(LeftOutNote, { testId: "x", leftOut: [] }))).toBe("");
   });
 
@@ -72,7 +74,7 @@ describe("Max's review", () => {
       createElement(LeftOutNote, { testId: "withdraw-left-out", leftOut: [{ txHash: "c3".repeat(32), txIndex: 1, reason: "returning" }] }),
     );
     const text = html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'");
-    expect(text).toContain(`${"c3".repeat(4)}…c3c3#1 waits for a return through Lovejoin that's still being sent, which adds to it`);
+    expect(text).toContain(`${"c3".repeat(4)}…c3c3#1 waits for a return through Lovejoin still being sent`);
     expect(text).not.toContain("reference script");
   });
 });
@@ -88,10 +90,10 @@ describe("the UTxOs screen", () => {
       );
     const priv = details("seedelf");
     expect(priv).toContain('data-testid="utxo-unspendable"');
-    expect(priv).toContain("it isn&#x27;t counted in your private balance");
+    expect(priv).toContain("left out of payments and your private balance");
     // No Lock for it: there's nothing to keep it out of.
     expect(priv).not.toContain(">Lock<");
-    expect(details("cardano")).toContain("Koios doesn&#x27;t give the wallet");
+    expect(details("cardano")).toContain("the wallet can&#x27;t read, so it can&#x27;t price spending it");
   });
 });
 
@@ -163,7 +165,7 @@ describe("DReps and pools that share a name (launch review #59)", () => {
     });
 
     it("says how many on the list use the name, leaving the DRep itself out when it isn't among them", () => {
-      expect(sharedDrepName({ shared: 3, listed: true })).toBe("3 DReps on the wallet's list use this name, or one that looks the same");
+      expect(sharedDrepName({ shared: 3, listed: true })).toBe("3 DReps on the wallet's list use this name or a lookalike");
       expect(sharedDrepName({ shared: 3, listed: false })).toBe(
         "2 DReps on the wallet's list use this name, or one that looks the same, each under another ID",
       );
@@ -217,7 +219,7 @@ describe("the public UTxOs while a mix is sent", () => {
   it("says the mix holds what it spends, until it's all sent", () => {
     const shown = renderToStaticMarkup(createElement(MixHolding, { progress: { total: 5, sent: 2 } }));
     expect(shown).toContain('data-testid="utxos-mix-holding"');
-    expect(shown).toContain("2 of 5 sent");
+    expect(shown).toContain("2 of 5 transactions");
     for (const progress of [null, { total: 5, sent: 5 }, { total: 5, sent: 2, stopped: "locked" }]) {
       expect(renderToStaticMarkup(createElement(MixHolding, { progress }))).toBe("");
     }

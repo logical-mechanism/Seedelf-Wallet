@@ -53,9 +53,9 @@ export function TxBanner({
         {title}
       </strong>
       {detail && (
-        <span className="tx-banner__detail" data-testid={`${testId}-detail`}>
+        <div className="tx-banner__detail" data-testid={`${testId}-detail`}>
           {detail}
-        </span>
+        </div>
       )}
       <ExplorerLink network={network} tx={txHash} private={isPrivate} className="banner__link">
         {t("txBanner.onCardanoscan", { hash: shortHex(txHash, 10, 6) })}

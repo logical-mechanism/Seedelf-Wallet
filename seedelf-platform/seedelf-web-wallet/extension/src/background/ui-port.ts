@@ -5,7 +5,13 @@
 // listening to runtime.onConnect, and no page does. The worker's broadcasts
 // (state-changed, dapp-changed) carry nothing, so they stay messages.
 
-import { isMessage, UI_PORT, type BuildStage, type Message, type Reply, type RequestName } from "../shared/rpc";
+import { isMessage, UI_PORT, type BuildStage, type Message, type Reply, type ReplyCode, type RequestName } from "../shared/rpc";
+import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
+
+/** What the UI acts on in a refusal: a review to build again (chunk 23's review, P-3). */
+function codeOf(error: unknown): ReplyCode | undefined {
+  return error instanceof StaleReviewError || error instanceof CollateralRefusedError ? "stale" : undefined;
+}
 
 /**
  * Serves one UI port: one request, one reply. Only this extension's own
@@ -50,7 +56,13 @@ export function serveUi(
     };
     answer(message, report).then(
       (value) => reply({ ok: true, value } as Reply<RequestName>),
-      (error: unknown) => reply({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+      (error: unknown) => {
+        const code = codeOf(error);
+        // Who refused, where that's giveme.my: the screen names it, not the user's own money (blind test §9.5).
+        const by = refusedBy(error);
+        const said = error instanceof Error ? error.message : String(error);
+        reply({ ok: false, error: said, ...(code ? { code } : {}), ...(by ? { by } : {}) });
+      },
     );
   });
   return true;
