@@ -2738,6 +2738,19 @@ Asked about what pass one left, the owner (5 October 2026) kept Home opening on 
 - **The visual critic's three passes:** the first found 13 problems on the built screens (an amount split from its ₳ in every review total, the empty wallet's first step below the fold, the connect window's privacy note under a pressable Connect, Activity rows running together, among them); the second confirmed 10 fixed and found what the fixes broke (shortened IDs breaking at their "…", addresses squeezed to a letter); the third confirmed those. **Still polish:** a few review labels wrap to two or three lines beside a long value (the sign window's "It signs for", the two-recipient total, Lovejoin's "Room for network fees"), and a private session's "Disconnect the site" may wrap in the side panel.
 - **Skipped, with reasons:** the proposer on an action (the rows don't carry it, and a deposit-return address doesn't identify one); a link from a review to Settings → Collateral (it would drop the review; the ⓘ says it all); hiding the account picker on Private (it reads "Public account" already, and the private side uses it).
 
+### Pass three: the owner's review of the fix round
+
+The owner tried the two passes by hand (6 October 2026) and listed eight things. What each became:
+
+1. **The account picker took a row on every screen for something rarely used.** It's the Public tab's heading on Home now, "Public account 2 ▾", and gone from the other screens; Settings → Public accounts still switches. With one account nothing shows, as before. Since the other screens no longer name the account, a public review's totals do with several: "Total leaving Public account 2", "Public account 2 after".
+2. **Symmetry between the sides.** The Private tab's row for the other side reads "Public account 2" (or "Public account · Savings"), as the Public tab's reads "Private balance".
+3. **The language note is gone;** Settings keeps *Report a translation error*.
+4. **Settings → About's paragraph on whom the wallet talks to is gone:** the privacy policy, linked beside it, says all of it. One fact in it was said nowhere else in the wallet, that Koios sends every transaction from the IP address that reads the public account, so the giveme.my note on every private review now ends "It and Koios see this transaction with your IP address, the one that reads your public account."
+5. **"Using the app is damn near a reading comprehension test."** Every screen's copy was cut, in seven areas at once (Home and history, payments and the worker's messages, swaps, Lovejoin, dApps and sites, staking and governance, Settings and onboarding), to a budget of about 20 words for a note always on screen. Mechanism, history and repeats went; every privacy, cost, can't-be-undone and next-step fact stayed, shorter. English went from 26,879 words to about 21,000; strings over 30 words from 189 to 37, over 40 from 81 to 6. Spanish and Japanese were rewritten from the new English. Some screens: the dApps page 196 → 104 words, the swap review 391 → 251, Settings 111 → 62, Lovejoin's page 222 → 113, Send publicly 55 → 33. Three reviews followed, of facts lost, of the translations and of the code and tests; their fixes put back "on chain" in two notes that had come to say "nothing ties", "here or elsewhere" in Remove wallet's double-pay warnings, the mixes' cost in Bring everything back, the no-break space before ₳ in 23 keys, and nine Spanish and Japanese wordings.
+6. **Buttons pinned left under a note are centred** (*Let sites connect*, *Create a Seedelf* in Home's callout, the DRep card's and Staking's retry); links stay with their text.
+7. **The swap review's numbered steps showed through Start swap:** the sticky foot sits above the body now (`z-index`), wherever a positioned element scrolls under it.
+8. **Does dApps from the Public tab use the private side?** Yes, by design: the dApps page is the same from either tab. A Minswap swap always runs from a one-time account funded from the private balance; Lovejoin's mix defaults to paying from the private balance and offers the public account; a site connecting asks, each time, for the public account or a private session. Nothing changed.
+
 ### Left for the owner
 
 - **The open calls, unchanged:** renaming Make public, polling for money coming in, a password on the wallet's own sends.
@@ -2751,6 +2764,7 @@ Asked about what pass one left, the owner (5 October 2026) kept Home opening on 
   - The later transactions' fees are an estimate of 0.25 ₳ each.
   - Private Send's Max hands no amount on to another form when an address is routed elsewhere.
   - The Staking page has its own copy of the rewards switch.
+  - Pass three: the picker is Home's Public heading only, so a payment form off Home doesn't name the account until its review; Koios's view of private payments is said on each private review's giveme.my note, not in Settings; and the copy budget itself (~20 words a note), which the owner may want tighter or looser on screens they use most.
 - **Not taken up:** §4's moment 24 (no sign of accounts on Home, by chunk 18's design). A site-signed transaction's change isn't counted as on its way, so the balance reads low until it lands; after a payment lands, an epoch's new rewards can read low for up to 2 hours (never high).
 
 ## Appendix A. How the test was run
