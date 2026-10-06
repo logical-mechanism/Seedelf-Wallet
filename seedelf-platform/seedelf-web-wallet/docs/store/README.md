@@ -57,6 +57,7 @@ What you can do:
 • Swap privately through Minswap: each swap runs from a new one-time account, funded from your private balance, and everything comes back into it afterwards. Your public account isn't in the swap's transactions, though anyone can follow the money back through its funding. The wallet asks Minswap for an order with the least you'll accept, checks where the transaction Minswap builds pays, and shows what the swap will cost before you approve it.
 • Mix through Lovejoin: the spare ADA a private session brings back goes through Lovejoin, a mixer of 10 ADA boxes on Cardano, so what comes back is harder to tie to the session on chain. You can turn that off in Settings, or bring any one back directly. You can also mix from the Lovejoin tile. Lovejoin has had no third-party audit, only its makers' own review, and the wallet says so where you choose it. On mainnet the wallet mixes only once Lovejoin's pool holds 30 boxes that aren't yours, so there are enough other boxes to mix with; until then a return comes back directly and says why.
 • Read any transaction before it is signed, on every review and when a site asks for a signature: where the money goes, what contracts run and with what data, the certificates, the note and the metadata, and the raw bytes if you want to take them elsewhere. Nothing is looked up to show it, so reading a transaction tells nobody that you read it.
+• Use it in English, Spanish or Japanese: it follows Chrome's language, and Settings changes it.
 
 What it doesn't hide:
 • Amounts, tokens, timing and which transactions spend which outputs are public, as with any Cardano wallet.
@@ -72,7 +73,7 @@ How it works:
 • Your recovery phrase never leaves your device. It's encrypted with your password (Argon2id and ChaCha20-Poly1305).
 • The wallet talks to a few services, and each sees your IP address. Koios reads the chain and submits your transactions. giveme.my, which we run, adds shared collateral to private payments, so your own address stays out of them, and sees each one. CoinGecko gives ADA's price on mainnet, unless you choose no currency. Minswap quotes and builds your swaps, only when you swap. Blockfrost's IPFS gateway gives an NFT's image, only when you press Show image on it. Lovejoin is a contract on the chain, reached through Koios.
 • It adds nothing to web pages unless you turn on connecting sites. Then it adds only the standard Cardano wallet entry (window.cardano) to https pages, so any https site can see you use Seedelf Wallet, as with any Cardano wallet, and it asks you before anything is signed.
-• There are no accounts, analytics or tracking.
+• There's no sign-up, and no analytics or tracking.
 
 Open source (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 ```
@@ -145,9 +146,11 @@ All code ships in the package, including the WebAssembly module (Rust compiled t
 **Two more to decide, both recommended checked.** Google's User Data FAQ answers "Do I have to disclose data handled locally?" with *"Yes. Extensions are required to disclose how they handle user data, even when data is processed or stored locally on a user's device and is not transmitted to external servers or third parties,"* and defines *handle* as "collecting, transmitting, using, or sharing". Over-declaring costs a fuller privacy label; under-declaring is what gets an extension pulled.
 
 - **Location — check it** (privacy review §2.5). The dashboard lists the IP address under *Location* ("region, IP address, GPS coordinates, or information about things near the user's device"). The wallet doesn't read the IP itself, but every private transaction goes to **giveme.my, which the developer runs**, so the developer's own service receives it. That is the developer handling it, not a third party's incidental logging. giveme.my's app logs leave out raw IP addresses, which limits the retention, not the receipt. (Koios, CoinGecko, Minswap and, for an NFT's image, Blockfrost's gateway see it too, but those are third parties' servers.)
-- **Web history — check it** (chunk 15). Once the user turns on connecting sites, the wallet keeps a `DappSite { origin, connectedAt }` for each one: the site's address and when it was connected. It's sealed on the device and never sent anywhere, but that's the shape Google's *Web history* covers ("the list of web pages a user has visited, as well as associated data such as page title and time of visit"), and the FAQ above says local-only doesn't exempt it. It's the user's own connection list, not browsing they didn't choose — say so in the policy rather than leaving the box clear.
+- **Web history — check it** (chunk 15). Once the user turns on connecting sites, the wallet keeps a `DappSite { origin, connectedAt, title }` for each one: the site's address, when it was connected, and the page's title as it asked to connect (from Chrome's tab, one line, at most 80 characters). It's sealed on the device and never sent anywhere, but that's the shape Google's *Web history* covers, field for field ("the list of web pages a user has visited, as well as associated data such as page title and time of visit"), and the FAQ above says local-only doesn't exempt it. It's the user's own connection list, not browsing they didn't choose — say so in the policy rather than leaving the box clear.
 
 If either is left unchecked, write the reason here before submitting, so the next release doesn't quietly reopen it.
+
+**Personally identifiable information stays unchecked**, as the launch review left it: contact and account names are the user's own labels, sealed on the device, and a DRep profile's name goes into a file the user downloads and publishes, which the wallet never keeps or sends.
 
 Then certify all three statements: no selling or transferring data outside the approved use cases, no use unrelated to the single purpose, and no creditworthiness or lending use.
 
