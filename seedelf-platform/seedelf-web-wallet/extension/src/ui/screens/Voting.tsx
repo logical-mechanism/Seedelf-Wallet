@@ -165,29 +165,38 @@ export function Voting({
       aside={t("vote.now", { what: voteLabel(current, ownName) })}
       error={error}
       foot={
-        becomeFirst ? (
-          <button type="button" className="primary" onClick={onBecome} disabled={!!blocked || busy} title={blocked}>
-            {t("drep.become")}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="primary"
-            onClick={() =>
-              chosen &&
-              onVote(
-                chosen,
-                pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
-                pick === "drep" ? drepShared : undefined,
-                pick === "drep" && drep !== undefined && drep.status !== "retired" && !drep.active,
-              )
-            }
-            disabled={!chosen || !!why || busy}
-            title={why}
-          >
-            {busy ? t("common.building") : t("common.review")}
-          </button>
-        )
+        <>
+          {becomeFirst ? (
+            <button type="button" className="primary" onClick={onBecome} disabled={!!blocked || busy} title={blocked}>
+              {t("drep.become")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="primary"
+              onClick={() =>
+                chosen &&
+                onVote(
+                  chosen,
+                  pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
+                  pick === "drep" ? drepShared : undefined,
+                  pick === "drep" && drep !== undefined && drep.status !== "retired" && !drep.active,
+                )
+              }
+              disabled={!chosen || !!why || busy}
+              title={why}
+            >
+              {busy ? t("common.building") : t("common.review")}
+            </button>
+          )}
+          {/* Why it can't be pressed, under it: the tooltip alone reached no touch screen or keyboard, and choosing
+              where the vote already goes greyed Review unsaid (blind test T03's verifier). */}
+          {(becomeFirst ? blocked : chosen && why) && (
+            <p className="note foot-note" data-testid="vote-why">
+              {becomeFirst ? blocked : why}
+            </p>
+          )}
+        </>
       }
     >
       <ul className="list" role="radiogroup" aria-label={t("vote.whereLabel")}>

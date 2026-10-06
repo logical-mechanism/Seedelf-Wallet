@@ -16,9 +16,11 @@
 // reads as what it paid, never "Sent +32.300614 ₳" for 25 ₳ (§9.1, T08); the
 // public side lists what the wallet sent before Koios does, marked Pending,
 // the details say so on both sides, and Home's banner shows here too (§9.3).
+// Each list starts with a row for the other side's, which Home opens on a
+// press, and Back from it comes back here (E01, the owner's call).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { type I18nKey, joinSentences, Rich, t, useT } from "../../i18n";
+import { type I18nKey, joinSentences, t, useT } from "../../i18n";
 
 import { entrySession, type ActivityEntry } from "../../shared/rpc";
 import {
@@ -40,13 +42,16 @@ import { ExplorerLink } from "../components/ExplorerLink";
 import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import {
   ArrowUpRightIcon,
+  ChevronRightIcon,
   DownloadIcon,
   LandmarkIcon,
   MoveInIcon,
   PieIcon,
   ReceiveIcon,
+  ShieldIcon,
   SproutIcon,
   TrashIcon,
+  WalletIcon,
   WithdrawIcon,
 } from "../components/Icons";
 import { Modal } from "../components/Modal";
@@ -120,12 +125,42 @@ export function ExportNote({ of, listed, more }: { of: Of; listed: number; more:
   );
 }
 
+/**
+ * The other side's list, as a row: its title, whose payments it holds, and a press to it. Each list is one side's
+ * alone, and Home opens on Private, so a question about all the wallet's money was answered from half of it (blind
+ * test E01). The same card as Home's row for the other side, so it reads as the same way across. Exported for its
+ * tests.
+ */
+export function OtherList({ of, onOpen }: { of: Of; onOpen: () => void }) {
+  const t = useT();
+  const toPublic = of === "seedelf";
+  return (
+    <section className="section">
+      <ul className="list">
+        <li>
+          <button type="button" className="menu-row" onClick={onOpen} data-testid="activity-other">
+            <span className="menu-row__icon">{toPublic ? <WalletIcon size={16} /> : <ShieldIcon size={16} />}</span>
+            <span className="menu-row__text">
+              <span>{t(toPublic ? "activity.titlePublic" : "activity.titlePrivate")}</span>
+              <span className="menu-row__sub menu-row__sub--wrap">
+                {t(toPublic ? "activity.other.public" : "activity.other.private")}
+              </span>
+            </span>
+            <ChevronRightIcon size={16} />
+          </button>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
 export function Activity({
   of,
   pendingHash,
   banner,
   onBack,
   onRead,
+  onOther,
 }: {
   of: Of;
   pendingHash?: string;
@@ -134,6 +169,8 @@ export function Activity({
   onBack: () => void;
   /** After Refresh: the balances may have been read again. */
   onRead: () => void;
+  /** Opens the other side's list: nothing of it is read until it's pressed (blind test E01). */
+  onOther?: () => void;
 }) {
   const network = useNetwork();
   const t = useT();
@@ -189,6 +226,9 @@ export function Activity({
   return (
     <Screen title={t(of === "seedelf" ? "activity.titlePrivate" : "activity.titlePublic")} titleId="activity-title" onBack={onBack}>
       {banner}
+      {/* The other list, first: asked when ADA last came in, E01's tester answered from Private activity, whose latest
+          was hours older than the public account's, and neither list said the other existed (blind test §4 entry 8). */}
+      {onOther && <OtherList of={of} onOpen={onOther} />}
       {of === "seedelf" ? (
         <Callout tone="privacy">{t("activity.privacy.kept")}</Callout>
       ) : (
@@ -356,11 +396,28 @@ function EntryLine({ lead, entry, otherwise }: { lead: string[]; entry: Activity
   );
 }
 
-/** Who an entry paid, or who paid it: an address cut in the middle, and how many more beside it. */
-function Who({ name, more }: { name: string; more?: number }) {
+/** Where "and 2 more" is cut around the name: no translation holds it. */
+const NAME_AT = "\u0000";
+
+/**
+ * Who an entry paid, or who paid it: an address cut in the middle, and how many more beside it. The words around the
+ * name ("and 2 more") are a part of their own that keeps its spaces and never gives way: loose in the line's flex row,
+ * their leading space collapsed ("…ckpvwrand 1 more"), and a squeezed name ran its tail over them (the pass-two
+ * visual check). Exported for its tests.
+ */
+export function Who({ name, more }: { name: string; more?: number }) {
+  const t = useT();
   // A tag or a $handle is short and said whole; an address has no spaces and runs long.
   const shown = name.length > 24 && !/\s/.test(name) ? <MiddleEllipsis text={name} /> : <span>{name}</span>;
-  return more ? <Rich k="activity.andMore" parts={{ first: shown }} values={{ count: more }} /> : shown;
+  if (!more) return shown;
+  const [before, after] = t("activity.andMore", { first: NAME_AT, count: more }).split(NAME_AT);
+  return (
+    <>
+      {before && <span className="activity__more">{before}</span>}
+      {shown}
+      {after && <span className="activity__more">{after}</span>}
+    </>
+  );
 }
 
 /** What an entry's who-or-where row is called: who it paid, who paid it, or the Seedelf it made or removed. */

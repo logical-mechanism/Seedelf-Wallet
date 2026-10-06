@@ -64,6 +64,13 @@ export const SESSION_ACTIVITY = "seedelf.lastActivity";
  */
 export const SESSION_UNLOCKED_AT = "seedelf.unlockedAt";
 /**
+ * chrome.storage.session: `true` while a restore has made this wallet and no
+ * Home has said so with a reading yet (handlers.ts `restored`; blind test
+ * T20a, T20b). The fact alone. A lock, Remove wallet or a closed browser
+ * wipes it with the rest, so a later unlock never says "restored".
+ */
+export const SESSION_RESTORED = "seedelf.restored";
+/**
  * chrome.storage.session: what the wallet knows of its own sends beyond what
  * it spent (spent.ts), which a lock wipes (KnownSends). The one thing a lock
  * keeps: two times, nothing of what was sent (`sends`).

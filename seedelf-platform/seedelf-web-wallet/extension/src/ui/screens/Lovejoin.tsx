@@ -177,24 +177,37 @@ export function mixCosts(funding: Pick<LovejoinFunding, "boxes" | "lovelace" | "
 }
 
 /**
- * "Mixed 2 waves deep, 4 mixes", with what a wave is behind its ⓘ: it was
- * explained only in Settings and on the review, which a short pool never
- * reaches (blind test T11). The text opens in the row, under it.
+ * A row whose label has an ⓘ, the text opening in the row, under it:
+ * "Mixed 2 waves deep, 4 mixes", with what a wave is (it was explained only
+ * in Settings and on the review, which a short pool never reaches: blind
+ * test T11), and the network fees, with which transactions they are, which
+ * as part of the value squeezed the label to a word a line (visual review).
+ * `testId` names the text; the icon is `${testId}-hint`.
  */
-function MixedRow({ depth, mixes }: { depth: number; mixes: number }) {
-  const tr = useT();
+function HintedRow({
+  label,
+  value,
+  hint,
+  testId,
+  part,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  testId: string;
+  part?: boolean;
+}) {
   const { open, toggle, id } = useHint();
-  const text = tr("lovejoin.mix.privacy.waves", { count: depth, one: 3 ** depth, mixes: mixesPerBox(depth) });
   return (
-    <div className="review__row review__row--hinted">
+    <div className={`review__row review__row--hinted${part ? " review__row--part" : ""}`}>
       <dt className="hinted">
-        {tr("lovejoin.mixedLabel")}
-        <HintButton text={text} open={open} onToggle={toggle} controls={id} testId="lovejoin-waves-hint" />
+        {label}
+        <HintButton text={hint} open={open} onToggle={toggle} controls={id} testId={`${testId}-hint`} />
       </dt>
-      <dd>{tr("lovejoin.mix.depthAndMixes", { count: depth, mixes: tr("amount.mixes", { count: mixes }) })}</dd>
+      <dd>{value}</dd>
       {open && (
-        <dd className="note hint__text review__hint" id={id} data-testid="lovejoin-waves">
-          {text}
+        <dd className="note hint__text review__hint" id={id} data-testid={testId}>
+          {hint}
         </dd>
       )}
     </div>
@@ -986,10 +999,19 @@ export function Lovejoin({
                   }
                 />
               )}
-              <MixedRow depth={funding.depth} mixes={funding.mixes} />
+              <HintedRow
+                label={tr("lovejoin.mixedLabel")}
+                value={tr("lovejoin.mix.depthAndMixes", { count: funding.depth, mixes: tr("amount.mixes", { count: funding.mixes }) })}
+                hint={tr("lovejoin.mix.privacy.waves", {
+                  count: funding.depth,
+                  one: 3 ** funding.depth,
+                  mixes: mixesPerBox(funding.depth),
+                })}
+                testId="lovejoin-waves"
+              />
               {/* In proportion: what mixing this much costs, as a share of it (chunk 23's review, D-3), and all of it:
-                  the mixes alone left out the network fees and the way back (blind test §9.8, T11). The rows under it
-                  add up to it. */}
+                  the mixes alone left out the network fees and the way back (blind test §9.8, T11). The rows set in
+                  under it are what it's made of, and add up to it. */}
               <Row
                 label={tr("lovejoin.mix.costOf", { ada: formatAda(costs.boxes.toString()) })}
                 value={tr("lovejoin.mix.feesShare", {
@@ -999,14 +1021,18 @@ export function Lovejoin({
                 strong
                 testId="lovejoin-mix-total"
               />
-              <Row label={tr("lovejoin.mix.feesLabel")} value={adaText(funding.mixFees)} />
-              <Row
+              <Row label={tr("lovejoin.mix.feesLabel")} value={adaText(funding.mixFees)} part />
+              <HintedRow
                 label={tr("lovejoin.mix.networkLabel")}
-                value={tr(source === "private" ? "lovejoin.mix.networkPrivate" : "lovejoin.mix.networkPublic", {
-                  ada: aboutAda(costs.networkFees),
+                value={adaText(toCents(costs.networkFees))}
+                hint={tr(source === "private" ? "lovejoin.mix.networkHintPrivate" : "lovejoin.mix.networkHintPublic", {
+                  each: aboutAda(SESSION_FEE_ESTIMATE),
+                  reserve: formatAda(costs.reserve.toString()),
                 })}
+                testId="lovejoin-network"
+                part
               />
-              <Row label={tr("lovejoin.mix.backLabel", { count: funding.boxes })} value={adaText(costs.backFees.toString())} />
+              <Row label={tr("lovejoin.mix.backLabel", { count: funding.boxes })} value={adaText(costs.backFees.toString())} part />
             </ReviewRows>
           )}
           {/* What leaves now and what comes back, adding up to what it costs, in the reviews' words; the reserve
@@ -1015,22 +1041,24 @@ export function Lovejoin({
             <ReviewRows testId="lovejoin-mix-moves">
               {source === "private" ? (
                 <>
+                  {/* The 15.3 ₳ and what it's made of, the reserve named (T11 asked whether 15.3 was 10 + 3.8 + 1.5). */}
+                  <Row label={tr("lovejoin.mix.intoOneTime")} value={adaText(funding.lovelace)} />
+                  <Row label={tr("lovejoin.mix.partBoxes", { count: funding.boxes })} value={adaText(costs.boxes.toString())} part />
+                  <Row label={tr("lovejoin.mix.feesLabel")} value={adaText(funding.mixFees)} part />
                   <Row
-                    label={tr("lovejoin.mix.intoOneTime")}
-                    value={tr("lovejoin.mix.intoValue", {
-                      count: funding.boxes,
-                      ada: formatAda(funding.lovelace),
-                      reserve: formatAda(costs.reserve.toString()),
-                    })}
+                    label={tr("swaps.review.part.room")}
+                    value={tr("swaps.review.part.roomValue", { ada: formatAda(costs.reserve.toString()) })}
+                    part
                   />
                   <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(COLLATERAL.toString()) })} />
                   <Row label={tr("lovejoin.mix.feeLabel")} value={adaText(toCents(SESSION_FEE_ESTIMATE))} />
                   <Row label={tr("lovejoin.mix.totalPrivate")} value={adaText(toCents(costs.leaving))} strong testId="lovejoin-mix-leaving" />
-                  <Row label={tr("lovejoin.mix.backSoon")} value={tr("lovejoin.mix.backSoonValue", { ada: aboutAda(costs.soon) })} />
+                  {/* What it's made of is the note under the rows. */}
+                  <Row label={tr("lovejoin.mix.backSoon")} value={adaText(toCents(costs.soon))} />
                 </>
               ) : (
                 <>
-                  <Row label={tr("lovejoin.mix.fromPublic")} value={tr("lovejoin.mix.publicNeeds", { ada: formatAda(funding.lovelace) })} />
+                  <Row label={tr("lovejoin.mix.fromPublic")} value={tr("lovejoin.mix.publicNeeds", { ada: formatAda(funding.lovelace) })} stack />
                   <Row label={tr("lovejoin.mix.totalPublic")} value={adaText(toCents(costs.leaving))} strong testId="lovejoin-mix-leaving" />
                 </>
               )}
@@ -1041,6 +1069,7 @@ export function Lovejoin({
                   ada: aboutAda(costs.later / BigInt(funding.boxes)),
                   delay: delayText(funding.delay),
                 })}
+                stack
               />
             </ReviewRows>
           )}
@@ -1306,7 +1335,7 @@ export function PrivateReview({ summary, before }: { summary: SessionOutSummary 
             ada: formatAda(mix.mixFees),
           })}
         />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} stack />
       </ReviewRows>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
@@ -1350,7 +1379,7 @@ function AgainReview({ summary, before }: { summary: SessionOutSummary & { mix: 
             ada: formatAda(mix.mixFees),
           })}
         />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(mix.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(mix.delay) })} stack />
       </ReviewRows>
       {mix.owned && mix.owned > mix.boxes && (
         <p className="note" data-testid="lovejoin-again-rest">
@@ -1386,7 +1415,7 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
         <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.public"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>
@@ -1407,7 +1436,7 @@ function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
         <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} stack />
       </ReviewRows>
       <Callout tone="warn" testId="lovejoin-seed-warning">
         {tr("lovejoin.review.warn.seed")}
@@ -1430,7 +1459,7 @@ function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
         <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>
     </>

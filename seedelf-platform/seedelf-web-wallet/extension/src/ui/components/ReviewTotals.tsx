@@ -74,11 +74,20 @@ export function AfterRow({ side, lovelace }: { side: Side; lovelace: bigint }) {
  * balance Home shows, so neither a cost nor a gain (S-2). Said as moved into
  * the balance, not "collected": beside a payment nobody asked to collect
  * anything with, that read as a charge (chunk 23's second review, PY-6).
+ * The amount is the row's value, as every other row's is, and what it means
+ * goes across the row under it: as the value, the sentence ran to three
+ * right-aligned lines beside the label (the visual review of pass two).
  */
 export function RewardsRow({ withdrawal }: { withdrawal?: string }) {
   const t = useT();
   if (!withdrawal || BigInt(withdrawal) === 0n) return null;
-  return <Row label={t("review.rewardsCollected")} value={t("review.alreadyCounted", { ada: adaText(withdrawal) })} />;
+  return (
+    <div className="review__row review__row--hinted" data-testid="review-rewards">
+      <dt>{t("review.rewardsCollected")}</dt>
+      <dd>{adaText(withdrawal)}</dd>
+      <dd className="note review__hint">{t("review.alreadyCounted")}</dd>
+    </div>
+  );
 }
 
 /** Under a review that moves rewards: which setting does it, since the user didn't ask for it here (PY-6). */

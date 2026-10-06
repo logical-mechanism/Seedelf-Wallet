@@ -14,12 +14,15 @@
 //
 // Every screen opens at its top (blind test §9.10): the page is what scrolls,
 // and screens swap inside it, so each one kept the last one's offset. A new
-// title is a new screen, which is how a form's review counts as one.
+// title is a new screen, which is how a form's review counts as one. One that
+// Back leads to opens where the reader left it instead: Back to a long list
+// (Settings, governance actions, pools) landed at its top, and the reader
+// looked for their place again (pass two of the blind test's fix round).
 
 import { useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { currentLanguage, useT } from "../../i18n";
 
-import { useBrowserBack } from "../history";
+import { pressedBack, useBrowserBack, wentBack } from "../history";
 import { HintButton, HintText, useHint } from "./Hint";
 import { BackIcon } from "./Icons";
 
@@ -35,6 +38,11 @@ interface ScreenProps {
   error?: string;
   /** The primary action, or actions. */
   foot?: ReactNode;
+  /**
+   * The header, Back and the title, stays in view as the page scrolls: for a long page whose only way out is its
+   * Back, which scrolled away with it (Settings, about 2,000 px: blind test E05).
+   */
+  headSticky?: boolean;
   /**
    * False: the foot follows the body instead of staying in view. For a screen
    * whose body must all be read before its button is pressed, which a foot
@@ -71,6 +79,7 @@ export function Screen({
   action,
   error,
   foot,
+  headSticky,
   footSticky = true,
   review,
   onSubmit,
@@ -83,8 +92,9 @@ export function Screen({
   // The browser's Back, Alt+← and a mouse's back button are this screen's Back (chunk 23's review, N-1).
   useBrowserBack(onBack, backDisabled);
   // At its top when it opens, and when it turns into another page: a form into its review, a list into an item's
-  // details. The id alone isn't enough: a few flows keep one for several steps (Create's, a sign window's).
-  useOpensAtTop(`${titleId}\u0000${typeof title === "string" ? title : ""}`);
+  // details. The id alone isn't enough: a few flows keep one for several steps (Create's, a sign window's). Where it
+  // was left, when Back leads to it.
+  useOpensAtTop(`${titleId}\u0000${typeof title === "string" ? title : ""}`, { remember: true });
   // The element itself, not a ref object: a flow's form and its review are one Screen, a <form> then a <section>,
   // so the foot is a new element each switch, and an observer on the old one measured nothing (the cross-area review
   // of chunk 23's second fix round).
@@ -92,12 +102,15 @@ export function Screen({
   useFootClearance(footEl, footSticky && !!(error || foot));
   const inner = (
     <>
-      <header className="screen__head">
+      <header className={headSticky ? "screen__head screen__head--sticky" : "screen__head"}>
         {onBack ? (
           <button
             type="button"
             className="icon-button"
-            onClick={onBack}
+            onClick={() => {
+              pressedBack();
+              onBack();
+            }}
             disabled={backDisabled}
             aria-label={t("common.back")}
             title={t("common.back")}
@@ -171,18 +184,135 @@ export function arrived(was: Shown | undefined, now: Shown): boolean {
 }
 
 /**
+ * Where a page opens: at its top, unless a Back led to it (`back`), when it opens where the reader left it, which
+ * `kept` holds by page. Exported for its test.
+ */
+export function openAt(page: string, back: boolean, kept: ReadonlyMap<string, number>): number {
+  return back ? (kept.get(page) ?? 0) : 0;
+}
+
+/**
+ * Where each `Screen` page was read to, by its key, while the reader is away from Home: what Back opens it at. Home
+ * and the app's own views start it afresh, so a page Back leads to that wasn't shown since (a flow opened part-way
+ * in, as Home's "Delegate your vote" opens Voting with Staking behind it) opens at its top, not at an offset Home's
+ * own scrolling, or an earlier visit, left under its key (the pass-two cross-area review). Exported for its test.
+ */
+export class Offsets {
+  private readonly kept = new Map<string, number>();
+  /** The `Screen` page showing, whose offset the document's is. None while Home or an app view shows. */
+  private showing: string | undefined;
+
+  /** The document scrolled to `offset`, or was pressed there: the showing page's. */
+  note(offset: number) {
+    if (this.showing !== undefined) this.kept.set(this.showing, offset);
+  }
+
+  /** A `Screen` page opens: where (`openAt`), and from now its offset is this page's. */
+  screen(page: string, back: boolean): number {
+    const to = openAt(page, back, this.kept);
+    this.showing = page;
+    this.kept.set(page, to);
+    return to;
+  }
+
+  /**
+   * Home or an app view opens: everything kept goes. Not when a `Screen` opened in the same draw (`withScreen`): the
+   * app's view is drawn round Settings and its sign windows, and its effect runs after theirs.
+   */
+  view(withScreen: boolean) {
+    if (withScreen) return;
+    this.kept.clear();
+    this.showing = undefined;
+  }
+}
+
+const offsets = new Offsets();
+/** A `Screen` page opened in the draw being made: React runs a draw's layout effects in one go, before any microtask. */
+let screenDrawn = false;
+let keeping = false;
+
+const scroller = () => document.scrollingElement ?? document.documentElement;
+
+function keep() {
+  offsets.note(scroller().scrollTop);
+}
+
+/**
+ * Follows the page's offset as it scrolls, and at a press: the scroll event for the last move comes with the next
+ * frame, and a press can leave the page before then. Read before the press is handled, as the window's listeners in
+ * the capture phase are.
+ */
+function startKeeping() {
+  if (keeping) return;
+  keeping = true;
+  window.addEventListener("scroll", keep, { passive: true });
+  window.addEventListener("click", keep, { capture: true });
+}
+
+/** What the reader does that ends a wait for a page to grow to where they left it: they've moved it themselves. */
+const MOVES = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+/** Long enough for a list read again from the device to draw; Koios answers aren't waited for. */
+const SETTLE_MS = 1_000;
+/** Stops the wait in progress, if any. */
+let settling: (() => void) | undefined;
+
+/**
+ * Scrolls to `to`, and if the page is still too short for it (a list drawing from what it reads again), follows it as
+ * it grows, for a moment, until the reader moves it or another page opens.
+ */
+function scrollToKept(to: number) {
+  settling?.();
+  const page = scroller();
+  page.scrollTop = to;
+  if (to === 0 || page.scrollTop >= to - 1 || typeof ResizeObserver === "undefined") return;
+  const watch = new ResizeObserver(() => {
+    page.scrollTop = to;
+    if (page.scrollTop >= to - 1) stop();
+  });
+  const timer = setTimeout(() => stop(), SETTLE_MS);
+  const stop = () => {
+    watch.disconnect();
+    clearTimeout(timer);
+    for (const move of MOVES) window.removeEventListener(move, stop, true);
+    if (settling === stop) settling = undefined;
+  };
+  for (const move of MOVES) window.addEventListener(move, stop, true);
+  watch.observe(document.body);
+  settling = stop;
+}
+
+/**
  * Opens `page` at the top of the page that scrolls, the document (blind test §9.10). Screens swap inside it and
  * nothing reset it, so "Review: stop staking" opened at its red button with its title and "Nothing is sent until …"
  * above the view (T13), and Home came back from Create Seedelf with its "sent" banner out of sight (T03). Before the
  * paint, so the old offset never shows. Exported for the views that aren't a `Screen`: Home's own, the app's.
+ *
+ * `remember`, a `Screen`'s: where the reader leaves the page is kept, and a Back that leads to it opens it there
+ * (`Offsets`). Home and the app's own views open at their top whichever way they're reached, so a sent
+ * transaction's banner is seen (T03), and forget what was kept.
  */
-export function useOpensAtTop(page: string) {
+export function useOpensAtTop(page: string, { remember = false }: { remember?: boolean } = {}) {
   const shown = useRef<Shown | undefined>(undefined);
   useLayoutEffect(() => {
     const now = { page, language: currentLanguage() };
     const was = shown.current;
     shown.current = now;
-    if (arrived(was, now)) (document.scrollingElement ?? document.documentElement).scrollTop = 0;
+    if (!arrived(was, now)) return;
+    if (!remember) {
+      settling?.();
+      offsets.view(screenDrawn);
+      scroller().scrollTop = 0;
+      return;
+    }
+    const to = offsets.screen(page, wentBack());
+    if (!screenDrawn) {
+      screenDrawn = true;
+      queueMicrotask(() => {
+        screenDrawn = false;
+      });
+    }
+    startKeeping();
+    scrollToKept(to);
   }, [page]);
 }
 

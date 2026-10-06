@@ -345,15 +345,24 @@ function PoolPage({
             {t("pools.alreadyYours")}
           </p>
         ) : (
-          <button
-            type="button"
-            className="primary"
-            onClick={() => details && onStake(details, shared)}
-            disabled={!details || !!why || busy}
-            title={why}
-          >
-            {busy ? t("common.building") : t("pools.stakeWith", { label })}
-          </button>
+          <>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => details && onStake(details, shared)}
+              disabled={!details || !!why || busy}
+              title={why}
+            >
+              {busy ? t("common.building") : t("pools.stakeWith", { label })}
+            </button>
+            {/* Why it can't be pressed, under it, not in a tooltip alone, which no touch screen or keyboard shows
+                (blind test T03's verifier). */}
+            {why && (
+              <p className="note foot-note" data-testid="pool-why">
+                {why}
+              </p>
+            )}
+          </>
         )
       }
     >

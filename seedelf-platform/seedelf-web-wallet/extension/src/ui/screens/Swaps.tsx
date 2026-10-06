@@ -1228,12 +1228,13 @@ export function SwapCosts({
   return (
     <>
       <h2>{tr("swaps.costs.title")}</h2>
+      {/* The total first, what it's made of set in under it, as Lovejoin's page says a mix's cost (visual review). */}
       <ReviewRows testId="swap-costs">
-        <Row label={tr("swaps.detail.dexFee")} value={adaText(quote.dexFee)} />
-        {quote.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={adaText(quote.aggregatorFee)} />}
-        <Row label={tr("swaps.costs.network")} value={about(costs.networkFees)} />
-        {costs.lovejoin > 0n && <Row label={tr("swaps.costs.lovejoin")} value={about(costs.lovejoin)} />}
         <Row label={tr("swaps.costs.total")} value={about(costs.cost)} strong testId="swap-cost-total" />
+        <Row label={tr("swaps.detail.dexFee")} value={adaText(quote.dexFee)} part />
+        {quote.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={adaText(quote.aggregatorFee)} part />}
+        <Row label={tr("swaps.costs.network")} value={about(costs.networkFees)} part />
+        {costs.lovejoin > 0n && <Row label={tr("swaps.costs.lovejoin")} value={about(costs.lovejoin)} part />}
         <Row
           label={tr("swaps.costs.back")}
           value={
@@ -1395,7 +1396,7 @@ export function LovejoinCost({ lovejoin: l, adaOut }: { lovejoin: SwapLovejoin; 
         />
         <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(l.mixFees)}\u00a0₳`} />
         <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(l.withdrawFees)}\u00a0₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} stack />
       </ReviewRows>
       <p className="note" data-testid="swap-lovejoin">
         {joinSentences([
@@ -1447,11 +1448,12 @@ function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
   const ada = (lovelace: string) => `${formatAda(lovelace)}\u00a0₳`;
   return (
     <>
-      {parts.swapped !== "0" && <Row label={tr("swaps.review.part.swapped")} value={ada(parts.swapped)} />}
-      <Row label={tr("swaps.detail.dexFee")} value={ada(parts.dexFee)} />
-      {parts.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={ada(parts.aggregatorFee)} />}
-      <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} />
-      <Row label={tr("swaps.review.part.room")} value={tr("swaps.review.part.roomValue", { ada: formatAda(parts.room) })} />
+      {/* Set in under "The swap and its costs": its parts, not more charges beside the total (visual review). */}
+      {parts.swapped !== "0" && <Row label={tr("swaps.review.part.swapped")} value={ada(parts.swapped)} part />}
+      <Row label={tr("swaps.detail.dexFee")} value={ada(parts.dexFee)} part />
+      {parts.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={ada(parts.aggregatorFee)} part />}
+      <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} part />
+      <Row label={tr("swaps.review.part.room")} value={tr("swaps.review.part.roomValue", { ada: formatAda(parts.room) })} part />
     </>
   );
 }

@@ -365,6 +365,8 @@
   "vote.warn.sharedName",
   "withdraw.privacy.linksBack",
   "withdraw.privacy.linksBackSeveral",
+  "withdraw.privacy.max",
+  "withdraw.privacy.maxLocked",
   "withdraw.privacy.shows",
   "withdraw.warn.ownAccount",
   "withdraw.warn.ownAccountNth",

@@ -51,7 +51,7 @@ describe("an ordinary address pasted into private Send", () => {
     expect(html).toMatch(/<button type="button" class="secondary"[^>]*disabled=""[^>]*>Pay from your public account<\/button>/);
     expect(html).not.toMatch(/disabled=""[^>]*>Pay from your private balance/);
     expect(text(html)).toContain(
-      "Fund your public account first: Receive shows its address. With your public account's Send, as any wallet pays: it shows as coming from your public account.",
+      "Fund your public account first: Receive publicly shows its address. With your public account's Send, as any wallet pays: it shows as coming from your public account.",
     );
     // One that ends a sentence already keeps its one full stop.
     expect(text(render({ onPayAddress: noop, publicBlocked: `${t("home.busy.wait")}.` }))).toContain(

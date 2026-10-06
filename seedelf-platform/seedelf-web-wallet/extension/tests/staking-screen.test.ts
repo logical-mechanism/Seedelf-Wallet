@@ -14,11 +14,13 @@ import { describe, expect, it } from "vitest";
 
 import { withdrawalsOf } from "../src/background/governance";
 import { IPFS_GATEWAY } from "../src/networks";
-import { ALWAYS_NO_CONFIDENCE, type PoolDetails, type PoolRow, type StakingSummary } from "../src/shared/rpc";
+import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
+import { ALWAYS_NO_CONFIDENCE, type PoolDetails, type PoolRow, type StakeInfo, type StakingSummary } from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
+import { PreferencesContext } from "../src/ui/preferences";
 import { readableUrl, rememberVote, sentVote } from "../src/ui/screens/Governance";
 import { paysNothing, PoolListRow, sortPools } from "../src/ui/screens/Pools";
-import { noFundsReason, oversaturation, poolWarnings, StakingReview } from "../src/ui/screens/Staking";
+import { noFundsReason, oversaturation, poolWarnings, Staking, StakingReview } from "../src/ui/screens/Staking";
 
 const markup = (element: ReactElement) =>
   renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, element));
@@ -221,5 +223,48 @@ describe("a governance action's text and a vote sent (GV-2, GV-6)", () => {
     expect(sentVote("mainnet", 0, "gov_action1test")).toBeUndefined();
     // Another public account is another DRep: account 0's vote isn't its own.
     expect(sentVote("preprod", 1, "gov_action1test")).toBeUndefined();
+  });
+});
+
+describe("the rewards' switch, beside the note it decides (blind test §9.9, E04)", () => {
+  const staking: StakeInfo = {
+    registered: true,
+    pool: { id: LOGIC, ticker: "LOGIC" },
+    drep: "drep_always_abstain",
+    rewards: "57475311",
+    deposit: "2000000",
+  };
+  const page = (spendRewards: boolean, stake = staking) =>
+    markup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: { ...DEFAULT_PREFERENCES, spendRewards, hideBalances: false }, loaded: true, set: async () => undefined } },
+        createElement(Staking, { staking: stake, spendRewards, onBack: noop, onSent: noop }),
+      ),
+    );
+  const theSwitch = (html: string) => /<button[^>]*role="switch"[^>]*aria-labelledby="staking-spend-rewards-label"[^>]*>/.exec(html)?.[0];
+
+  it("is Settings' own switch, in Settings' words, then says when withdrawing by hand matters, either way", () => {
+    const on = page(true);
+    expect(theSwitch(on)).toContain('aria-checked="true"');
+    // The note named the setting "in Settings" and gave no way there (blind test §9.9): the switch is here now, and
+    // explained as Settings explains it, not in words of its own (the pass-two visual review).
+    expect(text(on)).toContain(
+      "Use staking rewards when spending Anything your public account pays (a send, making money private, a Seedelf) withdraws the rewards too.",
+    );
+    expect(text(on)).toContain(
+      "Already counted in your public account's balance, so withdrawing them here only matters for a site, which counts your balance without them",
+    );
+    expect(text(on)).not.toContain("in Settings");
+    const off = page(false);
+    expect(theSwitch(off)).toContain('aria-checked="false"');
+    expect(text(off)).toContain("Rewards wait until you withdraw them");
+    expect(text(off)).toContain("withdraw them here to spend them, or for a site");
+  });
+
+  it("gives way, with its note, to the warning while the rewards are locked", () => {
+    const locked = page(true, { ...staking, drep: null });
+    expect(theSwitch(locked)).toBeUndefined();
+    expect(locked).not.toContain("staking-rewards-note");
   });
 });

@@ -22,7 +22,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
-import { delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
+import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
@@ -342,6 +342,8 @@ export function ClaimReview({
         {boxes > 0 && delay && (
           <Row label={t("claim.throughLovejoin")} value={t("claim.boxesBackAfter", { count: boxes, delay: delayText(delay) })} />
         )}
+        {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
+        {boxes > 0 && <BoxesBackRow boxes={boxes} />}
         <Row label={t("claim.fees")} value={`${formatAda(fees.toString())}\u00a0₳`} />
         <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>

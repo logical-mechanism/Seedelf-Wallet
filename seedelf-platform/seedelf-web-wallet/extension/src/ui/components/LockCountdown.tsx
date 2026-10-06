@@ -6,7 +6,7 @@
 // since the wallet's other page (the side panel and a tab) may have put it
 // off; at 0:00, asking locks it.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
 
 import { call, stayUnlocked } from "../background";
@@ -95,9 +95,25 @@ export function LockCountdown() {
     };
   }, [near, stay]);
 
+  // Its height, for what else keeps to the top as the page scrolls: Settings' header stays under it rather than
+  // behind it (styles.css `--lock-countdown-h`; the pass-two cross-area review).
+  const [box, setBox] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!box) return;
+    const root = document.documentElement;
+    const fit = () => root.style.setProperty("--lock-countdown-h", `${box.offsetHeight}px`);
+    fit();
+    const watch = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(fit);
+    watch?.observe(box);
+    return () => {
+      watch?.disconnect();
+      root.style.removeProperty("--lock-countdown-h");
+    };
+  }, [box]);
+
   if (!near || left === undefined) return null;
   return (
-    <section className="callout callout--warn lock-countdown" role="timer" aria-label={t("lock.autoLock")} data-testid="lock-countdown">
+    <section ref={setBox} className="callout callout--warn lock-countdown" role="timer" aria-label={t("lock.autoLock")} data-testid="lock-countdown">
       <span className="callout__icon">
         <LockIcon size={16} />
       </span>

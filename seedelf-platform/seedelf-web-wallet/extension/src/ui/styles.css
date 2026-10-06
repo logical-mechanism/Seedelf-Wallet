@@ -283,16 +283,24 @@ button:disabled {
   color: var(--accent-text);
 }
 
+/* On stays on under the pointer: the plain hover's grey, with the dark text of on, read as disabled (the visual
+   review of pass two). */
+.chip[aria-pressed="true"]:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
 /* A round action with its name below, like Lace's action buttons. */
 .action {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  /* Four fit the side panel's hero: Receive, Send, Make public, Create. */
-  width: 64px;
+  /* As wide as its column in .hero__actions. A name that names its side takes two lines, never cut: "Send" over
+     "privately" (blind test, the owner's call on labels that say their side). */
+  min-width: 0;
   font-size: var(--text-sm);
   font-weight: 500;
+  line-height: 1.3;
   color: var(--text-2);
 }
 
@@ -332,6 +340,21 @@ button:disabled {
    zero-width space, and let a word stand a little wider than its icon. */
 .action:lang(ja) {
   word-break: keep-all;
+}
+
+/* Two short lines, verb over side, in English and Spanish: in the column's 76 px "Make public" fitted one line among
+   two-line neighbours (the pass-two visual check). 64 px holds every word of theirs, "Recibir en" too. Japanese keeps
+   the column, since プライベート is one 75 px word, at 12 px, so two side by side don't read as one run. */
+.action__label {
+  max-width: 64px;
+}
+
+.action:lang(ja) .action__label {
+  max-width: none;
+  font-size: 12px;
+  /* As narrow as its widest word, so it breaks at every point the translation allows: two lines for every action,
+     公開 over 受取 as プライベート over 受取 (the pass-two visual check: 2/2/1/2 lines on Private, 1/1/2 on Public). */
+  width: min-content;
 }
 
 /* Filled means available and recommended: a primary action that can't be
@@ -603,6 +626,16 @@ main {
   text-align: center;
 }
 
+/* In the connector's window, the line sits in the top bar, which has no buttons there, and takes their room: a row
+   of its own pushed a signature's privacy note across the fold at 400×605 (blind test T18). Two lines at most in
+   English and Spanish, about the bar's height. */
+.network-strip--bar {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 10px;
+  line-height: 1.3;
+}
+
 /* Clear of the last card: it sat about 5 px under it (chunk 23's review, RC-2). */
 .footer {
   padding-top: var(--s2);
@@ -709,6 +742,12 @@ main {
   font-size: var(--text-sm);
 }
 
+/* A part of a note's line that wraps whole with the dot before it ("· Save to contacts"): the dot was left at the end
+   of a line when the part wrapped (the visual review of pass two). */
+.note-part {
+  white-space: nowrap;
+}
+
 /*
  * A refusal, in the sticky foot. It was 13px of bare tinted text, which read
  * as a footnote under a full page and was missed (the owner, on mainnet,
@@ -799,6 +838,26 @@ main {
   grid-template-columns: 36px minmax(0, 1fr) 36px;
   align-items: center;
   gap: var(--s2);
+}
+
+/* A long page's header kept in view, so its Back is there wherever the page is scrolled to: Settings' scrolled away
+   on a page about 2,000 px long, and the tester at its end had nothing in view to leave by (blind test E05). On the
+   page's own background, the rows fading under it as the foot's do; the padding is taken back by the margins, so it
+   sits where an ordinary header does. Under the lock countdown, which keeps to the top too and sets its height while
+   it shows (components/LockCountdown.tsx), so it doesn't cover Back. */
+.screen__head--sticky {
+  position: sticky;
+  top: var(--lock-countdown-h, 0px);
+  z-index: 4;
+  margin: calc(-1 * var(--s2)) 0;
+  padding: var(--s2) 0;
+  background: linear-gradient(to bottom, var(--bg) calc(100% - var(--s2)), transparent);
+}
+
+/* A field brought into view, by Tab or by the browser, stops clear of that header (as the foot's clearance does,
+   Screen's PY-8). */
+html:has(.screen__head--sticky) {
+  scroll-padding-top: calc(52px + var(--lock-countdown-h, 0px));
 }
 
 .screen__title {
@@ -910,16 +969,38 @@ main {
   border-top: 0;
 }
 
+/* The value keeps its words whole and takes the room it needs, up to 65% of the row; the label takes the rest, and
+   wraps. "3.174697 ₳" fell to "3.174697" over "₳" on every review, as `overflow-wrap: anywhere` let the value shrink
+   to a letter and broke it even at its no-break space; then a label held at 40% split short values ("drep1y2e…" over
+   its tail, "1 token" over "token") beside a one-word label (the visual review of pass two). A value wraps only
+   between words, or inside one too long for the row (a token's name, an ID). An empty label (a review's second
+   token) leaves the value the row. */
 .review__row dt {
+  flex: 1 1 0;
   color: var(--muted);
 }
 
 .review__row dd {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 65%;
   margin: 0;
   text-align: right;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+.review__row dt:empty + dd {
+  max-width: none;
+}
+
+/* A shortened ID ("addr_test1qr3xfa…cs00h9ax", ReviewRows' Row): one word, on one line, beside a label that gives
+   way; it broke at its "…" and left its tail alone. Short by how it's shortened, so it always fits. */
+.review__row--id dd {
+  flex-shrink: 0;
+  max-width: none;
+  white-space: nowrap;
 }
 
 .review__row--strong dd {
@@ -932,6 +1013,12 @@ main {
   flex-direction: column;
   align-items: stretch;
   gap: var(--s1);
+}
+
+.review__row--whole dt,
+.review__row--whole dd {
+  flex: none;
+  max-width: none;
 }
 
 .review__row--whole dd,
@@ -952,6 +1039,41 @@ main {
 
 .review__row dd.review__hint {
   flex-basis: 100%;
+  max-width: none;
+  text-align: left;
+  font-weight: 400;
+}
+
+/* A part of the row above it: "The swap and its costs" into the swap, its fees, its deposit and the room left; what
+   a mix costs into its mixes, fees and way back. Set in under it, smaller and quieter, with no rule between, so the
+   column reads as one figure and what it's made of, not as more charges (the blind test's visual review). */
+.review__row--part {
+  padding: 0 0 var(--s2) var(--s3);
+  border-top: 0;
+  font-size: 13px;
+}
+
+.review__row--part dd {
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+/* A value that's a sentence, under its label, so the label isn't squeezed into a word a line ("Back / later"). */
+.review__row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.review__row--stack dt,
+.review__row--stack dd {
+  flex: none;
+  max-width: none;
+}
+
+/* A sentence, read as one: in the value's weight it looked heavier than the bold total above it (the visual review of
+   pass two). */
+.review__row--stack dd {
   text-align: left;
   font-weight: 400;
 }
@@ -1382,7 +1504,9 @@ main {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: var(--s5) var(--s4) var(--s4);
+  /* No side padding: four actions with two-line names need the panel's whole width. All else in it is centred, and
+     narrower. */
+  padding: var(--s5) 0 var(--s4);
   border-radius: var(--r-lg);
   background: radial-gradient(120% 90% at 50% 0%, rgb(0 196 188 / 0.16), transparent 70%);
 }
@@ -1457,10 +1581,15 @@ main {
   color: var(--muted);
 }
 
+/* Equal columns, up to 76 px each: four take the 328 px a 360 px side panel leaves, and in them "privately",
+   "Recibir en" and プライベート each fit a line, so no name runs to a third or into its neighbour. */
 .hero__actions {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 76px);
   justify-content: center;
-  gap: var(--s3);
+  align-self: stretch;
+  gap: var(--s2);
   margin-top: var(--s4);
 }
 
@@ -1469,6 +1598,8 @@ main {
   margin: var(--s2) 0 0;
   max-width: 320px;
   text-align: center;
+  /* Even lines: Spanish left "ella" alone on the last (the pass-two visual check). */
+  text-wrap: balance;
   font-size: var(--text-sm);
   color: var(--muted);
 }
@@ -1476,6 +1607,11 @@ main {
 /* Send's reason and Create's, when they differ, each on its own line (chunk 23's second review, GS-1). */
 .hero__reason-line {
   display: block;
+}
+
+/* The way on under a new wallet's reason: Show my public address (screens/Home.tsx). */
+.hero__way {
+  margin-top: var(--s3);
 }
 
 /* Tokens (components/TokenList.tsx, screens/Tokens.tsx): a row is the logo or
@@ -1755,6 +1891,12 @@ main {
   transition: background-color 120ms;
 }
 
+/* A row with no icon (Governance actions): its text takes the wide column and its chevron the last, so the chevrons
+   line up; in the icon's column, each one landed where its text ended (the pass-two visual review). */
+.menu-row--plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .menu-row:hover {
   background: var(--surface-2);
 }
@@ -1803,14 +1945,12 @@ main {
   white-space: normal;
 }
 
-/* A row's first line with a figure at its end: Home's row for the other side's balance (blind test §9.4). A long
-   figure goes under the name rather than being cut. */
+/* A row's name with a figure under it: Home's row for the other side's balance (blind test §9.4). Always under: it
+   sat beside a short figure and dropped under a long one, so the row changed shape with the amount (the pass-two
+   visual check). */
 .menu-row__head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  column-gap: var(--s2);
+  flex-direction: column;
 }
 
 .menu-row__figure {
@@ -1850,11 +1990,18 @@ main {
   background: var(--accent-text);
 }
 
+/* A switch level with its name, not centred on the name and its note: beside a note of five to nine lines it sat
+   70–90 px under the words it switches (the pass-two visual review). */
 .setting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: var(--s3);
+}
+
+/* Centred on the name's first line, which is a little shorter than the switch. */
+.setting-row > .switch {
+  margin-top: -2px;
 }
 
 .menu-link {
@@ -3334,8 +3481,11 @@ button.dapp-tile:hover {
   white-space: normal;
 }
 
+/* It wraps: in a narrow row, "and 3 more" goes to a line of its own rather than squeeze the address to a letter or
+   two with no ellipsis ("h and 3 more", the pass-two visual check). */
 .activity__sub {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
 }
 
@@ -3354,6 +3504,18 @@ button.dapp-tile:hover {
 .activity__sub .middle-ellipsis {
   font: inherit;
   color: inherit;
+  /* Squeezed below its tail, it clips rather than paint the tail over "and 2 more" (the pass-two visual check). */
+  overflow: hidden;
+  /* Never less than a few first letters, the "…" and its tail; it fills the line, up to its whole length. */
+  flex: 1 1 9ch;
+  min-width: 9ch;
+  max-width: max-content;
+}
+
+/* "and 2 more" beside a name: whole, its spaces kept, never under the name (screens/Activity.tsx `Who`). */
+.activity__more {
+  flex: none;
+  white-space: pre;
 }
 
 /* A token passing for another: what it calls itself, whole, in the warning's colour (chunk 23's review, H-9). */

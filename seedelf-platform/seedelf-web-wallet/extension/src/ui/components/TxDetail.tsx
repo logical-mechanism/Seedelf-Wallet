@@ -40,16 +40,20 @@ import { tokenDecimals, tokenText } from "../tokens";
 /**
  * The control that opens the view, for a transaction the wallet is holding:
  * every review's, and a site's waiting for a signature. `label` names it where
- * "Transaction details" doesn't read right.
+ * "Transaction details" doesn't read right. `site`: the site built it and
+ * sends it, and the wallet only adds its signature (the connector's sign
+ * window).
  */
 export function TxDetailButton({
   txHash,
   label,
   testId = "tx-detail",
+  site = false,
 }: {
   txHash: string;
   label?: string;
   testId?: string;
+  site?: boolean;
 }) {
   const tr = useT();
   const [open, setOpen] = useState(false);
@@ -61,7 +65,7 @@ export function TxDetailButton({
           {label ?? tr("tx.detailsButton")}
         </button>
       </div>
-      {open && <TxDetailModal txHash={txHash} testId={testId} onClose={() => setOpen(false)} />}
+      {open && <TxDetailModal txHash={txHash} testId={testId} site={site} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -81,7 +85,17 @@ export function entryLabel({ txs, again }: { txs: number; again?: boolean }): st
 
 type Tab = "transaction" | "cbor";
 
-function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: string; onClose: () => void }) {
+function TxDetailModal({
+  txHash,
+  testId,
+  site,
+  onClose,
+}: {
+  txHash: string;
+  testId: string;
+  site: boolean;
+  onClose: () => void;
+}) {
   const tr = useT();
   const network = useNetwork();
   const [view, setView] = useState<TxView>();
@@ -141,7 +155,7 @@ function TxDetailModal({ txHash, testId, onClose }: { txHash: string; testId: st
             />
             <div id={`${testId}-panel-${tab}`} role="tabpanel" aria-labelledby={`${testId}-tab-${tab}`} className="stack">
               {tab === "transaction" ? (
-                <TxDetailBody detail={view.detail} network={network} testId={testId} />
+                <TxDetailBody detail={view.detail} network={network} testId={testId} site={site} />
               ) : (
                 <Raw cbor={view.cbor} testId={testId} />
               )}
@@ -227,7 +241,18 @@ function Outpoints({ list, testId }: { list: TxOutpoint[]; testId: string }) {
 }
 
 /** The transaction, field by field: exported for its tests. */
-export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; network: NetworkName; testId: string }) {
+export function TxDetailBody({
+  detail: d,
+  network,
+  testId,
+  site = false,
+}: {
+  detail: Detail;
+  network: NetworkName;
+  testId: string;
+  /** A site's transaction, in the connector's sign window: the wallet neither prepared it nor sends it. */
+  site?: boolean;
+}) {
   const tr = useT();
   const amount = (t: TxAsset) => {
     const q = BigInt(t.quantity);
@@ -332,10 +357,20 @@ export function TxDetailBody({ detail: d, network, testId }: { detail: Detail; n
               signature is unsigned. Signed, it still hasn't gone, and says so:
               this sheet only shows a transaction the wallet holds, and "2
               signatures so far" before Send read as sent (chunk 23's second
-              review, PY-7). */}
+              review, PY-7). Counted, not "Signed": on a review, before its
+              button or a password, "Signed 3 signatures" read as consent
+              already given (blind test §4 entry 16; T12, T14, T14r, E04). The
+              wallet signs as it prepares a review, so it can show the exact
+              transaction. A site's arrives as the site prepared it, and the
+              site sends it: the wallet promises only what it does, adding the
+              user's signature on Sign (the pass-two cross-area review). */}
           <Row
             label={tr("tx.signed")}
-            value={d.signatures.length ? tr("tx.signaturesSoFar", { count: d.signatures.length }) : tr("tx.notYet")}
+            value={
+              d.signatures.length
+                ? tr(site ? "tx.siteSignatures" : "tx.signaturesSoFar", { count: d.signatures.length })
+                : tr("tx.notYet")
+            }
           />
           {d.bootstrapWitnesses > 0 && (
             <Row label={tr("tx.byronWitnesses")} value={tr("tx.witnessCount", { count: d.bootstrapWitnesses })} />

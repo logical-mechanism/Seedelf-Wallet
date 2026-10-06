@@ -222,7 +222,14 @@ export function App() {
             brand
           )}
           {network && <NetworkBadge network={network.name} />}
-          <span className="topbar__spacer" />
+          {/* The connector's window has no buttons up here, so the test network's line takes their room rather than
+              a row of its own: that row put the end of a signature's privacy note under the fold at 400×605 (blind
+              test T18). */}
+          {connectorWindow && network ? (
+            <TestNetworkStrip network={network.name} inBar />
+          ) : (
+            <span className="topbar__spacer" />
+          )}
           {unlocked && !connectorWindow && (
             <button
               className="icon-button"
@@ -248,7 +255,7 @@ export function App() {
         {/* A row of its own, not in the top bar: there it pushed Lock and Open in tab off a 360 px side panel, and
             had room for "Account" only, not which one (chunk 23's review, HD-1). */}
         {unlocked && !connectorWindow && <AccountPicker />}
-        {network && <TestNetworkStrip network={network.name} />}
+        {network && !connectorWindow && <TestNetworkStrip network={network.name} />}
 
         <main>
           {unlocked && <LockCountdown />}

@@ -504,18 +504,22 @@ export function SeedelfNameInput({
         ) : found.state === "found" ? (
           <p className="note">
             {t("destination.found")}{" "}
-            {found.seedelf.label && <><strong>{found.seedelf.label}</strong> · </>}
+            {/* Each "·" starts what it leads to, never ends a line (the visual review of pass two). */}
+            {found.seedelf.label && <><strong>{found.seedelf.label}</strong>{" ·\u00a0"}</>}
             <code>{shortHex(found.seedelf.name, 12, 6)}</code>
             {saved ? (
-              <>{" · "}{t("destination.yourContact", { name: saved.name })}</>
+              <>{" ·\u00a0"}{t("destination.yourContact", { name: saved.name })}</>
             ) : (
               !found.seedelf.own &&
               contacts && (
                 <>
-                  {" · "}
-                  <button type="button" className="link" onClick={() => setContactModal("save")}>
-                    {t("destination.saveToContacts")}
-                  </button>
+                  {" "}
+                  <span className="note-part">
+                    {"·\u00a0"}
+                    <button type="button" className="link" onClick={() => setContactModal("save")}>
+                      {t("destination.saveToContacts")}
+                    </button>
+                  </span>
                 </>
               )
             )}

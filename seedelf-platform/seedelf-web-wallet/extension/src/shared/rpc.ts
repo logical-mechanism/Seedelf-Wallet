@@ -1833,6 +1833,12 @@ export interface Requests {
   "validate-phrase": { payload: { phrase: string }; result: null };
   "create-wallet": { payload: { phrase: string; password: string }; result: Status };
   "restore-wallet": { payload: { phrase: string; password: string }; result: Status };
+  /**
+   * Whether a restore made this wallet and Home is still to say so (blind test T20a, T20b): a mark in session
+   * storage, the fact alone, which a lock or Remove wallet wipes. `seen` takes it away: Home has shown the note with
+   * a reading, or it was dismissed.
+   */
+  restored: { payload: { seen?: boolean }; result: boolean };
   unlock: { payload: { password: string }; result: UnlockResult };
   lock: { payload: None; result: Status };
   activity: { payload: None; result: null };
@@ -2176,6 +2182,7 @@ const REQUEST_LIST = [
   "validate-phrase",
   "create-wallet",
   "restore-wallet",
+  "restored",
   "unlock",
   "lock",
   "activity",

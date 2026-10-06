@@ -165,7 +165,8 @@ export function Settings({
   }
 
   return (
-    <Screen title={t("app.settings")} titleId="settings-title" onBack={onBack}>
+    // Its header stays in view: about 2,000 px long, it had nothing to leave by once scrolled (blind test E05).
+    <Screen title={t("app.settings")} titleId="settings-title" onBack={onBack} headSticky>
       <NetworkSection status={status} onMoved={onNetwork} />
       <section className="section" aria-labelledby="wallet-title">
         <h2 id="wallet-title">{t("settings.wallet")}</h2>

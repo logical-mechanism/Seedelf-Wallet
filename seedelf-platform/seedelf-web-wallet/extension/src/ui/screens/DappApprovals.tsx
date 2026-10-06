@@ -20,7 +20,9 @@
 // rather than staying in view: kept in view at 400×605, it covered who the
 // transaction pays and the warning that signing ties two accounts together,
 // so Sign could be pressed without either having been on screen (chunk 23's
-// second review, CW-1). Now Sign is reached only past them.
+// second review, CW-1). Now Sign is reached only past them. The line under the
+// title says Sign is at the end: at 400×605, Sign sat 266 px below the fold
+// with nothing saying it was there (blind test T18).
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { joinSentences, t, useT } from "../../i18n";
@@ -199,8 +201,27 @@ export function DappApprovals() {
   }
 
   if (!current) {
+    // Declined, the window stays a few seconds to say so: with a way to close it now, where it was one sentence on an
+    // empty window that only closed itself (the pass-two visual review). A request that came in meanwhile is shown.
+    const closeNow = () => {
+      clearTimeout(closing.current);
+      call("dapp-close", {}).then((closed) => {
+        if (!closed) load();
+      }, load);
+    };
     return (
-      <Screen title="Seedelf Wallet" titleId="dapp-title" error={error}>
+      <Screen
+        title="Seedelf Wallet"
+        titleId="dapp-title"
+        error={error}
+        foot={
+          declined && approvals ? (
+            <button type="button" className="secondary" onClick={closeNow} data-testid="dapp-declined-close">
+              {tr("common.close")}
+            </button>
+          ) : undefined
+        }
+      >
         {declined && approvals ? (
           <p className="note center" role="status" data-testid="dapp-declined">
             {"all" in declined
@@ -242,7 +263,9 @@ export function DappApprovals() {
       key={current.id}
       title={title}
       titleId="dapp-title"
-      aside={tr("dappUi.nothingUntil", { action })}
+      // Where Sign is, from the first view: it follows the request, below the fold of a 400×605 window for most, and
+      // T18's tester stopped to work out whether the first view was the whole window (blind test §6).
+      aside={tr("dappUi.nothingUntilEnd", { action })}
       error={error}
       // With the password, Enter in its box signs, as it unlocks elsewhere.
       onSubmit={
@@ -493,7 +516,7 @@ export function ConnectRequest({
 
   // Choosing a private session brings its amount into view, and into focus: below the two cards it started under
   // the fold of the 400×605 window, beside a Review that was disabled with no reason (chunk 23's second review,
-  // CW-2). Centred, so the foot kept in view doesn't cover it.
+  // CW-2). Centred, with what follows it in view below.
   const amountField = useRef<HTMLDivElement>(null);
   const [choseSession, setChoseSession] = useState(0);
   useEffect(() => {
@@ -502,6 +525,15 @@ export function ConnectRequest({
     field?.querySelector("input")?.focus({ preventScroll: true });
     field?.scrollIntoView({ block: "center" });
   }, [choseSession]);
+
+  // Choosing the public account brings Connect into view, the nearest way: its privacy note sits between the cards
+  // and the buttons, so it comes too. In Spanish at 400×605 the note filled the window to its bottom edge, with
+  // nothing to say Connect was below (the pass-two visual review's second look).
+  const actions = useRef<HTMLDivElement>(null);
+  const [chosePublic, setChosePublic] = useState(0);
+  useEffect(() => {
+    if (chosePublic) actions.current?.scrollIntoView({ block: "nearest" });
+  }, [chosePublic]);
 
   // What the private balance holds, for the amount and its tokens: the last reading, no request.
   useEffect(() => {
@@ -727,10 +759,14 @@ export function ConnectRequest({
           : tr("dappUi.chooseWhatItSees")
       }
       error={error}
+      // After the choice and what it gives the site, not kept over them: kept in view at 400×605, Connect could be
+      // pressed with the public account's privacy note wholly under it (the pass-two visual review), as Sign could
+      // past a signature's (CW-1). Before a choice, the window's short enough for both buttons to show.
+      footSticky={false}
       foot={
         <>
           {declineNote}
-          <div className="actions">
+          <div className="actions" ref={actions}>
             <button
               type="button"
               className="secondary"
@@ -781,6 +817,7 @@ export function ConnectRequest({
             setConnection(c);
             onError(undefined);
             if (c === "private") setChoseSession((n) => n + 1);
+            else setChosePublic((n) => n + 1);
           }}
           options={[
             {
@@ -799,12 +836,13 @@ export function ConnectRequest({
         />
         {connection === "public" ? (
           <>
-            <ul className="dapp-points">
-              <li>{tr("dappUi.public.asks")}</li>
-            </ul>
+            {/* What the site learns, first, right under the choice that decides it. */}
             <Callout tone="privacy" testId="dapp-connect-privacy">
               {PUBLIC_PRIVACY()}
             </Callout>
+            <ul className="dapp-points">
+              <li>{tr("dappUi.public.asks")}</li>
+            </ul>
             {approval.governance && (
               <>
                 <div className="setting-row" data-testid="dapp-governance-switch">
@@ -1095,9 +1133,11 @@ export function SignTx({
           s.paid.some((p) => p.seedelf === "register"),
         )}
       </Callout>
-      {/* The site built these bytes, not the wallet: this is where reading them
-          matters most. It asks the worker for them while the request waits. */}
-      <TxDetailButton txHash={s.txHash} testId="dapp-tx" />
+      {/* The site built these bytes, not the wallet: this is where reading them matters most. It asks the worker
+          for them while the request waits. Last in the request, before the password, as a review's comes before its
+          button: after Sign, it saved Sign 40 px of scrolling but sat apart from every other review's (the pass-two
+          visual review), and under Pays it would push the privacy note back across the fold (blind test T18). */}
+      <TxDetailButton txHash={s.txHash} testId="dapp-tx" site />
     </>
   );
 }

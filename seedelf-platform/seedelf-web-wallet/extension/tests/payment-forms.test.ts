@@ -96,6 +96,6 @@ describe("a review's amounts (PY-4, PY-5, V-7)", () => {
     const total = (tokens?: number) => text(createElement(TotalRows, { side: "public", leaving: 5_195_025n, tokens }));
     expect(total()).toBe("Total leaving your public account 5.195025 ₳");
     // The words around the count are the translation's: \s takes the no-break space a sweep of them puts in.
-    expect(total(2)).toMatch(/^Total leaving your public account 5\.195025\s₳ and 2 tokens$/);
+    expect(total(2)).toMatch(/^Total leaving your public account 5\.195025\s₳ and 2\stokens$/);
   });
 });

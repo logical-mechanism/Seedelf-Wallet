@@ -37,8 +37,17 @@ import { Screen } from "../components/Screen";
 import { TxDetailButton } from "../components/TxDetail";
 import { formatAda, formatPercent, poolLabel, rewardsLocked, shortId, unlocked, voteLabel } from "../format";
 import { useNetwork } from "../network";
-import { useAmounts } from "../preferences";
-import { BecomeDrep, DrepCard, DrepProfileEdit, GovActions, rememberVote, useActionType, useVoteLabel } from "./Governance";
+import { useAmounts, usePreferences } from "../preferences";
+import {
+  BecomeDrep,
+  DrepCard,
+  DrepProfileEdit,
+  GovActions,
+  rememberVote,
+  shortAction,
+  useActionType,
+  useVoteLabel,
+} from "./Governance";
 import { NEW_POOLS_VIEW, Pools, SharedTicker, type PoolsView } from "./Pools";
 import { sharedDrepName, Voting, type VoteView } from "./Voting";
 
@@ -116,7 +125,7 @@ export function Staking({
   staking: StakeInfo;
   /** All the account holds, as Home shows it (locked UTxOs and rewards in): a review's balance after. */
   total?: string;
-  /** Whether a payment from the account spends the rewards too (Settings). */
+  /** Whether a payment from the account spends the rewards too: Settings' preference, which the rewards' switch sets too. */
   spendRewards: boolean;
   /** Why nothing can be sent now: a transaction is on its way. */
   blocked?: string;
@@ -139,6 +148,9 @@ export function Staking({
   const network = useNetwork();
   const { active } = useAccounts();
   const amounts = useAmounts();
+  const { loaded: prefsRead, set: setPrefs } = usePreferences();
+  // Said under the rewards' switch, as Settings says it under its own, and apart from a build's error.
+  const [rewardsError, setRewardsError] = useState<string>();
   const [page, setPage] = useState<Page>(start);
   const [pool, setPool] = useState<PoolDetails>();
   const [poolError, setPoolError] = useState<string>();
@@ -214,6 +226,16 @@ export function Staking({
     } catch (e) {
       setError((e as Error).message);
       setSending(false);
+    }
+  }
+
+  // Settings' "Use staking rewards when spending", from the rewards it decides about.
+  async function toggleSpendRewards() {
+    try {
+      await setPrefs({ spendRewards: !spendRewards });
+      setRewardsError(undefined);
+    } catch (e) {
+      setRewardsError((e as Error).message);
     }
   }
 
@@ -412,13 +434,39 @@ export function Staking({
             {amounts.ada(staking.rewards)}
             <span className="amount__unit">{"\u00a0₳"}</span>
           </p>
-          {/* When withdrawing by hand matters, naming the setting that decides it (blind test §9.9, E04): with it on,
-              payments take the rewards along, so only a site, which counts the balance without them, needs it.
+          {/* Settings' own switch, here too, in Settings' words: the note named it "in Settings" with no way there,
+              and going there closes this page (blind test §9.9, E04). Then when withdrawing by hand matters: with it
+              on, payments take the rewards along, so only a site, which counts the balance without them, needs it.
               Locked, the warning under the vote says what's true instead. */}
           {!locked && (
-            <p className="note" data-testid="staking-rewards-note">
-              {t(spendRewards ? "staking.rewardsSpent" : "staking.rewardsWait", { setting: t("settings.staking.useRewards") })}
-            </p>
+            <>
+              <div className="setting-row">
+                <span className="stack-tight">
+                  <span id="staking-spend-rewards-label">{t("settings.staking.useRewards")}</span>
+                  <span className="note" id="staking-spend-rewards-note">
+                    {t(spendRewards ? "settings.staking.rewardsSpend" : "settings.staking.rewardsWait")}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  className="switch"
+                  aria-checked={spendRewards}
+                  aria-labelledby="staking-spend-rewards-label"
+                  aria-describedby="staking-spend-rewards-note"
+                  onClick={() => void toggleSpendRewards()}
+                  disabled={!prefsRead}
+                />
+              </div>
+              {rewardsError && (
+                <p className="error" role="alert">
+                  {rewardsError}
+                </p>
+              )}
+              <p className="note" data-testid="staking-rewards-note">
+                {t(spendRewards ? "staking.rewardsSpent" : "staking.rewardsWait")}
+              </p>
+            </>
           )}
           <button
             type="button"
@@ -742,8 +790,15 @@ export function StakingReview({
         {(action.kind === "drep-register" || action.kind === "drep-update") && (
           <Row label={t("drep.profile")} value={action.anchor ? shortId(action.anchor.url) : t("drep.profile.none")} title={action.anchor?.url} />
         )}
+        {/* Which action, by the short ID its list row gives it, and its title when it has one: "Info action" alone
+            didn't say which of five, and the ID was only in a tooltip nothing pointed to (blind test T14). */}
         {action.kind === "drep-vote" && govAction && (
-          <Row label={t("staking.review.govAction")} value={govAction.title ?? typeOf(govAction.type)} title={govAction.id} />
+          <Row
+            label={t("staking.review.govAction")}
+            value={`${govAction.title ?? typeOf(govAction.type)} · ${shortAction(govAction)}`}
+            title={govAction.id}
+            testId="staking-review-action"
+          />
         )}
         {action.kind === "drep-vote" &&
           action.votes.map((b) => <Row key={`${b.txHash}#${b.index}`} label={t("staking.review.voteIs")} value={voteOf(b.vote)} strong />)}

@@ -472,12 +472,12 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     // The whole swap: the DEX's 2 ₳, and three network fees, this one's exact, about 0.25 ₳ each for the order and the
     // return: 2 + 0.233208 + 0.5 = 2.733208, about 2.73 ₳. What comes back: 21.233208 − 10 swapped − 2.733208 = 8.5 ₳,
     // the 5 ₳ kept aside, the 2 ₳ deposit and what the fees leave of the 2 ₳ room.
-    expect(line).toContain("DEX fee 2 ₳ Network fees, about 0.73 ₳ Costs in all, about 2.73 ₳ Comes back, about 4.2 tUSDM and 8.5 ₳");
+    expect(line).toContain("Costs in all, about 2.73 ₳ DEX fee 2 ₳ Network fees, about 0.73 ₳ Comes back, about 4.2 tUSDM and 8.5 ₳");
     expect(line).toContain("Network fees: this payment's 0.233208 ₳, and about 0.25 ₳ each for the order and the return, from the room");
     expect(line).not.toContain("The collateral, the order's deposit");
     // Through Lovejoin, with a box: its mixes and the box's way back are costs too, and the deposit a fourth fee.
     const mixed = review({ ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" });
-    expect(mixed).toContain("Network fees, about 0.98 ₳ Through Lovejoin, about 4.1 ₳ Costs in all, about 7.08 ₳");
+    expect(mixed).toContain("Costs in all, about 7.08 ₳ DEX fee 2 ₳ Network fees, about 0.98 ₳ Through Lovejoin, about 4.1 ₳");
     expect(mixed).toContain("about 0.25 ₳ each for the order, Lovejoin's deposit and the return");
     // Turned off, it comes back directly, as the switch says: Lovejoin's costs go.
     expect(review({ ...through, boxes: 1, mixes: 4, mixFees: "3800000", withdrawFees: "300000" }, false)).toContain("Costs in all, about 2.73 ₳");

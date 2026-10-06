@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { joinList, joinSentences, Rich, sentenceGap, t, useT } from "../../i18n";
 
 import { historyTags } from "../../shared/histories";
-import type { UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
+import type { Incoming, UtxoInfo, UtxoLists, UtxoSide } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
@@ -77,6 +77,27 @@ export function MixHolding({ progress }: { progress: MixProgress }) {
   );
 }
 
+/**
+ * What the wallet's own transactions on their way pay back to this side, all of them together, which no reading
+ * lists yet: Home's figure (Balances' `incoming`, background/incoming.ts), passed in, so nothing more is asked of the
+ * worker or Koios. Without it, during a pending send the list had dropped the UTxO spent and didn't show the change,
+ * adding up to less than Home with nothing to say why (blind test T08). A line, not rows: none of it can be locked,
+ * opened or spent until it's on chain.
+ */
+export function IncomingHere({ incoming }: { incoming?: Incoming }) {
+  const t = useT();
+  const amounts = useAmounts();
+  if (!incoming || incoming.utxos === 0) return null;
+  const what = incoming.tokens.length
+    ? t("format.adaAndTokens", { ada: amounts.ada(incoming.lovelace), count: incoming.tokens.length })
+    : `${amounts.ada(incoming.lovelace)}\u00a0₳`;
+  return (
+    <Callout tone="info" testId="utxos-incoming">
+      {t("utxos.incoming", { what, count: incoming.utxos })}
+    </Callout>
+  );
+}
+
 /** Why the wallet can't spend a UTxO marked `unspendable`, on its side. */
 export function unspendableWhy(of: UtxoSide): string {
   return t(of === "seedelf" ? "utxos.warn.unspendablePrivate" : "utxos.warn.unspendablePublic");
@@ -85,7 +106,18 @@ export function unspendableWhy(of: UtxoSide): string {
 /** Kept ones first, so they're found among hundreds; each group largest first, as the worker sends them. */
 const arrange = (all: UtxoInfo[]) => [...all.filter((u) => tag(u)), ...all.filter((u) => !tag(u))].map(ref);
 
-export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => void; onChanged: () => void }) {
+export function Utxos({
+  of,
+  incoming,
+  onBack,
+  onChanged,
+}: {
+  of: UtxoSide;
+  /** What's on its way back to this side, as Home has it: said above the list (`IncomingHere`). */
+  incoming?: Incoming;
+  onBack: () => void;
+  onChanged: () => void;
+}) {
   const amounts = useAmounts();
   // Private UTxOs name which public account money was made private from, once
   // there is more than one to tell apart (chunk 18): locking one to keep an
@@ -167,6 +199,7 @@ export function Utxos({ of, onBack, onChanged }: { of: UtxoSide; onBack: () => v
       error={shown ? undefined : error}
     >
       {of === "cardano" && <MixHolding progress={mix} />}
+      <IncomingHere incoming={incoming} />
       {stuck > 0 && (
         <Callout tone="warn" testId="utxos-unspendable">
           {t("utxos.warn.someUnspendable", { count: stuck })}

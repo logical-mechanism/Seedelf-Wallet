@@ -251,12 +251,33 @@ describe("a DRep transaction's review", () => {
     });
     expect(shown).toContain("Review: your vote");
     expect(shown).toContain("Cast No vote");
-    expect(shown).toContain("Treasury withdrawal");
+    // Which one, on the page: by its short ID, as its list row gives it, and not only in a tooltip (blind test T14).
+    // Kept on one line by a word joiner: it broke after the ellipsis (the pass-two visual review).
+    expect(shown).toContain("Governance action Treasury withdrawal · bbbbbbbb…\u2060#0");
     expect(shown).toContain("Your vote No");
     expect(shown).toContain("Your vote before Yes");
     // It said "public and permanent" beside "a new vote replaces it, until voting closes", which read as a
     // contradiction (GV-2): both are true, and it says how.
     expect(shown).toContain("Every vote is public and stays on chain for good, even one you replace before voting closes");
+  });
+
+  it("voting: an action with a title is named by it, and by its short ID too", () => {
+    const shown = review(summary({ kind: "drep-vote", votes: [{ txHash: "53fbef38".padEnd(64, "0"), index: 2, vote: "yes" }] }), {
+      govAction: {
+        id: "gov_action1y",
+        txHash: "53fbef38".padEnd(64, "0"),
+        index: 2,
+        type: "InfoAction",
+        title: "Raise k to 1000?",
+        proposedEpoch: 314,
+        expiresEpoch: 321,
+        deposit: "1000000000",
+        anchor: null,
+        anchorValid: null,
+      },
+    });
+    expect(shown).toContain("Governance action Raise k to 1000? · 53fbef38…\u2060#2");
+    expect(shown).not.toContain("Info action");
   });
 
   it("retiring: the deposit back, what ends, a danger button, and the account's own vote moving to Always abstain", () => {
@@ -335,5 +356,7 @@ describe("Voting power, for an account that may be its own DRep", () => {
     const html = voting(ID, registered);
     expect(text(html)).toContain("Now: Your own DRep");
     expect(html).toMatch(/aria-checked="true"[^>]*>(?:(?!<\/button>).)*Your own DRep/s);
+    // Review can't be pressed for it, and says why under it, not in a tooltip alone (blind test T03's verifier).
+    expect(html).toMatch(/<p class="note foot-note" data-testid="vote-why">Your voting power already goes there<\/p>/);
   });
 });

@@ -11,10 +11,30 @@
 // disabled (a transaction being sent) stays, and keeps its entry.
 //
 // Nothing is kept in the URL: a reload still starts at Home, and no form's
-// contents go into the history. Nor the scroll offset: the screen Back leads
-// to opens at its top, as every screen does (blind test §9.10).
+// contents go into the history. Nor does the browser keep the scroll offset:
+// a screen opens at its top (blind test §9.10), and one that Back leads to
+// opens where it was read to, which `Screen` keeps for itself (`pressedBack`).
 
 import { useEffect, useRef } from "react";
+
+/** A Back was pressed, the screen's own or the browser's, and what it leads to hasn't drawn yet. */
+let back = false;
+
+/**
+ * Says a Back was pressed: the screen it leads to opens where the reader left it rather than at its top (`Screen`'s
+ * `useOpensAtTop`). Back to a long list landed at its top, so the reader looked for their place again (pass two of
+ * the blind test's fix round). Until the next task: React draws what a Back leads to before then, in the same click
+ * or popstate.
+ */
+export function pressedBack() {
+  back = true;
+  setTimeout(() => {
+    back = false;
+  }, 0);
+}
+
+/** Whether the screen drawing now is one a Back led to. */
+export const wentBack = () => back;
 
 interface Entry {
   back: () => void;
@@ -42,7 +62,10 @@ function onPop() {
     return;
   }
   const top = stack[stack.length - 1];
-  if (top && !top.disabled()) top.back();
+  if (top && !top.disabled()) {
+    pressedBack();
+    top.back();
+  }
   // After React has drawn what Back led to: if that has a Back too, or this one stayed, an entry to come back to.
   setTimeout(keepEntry, 0);
 }

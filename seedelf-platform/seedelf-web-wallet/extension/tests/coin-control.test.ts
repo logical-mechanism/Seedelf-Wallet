@@ -9,6 +9,7 @@ import { forgetContractView } from "../src/background/contract-scan";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SESSION_MINT } from "../src/background/mint";
 import { SESSION_COLLATERAL } from "../src/background/send";
+import { SESSION_SPENT } from "../src/background/spent";
 import type { KoiosUtxo } from "../src/background/koios";
 import { accountMintPreprod, koiosPreprod, ownedUtxos, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -256,5 +257,30 @@ describe("locked UTxOs", () => {
     expect(sealed).not.toContain(seedelf[0]!.txHash);
     await t.wallet.lock();
     await expect(t.coins.choices("preprod")).rejects.toThrow("locked");
+  });
+});
+
+// The UTxOs screen during a pending spend: what the wallet has spent since the reading is off both lists, as the
+// balances count it, so the line saying what's on its way back adds up with them (pass two of the blind test's fix
+// round, its cross-area review: the private list kept a spent input the kept contract view still held).
+describe("the lists while a spend is on its way", () => {
+  it("leave out what the wallet has spent since the reading, on the private side as on the public", async () => {
+    const t = await unlocked(12);
+    const before = await t.balances.get("preprod");
+    const listed = await t.coins.lists("preprod");
+    const spentPrivate = ownedUtxos.find((u) => !u.asset_list?.some((a) => a.asset_name.startsWith("5eed0e1f")))!;
+    const spentPublic = listed.cardano[0]!;
+    // As rememberSpent writes it when a transaction is submitted.
+    await t.session.set(SESSION_SPENT, { [at(spentPrivate)]: t.clock.now, [at(spentPublic)]: t.clock.now });
+
+    const after = await t.balances.get("preprod");
+    const { seedelf, cardano } = await t.coins.lists("preprod");
+    expect(seedelf.some((u) => at(u) === at(spentPrivate))).toBe(false);
+    expect(cardano.some((u) => at(u) === at(spentPublic))).toBe(false);
+    expect(seedelf).toHaveLength(listed.seedelf.length - 1);
+    // What the list holds besides a Seedelf's own UTxO is what the balance counts, the spent input left out of both.
+    expect(after.seedelf.utxos).toBe(before.seedelf.utxos - 1);
+    const counted = seedelf.filter((u) => !u.seedelf).reduce((sum, u) => sum + BigInt(u.lovelace), 0n);
+    expect(counted).toBe(BigInt(after.seedelf.lovelace));
   });
 });

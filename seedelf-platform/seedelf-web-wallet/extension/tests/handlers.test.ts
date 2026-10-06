@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
 import { NetworkChoice } from "../src/background/preferences";
+import { SESSION_RESTORED } from "../src/background/wallet";
 import type { NetworkName } from "../src/networks";
 import type { Account, Balances, Message, Status, UnlockResult, UtxoLists } from "../src/shared/rpc";
 import { isMessage } from "../src/shared/rpc";
@@ -109,6 +110,34 @@ describe("handlers", () => {
     await handle({ type: "unlock", password: PASSWORD }, ctx);
     expect(await handle({ type: "status" }, ctx)).not.toHaveProperty("lockedBy");
     expect(((await handle({ type: "lock" }, ctx)) as Status).lockedBy).toBeUndefined();
+  });
+
+  it("marks a restore for whichever page opens Home next, the fact alone, until it's seen (blind test T20a, T20b)", async () => {
+    const v = vectors("cardano_account.json").find((v) => v.account === 0)!;
+    const ctx = context();
+    expect(await handle({ type: "restored" }, ctx)).toBe(false);
+    // Refused, it leaves no mark.
+    await expect(handle({ type: "restore-wallet", phrase: v.phrase, password: "short" }, ctx)).rejects.toThrow();
+    expect(await handle({ type: "restored" }, ctx)).toBe(false);
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, ctx);
+    expect(await handle({ type: "restored" }, ctx)).toBe(true);
+    expect(await ctx.session.get(SESSION_RESTORED)).toBe(true);
+    // Seen by one Home, it's seen for all.
+    expect(await handle({ type: "restored", seen: true }, ctx)).toBe(false);
+    expect(await handle({ type: "restored" }, ctx)).toBe(false);
+
+    // Not seen before a lock: the lock wipes it, so the next unlock isn't called a restore.
+    const locked = context();
+    await handle({ type: "restore-wallet", phrase: v.phrase, password: PASSWORD }, locked);
+    await handle({ type: "lock" }, locked);
+    await handle({ type: "unlock", password: PASSWORD }, locked);
+    expect(await handle({ type: "restored" }, locked)).toBe(false);
+
+    // Nor is a new wallet: Get started is its welcome.
+    const created = context();
+    const { phrase } = (await handle({ type: "generate-phrase" }, created)) as { phrase: string };
+    await handle({ type: "create-wallet", phrase, password: PASSWORD }, created);
+    expect(await handle({ type: "restored" }, created)).toBe(false);
   });
 
   it("creates a wallet and resets it", async () => {

@@ -11,7 +11,7 @@ import { joinSentences, t, useT } from "../../i18n";
 
 import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
-import { formatAda } from "../format";
+import { adaText, formatAda } from "../format";
 import { withoutStop } from "../sentence";
 import { BOX_BACK_ESTIMATE } from "../swap";
 import { Callout } from "./Callout";
@@ -137,9 +137,23 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
     <>
       <Row label={tr("claim.throughLovejoin")} value={tr("lovejoin.boxesOfTen", { count: l.boxes })} strong />
       <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.mixedValue", { count: l.depth, mixes: l.mixes })} />
-      <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachAfter", { delay: delayText(l.delay) })} />
+      <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachAfter", { delay: delayText(l.delay) })} stack />
+      <BoxesBackRow boxes={l.boxes} />
     </>
   );
+}
+
+/**
+ * About what bringing `boxes` Lovejoin boxes back costs, in lovelace, each paid from its box as it comes back
+ * (BOX_BACK_ESTIMATE). A return's review counted its chain's fees and not these, so a 10 ₳ box came back as about
+ * 9.7 ₳ with nothing to say so (pass two of the blind test's fix round); the Lovejoin page's costs and a swap's say it.
+ */
+export const boxesBackCost = (boxes: number): bigint => BigInt(boxes) * BOX_BACK_ESTIMATE;
+
+/** "Bringing them back, about 0.6 ₳", in the Lovejoin page's words: a return's review, and Bring everything back's. */
+export function BoxesBackRow({ boxes }: { boxes: number }) {
+  const tr = useT();
+  return <Row label={tr("lovejoin.mix.backLabel", { count: boxes })} value={adaText(boxesBackCost(boxes).toString())} />;
 }
 
 /**

@@ -118,7 +118,15 @@ export function whenOf(at: number, now: Date): string {
  * as every date in the wallet is, for now (a known gap, chunk 19's plan).
  */
 export function epochEnds(network: NetworkName, epoch: number): string {
-  return new Date(epochStart(network, epoch + 1)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return dayText(epochStart(network, epoch + 1));
+}
+
+/**
+ * A day as the wallet writes one, "23 Sept 2026": pinned to en-GB with the rest. The browser's own short date was
+ * "10/5/2026" on the connected sites, which reads as either month (the pass-two visual review).
+ */
+export function dayText(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */

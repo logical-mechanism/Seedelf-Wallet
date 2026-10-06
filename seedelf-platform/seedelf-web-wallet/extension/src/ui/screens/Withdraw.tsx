@@ -328,7 +328,10 @@ export function Withdraw({
             </div>
             {maxed ? (
               <p className="note" data-testid="withdraw-max-note">
-                {t(seedelf.locked.utxos ? "withdraw.maxNoteLocked" : "withdraw.maxNote")}
+                {/* What Max does, in a sentence of its own, then what spending UTxOs together shows: "Everything …,
+                    less the fee. Spending them together ties them to each other." said neither plainly, and a blind
+                    back-translation found it ambiguous (the blind test's fix round). A privacy note, so `.privacy.`. */}
+                {t(seedelf.locked.utxos ? "withdraw.privacy.maxLocked" : "withdraw.privacy.max", { max: MAX_UTXOS })}
               </p>
             ) : (
               <>

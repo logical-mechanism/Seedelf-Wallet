@@ -35,11 +35,15 @@
 // rewards twice.
 //
 // The blind test: each tab has a row for the other side, its balance and what
-// it's for, which opens its tab (§9.4); Home opens at its top (§9.10).
+// it's for, which opens its tab (§9.4); Home opens at its top (§9.10). And,
+// the owner's calls on it: the actions name their side ("Send privately"),
+// the line under them names what each reason holds back, and a restore is
+// confirmed at the top, with what the phrase holds (T03, T20a, T20b).
 
 import { useCallback, useEffect, useState } from "react";
 import { type I18nKey, joinList, joinSentences, t, useT } from "../../i18n";
 
+import { NETWORKS } from "../../networks";
 import { handlesIn } from "../../shared/handles";
 import type {
   Account,
@@ -178,6 +182,62 @@ const BUSY = "home.busy.wait" as const;
 const MAYBE_BUSY = "home.busy.maybe" as const;
 const ALL_LOCKED = "home.busy.allLocked" as const;
 
+/** Why an action can't be pressed: a key, or "busy", the last transaction's own words (it may have gone through). */
+export type Why = I18nKey | "busy" | undefined;
+
+/**
+ * Why each of the Private tab's actions can't be pressed, as keys: Send and Make public's (`spend`), Create's
+ * (`create`), and the lines said under them (`lines`), so two that say the same are said once. A side emptied by a
+ * transaction whose change is on its way waits for it, rather than asking for money. Exported for its tests.
+ *
+ * Each line names what it's about, as a press can't be connected to a reason otherwise (blind test T03: the tooltips
+ * were never seen, on a touch screen or a keyboard there are none). Create gives its own reason where it differs from
+ * Send's: Send's was shown for both, telling a new wallet to make ADA private first while Get started said to create
+ * the Seedelf first. With nothing anywhere and no Seedelf, funding the account is the one step, for all three, and
+ * its line says so for each (chunk 23's second review, GS-1; blind test T03).
+ */
+export function privateWhy(
+  balances: Balances | undefined,
+  watching: boolean,
+): { canSpend: boolean; canCreate: boolean; unfunded: boolean; spend: Why; create: Why; lines: Exclude<Why, undefined>[] } {
+  if (!balances) return { canSpend: false, canCreate: false, unfunded: false, spend: undefined, create: undefined, lines: [] };
+  const seedelfs = balances.seedelf.seedelfs;
+  // Each side less what's locked: the rewards a payment may spend change no count of UTxOs.
+  const free = { seedelf: unlocked(balances.seedelf).utxos, cardano: unlocked(balances.cardano).utxos };
+  const canSpend = free.seedelf > 0 && !watching;
+  const spend: Why = watching
+    ? "busy"
+    : balances.seedelf.utxos === 0
+      ? balances.seedelf.incoming
+        ? BUSY
+        : // Get started's order: with no Seedelf yet, creating one comes before making ADA private (GS-1).
+          seedelfs.length === 0
+          ? "home.busy.createFirst"
+          : "home.busy.makePrivateFirst"
+      : free.seedelf === 0
+        ? ALL_LOCKED
+        : undefined;
+  const canCreate = (free.cardano > 0 || free.seedelf > 0) && !watching;
+  // Nothing on either side, and nothing on its way: the account has to be funded first.
+  const unfunded =
+    balances.cardano.utxos === 0 && balances.seedelf.utxos === 0 && !balances.cardano.incoming && !balances.seedelf.incoming;
+  const create: Why = watching
+    ? "busy"
+    : !canCreate
+      ? unfunded
+        ? "home.busy.fundFirst"
+        : balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
+          ? ALL_LOCKED
+          : BUSY
+      : undefined;
+  const both: Why[] = [canSpend ? undefined : spend, canCreate ? undefined : create];
+  const lines: Exclude<Why, undefined>[] =
+    seedelfs.length === 0 && unfunded && !watching
+      ? ["home.busy.fundFirstAll"]
+      : [...new Set(both)].filter((why): why is Exclude<Why, undefined> => !!why);
+  return { canSpend, canCreate, unfunded, spend, create, lines };
+}
+
 /**
  * `goHome` counts the times the top bar's Seedelf mark was pressed: each one
  * puts the wallet back on Home, from however deep a flow, so nothing needs
@@ -224,6 +284,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const [picked, setPicked] = useState<Record<string, string>>();
   const [tokensOf, setTokensOf] = useState<Tab>();
   const [activityOf, setActivityOf] = useState<Tab>();
+  // The list Activity's row for the other side was pressed from: Back goes back to it (blind test E01).
+  const [activityFrom, setActivityFrom] = useState<Tab>();
   const [utxosOf, setUtxosOf] = useState<Tab>();
   const [pending, setPending] = useState<PendingTx | null>(null);
   const [dappStart, setDappStart] = useState<DappStart>();
@@ -324,6 +386,17 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   // Until the first reading (or its error), a splash covers the empty balances.
   const splash = useSplash(balances !== undefined || error !== undefined);
 
+  // A restore's note (blind test T20a, T20b): the worker keeps the mark, so it's whichever page opens Home next, the
+  // restore's tab or a side panel. Said once: the mark goes when this Home has shown what the reading found, or on
+  // Dismiss; this Home keeps the note until dismissed.
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    call("restored", {}).then(setRestored, () => undefined);
+  }, []);
+  useEffect(() => {
+    if (restored && balances) void call("restored", { seen: true }).catch(() => undefined);
+  }, [restored, balances !== undefined]);
+
   // Waiting on the sent transaction holds new payments back: for 10 minutes,
   // or, when Koios didn't answer it, until the worker settles it.
   const watching = pending !== null && unsettled(pending) && (!!pending.maybeSent || now - pending.submittedAt < HOLD_MS);
@@ -347,35 +420,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     seedelf: unlocked(balances.seedelf),
     cardano: withRewards(unlocked(balances.cardano), rewards),
   };
-  // Why each action can't be pressed, as keys, so two that say the same are said once. A side emptied by a
-  // transaction whose change is on its way waits for it, rather than asking for money.
-  type Why = I18nKey | "busy" | undefined;
-  const canSpend = !!free && free.seedelf.utxos > 0 && !watching;
-  const spendWhy: Why = watching
-    ? "busy"
-    : balances && balances.seedelf.utxos === 0
-      ? balances.seedelf.incoming
-        ? BUSY
-        : // Get started's order: with no Seedelf yet, creating one comes before making ADA private (GS-1).
-          seedelfs.length === 0
-          ? "home.busy.createFirst"
-          : "home.busy.makePrivateFirst"
-      : free && free.seedelf.utxos === 0
-        ? ALL_LOCKED
-        : undefined;
-  const canCreate = !!free && (free.cardano.utxos > 0 || free.seedelf.utxos > 0) && !watching;
-  // Nothing on either side, and nothing on its way: the account has to be funded first.
-  const unfunded =
-    !!balances && balances.cardano.utxos === 0 && balances.seedelf.utxos === 0 && !balances.cardano.incoming && !balances.seedelf.incoming;
-  const createWhy: Why = watching
-    ? "busy"
-    : balances && !canCreate
-      ? unfunded
-        ? "home.busy.fundFirst"
-        : balances.cardano.utxos > 0 || balances.seedelf.utxos > 0
-          ? ALL_LOCKED
-          : BUSY
-      : undefined;
+  // Why each of the Private tab's actions can't be pressed (privateWhy).
+  const { canSpend, canCreate, unfunded, spend: spendWhy, create: createWhy, lines } = privateWhy(balances, watching);
   const say = (why: Why) => (why === "busy" ? busy : why && t(why));
   const spendTitle = say(spendWhy);
   const createTitle = say(createWhy);
@@ -391,19 +437,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
           : undefined
       : undefined;
   // Why a tab's actions can't be pressed, said under them: a tooltip alone reached no touch screen, and the
-  // public tab had none for an empty account (chunk 23's review, H-1, H-10). Create gives its own reason where it
-  // differs from Send's: Send's was shown for both, telling a new wallet to make ADA private first while Get
-  // started said to create the Seedelf first. With nothing anywhere and no Seedelf, funding the account is the one
-  // step, for all three (chunk 23's second review, GS-1).
-  const privateReasons = (
-    !balances
-      ? []
-      : seedelfs.length === 0 && unfunded && !watching
-        ? ["home.busy.fundFirst" as const]
-        : [...new Set([!canSpend && spendWhy, !canCreate && createWhy])]
-  )
-    .map((why) => (why ? say(why) : undefined))
-    .filter((r): r is string => !!r);
+  // public tab had none for an empty account (chunk 23's review, H-1, H-10).
+  const privateReasons = lines.map((why) => say(why)).filter((r): r is string => !!r);
   const publicReason = !balances || canMoveIn ? undefined : (moveInTitle ?? t("home.busy.publicEmpty"));
   // Until there's a Seedelf, making money private isn't the next step: creating one is, and the callout under the
   // balance says so, so the action row doesn't contradict it (H-4). An empty account's next step is Receive.
@@ -442,6 +477,13 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
           setScreen(side === "cardano" ? (action === "send" ? "send" : "move-in") : action === "send" ? "transfer" : "withdraw");
         }
       : undefined;
+  // The public address, from Home's Private tab (Get started's first step, and the way on under a new wallet's reason):
+  // Back comes back to this tab. It switched Home to Public unsaid, and T03's tester came back to a tab they hadn't
+  // left (blind test T03, §5; GS-5's rule for the address).
+  const showAddress = () => {
+    setBackTo("home");
+    setScreen("receive");
+  };
   // The top bar's mark: leave every flow and overlay, keeping the tab chosen.
   useEffect(() => {
     if (!goHome) return;
@@ -452,6 +494,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     setPicked(undefined);
     setTokensOf(undefined);
     setActivityOf(undefined);
+    setActivityFrom(undefined);
     setUtxosOf(undefined);
     setDappStart(undefined);
   }, [goHome]);
@@ -617,15 +660,28 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   }
   if (activityOf) {
     const pendingHash = watching ? pending?.txHash : undefined;
+    const other: Tab = activityOf === "seedelf" ? "cardano" : "seedelf";
     return (
       <Activity
+        // A list of its own, read afresh: the other side's entries never show under this one's title meanwhile.
+        key={activityOf}
         of={activityOf}
         pendingHash={pendingHash}
         banner={
           pending ? <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} onCheck={watch} /> : undefined
         }
-        onBack={() => setActivityOf(undefined)}
+        // Back returns to the list the other one was opened from, then Home, on the tab it was left on.
+        onBack={() => {
+          setActivityOf(activityFrom);
+          setActivityFrom(undefined);
+        }}
         onRead={() => void load(false)}
+        // The other side's list, read only now, at the press: the public account's from Koios, as its own tab's
+        // Activity reads it. Pressed in a list opened that way, it's the way back, so the lists don't pile up.
+        onOther={() => {
+          setActivityFrom(activityFrom === other ? undefined : activityOf);
+          setActivityOf(other);
+        }}
       />
     );
   }
@@ -642,8 +698,16 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     );
   }
   if (utxosOf) {
-    // Locking or refreshing there changes the kept reading: Home picks it up, with no request.
-    return <Utxos of={utxosOf} onBack={() => setUtxosOf(undefined)} onChanged={() => void load(false)} />;
+    // Locking or refreshing there changes the kept reading: Home picks it up, with no request. What's on its way back
+    // to the side goes with it, from this reading, so the list says why it adds up to less (blind test T08).
+    return (
+      <Utxos
+        of={utxosOf}
+        incoming={balances?.[utxosOf].incoming}
+        onBack={() => setUtxosOf(undefined)}
+        onChanged={() => void load(false)}
+      />
+    );
   }
 
   return (
@@ -681,6 +745,16 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         {pending && (
           <PendingBanner pending={pending} watching={watching} onDismiss={() => setPending(null)} onCheck={watch} />
         )}
+        {restored && (
+          <RestoredNote
+            balances={balances}
+            failed={!!error}
+            onDismiss={() => {
+              void call("restored", { seen: true }).catch(() => undefined);
+              setRestored(false);
+            }}
+          />
+        )}
 
         <Tabs
           label={t("home.tabsLabel")}
@@ -709,19 +783,20 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               {/* What's locked, and nothing else: a UTxO count is the UTxOs page's (chunk 23's review, H-5). */}
               {balances && lockedMeta(balances.seedelf, amounts.ada, "seedelf-meta")}
               {balances && incomingMeta(balances.seedelf, "seedelf-incoming")}
+              {/* Each label names its side, as the accessible names did alone: a sighted user couldn't tell this
+                  Receive or Send from the Public tab's (blind test T03, T20b, §5; the owner's call, 2026-10-05). And
+                  Create names what it makes, which the reason under the row calls "your Seedelf". */}
               <div className="hero__actions">
                 <ActionButton
                   icon={<ReceiveIcon />}
-                  label={t("home.action.receive")}
-                  name={t("home.action.receivePrivately")}
+                  label={t("home.action.receivePrivately")}
                   onClick={() => setScreen("receive-seedelf")}
                   disabled={!balances}
                 />
                 <ActionButton
                   primary
                   icon={<SendIcon />}
-                  label={t("home.action.send")}
-                  name={t("home.action.sendPrivately")}
+                  label={t("home.action.sendPrivately")}
                   onClick={() => setScreen("transfer")}
                   disabled={!canSpend}
                   title={spendTitle}
@@ -735,8 +810,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 />
                 <ActionButton
                   icon={<SproutIcon />}
-                  label={t("home.action.create")}
-                  name={t("home.action.createSeedelf")}
+                  label={t("home.action.createSeedelf")}
                   onClick={() => setScreen("create")}
                   disabled={!canCreate}
                   title={createTitle}
@@ -751,17 +825,23 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                   ))}
                 </p>
               )}
+              {/* The way on, under the reason that asks for it: on a new wallet, Get started's own button sat below
+                  the fold at 360×640, and the one lit action above it, Receive privately, says there's no Seedelf yet
+                  (the pass-two visual check). Filled, as the tab's next step; Get started keeps its own. */}
+              {lines.includes("home.busy.fundFirstAll") && (
+                <button type="button" className="primary primary--compact hero__way" onClick={showAddress} data-testid="seedelf-fund">
+                  {t("receive.seedelfs.showPublic")}
+                </button>
+              )}
             </div>
 
             {balances && (seedelfs.length === 0 || balances.seedelf.utxos === 0) && (
               <GettingStarted
                 balances={balances}
                 watching={watching}
-                onReceive={() => {
-                  setTab("cardano");
-                  setBackTo("home");
-                  setScreen("receive");
-                }}
+                // One button for the first step: the hero's, above the fold (the pass-two visual check).
+                fundAbove={lines.includes("home.busy.fundFirstAll")}
+                onReceive={showAddress}
                 onCreate={() => setScreen("create")}
                 onMoveIn={() => setScreen("move-in")}
               />
@@ -828,12 +908,12 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                   {t(rewards > 0n ? "home.rewardsIn" : "home.rewardsInUnspent", { amount: amounts.ada(balances.cardano.staking.rewards) })}
                 </span>
               )}
+              {/* Named by their side, as on the Private tab. */}
               <div className="hero__actions">
                 <ActionButton
                   primary={publicEmpty}
                   icon={<ReceiveIcon />}
-                  label={t("home.action.receive")}
-                  name={t("home.action.receivePublicly")}
+                  label={t("home.action.receivePublicly")}
                   onClick={() => {
                     setBackTo("home");
                     setScreen("receive");
@@ -842,8 +922,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
                 />
                 <ActionButton
                   icon={<SendIcon />}
-                  label={t("home.action.send")}
-                  name={t("home.action.sendPublicly")}
+                  label={t("home.action.sendPublicly")}
                   onClick={() => setScreen("send")}
                   disabled={!canMoveIn}
                   title={moveInTitle}
@@ -1048,14 +1127,16 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
             </span>
             <span className="menu-row__text">
               <span>{t("staking.pageTitle")}</span>
-              <span className="menu-row__sub" data-testid="staking-row-pool">
+              {/* Whole, on two lines if they must: cut, Japanese's "not staking" line lost what it says (the pass-two
+                  visual check). */}
+              <span className="menu-row__sub menu-row__sub--wrap" data-testid="staking-row-pool">
                 {staking.pool
                   ? t("home.staking.pool", { pool: poolLabel(staking.pool) })
                   : rewards
                     ? t("home.staking.rewards")
                     : t("home.staking.notEarn")}
               </span>
-              <span className="menu-row__sub" data-testid="staking-row-vote">
+              <span className="menu-row__sub menu-row__sub--wrap" data-testid="staking-row-vote">
                 {t("home.votingPower", { what: voteLabel(staking.drep, staking.ownDrep ? t("drep.yourOwn") : undefined) })}
               </span>
             </span>
@@ -1071,8 +1152,8 @@ function StakingRow({ staking, onOpen }: { staking: StakeInfo; onOpen: () => voi
  * The wallet's other side, on the tab that's showing: its balance as its own tab shows it (hidden with the eye, "—"
  * until a reading), what it's for, and its tab. Home opens on Private, and 11 of 29 blind runs looked there first for
  * an ordinary payment, an address to be paid at, staking or a vote; once Get started was gone, nothing there said a
- * public side existed (blind test §9.4). The actions keep their short names, "Send" and "Receive", with the side in
- * their accessible names only (chunk 14); this row says it on the page. Exported for its tests.
+ * public side existed (blind test §9.4). The actions name their side too, since the owner's call on that test ("Send
+ * privately"): this row says where the other side's are. Exported for its tests.
  */
 export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "cardano"; lovelace?: string; onOpen: () => void }) {
   const t = useT();
@@ -1103,6 +1184,64 @@ export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "carda
           </button>
         </li>
       </ul>
+    </section>
+  );
+}
+
+/**
+ * "Wallet restored", on the Home a restore opens, once (blind test T20a, T20b): restore and create led to the same
+ * Home, so an empty restored wallet looked new, and both testers wondered whether the phrase had found their wallet.
+ * While the first reading runs, it says so (once it has failed, only that a used phrase's balances show once read: the
+ * alert above says it failed); then what the phrase holds on each side, as Home shows them (hidden with
+ * the eye), or that it holds nothing yet on this network, which is what a phrase never used holds. Once the look for
+ * more accounts finds some it says what the account shown holds, by its name, and how many more the phrase used, which
+ * the picker switches to: never "nothing… never used" from account 0 alone when the money is in another (the
+ * pass-two review). Only accounts the look found used are counted. In the banners' style, at the top, with Dismiss.
+ * Exported for its tests.
+ */
+export function RestoredNote({
+  balances,
+  failed = false,
+  onDismiss,
+}: {
+  balances?: Balances;
+  /** The reading failed: Home's alert says so, and this doesn't say it's reading. */
+  failed?: boolean;
+  onDismiss: () => void;
+}) {
+  const t = useT();
+  const amounts = useAmounts();
+  const accounts = useAccounts();
+  const publicTotal = balances && shownAccountTotal(balances.cardano);
+  const privateBalance = balances && privateTotal(balances.seedelf);
+  const found = !!balances && (BigInt(publicTotal!) > 0n || BigInt(privateBalance!) > 0n || balances.seedelf.seedelfs.length > 0);
+  // The other public accounts the look after the restore found used (`foundAt`): account 0 has none, used or not.
+  const others = accounts.accounts.filter((a) => a.foundAt !== undefined && a.index !== accounts.active).length;
+  const figures = balances && { public: `${amounts.ada(publicTotal!)}\u00a0₳`, private: `${amounts.ada(privateBalance!)}\u00a0₳` };
+  const what = !balances
+    ? joinSentences([!failed && t("home.restored.reading"), t("home.restored.once")])
+    : others > 0
+      ? t("home.restored.foundIn", { account: accounts.name, ...figures })
+      : found
+        ? t("home.restored.found", figures)
+        : t("home.restored.empty", { network: NETWORKS[balances.network].label });
+  return (
+    <section className="callout tx-banner callout--done" role="status" data-testid="home-restored">
+      <strong className="tx-banner__title">
+        <span className="callout__icon">
+          <DoneIcon size={16} />
+        </span>
+        {t("home.restored.title")}
+      </strong>
+      <div className="tx-banner__detail" data-testid="home-restored-detail">
+        {joinSentences([
+          what,
+          others > 0 && t("home.restored.others", { count: others }),
+        ])}
+      </div>
+      <button type="button" className="tx-banner__dismiss" onClick={onDismiss}>
+        {t("common.dismiss")}
+      </button>
     </section>
   );
 }
@@ -1242,12 +1381,15 @@ function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtx
 function GettingStarted({
   balances,
   watching,
+  fundAbove = false,
   onReceive,
   onCreate,
   onMoveIn,
 }: {
   balances: Balances;
   watching: boolean;
+  /** Show my public address is under the reason above, so the first step has no button of its own: two read as two steps. */
+  fundAbove?: boolean;
   onReceive: () => void;
   onCreate: () => void;
   onMoveIn: () => void;
@@ -1301,7 +1443,7 @@ function GettingStarted({
               {s.title}
               {s.done && <span className="sr-only">{t("home.start.done")}</span>}
             </span>
-            {i === current ? (
+            {i === current && !(i === 0 && fundAbove) ? (
               <button
                 type="button"
                 className="chip"

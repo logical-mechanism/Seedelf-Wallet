@@ -197,14 +197,22 @@ describe("the transaction view's page", () => {
   });
 
   it("says a transaction isn't signed yet where it isn't, whatever else its witness set holds", () => {
-    expect(shown(cborOf("payment"))).toContain("Signed Not yet");
+    expect(shown(cborOf("payment"))).toContain("Signatures None yet");
     // The wallet's transfer carries its redeemers and no signature yet: still unsigned.
-    expect(shown(transferPreprod.final.txCbor)).toContain("Signed Not yet");
+    expect(shown(transferPreprod.final.txCbor)).toContain("Signatures None yet");
     // One that has been signed says how many have signed it, and that it hasn't gone: the sheet is only ever
-    // shown for a transaction the wallet holds, before Send (chunk 23's second review, PY-7).
+    // shown for a transaction the wallet holds, before Send (chunk 23's second review, PY-7). Counted, never
+    // "Signed", which on a review read as consent already given (blind test §4 entry 16), and said to come from
+    // preparing it.
     const detail = { ...read(cborOf("payment")), signatures: [{ publicKey: "ab".repeat(32), keyHash: "cd".repeat(28) }] };
     const page = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx" }));
-    expect(page).toContain("Signed 1 signature, not sent yet");
+    expect(page).toContain("Signatures 1, made while preparing it: not sent until you confirm");
+    expect(page).not.toContain("Signed");
+    // A site's, in the connector's sign window: the site prepared it and sends it, so the wallet says only what it
+    // does itself (the pass-two cross-area review).
+    const site = text(createElement(TxDetailBody, { detail, network: "preprod" as const, testId: "tx", site: true }));
+    expect(site).toContain("Signatures 1 already in it. Seedelf Wallet adds yours only when you press Sign, and the site sends it");
+    expect(site).not.toContain("not sent until you confirm");
   });
 
   it("reports a field it has no name for rather than leaving it out", () => {

@@ -37,7 +37,7 @@ import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Hinted } from "../components/Hint";
 import { Screen } from "../components/Screen";
-import { epochEnds, formatAda, shortId, voteLabel } from "../format";
+import { dayText, epochEnds, formatAda, shortId, voteLabel } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { type Building, drepNeeds, KEY_DEPOSIT, ReadFailed } from "./Staking";
@@ -663,11 +663,15 @@ function ProfileForm({ onAnchor, busy }: { onAnchor: (anchor?: Anchor) => void; 
   );
 }
 
-/** "12 Sep 2026", as the wallet writes an epoch's end (format.ts `epochEnds`). */
-const dayOf = (ms: number) => new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+/** "12 Sept 2026", as the wallet writes an epoch's end (format.ts `epochEnds`). */
+const dayOf = dayText;
 
-/** An action told apart from its neighbours at a glance: its transaction's first characters and its index. */
-const shortAction = (a: GovAction) => `${a.txHash.slice(0, 8)}…#${a.index}`;
+/**
+ * An action told apart from its neighbours at a glance: its transaction's first characters and its index. The vote's
+ * review names it the same way (Staking.tsx), as Transaction details begins it. A word joiner keeps it on one line:
+ * the review broke it after the ellipsis, "53fbef38…" over "#0" (the pass-two visual review).
+ */
+export const shortAction = (a: Pick<GovAction, "txHash" | "index">) => `${a.txHash.slice(0, 8)}…\u2060#${a.index}`;
 
 /** What a treasury withdrawal pays out, all of it. */
 const paidOut = (a: GovAction) => (a.withdrawals ?? []).reduce((sum, w) => sum + BigInt(w.amount), 0n);
@@ -875,45 +879,56 @@ export function GovActions({
       )}
       {view && !registered && <NotADrep onBecome={onBecome} blocked={blocked} busy={busy} />}
       {view && actions.length === 0 && <p className="note">{t("gov.none")}</p>}
-      <ul className="list" data-testid="gov-actions">
-        {actions.map((a) => {
-          const mine = view?.votes[a.id];
-          const coming = onItsWay(a.id);
-          const paid = paidOut(a);
-          // Rows that differed only in type and date: each has its ID and when it was proposed, and a treasury
-          // withdrawal its amount (chunk 23's second review, GV-1).
-          const about = [
-            ...(a.title ? [typeOf(a.type)] : []),
-            ...(paid > 0n ? [`${formatAda(paid.toString())}\u00a0₳`] : []),
-            closes(t, network, a.expiresEpoch, now),
-          ].join(" · ");
-          return (
-            <li key={a.id}>
-              <button type="button" className="menu-row" onClick={() => setOpen(a)} data-testid="gov-action-row">
-                <span className="stack-tight">
-                  <span>{a.title ?? typeOf(a.type)}</span>
-                  <span className="note">{about}</span>
-                  <span className="note" data-testid="gov-action-when">
-                    {a.proposedAt !== undefined
-                      ? t("gov.row.proposedOn", { id: shortAction(a), date: dayOf(a.proposedAt) })
-                      : t("gov.row.proposedIn", { id: shortAction(a), epoch: a.proposedEpoch })}
-                  </span>
-                  {registered && (
-                    <span className="note" data-testid="gov-your-vote">
-                      {coming
-                        ? t("gov.yourVote", { vote: t("gov.vote.onItsWay", { vote: voteOf(coming) }) })
-                        : mine
-                          ? t("gov.yourVote", { vote: voteOf(mine) })
-                          : t("gov.notVoted")}
+      {/* In a card, as Settings' lists are, with the chevrons in one column: with no icon, a row's text fell into the
+          icon's column and its chevron landed wherever the text ended (the pass-two visual review). */}
+      {actions.length > 0 && (
+        <div className="section">
+          <ul className="list" data-testid="gov-actions">
+            {actions.map((a) => {
+              const mine = view?.votes[a.id];
+              const coming = onItsWay(a.id);
+              const paid = paidOut(a);
+              // Rows that differed only in type and date: each has its ID and when it was proposed, and a treasury
+              // withdrawal its amount (chunk 23's second review, GV-1).
+              const about = [
+                ...(a.title ? [typeOf(a.type)] : []),
+                ...(paid > 0n ? [`${formatAda(paid.toString())}\u00a0₳`] : []),
+                closes(t, network, a.expiresEpoch, now),
+              ].join(" · ");
+              return (
+                <li key={a.id}>
+                  <button
+                    type="button"
+                    className="menu-row menu-row--plain"
+                    onClick={() => setOpen(a)}
+                    data-testid="gov-action-row"
+                  >
+                    <span className="stack-tight">
+                      <span>{a.title ?? typeOf(a.type)}</span>
+                      <span className="note">{about}</span>
+                      <span className="note" data-testid="gov-action-when">
+                        {a.proposedAt !== undefined
+                          ? t("gov.row.proposedOn", { id: shortAction(a), date: dayOf(a.proposedAt) })
+                          : t("gov.row.proposedIn", { id: shortAction(a), epoch: a.proposedEpoch })}
+                      </span>
+                      {registered && (
+                        <span className="note" data-testid="gov-your-vote">
+                          {coming
+                            ? t("gov.yourVote", { vote: t("gov.vote.onItsWay", { vote: voteOf(coming) }) })
+                            : mine
+                              ? t("gov.yourVote", { vote: voteOf(mine) })
+                              : t("gov.notVoted")}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-                <ChevronRightIcon size={16} />
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+                    <ChevronRightIcon size={16} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </Screen>
   );
 }

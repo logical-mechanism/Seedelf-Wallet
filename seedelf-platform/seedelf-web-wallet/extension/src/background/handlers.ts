@@ -26,7 +26,7 @@ import type { Area } from "./storage";
 import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
-import { WalletLocked, type Wallet } from "./wallet";
+import { SESSION_RESTORED, WalletLocked, type Wallet } from "./wallet";
 
 export interface Context {
   wasm: typeof Wasm;
@@ -99,7 +99,17 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // wallet, as the network does, so a new phrase starts on account 0
       // rather than wherever the last one was left (accounts.ts `useFirst`).
       await ctx.accounts.useFirst();
-      await wallet.create(message.phrase, message.password);
+      // A restore is confirmed by the Home that opens next, in whichever page that is (`restored`, blind test T20a,
+      // T20b): marked before the wallet exists, since its state change opens Home in every open page at once. The
+      // fact alone. A create is never marked: Get started is its welcome.
+      if (message.type === "restore-wallet") await ctx.session.set(SESSION_RESTORED, true);
+      else await ctx.session.remove(SESSION_RESTORED);
+      try {
+        await wallet.create(message.phrase, message.password);
+      } catch (e) {
+        await ctx.session.remove(SESSION_RESTORED).catch(() => undefined);
+        throw e;
+      }
       // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
       await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
       // So does a mix from the public account that may have gone through (final review F1).
@@ -113,6 +123,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         void ctx.accounts.discover(ctx.network).catch(() => undefined);
       }
       return status(ctx);
+    case "restored":
+      // Whether Home is still to say a restore made this wallet; `seen` once it has, with a reading, or was dismissed.
+      if (message.seen) {
+        await ctx.session.remove(SESSION_RESTORED);
+        return false;
+      }
+      return (await ctx.session.get<boolean>(SESSION_RESTORED)) === true;
     case "unlock":
       return wallet.unlock(message.password);
     case "lock":

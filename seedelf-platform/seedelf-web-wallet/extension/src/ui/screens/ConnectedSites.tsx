@@ -19,7 +19,9 @@ import { t, useT } from "../../i18n";
 
 import type { DappDeclined, DappSite, SessionView } from "../../shared/rpc";
 import { call } from "../background";
+import { Callout } from "../components/Callout";
 import { Modal } from "../components/Modal";
+import { dayText } from "../format";
 import { Screen } from "../components/Screen";
 import { useDeclined, useSiteAccount, waitText } from "../sites";
 import { disconnectWait } from "./SiteSessions";
@@ -76,7 +78,8 @@ export function SiteItem({
         <SiteName origin={s.origin} title={s.title} />
         <span className="note">
           {s.session === undefined ? publicAccountText(account) : t("claim.session", { number: s.session + 1 })} ·{" "}
-          {t("sites.since", { date: new Date(s.connectedAt).toLocaleDateString() })}
+          {/* One piece, so "5 Oct 2026" never breaks across lines (the visual review of pass two). */}
+          <span className="note-part">{t("sites.since", { date: dayText(s.connectedAt) })}</span>
         </span>
         {s.cip95 && (
           <span className="note" data-testid="site-governance">
@@ -144,7 +147,10 @@ export function disconnectText(site: string, session?: number): string {
     : t("sites.disconnectTextSession", { number: session + 1, site });
 }
 
-/** Disconnect's question: what it does, Keep it, and Disconnect the site. */
+/**
+ * Disconnect's question: what it does, Keep it, and Disconnect, which the title's question names the site for:
+ * "Disconnect the site" wrapped onto two lines in the side panel (the pass-two visual review's second look).
+ */
 export function DisconnectModal({ site, onKeep, onDisconnect }: { site: DappSite; onKeep: () => void; onDisconnect: () => void }) {
   const tr = useT();
   return (
@@ -177,10 +183,12 @@ export function DisconnectModal({ site, onKeep, onDisconnect }: { site: DappSite
 export function Disconnected({ host }: { host?: string }) {
   const tr = useT();
   if (!host) return null;
+  // A callout, as the wallet says what just happened elsewhere: a grey paragraph, it ran into the page's notes, some
+  // left-aligned and one centred (the pass-two visual review's second look).
   return (
-    <p className="note" role="status" data-testid="sites-disconnected">
+    <Callout tone="privacy" role="status" testId="sites-disconnected">
       {tr("sites.privacy.disconnected", { site: host })}
-    </p>
+    </Callout>
   );
 }
 
@@ -281,7 +289,7 @@ export function ConnectedSites({ onBack }: { onBack: () => void }) {
         </div>
       )}
       {sites?.length === 0 && (
-        <p className="note center" data-testid="sites-empty">
+        <p className="note" data-testid="sites-empty">
           {t("sites.empty")}
         </p>
       )}

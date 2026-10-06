@@ -189,9 +189,13 @@ export function ReviewWait({ reasons, tooMuch, busy }: { reasons: Array<I18nKey 
 
 /**
  * A review's recipients: with one, its rows open the review; with several,
- * each gets its own box under "Recipient N", and what they get in all leads
- * the rest. Not in bold, and not called Total: the bold total is what leaves
- * the balance, fee included (components/ReviewTotals.tsx).
+ * what they get in all, the fee, "Total leaving …" and "… after" come first,
+ * then each recipient's own box under "Recipient N". Under the boxes, the
+ * totals sat below the Send kept in view at 640 px and taller, so the review
+ * could be sent with them unseen (blind test §9.10's last case); a site's
+ * signing window puts its total first, and was read right every time (T18).
+ * What they get in all isn't in bold, nor called Total: the bold total is what
+ * leaves the balance, fee included (components/ReviewTotals.tsx).
  */
 export function ReviewRecipients({
   testId,
@@ -203,7 +207,7 @@ export function ReviewRecipients({
   payments: Paid[];
   /** One recipient's rows. */
   rows: (index: number) => ReactNode;
-  /** The rows after them: the fee, and what leaves the balance in all. */
+  /** The fee and what leaves the balance in all: after one recipient's rows, before several recipients' boxes. */
   children: ReactNode;
 }) {
   const t = useT();
@@ -219,6 +223,10 @@ export function ReviewRecipients({
   const kinds = new Set(payments.flatMap((p) => p.tokens.map(key))).size;
   return (
     <>
+      <ReviewRows testId={testId}>
+        <Row label={t("recipients.total")} value={adaWithTokens(lovelace, kinds)} />
+        {children}
+      </ReviewRows>
       {payments.map((_, i) => (
         <section key={i} className="review-recipient" aria-labelledby={`${testId}-${i + 1}-title`}>
           <h3 id={`${testId}-${i + 1}-title`} className="review__caption">
@@ -227,10 +235,6 @@ export function ReviewRecipients({
           <ReviewRows testId={`${testId}-${i + 1}`}>{rows(i)}</ReviewRows>
         </section>
       ))}
-      <ReviewRows testId={testId}>
-        <Row label={t("recipients.total")} value={adaWithTokens(lovelace, kinds)} />
-        {children}
-      </ReviewRows>
     </>
   );
 }
