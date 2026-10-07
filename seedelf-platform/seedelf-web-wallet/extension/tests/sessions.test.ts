@@ -9,12 +9,13 @@ import { bodyOutpoints } from "../src/background/cbor";
 import { Collateral, StaleReviewError } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { MAX_DEPOSIT_BOXES, UNLOCK_WAIT_MS } from "../src/background/lovejoin";
-import { builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
+import { type BuiltOutput, builtOutputs, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, Minswap } from "../src/background/minswap";
 import { pendingKey } from "../src/background/pending";
 import { PRIVATE_PREFIX, UnreadableRecordError } from "../src/background/private-store";
 import {
   checkAsk,
   checkOrder,
+  dexOrderAt,
   INDEX_PROBE,
   Refused,
   SESSION_BACK,
@@ -27,10 +28,10 @@ import { WalletLocked } from "../src/background/wallet";
 import { i18n, t as translate } from "../src/i18n/core";
 import { activityDetail } from "../src/ui/activity";
 import { SESSION_FEE_ESTIMATE } from "../src/ui/swap";
-import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
+import { bytes, cbor, type Cbor, hex, ORDER_ADDRESS, ORDER_DATUM, ORDER_SCRIPT, recordedSwap, SENDER, SESSION_ADDRESS, swapTx } from "./fixtures/swap-tx";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
+import { orderRow } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -436,7 +437,7 @@ describe("a private session", () => {
     t.koios.addedToAccounts.push(
       atSession(review.txHash, 1, "131585414"),
       atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]),
-      { ...atSession(review.txHash, 0, "14000000"), address: bech32("addr_test", bytes(ORDER_ADDRESS)), payment_cred: "a6".repeat(28) },
+      orderRow(review.txHash, 0, "14000000"),
     );
     expect(await sessions.orders("preprod", 0)).toEqual([]);
 
@@ -589,30 +590,18 @@ describe("a private session", () => {
     t.koios.addedToAccounts.push(atSession("bb".repeat(32), 0, "30000000"));
     await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("spends something that isn't this session's");
 
-    t.minswap.orders = [
-      {
-        owner_address: sessionSwap.address,
-        protocol: "Minswap",
-        token_in: {},
-        token_out: {},
-        amount_in: "10000000",
-        min_amount_out: "902083681",
-        created_at: 1,
-        tx_in: `${"cc".repeat(32)}#0`,
-        dex_fee: "2000000",
-        deposit: "2000000",
-      },
-    ];
-    expect(await sessions.orders("preprod", 0)).toEqual([
-      { protocol: "Minswap", txIn: `${"cc".repeat(32)}#0`, amountIn: "10000000", minAmountOut: "902083681", createdAt: 1 },
-    ]);
-    // No swap was sent from it, so an order Minswap lists doesn't hold the return back...
+    // Its orders are read from chain, never from Minswap's list (chunk 24, Step 3): one Minswap lists counts for nothing.
+    t.minswap.orders = [{ ...ORDER, tx_in: `${"cc".repeat(32)}#0` }];
+    expect(await sessions.orders("preprod", 0)).toEqual([]);
+    // No swap was sent from it, so nothing holds the return back...
     await expect(sessions.backBuild("preprod", 0)).resolves.toMatchObject({ inputs: 1 });
-    // ...but once one was, a waiting order does.
+    // ...but once one was, its order waiting at the DEX's contract does.
     t.koios.addedToAccounts.push(atSession(sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
     t.koios.addedToAccounts.splice(0, 1);
     const review = await sessions.swapBuild("preprod", 0);
     await sessions.txSubmit("preprod", review.txHash, "swap");
+    t.koios.addedToAccounts.push(orderRow(review.txHash));
+    expect(await sessions.orders("preprod", 0)).toEqual([{ protocol: "Minswap", txIn: `${review.txHash}#0`, createdAt: 1_800_000_000_000 }]);
     await expect(sessions.backBuild("preprod", 0)).rejects.toThrow("still waiting");
   });
 
@@ -695,11 +684,7 @@ describe("a swap that runs itself", () => {
   /** The swap lands: its order waits at the DEX's contract (output 0), and its change is at the account. */
   function ordered(t: T) {
     t.koios.spent.add(`${sessionSwap.utxo.tx_hash}#${sessionSwap.utxo.tx_index}`);
-    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), {
-      ...atSession(SWAP_TX, 0, "14000000"),
-      address: bech32("addr_test", bytes(ORDER_ADDRESS)),
-      payment_cred: "a6".repeat(28),
-    });
+    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), orderRow(SWAP_TX, 0, "14000000"));
   }
 
   it("brings back what's left when its return through Lovejoin stopped partway, whatever Minswap still lists", async () => {
@@ -964,10 +949,12 @@ describe("a swap that runs itself", () => {
     await sessions.stop("preprod", 0);
     expect(t.koios.submitted).toHaveLength(2);
 
-    // Unseen for 15 minutes, and Minswap lists no order of it: everything comes back, the funding it spent too.
+    // Unseen for 15 minutes, and Koios knows no order of it: everything comes back, the funding it spent too.
+    // Its order is looked for on chain, never in Minswap's list (chunk 24, Step 3).
     await busy(t, 11 * 60_000);
     await sessions.advance("preprod", 0, true);
-    expect(t.minswap.calls.at(-1)!.path).toBe("pending-orders");
+    expect(t.minswap.calls.map((c) => c.path)).not.toContain("pending-orders");
+    expect(t.koios.calls.some((c) => c.path === "utxo_info" && c.body._utxo_refs.includes(`${SWAP_TX}#0`))).toBe(true);
     const back = t.koios.submitted.at(-1)!;
     expect(bodyOutpoints(back, 0)!.sort()).toEqual([FUNDING, COLLATERAL].sort());
 
@@ -1024,21 +1011,20 @@ describe("a swap that runs itself", () => {
       expect(view.auto!.paused).toMatchObject({ why: "refused" });
       const builds = t.minswap.calls.filter((c) => c.path === "build-tx").length;
 
-      // It shows up after all, and Minswap lists its order (tx_status, behind, may not show it yet).
+      // It shows up after all: its order is on chain (tx_status, behind, may not show it yet).
       if (how !== "stop before tx_status shows it") t.koios.missing.delete(SWAP_TX);
       ordered(t);
-      t.minswap.orders = [{ ...ORDER, tx_in: `${SWAP_TX}#0` }];
       if (how !== "resume") {
         view = await sessions.stop("preprod", 0);
-        // Its order is cancelled, never left at the DEX for a session that's over.
-        expect(t.minswap.calls.map((c) => c.path)).toContain("cancel-tx");
+        // Its order is cancelled, by the wallet's own cancel, never left at the DEX for a session that's over.
+        expect(t.minswap.calls.map((c) => c.path)).not.toContain("cancel-tx");
+        expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toContain(`${SWAP_TX}#0`);
         expect(view.txs.map((x) => x.kind)).not.toContain("back");
         expect(view.stage).toBe("open");
       } else {
         view = await sessions.resume("preprod", 0);
         expect(view.auto).toMatchObject({ step: "filling" });
         // Filled: its proceeds come back, with no second order.
-        t.minswap.orders = [];
         t.koios.spent.add(`${SWAP_TX}#0`);
         t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]));
         view = await sessions.advance("preprod", 0, true);
@@ -1077,11 +1063,7 @@ describe("a swap that runs itself", () => {
     /** The swap `txHash` landed: its order waits at the DEX's contract (output 0), and its change is at the account. */
     const landed = (t: T, txHash: string) => {
       t.koios.spent.add(FUNDING);
-      t.koios.addedToAccounts.push(atSession(txHash, 1, "131585414"), {
-        ...atSession(txHash, 0, "14000000"),
-        address: bech32("addr_test", bytes(ORDER_ADDRESS)),
-        payment_cred: "a6".repeat(28),
-      });
+      t.koios.addedToAccounts.push(atSession(txHash, 1, "131585414"), orderRow(txHash, 0, "14000000"));
     };
     /** A batcher fills the order at `txHash`#0, and pays the proceeds. */
     const fill = (t: T, txHash: string) => {
@@ -1260,10 +1242,10 @@ describe("a swap that runs itself", () => {
     expect(await refused(swapTx({ datum: builtOutputs(bytes(recordedSwap.cbor))[0]!.datum! }))).toBe(
       "its order isn't for this session.",
     );
-    // An order whose details it doesn't carry.
-    expect(await refused(sessionSwap.swapCbor)).toBe("it pays a contract without saying who the order is for.");
+    // An order at a contract the wallet can't cancel an order at (chunk 24, Step 3): Stop couldn't bring it back.
+    expect(await refused(sessionSwap.swapCbor)).toBe("it places an order the wallet couldn't cancel.");
     // An order under another staking part.
-    const staked = `10${"a6".repeat(28)}${"c5".repeat(28)}`;
+    const staked = `10${ORDER_SCRIPT}${"c5".repeat(28)}`;
     expect(await refused(swapTx({ outputs: [[staked, 14_000_000, ORDER_DATUM], [SESSION_ADDRESS, 131_585_414]] }))).toBe(
       "it pays a contract under someone else's staking part.",
     );
@@ -1276,7 +1258,7 @@ describe("a swap that runs itself", () => {
     const contract = `70${"f0".repeat(28)}`;
     const toContract = swapTx({ outputs: [[ORDER_ADDRESS, 14_000_000, ORDER_DATUM], [contract, 1_000_000], [SESSION_ADDRESS, 130_585_414]] });
     expect(await refused(toContract, "1000000")).toBeUndefined();
-    expect(await refused(toContract)).toBe("it pays a contract without saying who the order is for.");
+    expect(await refused(toContract)).toBe("it places an order the wallet couldn't cancel.");
     // No order at all, only the fee: nothing a swap would sign.
     expect(await refused(swapTx({ outputs: [[other, 1_000_000], [SESSION_ADDRESS, 144_585_414]] }), "1000000")).toBe(
       "it places no order.",
@@ -1301,7 +1283,8 @@ describe("a swap that runs itself", () => {
     expect(t.koios.submitted).toHaveLength(1);
   });
 
-  it("cancels an order with a small fee that pays no one else, and pauses rather than sign one with a large fee", async () => {
+  it("cancels an order with the wallet's own cancel, everything back for a small fee, and pauses rather than sign one with a large fee (chunk 24, Step 3)", async () => {
+    // A cancel the builder got wrong, as it would carry it: the checks before signing still hold it.
     const cancelTx = (fee: number, donation?: number) => {
       const own = bytes(SESSION_ADDRESS);
       const body = new Map<number, Cbor>([
@@ -1319,24 +1302,32 @@ describe("a swap that runs itself", () => {
       const redeemers = new Map<number, Cbor>([[5, [[0, 0, { tag: 122, of: [] }, [500_000, 200_000_000]]]]]);
       return hex(cbor([body, redeemers, true, null]));
     };
-    const stopped = async (cancelCbor: string) => {
+    const stopped = async (built?: string) => {
       const t = await unlocked();
-      const sessions = signing(t);
+      const covers = [`${SWAP_TX}#0`];
+      const stood = built === undefined ? {} : { buildOrderCancel: () => JSON.stringify({ txCbor: built, covers, stakeSigns: false }) };
+      const sessions = signing(t, alarm(), stood);
       await started(sessions);
       funded(t);
       await sessions.advance("preprod", 0);
-      // The order waits at the DEX's contract; Stop asks Minswap to cancel it.
+      // The order waits at the DEX's contract. Minswap doesn't list it, and isn't asked.
       ordered(t);
-      t.minswap.orders = [{ ...ORDER, tx_in: `${SWAP_TX}#0` }];
-      t.minswap.cancelCbor = cancelCbor;
       const view = await sessions.stop("preprod", 0);
-      return { view, sent: t.koios.submitted.length };
+      return { view, t, sent: t.koios.submitted.length };
     };
-    // 0.4 ₳, all of it back to the session: signed and sent.
+    // The wallet's own: the order spent, everything back to the session, its fee under 1 ₳, signed and sent.
+    const own = await stopped();
+    expect(own.view.auto!.paused).toBeUndefined();
+    expect(own.view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    const cancel = own.t.koios.submitted.at(-1)!;
+    expect(bodyOutpoints(cancel, 0)).toContain(`${SWAP_TX}#0`);
+    expect(builtOutputs(cancel).map((o) => o.address)).toEqual([SESSION_ADDRESS]);
+    expect(own.t.minswap.calls.map((c) => c.path)).not.toContain("cancel-tx");
+    // 0.4 ₳ as a builder might set it, all of it back to the session: signed and sent.
     const fine = await stopped(cancelTx(400_000));
     expect(fine.view.auto!.paused).toBeUndefined();
     expect(fine.view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
-    // 5 ₳ is more than any cancel of Minswap's takes.
+    // 5 ₳ is more than any cancel takes.
     const costly = await stopped(cancelTx(5_000_000));
     expect(costly.view.auto!.paused).toMatchObject({ why: "refused", detail: "its cancel's fee is more than a cancel takes." });
     expect(costly.sent).toBe(2);
@@ -1348,8 +1339,12 @@ describe("a swap that runs itself", () => {
   it("reads where a swap pays the same way on the order Minswap's aggregator really built", async () => {
     const outputs = builtOutputs(bytes(recordedSwap.cbor));
     // Made out to its sender (the 12-word phrase's public account): its order, output 0, and the change back.
-    expect(checkOrder(outputs, { address: SENDER, keyHash: SENDER.slice(2, 58) }, 0n)).toEqual([0]);
-    expect(() => checkOrder(outputs, { address: SESSION_ADDRESS, keyHash: sessionSwap.keyHash }, 0n)).toThrow(Refused);
+    const wasm = loadTestWasm();
+    const reader = (session: string) => (o: BuiltOutput) => dexOrderAt(wasm, "preprod", o.address, o.datum ?? "", session);
+    expect(checkOrder(outputs, { address: SENDER, keyHash: SENDER.slice(2, 58) }, 0n, reader(recordedSwap.sender))).toEqual([0]);
+    expect(() =>
+      checkOrder(outputs, { address: SESSION_ADDRESS, keyHash: sessionSwap.keyHash }, 0n, reader(sessionSwap.address)),
+    ).toThrow(Refused);
   });
 
   it("won't let the user sign a swap the runner wouldn't", async () => {
@@ -1358,7 +1353,7 @@ describe("a swap that runs itself", () => {
     t.minswap.swapCbor = sessionSwap.swapCbor;
     await started(sessions);
     funded(t);
-    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("The wallet won't sign what Minswap built: it pays a contract without saying");
+    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("The wallet won't sign what Minswap built: it places an order the wallet couldn't cancel");
   });
 
   it("pauses rather than sign a swap that spends UTxOs that aren't the session's, as a DEX swapping against its pools does", async () => {
@@ -1605,27 +1600,27 @@ describe("a swap that runs itself", () => {
     expect(t.minswap.calls.map((c) => c.path)).toEqual(["estimate"]);
   });
 
-  it("never cancels an order by itself; Stop asks Minswap to cancel it", async () => {
+  it("never cancels an order by itself; Stop cancels it with the wallet's own cancel (chunk 24, Step 3)", async () => {
     const t = await unlocked();
     const sessions = signing(t);
     await started(sessions);
     funded(t);
     await sessions.advance("preprod", 0);
     ordered(t);
-    t.minswap.orders = [ORDER];
+    const sent = t.koios.submitted.length;
 
     // Ten minutes on, still not filled: the runner keeps waiting. (Past the 15 minutes auto-lock allows, it would wait for the unlock.)
     t.clock.now += 10 * 60_000;
     let view = await sessions.advance("preprod", 0);
     expect(view.auto).toMatchObject({ step: "filling", stopping: false });
-    expect(t.minswap.calls.map((c) => c.path)).not.toContain("cancel-tx");
+    expect(t.koios.submitted).toHaveLength(sent);
 
     view = await sessions.stop("preprod", 0);
     expect(view.auto).toMatchObject({ step: "cancelling", stopping: true });
-    expect(t.minswap.calls.at(-1)).toMatchObject({
-      path: "cancel-tx",
-      body: { sender: sessionSwap.address, orders: [{ tx_in: ORDER.tx_in, protocol: "Minswap" }] },
-    });
+    // Built in the wallet, from the order on chain and its datum Koios gives back by hash: Minswap isn't asked.
+    expect(t.minswap.calls.map((c) => c.path)).not.toContain("cancel-tx");
+    expect(t.koios.calls.some((c) => c.path === "datum_info")).toBe(true);
+    expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toContain(`${SWAP_TX}#0`);
   });
 });
 

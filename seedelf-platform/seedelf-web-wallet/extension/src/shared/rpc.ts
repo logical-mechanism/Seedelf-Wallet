@@ -1492,11 +1492,11 @@ export interface SessionAuto {
   /** The order was refunded, none of it filled: what it gave came back (independent review M18). */
   refunded?: boolean;
   /**
-   * Stopped, but an order of the swap is still open at a DEX, and Minswap
-   * doesn't list it, so it can't be cancelled yet: when the runner first
-   * found it so (ms). What's left waits at the account until that order is
-   * filled or refunded, or Minswap lists it and it's cancelled (independent
-   * review L16).
+   * Stopped, but an order of the swap is still open at a DEX, and Koios
+   * can't find it yet, so the wallet can't cancel it yet: when the runner
+   * first found it so (ms). What's left waits at the account until that
+   * order is filled or refunded, or found and cancelled (independent review
+   * L16, chunk 24 Step 3).
    */
   orderOpen?: number;
   /** The least the user approved receiving. */
@@ -1834,13 +1834,13 @@ export interface LovejoinHeld {
   stopped: number;
 }
 
-/** A session's order not filled yet, from Minswap. */
+/** A session's order not filled yet, read from chain (chunk 24, Step 3). */
 export interface SessionOrder {
+  /** The DEX's, by the name Minswap gives it. */
   protocol: string;
   /** `txhash#index` */
   txIn: string;
-  amountIn: string;
-  minAmountOut: string;
+  /** Milliseconds since 1970: its block's. */
   createdAt: number;
 }
 

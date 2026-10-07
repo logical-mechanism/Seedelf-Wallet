@@ -65,20 +65,6 @@ export interface Estimate {
   aggregator_fee_percent: number | null;
 }
 
-export interface PendingOrder {
-  owner_address: string;
-  protocol: string;
-  token_in: unknown;
-  token_out: unknown;
-  amount_in: string;
-  min_amount_out: string;
-  created_at: number;
-  /** The order's UTxO, `txhash#index`. */
-  tx_in: string;
-  dex_fee: string;
-  deposit: string;
-}
-
 export interface SwapToken {
   token_id: TokenId;
   ticker: string | null;
@@ -130,27 +116,22 @@ export const DIRECT_PROTOCOLS = ["ChakraBondingCurve", "OpenDjedV1"];
 const PREPROD_BROKEN = ["Splash", "SplashStable"];
 
 /**
- * The DEXes a mainnet swap goes through: those whose orders the session's
- * check (sessions.ts `checkOrder`) reads as the session's, by the order
- * details each DEX publishes. Each order names its owner's key as a 28-byte
- * field of its own (an address's payment part, or a signature's key), and
- * sits at a script with no staking part or the sender's:
- * - Minswap (V1) and MinswapStable: the sender's and the receiver's
- *   addresses. V1's passes on a real order Minswap built on preprod.
- * - MinswapV2: the canceller's key, and the refund and success receivers.
- * - SundaeSwap: the destination address.
- * - SundaeSwapV3: read exactly, at its order script (SUNDAE_V3): owned by
- *   the session's own stake key, which signs its cancel too, and paying the
- *   session's address (chunk 24). Only as a path of its own (outOfPlace).
+ * The DEXes a mainnet swap goes through: those whose orders the wallet can
+ * cancel itself (chunk 24, Step 3). Each order script is pinned, with its
+ * cancel, in seedelf-core's `orders.json`, and WebAssembly reads each order
+ * exactly (`readDexOrder`, which sessions.ts `checkOrder` asks): cancelled by
+ * the session's own key, and paying the session's address alone. So Stop
+ * brings the money back whatever Minswap lists, from any of them:
+ * - Minswap (V1), MinswapV2 and MinswapStable (one order script a pool);
+ * - SundaeSwap (V1) and SundaeSwapV3, the latter owned by the session's own
+ *   stake key, which signs its cancel too, and only as a path of its own
+ *   (outOfPlace);
+ * - WingRiders, WingRidersV2 and WingRidersStableV2;
+ * - Splash and Spectrum: both are Splash's limit order as Minswap builds them;
  * - DanogoCLMMV1: no order, a swap against its pools (DANOGO_POOL), read by
  *   what it spends, pays and gives back (chunk 24). Only on its own.
- * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
- *   beneficiary's addresses.
- * - Splash: the cancelling key and the redeemer's address. Spectrum: the
- *   reward key.
- * None was checked on a mainnet order yet: the owner's smoke test is one
- * small swap through each before launch. A route through any other is
- * refused before it's funded (quote), rather than pause once it is.
+ * A route through any other is refused before it's funded (quote), rather
+ * than pause once it is.
  */
 export const MAINNET_PROTOCOLS: readonly string[] = [
   "Minswap",
@@ -191,9 +172,9 @@ const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SplashStable"];
  * 2026-10-06). A single-leg order names the sender's stake key as its owner,
  * whose signature alone cancels it, and the sender's address as its
  * destination, with no datum; V3's pools pay the destination exactly, and
- * its orders never expire. sessions.ts `checkOrder` reads one exactly
- * (`sundaeV3Order`), and Stop's cancel of one is signed by the session's
- * stake key too.
+ * its orders never expire. WebAssembly reads one exactly (`readDexOrder`,
+ * seedelf-core orders.rs), and Stop's own cancel of one is signed by the
+ * session's stake key too.
  */
 export const SUNDAE_V3: Readonly<Record<"preprod" | "mainnet", { order: string; stake: string }>> = {
   mainnet: {
@@ -355,24 +336,6 @@ export class Minswap {
     return cbor;
   }
 
-  /** `owner`'s orders that aren't filled, cancelled or expired yet. */
-  async pendingOrders(owner: string): Promise<PendingOrder[]> {
-    const { orders } = await this.request<{ orders: PendingOrder[] }>(
-      "GET",
-      `pending-orders?owner_address=${encodeURIComponent(owner)}&amount_in_decimal=false`,
-    );
-    return orders;
-  }
-
-  /** An unsigned cancel of up to six of `sender`'s orders. */
-  async cancelTx(sender: string, orders: Array<Pick<PendingOrder, "tx_in" | "protocol">>): Promise<string> {
-    const { cbor } = await this.post<{ cbor: string }>("cancel-tx", {
-      sender,
-      orders: orders.map((o) => ({ tx_in: o.tx_in, protocol: o.protocol })),
-    });
-    return cbor;
-  }
-
   /** Tokens by name, ticker or ID. */
   async tokens(query: string, onlyVerified = true): Promise<SwapToken[]> {
     const { tokens } = await this.post<{ tokens: SwapToken[] }>("tokens", { query, only_verified: onlyVerified });
@@ -495,76 +458,6 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
     }
     return { address: hex(address), lovelace, tokens, datum };
   });
-}
-
-/** What a SundaeSwap V3 order says, as far as a session's check reads it. */
-export interface SundaeV3Order {
-  /** The key whose signature alone cancels it, when its owner is one signature. */
-  owner: string | null;
-  /**
-   * Where its scoop pays, when that's an address under a key, with no datum:
-   * the key's hash, and its staking key's when it has one.
-   */
-  pays: { payment: string; stake: string | null } | null;
-}
-
-/**
- * Reads a SundaeSwap V3 (or Stableswaps) order's datum, `[pool, owner,
- * max_protocol_fee, destination, details, extension]` (sundae-contracts
- * `lib/types/order.ak`): its owner, a `MultisigScript`, and its destination,
- * `Fixed { address, datum }` or `Self`. Null when it isn't one.
- */
-export function sundaeV3Order(datum: string): SundaeV3Order | null {
-  try {
-    const b = Uint8Array.from(datum.match(/../g) ?? [], (x) => Number.parseInt(x, 16));
-    const order = constr(b, 0);
-    if (order.index !== 0 || order.fields.length !== 6) return null;
-    // Signature(key) is constructor 0 of MultisigScript, its one field the key's hash.
-    const owner = constr(b, order.fields[1]!);
-    const ownerKey = owner.index === 0 && owner.fields.length === 1 ? keyHashAt(b, owner.fields[0]!) : null;
-    return { owner: ownerKey, pays: paysKey(b, order.fields[3]!) };
-  } catch {
-    return null;
-  }
-}
-
-/** A V3 destination that's `Fixed` to a key's address with `NoDatum`, as `SundaeV3Order.pays`. */
-function paysKey(b: Uint8Array, at: number): SundaeV3Order["pays"] {
-  const destination = constr(b, at);
-  if (destination.index !== 0 || destination.fields.length !== 2) return null;
-  const [addressAt, datumAt] = destination.fields as [number, number];
-  const datum = constr(b, datumAt);
-  if (datum.index !== 0 || datum.fields.length !== 0) return null;
-  // Address { payment_credential, stake_credential: Option<Inline(credential)> }; a key's credential is constructor 0.
-  const address = constr(b, addressAt);
-  if (address.index !== 0 || address.fields.length !== 2) return null;
-  const payment = constr(b, address.fields[0]!);
-  if (payment.index !== 0) return null;
-  const staking = constr(b, address.fields[1]!);
-  if (staking.index === 1) return { payment: keyHashAt(b, payment.fields[0]!), stake: null };
-  if (staking.index !== 0) return null;
-  const inline = constr(b, staking.fields[0]!);
-  if (inline.index !== 0) return null;
-  const stake = constr(b, inline.fields[0]!);
-  if (stake.index !== 0) return null;
-  return { payment: keyHashAt(b, payment.fields[0]!), stake: keyHashAt(b, stake.fields[0]!) };
-}
-
-/** What `sundaeV3Order`'s readers throw at a shape that isn't a V3 order's; never shown. */
-class NotAnOrder extends Error {}
-
-/** A Plutus constructor at `pos`, tags 121 to 127: its index, and where each field starts. */
-function constr(b: Uint8Array, pos: number): { index: number; fields: number[] } {
-  const tag = head(b, pos);
-  if (tag.major !== 6 || tag.n < 121n || tag.n > 127n) throw new NotAnOrder();
-  return { index: Number(tag.n - 121n), fields: items(b, tag.p) };
-}
-
-/** The 28-byte key hash at `pos`, hex. */
-function keyHashAt(b: Uint8Array, pos: number): string {
-  const key = bytesAt(b, pos);
-  if (key.length !== 28) throw new NotAnOrder();
-  return hex(key);
 }
 
 /**

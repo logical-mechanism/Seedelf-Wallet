@@ -16,6 +16,8 @@ fn fixture_params() -> ProtocolParameters {
         price_mem: 0.0577,
         price_step: 0.0000721,
         cost_model_v3: Vec::new(),
+        cost_model_v1: Vec::new(),
+        cost_model_v2: Vec::new(),
         min_fee_ref_script_cost_per_byte: Ratio::whole(15),
     }
 }

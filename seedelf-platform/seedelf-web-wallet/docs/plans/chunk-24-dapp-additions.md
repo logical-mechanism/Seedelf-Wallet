@@ -100,8 +100,69 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] Danogo's swap part: routed on both networks, the swap page's words, the docs. **Owner: its live runs** (below).
 - [x] The multi-hop question: routes are direct, asked so explicitly, with any longer path refused. The Danogo approval's cost rows: checked and fixed (below, *Direct routes and Danogo's costs*).
 - [x] [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described: the last "orders only" (flows.md's quote) is gone.
+- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. **Owner: the live cancel of the stuck preprod order**, then a mainnet Stop.
 - [ ] WingRiders' smoke test and the owner's live runs.
 - [ ] At the end: the post-release roadmap, the handoff note, and this plan to the archive.
+
+## Step 3 · Stop's own cancel (2026-10-07)
+
+**Why.** The owner's preprod Stop of a SundaeSwap V3 order (`70773ee9…#0`, 14 USDR) never cancelled it:
+
+- **Minswap's `POST /aggregator/cancel-tx` answers 404, "Route … not found", on mainnet and preprod.** Its documentation still lists it. `build-tx`, `pending-orders` and `finalize-and-submit-tx` still answer. No live cancel through it was ever recorded, so released wallets can't cancel a placed order on any DEX either.
+- **Minswap's `pending-orders` doesn't list every order.** On preprod it lists nothing for that session; on mainnet it listed one of two V3 orders Minswap built.
+- **The page said nothing.** Stopped, with no order listed and nothing arrived, the runner returned before noting the order open, so the swap sat on "cancelling".
+- Minswap's own app still cancels, through a route the wallet doesn't know (37 "Minswap: Aggregator Cancel Order" transactions at Splash's script in the week to 2026-10-07).
+
+**The owner's call (2026-10-07):** Stop must bring the money back. "No one is going to take a wallet seriously that gets the funds effectively stuck." So the wallet builds every cancel itself, from the session's own keys and collateral, and asks Minswap for nothing to get money back.
+
+**What every DEX's cancel needs** (four research passes, 2026-10-07: real owner cancels decoded from chain, checked against each DEX's source or bytecode; the SundaeSwap V3 cancel of the stuck order dry-run through Ogmios):
+
+| Minswap's name | Order script, Plutus | Script | Cancel redeemer | Signer | Notes |
+|---|---|---|---|---|---|
+| `Minswap` (V1) | `a65ca58a…`, V1, both networks | in the transaction (335 B) | `d87a80` | the datum's sender's payment key | datum by hash: the original bytes go in the witness set |
+| `MinswapV2` | mainnet `c3e28c36…`, preprod `da952546…1b7a`; V2 | reference | `d87a80` | `canceller = OAMSignature(payment key)`, field 0 | the order's own staking part is the sender's |
+| `MinswapStable` | one per pool: 13 mainnet, 3 preprod; V2 | reference, per pool | `d87a80` | the sender's payment key, field 0 | Minswap's SDK lists the wrong reference for 4 mainnet pools; the table has the on-chain ones |
+| `SundaeSwap` (V1) | `ba158766…`, V1, mainnet | in the transaction (2,121 B) | `d87a80` | the destination's payment key (`alternate` unset) | datum by hash; closed source, the rule found by Ogmios dry runs |
+| `SundaeSwapV3` | mainnet `fa6a58bb…`, preprod `a989aa2f…`; **V2** | reference | `d87a80` | `owner = Signature(stake key)`: **2/i** | mainnet's reference sits at Sundae's own key |
+| `SundaeSwapStable` | mainnet `6ab62945…`, preprod `eff5be0d…`; V3 | reference | `d87a80` | as V3 | not routed on mainnet; preprod has no scooper |
+| `WingRiders` (V1) | `86ae9eeb…`, V1, mainnet | in the transaction (883 B) | `d87a80` | the owner's payment key | datum by hash; Minswap's orders expire in about 8 h, then only the owner can reclaim |
+| `WingRidersV2`, `WingRidersStableV2` | mainnet `c134d839…`, `23680ea6…`; preprod `c25f7962…`, `acefcfe8…`; V2 | reference | `d87a80` | the owner's payment key, field 2 | references held by a script that can never spend them |
+| `Splash`, `Spectrum` | both `464eeee8…` (Splash's limit order), V2, mainnet | reference | **`d87980`** | `cancellation_pkh` (field 10), the payment key | **output 0 must be the exact refund to the order's redeemer address: one order a transaction.** Partial fills recreate the order at a new outpoint. |
+
+- No cancel needs a validity interval, a withdrawal or a mint. Every key that signs must be a required signer (body key 14): the scripts read it there.
+- The full table, with each reference UTxO, is `seedelf-core/src/orders.json`. Every reference was checked on chain on 2026-10-07: unspent, holding a script of the expected hash. The three V1 scripts are bundled, checked by hash.
+- **A Plutus V1 script** goes in the transaction, with its order's original datum bytes. One cancel transaction takes one Plutus version (Pallas stages one language view), and a V1 one carries no reference inputs and no inline datums.
+- **What Minswap's own cancel does that the wallet's can't:** it refunds Minswap's aggregator fee too, signed by Minswap's key. The wallet's cancel leaves that fee with Minswap.
+
+**The design.**
+
+1. **The cost models.** `ProtocolParameters` carries Plutus V1 and V2's too, and the local evaluator (`eval.rs`) takes all three.
+2. **The table and the readers** (`seedelf-core` `orders.rs`): for an order output, which DEX's it is, who must sign its cancel, and where it pays, read exactly from each DEX's datum.
+3. **The builder** (`cancel_orders`): one group of orders (one Plutus version; a Splash order alone), the session's own UTxOs for the fee, the session's collateral with its return, every signer a required signer, the scripts by reference (V1's in the transaction), budgets measured in the wallet, the fee settled. Everything goes back to the session, a Splash order's exact refund first.
+4. **WebAssembly:** `read_dex_order` and `build_order_cancel`.
+5. **The order check** (`checkOrder`): every order sits at a script the table knows, owned by the session's own key, paying the session's address. Anything else is refused before it's signed. **So every order the wallet places is one it can cancel itself.**
+6. **Stop:** the orders to cancel are the swap's recorded ones that are still unspent, and any order under the session's stake key (a partial fill's), from Koios, never Minswap's list. One group a transaction, then the return. A swap waiting on an order it can't cancel says so.
+7. **Tests:** for each DEX, a real order cancelled through its real script in the local evaluator, and refused with the wrong key.
+8. **Live:** the stuck preprod V3 order first; then a preprod Minswap V2 order; then the owner's mainnet runs.
+
+**Built (2026-10-07).**
+
+- **seedelf-core** `orders.rs` and `orders.json`: the table, each DEX's reader (`read`, `read_order`, `Session::owns`), and `cancel_orders`. `ProtocolParameters` carries the V1 and V2 cost models (empty when Koios leaves them out), and `eval::evaluate_with` measures any Plutus version; `resolve_reference` hands it a reference script.
+- **A bug in Pallas, worked around:** `pallas-txbuilder` hashes witness datums as a plain list but writes them as a tagged set, so a cancel carrying a datum (any Plutus V1 order's) would be refused at submit. `with_integrity` recomputes the script data hash from the transaction's own witness bytes (`integrity_hash`, V1's legacy language view included).
+- **WebAssembly:** `readDexOrder` and `buildOrderCancel`.
+- **The worker:**
+  - `checkOrder` asks `readDexOrder`; any contract the table doesn't hold is refused (`sess.refuse.warn.notCancellable`).
+  - `liveOrders` replaces Minswap's `pending-orders` everywhere: Stop, the runner's wait, the close, the manual return and Bring everything back.
+  - `cancel` and the manual `cancelBuild` build the wallet's own cancel (`cancelOf`), checked by `inspect` as before; the stake key signs only where a spent order is SundaeSwap V3's or Stableswaps', as `readDexOrder` says.
+  - The client lost `pendingOrders` and `cancelTx`; Koios's gained `datumInfo` and `addressUtxos`.
+- **The "Order open" state** now means an order Koios can't find yet; its two lines say so (`swaps.now.orderOpen`, `swaps.step.openAtDex`, `mtpe`). A 1.2.0 record that says it is cleared at its next run, and the order cancelled.
+- **Strings:** `sess.refuse.warn.notCancellable` and `sess.refuse.warn.noCollateral`, back-translated blind twice; the first pass changed the Japanese "can't cancel" (the wallet read as placing the order) and the Spanish "no collateral" (it lost the ADA-only UTxO).
+- **Tests:**
+  - Rust (`seedelf-core/tests/orders_test.rs`, 7): for each DEX (Minswap V1, V2 on both networks, Stable; SundaeSwap V1, V3 on both networks, Stableswaps; WingRiders V1, V2 on both networks, StableV2; Splash), a real order from chain cancelled through its real script in the wallet's evaluator, and refused by that script without the canceller's signature; the script data hash recomputed for real V1, V2 and V3 cancels from chain, and matched by every cancel the wallet builds; the owner's stuck order cancelled with exactly the budget every real single-key V3 cancel used. Mutation-checked: without the integrity patch, the V1 cancel's hash is wrong.
+  - The preprod MinswapV2 fixture is synthetic in one way: the real order's owner had an enterprise address, which no session has, so its two receivers were given a staking part. The script reads only the canceller.
+  - Vitest 1,755 on both builds; Playwright 80. The swap tests now drive the wallet's own cancel through the worker: a Minswap V1 order (the fixtures' order moved to Minswap V1's real script) and a SundaeSwap V3 order with Sundae's real reference script, signed by both keys.
+- **Not tested in the worker:** a Splash order's partial fill (`liveOrders`' `address_utxos` look). Splash is mainnet only, and the worker's tests run on preprod. The Rust side cancels a real Splash order.
+- **Released wallets** (1.2.0 and before) still ask Minswap's `cancel-tx`, so their Stop can't cancel a placed order. This is the fix; when it ships is the owner's call.
 
 ## Built (2026-10-06)
 

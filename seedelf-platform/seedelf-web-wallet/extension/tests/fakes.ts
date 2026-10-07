@@ -9,7 +9,7 @@ import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
 import { DappService, type ApprovalWindow } from "../src/background/dapp";
-import { Minswap, type Estimate, type PendingOrder } from "../src/background/minswap";
+import { Minswap, type Estimate } from "../src/background/minswap";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
 import {
@@ -43,6 +43,7 @@ import type { Area } from "../src/background/storage";
 import type { SwapAsk } from "../src/shared/rpc";
 import { NETWORKS } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
+import { ORDER_DATUM, ORDER_DATUM_HASH } from "./fixtures/swap-tx";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
 /** An in-memory chrome.storage area. Values go through JSON, as Chrome's do. */
@@ -226,6 +227,56 @@ export interface FakeKoios {
   proposals: KoiosProposal[];
   /** Every DRep's votes, for `vote_list`. */
   votes: Array<KoiosVote & { voter_id: string }>;
+  /** Datums by hash, for `datum_info`: the swap's order's (fixtures/swap-tx.ts) to begin with. */
+  datums: Map<string, string>;
+}
+
+/**
+ * The preprod DEX order scripts' reference UTxOs a session's own cancel reads
+ * (seedelf-core's orders.json), as Koios lists them with their scripts: read
+ * from chain on 2026-10-07 (seedelf-core/tests/fixtures/order_cancels.json).
+ */
+const dexReferences: KoiosUtxo[] = [
+  ...new Map(
+    (
+      JSON.parse(readFileSync(new URL("../../../seedelf-core/tests/fixtures/order_cancels.json", import.meta.url), "utf8")) as Array<{
+        network: string;
+        reference: (Partial<KoiosUtxo> & { tx_hash: string; tx_index: number }) | null;
+      }>
+    )
+      .filter((f) => f.network === "preprod" && f.reference)
+      .map((f) => [
+        `${f.reference!.tx_hash}#${f.reference!.tx_index}`,
+        {
+          stake_address: null,
+          // Each sits at a script that holds it: its payment part, as Koios gives it.
+          payment_cred: "00".repeat(28),
+          epoch_no: 300,
+          block_height: 4_000_000,
+          block_time: 1_700_000_000,
+          inline_datum: null,
+          datum_hash: null,
+          asset_list: [],
+          is_spent: false,
+          ...f.reference!,
+        } as KoiosUtxo,
+      ]),
+  ).values(),
+];
+
+/** An order as Minswap's `pending-orders` lists it: what the fake aggregator answers, which the wallet no longer asks (chunk 24, Step 3). */
+export interface PendingOrder {
+  owner_address: string;
+  protocol: string;
+  token_in: unknown;
+  token_out: unknown;
+  amount_in: string;
+  min_amount_out: string;
+  created_at: number;
+  /** The order's UTxO, `txhash#index`. */
+  tx_in: string;
+  dex_fee: string;
+  deposit: string;
 }
 
 /** Real preprod protocol parameters (the CLI's and core's test fixture). */
@@ -264,6 +315,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     drepProfiles: new Map(),
     proposals: governanceFixture.proposal_list.preprod,
     votes: [],
+    datums: new Map([[ORDER_DATUM_HASH, ORDER_DATUM]]),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -317,7 +369,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
           ...[...fake.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
         ];
       } else if (path === "utxo_info") {
-        // Any UTxO the fixtures know, spent or not, as Koios answers.
+        // Any UTxO the fixtures know, spent or not, as Koios answers; and the DEX order scripts' references.
         const refs: string[] = body._utxo_refs;
         const every = [
           ...koiosPreprod.contract_utxos,
@@ -325,10 +377,21 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
           ...fake.added,
           ...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos),
           ...fake.addedToAccounts,
+          ...dexReferences,
         ];
         rows = every
           .filter((u) => refs.includes(`${u.tx_hash}#${u.tx_index}`))
           .map((u) => ({ ...u, is_spent: fake.spent.has(`${u.tx_hash}#${u.tx_index}`) }));
+      } else if (path === "datum_info") {
+        rows = (body._datum_hashes as string[]).flatMap((h) => {
+          const bytes = fake.datums.get(h);
+          return bytes ? [{ datum_hash: h, bytes }] : [];
+        });
+      } else if (path === "address_utxos") {
+        const addresses: string[] = body._addresses;
+        rows = [...fake.addedToAccounts, ...fake.added].filter(
+          (u) => addresses.includes(u.address) && !fake.spent.has(`${u.tx_hash}#${u.tx_index}`),
+        );
       } else if (path === "account_addresses") {
         const asked: string[] = body._stake_addresses;
         rows = [

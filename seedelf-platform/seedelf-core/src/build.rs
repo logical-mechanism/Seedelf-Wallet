@@ -136,14 +136,14 @@ pub const MAX_TX_SIZE: u64 = 16_384;
 /// staking (certificates, a withdrawal; see [`Staking::patch`]) and a note
 /// ([`Note::patch`]).
 #[derive(Clone, Copy)]
-struct Patches<'a> {
+pub(crate) struct Patches<'a> {
     staking: &'a Staking,
     note: Option<&'a Note>,
 }
 
 impl<'a> Patches<'a> {
     /// Only `staking`: every transaction but a send with a note.
-    fn staking(staking: &'a Staking) -> Self {
+    pub(crate) fn staking(staking: &'a Staking) -> Self {
         Patches {
             staking,
             note: None,
@@ -164,7 +164,7 @@ impl<'a> Patches<'a> {
 /// priced; `signers` doesn't count the stake key a staking patch needs.
 /// A draft over [`MAX_TX_SIZE`], or a fee over [`MAX_FEE`], is refused here,
 /// in words.
-fn settle(
+pub(crate) fn settle(
     signers: usize,
     patches: Patches,
     price: impl Fn(u64) -> u64,
@@ -301,7 +301,7 @@ pub fn minimum_deposit(params: &ProtocolParameters, tokens: &Assets) -> Result<u
 /// to an output, the last output carrying the rest of `lovelace`. No output at
 /// all when there's nothing to return. `short` is the error when the
 /// lovelace can't carry the tokens.
-fn change_outputs(
+pub(crate) fn change_outputs(
     params: &ProtocolParameters,
     change_addr: &Address,
     lovelace: u64,
@@ -361,7 +361,7 @@ fn minimum_change(
 
 /// The chosen inputs can't pay for the transaction; more inputs might.
 #[derive(Debug, Clone, Copy)]
-struct NotEnough(&'static str);
+pub(crate) struct NotEnough(pub(crate) &'static str);
 
 /// A move-in's inputs can't pay for it.
 const MOVE_IN_SHORT: NotEnough =

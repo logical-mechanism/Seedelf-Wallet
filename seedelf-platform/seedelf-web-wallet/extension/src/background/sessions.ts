@@ -90,14 +90,12 @@ import {
   MinswapError,
   outOfPlace,
   SUNDAE_V3,
-  sundaeV3Order,
   uncheckedProtocols,
   witnessedKeys,
   type BuiltOutput,
   type Estimate,
   type Minswap,
   type MinswapTrouble,
-  type PendingOrder,
 } from "./minswap";
 import {
   CHAIN_CUT,
@@ -282,10 +280,11 @@ interface AutoRecord {
   failed?: number;
   /**
    * When the runner first found it stopped and waiting on an order of the
-   * swap that isn't spent and that Minswap doesn't list, so nothing can
+   * swap that isn't spent and that Koios can't find yet, so the wallet can't
    * cancel it yet: what's left waits at the account (independent review
    * L16). Only the page reads it. Cleared once that's over: the order is
-   * spent, or Minswap lists it and it's cancelled.
+   * spent, or found and cancelled (chunk 24, Step 3). Before Step 3 the
+   * runner wrote it for an order Minswap didn't list.
    */
   orderOpen?: number;
   /**
@@ -519,7 +518,7 @@ const MAX_MERGE = 4;
  */
 const SITE_OUTS_KEPT = 40;
 
-/** The most a cancel's fee may be: Minswap's cancel of six orders, each a script spend, costs well under it. */
+/** The most a cancel's fee may be: the wallet's own cancel of several orders, each a script spend, costs well under it. */
 const MAX_CANCEL_FEE = 3_000_000n;
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -1631,31 +1630,32 @@ export class SessionService {
     return this.review(network, s, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
   }
 
-  /** The session's orders that aren't filled yet. */
+  /** The session's orders that aren't filled yet, read from chain (`liveOrders`). */
   async orders(network: NetworkName, index: number): Promise<SessionOrder[]> {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
     if (!s) throw new Error(t("sess.noSuchSession"));
     const { address } = (await this.accounts(network, [s])).get(index)!;
-    const orders = await this.deps.minswap(network).pendingOrders(address);
-    return orders.map((o) => ({
-      protocol: o.protocol,
-      txIn: o.tx_in,
-      amountIn: o.amount_in,
-      minAmountOut: o.min_amount_out,
-      createdAt: o.created_at,
-    }));
+    const orders = await this.liveOrders(network, s, address);
+    const protocol = (o: KoiosUtxo) => {
+      try {
+        return dexOrder(this.deps.wasm, network, o, address).protocol ?? "";
+      } catch (e) {
+        if (isTrap(e)) throw e;
+        return "";
+      }
+    };
+    return orders.map((o) => ({ protocol: protocol(o), txIn: outpoint(o), createdAt: (o.block_time ?? 0) * 1000 }));
   }
 
-  /** Has Minswap build a cancel of the session's open orders (six at most), and reads it. */
+  /** Builds the wallet's own cancel of the session's open orders (chunk 24, Step 3), and reads it. */
   async cancelBuild(network: NetworkName, index: number): Promise<SessionTxReview> {
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
-    const minswap = this.deps.minswap(network);
-    const orders = (await minswap.pendingOrders(address)).slice(0, 6);
+    const orders = await this.liveOrders(network, s, address);
     if (!orders.length) throw new Error(t("sess.noOrderWaiting"));
-    const txCbor = await minswap.cancelTx(address, orders);
     const rows = await this.utxosOf(network, keyHash);
-    return this.review(network, s, "cancel", txCbor, rows, { orders: orders.length });
+    const { txCbor, covers } = await this.cancelOf(network, address, rows, orders);
+    return this.review(network, s, "cancel", txCbor, rows, { orders: covers.length });
   }
 
   /** Signs the swap or cancel reviewed last with the session's key, puts the signature in, and submits it. */
@@ -1685,7 +1685,7 @@ export class SessionService {
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     // Money that arrives after the return would need another one.
-    if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
+    if (s.txs.some((t) => t.kind === "swap") && (await this.liveOrders(network, s, address)).length) {
       throw new Error(t("sess.orderWaitingBack"));
     }
     const rows = await this.utxosOf(network, keyHash);
@@ -1739,7 +1739,7 @@ export class SessionService {
         const s = await this.live(network, index);
         if (s.auto) throw new Error(t(s.mix ? "sess.mixComesBack" : "sess.autoComesBack"));
         const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
-        if (s.txs.some((t) => t.kind === "swap") && (await this.deps.minswap(network).pendingOrders(address)).length) {
+        if (s.txs.some((t) => t.kind === "swap") && (await this.liveOrders(network, s, address)).length) {
           throw new Error(t("sess.orderWaiting"));
         }
         const rows = await this.utxosOf(network, keyHash);
@@ -2098,26 +2098,26 @@ export class SessionService {
     // A return through Lovejoin that stopped partway (a transaction Koios
     // never took, a closed browser): what's at the account now came from the
     // chain itself, so nothing "arrives" from outside. What's left comes back
-    // (directly: its deposit is in), whatever Minswap lists.
+    // (directly: its deposit is in).
     if (kinds.has("deposit") || kinds.has("mix")) return go(() => this.bringBack(network, s.index, rows));
     const auto = s.auto!;
     // No order yet: place it, unless the user stopped, or brought the session back by hand.
     if (!kinds.has("swap")) {
-      // A swap that went unseen may have landed after all: never a second order, or a return, while Minswap
-      // lists one. After Stop, it's cancelled first, as one the runner saw land is (final review sessions-2).
+      // A swap that went unseen may have landed after all: never a second order, or a return, while one of its
+      // orders is open. After Stop, it's cancelled first, as one the runner saw land is (final review sessions-2).
       if (s.txs.some((t) => t.kind === "swap")) {
-        const orders = await this.deps.minswap(network).pendingOrders(address);
+        const orders = await this.liveOrders(network, s, address);
         if (orders.length) return auto.stopping ? go(() => this.cancel(network, s, address, rows, orders)) : undefined;
       }
       if (auto.stopping || kinds.has("back")) return go(() => this.bringBack(network, s.index, rows));
       return go(() => this.order(network, s, address, rows));
     }
 
-    const orders = await this.deps.minswap(network).pendingOrders(address);
+    // Its orders still open, from chain: Minswap's list doesn't hold every order (chunk 24, Step 3).
+    const orders = await this.liveOrders(network, s, address);
     if (orders.length) {
-      // Minswap lists it now: an order the swap waited on can be cancelled (independent review L16).
       s = await this.noteOrderOpen(network, s, false);
-      // Waiting for a batcher to fill it, unless the user stopped it.
+      // Waiting for a batcher to fill it, unless the user stopped it: then the wallet cancels it itself.
       if (auto.stopping) await go(() => this.cancel(network, s, address, rows, orders));
       return;
     }
@@ -2160,9 +2160,9 @@ export class SessionService {
         });
       }
     } else if (!(await this.ordersSpent(network, s))) {
-      // Cancelled: every order of the swap is spent too, as a fill's are. One Minswap didn't list isn't
+      // Cancelled: every order of the swap is spent too, as a fill's are. One Koios can't find yet isn't
       // cancelled, and still pays the account; meanwhile what's there stays, so a cancel of it can still
-      // be paid for once Minswap lists it (independent review L16). The page says so plainly.
+      // be paid for once Koios finds it (independent review L16). The page says so plainly.
       await this.noteOrderOpen(network, s, true);
       return;
     }
@@ -2172,7 +2172,7 @@ export class SessionService {
   }
 
   /**
-   * Records that the stopped swap waits on an order Minswap doesn't list
+   * Records that the stopped swap waits on an order Koios can't find yet
    * (`open`), from the first time the runner finds it so, or that it no
    * longer does. It writes only when that changes, and nothing but the page
    * reads it (independent review L16).
@@ -2267,15 +2267,56 @@ export class SessionService {
 
   /**
    * Whether an order of session `s`'s swap may still pay its account: one
-   * of the landed copy's orders isn't spent (ordersSpent), or Minswap lists
-   * one, though a DEX made it (a remainder of a partial fill, say). Nothing
-   * reads a closed session's account again, so it isn't closed meanwhile
-   * (independent review L15, D2).
+   * of the landed copy's orders isn't spent (ordersSpent), or one is open
+   * from chain, though a DEX made it (a remainder of a partial fill:
+   * `liveOrders`). Nothing reads a closed session's account again, so it
+   * isn't closed meanwhile (independent review L15, D2).
    */
   private async ordersOpen(network: NetworkName, s: SessionRecord, address: string): Promise<boolean> {
     if (!s.txs.some((t) => t.kind === "swap" && !t.unsent)) return false;
     if (!(await this.ordersSpent(network, s))) return true;
-    return (await this.deps.minswap(network).pendingOrders(address)).length > 0;
+    return (await this.liveOrders(network, s, address)).length > 0;
+  }
+
+  /**
+   * The session's orders still open, read from chain and never from
+   * Minswap's list, which doesn't hold every order (chunk 24, Step 3): each
+   * order a sent copy of its swap placed, recorded before it was sent, that
+   * isn't spent; and what a partial fill of one left at the same address,
+   * under the session's own stake key (Splash fills an order in parts). Each
+   * as Koios lists it, with its datum.
+   */
+  private async liveOrders(network: NetworkName, s: SessionRecord, address: string): Promise<KoiosUtxo[]> {
+    const recorded = [
+      ...new Set(
+        s.txs
+          .filter((t) => t.kind === "swap" && !t.unsent)
+          .flatMap((t) => t.orders ?? s.orders?.filter((o) => o.startsWith(`${t.txHash}#`)) ?? []),
+      ),
+    ];
+    if (!recorded.length) return [];
+    const koios = this.deps.koios(network);
+    const rows = (await koios.utxoInfo(recorded)) as Array<KoiosUtxo & { is_spent?: boolean }>;
+    const live: KoiosUtxo[] = rows.filter((r) => !r.is_spent);
+    // A fill in parts spends the order and leaves the rest as a new one where it sat: looked for only where a
+    // spent order Koios describes was Splash's (no other DEX the wallet routes fills in parts).
+    const splash = (r: KoiosUtxo) => {
+      if (!r.address || !r.inline_datum) return false;
+      try {
+        return dexOrder(this.deps.wasm, network, r, address).protocol === "Splash";
+      } catch (e) {
+        if (isTrap(e)) throw e;
+        return false;
+      }
+    };
+    const parted = [...new Set(rows.filter((r) => r.is_spent && splash(r)).map((r) => r.address))];
+    if (parted.length) {
+      const known = new Set(live.map(outpoint));
+      for (const r of await koios.addressUtxos(parted)) {
+        if (!known.has(outpoint(r)) && dexOrder(this.deps.wasm, network, r, address).ours) live.push(r);
+      }
+    }
+    return live;
   }
 
   /** Places the order: a fresh quote, Minswap's swap for the account, the checks, and the key's signature. */
@@ -2310,20 +2351,75 @@ export class SessionService {
     await this.signAndSend(network, built);
   }
 
-  /** Cancels the session's orders, after Stop: Minswap's cancel, checked, and the key's signature. */
+  /**
+   * Cancels the session's orders, after Stop: the wallet's own cancel, with
+   * the session's own keys and collateral (chunk 24, Step 3; Minswap's
+   * `cancel-tx` is gone), checked as any session transaction is, and signed.
+   * One transaction cancels the orders that can share it; the next step the
+   * rest.
+   */
   private async cancel(
     network: NetworkName,
     s: SessionRecord,
     address: string,
     rows: KoiosUtxo[],
-    orders: PendingOrder[],
+    orders: KoiosUtxo[],
   ): Promise<void> {
-    const txCbor = await this.deps.minswap(network).cancelTx(address, orders.slice(0, 6));
+    const { txCbor } = await this.cancelOf(network, address, rows, orders);
     const built = await this.inspect(network, s, "cancel", txCbor, rows);
     // A cancel only brings the orders' funds back to the session: it pays nothing out but its fee, and that's small.
     if (paidOut(built.summary, address).length) throw new Refused(t("sess.refuse.warn.cancelPaysOther"));
     if (BigInt(built.summary.fee) > MAX_CANCEL_FEE) throw new Refused(t("sess.refuse.warn.cancelFee"));
     await this.signAndSend(network, built);
+  }
+
+  /**
+   * Builds the cancel of `orders`, the session's own, in WebAssembly
+   * (`buildOrderCancel`): each order's datum (the bytes its hash names, from
+   * Koios, for one kept by hash), the reference UTxOs its script is read
+   * from, the session's own UTxOs for the fee, and one of its 5 ₳ UTxOs as
+   * collateral. Unsigned. What it can't build pauses the swap and says why.
+   */
+  private async cancelOf(
+    network: NetworkName,
+    address: string,
+    rows: KoiosUtxo[],
+    orders: KoiosUtxo[],
+  ): Promise<{ txCbor: string; covers: string[] }> {
+    const { wasm } = this.deps;
+    const koios = this.deps.koios(network);
+    // Its 5 ₳ collateral, as its funding paid one; or, if a cancel before spent it, its largest UTxO of ADA alone
+    // (WebAssembly checks it covers the cancel). Its other UTxOs of ADA alone help pay the fee with the orders' own
+    // ADA; one holding tokens or a datum (a stranger's) waits for the return.
+    const plain = rows
+      .filter((u) => !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash)
+      .sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : -1));
+    const collateral = rows.find(collateralFits) ?? plain[0];
+    if (!collateral) throw new Refused(t("sess.refuse.warn.noCollateral"));
+    const byHash = orders.filter((o) => !o.inline_datum && o.datum_hash).map((o) => o.datum_hash!);
+    const datums = byHash.length ? await koios.datumInfo([...new Set(byHash)]) : new Map<string, string>();
+    const refs = [
+      ...new Set(orders.flatMap((o) => dexOrder(wasm, network, o, address).reference ?? [])),
+    ];
+    const references = refs.length ? await koios.utxoInfo(refs) : [];
+    const request = JSON.stringify({
+      network,
+      params: await koios.epochParams(),
+      session: address,
+      orders: orders.map((o) => ({
+        utxo: o,
+        datum: o.inline_datum?.bytes ?? (o.datum_hash ? (datums.get(o.datum_hash) ?? "") : ""),
+      })),
+      funds: plain,
+      collateral,
+      references,
+    });
+    try {
+      return JSON.parse(wasm.buildOrderCancel(request)) as { txCbor: string; covers: string[] };
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      throw new Refused(clauseOf(e instanceof Error ? e.message : String(e)));
+    }
   }
 
   /**
@@ -2400,9 +2496,11 @@ export class SessionService {
       // What WebAssembly won't read (an output on another network, say) won't read any better later: pause.
       throw new Refused(clauseOf(message));
     }
-    // Stop's cancel of a SundaeSwap V3 order needs its owner's signature too: the session's own stake key (chunk 24).
+    // A cancel of a SundaeSwap V3 or Stableswaps order needs its owner's signature too: the session's own stake
+    // key (chunk 24), as the spent order itself says.
     const ownStake = s.ownStake === true;
-    const stake = kind === "cancel" && ownStake && foreign.some((r) => r.payment_cred === SUNDAE_V3[network].order);
+    const { address: bech32 } = (await this.accounts(network, [s])).get(index)!;
+    const stake = kind === "cancel" && ownStake && foreign.some((r) => dexOrder(wasm, network, r, bech32).stakeSigns);
     refuseOddities(summary, index, { stake, ...(direct ? { direct: { signed } } : {}) });
     let orders: string[] | undefined;
     if (kind === "swap") {
@@ -2414,7 +2512,8 @@ export class SessionService {
         if (quote) checkProceeds(summary, quote, paid);
         orders = [];
       } else {
-        orders = checkOrder(outputs, session, fee).map((i) => `${summary.txHash}#${i}`);
+        const read = (o: BuiltOutput) => dexOrderAt(wasm, network, o.address, o.datum ?? "", address);
+        orders = checkOrder(outputs, session, fee, read).map((i) => `${summary.txHash}#${i}`);
       }
     }
     return {
@@ -3654,36 +3753,68 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
 }
 
 /**
+ * What WebAssembly reads of an output at a contract (`readDexOrder`, chunk
+ * 24 Step 3): whether it's at a DEX order script the wallet can cancel at
+ * (`known`), which DEX's, the session's own or not, whether its cancel is
+ * signed by the session's stake key too, and where its script is read from.
+ */
+export interface DexOrderRead {
+  known: boolean;
+  protocol: string | null;
+  ours: boolean;
+  stakeSigns: boolean;
+  reference: string | null;
+  why: string | null;
+}
+
+/** Reads the output at `address` (hex) holding `datum` (CBOR, hex) for the session at `session` (bech32). */
+export function dexOrderAt(
+  wasm: { readDexOrder(request: string): string },
+  network: NetworkName,
+  address: string,
+  datum: string,
+  session: string,
+): DexOrderRead {
+  return JSON.parse(wasm.readDexOrder(JSON.stringify({ network, address, datum, session }))) as DexOrderRead;
+}
+
+/** `dexOrderAt` for a UTxO as Koios lists it. */
+function dexOrder(
+  wasm: { readDexOrder(request: string): string; cip30Address(address: string): string },
+  network: NetworkName,
+  row: KoiosUtxo,
+  session: string,
+): DexOrderRead {
+  return dexOrderAt(wasm, network, wasm.cip30Address(row.address), row.inline_datum?.bytes ?? "", session);
+}
+
+/**
  * Where a swap Minswap built pays, before the session's key signs it (the
  * runner, or the user's review), from its bytes (`builtOutputs`):
  * - back to the session's own address;
- * - an output at a script, staked with the session's stake key or none,
- *   whose datum (inline, or carried for its hash) names the session's key:
- *   a real order names its owner, who gets the proceeds or the refund.
- *   There's one at least;
+ * - an order: an output at a DEX order script the wallet can cancel at
+ *   (`read`, WebAssembly's `readDexOrder` over seedelf-core's `orders.json`,
+ *   chunk 24 Step 3), read exactly: cancelled by the session's own key (its
+ *   stake key's for SundaeSwap V3 and Stableswaps, which a session from
+ *   before each had its own, `ownStake`, hasn't got), paying the session's
+ *   address alone, and under the session's staking part or none (a V3
+ *   order Minswap builds, under Minswap's there: SUNDAE_V3). One at least;
  * - at most one other output, Minswap's fee, wherever it goes: ADA alone,
  *   and no more than `aggregatorFee` quoted (none on preprod).
- * Anything else is refused. Which script an order goes to isn't checked,
- * bar SundaeSwap V3's: no other DEX's order contract is pinned, so that's
- * Minswap's to build, as the order's receivers are; on mainnet, Minswap is
- * asked to leave out every DEX the wallet doesn't check, and the estimate
- * the order is built from is checked (excludedProtocols, uncheckedProtocols,
- * independent review M17). Nor is its minimum read back: it's what the
- * wallet asks Minswap for, and Minswap builds the order.
- *
- * An output at SundaeSwap V3's order script is read exactly (chunk 24): it's
- * the session's order only if it sits under the session's staking part, none
- * or Minswap's (SUNDAE_V3's `stake`, at this script alone), is owned by the
- * session's own stake key, and pays the session's address with no datum.
- * V3's orders never expire, so one the session couldn't cancel is never
- * signed: a session from before each had its own stake key (`ownStake`)
- * carries the shared one, which never signs. Returns the orders' output
- * indexes.
+ * Anything else is refused, any other contract above all: every order the
+ * session places is one the wallet can cancel itself, so Stop always brings
+ * the money back. Which DEX routes it is Minswap's to choose: on mainnet,
+ * Minswap is asked to leave out every DEX the wallet doesn't check, and the
+ * estimate the order is built from is checked (excludedProtocols,
+ * uncheckedProtocols, independent review M17). Nor is an order's minimum
+ * read back: it's what the wallet asks Minswap for, and Minswap builds it.
+ * Returns the orders' output indexes.
  */
 export function checkOrder(
   outputs: BuiltOutput[],
   session: { address: string; keyHash: string; ownStake?: boolean },
   aggregatorFee: bigint,
+  read: (o: BuiltOutput) => DexOrderRead,
 ): number[] {
   // A base address's staking part: bytes 29 to 57, after the header and the payment part.
   const stake = session.address.slice(58, 114);
@@ -3699,13 +3830,18 @@ export function checkOrder(
     if (!script && o.address.slice(2, 58) === session.keyHash) {
       throw new Refused(t("sess.refuse.warn.otherStake"));
     }
-    if (script && o.address.slice(2, 58) === sundae.order) {
-      if (!sundaeOrderOurs(o, type, { ...session, stake }, sundae.stake)) throw new Refused(t("sess.refuse.warn.sundaeNotOurs"));
-      orders.push(i);
-      return;
-    }
-    const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
-    if (script && staked && o.datum && names(o.datum, session.keyHash)) {
+    const order = script && o.datum ? read(o) : undefined;
+    if (order?.known) {
+      if (!order.ours) {
+        throw new Refused(t(order.stakeSigns ? "sess.refuse.warn.sundaeNotOurs" : "sess.refuse.warn.orderNotOurs"));
+      }
+      // Its cancel is signed by the session's own stake key: the shared one never signs.
+      if (order.stakeSigns && !session.ownStake) throw new Refused(t("sess.refuse.warn.sundaeNotOurs"));
+      const part = o.address.slice(58, 114);
+      const minswaps = o.address.slice(2, 58) === sundae.order && part === sundae.stake;
+      if (!(type === 7 || (type === 1 && (part === stake || minswaps)))) {
+        throw new Refused(t("sess.refuse.warn.contractOtherStake"));
+      }
       orders.push(i);
       return;
     }
@@ -3714,9 +3850,8 @@ export function checkOrder(
       return;
     }
     if (!script) throw new Refused(t("sess.refuse.warn.otherAddress"));
-    if (!staked) throw new Refused(t("sess.refuse.warn.contractOtherStake"));
-    if (!o.datum) throw new Refused(t("sess.refuse.warn.contractNoOwner"));
-    throw new Refused(t("sess.refuse.warn.orderNotOurs"));
+    // A contract the wallet can't cancel an order at: Stop couldn't bring it back.
+    throw new Refused(t("sess.refuse.warn.notCancellable"));
   });
   if (!orders.length) throw new Refused(t("sess.refuse.warn.noOrder"));
   return orders;
@@ -3821,21 +3956,6 @@ function withinNet(summary: DappTxSummary, fund: SwapQuote["fund"]): void {
     const funded = fund.tokens.find((f) => f.policyId + f.assetName === x.policyId + x.assetName);
     if (!funded || out > BigInt(funded.quantity)) throw new Refused(t("sess.refuse.warn.moreTokens"));
   }
-}
-
-/** Whether output `o`, at SundaeSwap V3's order script, is the session's own order, as `checkOrder` says. */
-function sundaeOrderOurs(o: BuiltOutput, type: number, session: { keyHash: string; stake: string; ownStake?: boolean }, minswaps: string): boolean {
-  if (!session.ownStake || !o.datum) return false;
-  const under = type === 7 || (type === 1 && [session.stake, minswaps].includes(o.address.slice(58, 114)));
-  const order = under ? sundaeV3Order(o.datum) : null;
-  return order?.owner === session.stake && order.pays?.payment === session.keyHash && order.pays.stake === session.stake;
-}
-
-/** Whether CBOR (hex) holds `keyHash` as a byte string of its own. */
-function names(cbor: string, keyHash: string): boolean {
-  const needle = `581c${keyHash}`;
-  for (let at = cbor.indexOf(needle); at >= 0; at = cbor.indexOf(needle, at + 1)) if (at % 2 === 0) return true;
-  return false;
 }
 
 /**

@@ -2389,7 +2389,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const failed = s.stage === "failed";
   // Stopped before any order: the order and its fill never happen.
   const unordered = auto.stopping && !tx("swap");
-  // Stopped, but an order Minswap doesn't list is still open: not cancelled (independent review L16).
+  // Stopped, but an order Koios can't find yet is still open: not cancelled (independent review L16).
   const open = auto.orderOpen !== undefined;
   const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded);
   const state = (i: number): StepState => {
@@ -2528,7 +2528,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   );
 }
 
-/** A stopped swap waiting on an order Minswap doesn't list (independent review L16). */
+/** A stopped swap waiting on an order Koios can't find yet (independent review L16). */
 const ORDER_OPEN = () => t("swaps.now.orderOpen");
 
 /** What's happening now, in plain words. */
@@ -2544,7 +2544,7 @@ export function nowLine(s: SessionView): string {
     case "filling":
       return t("swaps.now.filling");
     case "cancelling":
-      // An order Minswap doesn't list can't be cancelled: what the swap waits on, plainly (independent review L16).
+      // An order Koios can't find yet can't be cancelled: what the swap waits on, plainly (independent review L16).
       if (a.orderOpen !== undefined) return ORDER_OPEN();
       return t("swaps.now.cancelling");
     case "returning":
