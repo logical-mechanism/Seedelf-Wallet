@@ -152,10 +152,10 @@ Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777
   - [flows.md](../flows.md)'s Stop.
   - [privacy.md](../privacy.md)'s session stake key: the cancel's signature shows nothing new.
 - **No screen wording changed.** None promises that an order expires. "The order is waiting for a DEX's batcher to fill it. If it doesn't, cancel it." fits V3.
-- **Owner: the live runs.** Preprod has V3 pools: Minswap's preprod aggregator routed ADA→USDRF through `SundaeSwapV3` alone on 2026-10-06.
-  1. A small ADA→USDRF swap: it should quote with route SundaeSwapV3, place, fill and come back.
-  2. A second one, stopped while its order waits: the cancel is signed by both keys, lands, and everything comes back.
-  3. Then one small mainnet swap through V3. The fresh quote must show SundaeSwapV3 in its route; it depends on the pair and amount.
+- **Owner: the live runs.**
+  - **Preprod's V3 pools quote, but nothing fills them** (read from preprod's chain, 2026-10-07). Since about 2026-09-10 every spend of a V3 order there has been its owner's cancel, and 93 orders sit open. Minswap's preprod router sends tADA→USDRF, tADA→USDCx (policy `31dde3db…`) and tADA→PPEE through `SundaeSwapV3` alone, at 10, 50 and 200 tADA.
+  1. On preprod, the Stop run: a small tADA→USDRF swap, its route SundaeSwapV3. It places and waits. Stop: the cancel is signed by both keys, lands, and everything comes back.
+  2. On mainnet, the fill: one small swap whose fresh quote shows SundaeSwapV3 in its route (it depends on the pair and amount). It should place, fill and come back.
 
 **Danogo's swap part (2026-10-06).**
 
@@ -173,7 +173,10 @@ Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777
   - [privacy.md](../privacy.md): Minswap's collateral in the transaction ties it to Minswap's aggregator, which its note already does, and to nothing of the user's.
   - No privacy-policy entry: no new service is asked, and nothing new is sent.
 - **Owner: the live runs.**
-  - On preprod, MIN→ADA routes through `DanogoCLMMV1`; 200 MIN quoted Danogo alone on 2026-10-06. Danogo's preprod pools once failed Minswap's own evaluation, and the next build was clean.
+  - On preprod (2026-10-07), in two swaps:
+    1. tADA→MIN first: 10 tADA buys about 900 MIN through Minswap's own V1 pool, an ordinary order. Minswap's preprod batcher filled every V1 order on 2026-09-25 within about a minute.
+    2. Then MIN→tADA through Danogo: 10–50 MIN goes through one Danogo pool, 100–200 MIN through two, 400 or more through four. Start with one pool. Preprod's prices make no sense (50 MIN quotes about 38 tADA); ignore them.
+    - Danogo's preprod pools once failed Minswap's own evaluation, and the next build was clean.
   - Then one small mainnet swap whose quote shows DanogoCLMMV1. ADA→USDCx at 1,000 ₳ went through Danogo alone in the research.
   - Watch for:
     - the timeline's words;
