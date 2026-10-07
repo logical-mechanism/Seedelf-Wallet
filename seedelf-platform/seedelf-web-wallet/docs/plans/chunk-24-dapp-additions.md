@@ -96,14 +96,15 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] Foundation 1 (Sundae V3): route rule, `checkOrder`, the stake-signed cancel, tests.
 - [x] Foundation 2 (Danogo): a real transaction read, the checks, the runner's fill, tests.
 - [x] SundaeSwap V3's swap part: routed on mainnet, both networks pinned, the docs. **Owner: its live runs** (below).
-- [ ] Danogo's swap part, and WingRiders' smoke test, with the owner's live runs.
+- [x] Danogo's swap part: routed on both networks, the swap page's words, the docs. **Owner: its live runs** (below).
+- [ ] WingRiders' smoke test, the owner's live runs, and the multi-hop question.
 - [ ] At the end: update [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described ("orders only"); then the post-release roadmap, the handoff note, and this plan to the archive.
 
 ## Built (2026-10-06)
 
 Uncommitted on the branch until the owner says.
 
-- **Mainnet routing:** SplashStable out. `DanogoCLMMV1` stays on `DIRECT_PROTOCOLS` until its swap part. SundaeSwap V3 went on in its own swap part (below).
+- **Mainnet routing:** SplashStable out. SundaeSwap V3 and Danogo went on in their own swap parts (below).
 - **Tests:**
   - The suites: Vitest 1,748 on both builds; Playwright 80 on the built `dist/`.
   - New files: `tests/sundae-orders.test.ts` (11) and `tests/direct-swaps.test.ts` (8).
@@ -154,9 +155,34 @@ Uncommitted on the branch until the owner says.
   2. A second one, stopped while its order waits: the cancel is signed by both keys, lands, and everything comes back.
   3. Then one small mainnet swap through V3. The fresh quote must show SundaeSwapV3 in its route; it depends on the pair and amount.
 
+**Danogo's swap part (2026-10-06).**
+
+- **Routed on both networks:** `DanogoCLMMV1` is on `MAINNET_PROTOCOLS`, off `DIRECT_PROTOCOLS`. Chakra's bonding curve and Djed's minting stay out.
+- **The flag:** the quote and the session's view carry `againstPools` (`SwapQuote`, `SessionAuto`). The recorded swap's flag was renamed `againstPools` too, as `auto.direct` already means a return that skips Lovejoin.
+- **The swap page:**
+  - The approval's plan and the timeline say **Swapped against the DEX's pools** for the order step.
+  - The fill step reads **In the swap itself: no order to wait for**.
+  - The row's line says **Swapping** while it's on its way.
+  - **No Stop once it has gone out.** There's no order to cancel, and the dialog would speak of one. A copy the network refuses (its pool taken first) is dropped from the view, and Stop is back while it's built again.
+  - Three new strings, `mtpe`; not critical.
+- **The docs:**
+  - [architecture.md](../architecture.md): routing and `MAINNET_PROTOCOLS`.
+  - [flows.md](../flows.md): the swap's run.
+  - [privacy.md](../privacy.md): Minswap's collateral in the transaction ties it to Minswap's aggregator, which its note already does, and to nothing of the user's.
+  - No privacy-policy entry: no new service is asked, and nothing new is sent.
+- **Owner: the live runs.**
+  - On preprod, MIN→ADA routes through `DanogoCLMMV1`; 200 MIN quoted Danogo alone on 2026-10-06. Danogo's preprod pools once failed Minswap's own evaluation, and the next build was clean.
+  - Then one small mainnet swap whose quote shows DanogoCLMMV1. ADA→USDCx at 1,000 ₳ went through Danogo alone in the research.
+  - Watch for:
+    - the timeline's words;
+    - no Stop after the send;
+    - the swap landing as **Filled** with no wait;
+    - everything coming back.
+
 **Not done, for the swap parts.**
 
-- **The swap page's timeline** for a direct swap. Between its send and its landing, the step is "ordering". Check what it says: it must not talk of an order or a batcher.
-- **Settings' and the quote's wording** where they say Minswap places orders.
-- **The docs for Danogo**, when it's routed. architecture.md describes its checks as built and not routed.
+- **Wording outside the swap page:** checked. Two lines on the approval were wrong for a pool swap, and are fixed:
+  - the warning that the wallet relies on Minswap for the minimum is hidden, since the wallet checks it itself;
+  - "Stop works until the order fills" reads "until the swap goes out" (`swaps.review.approvesPools`).
+- **Not checked:** the approval's cost rows for a Danogo route. "DEX fee" and "Order deposit" may read 0, or say an order. Look at them on the owner's first preprod run.
 - **A question for the owner, found on the way:** any multi-hop route places its second leg's order from the first leg's batcher, so the session's check never sees it. If that order sat unfilled, could the session cancel it? This applies to the DEXes already on `MAINNET_PROTOCOLS`, not just V3. Worth a look at a real Minswap multi-hop order before launch.

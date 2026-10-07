@@ -243,7 +243,7 @@ describe("a swap's quote", () => {
       amount: "10000000",
       token_in: "lovelace",
       token_out: MIN,
-      exclude_protocols: ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjedV1"],
+      exclude_protocols: ["ChakraBondingCurve", "OpenDjedV1"],
     });
     // Selling a token: the session carries it, and ADA for the costs.
     const selling = await t.sessions.quote("preprod", { ...ASK, tokenIn: MIN, tokenOut: "lovelace", amount: "500" });

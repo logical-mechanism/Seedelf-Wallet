@@ -413,6 +413,25 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(line).not.toContain("Too little spare ADA for a Lovejoin box");
   });
 
+  it("doesn't say it relies on Minswap for the minimum of a swap against Danogo's pools, whose minimum it checks, nor speak of an order (chunk 24)", () => {
+    const pools = text(
+      createElement(SwapApproval, {
+        summary,
+        quote: { ...quote, againstPools: true },
+        lovejoin: through,
+        pay,
+        get,
+        through: true,
+        onThrough: () => undefined,
+        busy: false,
+      }),
+    );
+    expect(pools).not.toContain("The wallet relies on Minswap for the minimum");
+    expect(pools).toContain("Stop works until the swap goes out.");
+    expect(pools).toContain("Swapped against the DEX's pools");
+    expect(pools).not.toContain("Order placed");
+  });
+
   it("says the slippage, that it relies on Minswap for the minimum, and what the swap and its costs pay for (chunk 23's second review, DX-2, DX-3)", () => {
     const line = approval(through);
     expect(line).toContain("Asks for at least 4.158 tUSDM · 1% slippage · 0.3% price impact");

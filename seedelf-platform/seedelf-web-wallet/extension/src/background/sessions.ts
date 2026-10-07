@@ -85,6 +85,7 @@ import { CollateralError, CollateralRefusedError, StaleReviewError } from "./col
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosTrouble, type KoiosUtxo } from "./koios";
 import {
   builtOutputs,
+  againstPools,
   DANOGO_POOL,
   MinswapError,
   outOfPlace,
@@ -238,10 +239,10 @@ type RecordedTx = SessionTx & {
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
   /**
-   * A direct swap (Danogo's, chunk 24): against a DEX's pools, with no order.
-   * Its proceeds come in itself, so once it lands it's the fill.
+   * A swap against a DEX's pools (Danogo's, chunk 24), with no order. Its
+   * proceeds come in itself, so once it lands it's the fill.
    */
-  direct?: boolean;
+  againstPools?: boolean;
   /**
    * A return whose private history isn't written yet: what its review said,
    * recorded with it before it's sent, and gone once its history is. One
@@ -422,8 +423,8 @@ interface KeptTx {
   quote?: SwapQuote;
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`). */
   orders?: string[];
-  /** A direct swap: against a DEX's pools, with no order, its proceeds paid in itself (chunk 24). */
-  direct?: boolean;
+  /** A swap against a DEX's pools, with no order, its proceeds paid in itself (chunk 24). */
+  againstPools?: boolean;
   builtAt: number;
 }
 
@@ -591,6 +592,7 @@ export function quoteOf(network: NetworkName, ask: SwapAsk, est: Estimate): Swap
     aggregatorFee: est.aggregator_fee ?? "0",
     priceImpact: est.avg_price_impact,
     route: [...new Set(est.paths.flat().map((leg) => leg.protocol))],
+    ...(againstPools(est) ? { againstPools: true } : {}),
     fund,
     collateral: SESSION_COLLATERAL.toString(),
   };
@@ -2120,7 +2122,7 @@ export class SessionService {
       return;
     }
     // A direct swap paid its proceeds in itself (chunk 24): landed, it's the fill, with no order to wait on.
-    if (!kinds.has("cancel") && s.txs.some((t) => t.kind === "swap" && t.confirmed && !t.replaced && t.direct)) {
+    if (!kinds.has("cancel") && s.txs.some((t) => t.kind === "swap" && t.confirmed && !t.replaced && t.againstPools)) {
       if (!auto.filled) {
         s = await this.update(network, s.index, (r) => {
           r.auto!.filled = now();
@@ -2303,7 +2305,7 @@ export class SessionService {
     // Minswap's fee is bounded by what was approved, not by what it quotes now.
     const quote = { ...quoteOf(network, asked, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
     const built = await this.inspect(network, s, "swap", txCbor, rows, quote);
-    if (built.direct) withinNet(built.summary, approved.fund);
+    if (built.againstPools) withinNet(built.summary, approved.fund);
     else withinFunding(paidOut(built.summary, address), built.summary.fee, approved.fund);
     await this.signAndSend(network, built);
   }
@@ -2424,7 +2426,7 @@ export class SessionService {
       request,
       quote,
       orders,
-      ...(direct ? { direct } : {}),
+      ...(direct ? { againstPools: true } : {}),
       builtAt: now(),
       summary,
     };
@@ -2458,7 +2460,7 @@ export class SessionService {
       // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked
       // at, and its own minimum the one shown.
       orders: built.kind === "swap" ? built.orders : undefined,
-      direct: built.direct,
+      againstPools: built.againstPools,
       minAmountOut: built.kind === "swap" ? built.quote?.minAmountOut : undefined,
       after: (s) => {
         if (built.kind === "swap" && built.quote && s.swap) {
@@ -3027,14 +3029,14 @@ export class SessionService {
       after,
       keptHash = txHash,
       orders,
-      direct,
+      againstPools,
       summary,
       minAmountOut,
     }: {
       after?: (s: SessionRecord) => void;
       keptHash?: string;
       orders?: string[];
-      direct?: boolean;
+      againstPools?: boolean;
       summary?: RecordedTx["summary"];
       minAmountOut?: string;
     } = {},
@@ -3063,7 +3065,7 @@ export class SessionService {
           at: now(),
           sending: true,
           ...(orders ? { orders } : {}),
-          ...(direct ? { direct } : {}),
+          ...(againstPools ? { againstPools } : {}),
           ...(minAmountOut ? { minAmountOut } : {}),
           ...(summary ? { summary } : {}),
         });
@@ -3586,6 +3588,7 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     // Only while it's still stopping: never on a return, or once it's over (independent review L16).
     ...(auto.orderOpen !== undefined && step === "cancelling" ? { orderOpen: auto.orderOpen } : {}),
     approvedMinOut: auto.approved.minAmountOut,
+    ...(order?.againstPools ? { againstPools: true } : {}),
     ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),
     ...(auto.retry

@@ -114,12 +114,13 @@ const FUNDING_UNSEEN = /no wallet utxos|insufficient balance/i;
  * DEXes that swap straight against their pools in the same transaction,
  * rather than taking an order for a batcher to fill: the transaction spends
  * the pools' UTxOs, runs their scripts, and brings someone else's collateral.
- * A session signs only transactions that spend nothing but its own UTxOs
- * (sessions.ts), so routing leaves these out. DanogoCLMMV1 was seen doing it
- * on preprod (2026-09-25); a bonding curve and Djed's minting work the same
- * way. The session's check stays: any other DEX that does it pauses the swap.
+ * Routing leaves these out: a bonding curve and Djed's minting. Danogo's
+ * (DanogoCLMMV1, seen doing it on preprod, 2026-09-25) is routed since
+ * chunk 24, whose checks read its swaps (DANOGO_POOL, sessions.ts
+ * `directSpends`). The session's check stays: any other DEX that does it
+ * pauses the swap.
  */
-export const DIRECT_PROTOCOLS = ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjedV1"];
+export const DIRECT_PROTOCOLS = ["ChakraBondingCurve", "OpenDjedV1"];
 
 /**
  * On preprod, Minswap builds Splash's orders with Splash's mainnet order
@@ -141,6 +142,8 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  * - SundaeSwapV3: read exactly, at its order script (SUNDAE_V3): owned by
  *   the session's own stake key, which signs its cancel too, and paying the
  *   session's address (chunk 24). Only as a path of its own (outOfPlace).
+ * - DanogoCLMMV1: no order, a swap against its pools (DANOGO_POOL), read by
+ *   what it spends, pays and gives back (chunk 24). Only on its own.
  * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
  *   beneficiary's addresses.
  * - Splash: the cancelling key and the redeemer's address. Spectrum: the
@@ -160,6 +163,7 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
   "WingRidersStableV2",
   "Splash",
   "Spectrum",
+  "DanogoCLMMV1",
 ];
 
 /**
@@ -233,6 +237,11 @@ export const DANOGO_POOL: Readonly<Record<"preprod" | "mainnet", string>> = {
  * be filled later, under a minimum the check never reads.
  */
 const DIRECT_CHECKED = ["DanogoCLMMV1"];
+
+/** Whether `est`'s route swaps against a DEX's pools, with no order: Danogo's, on its own (outOfPlace). */
+export function againstPools(est: Pick<Estimate, "paths">): boolean {
+  return est.paths.flat().some((leg) => DIRECT_CHECKED.includes(leg.protocol));
+}
 
 /**
  * The DEXes of `est`'s route that sit where a session's check can't follow

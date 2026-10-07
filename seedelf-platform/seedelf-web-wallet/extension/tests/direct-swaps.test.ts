@@ -5,10 +5,15 @@
 // Danogo's script and the pool's staking script, the pool recreated,
 // Minswap's fee, and the proceeds back to the session.
 import { blake2b } from "@noble/hashes/blake2.js";
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { KoiosUtxo } from "../src/background/koios";
-import { DANOGO_POOL, outOfPlace, witnessedKeys } from "../src/background/minswap";
+import { DANOGO_POOL, DIRECT_PROTOCOLS, excludedProtocols, MAINNET_PROTOCOLS, outOfPlace, witnessedKeys } from "../src/background/minswap";
+import type { SessionView } from "../src/shared/rpc";
+import { NetworkContext } from "../src/ui/network";
+import { Plan, Session, SwapRow } from "../src/ui/screens/Swaps";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { bytes, cbor, type Cbor, hex, SESSION_ADDRESS } from "./fixtures/swap-tx";
@@ -221,5 +226,56 @@ describe("a route through Danogo", () => {
     expect(outOfPlace(route(["DanogoCLMMV1"], ["MinswapV2"]))).toEqual(["DanogoCLMMV1"]);
     expect(outOfPlace(route(["MinswapV2", "DanogoCLMMV1"]))).toEqual(["DanogoCLMMV1"]);
     expect(outOfPlace(route(["DanogoCLMMV1"], ["MinswapV2", "SundaeSwapV3"])).sort()).toEqual(["DanogoCLMMV1", "SundaeSwapV3"]);
+  });
+});
+
+describe("Danogo routed (chunk 24)", () => {
+  const leg = minswapEstimate.estimate.paths[0]![0]!;
+  const selling = { ...minswapEstimate.ask, tokenIn: MIN, tokenOut: "lovelace", amount: "500" };
+
+  it("is left in routing on both networks, and a quote through it says it swaps against the pools", async () => {
+    expect(MAINNET_PROTOCOLS).toContain("DanogoCLMMV1");
+    expect(DIRECT_PROTOCOLS).not.toContain("DanogoCLMMV1");
+    expect(excludedProtocols("mainnet")).not.toContain("DanogoCLMMV1");
+    expect(excludedProtocols("preprod")).not.toContain("DanogoCLMMV1");
+    // A bonding curve and Djed's minting still aren't.
+    expect(excludedProtocols("mainnet")).toEqual(expect.arrayContaining(["ChakraBondingCurve", "OpenDjedV1"]));
+
+    const t = await unlocked();
+    t.minswap.estimate = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "DanogoCLMMV1" }], [{ ...leg, protocol: "DanogoCLMMV1" }]] };
+    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["DanogoCLMMV1"], againstPools: true });
+    t.minswap.estimate = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "MinswapV2" }]] };
+    expect(await t.sessions.quote("mainnet", selling)).not.toHaveProperty("againstPools");
+  });
+});
+
+/** A page's text, as a person reads it. */
+const text = (element: ReactElement) =>
+  renderToStaticMarkup(createElement(NetworkContext.Provider, { value: "preprod" }, element))
+    .replace(/<[^>]+>/g, " ")
+    .replaceAll("&#x27;", "'")
+    .replace(/\s+/g, " ");
+
+describe("a swap against the pools, on its page (chunk 24)", () => {
+  it("says it swaps against the DEX's pools and fills in itself, with no order, and offers no Stop once it's gone out", async () => {
+    const { view } = await placing(directTx());
+    expect(view.auto).toMatchObject({ step: "ordering", againstPools: true });
+    const page = text(
+      createElement(Session, { session: view, reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+    );
+    expect(page).toContain("Swapped against the DEX's pools");
+    expect(page).toContain("In the swap itself: no order to wait for");
+    expect(page).not.toContain("Order placed");
+    expect(page).not.toMatch(/\bStop\b/);
+    expect(text(createElement(SwapRow, { session: view as SessionView, onOpen: () => undefined }))).toContain("Swapping");
+  });
+
+  it("says so in the plan before it's started, when the route is Danogo's", () => {
+    const pools = text(createElement(Plan, { lovejoin: false, adaOut: false, pools: true }));
+    expect(pools).toContain("Swapped against the DEX's pools");
+    expect(pools).toContain("In the swap itself: no order to wait for");
+    const orders = text(createElement(Plan, { lovejoin: false, adaOut: false }));
+    expect(orders).toContain("Order placed");
+    expect(orders).toContain("By a DEX, usually within a few blocks");
   });
 });

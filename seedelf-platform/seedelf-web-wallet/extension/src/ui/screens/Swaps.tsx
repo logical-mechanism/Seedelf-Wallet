@@ -252,17 +252,26 @@ function subOf(s: SessionView, now: number): string {
   if (s.auto.paused) return t(PAUSED[s.auto.paused.why]);
   if (s.auto.orderOpen !== undefined) return t("swaps.sub.orderOpen");
   // Stopped before its order: it comes back rather than place one.
-  return t(STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step]);
+  if (s.auto.stopping && s.auto.step === "ordering") return t(STEP.returning);
+  // A swap against a DEX's pools has no order to place: it's swapping (chunk 24).
+  if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
+  return t(STEP[s.auto.step]);
 }
 
 /**
  * Whether Stop still changes anything: before the order is filled or
  * refunded. Once it has been, everything is coming back anyway, and Stop's
  * dialog would speak of cancelling an order that's gone (chunk 23's second
- * review, DX-5).
+ * review, DX-5). Nor once a swap against a DEX's pools has gone out: it has
+ * no order to cancel, and lands as it is or not at all, when it's built
+ * again and Stop is back (chunk 24).
  */
 const stoppable = (a: SessionAuto) =>
-  !a.stopping && !a.filled && !a.refunded && (a.step === "funding" || a.step === "ordering" || a.step === "filling");
+  !a.stopping &&
+  !a.filled &&
+  !a.refunded &&
+  !a.againstPools &&
+  (a.step === "funding" || a.step === "ordering" || a.step === "filling");
 
 /** A swap's state as a small pill: a live dot, a tick, a warning, a stop, or a cross. */
 export function SwapTag({ tone, label }: { tone: SwapTone; label: string }) {
@@ -1156,10 +1165,13 @@ export function SwapApproval({
         )}
       </div>
       {/* By the minimum, its own line: the wallet asks Minswap for it, and can't read it back from the order Minswap
-          builds (chunk 23's second review, DX-2). Reading it would mean decoding each DEX's order datum. */}
-      <Callout tone="warn" testId="swap-minimum-trust">
-        {tr("swaps.review.warn.minimum", { least: amountOf(quote.minAmountOut, get) })}
-      </Callout>
+          builds (chunk 23's second review, DX-2). Reading it would mean decoding each DEX's order datum. A swap
+          against Danogo's pools has no order: the wallet reads what it gives, and won't sign less (chunk 24). */}
+      {!quote.againstPools && (
+        <Callout tone="warn" testId="swap-minimum-trust">
+          {tr("swaps.review.warn.minimum", { least: amountOf(quote.minAmountOut, get) })}
+        </Callout>
+      )}
       {quote.ask.slippage >= SLIPPAGE_HIGH && (
         <Callout tone="warn" testId="swap-slippage-high">
           {tr("swaps.slippage.warn.high", { percent: formatPercent(quote.ask.slippage) })}
@@ -1181,9 +1193,9 @@ export function SwapApproval({
       </ReviewRows>
       <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
-      <Plan lovejoin={mixes} adaOut={adaOut} />
+      <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} />
       <p className="note" data-testid="swap-approves">
-        {tr("swaps.review.approves")}
+        {tr(quote.againstPools ? "swaps.review.approvesPools" : "swaps.review.approves")}
       </p>
       {any && (
         <LovejoinChoice
@@ -1259,14 +1271,16 @@ export function SwapCosts({
  * What happens after Send, as the swap's own page then shows it: the
  * timeline's four steps, none taken yet. `lovejoin`: the return goes through
  * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
- * The least the order asks for is said above it, once.
+ * The least the order asks for is said above it, once. `pools`: the route
+ * swaps against a DEX's pools (Danogo's), with no order, and is filled in
+ * the swap itself (chunk 24).
  */
-export function Plan({ lovejoin, adaOut }: { lovejoin: boolean; adaOut: boolean }) {
+export function Plan({ lovejoin, adaOut, pools = false }: { lovejoin: boolean; adaOut: boolean; pools?: boolean }) {
   const tr = useT();
   const steps = [
     [tr("swaps.plan.funded"), tr("swaps.plan.fundedSub")],
-    [tr("swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
-    [tr("swaps.plan.filled"), tr("swaps.plan.filledSub")],
+    [tr(pools ? "swaps.plan.swapped" : "swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
+    [tr("swaps.plan.filled"), tr(pools ? "swaps.step.filledInSwap" : "swaps.plan.filledSub")],
     [
       tr("swaps.plan.back"),
       tr(!lovejoin ? "swaps.plan.backDirect" : adaOut ? "swaps.plan.backAdaOut" : "swaps.plan.backTokenOut"),
@@ -2384,7 +2398,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       tx: tx("out"),
     },
     {
-      title: tr(unordered ? "swaps.step.noOrder" : "swaps.plan.ordered"),
+      title: tr(unordered ? "swaps.step.noOrder" : auto.againstPools ? "swaps.plan.swapped" : "swaps.plan.ordered"),
       sub: unordered
         ? tr("swaps.step.stoppedBefore")
         : least
@@ -2419,7 +2433,9 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
                   ? "swaps.step.partlySub"
                   : auto.filled
                     ? "swaps.step.proceedsAt"
-                    : "swaps.plan.filledSub",
+                    : auto.againstPools
+                      ? "swaps.step.filledInSwap"
+                      : "swaps.plan.filledSub",
       ),
       tx: tx("cancel"),
     },

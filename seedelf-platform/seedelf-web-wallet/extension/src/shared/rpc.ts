@@ -1386,6 +1386,8 @@ export interface SwapQuote {
   priceImpact: number;
   /** The DEXes it routes through, e.g. ["MinswapV2", "SundaeSwapV3"]. */
   route: string[];
+  /** It swaps against a DEX's pools (Danogo's), with no order: filled in the swap itself (chunk 24). */
+  againstPools?: boolean;
   /** Moved from the private balance to the session's account: the swap and its costs, with room for the swap's fee and change. */
   fund: { lovelace: string; tokens: TokenQuantity[] };
   /** Also moved: the account's own collateral, in lovelace. It comes back with the rest. */
@@ -1499,6 +1501,8 @@ export interface SessionAuto {
   orderOpen?: number;
   /** The least the user approved receiving. */
   approvedMinOut: string;
+  /** Its swap went against a DEX's pools (Danogo's), with no order: filled in the swap itself (chunk 24). */
+  againstPools?: boolean;
   /**
    * The least the order placed asks for, once one is: Review it myself, or
    * a fresh quote above the approved least, asks for other than was
