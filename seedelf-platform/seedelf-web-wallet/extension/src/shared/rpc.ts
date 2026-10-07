@@ -924,6 +924,8 @@ export interface DappTxSummary {
     refund: string | null;
     /** A DRep's own certificate (kind "drep"): it registers the DRep, updates it, or retires it. `own` when it's the account's DRep (CIP-95). */
     drepAction?: "register" | "update" | "retire" | null;
+    /** A DRep certificate's profile address, as text (C14). */
+    anchor?: string | null;
   }>;
   withdrawals: Array<{ address: string; lovelace: string; own: boolean }>;
   collateral: { own: number; lovelace: string; total: string | null; returnedLovelace: string | null; atRisk: string } | null;
@@ -932,6 +934,8 @@ export interface DappTxSummary {
   votes: number;
   /** Of `votes`, those cast by the account's own DRep (CIP-95). */
   ownVotes?: number;
+  /** Each vote the account's own DRep casts: which action, and how (C14). */
+  ownBallots?: Array<{ txHash: string; index: number; vote: "yes" | "no" | "abstain" }>;
   proposals: number;
   donation: string | null;
   /** CIP-20's message lines. */

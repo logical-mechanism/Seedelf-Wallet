@@ -675,6 +675,8 @@ export function Lovejoin({
   // How the reviewed mix runs once sent, behind the icon by the title (chunk 23): what it costs, hides and
   // ties stays in the review's rows and callouts.
   const howItRuns = (r: Review) => {
+    // A seed has its own note on either side: nothing is mixed, and its boxes come back as a mix's do (the owner, 2026-10-06).
+    if (seeds(r)) return tr("lovejoin.review.seedNote");
     if (r.source === "private") return tr(r.summary.mix.again ? "lovejoin.review.againNote" : "lovejoin.review.privateNote");
     if (r.summary.again) return tr("lovejoin.review.publicAgainNote");
     return tr(r.summary.seed ? "lovejoin.review.seedNote" : "lovejoin.review.publicNote");
@@ -1384,7 +1386,7 @@ export function PrivateReview({ summary, before }: { summary: SessionOutSummary 
         <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: mix.boxes })} strong />
         <Row
           label={tr("lovejoin.mixedLabel")}
-          value={tr("lovejoin.review.depthMixesCost", {
+          value={mix.seed ? tr("lovejoin.review.notAtAll") : tr("lovejoin.review.depthMixesCost", {
             count: mix.depth,
             mixes: tr("amount.mixes", { count: mix.mixes }),
             ada: formatAda(mix.mixFees),
@@ -1392,7 +1394,13 @@ export function PrivateReview({ summary, before }: { summary: SessionOutSummary 
         />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} stack />
       </ReviewRows>
-      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
+      {mix.seed ? (
+        <Callout tone="warn" testId="lovejoin-seed-warning">
+          {tr("lovejoin.seed.privacy.hidesNothing")}
+        </Callout>
+      ) : (
+        <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
+      )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <GivemeNote funding />
     </>
@@ -1498,7 +1506,7 @@ function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
         <TotalRows side="public" leaving={publicLeaving(summary)} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} stack />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <Callout tone="warn" testId="lovejoin-seed-warning">
         {tr("lovejoin.review.warn.seed")}

@@ -1091,6 +1091,18 @@ export function SignTx({
           {tr("dappUi.privacy.ownVotes", { count: s.ownVotes })}
         </Callout>
       )}
+      {/* Each of those votes, which action and which way, before Sign (the owner's call, 2026-10-06). */}
+      {(s.ownBallots ?? []).length > 0 && (
+        <ul className="list" data-testid="dapp-own-ballots">
+          {s.ownBallots!.map((b) => (
+            <li key={`${b.txHash}#${b.index}`}>
+              {tr(b.vote === "yes" ? "dappUi.privacy.ballot.yes" : b.vote === "no" ? "dappUi.privacy.ballot.no" : "dappUi.privacy.ballot.abstain", {
+                action: `${shortHex(b.txHash, 8, 4)}#${b.index}`,
+              })}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {collateralSpent && (
         <Callout tone="warn" testId="dapp-collateral-spent">
