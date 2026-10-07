@@ -65,20 +65,6 @@ export interface Estimate {
   aggregator_fee_percent: number | null;
 }
 
-export interface PendingOrder {
-  owner_address: string;
-  protocol: string;
-  token_in: unknown;
-  token_out: unknown;
-  amount_in: string;
-  min_amount_out: string;
-  created_at: number;
-  /** The order's UTxO, `txhash#index`. */
-  tx_in: string;
-  dex_fee: string;
-  deposit: string;
-}
-
 export interface SwapToken {
   token_id: TokenId;
   ticker: string | null;
@@ -114,12 +100,13 @@ const FUNDING_UNSEEN = /no wallet utxos|insufficient balance/i;
  * DEXes that swap straight against their pools in the same transaction,
  * rather than taking an order for a batcher to fill: the transaction spends
  * the pools' UTxOs, runs their scripts, and brings someone else's collateral.
- * A session signs only transactions that spend nothing but its own UTxOs
- * (sessions.ts), so routing leaves these out. DanogoCLMMV1 was seen doing it
- * on preprod (2026-09-25); a bonding curve and Djed's minting work the same
- * way. The session's check stays: any other DEX that does it pauses the swap.
+ * Routing leaves these out: a bonding curve and Djed's minting. Danogo's
+ * (DanogoCLMMV1, seen doing it on preprod, 2026-09-25) is routed since
+ * chunk 24, whose checks read its swaps (DANOGO_POOL, sessions.ts
+ * `directSpends`). The session's check stays: any other DEX that does it
+ * pauses the swap.
  */
-export const DIRECT_PROTOCOLS = ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjedV1"];
+export const DIRECT_PROTOCOLS = ["ChakraBondingCurve", "OpenDjedV1"];
 
 /**
  * On preprod, Minswap builds Splash's orders with Splash's mainnet order
@@ -129,34 +116,35 @@ export const DIRECT_PROTOCOLS = ["DanogoCLMMV1", "ChakraBondingCurve", "OpenDjed
 const PREPROD_BROKEN = ["Splash", "SplashStable"];
 
 /**
- * The DEXes a mainnet swap goes through: those whose orders the session's
- * check (sessions.ts `checkOrder`) reads as the session's, by the order
- * details each DEX publishes. Each order names its owner's key as a 28-byte
- * field of its own (an address's payment part, or a signature's key), and
- * sits at a script with no staking part or the sender's:
- * - Minswap (V1) and MinswapStable: the sender's and the receiver's
- *   addresses. V1's passes on a real order Minswap built on preprod.
- * - MinswapV2: the canceller's key, and the refund and success receivers.
- * - SundaeSwap: the destination address.
- * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
- *   beneficiary's addresses.
- * - Splash and SplashStable: the cancelling key and the redeemer's address.
- *   Spectrum: the reward key.
- * None was checked on a mainnet order yet: the owner's smoke test is one
- * small swap through each before launch. A route through any other is
- * refused before it's funded (quote), rather than pause once it is.
+ * The DEXes a mainnet swap goes through: those whose orders the wallet can
+ * cancel itself (chunk 24, Step 3). Each order script is pinned, with its
+ * cancel, in seedelf-core's `orders.json`, and WebAssembly reads each order
+ * exactly (`readDexOrder`, which sessions.ts `checkOrder` asks): cancelled by
+ * the session's own key, and paying the session's address alone. So Stop
+ * brings the money back whatever Minswap lists, from any of them:
+ * - Minswap (V1), MinswapV2 and MinswapStable (one order script a pool);
+ * - SundaeSwap (V1) and SundaeSwapV3, the latter owned by the session's own
+ *   stake key, which signs its cancel too, and only as a path of its own
+ *   (outOfPlace);
+ * - WingRiders, WingRidersV2 and WingRidersStableV2;
+ * - Splash and Spectrum: both are Splash's limit order as Minswap builds them;
+ * - DanogoCLMMV1: no order, a swap against its pools (DANOGO_POOL), read by
+ *   what it spends, pays and gives back (chunk 24). Only on its own.
+ * A route through any other is refused before it's funded (quote), rather
+ * than pause once it is.
  */
 export const MAINNET_PROTOCOLS: readonly string[] = [
   "Minswap",
   "MinswapV2",
   "MinswapStable",
   "SundaeSwap",
+  "SundaeSwapV3",
   "WingRiders",
   "WingRidersV2",
   "WingRidersStableV2",
   "Splash",
-  "SplashStable",
   "Spectrum",
+  "DanogoCLMMV1",
 ];
 
 /**
@@ -166,18 +154,87 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
  * owner as one 56-byte field, the key and the staking part together, and
  * MuesliSwap's orders are staked to its own key, not the sender's.
  *
- * SundaeSwapV3 too (independent review M16). Minswap builds its orders at
- * SundaeSwap's V3 order script under a fixed staking part that isn't the
- * sender's (f217f435…, the same for every sender, seen 2026-09-27), so the
- * check refuses every one, after the swap is funded. And the order's owner
- * is the sender's stake key, so cancelling one needs the session's stake
- * key 2/i as well as its payment key 0/i, which the wallet never signs
- * with; V3 orders don't expire, so an order it couldn't cancel would wait
- * at the DEX for good. It comes back only with all three: the V3 order
- * script and that staking part pinned in `checkOrder`, and a cancel that
- * may be signed by 0/i and 2/i, and by nothing else.
+ * SplashStable too: the only stable-pool validator Splash deployed was
+ * drained on 2026-09-13, and its README says not to use it (chunk 24).
+ *
+ * SundaeSwapV3 was here (independent review M16) until chunk 24 built what
+ * it needed: Minswap builds its orders under a fixed staking part that
+ * isn't the sender's, owned by the sender's stake key, and they never
+ * expire, so the check pins its order script and that staking part, and
+ * Stop's cancel of one is signed by 0/i and 2/i, and by nothing else.
  */
-const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SundaeSwapV3"];
+const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SplashStable"];
+
+/**
+ * SundaeSwap V3's order script, by network, and the staking part Minswap
+ * builds every V3 order under there: the same for every sender (mainnet's
+ * unregistered; seen on 25 open orders on mainnet and in a preprod build,
+ * 2026-10-06). A single-leg order names the sender's stake key as its owner,
+ * whose signature alone cancels it, and the sender's address as its
+ * destination, with no datum; V3's pools pay the destination exactly, and
+ * its orders never expire. WebAssembly reads one exactly (`readDexOrder`,
+ * seedelf-core orders.rs), and Stop's own cancel of one is signed by the
+ * session's stake key too.
+ */
+export const SUNDAE_V3: Readonly<Record<"preprod" | "mainnet", { order: string; stake: string }>> = {
+  mainnet: {
+    order: "fa6a58bbe2d0ff05534431c8e2f0ef2cbdc1602a8456e4b13c8f3077",
+    stake: "f217f435f5f34dba69830d9ada013b5c290a4eee6078371cae55298b",
+  },
+  preprod: {
+    order: "a989aa2fe6e3866688631162d8ccc830d39ce38b3f11acd3880c165f",
+    stake: "c41401cdf24ad644ff8dd55b00cbb7f2e057c7ed0b79d82ef2e38377",
+  },
+};
+
+/**
+ * Danogo's concentrated-liquidity pools' script, by network: a DEX that
+ * swaps against its pools in the swap itself, with no order (chunk 24). A
+ * session's direct swap spends UTxOs at it and nothing else of anyone's but
+ * a collateral signed already, recreates its pools there, and withdraws
+ * zero from it and from each spent pool's staking script (sessions.ts
+ * `directSpends`, `checkDirect`). Seen in swaps Minswap built, on mainnet and
+ * on preprod, 2026-10-06.
+ */
+export const DANOGO_POOL: Readonly<Record<"preprod" | "mainnet", string>> = {
+  mainnet: "d8b69fc53637bcfadbc4469083f706bc293f4d9d2296646c5ca167bb",
+  preprod: "04041c3c6ba87b33f2c9eb7f7dbeae3b26003c3e199d438bb99932a2",
+};
+
+/**
+ * DEXes that swap against their pools whose swaps a session reads: a route
+ * through one goes through nothing else. Its proceeds come in the swap
+ * itself, which the runner counts as the fill, and the session's check
+ * holds a swap to its minimum by what it pays back; an order beside it would
+ * be filled later, under a minimum the check never reads.
+ */
+const DIRECT_CHECKED = ["DanogoCLMMV1"];
+
+/** Whether `est`'s route swaps against a DEX's pools, with no order: Danogo's, on its own (outOfPlace). */
+export function againstPools(est: Pick<Estimate, "paths">): boolean {
+  return est.paths.flat().some((leg) => DIRECT_CHECKED.includes(leg.protocol));
+}
+
+/**
+ * The DEXes of `est`'s route that sit where a session's check can't follow
+ * them, to be asked for again without: any in a path of more than one leg,
+ * and one that swaps against its pools beside any other leg (DIRECT_CHECKED).
+ * Danogo split across two of its own pools is one swap, and fine.
+ *
+ * Routes are asked for direct (`routed`), so a longer path is Minswap not
+ * keeping to that. Its later legs' orders are placed by the leg before's
+ * batcher, and the session's check never sees them; and its first leg pays
+ * the next leg's order or Minswap's adapter, not the session. A SundaeSwap
+ * V3 first leg paying the adapter is owned by Minswap's key too, so the
+ * session could never cancel it, and it never expires (seen on mainnet,
+ * 2026-10-06).
+ */
+export function outOfPlace(est: Pick<Estimate, "paths">): string[] {
+  const legs = est.paths.flat().map((leg) => leg.protocol);
+  const found = est.paths.filter((path) => path.length > 1).flatMap((path) => path.map((leg) => leg.protocol));
+  for (const p of DIRECT_CHECKED) if (legs.includes(p) && legs.some((q) => q !== p)) found.push(p);
+  return [...new Set(found)];
+}
 
 /**
  * Every DEX Minswap's aggregator routes through, by the names its
@@ -230,12 +287,15 @@ export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
 /**
  * The DEXes of `est`'s route a swap on `network` doesn't go through: on
  * mainnet, any not on MAINNET_PROTOCOLS (CswapV1, whose orders the wallet
- * doesn't know, or one Minswap adds later); none on preprod, where only the
- * check stands.
+ * doesn't know, or one Minswap adds later); on either network, one where
+ * the session's check can't follow it (`outOfPlace`). Otherwise none on
+ * preprod, where only the check stands.
  */
 export function uncheckedProtocols(network: "preprod" | "mainnet", est: Pick<Estimate, "paths">): string[] {
-  if (network !== "mainnet") return [];
-  return [...new Set(est.paths.flat().map((leg) => leg.protocol))].filter((p) => !MAINNET_PROTOCOLS.includes(p));
+  const legged = outOfPlace(est);
+  if (network !== "mainnet") return legged;
+  const unknown = est.paths.flat().map((leg) => leg.protocol).filter((p) => !MAINNET_PROTOCOLS.includes(p));
+  return [...new Set([...unknown, ...legged])];
 }
 
 const TIMEOUT_MS = 20_000;
@@ -248,9 +308,12 @@ export class Minswap {
     private readonly exclude: string[] = DIRECT_PROTOCOLS,
   ) {}
 
-  /** The best route for `ask` through DEXes that take orders, and what it's expected to give. */
-  estimate(ask: SwapAsk): Promise<Estimate> {
-    return this.post<Estimate>("estimate", { ...routed(ask, this.exclude), amount_in_decimal: false });
+  /**
+   * The best route for `ask` through DEXes that take orders, and what it's
+   * expected to give; `avoid`, DEXes left out of this one too.
+   */
+  estimate(ask: SwapAsk, avoid: string[] = []): Promise<Estimate> {
+    return this.post<Estimate>("estimate", { ...routed(ask, [...this.exclude, ...avoid]), amount_in_decimal: false });
   }
 
   /**
@@ -260,31 +323,15 @@ export class Minswap {
    * least it may be, and a build under it is refused, a 400 whose message
    * has the comparison backwards ("Minimum amount out is less than or equal
    * to the estimated minimum amount out", seen 2026-10-05 on mainnet).
+   * `avoid`: what the estimate it's built from left out besides, as Minswap
+   * routes it again.
    */
-  async buildTx(sender: string, minAmountOut: string, ask: SwapAsk): Promise<string> {
+  async buildTx(sender: string, minAmountOut: string, ask: SwapAsk, avoid: string[] = []): Promise<string> {
     const { cbor } = await this.post<{ cbor: string }>("build-tx", {
       sender,
       min_amount_out: minAmountOut,
-      estimate: routed(ask, this.exclude),
+      estimate: routed(ask, [...this.exclude, ...avoid]),
       amount_in_decimal: false,
-    });
-    return cbor;
-  }
-
-  /** `owner`'s orders that aren't filled, cancelled or expired yet. */
-  async pendingOrders(owner: string): Promise<PendingOrder[]> {
-    const { orders } = await this.request<{ orders: PendingOrder[] }>(
-      "GET",
-      `pending-orders?owner_address=${encodeURIComponent(owner)}&amount_in_decimal=false`,
-    );
-    return orders;
-  }
-
-  /** An unsigned cancel of up to six of `sender`'s orders. */
-  async cancelTx(sender: string, orders: Array<Pick<PendingOrder, "tx_in" | "protocol">>): Promise<string> {
-    const { cbor } = await this.post<{ cbor: string }>("cancel-tx", {
-      sender,
-      orders: orders.map((o) => ({ tx_in: o.tx_in, protocol: o.protocol })),
     });
     return cbor;
   }
@@ -330,14 +377,20 @@ export class Minswap {
   }
 }
 
-/** An ask as Minswap's estimate takes it: the route through DEXes that take orders only. */
+/**
+ * An ask as Minswap's estimate takes it: the route through DEXes that take
+ * orders only, and direct, one leg a path (`outOfPlace`). Minswap routes
+ * direct unless asked otherwise (seen on both networks, 2026-10-06), but its
+ * documentation gives no default, so it's asked.
+ */
 function routed(ask: SwapAsk, exclude: string[]) {
   return {
     amount: ask.amount,
     token_in: ask.tokenIn,
     token_out: ask.tokenOut,
     slippage: ask.slippage,
-    exclude_protocols: exclude,
+    exclude_protocols: [...new Set(exclude)],
+    allow_multi_hops: false,
   };
 }
 
@@ -405,6 +458,21 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
     }
     return { address: hex(address), lovelace, tokens, datum };
   });
+}
+
+/**
+ * The keys a transaction carries a signature of already, as key hashes (hex):
+ * its witness set's vkey witnesses. A direct swap Minswap builds comes signed
+ * by its collateral's owner.
+ */
+export function witnessedKeys(tx: Uint8Array): Set<string> {
+  if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
+  const found = new Set<string>();
+  for (const [key, at] of entries(tx, skip(tx, 1))) {
+    if (key !== 0) continue;
+    for (const w of items(tx, at)) found.add(hex(blake2b(bytesAt(tx, items(tx, w)[0]), { dkLen: 28 })));
+  }
+  return found;
 }
 
 interface Head {

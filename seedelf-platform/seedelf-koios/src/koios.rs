@@ -896,6 +896,10 @@ pub struct ProtocolParameters {
     pub price_mem: f64,
     pub price_step: f64,
     pub cost_model_v3: Vec<i64>,
+    /// Plutus V1's and V2's cost models: empty when Koios leaves them out, so
+    /// only what runs a V1 or V2 script (a DEX order's cancel) fails over it.
+    pub cost_model_v1: Vec<i64>,
+    pub cost_model_v2: Vec<i64>,
     /// What a byte of reference script costs, before Conway's tiers (see
     /// `seedelf_core::build::reference_script_fee`): a fraction, exactly as
     /// the ledger keeps it.
@@ -1043,6 +1047,16 @@ impl ProtocolParameters {
             .iter()
             .map(|v| v.as_i64().ok_or_else(|| anyhow!("Non-integer cost entry")))
             .collect::<Result<Vec<_>>>()?;
+        let older = |version: &str| -> Result<Vec<i64>> {
+            params["cost_models"][version]
+                .as_array()
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .map(|v| v.as_i64().ok_or_else(|| anyhow!("Non-integer cost entry")))
+                .collect()
+        };
+        let cost_model_v1 = older("PlutusV1")?;
+        let cost_model_v2 = older("PlutusV2")?;
 
         Ok(ProtocolParameters {
             min_fee_a,
@@ -1053,6 +1067,8 @@ impl ProtocolParameters {
             price_mem,
             price_step,
             cost_model_v3,
+            cost_model_v1,
+            cost_model_v2,
             min_fee_ref_script_cost_per_byte,
         })
     }

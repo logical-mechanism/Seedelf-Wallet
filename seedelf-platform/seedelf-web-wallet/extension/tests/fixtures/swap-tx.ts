@@ -41,9 +41,12 @@ export function cbor(v: Cbor): number[] {
   return [...head(6, v.tag), ...cbor(v.of)];
 }
 
+/** Minswap's V1 order script, on preprod as on mainnet: where the recorded swap's order sits (seedelf-core orders.json). */
+export const ORDER_SCRIPT = "a65ca58a4e9c755fa830173d2a5caed458ac0c73f97db7faae2e7e3b";
+
 /** Session 0's address, and the recorded swap's order contract's under its staking part, as bytes (hex). */
 export const SESSION_ADDRESS = hex(bech32Bytes(sessionSwap.address));
-export const ORDER_ADDRESS = `10${"a6".repeat(28)}${SESSION_ADDRESS.slice(58)}`;
+export const ORDER_ADDRESS = `10${ORDER_SCRIPT}${SESSION_ADDRESS.slice(58)}`;
 
 /** The swap Minswap's aggregator really built on preprod (a Minswap V1 order kept by its hash), and its sender as bytes (hex). */
 export const recordedSwap = JSON.parse(
@@ -58,6 +61,9 @@ export const SENDER = hex(bech32Bytes(recordedSwap.sender));
 export const ORDER_DATUM = builtOutputs(bytes(recordedSwap.cbor))[0]!
   .datum!.replaceAll(SENDER.slice(2, 58), sessionSwap.keyHash)
   .replaceAll(SENDER.slice(58), SESSION_ADDRESS.slice(58));
+
+/** Its hash, which the order holds: Koios's `datum_info` gives the datum back by it. */
+export const ORDER_DATUM_HASH = hex(blake2b(bytes(ORDER_DATUM), { dkLen: 32 }));
 
 /**
  * A swap shaped like the one Minswap's aggregator built on preprod, from

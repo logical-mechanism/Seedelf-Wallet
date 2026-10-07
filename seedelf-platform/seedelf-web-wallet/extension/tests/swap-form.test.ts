@@ -11,6 +11,7 @@ import {
   impactLevel,
   maxAdaIn,
   parseSlippage,
+  POOL_SWAP_FEE_ESTIMATE,
   rateOf,
   sameAsk,
   SESSION_FEE_ESTIMATE,
@@ -138,6 +139,20 @@ describe("what a swap takes, all told (blind test §9.8, T10)", () => {
     const costs = swapCosts({ ...quote, aggregatorFee: "500000" }, funding, { mixFees: "3800000", withdrawFees: "300000" });
     expect(costs).toMatchObject({ later: 3, networkFees: 983_208n, lovejoin: 4_100_000n });
     expect(costs.cost).toBe(983_208n + 2_000_000n + 500_000n + 4_100_000n);
+  });
+
+  it("prices a swap against a DEX's pools at its own estimate, in place of the order's, and its funding has no deposit (chunk 24)", () => {
+    const pools: SwapQuote = { ...quote, dexFee: "100000", deposits: "0", fund: { lovelace: "12100000", tokens: [] }, againstPools: true };
+    // It runs the pools' scripts: about 0.75 ₳, measured on Danogo swaps Minswap built, and the return's 0.25 ₳.
+    expect(POOL_SWAP_FEE_ESTIMATE).toBe(750_000n);
+    const costs = swapCosts(pools, { paid: 17_100_000n, fee: 233_208n });
+    expect(costs).toMatchObject({ later: 2, networkFees: 233_208n + 750_000n + 250_000n });
+    expect(costs.cost).toBe(1_233_208n + 100_000n);
+    // Back: the 5 ₳ kept aside and the 2 ₳ room less the two later fees; no deposit.
+    expect(costs.back).toBe(5_000_000n + (SWAP_MARGIN - 1_000_000n));
+    expect(fundParts(pools, pools.fund.lovelace)).toMatchObject({ deposits: "0", room: "2000000" });
+    // Through Lovejoin, the deposit's fee is the order's estimate.
+    expect(swapCosts(pools, { paid: 17_100_000n, fee: 233_208n }, { mixFees: "0", withdrawFees: "0" }).networkFees).toBe(1_483_208n);
   });
 
   it("brings a token→ADA swap's proceeds back with the rest", () => {

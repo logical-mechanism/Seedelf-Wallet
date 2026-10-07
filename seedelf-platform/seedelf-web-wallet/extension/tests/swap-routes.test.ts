@@ -22,19 +22,20 @@ const leg = minswapEstimate.estimate.paths[0]![0]!;
 const selling = { ...minswapEstimate.ask, tokenIn: MIN, tokenOut: "lovelace", amount: "500" };
 const via = (...protocols: string[]) => ({ ...minswapEstimate.estimate, paths: protocols.map((protocol) => [{ ...leg, protocol }]) });
 
-describe("SundaeSwapV3 on mainnet (independent review M16)", () => {
-  it("is left out of routing, and a quote through it is refused before anything is funded", async () => {
-    // Minswap builds its orders under a fixed staking part that isn't the sender's, which the check refuses.
-    expect(MAINNET_PROTOCOLS).not.toContain("SundaeSwapV3");
-    expect(excludedProtocols("mainnet")).toContain("SundaeSwapV3");
-    // SundaeSwap's own first version stays: its orders name the destination, at a script staked to the sender.
+describe("SundaeSwapV3 on mainnet (independent review M16, chunk 24)", () => {
+  it("is routed through as a path of its own, once the check reads its orders and Stop can cancel one", async () => {
+    // Minswap builds its orders under a fixed staking part, owned by the sender's stake key: the check pins both.
+    expect(MAINNET_PROTOCOLS).toContain("SundaeSwapV3");
+    expect(excludedProtocols("mainnet")).not.toContain("SundaeSwapV3");
     expect(MAINNET_PROTOCOLS).toContain("SundaeSwap");
-    expect(excludedProtocols("mainnet")).not.toContain("SundaeSwap");
 
     const t = await unlocked();
     t.minswap.estimate = via("SundaeSwapV3");
+    await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["SundaeSwapV3"] });
+    // Beside another leg its order is Minswap's to cancel, and never expires: refused if Minswap still routes so.
+    t.minswap.estimate = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "MinswapV2" }, { ...leg, protocol: "SundaeSwapV3" }]] };
     await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
-      "Minswap routes this swap through SundaeSwapV3, which the wallet can't check yet, so it won't swap this way",
+      "Minswap routes this swap through MinswapV2 and SundaeSwapV3, which the wallet can't check yet, so it won't swap this way",
     );
   });
 });
@@ -45,7 +46,7 @@ describe("a mainnet swap's route (independent review M17)", () => {
     // Every one Minswap offers is either checked or left out.
     for (const p of MINSWAP_PROTOCOLS) expect(MAINNET_PROTOCOLS.includes(p) !== left.includes(p)).toBe(true);
     expect(left).toEqual(
-      expect.arrayContaining(["CswapV1", "SundaeSwapStable", "WingRidersStableV1", "VyFinance", "MuesliSwap", ...DIRECT_PROTOCOLS]),
+      expect.arrayContaining(["CswapV1", "SundaeSwapStable", "SplashStable", "WingRidersStableV1", "VyFinance", "MuesliSwap", ...DIRECT_PROTOCOLS]),
     );
     // Minswap refuses a request naming a DEX it doesn't know: the list holds only its own names.
     for (const p of left) expect(MINSWAP_PROTOCOLS).toContain(p);
@@ -85,6 +86,33 @@ describe("a mainnet swap's route (independent review M17)", () => {
       expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
     } finally {
       rule.mainnet = false;
+    }
+  });
+});
+
+describe("a route of more than one leg (chunk 24)", () => {
+  // MIN → ADA → iUSD: two Minswap V2 pools, one after the other.
+  const hops = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "MinswapV2" }, { ...leg, protocol: "MinswapV2" }]] };
+
+  it("is never asked for: every estimate and build asks Minswap for a direct route", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await sessions.quote("preprod", selling);
+    await started(sessions);
+    funded(t);
+    await sessions.advance("preprod", 0, true);
+    expect(t.minswap.calls.map((c) => c.path)).toContain("build-tx");
+    for (const c of t.minswap.calls.filter((c) => c.path === "estimate")) expect(c.body).toMatchObject({ allow_multi_hops: false });
+    for (const c of t.minswap.calls.filter((c) => c.path === "build-tx")) expect(c.body).toMatchObject({ estimate: { allow_multi_hops: false } });
+  });
+
+  it("is refused if Minswap routes so anyway, whichever DEXes, on either network: the check never sees a later leg's order", async () => {
+    const t = await unlocked();
+    t.minswap.estimate = hops;
+    for (const network of ["preprod", "mainnet"] as const) {
+      await expect(t.sessions.quote(network, selling)).rejects.toThrow(
+        "Minswap routes this swap through MinswapV2, which the wallet can't check yet, so it won't swap this way",
+      );
     }
   });
 });

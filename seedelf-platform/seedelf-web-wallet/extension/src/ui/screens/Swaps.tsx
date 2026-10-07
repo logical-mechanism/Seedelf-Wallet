@@ -110,6 +110,7 @@ import {
   impactLevel,
   maxAdaIn,
   parseSlippage,
+  POOL_SWAP_FEE_ESTIMATE,
   rateOf,
   sameAsk,
   SLIPPAGE_HIGH,
@@ -252,17 +253,26 @@ function subOf(s: SessionView, now: number): string {
   if (s.auto.paused) return t(PAUSED[s.auto.paused.why]);
   if (s.auto.orderOpen !== undefined) return t("swaps.sub.orderOpen");
   // Stopped before its order: it comes back rather than place one.
-  return t(STEP[s.auto.stopping && s.auto.step === "ordering" ? "returning" : s.auto.step]);
+  if (s.auto.stopping && s.auto.step === "ordering") return t(STEP.returning);
+  // A swap against a DEX's pools has no order to place: it's swapping (chunk 24).
+  if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
+  return t(STEP[s.auto.step]);
 }
 
 /**
  * Whether Stop still changes anything: before the order is filled or
  * refunded. Once it has been, everything is coming back anyway, and Stop's
  * dialog would speak of cancelling an order that's gone (chunk 23's second
- * review, DX-5).
+ * review, DX-5). Nor once a swap against a DEX's pools has gone out: it has
+ * no order to cancel, and lands as it is or not at all, when it's built
+ * again and Stop is back (chunk 24).
  */
 const stoppable = (a: SessionAuto) =>
-  !a.stopping && !a.filled && !a.refunded && (a.step === "funding" || a.step === "ordering" || a.step === "filling");
+  !a.stopping &&
+  !a.filled &&
+  !a.refunded &&
+  !a.againstPools &&
+  (a.step === "funding" || a.step === "ordering" || a.step === "filling");
 
 /** A swap's state as a small pill: a live dot, a tick, a warning, a stop, or a cross. */
 export function SwapTag({ tone, label }: { tone: SwapTone; label: string }) {
@@ -1044,10 +1054,13 @@ export function NewSwap({
               {shown.aggregatorFee !== "0" && (
                 <Detail label={tr("swaps.detail.minswapFee")} value={`${formatAda(shown.aggregatorFee)}\u00a0₳`} />
               )}
-              <Detail
-                label={tr("swaps.detail.deposit")}
-                value={tr("swaps.detail.depositValue", { ada: formatAda(shown.deposits) })}
-              />
+              {/* None for a swap against a DEX's pools: there's no order (chunk 24). */}
+              {shown.deposits !== "0" && (
+                <Detail
+                  label={tr("swaps.detail.deposit")}
+                  value={tr("swaps.detail.depositValue", { ada: formatAda(shown.deposits) })}
+                />
+              )}
             </dl>
           )}
         </div>
@@ -1156,10 +1169,13 @@ export function SwapApproval({
         )}
       </div>
       {/* By the minimum, its own line: the wallet asks Minswap for it, and can't read it back from the order Minswap
-          builds (chunk 23's second review, DX-2). Reading it would mean decoding each DEX's order datum. */}
-      <Callout tone="warn" testId="swap-minimum-trust">
-        {tr("swaps.review.warn.minimum", { least: amountOf(quote.minAmountOut, get) })}
-      </Callout>
+          builds (chunk 23's second review, DX-2). Reading it would mean decoding each DEX's order datum. A swap
+          against Danogo's pools has no order: the wallet reads what it gives, and won't sign less (chunk 24). */}
+      {!quote.againstPools && (
+        <Callout tone="warn" testId="swap-minimum-trust">
+          {tr("swaps.review.warn.minimum", { least: amountOf(quote.minAmountOut, get) })}
+        </Callout>
+      )}
       {quote.ask.slippage >= SLIPPAGE_HIGH && (
         <Callout tone="warn" testId="swap-slippage-high">
           {tr("swaps.slippage.warn.high", { percent: formatPercent(quote.ask.slippage) })}
@@ -1181,9 +1197,9 @@ export function SwapApproval({
       </ReviewRows>
       <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
-      <Plan lovejoin={mixes} adaOut={adaOut} />
+      <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} />
       <p className="note" data-testid="swap-approves">
-        {tr("swaps.review.approves")}
+        {tr(quote.againstPools ? "swaps.review.approvesPools" : "swaps.review.approves")}
       </p>
       {any && (
         <LovejoinChoice
@@ -1209,8 +1225,9 @@ export function SwapApproval({
 /**
  * What a swap costs, all told, and what comes back (blind test §9.8, T10):
  * the DEX's fee, Minswap's, the network fees of its transactions (this
- * payment's exact, the later ones' about SESSION_FEE_ESTIMATE each, as
- * nothing has built them yet), and Lovejoin's when its return goes through
+ * payment's exact, the later ones' about SESSION_FEE_ESTIMATE each, a swap
+ * against a DEX's pools POOL_SWAP_FEE_ESTIMATE, as nothing has built them
+ * yet), and Lovejoin's when its return goes through
  * it; then what comes back into the private balance: what's received, and
  * the ADA that isn't used up. Exported for its test.
  */
@@ -1249,7 +1266,12 @@ export function SwapCosts({
           transactions, three network fees" gave a figure for the first only (blind test T10). This payment's own is
           its row above. */}
       <p className="note" data-testid="swap-costs-note">
-        {tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", { each: aboutAda(SESSION_FEE_ESTIMATE) })}
+        {quote.againstPools
+          ? tr(costs.later > 2 ? "swaps.costs.notePoolsLovejoin" : "swaps.costs.notePools", {
+              swap: aboutAda(POOL_SWAP_FEE_ESTIMATE),
+              each: aboutAda(SESSION_FEE_ESTIMATE),
+            })
+          : tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", { each: aboutAda(SESSION_FEE_ESTIMATE) })}
       </p>
     </>
   );
@@ -1259,14 +1281,16 @@ export function SwapCosts({
  * What happens after Send, as the swap's own page then shows it: the
  * timeline's four steps, none taken yet. `lovejoin`: the return goes through
  * Lovejoin first; `adaOut`: the proceeds are ADA, so they go through it too.
- * The least the order asks for is said above it, once.
+ * The least the order asks for is said above it, once. `pools`: the route
+ * swaps against a DEX's pools (Danogo's), with no order, and is filled in
+ * the swap itself (chunk 24).
  */
-export function Plan({ lovejoin, adaOut }: { lovejoin: boolean; adaOut: boolean }) {
+export function Plan({ lovejoin, adaOut, pools = false }: { lovejoin: boolean; adaOut: boolean; pools?: boolean }) {
   const tr = useT();
   const steps = [
     [tr("swaps.plan.funded"), tr("swaps.plan.fundedSub")],
-    [tr("swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
-    [tr("swaps.plan.filled"), tr("swaps.plan.filledSub")],
+    [tr(pools ? "swaps.plan.swapped" : "swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
+    [tr("swaps.plan.filled"), tr(pools ? "swaps.step.filledInSwap" : "swaps.plan.filledSub")],
     [
       tr("swaps.plan.back"),
       tr(!lovejoin ? "swaps.plan.backDirect" : adaOut ? "swaps.plan.backAdaOut" : "swaps.plan.backTokenOut"),
@@ -1429,8 +1453,9 @@ export function Unverified({ pick }: { pick: Pick }) {
 /**
  * What "For the swap" pays for, a row each, so the rows add up to it (chunk
  * 23's second review, DX-3): the ADA swapped, the DEX's fee, Minswap's, the
- * order's deposit, back with the proceeds, and the room left for the network
- * fees, whose rest comes back. Nothing when they don't add up (fundParts).
+ * order's deposit, back with the proceeds (none against a DEX's pools, chunk
+ * 24), and the room left for the network fees, whose rest comes back.
+ * Nothing when they don't add up (fundParts).
  */
 function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
   const tr = useT();
@@ -1443,7 +1468,9 @@ function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
       {parts.swapped !== "0" && <Row label={tr("swaps.review.part.swapped")} value={ada(parts.swapped)} part />}
       <Row label={tr("swaps.detail.dexFee")} value={ada(parts.dexFee)} part />
       {parts.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={ada(parts.aggregatorFee)} part />}
-      <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} part />
+      {parts.deposits !== "0" && (
+        <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} part />
+      )}
       <Row label={tr("swaps.review.part.room")} value={tr("swaps.review.part.roomValue", { ada: formatAda(parts.room) })} part />
     </>
   );
@@ -2362,7 +2389,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const failed = s.stage === "failed";
   // Stopped before any order: the order and its fill never happen.
   const unordered = auto.stopping && !tx("swap");
-  // Stopped, but an order Minswap doesn't list is still open: not cancelled (independent review L16).
+  // Stopped, but an order Koios can't find yet is still open: not cancelled (independent review L16).
   const open = auto.orderOpen !== undefined;
   const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded);
   const state = (i: number): StepState => {
@@ -2384,7 +2411,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       tx: tx("out"),
     },
     {
-      title: tr(unordered ? "swaps.step.noOrder" : "swaps.plan.ordered"),
+      title: tr(unordered ? "swaps.step.noOrder" : auto.againstPools ? "swaps.plan.swapped" : "swaps.plan.ordered"),
       sub: unordered
         ? tr("swaps.step.stoppedBefore")
         : least
@@ -2419,7 +2446,9 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
                   ? "swaps.step.partlySub"
                   : auto.filled
                     ? "swaps.step.proceedsAt"
-                    : "swaps.plan.filledSub",
+                    : auto.againstPools
+                      ? "swaps.step.filledInSwap"
+                      : "swaps.plan.filledSub",
       ),
       tx: tx("cancel"),
     },
@@ -2499,7 +2528,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   );
 }
 
-/** A stopped swap waiting on an order Minswap doesn't list (independent review L16). */
+/** A stopped swap waiting on an order Koios can't find yet (independent review L16). */
 const ORDER_OPEN = () => t("swaps.now.orderOpen");
 
 /** What's happening now, in plain words. */
@@ -2515,7 +2544,7 @@ export function nowLine(s: SessionView): string {
     case "filling":
       return t("swaps.now.filling");
     case "cancelling":
-      // An order Minswap doesn't list can't be cancelled: what the swap waits on, plainly (independent review L16).
+      // An order Koios can't find yet can't be cancelled: what the swap waits on, plainly (independent review L16).
       if (a.orderOpen !== undefined) return ORDER_OPEN();
       return t("swaps.now.cancelling");
     case "returning":

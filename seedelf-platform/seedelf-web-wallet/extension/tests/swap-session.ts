@@ -8,7 +8,7 @@ import { builtOutputs, Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { bytes, ORDER_ADDRESS, swapTx } from "./fixtures/swap-tx";
+import { bytes, ORDER_ADDRESS, ORDER_DATUM_HASH, ORDER_SCRIPT, swapTx } from "./fixtures/swap-tx";
 import { loadTestWasm, minswapEstimate, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
 export const PASSWORD = "correct horse battery";
@@ -144,14 +144,24 @@ export function fundingOutsSpent(t: T) {
   });
 }
 
+/**
+ * Session 0's order at Minswap V1's order script, under its staking part,
+ * as Koios lists it: output `index` of swap `txHash`, its datum by hash
+ * (fixtures/swap-tx.ts), which Koios's `datum_info` gives back.
+ */
+export function orderRow(txHash: string, index = 0, value = "14000000"): KoiosUtxo {
+  return {
+    ...atSession(txHash, index, value),
+    address: bech32("addr_test", bytes(ORDER_ADDRESS)),
+    payment_cred: ORDER_SCRIPT,
+    datum_hash: ORDER_DATUM_HASH,
+  };
+}
+
 /** The swap `txHash` lands: its order waits at the DEX's contract (output 0), and its change is at the account. */
 export function ordered(t: T, txHash = SWAP_TX) {
   t.koios.spent.add(FUNDING);
-  t.koios.addedToAccounts.push(atSession(txHash, 1, "131585414"), {
-    ...atSession(txHash, 0, "14000000"),
-    address: bech32("addr_test", bytes(ORDER_ADDRESS)),
-    payment_cred: "a6".repeat(28),
-  });
+  t.koios.addedToAccounts.push(atSession(txHash, 1, "131585414"), orderRow(txHash));
 }
 
 /** The sealed record of the network's sessions, as the tests read it. */

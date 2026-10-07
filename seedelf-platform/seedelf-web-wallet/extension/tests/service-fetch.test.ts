@@ -84,7 +84,7 @@ describe("a service request", () => {
     const { inits, fetchFn } = recording({ tokens: [], orders: [] });
     const minswap = new Minswap("https://agg-api.minswap.org/aggregator", fetchFn);
     await minswap.tokens("min");
-    await minswap.pendingOrders("addr_test1");
+    await minswap.estimate({ amount: "1000000", tokenIn: "lovelace", tokenOut: "ab".repeat(28), slippage: 1 });
     expect(inits).toHaveLength(2);
     inits.forEach(privately);
   });

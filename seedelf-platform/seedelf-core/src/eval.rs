@@ -76,12 +76,29 @@ pub fn refusal(row: &UtxoResponse) -> Option<String> {
 /// A Koios UTxO row as the evaluator needs it, unless it's one the evaluator
 /// can't take ([`refusal`]).
 pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
-    let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
-        .try_into()
-        .map_err(|_| anyhow!("UTxO {}#{} has a malformed hash", row.tx_hash, row.tx_index))?;
     if let Some(why) = refusal(row) {
         bail!(why);
     }
+    resolve(row, None)
+}
+
+/// A reference UTxO holding `script`, a Plutus script of `version` (1 to 3)
+/// as its witness carries it, for a script read by reference: a DEX order's,
+/// whose bytes the caller has checked against its hash ([`crate::orders`]).
+/// The row's datum, if any, is carried too.
+pub fn resolve_reference(row: &UtxoResponse, version: u8, script: &[u8]) -> Result<Resolved> {
+    if !(1..=3).contains(&version) {
+        bail!("A reference script must be a Plutus script");
+    }
+    resolve(row, Some((version, script)))
+}
+
+/// `row`'s output as the ledger encodes it, with `script` as its reference
+/// script when given.
+fn resolve(row: &UtxoResponse, script: Option<(u8, &[u8])>) -> Result<Resolved> {
+    let tx_hash: [u8; 32] = hex::decode(&row.tx_hash)?
+        .try_into()
+        .map_err(|_| anyhow!("UTxO {}#{} has a malformed hash", row.tx_hash, row.tx_index))?;
     let address = Address::from_bech32(&row.address)
         .map_err(|e| {
             anyhow!(
@@ -122,7 +139,8 @@ pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
     let datum_hash = row.datum_hash.as_ref().map(hex::decode).transpose()?;
 
     let mut e = minicbor::Encoder::new(Vec::new());
-    let fields = 2 + u64::from(inline.is_some() || datum_hash.is_some());
+    let fields =
+        2 + u64::from(inline.is_some() || datum_hash.is_some()) + u64::from(script.is_some());
     e.map(fields)?.u8(0)?.bytes(&address)?.u8(1)?;
     if tokens.is_empty() {
         e.u64(lovelace)?;
@@ -148,6 +166,14 @@ pub fn resolve_row(row: &UtxoResponse) -> Result<Resolved> {
             e.u8(2)?.array(2)?.u8(0)?.bytes(&hash)?;
         }
         (None, None) => {}
+    }
+    // #6.24(bytes .cbor [version, script])
+    if let Some((version, bytes)) = script {
+        let mut inner = minicbor::Encoder::new(Vec::new());
+        inner.array(2)?.u8(version)?.bytes(bytes)?;
+        e.u8(3)?
+            .tag(minicbor::data::Tag::new(24))?
+            .bytes(&inner.into_writer())?;
     }
     Ok(Resolved {
         tx_hash,
@@ -236,6 +262,20 @@ pub fn evaluate(
     cost_model_v3: &[i64],
     network_flag: bool,
 ) -> Result<Value> {
+    evaluate_with(tx_cbor, known, &[], &[], cost_model_v3, network_flag)
+}
+
+/// [`evaluate`] for scripts of any Plutus version: a DEX order's may be V1 or
+/// V2 ([`crate::orders`]). A version's empty cost model is left out, and a
+/// script of that version can't be measured.
+pub fn evaluate_with(
+    tx_cbor: &[u8],
+    known: &[Resolved],
+    cost_model_v1: &[i64],
+    cost_model_v2: &[i64],
+    cost_model_v3: &[i64],
+    network_flag: bool,
+) -> Result<Value> {
     let tx =
         MultiEraTx::decode(tx_cbor).map_err(|e| anyhow!("The transaction can't be read: {e}"))?;
     let mut pairs = Vec::new();
@@ -250,9 +290,10 @@ pub fn evaluate(
             })?;
         pairs.push((resolved.input_cbor()?, resolved.output.clone()));
     }
+    let model = |m: &[i64]| (!m.is_empty()).then(|| m.to_vec());
     let cost_models = CostModels {
-        plutus_v1: None,
-        plutus_v2: None,
+        plutus_v1: model(cost_model_v1),
+        plutus_v2: model(cost_model_v2),
         plutus_v3: Some(cost_model_v3.to_vec()),
     };
     let cost_models = minicbor::to_vec(&cost_models)

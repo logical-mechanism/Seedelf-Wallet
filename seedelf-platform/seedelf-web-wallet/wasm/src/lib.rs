@@ -635,6 +635,182 @@ pub mod api {
         dapp_address(hex::encode(key), network_flag)
     }
 
+    /// An output at a contract, read for the session's order check: whether
+    /// it's a DEX order the wallet can cancel, and the session's own
+    /// (`seedelf_core::orders`). As JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DexOrderRequest {
+        pub network: String,
+        /// The output's address bytes, hex.
+        pub address: String,
+        /// Its datum's CBOR, hex: inline, or the one its hash names.
+        pub datum: String,
+        /// The session's address, bech32: its payment key and stake key.
+        pub session: String,
+    }
+
+    /// What [`read_dex_order`] found.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DexOrderResult {
+        /// It sits at an order script the wallet can cancel at.
+        pub known: bool,
+        pub protocol: Option<String>,
+        /// Cancelled by the session's own key, and paying the session alone.
+        pub ours: bool,
+        /// Its cancel is signed by the session's stake key too.
+        pub stake_signs: bool,
+        /// Where its script is read from, `hash#index`, when by reference.
+        pub reference: Option<String>,
+        /// Why its datum couldn't be read, when it couldn't.
+        pub why: Option<String>,
+    }
+
+    /// A session's payment key and stake key, from its base address.
+    fn session_keys(address: &str, network_flag: bool) -> Result<seedelf_core::orders::Session> {
+        let Ok(Address::Shelley(shelley)) = Address::from_bech32(address) else {
+            bail!("{address} isn't a session's address");
+        };
+        let network = if network_flag {
+            AddressNetwork::Testnet
+        } else {
+            AddressNetwork::Mainnet
+        };
+        match (shelley.payment(), shelley.delegation()) {
+            (ShelleyPaymentPart::Key(payment), ShelleyDelegationPart::Key(stake))
+                if shelley.network() == network =>
+            {
+                Ok(seedelf_core::orders::Session {
+                    payment: *payment,
+                    stake: *stake,
+                })
+            }
+            _ => bail!("{address} isn't a session's address"),
+        }
+    }
+
+    /// Reads an output for the session's order check.
+    pub fn read_dex_order(request: DexOrderRequest) -> Result<DexOrderResult> {
+        let network_flag = network_flag(&request.network)?;
+        let session = session_keys(&request.session, network_flag)?;
+        let address = hex::decode(&request.address)?;
+        let datum = hex::decode(&request.datum)?;
+        let unknown = DexOrderResult {
+            known: false,
+            protocol: None,
+            ours: false,
+            stake_signs: false,
+            reference: None,
+            why: None,
+        };
+        let header = address.first().copied().unwrap_or(0xff) >> 4;
+        if header > 7 || header % 2 == 0 || address.len() < 29 {
+            return Ok(unknown);
+        }
+        let script = Hash::<28>::new(address[1..29].try_into()?);
+        let Some(entry) = seedelf_core::orders::entry(network_flag, &script)? else {
+            return Ok(unknown);
+        };
+        let (ours, why) = match seedelf_core::orders::read(entry.protocol, &datum) {
+            Ok(read) => (session.owns(&read), None),
+            Err(e) => (false, Some(e.to_string())),
+        };
+        Ok(DexOrderResult {
+            known: true,
+            protocol: Some(entry.protocol.name().to_string()),
+            ours,
+            stake_signs: entry.protocol.signs_with_stake(),
+            reference: entry.reference_outpoint(),
+            why,
+        })
+    }
+
+    /// One order to cancel: its UTxO as Koios lists it, and its datum's CBOR.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OrderRow {
+        pub utxo: UtxoResponse,
+        /// Hex: the inline datum, or the one its hash names.
+        pub datum: String,
+    }
+
+    /// A cancel of the session's orders, as JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OrderCancelRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The session's address, bech32: where everything goes back.
+        pub session: String,
+        pub orders: Vec<OrderRow>,
+        /// The session's own UTxOs, the collateral among them or not.
+        pub funds: Vec<UtxoResponse>,
+        /// One of the session's ADA-only UTxOs.
+        pub collateral: UtxoResponse,
+        /// The reference UTxOs the orders' scripts are read from, with their scripts.
+        pub references: Vec<UtxoResponse>,
+    }
+
+    /// A cancel, unsigned: the session's payment key signs it, and its stake
+    /// key too when `stakeSigns`.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OrderCancelResult {
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub fee: String,
+        /// The orders it cancels, `hash#index`: the first asked for, and those that can share it.
+        pub covers: Vec<String>,
+        pub stake_signs: bool,
+    }
+
+    /// Builds a cancel of the session's orders (`seedelf_core::orders::cancel_orders`).
+    pub fn build_order_cancel(request: OrderCancelRequest) -> Result<OrderCancelResult> {
+        let network_flag = network_flag(&request.network)?;
+        let params = ProtocolParameters::from_koios(&request.params)?;
+        let session = session_keys(&request.session, network_flag)?;
+        let address = Address::from_bech32(&request.session)
+            .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
+        let orders = request
+            .orders
+            .into_iter()
+            .map(|o| {
+                Ok(seedelf_core::orders::OrderToCancel {
+                    utxo: o.utxo,
+                    datum: hex::decode(&o.datum)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for row in request.funds.iter().chain([&request.collateral]) {
+            if payment_key_of(&row.address, network_flag) != Some(session.payment) {
+                bail!(
+                    "UTxO {}#{} isn't at the session's account",
+                    row.tx_hash,
+                    row.tx_index
+                );
+            }
+        }
+        let built = seedelf_core::orders::cancel_orders(&seedelf_core::orders::Cancel {
+            params: &params,
+            network_flag,
+            session,
+            address: &address,
+            orders: &orders,
+            funds: &request.funds,
+            collateral: &request.collateral,
+            references: &request.references,
+        })?;
+        Ok(OrderCancelResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            fee: built.fee.to_string(),
+            covers: built.covers,
+            stake_signs: built.stake_signs,
+        })
+    }
+
     /// Bringing a private session's one-time account back into Seedelf, as
     /// JSON from the extension.
     #[derive(Deserialize)]
@@ -3566,6 +3742,22 @@ pub fn build_session_return(
 ) -> Result<String, JsError> {
     let request: api::SessionReturnRequest = from_json(request)?;
     to_json(&api::session_return(&accounts.inner, key.sk, request).map_err(js_error)?)
+}
+
+/// Reads an output for a session's order check: whether it's a DEX order
+/// the wallet can cancel, and the session's own (`api::DexOrderRequest` →
+/// `api::DexOrderResult`).
+#[wasm_bindgen(js_name = readDexOrder)]
+pub fn read_dex_order(request: &str) -> Result<String, JsError> {
+    to_json(&api::read_dex_order(from_json(request)?).map_err(js_error)?)
+}
+
+/// Builds a cancel of a session's DEX orders, unsigned
+/// (`api::OrderCancelRequest` → `api::OrderCancelResult`): Stop's, without
+/// asking Minswap.
+#[wasm_bindgen(js_name = buildOrderCancel)]
+pub fn build_order_cancel(request: &str) -> Result<String, JsError> {
+    to_json(&api::build_order_cancel(from_json(request)?).map_err(js_error)?)
 }
 
 /// How many Lovejoin boxes a session's spare ADA pays for at `depth`, before

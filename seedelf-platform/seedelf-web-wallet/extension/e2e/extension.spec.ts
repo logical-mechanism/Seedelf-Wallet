@@ -2392,10 +2392,12 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await expect(page.getByRole("region", { name: "In progress" })).toHaveCount(0);
   await snap(page, "swaps");
   // MIN is on the wallet's own list, so Minswap is never asked to search (privacy review §3.11). One quote for
-  // 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a cancel.
+  // 30 ₳, one for 10 ₳, one at 2% slippage, the order's fresh one refused by the rate limit, then again; never a
+  // cancel, and never its list of orders: the wallet reads the order from chain (chunk 24, Step 3).
   const paths = swaps.calls.map((c) => c.path);
   expect(paths).not.toContain("tokens");
-  expect(paths.slice(0, 7)).toEqual(["estimate", "estimate", "estimate", "estimate", "estimate", "build-tx", "pending-orders"]);
+  expect(paths.slice(0, 6)).toEqual(["estimate", "estimate", "estimate", "estimate", "estimate", "build-tx"]);
+  expect(paths).not.toContain("pending-orders");
   expect(paths).not.toContain("cancel-tx");
 });
 

@@ -24,6 +24,15 @@ import { formatAda, formatQuantity } from "./format";
 export const SESSION_FEE_ESTIMATE = 250_000n;
 
 /**
+ * About what a swap against a DEX's pools costs, in place of an order's
+ * SESSION_FEE_ESTIMATE (chunk 24): it runs the pools' scripts, so it's
+ * dearer, and dearer the more pools it spends. Swaps Minswap built against
+ * Danogo's pools, 2026-10-06: six on mainnet, 0.48 ₳ for one pool to 0.92 ₳
+ * for four, and a preprod build 0.64 ₳ for two.
+ */
+export const POOL_SWAP_FEE_ESTIMATE = 750_000n;
+
+/**
  * About what bringing one Lovejoin box back costs, paid from the box: the
  * worker's own figure (sessions.ts LOVEJOIN_WITHDRAW_ESTIMATE, a 1-box
  * withdraw measured 0.2897 ₳ on mainnet), which a swap's Lovejoin quote
@@ -56,8 +65,9 @@ export function toCents(lovelace: bigint): string {
  * - `leaving`: the ADA the funding takes from the private balance now.
  * - `networkFees`: the funding's fee, and SESSION_FEE_ESTIMATE for each
  *   transaction after it (`later`): the order and the return, and Lovejoin's
- *   deposit when it takes a box. The later ones come out of the room for
- *   network fees (sessions.ts SWAP_MARGIN), whose rest comes back.
+ *   deposit when it takes a box; POOL_SWAP_FEE_ESTIMATE for a swap against a
+ *   DEX's pools in place of the order. The later ones come out of the room
+ *   for network fees (sessions.ts SWAP_MARGIN), whose rest comes back.
  * - `cost`: what's used up: the network fees, the DEX's fee, Minswap's, and
  *   Lovejoin's. The ADA swapped isn't a cost: it buys what's received.
  * - `back`: the ADA that comes back into the private balance: the 5 ₳ kept
@@ -71,7 +81,8 @@ export function swapCosts(
 ): { leaving: bigint; networkFees: bigint; later: number; lovejoin: bigint; cost: bigint; back: bigint } {
   const leaving = funding.paid + funding.fee;
   const later = lovejoin ? 3 : 2;
-  const networkFees = funding.fee + BigInt(later) * SESSION_FEE_ESTIMATE;
+  const swap = quote.againstPools ? POOL_SWAP_FEE_ESTIMATE : SESSION_FEE_ESTIMATE;
+  const networkFees = funding.fee + swap + BigInt(later - 1) * SESSION_FEE_ESTIMATE;
   const mixing = lovejoin ? BigInt(lovejoin.mixFees) + BigInt(lovejoin.withdrawFees) : 0n;
   const cost = networkFees + BigInt(quote.dexFee) + BigInt(quote.aggregatorFee) + mixing;
   const swapped = quote.ask.tokenIn === "lovelace" ? BigInt(quote.ask.amount) : 0n;

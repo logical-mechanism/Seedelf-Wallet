@@ -583,6 +583,31 @@ export class Koios {
     return rows;
   }
 
+  /**
+   * The datums `hashes` name, their CBOR (hex) by hash: a DEX order that
+   * keeps its datum by hash (a Plutus V1 one's) is cancelled with those exact
+   * bytes (chunk 24).
+   */
+  async datumInfo(hashes: string[]): Promise<Map<string, string>> {
+    const found = new Map<string, string>();
+    for (let i = 0; i < hashes.length; i += REFS_PER_REQUEST) {
+      const page = await this.post<{ datum_hash: string; bytes: string }>("datum_info", {
+        _datum_hashes: hashes.slice(i, i + REFS_PER_REQUEST),
+      });
+      for (const row of page) found.set(row.datum_hash, row.bytes);
+    }
+    return found;
+  }
+
+  /**
+   * Every UTxO at `addresses` (bech32): what a DEX's partial fill of an order
+   * left at the order's own address (chunk 24). Each is `trimmed`.
+   */
+  async addressUtxos(addresses: string[]): Promise<KoiosUtxo[]> {
+    const rows = await this.paged<KoiosUtxo>("address_utxos", { _addresses: addresses, _extended: true });
+    return rows.map(trimmed);
+  }
+
   /** Every address that has used this stake key, including ones now empty. */
   async accountAddresses(stakeAddress: string): Promise<string[]> {
     const rows = await this.post<{ addresses: string[] }>("account_addresses", {
