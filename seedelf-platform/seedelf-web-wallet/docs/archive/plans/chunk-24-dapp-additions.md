@@ -2,7 +2,7 @@
 
 Branch `web-wallet/dapp-additions`, from `main`. **One long branch for all of it** (the owner, 2026-10-06), with a PR at the end.
 
-**Status: built and run live (2026-10-06 and 07).** SundaeSwap V3 and Danogo are routed, routes are direct, and Stop cancels every order itself. The owner ran every DEX the wallet routes on mainnet but Splash and Spectrum, with a Stop on two, and the stuck preprod V3 order cancelled live ([*Mainnet runs*](#mainnet-runs-the-pairs-2026-10-07), [Step 3](#step-3--stops-own-cancel-2026-10-07)). It goes out in 1.3.0 (the owner, 2026-10-07). What's still open is in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Owed* (O2, O4) and *Kept in mind*.
+**Status: built and run live (2026-10-06 and 07).** SundaeSwap V3 and Danogo are routed, routes are direct, and Stop cancels every order itself. The owner ran every DEX the wallet routes on mainnet but Splash and Spectrum, and two Stops there cancelled, and the stuck preprod V3 order cancelled live ([*Mainnet runs*](#mainnet-runs-the-pairs-2026-10-07), [Step 3](#step-3--stops-own-cancel-2026-10-07)). It goes out in 1.3.0 (the owner, 2026-10-07). What's still open is in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Owed* (O2, O4) and *Kept in mind*.
 
 ## The owner's calls (2026-10-06)
 
@@ -102,7 +102,7 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] Danogo's swap part: routed on both networks, the swap page's words, the docs. **Owner: its live runs** (below).
 - [x] The multi-hop question: routes are direct, asked so explicitly, with any longer path refused. The Danogo approval's cost rows: checked and fixed (below, *Direct routes and Danogo's costs*).
 - [x] [flows.md](../../flows.md), [privacy.md](../../privacy.md) and [architecture.md](../../architecture.md) where a DEX is named or routing is described: the last "orders only" (flows.md's quote) is gone.
-- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. The stuck preprod V3 order cancelled live and its money came back, and so did a Stop on mainnet (the owner, 2026-10-07).
+- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. The stuck preprod V3 order cancelled live and its money came back, and two Stops on mainnet cancelled (the owner, 2026-10-07).
 - [x] WingRiders' smoke test and the owner's live runs: on mainnet, 2026-10-07 (*Mainnet runs*, below).
 - [x] At the end: the post-release roadmap, the handoff note, and this plan to the archive.
 
@@ -126,7 +126,7 @@ The DEX runs are mainnet's: preprod's pools route almost nothing the wallet can 
 
 Minswap charges its aggregator fee (0.85 ₳; 1 ₳ for a stablecoin pair) on every route but its own pools.
 
-**Run (the owner, 2026-10-07): "everything works."** Every pair above but Spectrum's and Splash's, on a mainnet test wallet: each order placed, filled and its money back, Danogo's filled in the swap itself; and a Stop on an NTX swap (Minswap V2) and a MIN one (Minswap V1, the Plutus V1 cancel), each bringing the money back. With the WingRiders runs, that's the smoke test. Splash and Spectrum stay open ([O2](../../post-release-roadmap.md#owed)).
+**Run (the owner, 2026-10-07): "everything works."** Every pair above but Spectrum's and Splash's, on a mainnet test wallet: each order placed, filled and its money back, Danogo's filled in the swap itself; and a Stop on an NTX swap (Minswap V2) and a MIN one (Minswap V1), each cancelled before its fill and the money back. The MIN one is the first live Plutus V1 cancel: the order's script and datum in the transaction, and its script data hash `with_integrity`'s, which the node took. With the WingRiders runs, that's the smoke test. Splash and Spectrum stay open ([O2](../../post-release-roadmap.md#owed)).
 
 ## Step 3 · Stop's own cancel (2026-10-07)
 
