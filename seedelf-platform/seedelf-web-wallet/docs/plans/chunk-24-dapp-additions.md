@@ -95,14 +95,15 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] Step 0: SplashStable out.
 - [x] Foundation 1 (Sundae V3): route rule, `checkOrder`, the stake-signed cancel, tests.
 - [x] Foundation 2 (Danogo): a real transaction read, the checks, the runner's fill, tests.
-- [ ] The swap parts, with the owner's live runs.
+- [x] SundaeSwap V3's swap part: routed on mainnet, both networks pinned, the docs. **Owner: its live runs** (below).
+- [ ] Danogo's swap part, and WingRiders' smoke test, with the owner's live runs.
 - [ ] At the end: update [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described ("orders only"); then the post-release roadmap, the handoff note, and this plan to the archive.
 
 ## Built (2026-10-06)
 
 Uncommitted on the branch until the owner says.
 
-- **Mainnet routing:** unchanged bar SplashStable. `SundaeSwapV3` stays on `MAINNET_REFUSED`, and `DanogoCLMMV1` on `DIRECT_PROTOCOLS`, until their swap parts.
+- **Mainnet routing:** SplashStable out. `DanogoCLMMV1` stays on `DIRECT_PROTOCOLS` until its swap part. SundaeSwap V3 went on in its own swap part (below).
 - **Tests:**
   - The suites: Vitest 1,748 on both builds; Playwright 80 on the built `dist/`.
   - New files: `tests/sundae-orders.test.ts` (11) and `tests/direct-swaps.test.ts` (8).
@@ -136,9 +137,26 @@ Uncommitted on the branch until the owner says.
   - `act` counts it as filled once it lands, and brings everything back. Its proceeds are in its own transaction, which the order path would never count as arrived.
   - A pool UTxO spent before the swap lands gets the swap refused at submit. It's marked unsent and rebuilt after `RESEND_AFTER_MS`, as any refused step is.
 
+**SundaeSwap V3's swap part (2026-10-06).**
+
+- **Routed on mainnet:** `SundaeSwapV3` is on `MAINNET_PROTOCOLS`, off `MAINNET_REFUSED`.
+- **Pinned by network** (`SUNDAE_V3`), each read from a build Minswap made:
+  - mainnet: order script `fa6a58…`, Minswap's staking part `f217f435…`;
+  - preprod: order script `a989aa2f…`, Minswap's staking part `c41401cd…`.
+  - `checkOrder` takes the network from the session address's header.
+- **The docs:**
+  - [architecture.md](../architecture.md)'s session section: what it signs, `checkOrder`, routing.
+  - [flows.md](../flows.md)'s Stop.
+  - [privacy.md](../privacy.md)'s session stake key: the cancel's signature shows nothing new.
+- **No screen wording changed.** None promises that an order expires. "The order is waiting for a DEX's batcher to fill it. If it doesn't, cancel it." fits V3.
+- **Owner: the live runs.** Preprod has V3 pools: Minswap's preprod aggregator routed ADA→USDRF through `SundaeSwapV3` alone on 2026-10-06.
+  1. A small ADA→USDRF swap: it should quote with route SundaeSwapV3, place, fill and come back.
+  2. A second one, stopped while its order waits: the cancel is signed by both keys, lands, and everything comes back.
+  3. Then one small mainnet swap through V3. The fresh quote must show SundaeSwapV3 in its route; it depends on the pair and amount.
+
 **Not done, for the swap parts.**
 
 - **The swap page's timeline** for a direct swap. Between its send and its landing, the step is "ordering". Check what it says: it must not talk of an order or a batcher.
 - **Settings' and the quote's wording** where they say Minswap places orders.
-- **The docs above.**
+- **The docs for Danogo**, when it's routed. architecture.md describes its checks as built and not routed.
 - **A question for the owner, found on the way:** any multi-hop route places its second leg's order from the first leg's batcher, so the session's check never sees it. If that order sat unfilled, could the session cancel it? This applies to the DEXes already on `MAINNET_PROTOCOLS`, not just V3. Worth a look at a real Minswap multi-hop order before launch.

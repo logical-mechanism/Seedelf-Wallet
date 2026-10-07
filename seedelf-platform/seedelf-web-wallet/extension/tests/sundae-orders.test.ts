@@ -6,9 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { KoiosUtxo } from "../src/background/koios";
 import {
   type BuiltOutput,
-  MINSWAP_SUNDAE_STAKE,
   outOfPlace,
-  SUNDAE_V3_ORDER,
+  SUNDAE_V3,
   sundaeV3Order,
   uncheckedProtocols,
 } from "../src/background/minswap";
@@ -22,8 +21,9 @@ const PAYMENT = sessionSwap.keyHash;
 const STAKE = SESSION_ADDRESS.slice(58);
 const SOMEONE = "ee".repeat(28);
 
-/** A V3 order's address on preprod: its script, under `stake` (none: an enterprise address). */
-const v3At = (stake?: string) => (stake ? `10${SUNDAE_V3_ORDER}${stake}` : `70${SUNDAE_V3_ORDER}`);
+/** A V3 order's address on preprod: its script there, under `stake` (none: an enterprise address). */
+const { order: V3_ORDER, stake: MINSWAP_SUNDAE_STAKE } = SUNDAE_V3.preprod;
+const v3At = (stake?: string) => (stake ? `10${V3_ORDER}${stake}` : `70${V3_ORDER}`);
 
 /**
  * A single-leg V3 order's datum as Minswap builds one, byte for byte bar the
@@ -100,6 +100,22 @@ describe("the session's check of a V3 order (checkOrder)", () => {
     refused(at(v3At(MINSWAP_SUNDAE_STAKE), realV3Datum()), { address: SESSION_ADDRESS, keyHash: PAYMENT });
   });
 
+  it("pins each network's V3 order script, and Minswap's staking part there", () => {
+    const { mainnet, preprod } = SUNDAE_V3;
+    expect(mainnet.order).not.toBe(preprod.order);
+    // A mainnet session (header 0x01): its V3 orders are at mainnet's script, under mainnet's staking part.
+    const onMainnet = { ...ours, address: `01${SESSION_ADDRESS.slice(2)}` };
+    const back = at(onMainnet.address, null);
+    expect(checkOrder([at(`11${mainnet.order}${mainnet.stake}`, realV3Datum()), back], onMainnet, 0n)).toEqual([0]);
+    expect(() => checkOrder([at(`11${mainnet.order}${preprod.stake}`, realV3Datum()), back], onMainnet, 0n)).toThrow(
+      "it places a SundaeSwap order this session couldn't cancel, or that pays someone else.",
+    );
+    // Mainnet's script on preprod is no V3 order there: under mainnet's staking part, it's someone else's.
+    expect(() => checkOrder([at(`10${mainnet.order}${mainnet.stake}`, realV3Datum()), change], ours, 0n)).toThrow(
+      "it pays a contract under someone else's staking part.",
+    );
+  });
+
   it("takes Minswap's staking part at V3's order script alone", () => {
     // Another DEX's order, naming the session's key, under Minswap's V3 staking part: someone else's staking part.
     const other = at(`10${"a6".repeat(28)}${MINSWAP_SUNDAE_STAKE}`, hex(cbor(c(0, bytes(PAYMENT)))));
@@ -167,7 +183,7 @@ describe("a V3 order placed and stopped", () => {
     t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), {
       ...atSession(SWAP_TX, 0, "14000000"),
       address: bech32("addr_test", bytes(v3At(MINSWAP_SUNDAE_STAKE))),
-      payment_cred: SUNDAE_V3_ORDER,
+      payment_cred: V3_ORDER,
     } as KoiosUtxo);
   };
 

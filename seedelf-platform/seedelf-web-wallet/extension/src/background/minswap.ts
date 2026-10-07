@@ -138,6 +138,9 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  *   addresses. V1's passes on a real order Minswap built on preprod.
  * - MinswapV2: the canceller's key, and the refund and success receivers.
  * - SundaeSwap: the destination address.
+ * - SundaeSwapV3: read exactly, at its order script (SUNDAE_V3): owned by
+ *   the session's own stake key, which signs its cancel too, and paying the
+ *   session's address (chunk 24). Only as a path of its own (outOfPlace).
  * - WingRiders, WingRidersV2 and WingRidersStableV2: the owner's and the
  *   beneficiary's addresses.
  * - Splash: the cancelling key and the redeemer's address. Spectrum: the
@@ -151,6 +154,7 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
   "MinswapV2",
   "MinswapStable",
   "SundaeSwap",
+  "SundaeSwapV3",
   "WingRiders",
   "WingRidersV2",
   "WingRidersStableV2",
@@ -165,36 +169,38 @@ export const MAINNET_PROTOCOLS: readonly string[] = [
  * owner as one 56-byte field, the key and the staking part together, and
  * MuesliSwap's orders are staked to its own key, not the sender's.
  *
- * SundaeSwapV3 too (independent review M16). Minswap builds its orders at
- * SundaeSwap's V3 order script under a fixed staking part that isn't the
- * sender's (f217f435…, the same for every sender, seen 2026-09-27), so the
- * check refuses every one, after the swap is funded. And the order's owner
- * is the sender's stake key, so cancelling one needs the session's stake
- * key 2/i as well as its payment key 0/i, which the wallet never signs
- * with; V3 orders don't expire, so an order it couldn't cancel would wait
- * at the DEX for good. It comes back only with all three: the V3 order
- * script and that staking part pinned in `checkOrder`, and a cancel that
- * may be signed by 0/i and 2/i, and by nothing else. Chunk 24 builds all
- * three (SUNDAE_V3_ORDER, sessions.ts `checkOrder` and `refuseOddities`);
- * V3 stays here until its live swap.
- *
  * SplashStable too: the only stable-pool validator Splash deployed was
  * drained on 2026-09-13, and its README says not to use it (chunk 24).
+ *
+ * SundaeSwapV3 was here (independent review M16) until chunk 24 built what
+ * it needed: Minswap builds its orders under a fixed staking part that
+ * isn't the sender's, owned by the sender's stake key, and they never
+ * expire, so the check pins its order script and that staking part, and
+ * Stop's cancel of one is signed by 0/i and 2/i, and by nothing else.
  */
-const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SundaeSwapV3", "SplashStable"];
+const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SplashStable"];
 
 /**
- * SundaeSwap V3's order script on mainnet, and the staking part Minswap
- * builds every V3 order under: the same for every sender, and unregistered
- * (seen on 25 open orders, 2026-10-06). A single-leg order names the
- * sender's stake key as its owner, whose signature alone cancels it, and the
- * sender's address as its destination, with no datum; V3's pools pay the
- * destination exactly, and its orders never expire. sessions.ts `checkOrder`
- * reads one exactly (`sundaeV3Order`), and Stop's cancel of one is signed by
- * the session's stake key too.
+ * SundaeSwap V3's order script, by network, and the staking part Minswap
+ * builds every V3 order under there: the same for every sender (mainnet's
+ * unregistered; seen on 25 open orders on mainnet and in a preprod build,
+ * 2026-10-06). A single-leg order names the sender's stake key as its owner,
+ * whose signature alone cancels it, and the sender's address as its
+ * destination, with no datum; V3's pools pay the destination exactly, and
+ * its orders never expire. sessions.ts `checkOrder` reads one exactly
+ * (`sundaeV3Order`), and Stop's cancel of one is signed by the session's
+ * stake key too.
  */
-export const SUNDAE_V3_ORDER = "fa6a58bbe2d0ff05534431c8e2f0ef2cbdc1602a8456e4b13c8f3077";
-export const MINSWAP_SUNDAE_STAKE = "f217f435f5f34dba69830d9ada013b5c290a4eee6078371cae55298b";
+export const SUNDAE_V3: Readonly<Record<"preprod" | "mainnet", { order: string; stake: string }>> = {
+  mainnet: {
+    order: "fa6a58bbe2d0ff05534431c8e2f0ef2cbdc1602a8456e4b13c8f3077",
+    stake: "f217f435f5f34dba69830d9ada013b5c290a4eee6078371cae55298b",
+  },
+  preprod: {
+    order: "a989aa2fe6e3866688631162d8ccc830d39ce38b3f11acd3880c165f",
+    stake: "c41401cdf24ad644ff8dd55b00cbb7f2e057c7ed0b79d82ef2e38377",
+  },
+};
 
 /**
  * DEXes a route may go through only as a path of their own, one leg. As the

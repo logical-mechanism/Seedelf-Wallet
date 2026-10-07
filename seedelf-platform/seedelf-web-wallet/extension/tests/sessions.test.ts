@@ -338,7 +338,6 @@ describe("a swap's quote", () => {
       ...DIRECT_PROTOCOLS,
       "VyFinance",
       "MuesliSwap",
-      "SundaeSwapV3",
       "SplashStable",
       "SundaeSwapStable",
       "CswapV1",

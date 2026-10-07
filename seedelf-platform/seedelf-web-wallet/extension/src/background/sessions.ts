@@ -86,10 +86,9 @@ import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosTrou
 import {
   builtOutputs,
   DANOGO_POOL,
-  MINSWAP_SUNDAE_STAKE,
   MinswapError,
   outOfPlace,
-  SUNDAE_V3_ORDER,
+  SUNDAE_V3,
   sundaeV3Order,
   uncheckedProtocols,
   witnessedKeys,
@@ -2401,7 +2400,7 @@ export class SessionService {
     }
     // Stop's cancel of a SundaeSwap V3 order needs its owner's signature too: the session's own stake key (chunk 24).
     const ownStake = s.ownStake === true;
-    const stake = kind === "cancel" && ownStake && foreign.some((r) => r.payment_cred === SUNDAE_V3_ORDER);
+    const stake = kind === "cancel" && ownStake && foreign.some((r) => r.payment_cred === SUNDAE_V3[network].order);
     refuseOddities(summary, index, { stake, ...(direct ? { direct: { signed } } : {}) });
     let orders: string[] | undefined;
     if (kind === "swap") {
@@ -3671,7 +3670,7 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
  *
  * An output at SundaeSwap V3's order script is read exactly (chunk 24): it's
  * the session's order only if it sits under the session's staking part, none
- * or Minswap's (MINSWAP_SUNDAE_STAKE, at this script alone), is owned by the
+ * or Minswap's (SUNDAE_V3's `stake`, at this script alone), is owned by the
  * session's own stake key, and pays the session's address with no datum.
  * V3's orders never expire, so one the session couldn't cancel is never
  * signed: a session from before each had its own stake key (`ownStake`)
@@ -3685,6 +3684,8 @@ export function checkOrder(
 ): number[] {
   // A base address's staking part: bytes 29 to 57, after the header and the payment part.
   const stake = session.address.slice(58, 114);
+  // The header's low four bits are its network: 1 is mainnet's.
+  const sundae = SUNDAE_V3[session.address.charAt(1) === "1" ? "mainnet" : "preprod"];
   const orders: number[] = [];
   let fee = false;
   outputs.forEach((o, i) => {
@@ -3695,8 +3696,8 @@ export function checkOrder(
     if (!script && o.address.slice(2, 58) === session.keyHash) {
       throw new Refused(t("sess.refuse.warn.otherStake"));
     }
-    if (script && o.address.slice(2, 58) === SUNDAE_V3_ORDER) {
-      if (!sundaeOrderOurs(o, type, { ...session, stake })) throw new Refused(t("sess.refuse.warn.sundaeNotOurs"));
+    if (script && o.address.slice(2, 58) === sundae.order) {
+      if (!sundaeOrderOurs(o, type, { ...session, stake }, sundae.stake)) throw new Refused(t("sess.refuse.warn.sundaeNotOurs"));
       orders.push(i);
       return;
     }
@@ -3820,9 +3821,9 @@ function withinNet(summary: DappTxSummary, fund: SwapQuote["fund"]): void {
 }
 
 /** Whether output `o`, at SundaeSwap V3's order script, is the session's own order, as `checkOrder` says. */
-function sundaeOrderOurs(o: BuiltOutput, type: number, session: { keyHash: string; stake: string; ownStake?: boolean }): boolean {
+function sundaeOrderOurs(o: BuiltOutput, type: number, session: { keyHash: string; stake: string; ownStake?: boolean }, minswaps: string): boolean {
   if (!session.ownStake || !o.datum) return false;
-  const under = type === 7 || (type === 1 && [session.stake, MINSWAP_SUNDAE_STAKE].includes(o.address.slice(58, 114)));
+  const under = type === 7 || (type === 1 && [session.stake, minswaps].includes(o.address.slice(58, 114)));
   const order = under ? sundaeV3Order(o.datum) : null;
   return order?.owner === session.stake && order.pays?.payment === session.keyHash && order.pays.stake === session.stake;
 }
