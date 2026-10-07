@@ -1,5 +1,5 @@
 {
-  "note": "The DEX order scripts whose orders a session cancels itself (orders.rs), by network: Minswap's protocol name, the order script's hash, its Plutus version, and where the script is read from: a reference UTxO (each checked on chain on 2026-10-07: unspent, holding a script of this hash, of `referenceSize` bytes) or `inline`, bundled below (a Plutus V1 script, checked by hash). See docs/plans/chunk-24-dapp-additions.md, Step 3.",
+  "note": "The DEX order scripts whose orders a session cancels itself (orders.rs), by network: Minswap's protocol name, the order script's hash, its Plutus version, and where the script is read from: a reference UTxO (each checked on chain on 2026-10-07: unspent, holding a script of this hash, of `referenceSize` bytes) or `inline`, bundled below (a Plutus V1 script, checked by hash). See seedelf-web-wallet/docs/archive/plans/chunk-24-dapp-additions.md, Step 3.",
   "orders": {
     "mainnet": [
       {

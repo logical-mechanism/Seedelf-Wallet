@@ -1,6 +1,6 @@
 //! The DEX orders a private session places through Minswap's aggregator, read
 //! exactly, and their cancels, built in the wallet (chunk 24, Step 3 in
-//! `seedelf-web-wallet/docs/plans/chunk-24-dapp-additions.md`).
+//! `seedelf-web-wallet/docs/archive/plans/chunk-24-dapp-additions.md`).
 //!
 //! Minswap's `cancel-tx` route answers 404 on both networks (2026-10-07), and
 //! its `pending-orders` doesn't list every order, so a session can't count on

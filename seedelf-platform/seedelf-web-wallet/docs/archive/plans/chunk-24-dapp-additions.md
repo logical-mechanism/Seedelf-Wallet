@@ -2,6 +2,8 @@
 
 Branch `web-wallet/dapp-additions`, from `main`. **One long branch for all of it** (the owner, 2026-10-06), with a PR at the end.
 
+**Status: built and run live (2026-10-06 and 07).** SundaeSwap V3 and Danogo are routed, routes are direct, and Stop cancels every order itself. The owner ran every DEX the wallet routes on mainnet but Splash and Spectrum, with a Stop on two, and the stuck preprod V3 order cancelled live ([*Mainnet runs*](#mainnet-runs-the-pairs-2026-10-07), [Step 3](#step-3--stops-own-cancel-2026-10-07)). It goes out in 1.3.0 (the owner, 2026-10-07). What's still open is in [post-release-roadmap.md](../../post-release-roadmap.md)'s *Owed* (O2, O4) and *Kept in mind*.
+
 ## The owner's calls (2026-10-06)
 
 - **DEXes, not lenders.** Lending is low priority; Djed is "a cool idea that doesn't really work" for how stablecoins are used. The dApps page stays swaps and the mixer, with lenders maybe later.
@@ -17,7 +19,7 @@ Checked against live chain data, APIs and repos.
   - Minswap was within 0.12% of the best quote at 500 ADA or more.
   - Steelswap's CORS refuses `chrome-extension://` origins, and it has no preprod.
   - DexHunter costs 0.25% plus 2–5 ₳, and makes the stake key a required signer.
-  - No aggregator takes a receiver or receiver datum, so A2 ([O4](../post-release-roadmap.md#owed)) needs DEX-specific builders. That's not this chunk.
+  - No aggregator takes a receiver or receiver datum, so A2 ([O4](../../post-release-roadmap.md#owed)) needs DEX-specific builders. That's not this chunk.
 - **Volume.**
   - DefiLlama's "SundaeSwap V2" is Sundae's V1 contracts. Its $47M a month is Sundae's self-reported total across all versions. Pool-script transactions over a week: V3 ~3,480, Stableswaps 445, V4 237, V1 177.
   - "Dano Finance" is Danogo. Its TVL counts lending too; the concentrated-liquidity DEX (CLMM) holds about 2.87M ₳ on the ADA side.
@@ -68,7 +70,7 @@ Danogo has no order: Minswap's transaction swaps against its pools in the same t
 - a zero-ADA withdrawal from a script;
 - 3 ₳ of someone else's collateral, signed by its owner already.
 
-The session refuses all of it today. Chunk 15b listed what allowing it takes ([archive](../archive/plans/chunk-15b-swap-runner.md)). To be designed in detail from **a real Minswap-built Danogo transaction recorded first** (mainnet, read from chain):
+The session refuses all of it today. Chunk 15b listed what allowing it takes ([archive](chunk-15b-swap-runner.md)). To be designed in detail from **a real Minswap-built Danogo transaction recorded first** (mainnet, read from chain):
 
 - **Foreign script inputs**, accepted only at Danogo's pool script, pinned (mainnet `d8b69fc5…`, to be confirmed from the recorded transaction). Reference inputs are fine.
 - **The zero-ADA withdrawal**, from Danogo's pinned script only.
@@ -99,10 +101,32 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] SundaeSwap V3's swap part: routed on mainnet, both networks pinned, the docs. **Owner: its live runs** (below).
 - [x] Danogo's swap part: routed on both networks, the swap page's words, the docs. **Owner: its live runs** (below).
 - [x] The multi-hop question: routes are direct, asked so explicitly, with any longer path refused. The Danogo approval's cost rows: checked and fixed (below, *Direct routes and Danogo's costs*).
-- [x] [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described: the last "orders only" (flows.md's quote) is gone.
-- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. The stuck preprod V3 order cancelled live and its money came back (the owner, 2026-10-07). **Owner: a mainnet Stop.**
-- [ ] WingRiders' smoke test and the owner's live runs.
-- [ ] At the end: the post-release roadmap, the handoff note, and this plan to the archive.
+- [x] [flows.md](../../flows.md), [privacy.md](../../privacy.md) and [architecture.md](../../architecture.md) where a DEX is named or routing is described: the last "orders only" (flows.md's quote) is gone.
+- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. The stuck preprod V3 order cancelled live and its money came back, and so did a Stop on mainnet (the owner, 2026-10-07).
+- [x] WingRiders' smoke test and the owner's live runs: on mainnet, 2026-10-07 (*Mainnet runs*, below).
+- [x] At the end: the post-release roadmap, the handoff note, and this plan to the archive.
+
+## Mainnet runs: the pairs (2026-10-07)
+
+The DEX runs are mainnet's: preprod's pools route almost nothing the wallet can buy. Minswap's mainnet estimate, asked as the wallet asks it (its exclusions, `allow_multi_hops: false`), routed each of these through one DEX alone, every token on the wallet's list. A route moves with the pools: the approval names the DEX to check before approving.
+
+| DEX | Pair | Notes |
+|---|---|---|
+| SundaeSwap V3 | 20 ₳ → SUNDAE, then SUNDAE → ₳ | 0.3% impact each way; INDY too |
+| Danogo | 20 ₳ → NIGHT, then NIGHT → ₳ | 0.3–0.4%; USDM both ways, and USDM ↔ USDA, too |
+| Minswap V2 | 20 ₳ → NTX, then NTX → ₳ | 0.3%; HOSKY too |
+| Minswap (V1) | 20 ₳ → MIN | Plutus V1: the order's script and datum go in its cancel |
+| SundaeSwap (V1) | MIN → ₳ (3,294 MIN) | Plutus V1; 3% impact |
+| WingRiders V2 | 50 ₳ → USDA, IAG or COPI | at 20 ₳, IAG goes through SundaeSwap V3 |
+| WingRiders (V1) | 50 ₳ → LQ | Plutus V1; at 20 ₳ it goes through SundaeSwap V3 |
+| MinswapStable | USDM → DJED, DJED → iUSD, iUSD → USDM (12 each) | |
+| WingRiders StableV2 | iUSD → DJED (12) | 0.06% |
+| Spectrum | IAG → ₳ (5.9%), ₳ → iBTC (33%) | only at a bad price: skip |
+| Splash | none found | its cancel is tested in Rust only |
+
+Minswap charges its aggregator fee (0.85 ₳; 1 ₳ for a stablecoin pair) on every route but its own pools.
+
+**Run (the owner, 2026-10-07): "everything works."** Every pair above but Spectrum's and Splash's, on a mainnet test wallet: each order placed, filled and its money back, Danogo's filled in the swap itself; and a Stop on an NTX swap (Minswap V2) and a MIN one (Minswap V1, the Plutus V1 cancel), each bringing the money back. With the WingRiders runs, that's the smoke test. Splash and Spectrum stay open ([O2](../../post-release-roadmap.md#owed)).
 
 ## Step 3 · Stop's own cancel (2026-10-07)
 
@@ -167,7 +191,7 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 
 ## Built (2026-10-06)
 
-Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777c2) and Danogo's (04d0022). *Direct routes and Danogo's costs* (below) is uncommitted until the owner says.
+Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777c2), Danogo's (04d0022), and *Direct routes and Danogo's costs* (below, 00fde82).
 
 - **Mainnet routing:** SplashStable out. SundaeSwap V3 and Danogo went on in their own swap parts (below).
 - **Tests:**
@@ -211,9 +235,9 @@ Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777
   - preprod: order script `a989aa2f…`, Minswap's staking part `c41401cd…`.
   - `checkOrder` takes the network from the session address's header.
 - **The docs:**
-  - [architecture.md](../architecture.md)'s session section: what it signs, `checkOrder`, routing.
-  - [flows.md](../flows.md)'s Stop.
-  - [privacy.md](../privacy.md)'s session stake key: the cancel's signature shows nothing new.
+  - [architecture.md](../../architecture.md)'s session section: what it signs, `checkOrder`, routing.
+  - [flows.md](../../flows.md)'s Stop.
+  - [privacy.md](../../privacy.md)'s session stake key: the cancel's signature shows nothing new.
 - **No screen wording changed.** None promises that an order expires. "The order is waiting for a DEX's batcher to fill it. If it doesn't, cancel it." fits V3.
 - **Owner: the live runs.**
   - **Preprod's V3 pools quote, but nothing fills them** (read from preprod's chain, 2026-10-07). Since about 2026-09-10 every spend of a V3 order there has been its owner's cancel, and 93 orders sit open. Minswap's preprod router sends tADA→USDRF, tADA→USDCx (policy `31dde3db…`) and tADA→PPEE through `SundaeSwapV3` alone, at 10, 50 and 200 tADA.
@@ -235,9 +259,9 @@ Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777
   - **No Stop once it has gone out.** There's no order to cancel, and the dialog would speak of one. A copy the network refuses (its pool taken first) is dropped from the view, and Stop is back while it's built again.
   - Three new strings, `mtpe`; not critical.
 - **The docs:**
-  - [architecture.md](../architecture.md): routing and `MAINNET_PROTOCOLS`.
-  - [flows.md](../flows.md): the swap's run.
-  - [privacy.md](../privacy.md): Minswap's collateral in the transaction ties it to Minswap's aggregator, which its note already does, and to nothing of the user's.
+  - [architecture.md](../../architecture.md): routing and `MAINNET_PROTOCOLS`.
+  - [flows.md](../../flows.md): the swap's run.
+  - [privacy.md](../../privacy.md): Minswap's collateral in the transaction ties it to Minswap's aggregator, which its note already does, and to nothing of the user's.
   - No privacy-policy entry: no new service is asked, and nothing new is sent.
 - **Owner: the live runs.**
   - On preprod (2026-10-07), in two swaps:
