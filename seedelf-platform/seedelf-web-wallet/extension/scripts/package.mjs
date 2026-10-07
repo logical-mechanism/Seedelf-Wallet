@@ -2,7 +2,8 @@
 // checks it is a store build of the network asked for, adds the third-party
 // notices, and zips it into release/seedelf-wallet-<version>-<network>.zip.
 // The zip is reproducible: sorted entries and fixed timestamps, so the same
-// dist/ always gives the same bytes.
+// dist/ gives the same bytes. Official Node builds 20 to 24 deflate alike; one
+// linked to the system's zlib may not, so it prints which zipped it.
 //
 //   npm run package           the store's: mainnet, with preprod in Settings
 //                             (builds with VITE_ENABLE_MAINNET=true and
@@ -116,3 +117,4 @@ console.log(`${manifest.name} ${manifest.version} (${network}): ${hosts.join(", 
 console.log(`Third-party notices: ${components} components (licenses/THIRD-PARTY.txt)`);
 console.log(`${relative(extension, out)}: ${paths.length} files, ${Math.round(archive.length / 1024)} KB`);
 console.log(`sha256 ${createHash("sha256").update(archive).digest("hex")}`);
+console.log(`Zipped with Node ${process.version}, zlib ${process.versions.zlib}`);

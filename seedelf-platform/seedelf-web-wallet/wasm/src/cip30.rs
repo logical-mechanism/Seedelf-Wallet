@@ -774,6 +774,9 @@ pub struct Cert {
     /// "register-vote", "delegate-vote", "register-delegate-vote", "drep",
     /// "pool" or "committee".
     pub kind: String,
+    /// A DRep certificate's profile address, as text: control and bidi
+    /// characters out, so a site can't reorder what's around it (C14).
+    pub anchor: Option<String>,
     /// It's about the account's own stake key.
     pub own: bool,
     /// The pool it stakes with, or a stake pool's own certificate's pool.
@@ -813,6 +816,16 @@ pub struct CollateralOut {
     pub at_risk: String,
 }
 
+/// A vote the account's own DRep casts, for the signing prompt (C14).
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Ballot {
+    pub tx_hash: String,
+    pub index: u32,
+    /// "yes", "no" or "abstain".
+    pub vote: String,
+}
+
 /// What a dApp's transaction does to the public account, for the signing prompt.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -849,6 +862,8 @@ pub struct TxSummary {
     pub votes: usize,
     /// Of `votes`, the ones cast by the account's own DRep (governance granted).
     pub own_votes: usize,
+    /// Each of them: which governance action, and how (C14).
+    pub own_ballots: Vec<Ballot>,
     pub proposals: usize,
     pub donation: Option<String>,
     /// CIP-20's message (label 674), when there is one.
@@ -1345,10 +1360,14 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             C::RegDRepCert(..) | C::UnRegDRepCert(..) | C::UpdateDRepCert(..) => {
                 // A DRep's own: the account's, when governance was granted and
                 // it's the account's DRep key (`3/0`), or someone else's.
-                let (drep_cred, action, deposit, refund) = match cert {
-                    C::RegDRepCert(cred, deposit, _) => (cred, "register", Some(*deposit), None),
-                    C::UnRegDRepCert(cred, refund) => (cred, "retire", None, Some(*refund)),
-                    C::UpdateDRepCert(cred, _) => (cred, "update", None, None),
+                let (drep_cred, action, deposit, refund, anchor) = match cert {
+                    C::RegDRepCert(cred, deposit, anchor) => {
+                        (cred, "register", Some(*deposit), None, anchor_url(anchor))
+                    }
+                    C::UnRegDRepCert(cred, refund) => (cred, "retire", None, Some(*refund), None),
+                    C::UpdateDRepCert(cred, anchor) => {
+                        (cred, "update", None, None, anchor_url(anchor))
+                    }
                     _ => unreachable!("matched above"),
                 };
                 let key = match drep_cred {
@@ -1360,6 +1379,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                     drep: Some(drep_of_credential(drep_cred)),
                     deposit: deposit.map(|d| d.to_string()),
                     refund: refund.map(|r| r.to_string()),
+                    anchor,
                     ..cert_kind("drep")
                 };
                 match key {
@@ -1459,6 +1479,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
 
     let mut votes = 0;
     let mut own_votes = 0;
+    let mut own_ballots = Vec::new();
     for (voter, procedures) in body.voting_procedures.iter().flat_map(|v| v.iter()) {
         votes += procedures.len();
         match voter {
@@ -1466,6 +1487,18 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             // The account's own DRep, when governance was granted.
             conway::Voter::DRepKey(h) if keys.drep == Some(*h) => {
                 own_votes += procedures.len();
+                for (action, procedure) in procedures.iter() {
+                    own_ballots.push(Ballot {
+                        tx_hash: action.transaction_id.to_string(),
+                        index: action.action_index,
+                        vote: match procedure.vote {
+                            conway::Vote::Yes => "yes",
+                            conway::Vote::No => "no",
+                            conway::Vote::Abstain => "abstain",
+                        }
+                        .into(),
+                    });
+                }
                 signers.insert(Signer::Drep);
             }
             conway::Voter::ConstitutionalCommitteeKey(h)
@@ -1543,6 +1576,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         reference_inputs: body.reference_inputs.as_ref().map_or(0, |r| r.len()),
         votes,
         own_votes,
+        own_ballots,
         proposals: body.proposal_procedures.as_ref().map_or(0, |p| p.len()),
         donation: body.donation.map(|d| u64::from(d).to_string()),
         note,
@@ -1567,6 +1601,24 @@ fn drep_of_credential(cred: &StakeCredential) -> String {
         StakeCredential::AddrKeyhash(h) => conway::DRep::Key(*h),
         StakeCredential::ScriptHash(h) => conway::DRep::Script(*h),
     })
+}
+
+/// A certificate's anchor address as the prompt shows it: text only, with
+/// control and bidi characters out (C14).
+fn anchor_url(anchor: &Nullable<conway::Anchor>) -> Option<String> {
+    match anchor {
+        Nullable::Some(a) => Some(
+            a.url
+                .chars()
+                .filter(|c| !c.is_control() && !is_bidi(*c))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+fn is_bidi(c: char) -> bool {
+    matches!(c, '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
 
 fn cert_kind(kind: &str) -> Cert {
@@ -1874,7 +1926,8 @@ impl DataFor {
 }
 
 /// A DRep ID as a site may give it to `signData` (CIP-95): its key hash in
-/// hex, or CIP-129's or CIP-105's `drep1…`. A script DRep is no key's.
+/// hex, or any ID `parse_drep` reads (CIP-129's `drep1…`, CIP-105's
+/// `drep_vkh1…` and its deprecated `drep1…`). A script DRep is no key's.
 fn drep_key_of(text: &str) -> Option<Hash<28>> {
     let text = text.trim();
     if text.len() == 56 && text.bytes().all(|b| b.is_ascii_hexdigit()) {

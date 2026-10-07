@@ -20,7 +20,7 @@
 // wallet asks Minswap for; Minswap builds the order (#21).
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { type I18nKey, joinList, joinSentences, sentenceGap, t, useT } from "../../i18n";
+import { currentLanguage, type I18nKey, joinList, joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
 import type {
@@ -143,9 +143,12 @@ interface Pick {
 
 const ADA_PICK: Pick = { id: "lovelace", side: ADA };
 
-/** An amount on one side of a swap: "10 ₳", "906.5941 MIN". ADA by its ID: a token may call itself ₳. */
-function amountOf(quantity: string, pick: Pick): string {
-  return pick.id === "lovelace" ? `${formatAda(quantity)}\u00a0₳` : `${formatQuantity(quantity, pick.side.decimals)} ${pick.side.label}`;
+/**
+ * An amount on one side of a swap: "10 ₳", "906.5941 MIN". ADA by its ID: a token may call itself ₳. `write` writes
+ * the number: `useAmounts().quantity` for what the private balance holds, masked while balances are hidden (HM-9).
+ */
+function amountOf(quantity: string, pick: Pick, write = formatQuantity): string {
+  return pick.id === "lovelace" ? `${write(quantity, 6)}\u00a0₳` : `${write(quantity, pick.side.decimals)} ${pick.side.label}`;
 }
 
 /** A side's name on its button and in the lists: ADA, or the token's name (tokenText). */
@@ -943,7 +946,7 @@ export function NewSwap({
             {get && (
               <span className="swap-card__held" title={tr("swaps.inPrivate")}>
                 <WalletIcon size={14} />
-                {formatQuantity(heldOf(seedelf, get.id), get.side.decimals)}
+                {amounts.quantity(heldOf(seedelf, get.id), get.side.decimals)}
               </span>
             )}
           </div>
@@ -952,7 +955,7 @@ export function NewSwap({
       {note && <p className="field-note">{note}</p>}
       {tooMuch && (
         <p className="field-note" data-testid="swap-short">
-          {tr("swaps.tooMuch", { held: amountOf(held, pay) })}
+          {tr("swaps.tooMuch", { held: amountOf(held, pay, amounts.quantity) })}
         </p>
       )}
       {/* Max is less than the balance: it says why, on the page, not only in its label (DX-4). */}
@@ -1507,7 +1510,11 @@ export function TokenSelect({
 }) {
   const tr = useT();
   const network = useNetwork();
-  const own = useMemo(() => ownPicks(network, seedelf), [network, seedelf]);
+  // What's held: masked while balances are hidden, as on the form (HM-9).
+  const amounts = useAmounts();
+  // The second lines are words: made again when another page switches the language.
+  const language = currentLanguage();
+  const own = useMemo(() => ownPicks(network, seedelf), [network, seedelf, language]);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<SwapTokenInfo[]>();
   const [error, setError] = useState<string>();
@@ -1552,7 +1559,7 @@ export function TokenSelect({
       >
         <SwapAvatar pick={p} />
         <span className="token-row__label">{nameOf(p)}</span>
-        <span className="token-row__amount">{held === undefined ? "" : formatQuantity(held, p.side.decimals)}</span>
+        <span className="token-row__amount">{held === undefined ? "" : amounts.quantity(held, p.side.decimals)}</span>
         <span className="token-row__sub">{sub}</span>
       </button>
     </li>

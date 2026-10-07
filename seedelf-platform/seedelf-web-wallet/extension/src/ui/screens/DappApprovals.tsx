@@ -41,16 +41,16 @@ import { GlobeIcon, ShieldIcon, SpinnerIcon, WalletIcon } from "../components/Ic
 import { PasswordField } from "../components/PasswordField";
 import { boxCost } from "../components/LovejoinReturn";
 import { ReviewRows, Row } from "../components/ReviewRows";
-import { TotalRows } from "../components/ReviewTotals";
+import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/SessionRefused";
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
 import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
-import { adaText, formatAda, formatQuantity, shortHex } from "../format";
+import { adaText, formatAda, formatQuantity, shortHex, unlocked } from "../format";
 import { useNetwork } from "../network";
-import { usePreferences } from "../preferences";
+import { useAmounts, usePreferences } from "../preferences";
 import { aboutAda, SESSION_FEE_ESTIMATE, toCents } from "../swap";
 import { useSiteAccount, waitText } from "../sites";
 import { tokenDecimals, tokenText } from "../tokens";
@@ -506,6 +506,8 @@ export function ConnectRequest({
   const { prefs } = usePreferences();
   const lovejoinBack = prefs.lovejoinReturns && lovejoinOn(network);
   const perBox = aboutAda(boxCost(prefs.lovejoinDepth));
+  // The amount's lines about the private balance hide with the balances, as a top-up's do (HM-9).
+  const amounts = useAmounts();
   const [amount, setAmount] = useState("");
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [review, setReview] = useState<SessionOutSummary>();
@@ -725,11 +727,12 @@ export function ConnectRequest({
             <Row label={tr("dappUi.keptAside")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral?.lovelace ?? "0") })} />
             <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
             {/* What leaves the private balance and what it holds after, as every other review says them: the change
-                (3.766792 ₳ of a 25 ₳ UTxO) didn't match what the tester worked out from 28 ₳ (blind test T16). */}
+                (3.766792 ₳ of a 25 ₳ UTxO) didn't match what the tester worked out from 28 ₳ (blind test T16). From
+                Home's figure, what's on its way back included: homeBalance takes a side unlocked, as forms get it. */}
             <TotalRows
               side="private"
               leaving={review.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(review.fee.total))}
-              before={seedelf?.lovelace}
+              before={seedelf && homeBalance(unlocked(seedelf))}
               tokens={forSite?.tokens.length ?? 0}
             />
           </ReviewRows>
@@ -890,11 +893,11 @@ export function ConnectRequest({
               />
               {seedelf && (
                 <p className="note" data-testid="dapp-private-held">
-                  {tr("dappUi.heldAndCollateral", { ada: formatAda(seedelf.lovelace) })}
+                  {tr("dappUi.heldAndCollateral", { ada: amounts.ada(seedelf.lovelace) })}
                 </p>
               )}
               {tooMuch && seedelf && (
-                <p className="field-note">{tr("sites.topUp.tooMuch", { held: formatAda(seedelf.lovelace) })}</p>
+                <p className="field-note">{tr("sites.topUp.tooMuch", { held: amounts.ada(seedelf.lovelace) })}</p>
               )}
             </div>
             {withTokens && <MinimumHint />}
@@ -1087,6 +1090,18 @@ export function SignTx({
         <Callout tone="privacy" testId="dapp-own-votes">
           {tr("dappUi.privacy.ownVotes", { count: s.ownVotes })}
         </Callout>
+      )}
+      {/* Each of those votes, which action and which way, before Sign (the owner's call, 2026-10-06). */}
+      {(s.ownBallots ?? []).length > 0 && (
+        <ul className="list" data-testid="dapp-own-ballots">
+          {s.ownBallots!.map((b) => (
+            <li key={`${b.txHash}#${b.index}`}>
+              {tr(b.vote === "yes" ? "dappUi.privacy.ballot.yes" : b.vote === "no" ? "dappUi.privacy.ballot.no" : "dappUi.privacy.ballot.abstain", {
+                action: `${shortHex(b.txHash, 8, 4)}#${b.index}`,
+              })}
+            </li>
+          ))}
+        </ul>
       )}
 
       {collateralSpent && (

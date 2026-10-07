@@ -107,6 +107,10 @@ export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): str
  * Japanese read "…登録します（…）、…にステーキングします、投票権を委任します:
  * 常に棄権.": finished sentences comma-spliced, then an ASCII full stop.
  */
+/** A DRep certificate's line, then where its profile is, as text and never a link (C14). */
+const withProfile = (c: Certificate, line: string) =>
+  c.anchor ? joinSentences([line, t("dappUi.cert.warn.drepProfile", { url: c.anchor })]) : line;
+
 export function certificateLine(c: Certificate, back: boolean, whose: string): string {
   // Someone else's are `.warn.` too: they sit in the same callout as the
   // account's own, and "a stake key that isn't yours" read as "your stake key"
@@ -123,14 +127,14 @@ export function certificateLine(c: Certificate, back: boolean, whose: string): s
   }
   // The account's own DRep (CIP-95): its registration, update or retirement.
   if (c.kind === "drep") {
-    if (c.drepAction === "register") return t("dappUi.cert.warn.drepRegister", { amount: formatAda(c.deposit ?? "0") });
+    if (c.drepAction === "register") return withProfile(c, t("dappUi.cert.warn.drepRegister", { amount: formatAda(c.deposit ?? "0") }));
     if (c.drepAction === "retire") {
       return t(back ? "dappUi.cert.warn.drepRetireBack" : "dappUi.cert.warn.drepRetireNotAllBack", {
         amount: formatAda(c.refund ?? "0"),
         whose,
       });
     }
-    return t("dappUi.cert.warn.drepUpdate");
+    return withProfile(c, t("dappUi.cert.warn.drepUpdate"));
   }
   const what = c.drep ? voteLabel(c.drep) : undefined;
   if (c.kind.startsWith("register") && c.deposit) {

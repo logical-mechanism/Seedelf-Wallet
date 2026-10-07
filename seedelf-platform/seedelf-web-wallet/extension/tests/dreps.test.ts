@@ -56,6 +56,11 @@ describe("searching DReps", () => {
     expect(isDrepId(LOGIC_DREP)).toBe(true);
     expect(isDrepId(` ${LOGIC_DREP.toUpperCase()} `)).toBe(true);
     expect(isDrepId("drep_script1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqp8tcfx")).toBe(true);
+    // CIP-105's own form for a key, and its deprecated one (its test vector 1): drep_vkh1… was "matches nothing".
+    expect(isDrepId("drep_vkh15k6929drl7xt0spvudgcxndryn4kmlzpk4meed0xhqe254czjh2")).toBe(true);
+    expect(isDrepId("drep15k6929drl7xt0spvudgcxndryn4kmlzpk4meed0xhqe25nle07s")).toBe(true);
+    expect(isDrepId("drep_vkh15k6929")).toBe(false);
+    expect(isDrepId("drep_vk1" + "q".repeat(52))).toBe(false);
     expect(isDrepId("drep1ydmraa")).toBe(false);
     expect(isDrepId("Logical Mechanism")).toBe(false);
     expect(isDrepId("pool1rccstu3l9ty3k0a5cd06fl3szsss9r34dcg5j38fqgq9kvng0tg")).toBe(false);

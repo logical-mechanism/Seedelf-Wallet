@@ -17,11 +17,13 @@
 // more (a chain cut short, or boxes nobody has mixed since), paid from the
 // private balance through a one-time account, as a mix from it is, with no
 // deposit. Its boxes wait again, a fresh delay each; none comes back while
-// it runs. A box a mix from the public account put in is the account's: the
+// it runs. A box a mix from a public account put in is that account's: the
 // private balance paying for its mixes would tie the two (privacy review
 // §2.10). So Mix my boxes again leaves those out, and Mix again from my
-// public account mixes them, paid by the account, which ties nothing new;
-// Pay from my private balance anyway takes them all, after a warning.
+// public account mixes the active account's, paid by it, which ties nothing
+// new; another account's are that account's to mix again, and the page says
+// which to switch to. Pay from my private balance anyway takes them all,
+// after a warning.
 //
 // Every chain the wallet sends is recorded (launch review H2). A box one of
 // them made and didn't finish mixing is "not mixed yet": it never comes back
@@ -51,6 +53,7 @@ import type {
   SessionOutSummary,
   SessionView,
 } from "../../shared/rpc";
+import { publicAccountName, useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { GivemeNote } from "../components/GivemeNote";
@@ -217,6 +220,16 @@ function HintedRow({
 /** A mix that's over: back, or never funded. */
 const isOver = (s: SessionView) => s.stage === "closed" || s.stage === "failed";
 
+/**
+ * The running mixes' indexes, as one string: what the page's 20 s advance is keyed on. The 2 s watch replaces
+ * the mixes with every read, and an advance keyed on them was torn down before it ever fired (release review C37).
+ */
+export const runningKey = (mixes: SessionView[]) =>
+  mixes
+    .filter((m) => !isOver(m))
+    .map((m) => m.index)
+    .join(",");
+
 /** A mix of the wallet's boxes again that may still spend them: no box comes back meanwhile. */
 const isMixingAgain = (s: SessionView) => !!s.mix?.again && !isOver(s) && !s.txs.some((t) => t.kind === "back");
 
@@ -361,15 +374,18 @@ export function anywayWarning(status?: Pick<LovejoinStatus, "notMixed" | "unsure
  * come back by themselves. Those a deposit made are said as Koios said it,
  * never as a stopped chain's: the wallet can't know whose deposit it was,
  * or why no mix followed it. Mixing again takes them first: Mix again from
- * my public account those a mix from it made (`fromPublic` of them), Mix my
- * boxes again the rest. Bring it back anyway takes one as it is. After a
- * restore, a box whose making Koios hasn't said of yet (`unsure` of them)
- * waits too, until it has, and Mix my boxes again refuses meanwhile
- * (independent review M14).
+ * my public account those a mix from the active account made (`fromPublic`
+ * of them), Mix my boxes again the rest, but for those another account's mix
+ * made (`elsewhere`): neither takes them, and the note under the callout
+ * says which account to switch to (OtherAccounts). Bring it back anyway
+ * takes one as it is. After a restore, a box whose making Koios hasn't said
+ * of yet (`unsure` of them) waits too, until it has, and Mix my boxes again
+ * refuses meanwhile (independent review M14).
  */
 export function NotMixed({
   count,
   fromPublic = 0,
+  elsewhere = 0,
   unsure = 0,
   deposits = 0,
   busy,
@@ -377,6 +393,7 @@ export function NotMixed({
 }: {
   count: number;
   fromPublic?: number;
+  elsewhere?: number;
   unsure?: number;
   deposits?: number;
   busy: boolean;
@@ -404,12 +421,16 @@ export function NotMixed({
           others: tr("lovejoin.warn.notMixed.theOther", { count: amounts.hidden || found > 1 ? 2 : 1 }),
         });
   // A mix from the public account made them: the account pays to mix them again, and the private balance stays out of it (§2.10).
-  const takes =
-    fromPublic >= known
-      ? tr("lovejoin.warn.notMixed.takes.public", { count: agree })
+  // Of those, the ones this account's buttons take: another account's mix's are that account's to mix again.
+  const here = known - Math.min(elsewhere, known);
+  const agreeHere = amounts.hidden || here > 1 ? 2 : 1;
+  const takes = !here
+    ? undefined
+    : fromPublic >= here
+      ? tr("lovejoin.warn.notMixed.takes.public", { count: agreeHere })
       : fromPublic > 0
         ? tr("lovejoin.warn.notMixed.takes.both")
-        : tr("lovejoin.warn.notMixed.takes.private", { count: agree });
+        : tr("lovejoin.warn.notMixed.takes.private", { count: agreeHere });
   const asks = tr("lovejoin.warn.notMixed.asks");
   // Koios hasn't said how these went in: said as they are, without the number while balances are hidden.
   const tail = amounts.hidden ? tr("lovejoin.warn.notMixed.unsureTailHidden") : tr("lovejoin.warn.notMixed.unsureTail", { count: unsure });
@@ -430,6 +451,35 @@ export function NotMixed({
       </div>
     </Callout>
   );
+}
+
+/**
+ * The wallet's boxes in the pool that a mix from a public account put in (privacy review §2.10), by
+ * `txHash#txIndex`: every account's (`all`), which the private balance leaves out; the active account's (`mine`),
+ * which Mix again from my public account takes; and the other accounts (`accounts`, by index), each the one to
+ * mix its own again.
+ */
+export function publicBoxesOf(status?: Pick<LovejoinStatus, "fromPublic" | "otherAccounts">) {
+  const key = (b: { txHash: string; txIndex: number }) => `${b.txHash}#${b.txIndex}`;
+  const all = new Set((status?.fromPublic ?? []).map(key));
+  const away = new Set((status?.otherAccounts ?? []).map(key));
+  const mine = new Set([...all].filter((k) => !away.has(k)));
+  const accounts = [...new Set((status?.otherAccounts ?? []).map((b) => b.account))].sort((a, b) => a - b);
+  return { all, mine, accounts };
+}
+
+/**
+ * Boxes a mix from another public account put in: that account mixes them again, which ties nothing new, so Mix
+ * again from my public account leaves them out here. Which account, by the name the picker on Home shows.
+ */
+export function OtherAccounts({ accounts }: { accounts: number[] }) {
+  const tr = useT();
+  const { accounts: known } = useAccounts();
+  return accounts.map((index) => (
+    <p key={index} className="note" data-testid="lovejoin-other-account">
+      {tr("lovejoin.otherAccount", { account: publicAccountName(known.find((a) => a.index === index) ?? { index }) })}
+    </p>
+  ));
 }
 
 export function Lovejoin({
@@ -492,18 +542,20 @@ export function Lovejoin({
     void load();
   }, [load]);
 
-  // A mix that runs takes its next step while the page is open, as the alarm would.
+  // A mix that runs takes its next step while the page is open, as the alarm would: keyed on which mixes run, not on
+  // the list the watch below reads afresh every 2 s (runningKey).
+  const running = runningKey(mixes);
   useEffect(() => {
-    const running = mixes.filter((m) => !isOver(m));
-    if (!running.length) return;
+    if (!running) return;
+    const indexes = running.split(",").map(Number);
     const timer = setInterval(() => {
-      void Promise.all(running.map((m) => call("session-advance", { index: m.index }))).then(
+      void Promise.all(indexes.map((index) => call("session-advance", { index }))).then(
         (moved) => setMixes((was) => was.map((m) => moved.find((x) => x.index === m.index) ?? m)),
         () => undefined,
       );
     }, ADVANCE_EVERY_MS);
     return () => clearInterval(timer);
-  }, [mixes]);
+  }, [running]);
 
   // Its chain's progress, as it's sent and confirmed: the record alone, every few seconds.
   useSessionsWhile(
@@ -623,6 +675,8 @@ export function Lovejoin({
   // How the reviewed mix runs once sent, behind the icon by the title (chunk 23): what it costs, hides and
   // ties stays in the review's rows and callouts.
   const howItRuns = (r: Review) => {
+    // A seed has its own note on either side: nothing is mixed, and its boxes come back as a mix's do (the owner, 2026-10-06).
+    if (seeds(r)) return tr("lovejoin.review.seedNote");
     if (r.source === "private") return tr(r.summary.mix.again ? "lovejoin.review.againNote" : "lovejoin.review.privateNote");
     if (r.summary.again) return tr("lovejoin.review.publicAgainNote");
     return tr(r.summary.seed ? "lovejoin.review.seedNote" : "lovejoin.review.publicNote");
@@ -766,10 +820,13 @@ export function Lovejoin({
 
   const owned = status?.boxes.length ?? 0;
   const notMixed = status?.notMixed.length ?? 0;
-  // The boxes a mix from the public account put in, and how many of those aren't mixed yet (§2.10).
-  const theirs = new Set((status?.fromPublic ?? []).map((b) => `${b.txHash}#${b.txIndex}`));
+  // The boxes a mix from a public account put in, and how many of those aren't mixed yet (§2.10): the private balance
+  // leaves every account's out, and Mix again from my public account takes the active account's alone.
+  const { all: theirs, mine: ownPublic, accounts: otherAccounts } = publicBoxesOf(status);
   const publicBoxes = theirs.size;
-  const publicNotMixed = (status?.notMixed ?? []).filter((b) => theirs.has(`${b.txHash}#${b.txIndex}`)).length;
+  const notMixedOf = (boxes: Set<string>) => (status?.notMixed ?? []).filter((b) => boxes.has(`${b.txHash}#${b.txIndex}`)).length;
+  const publicNotMixed = notMixedOf(theirs);
+  const ownNotMixed = notMixedOf(ownPublic);
   // After a restore, those whose making Koios hasn't said of yet (independent review M14).
   const unsure = new Set((status?.unsure ?? []).map((b) => `${b.txHash}#${b.txIndex}`));
   // The box Bring one back anyway takes, which its warning is about.
@@ -867,7 +924,8 @@ export function Lovejoin({
       )}
       <NotMixed
         count={notMixed}
-        fromPublic={publicNotMixed}
+        fromPublic={ownNotMixed}
+        elsewhere={publicNotMixed - ownNotMixed}
         unsure={unsure.size}
         deposits={status?.deposits?.length ?? 0}
         busy={busy || mixingAgain}
@@ -875,10 +933,12 @@ export function Lovejoin({
       />
       {owned > 0 && (
         <div className="stack">
-          {publicBoxes > 0 && (
+          <OtherAccounts accounts={otherAccounts} />
+          {/* The active account's boxes alone: paying for another's mixes would tie the two accounts (§2.10). */}
+          {ownPublic.size > 0 && (
             <button
               type="button"
-              className={publicNotMixed ? "primary" : "secondary"}
+              className={ownNotMixed ? "primary" : "secondary"}
               disabled={busy || mixingAgain || publicRunning}
               onClick={() => void againPublic()}
               data-testid="lovejoin-again-public"
@@ -1326,7 +1386,7 @@ export function PrivateReview({ summary, before }: { summary: SessionOutSummary 
         <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: mix.boxes })} strong />
         <Row
           label={tr("lovejoin.mixedLabel")}
-          value={tr("lovejoin.review.depthMixesCost", {
+          value={mix.seed ? tr("lovejoin.review.notAtAll") : tr("lovejoin.review.depthMixesCost", {
             count: mix.depth,
             mixes: tr("amount.mixes", { count: mix.mixes }),
             ada: formatAda(mix.mixFees),
@@ -1334,7 +1394,13 @@ export function PrivateReview({ summary, before }: { summary: SessionOutSummary 
         />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} stack />
       </ReviewRows>
-      <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
+      {mix.seed ? (
+        <Callout tone="warn" testId="lovejoin-seed-warning">
+          {tr("lovejoin.seed.privacy.hidesNothing")}
+        </Callout>
+      ) : (
+        <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
+      )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <GivemeNote funding />
     </>
@@ -1396,6 +1462,13 @@ function AgainReview({ summary, before }: { summary: SessionOutSummary & { mix: 
   );
 }
 
+/**
+ * What a chain from the public account takes from it, all told (release review C41): the boxes it puts in, none
+ * mixing its own again, and every fee. Its change stays, and as a row of its own read as what would be left
+ * (ReviewTotals). With several accounts, TotalRows names the one that pays.
+ */
+const publicLeaving = (summary: LovejoinPublicSummary) => (summary.again ? 0n : BigInt(summary.boxes) * BOX) + BigInt(summary.fees);
+
 /** A mix from the public account: the deposit and every mix, sent now. */
 export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
   const tr = useT();
@@ -1411,7 +1484,7 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
         />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
+        <TotalRows side="public" leaving={publicLeaving(summary)} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.public"), PUBLIC_MIX_WAY_BACK()])}</Callout>
@@ -1432,8 +1505,8 @@ function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
         <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.review.notAtAll")} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.onlyWhenAsked")} stack />
+        <TotalRows side="public" leaving={publicLeaving(summary)} />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <Callout tone="warn" testId="lovejoin-seed-warning">
         {tr("lovejoin.review.warn.seed")}
@@ -1455,7 +1528,7 @@ function PublicAgainReview({ summary }: { summary: LovejoinPublicSummary }) {
         />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <Row label={tr("lovejoin.review.staysPublic")} value={`${formatAda(summary.change)}\u00a0₳`} />
+        <TotalRows side="public" leaving={publicLeaving(summary)} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.publicAgain"), PUBLIC_MIX_WAY_BACK()])}</Callout>

@@ -20,10 +20,11 @@ export type Side = "public" | "private";
 
 /**
  * "Total leaving your public account" and, given what the side holds now,
- * "Public account after". `before` is Home's whole balance, locked UTxOs and
- * rewards included; the after is masked with the balances when they're
- * hidden, as Home's is. Each amount keeps its ₳ beside it, with a no-break
- * space: the long label beside it pushed the ₳ onto a line of its own.
+ * "Public account after". `before` is Home's whole balance: locked UTxOs,
+ * rewards and what's on its way back included; the after is masked with the
+ * balances when they're hidden, as Home's is. Each amount keeps its ₳ beside
+ * it, with a no-break space: the long label beside it pushed the ₳ onto a
+ * line of its own.
  *
  * `tokens`: how many kinds of token leave too, said with the ADA ("5.195025 ₳
  * and 2 tokens"): a total of the ADA alone read as everything that leaves,
@@ -50,13 +51,18 @@ export function TotalRows({ side, leaving, before, tokens = 0 }: { side: Side; l
 
 /**
  * Home's balance for a side a form was handed spendable (format.ts
- * `unlocked`, which keeps what it took out in `locked`): what's spendable
- * and what's locked, together, as Home shows it. A screen that gets the
- * spendable side alone (the dApps page's, a site's session) gives its review
- * "… after" from it (blind test §9.8).
+ * `unlocked`, which keeps what it took out in `locked`): what's spendable,
+ * what's locked and what's on its way back, together, as Home shows it. A
+ * screen that gets the spendable side alone (the dApps page's, a site's
+ * session) gives its review "… after" from it (blind test §9.8). Without
+ * what's on its way, the after was short by all of it, a swap's return say.
  */
-export function homeBalance(side: { lovelace: string; locked: { lovelace: string } }): string {
-  return (BigInt(side.lovelace) + BigInt(side.locked.lovelace)).toString();
+export function homeBalance(side: {
+  lovelace: string;
+  locked: { lovelace: string };
+  incoming?: { lovelace: string };
+}): string {
+  return (BigInt(side.lovelace) + BigInt(side.locked.lovelace) + BigInt(side.incoming?.lovelace ?? "0")).toString();
 }
 
 /**

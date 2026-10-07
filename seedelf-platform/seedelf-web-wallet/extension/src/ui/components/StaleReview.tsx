@@ -101,6 +101,16 @@ export function StaleFoot({
   );
 }
 
+/**
+ * The stale foot's `onAgain` for a form's review: builds it again, or, when the form can't be built as it now
+ * stands (Home has since read less than it asks for, or a token's amount is gone), goes back to the form, which
+ * says why. The build returned at its guard there, so the press did nothing and said nothing; building past the
+ * guard instead would quietly leave out a token the form can no longer send (TokenAmounts' tokenChoices).
+ */
+export function againOrForm(ready: boolean, build: () => Promise<void>, toForm: () => void): () => void {
+  return () => (ready ? void build() : toForm());
+}
+
 /** Over Send, once a refused review was built again: what's on screen is new, and wants reading again. */
 export function RenewedNote({ renewed }: { renewed: boolean }) {
   const t = useT();

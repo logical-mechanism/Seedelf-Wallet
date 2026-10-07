@@ -17,14 +17,15 @@
 // Sending the freed ADA to a *different* account links that one to the
 // Seedelf's name too, and anyone can join the two by the name — so the two
 // accounts are tied together. `paidByAccount` says which paid, and the note
-// warns when the wallet has since moved to another.
+// and the account's card warn when the wallet has since moved to another.
 
 import { useState, type FormEvent } from "react";
 import { type I18nKey, t, useT } from "../../i18n";
 
-import type { MintSource, PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
+import type { KnownAccount, MintSource, PendingTx, RemoveSummary, RemoveTo, SeedelfInfo } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
 import { call, isStale } from "../background";
+import { ownAccountNumber } from "../components/AccountRecipients";
 import { BuildStage } from "../components/BuildStage";
 import { Callout } from "../components/Callout";
 import { GivemeNote } from "../components/GivemeNote";
@@ -35,37 +36,69 @@ import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { formatAda } from "../format";
+import { useAmounts } from "../preferences";
 
 /** Where the freed ADA goes. Keys: the review's "Back to your …" is a whole key, not this one lowercased. */
 const DESTINATIONS = { account: "mint.source.account", seedelf: "mint.source.seedelf" } as const satisfies Record<RemoveTo, I18nKey>;
 
 /**
+ * Which public account paid (`paidByAccount`) and which the wallet is on now
+ * (`active`), when there is more than one to tell apart; `known` gives their
+ * names, so a warning names a renamed account as the picker shows it.
+ */
+interface Accounts {
+  paidByAccount?: number;
+  active: number;
+  several: boolean;
+  known?: KnownAccount[];
+}
+
+/**
+ * Whether sending the freed ADA to `to` ties two of the user's accounts
+ * together: the public account it goes to isn't the one that paid, which
+ * the mint already links to the Seedelf's name. The note and the card both
+ * ask this, so they can't disagree: the card said "Links nothing new" over
+ * the note's warning.
+ */
+function otherAccountPaid(
+  to: RemoveTo | undefined,
+  paidBy: MintSource | undefined,
+  accounts: Accounts | undefined,
+): accounts is Accounts & { paidByAccount: number } {
+  return (
+    to === "account" &&
+    paidBy === "account" &&
+    !!accounts?.several &&
+    accounts.paidByAccount !== undefined &&
+    accounts.paidByAccount !== accounts.active
+  );
+}
+
+/** The two accounts `otherAccountPaid` ties, for a warning's "Account {{paid}}" and "Account {{active}}". */
+const tiedAccounts = (accounts: Accounts & { paidByAccount: number }) => ({
+  paid: ownAccountNumber(accounts.known ?? [], accounts.paidByAccount),
+  active: ownAccountNumber(accounts.known ?? [], accounts.active),
+});
+
+/**
  * What sending the freed ADA to `to` links, for a Seedelf `paidBy` paid for;
- * a warning where it links something new.
- *
- * `accounts`: which public account paid (`paidByAccount`) and which the
- * wallet is on now (`active`), when there is more than one to tell apart.
- * Where they differ, sending to the public account ties the two accounts
- * together, which is the strongest warning here.
+ * a warning where it links something new. Where another of the wallet's
+ * accounts paid (`accounts`), sending to the public account ties the two
+ * accounts together, which is the strongest warning here.
  */
 export function removeNote(
   to: RemoveTo | undefined,
   paidBy: MintSource | undefined,
-  accounts?: { paidByAccount?: number; active: number; several: boolean },
+  accounts?: Accounts,
 ): { tone: "privacy" | "warn"; text: string } {
   // Said before anything else: a different account's is the one case where
   // removing to "the public account" ties two of the user's accounts
   // together, in the open, and the default would have done it quietly.
-  if (
-    to === "account" &&
-    paidBy === "account" &&
-    accounts?.several &&
-    accounts.paidByAccount !== undefined &&
-    accounts.paidByAccount !== accounts.active
-  ) {
+  // Shown while nothing is chosen too: it's why nothing is.
+  if (otherAccountPaid(to ?? "account", paidBy, accounts)) {
     return {
       tone: "warn",
-      text: t("remove.warn.otherAccount", { paid: accounts.paidByAccount + 1, active: accounts.active + 1 }),
+      text: t("remove.warn.otherAccount", tiedAccounts(accounts)),
     };
   }
   if (to === undefined) {
@@ -84,7 +117,9 @@ export function removeNote(
               // the critical-set deriver never sees this key in the JSX.
               whose:
                 accounts?.several && accounts.paidByAccount !== undefined
-                  ? t("accountPicker.numbered", { number: accounts.paidByAccount + 1 })
+                  ? t("accountPicker.numbered", {
+                      number: ownAccountNumber(accounts.known ?? [], accounts.paidByAccount),
+                    })
                   : t("remove.privacy.yourPublicAccount"),
             })
           : t("remove.privacy.backToPrivate"),
@@ -116,10 +151,12 @@ export function removeNote(
  * What sending the freed ADA to `to` links, in a line, for the card that
  * offers it: nothing new back to the side that paid, a link otherwise, and
  * which side it's safe for when the wallet doesn't know who paid
- * (chunk 23's second review, RX-3).
+ * (chunk 23's second review, RX-3). The public account, when another of the
+ * wallet's accounts paid, ties the two, as the note under the cards says.
  */
-export function removeOption(to: RemoveTo, paidBy: MintSource | undefined): string {
+export function removeOption(to: RemoveTo, paidBy: MintSource | undefined, accounts?: Accounts): string {
   if (paidBy === undefined) return t(to === "account" ? "remove.privacy.option.ifAccountPaid" : "remove.privacy.option.ifPrivatePaid");
+  if (otherAccountPaid(to, paidBy, accounts)) return t("remove.warn.option.otherAccount", tiedAccounts(accounts));
   if (to === paidBy) return t("remove.privacy.option.nothingNew");
   return t(to === "account" ? "remove.privacy.option.tiesAccount" : "remove.privacy.option.tiesName");
 }
@@ -134,16 +171,22 @@ export function RemoveSeedelf({
   onSent: (pending: PendingTx) => void;
 }) {
   const t = useT();
-  // The side that paid for it, when the wallet knows; nothing otherwise.
-  const [to, setTo] = useState<RemoveTo | undefined>(seedelf.paidBy);
+  // What the user picked; until then, the side that paid for it when the wallet knows (below).
+  const [chosen, setTo] = useState<RemoveTo>();
   const [summary, setSummary] = useState<RemoveSummary>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   // The worker's words for a review that can't go as it is: Remove gives way to building it again.
   const stale = useStale();
   const name = seedelf.label ?? t("remove.aSeedelf");
-  const { active, several } = useAccounts();
-  const note = removeNote(to, seedelf.paidBy, { paidByAccount: seedelf.paidByAccount, active, several });
+  const { accounts: known, active, several } = useAccounts();
+  const accounts = { paidByAccount: seedelf.paidByAccount, active, several, known };
+  // Nothing is chosen for the user where another of their accounts paid, as when the payer is unknown:
+  // the public account here would tie the two together in the open (the owner's call, 2026-10-06).
+  const to = chosen ?? (otherAccountPaid("account", seedelf.paidBy, accounts) ? undefined : seedelf.paidBy);
+  const note = removeNote(to, seedelf.paidBy, accounts);
+  // The form's line about what's locked hides with the balances, as Receive's list does (HM-9).
+  const shown = useAmounts();
 
   function review(e: FormEvent) {
     e.preventDefault();
@@ -231,7 +274,7 @@ export function RemoveSeedelf({
       title={t("remove.title", { name })}
       titleId="remove-title"
       onBack={onCancel}
-      aside={t("remove.aside", { amount: formatAda(seedelf.lovelace) })}
+      aside={t("remove.aside", { amount: shown.ada(seedelf.lovelace) })}
       error={error}
       foot={
         <>
@@ -261,7 +304,7 @@ export function RemoveSeedelf({
         options={(["account", "seedelf"] as const).map((d) => ({
           value: d,
           label: t(DESTINATIONS[d]),
-          text: removeOption(d, seedelf.paidBy),
+          text: removeOption(d, seedelf.paidBy, accounts),
           icon: d === "account" ? <WalletIcon size={16} /> : <ShieldIcon size={16} />,
         }))}
       />

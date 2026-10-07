@@ -994,7 +994,8 @@ describe("mixing a public mix's boxes again (privacy review §2.10)", () => {
       }),
     );
     expect(line).toContain("Mixed again 2 boxes your public account put in");
-    expect(line).toContain("Stays in your public account 40 ₳");
+    // What leaves the account, the fees alone, not the chain's change (release review C41).
+    expect(line).toContain("Total leaving your public account 6.6 ₳");
     expect(line).toContain("paying their mixes from it ties nothing new. Your private balance stays out of it");
     expect(line).not.toContain("Into Lovejoin");
   });

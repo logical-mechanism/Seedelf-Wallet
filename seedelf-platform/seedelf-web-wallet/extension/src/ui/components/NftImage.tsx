@@ -3,14 +3,15 @@
 // to whom, more strongly for an NFT in the private balance; after it, the
 // image, or why there is none. Nothing is asked for an NFT nobody clicks.
 
-import { useState, type ReactNode } from "react";
-import { joinSentences, useT } from "../../i18n";
+import { useEffect, useState, type ReactNode } from "react";
+import { joinSentences, t, useT } from "../../i18n";
 
-import { IPFS_GATEWAY, IPFS_GATEWAY_HOST } from "../../networks";
+import { IPFS_GATEWAY, IPFS_GATEWAY_HOST, type NetworkName } from "../../networks";
+import type { TokenRef } from "../../shared/rpc";
 import { seedelfName } from "../../shared/seedelf-name";
 import { call } from "../background";
 import { useNetwork } from "../network";
-import { imageIn, rememberImage, useShownImage } from "../nft-images";
+import { imageIn, imageLocks, rememberImage, useShownImage } from "../nft-images";
 import type { TokenView } from "../tokens";
 import { Callout } from "./Callout";
 import { CopyField } from "./CopyField";
@@ -42,6 +43,32 @@ export function NftPicture({ view, children }: { view: TokenView; children: Reac
 }
 
 /**
+ * What the details say before Show image: who it asks and what they see, and that Chrome asks first, unless access
+ * the wallet has covers the gateway already (`reachable`), as Let sites connect's does: Chrome then asks nothing.
+ * Exported for its tests.
+ */
+export function beforeShowing(of: "seedelf" | "cardano", reachable?: boolean): string {
+  return joinSentences([
+    of === "seedelf" ? t("nftImage.privacy.private", { host: HOST }) : t("nftImage.privacy.public", { host: HOST }),
+    reachable !== true && t("nftImage.privacy.chromeAsks", { host: HOST }),
+  ]);
+}
+
+/**
+ * Show image's click: Chrome's permission, then the worker, and the answer kept until the wallet locks. One that
+ * comes after a lock is dropped (`rememberImage`'s `asked`). False: Chrome wasn't given the gateway, so nothing was
+ * asked. Exported for its tests.
+ */
+export async function askImage(network: NetworkName, token: TokenRef): Promise<boolean> {
+  const asked = imageLocks();
+  // Before anything is awaited: Chrome asks only straight from a click, and
+  // only when no access the wallet has covers the gateway already.
+  if (!(await chrome.permissions.request({ origins: [IPFS_GATEWAY_HOST] }))) return false;
+  rememberImage(network, token, await call("nft-image", { policyId: token.policyId, assetName: token.assetName }), asked);
+  return true;
+}
+
+/**
  * What an NFT's details say about its image: what Show image reveals, and
  * the button; or, once asked, where the image came from or why there's none.
  * `of`: whose NFT it is, which decides what the click reveals.
@@ -52,22 +79,28 @@ export function NftImageShow({ view, of }: { view: TokenView; of: "seedelf" | "c
   const shown = useShownImage(view.token);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string>();
+  const offered = hasImageToShow(view);
+  // Whether the wallet can reach the gateway already: then Chrome asks nothing, and the callout doesn't say it will.
+  const [reachable, setReachable] = useState<boolean>();
+  useEffect(() => {
+    if (!offered) return;
+    let live = true;
+    globalThis.chrome?.permissions?.contains({ origins: [IPFS_GATEWAY_HOST] }).then(
+      (yes) => live && setReachable(yes),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [offered]);
 
-  if (!hasImageToShow(view)) return null;
+  if (!offered) return null;
 
   async function show() {
     setError(undefined);
     setAsking(true);
     try {
-      // Before anything is awaited: Chrome asks only straight from a click,
-      // and only the first time. Turned down, nothing is asked of anyone.
-      const granted = await chrome.permissions.request({ origins: [IPFS_GATEWAY_HOST] });
-      if (!granted) {
-        setError(t("nftImage.warn.notGranted", { host: HOST }));
-        return;
-      }
-      const found = await call("nft-image", { policyId: view.token.policyId, assetName: view.token.assetName });
-      rememberImage(network, view.token, found);
+      if (!(await askImage(network, view.token))) setError(t("nftImage.warn.notGranted", { host: HOST }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -75,23 +108,25 @@ export function NftImageShow({ view, of }: { view: TokenView; of: "seedelf" | "c
     }
   }
 
-  if (shown) return <ShownImage shown={shown} />;
   return (
-    <div className="stack-tight" data-testid="nft-image-show">
-      <Callout tone="privacy" testId="nft-image-privacy">
-        {joinSentences([
-          of === "seedelf" ? t("nftImage.privacy.private", { host: HOST }) : t("nftImage.privacy.public", { host: HOST }),
-          t("nftImage.privacy.chromeAsks", { host: HOST }),
-        ])}
-      </Callout>
-      <button type="button" className="secondary" onClick={show} disabled={asking}>
-        {asking ? t("nftImage.showing") : error ? t("common.tryAgain") : t("nftImage.show")}
-      </button>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
+    <div>
+      {!shown && (
+        <div className="stack-tight" data-testid="nft-image-show">
+          <Callout tone="privacy" testId="nft-image-privacy">
+            {beforeShowing(of, reachable)}
+          </Callout>
+          <button type="button" className="secondary" onClick={show} disabled={asking}>
+            {asking ? t("nftImage.showing") : error ? t("common.tryAgain") : t("nftImage.show")}
+          </button>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
       )}
+      {/* What came, or why nothing did, in a region there from the start, so a screen reader says it (WCAG 4.1.3). */}
+      <div role="status">{shown && <ShownImage shown={shown} />}</div>
     </div>
   );
 }

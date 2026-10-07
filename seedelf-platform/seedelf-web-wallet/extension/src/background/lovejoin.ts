@@ -36,9 +36,9 @@
 // no record accounts for, found when more could come back than there are
 // due times, is known by the transaction that made it (tx_info): a mix made
 // it, and it comes back as any box does; a deposit did, and it's held, not
-// mixed yet, as a recorded chain's box is; paid by the public account, it's
-// the account's. Until Koios says, it's held, and asked of again at each
-// pool read (independent review M14).
+// mixed yet, as a recorded chain's box is; paid by one of the phrase's public
+// accounts, it's that account's. Until Koios says, it's held, and asked of
+// again at each pool read (independent review M14).
 //
 // A chain is sent over many blocks, and only while the wallet is unlocked; a
 // lock, a closed browser or an update wipes what's left of it (it waits in
@@ -65,11 +65,12 @@
 // chain cut short, or boxes nobody has mixed since), with no deposit, paid
 // from the private balance through a mix session. While one runs, no box is
 // withdrawn: its chain spends them. Once its first mix is in, those boxes
-// wait again, each a fresh delay. A box a mix from the public account put in
-// is the account's, which paid for that mix in the open: paying for its
+// wait again, each a fresh delay. A box a mix from a public account put in
+// is that account's, which paid for that mix in the open: paying for its
 // mixes from the private balance would tie the two, so it's left out unless
-// the user asks, and the public account pays to mix it again instead, no
-// new tie (publicAgainBuild, privacy review §2.10).
+// the user asks, and that account pays to mix it again instead, no new tie
+// (publicAgainBuild, privacy review §2.10). Never another account: that
+// would tie the two accounts, so each chain records the account that paid.
 //
 // Koios requests: one pool read and one evaluate for a chain; one pool read
 // at each unlock, only on a network where the wallet has something open in
@@ -99,6 +100,7 @@ import type {
   TokenQuantity,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount } from "./account";
+import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { txInputs } from "./cbor";
 import { GAP_LIMIT } from "./chain";
@@ -523,7 +525,7 @@ interface Schedule {
   unlock?: number;
   /**
    * The leaves of chains whose records went (RECORD_KEEP_MS), `txhash#index`,
-   * and whose chain made each (chainOwner): kept while the box is still
+   * and whose chain made each (ownerOf): kept while the box is still
    * there, unmoved, so the box brought back is one someone else's mix has
    * moved since (backOrder, privacy review §3.6).
    */
@@ -559,11 +561,13 @@ interface Origin {
    */
   mixed: boolean;
   /**
-   * One of its inputs was the public account's: its box, as one a mix from
+   * One of its inputs was a public account's: its box, as one a mix from
    * the account put in is (fromPublic), which the private balance never pays
    * to mix unless asked (privacy review §2.10).
    */
   public?: true;
+  /** Which public account's (its index), with `public`: none is account 0, as 1.1.0 kept it with one account. */
+  account?: number;
   /**
    * When a pool read last listed a box it made (ms). It goes RECORD_KEEP_MS
    * after, as a chain's record does: a listing that's behind may not show a
@@ -572,8 +576,11 @@ interface Origin {
   seen: number;
 }
 
+/** What Koios said made a box (madeBy), before it's kept. */
+type Told = Pick<Origin, "mixed" | "public" | "account">;
+
 /**
- * How far along each of the public account's chains its payment keys are
+ * How far along each of a public account's chains its payment keys are
  * looked for, when an input of a transaction that made a box carries the
  * account's stake key under a payment key the wallet doesn't know (madeBy):
  * a thousand key hashes at most, about a fifth of a second, once for each
@@ -639,6 +646,11 @@ interface ChainRecord {
   id: string;
   /** A session's return or mix (its index); none for a mix from the public account. */
   session?: number;
+  /**
+   * A mix from a public account: which account paid it (its index), whose keys built and signed it. None on one
+   * 1.1.0 recorded, which had account 0 alone.
+   */
+  account?: number;
   /** Where it waits while it's being sent (chrome.storage.session). */
   progress: string;
   deposit?: string;
@@ -743,6 +755,8 @@ interface KeptPublic extends LovejoinPublicSummary {
   chain: LovejoinChain["txs"];
   leaves: OutRef[];
   builtAt: number;
+  /** The public account whose keys built and signed it: its record's (ChainRecord `account`). None: account 0. */
+  account?: number;
 }
 
 /** The public account's own boxes mixed again, as a chain's review has them. */
@@ -779,6 +793,8 @@ export interface LovejoinDeps extends ScriptSpendDeps {
   mixingAgain?: (network: NetworkName) => Promise<boolean>;
   /** The sessions alarm (chrome.alarms), which sends the rest of a public mix while the wallet is unlocked. */
   alarm?: { start(): Promise<void> };
+  /** The public accounts the wallet knows of, by index (accounts.ts): whose keys may have paid a box in (madeBy). */
+  knownAccounts?: () => Promise<number[]>;
 }
 
 const HOUR = 3_600_000;
@@ -931,6 +947,23 @@ const sameInputs = (a: Reservation, b: Reservation) => a.inputs.length === b.inp
 export const chainOwner = (index?: number) => (index === undefined ? "public" : `session.${index}`);
 
 /**
+ * What a leaf kept after its record went (`s.leaves`) says of a mix from public account `account`: "public" for
+ * account 0, as 1.1.0 wrote it with one account, and "public.<n>" for account n. Its reservation stays
+ * chainOwner()'s: one mix from the public side at a time, whichever account pays.
+ */
+const publicOwner = (account: number) => (account === 0 ? chainOwner() : `${chainOwner()}.${account}`);
+
+/** The public account an owner names (publicOwner); undefined for a session's, or none. */
+function accountOf(owner: string | undefined): number | undefined {
+  if (owner === chainOwner()) return 0;
+  const n = /^public\.(\d+)$/.exec(owner ?? "")?.[1];
+  return n === undefined ? undefined : Number(n);
+}
+
+/** Whose chain `c` is: a session's, or a public account's, account 0 when it names none (1.1.0's). */
+const ownerOf = (c: ChainRecord) => (c.session === undefined ? publicOwner(c.account ?? 0) : chainOwner(c.session));
+
+/**
  * The wallet's boxes that a chain of its own made short of its last mixes:
  * not mixed yet, so still traceable to where they went in.
  */
@@ -1073,16 +1106,17 @@ function backOrder(boxes: OutRef[], rows: Map<string, KoiosUtxo>, leaves: Set<st
 }
 
 /**
- * Whose chain put box `b` where it is (chainOwner): the public account's, or
- * a session's; undefined when none of the wallet's recorded chains did (a
- * restore, or someone else's mix moved it since). After a restore, the
- * public account's when the transaction that made it spent the account's
- * (Origin `public`).
+ * Whose chain put box `b` where it is (ownerOf): a public account's, or a
+ * session's; undefined when none of the wallet's recorded chains did (a
+ * restore, or someone else's mix moved it since). After a restore, a public
+ * account's when the transaction that made it spent that account's (Origin
+ * `public`).
  */
 function originOf(b: OutRef, s: Schedule): string | undefined {
   const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
-  if (made) return chainOwner(made.session);
-  return s.leaves?.[ref(b)] ?? (s.origins?.[b.txHash]?.public ? chainOwner() : undefined);
+  if (made) return ownerOf(made);
+  const told = s.origins?.[b.txHash];
+  return s.leaves?.[ref(b)] ?? (told?.public ? publicOwner(told.account ?? 0) : undefined);
 }
 
 /**
@@ -1129,8 +1163,14 @@ function ripeAt(b: OutRef, s: Schedule, rows: Map<string, KoiosUtxo>): number {
   return Math.max(0, ...s.chains.filter((c) => c.at <= moved).map(ownWaitAt));
 }
 
-/** The boxes of `boxes` a mix from the public account put where they are. */
-const fromPublic = (boxes: OutRef[], s: Schedule) => boxes.filter((b) => originOf(b, s) === chainOwner());
+/** The boxes of `boxes` a mix from any of the public accounts put where they are: the private balance leaves them out. */
+const fromPublic = (boxes: OutRef[], s: Schedule) => boxes.filter((b) => accountOf(originOf(b, s)) !== undefined);
+
+/**
+ * Those public account `account`'s mix put in: only that account pays to mix them again, which ties nothing new.
+ * Another account paying for their mixes would tie the two accounts together.
+ */
+const fromAccount = (boxes: OutRef[], s: Schedule, account: number) => boxes.filter((b) => accountOf(originOf(b, s)) === account);
 
 /** Where the wallet's own chains left its boxes, mixed all the way: each recorded chain's leaves, and those kept after its record went. */
 const ownLeaves = (s: Schedule) => new Set([...s.chains.flatMap((c) => c.leaves.map(ref)), ...Object.keys(s.leaves ?? {})]);
@@ -1394,7 +1434,7 @@ export class LovejoinService {
     return { boxes, owned: owned.length };
   }
 
-  /** `boxes` less those a mix from the public account put in: what the private balance mixes again without tying itself to the account. */
+  /** `boxes` less those a mix from any public account put in: what the private balance mixes again without tying itself to one. */
   private privately(boxes: OutRef[], s: Schedule): OutRef[] {
     const theirs = new Set(fromPublic(boxes, s).map(ref));
     return boxes.filter((b) => !theirs.has(ref(b)));
@@ -1429,9 +1469,8 @@ export class LovejoinService {
     const { depth } = await this.settings();
     const needed = boxes * mixesPerBox(depth) * 2;
     if (others < needed) {
-      throw new Error(
-        t("lj.notEnough", { others, count: boxes, depth, needed }),
-      );
+      // The depth with its own plural, as poolShort says it (sessions.ts): the count is the boxes'.
+      throw new Error(t("lj.notEnough", { others, count: boxes, deep: t("sess.skip.warn.deep", { count: depth }), needed }));
     }
   }
 
@@ -1750,9 +1789,11 @@ export class LovejoinService {
       const split = await this.split(network, chainOwner(), avoid);
       if (!seed) this.floor(network, split.others.length, true);
       const request = { network, params, utxos, collateral: collateral ?? null, pool: this.real(split), depth, boxes };
-      const built = await wallet.withKeys(
-        (keys) => JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
-      );
+      // The account whose keys sign it is the one its record names (ChainRecord `account`).
+      const built = await wallet.withKeys((keys) => ({
+        ...(JSON.parse(wasm.buildLovejoinFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain),
+        account: keys.account,
+      }));
       return this.checked(network, built);
     });
     const last = chain.txs.at(-1)!;
@@ -1769,7 +1810,8 @@ export class LovejoinService {
       fees: chain.fees,
       change: chain.returned,
     };
-    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
+    const kept: KeptPublic = { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now(), account: chain.account };
+    await this.keep(network, kept, chain.reserved);
     return summary;
   }
 
@@ -1798,7 +1840,7 @@ export class LovejoinService {
    * network's check, which it then passes, or its reservation goes
    * (independent review L27).
    */
-  private async checked(network: NetworkName, built: LovejoinChain): Promise<LovejoinChain & { reserved: Reservation }> {
+  private async checked<C extends LovejoinChain>(network: NetworkName, built: C): Promise<C & { reserved: Reservation }> {
     const reserved = await this.reserve(network, chainOwner(), built.txs, this.deps.now() + BUILT_TTL_MS);
     try {
       await this.crossCheck(network, built);
@@ -1822,13 +1864,15 @@ export class LovejoinService {
   }
 
   /**
-   * Mixes the wallet's boxes that a mix from the public account put in again,
-   * paid by the account (privacy review §2.10): it paid for their deposit and
-   * mixes in the open already, so paying again ties nothing new, where the
-   * private balance would tie itself to the account. Every mix built, signed
-   * by the account's keys and checked against the network, kept for Send as
-   * a mix from it is (publicSubmit); no deposit, and the change stays in the
-   * account. The boxes not mixed yet go first.
+   * Mixes the wallet's boxes that a mix from the active public account put in
+   * again, paid by that account (privacy review §2.10): it paid for their
+   * deposit and mixes in the open already, so paying again ties nothing new,
+   * where the private balance would tie itself to the account. Never another
+   * account's boxes: paying for their mixes would tie the two accounts, so
+   * with only those left it says which account to switch to. Every mix built,
+   * signed by the account's keys and checked against the network, kept for
+   * Send as a mix from it is (publicSubmit); no deposit, and the change stays
+   * in the account. The boxes not mixed yet go first.
    */
   async publicAgainBuild(network: NetworkName): Promise<PublicAgain> {
     if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
@@ -1836,6 +1880,8 @@ export class LovejoinService {
     // It spends the account: not while a payment from it may still go through (pending.ts).
     await settleMaybeSent(this.deps, network);
     const { wasm, wallet, now } = this.deps;
+    // The account that pays, and whose boxes alone it takes.
+    const account = await wallet.withKeys((keys) => keys.account);
     const { params, utxos, collateral, held } = await readAccount(this.deps, network);
     if (!collateral) {
       throw new Error(t("lj.needCollateral"));
@@ -1846,8 +1892,14 @@ export class LovejoinService {
       const split = await this.split(network, chainOwner(), avoid);
       this.floor(network, split.others.length);
       const schedule = await this.read(network);
-      const theirs = free(fromPublic(split.owned, schedule), split.reserved);
-      if (!theirs.length) throw new Error(t("lj.noneFromAccount"));
+      const theirs = free(fromAccount(split.owned, schedule, account), split.reserved);
+      if (!theirs.length) {
+        // Only another account's mix put boxes in: that account mixes them again, never this one.
+        const [other] = free(fromPublic(split.owned, schedule), split.reserved)
+          .map((b) => accountOf(originOf(b, schedule))!)
+          .sort((a, b) => a - b);
+        throw new Error(other === undefined ? t("lj.noneFromAccount") : t("lj.privacy.otherAccount", { number: other + 1 }));
+      }
       const others = free(split.others, split.reserved).length;
       const perBox = mixesPerBox(depth);
       const boxes = Math.min(theirs.length, Math.floor(others / (perBox * 2)), Math.floor(MAX_CHAIN_MIXES / perBox));
@@ -1861,9 +1913,11 @@ export class LovejoinService {
         .filter((u) => !mine.has(outpoint(u)) || taken.has(outpoint(u)))
         .sort((a, b) => first(a) - first(b));
       const request = { network, params, utxos, collateral, pool, depth, boxes };
-      const built = await wallet.withKeys(
-        (keys) => JSON.parse(wasm.buildLovejoinAgainFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
-      );
+      const built = await wallet.withKeys((keys) => {
+        // Still the account the boxes were picked for: a switch since would have another account pay for them.
+        if (keys.account !== account) throw new Error(NOT_READY());
+        return JSON.parse(wasm.buildLovejoinAgainFromAccount(keys.cardano, keys.seedelf, JSON.stringify(request))) as LovejoinChain;
+      });
       return this.checked(network, built);
     });
     const last = chain.txs.at(-1)!;
@@ -1880,7 +1934,7 @@ export class LovejoinService {
       change: chain.returned,
       again: true,
     };
-    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now() }, chain.reserved);
+    await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves, builtAt: now(), account }, chain.reserved);
     return summary;
   }
 
@@ -1919,7 +1973,14 @@ export class LovejoinService {
     const sending: SendingPublic = { network, boxes: built.boxes, txs: built.chain, next: 0, flying: [] };
     // Recorded, sealed, before its progress is where anything can send it from (independent review L28). Its own
     // boxes mixed again: they wait afresh once its first mix is in (chainSent).
-    const chain = { progress: SESSION_LOVEJOIN_SENDING + network, txs: built.chain, leaves: built.leaves ?? [], boxes: built.boxes };
+    // The account that built and signed it, not the one active at Send: its boxes are that account's (§2.10).
+    const chain = {
+      progress: SESSION_LOVEJOIN_SENDING + network,
+      txs: built.chain,
+      leaves: built.leaves ?? [],
+      boxes: built.boxes,
+      account: built.account ?? 0,
+    };
     await this.recordChain(network, { ...chain, ...(built.again ? { again: true } : {}), ...(built.seed ? { seed: true } : {}) }, async () => {
       // Being sent: its change to come and its collateral are the chain's too, as long as what its review
       // reserved is still its own.
@@ -2178,12 +2239,13 @@ export class LovejoinService {
    * it there (and reserves what it spends), so nothing can send a chain
    * with no record (independent review L28); meanwhile it isn't taken for
    * one a lock cut (cuts). One whose `start` fails never went: its record
-   * goes.
+   * goes. `account`: the public account that paid a mix from the public side.
    */
   async recordChain(
     network: NetworkName,
     chain: {
       session?: number;
+      account?: number;
       progress: string;
       txs: LovejoinChain["txs"];
       leaves: OutRef[];
@@ -2198,6 +2260,7 @@ export class LovejoinService {
     const record: ChainRecord = {
       id: txs.at(-1)!.txHash,
       ...(chain.session !== undefined ? { session: chain.session } : {}),
+      ...(chain.session === undefined && chain.account !== undefined ? { account: chain.account } : {}),
       progress: chain.progress,
       ...(txs[0]?.kind === "deposit" ? { deposit: txs[0].txHash } : {}),
       mixes: txs.filter((t) => t.kind === "mix").map((t) => t.txHash),
@@ -2549,7 +2612,8 @@ export class LovejoinService {
       // Kept while its boxes haven't waited its own delay's least, too: the withdraws read that from it (ripeAt).
       const keep = (c: ChainRecord) =>
         !c.ended || now - c.ended < RECORD_KEEP_MS || unmixedOf([c], listed).length > 0 || now < ownWaitAt(c);
-      const gone = s.chains.filter((c) => !keep(c)).flatMap((c) => c.leaves.map((l) => [ref(l), chainOwner(c.session)] as const));
+      // Each with whose chain it was, a public one's account too (ownerOf).
+      const gone = s.chains.filter((c) => !keep(c)).flatMap((c) => c.leaves.map((l) => [ref(l), ownerOf(c)] as const));
       const leaves = Object.entries({ ...s.leaves, ...Object.fromEntries(gone) }).filter(([r]) => there.has(r));
       if (leaves.length) s.leaves = Object.fromEntries(leaves);
       else delete s.leaves;
@@ -2646,7 +2710,7 @@ export class LovejoinService {
       const was = await this.read(network);
       const said = was.origins ?? {};
       const asked = [...new Set(ask.map((b) => b.txHash))].filter((tx) => !said[tx]);
-      const told = asked.length ? await this.madeBy(network, asked) : new Map<string, Pick<Origin, "mixed" | "public">>();
+      const told = asked.length ? await this.madeBy(network, asked) : new Map<string, Told>();
       const at = this.deps.now();
       const fresh = Object.fromEntries([...told].map(([tx, o]) => [tx, { ...o, seen: at }]));
       const silent = asked.filter((tx) => !told.has(tx) && holding.has(tx));
@@ -2666,18 +2730,20 @@ export class LovejoinService {
 
   /**
    * What made each of `txHashes`, as Koios's tx_info says of its inputs: a
-   * mix, when one sat at Lovejoin's mix_box; the public account, when one was
-   * under one of its payment keys (accountKeys). Only a payment key says so:
-   * anyone can pay from an address of their own payment key and the
-   * account's stake key, without the account's signature, as activity.ts's
-   * accountMatcher says. An input that carries the stake key under a payment
-   * key the wallet doesn't know has the account's keys looked for further
-   * (fartherKeys): an address of the account's past those known, before a
-   * balance reading found it. Those Koios doesn't know are left out, and
-   * those of a request it doesn't answer and of every one after it: each is
-   * asked of again at a later read, and what came back before it is kept.
+   * mix, when one sat at Lovejoin's mix_box; a public account, and which,
+   * when one was under one of its payment keys (accountKeys), whichever
+   * account is active: a restore opens on account 0, and the answer is kept.
+   * Only a payment key says so: anyone can pay from an address of their own
+   * payment key and an account's stake key, without the account's signature,
+   * as activity.ts's accountMatcher says. An input that carries an account's
+   * stake key under a payment key the wallet doesn't know has that account's
+   * keys looked for further (fartherKeys): an address of the account's past
+   * those known, before a balance reading found it. Those Koios doesn't know
+   * are left out, and those of a request it doesn't answer and of every one
+   * after it: each is asked of again at a later read, and what came back
+   * before it is kept.
    */
-  private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Pick<Origin, "mixed" | "public">>> {
+  private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Told>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
     const koios = this.deps.koios(network);
     const rows: KoiosTxSpends[] = [];
@@ -2689,41 +2755,43 @@ export class LovejoinService {
         throw e;
       }
     }
-    const told = new Map<string, Pick<Origin, "mixed" | "public">>();
+    const told = new Map<string, Told>();
     const asked = new Set(txHashes);
     const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
     if (!mixBox || !read.length) return told;
-    const account = await this.accountKeys(network);
+    const accounts = await this.accountKeys(network);
     const spent = read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
-    // The stake key alone never makes an input the account's: its payment key is looked for further (independent review M14).
-    const unknown = new Set(
-      spent.flatMap(([, keys]) =>
-        keys.flatMap(({ cred, stake }) =>
-          cred !== undefined && cred !== mixBox && account.stake !== undefined && stake === account.stake && !account.payment.has(cred)
-            ? [cred]
-            : [],
+    // The stake key alone never makes an input an account's: its payment key is looked for further (independent review M14).
+    for (const a of accounts) {
+      if (a.stake === undefined) continue;
+      const unknown = new Set(
+        spent.flatMap(([, keys]) =>
+          keys.flatMap(({ cred, stake }) => (cred !== undefined && cred !== mixBox && stake === a.stake && !a.payment.has(cred) ? [cred] : [])),
         ),
-      ),
-    );
-    if (unknown.size) for (const key of await this.fartherKeys(unknown)) account.payment.add(key);
+      );
+      if (unknown.size) for (const key of await this.fartherKeys(a.account, unknown)) a.payment.add(key);
+    }
+    const whose = (cred?: string) => (cred === undefined ? undefined : accounts.find((a) => a.payment.has(cred))?.account);
     for (const [tx_hash, keys] of spent) {
+      const account = keys.map((k) => whose(k.cred)).find((n) => n !== undefined);
       told.set(tx_hash, {
         mixed: keys.some((k) => k.cred === mixBox),
-        ...(keys.some((k) => k.cred !== undefined && account.payment.has(k.cred)) ? { public: true as const } : {}),
+        // Account 0's kept as 1.1.0 kept it: `public` alone.
+        ...(account !== undefined ? { public: true as const, ...(account ? { account } : {}) } : {}),
       });
     }
     return told;
   }
 
   /**
-   * Which of `creds` are the public account's payment keys past the first
-   * GAP_LIMIT of each chain: looked for along both up to FARTHER_KEYS,
+   * Which of `creds` are public account `account`'s payment keys past the
+   * first GAP_LIMIT of each chain: looked for along both up to FARTHER_KEYS,
    * stopping once each is found. Each is an input's that carried the
    * account's stake key (madeBy), looked for once for each transaction Koios
    * says the making of, whose answer is kept (found).
    */
-  private fartherKeys(creds: Set<string>): Promise<string[]> {
-    return this.deps.wallet.withKeys(({ cardano }) => {
+  private fartherKeys(account: number, creds: Set<string>): Promise<string[]> {
+    return this.deps.wallet.withAccount(account, ({ cardano }) => {
       const left = new Set(creds);
       const found: string[] = [];
       for (let i = GAP_LIMIT; i < FARTHER_KEYS && left.size; i++) {
@@ -2737,21 +2805,36 @@ export class LovejoinService {
   }
 
   /**
-   * The public account's keys as the wallet knows them (hex): its payment
-   * keys, the first GAP_LIMIT of each chain and those the last balance
-   * reading found past them; and its stake key, which each of its base
-   * addresses carries however far past them, a balance reading or not
-   * (madeBy looks further for one of those).
+   * Each public account's keys as the wallet knows them (hex): its payment
+   * keys, the first GAP_LIMIT of each chain, and the active account's that
+   * the last balance reading found past them; and its stake key, which each
+   * of its base addresses carries however far past them (madeBy looks further
+   * for one of those). Every account the wallet knows, the active one, and the
+   * first MAX_PROBE: a restore's look for accounts runs in the background, and
+   * finds none used only on the other network. Derived on the device, as Make
+   * public's own-account check is: no request.
    */
-  private accountKeys(network: NetworkName): Promise<{ payment: Set<string>; stake?: string }> {
+  private async accountKeys(network: NetworkName): Promise<Array<{ account: number; payment: Set<string>; stake?: string }>> {
     const { wallet, session, wasm } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
-    return wallet.withKeys(async ({ cardano }) => {
-      const found = await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
-      const first = Array.from({ length: GAP_LIMIT }, (_, i) => [cardano.paymentKeyHash(0, i), cardano.paymentKeyHash(1, i)]).flat();
-      const { stake } = this.keysOf({ bech32: cardano.stakeAddress(net) });
-      return { payment: new Set([...first, ...(found?.keys ?? [])]), ...(stake !== undefined ? { stake } : {}) };
-    });
+    const { active, found } = await wallet.withKeys(async ({ account }) => ({
+      active: account,
+      found: (await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network))?.keys ?? [],
+    }));
+    const known = (await this.deps.knownAccounts?.().catch(() => [])) ?? [];
+    const indexes = [...new Set([active, ...known, ...Array.from({ length: MAX_PROBE }, (_, i) => i)])];
+    const keys: Array<{ account: number; payment: Set<string>; stake?: string }> = [];
+    for (const index of indexes) {
+      keys.push(
+        await wallet.withAccount(index, ({ cardano, account }) => {
+          const first = Array.from({ length: GAP_LIMIT }, (_, i) => [cardano.paymentKeyHash(0, i), cardano.paymentKeyHash(1, i)]).flat();
+          const { stake } = this.keysOf({ bech32: cardano.stakeAddress(net) });
+          const payment = new Set([...first, ...(account === active ? found : [])]);
+          return { account, payment, ...(stake !== undefined ? { stake } : {}) };
+        }),
+      );
+    }
+    return keys;
   }
 
   /**
@@ -2796,6 +2879,14 @@ export class LovejoinService {
     const { due, chains } = schedule;
     // What a new mix draws from, as fits counts it: the device's own reservations, no request.
     const drawable = free(others, await this.reservedBoxes(network)).length;
+    // Every public account's boxes stay out of the private balance's mixes; another account's are its own to mix
+    // again, never this one's (publicAgainBuild).
+    const publicBoxes = fromPublic(owned, schedule);
+    const active = await this.deps.wallet.withKeys((keys) => keys.account);
+    const otherAccounts = publicBoxes.flatMap((b) => {
+      const account = accountOf(originOf(b, schedule))!;
+      return account === active ? [] : [{ ...b, account }];
+    });
     return {
       available: true,
       boxes: owned,
@@ -2811,7 +2902,8 @@ export class LovejoinService {
       notMixed: unmixed,
       ...(unsure.length ? { unsure } : {}),
       ...(deposits.length ? { deposits } : {}),
-      fromPublic: fromPublic(owned, schedule),
+      fromPublic: publicBoxes,
+      ...(otherAccounts.length ? { otherAccounts } : {}),
       chains: chains
         .filter(shown)
         .map((c) => ({

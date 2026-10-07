@@ -29,6 +29,7 @@ import { RewardsRow, TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
 import { formatAda } from "../format";
+import { useAmounts } from "../preferences";
 
 /**
  * What pays for the mint. Keys, not words: the review and the aside used to
@@ -67,6 +68,8 @@ export function CreateSeedelf({
   const [error, setError] = useState<string>();
   // The worker's words for a review that can't go as it is: Create gives way to building it again.
   const stale = useStale();
+  // The form's line about the balance that pays, hidden with the balances; the review shows what's sent in full (HM-9).
+  const shown = useAmounts();
 
   const tag = label.trim();
   const problem = labelProblem(label);
@@ -167,7 +170,7 @@ export function CreateSeedelf({
       hintTestId="mint-note"
       onBack={onCancel}
       aside={t(from === "account" ? "mint.asideAccount" : "mint.asidePrivate", {
-        amount: formatAda(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace),
+        amount: shown.ada(from === "account" ? balances.cardano.lovelace : balances.seedelf.lovelace),
       })}
       error={error}
       foot={

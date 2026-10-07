@@ -93,7 +93,7 @@ export function DestinationInput({
   known,
   onRead,
   seedelfs = false,
-  ownAccounts = false,
+  ownAccounts,
 }: {
   id: string;
   value: string;
@@ -102,8 +102,8 @@ export function DestinationInput({
   known?: KnownRead;
   onRead: (read: KnownRead) => void;
   seedelfs?: boolean;
-  /** Offer the wallet's own other public accounts as recipients (chunk 18). */
-  ownAccounts?: boolean;
+  /** Offer the wallet's own other public accounts as recipients, from the balance this pays from (chunk 18). */
+  ownAccounts?: "public" | "private";
 }) {
   const read = useDestination(value, { seedelfs, known });
   const report = useRef(onRead);
@@ -121,7 +121,7 @@ export function DestinationField({
   onChange,
   read,
   seedelfs = false,
-  ownAccounts = false,
+  ownAccounts,
 }: {
   id: string;
   value: string;
@@ -130,11 +130,11 @@ export function DestinationField({
   /** A seedelf's name is a destination too (Send from the Cardano account). */
   seedelfs?: boolean;
   /**
-   * Offer the wallet's own other public accounts as recipients (chunk 18).
-   * The public Send does; Make public doesn't, where the destination is
-   * already about leaving the private balance.
+   * Offer the wallet's own other public accounts as recipients (chunk 18),
+   * from the balance this pays from: the public Send's account, or Make
+   * public's private balance. What picking one shows depends on which.
    */
-  ownAccounts?: boolean;
+  ownAccounts?: "public" | "private";
 }) {
   const t = useT();
   const [contacts, reloadContacts] = useContacts();
@@ -240,8 +240,9 @@ export function DestinationField({
       )}
       {/* Picking one only fills the field: it is then read, and said, like any
           other address — including the note naming the account (chunk 18). */}
-      {accountModal && (
+      {accountModal && ownAccounts && (
         <AccountRecipients
+          from={ownAccounts}
           onClose={() => setAccountModal(false)}
           onPick={(address) => {
             onChange(address);

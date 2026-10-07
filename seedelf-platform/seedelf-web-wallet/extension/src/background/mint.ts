@@ -34,6 +34,7 @@ import {
   readContract,
   send,
   spentHistories,
+  type Kept,
   type OutRef,
   type ScriptSpendDeps,
 } from "./script-spend";
@@ -156,10 +157,12 @@ export class MintService {
   async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
     const { wallet, session, store } = this.deps;
     const [built, account] = await wallet.withKeys(
-      async (keys) => [await session.get<MintSummary>(SESSION_MINT), keys.account] as const,
+      async (keys) => [await session.get<MintSummary & Pick<Kept, "account">>(SESSION_MINT), keys.account] as const,
     );
     if (built?.txHash === txHash && built.network === network) {
-      await rememberMint(store, network, built.tokenName, built.from, account);
+      // The account its review was built and signed on, which another window may have switched from since, as
+      // Send's own records have it (pending.ts writeAhead); with none kept, the one active now.
+      await rememberMint(store, network, built.tokenName, built.from, built.account ?? account);
     }
     return send(this.deps, network, txHash, SESSION_MINT, "mint", "seedelf");
   }

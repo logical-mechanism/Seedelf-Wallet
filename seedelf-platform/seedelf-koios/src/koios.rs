@@ -889,8 +889,9 @@ pub struct ProtocolParameters {
     /// What registering a stake key locks up, returned when it's unregistered.
     pub key_deposit: u64,
     /// What registering a DRep locks up, returned when it retires. `None`
-    /// when Koios leaves it out: only registering a DRep needs it, and that
-    /// refuses to guess.
+    /// when Koios leaves it out, or gives one that isn't a lovelace amount up
+    /// to [`MAX_DREP_DEPOSIT`]: only registering a DRep needs it, and that
+    /// refuses to guess, so no other build fails over it.
     pub drep_deposit: Option<u64>,
     pub price_mem: f64,
     pub price_step: f64,
@@ -983,7 +984,7 @@ impl ProtocolParameters {
     /// Split from [`epoch_params`] so callers that fetch Koios JSON
     /// themselves (the web wallet, through WebAssembly) parse it the same way.
     /// Refuses any parameter over its limit (see [`MAX_MIN_FEE_A`] and the
-    /// rest).
+    /// rest), but `drep_deposit`, which reads as unknown instead.
     pub fn from_koios(params: &Value) -> Result<Self> {
         // Koios gives lovelace amounts as numbers or as strings.
         let lovelace = |field: &str, most: u64| -> Result<u64> {
@@ -1009,10 +1010,11 @@ impl ProtocolParameters {
         let min_fee_b: u64 = lovelace("min_fee_b", MAX_MIN_FEE_B)?;
         let coins_per_utxo_size: u64 = lovelace("coins_per_utxo_size", MAX_COINS_PER_UTXO_SIZE)?;
         let key_deposit: u64 = lovelace("key_deposit", MAX_KEY_DEPOSIT)?;
-        let drep_deposit = match &params["drep_deposit"] {
-            Value::Null => None,
-            _ => Some(lovelace("drep_deposit", MAX_DREP_DEPOSIT)?),
-        };
+        // Every build parses these, and only a DRep's registration needs this
+        // one: off the network's, it's unknown and the registration refuses,
+        // where every payment failed (release review C34). The ledger takes
+        // only the exact deposit anyway.
+        let drep_deposit = lovelace("drep_deposit", MAX_DREP_DEPOSIT).ok();
         let price_mem: f64 = price("price_mem", MAX_PRICE_MEM)?;
         let price_step: f64 = price("price_step", MAX_PRICE_STEP)?;
         let per_byte = "min_fee_ref_script_cost_per_byte";

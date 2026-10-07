@@ -5,7 +5,9 @@
 // account the user just left. The choice lives in local storage
 // (`LOCAL_ACCOUNT`), so local storage's own event is what says it moved — never
 // chrome.storage.onChanged, which carries session storage's changes too, the
-// vault's entropy among them, into this page.
+// vault's entropy among them, into this page. The list is read again when its
+// sealed record is written too: a restore's look finds accounts after the
+// page has read it (`accountsChanged`).
 //
 // One account is the common case, and the picker is hidden then: there is
 // nothing to choose between, and a wallet that has never had a second account
@@ -13,7 +15,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { LOCAL_ACCOUNT } from "../shared/preferences";
+import { LOCAL_ACCOUNT, LOCAL_ACCOUNTS_RECORD } from "../shared/preferences";
 import type { KnownAccount } from "../shared/rpc";
 import { currentLanguage, t, useT } from "../i18n";
 import { call } from "./background";
@@ -44,6 +46,33 @@ export const accountNumberAndName = (a: KnownAccount): string => {
 /** The name of account `index` among `accounts`, for a message about one that may not be listed. */
 export const nameOf = (accounts: KnownAccount[], index: number): string =>
   accountName(accounts.find((a) => a.index === index) ?? { index });
+
+/** The first account not in `accounts`, counting up from 0: the one the worker's look for the next asks about. */
+export function nextInOrder(accounts: KnownAccount[]): number {
+  const known = new Set(accounts.map((a) => a.index));
+  let next = 0;
+  while (known.has(next)) next += 1;
+  return next;
+}
+
+/**
+ * Whether a restore finds account `index` by itself: it looks from index 1 up, one at a time, and stops at the
+ * first never used (background/accounts.ts discover). Only those the wallet has found used (`foundAt`) count.
+ */
+export function restoreFinds(accounts: KnownAccount[], index: number): boolean {
+  const used = new Set(accounts.filter((a) => a.foundAt !== undefined).map((a) => a.index));
+  let reach = 1;
+  while (used.has(reach)) reach += 1;
+  return index <= reach;
+}
+
+/**
+ * Whether a local storage change is the accounts': the choice, or the sealed list, which a restore's look writes in
+ * the background, so the picker and the restore's note follow what it finds (release review C12). Only the key's
+ * name is read, never its sealed value.
+ */
+export const accountsChanged = (changes: Record<string, unknown>): boolean =>
+  LOCAL_ACCOUNT in changes || LOCAL_ACCOUNTS_RECORD in changes;
 
 interface AccountsValue {
   accounts: KnownAccount[];
@@ -100,7 +129,7 @@ export function AccountsProvider({ unlocked, children }: { unlocked: boolean; ch
     };
     again();
     const changed = (changes: Record<string, chrome.storage.StorageChange>) => {
-      if (LOCAL_ACCOUNT in changes) again();
+      if (accountsChanged(changes)) again();
     };
     chrome.storage.local.onChanged.addListener(changed);
     return () => {

@@ -68,8 +68,10 @@ export async function readOwnDrep(deps: GovernanceDeps, network: NetworkName, { 
     let depositNow: string | undefined;
     if (!light) {
       try {
-        const deposit = (await koios.epochParams()).drep_deposit;
-        if (typeof deposit === "string" || typeof deposit === "number") depositNow = String(deposit);
+        const deposit = String((await koios.epochParams()).drep_deposit);
+        // Lovelace, or unknown: the screens count with it, and anything else threw while they drew (release review
+        // C34).
+        if (/^\d+$/.test(deposit)) depositNow = deposit;
       } catch {
         // The review says what it locks up, from the build.
       }

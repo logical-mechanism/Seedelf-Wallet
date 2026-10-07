@@ -92,7 +92,10 @@ export async function reachOpenPages(): Promise<number> {
           func: () => !!(window as { cardano?: { seedelf?: unknown } }).cardano?.seedelf,
         });
         if (probe?.result !== false) return false;
-        for (const script of CONTENT_SCRIPTS) {
+        // The bridge first, each in a round trip of its own: a site may call the moment page.ts's entry appears, and
+        // a call with no bridge yet to hear it was never answered, page.ts having no timeout (the release review).
+        const bridgeFirst = [...CONTENT_SCRIPTS].sort((a, b) => Number(a.world === "MAIN") - Number(b.world === "MAIN"));
+        for (const script of bridgeFirst) {
           await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [script.file], world: script.world });
         }
         return true;

@@ -12,6 +12,7 @@ import { joinSentences, useT } from "../../i18n";
 import type { Balances, PendingTx, WithdrawSummary } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
 import { call, isStale } from "../background";
+import { ownAccountNumber } from "../components/AccountRecipients";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, amountText, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
@@ -34,7 +35,7 @@ import {
   waitingFor,
 } from "../components/Recipients";
 import { Row } from "../components/ReviewRows";
-import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
+import { againOrForm, RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
 import { TotalRows } from "../components/ReviewTotals";
 import { TxDetailButton } from "../components/TxDetail";
 import { Screen } from "../components/Screen";
@@ -147,6 +148,13 @@ export function Withdraw({
     }
   }
 
+  /** Back from the review: its error is the review's, so the form it goes back to starts clean, as a swap's does. */
+  function toForm() {
+    setSummary(undefined);
+    setError(undefined);
+    stale.clear();
+  }
+
   if (summary) {
     const several = summary.payments.length > 1;
     const leaving = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(summary.fee.total));
@@ -189,18 +197,13 @@ export function Withdraw({
         title={t("withdraw.review.title")}
         titleId="withdraw-review"
         review
-        onBack={() => {
-          // The review's error is the review's: the form it goes back to starts clean, as a swap's does.
-          setSummary(undefined);
-          setError(undefined);
-          stale.clear();
-        }}
+        onBack={toForm}
         backDisabled={busy}
         aside={t("review.nothingSent")}
         error={error}
         foot={
           stale.detail !== undefined ? (
-            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={() => void build()} />
+            <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={againOrForm(ready, build, toForm)} />
           ) : (
             <>
               <RenewedNote renewed={stale.renewed} />
@@ -299,7 +302,7 @@ export function Withdraw({
               onChange={(to) => list.update(d.id, { to })}
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
-              ownAccounts
+              ownAccounts="private"
             />
             {read.state === "read" && read.destination.own && <OwnWarning account={read.destination.ownAccount} />}
 
@@ -369,15 +372,16 @@ export function Withdraw({
  * (chunk 18). It is named only where there is more than one to tell apart; a
  * wallet with one account reads exactly as it did. `whose` is put together
  * above the callout, out of the critical-set deriver's sight, so its key is
- * named `.warn.`; an account's number is its name, as the account picker says it.
+ * named `.warn.`; an account goes by its number and, renamed, its name too,
+ * since the picker shows a renamed one by its name alone.
  * `nth`: which recipient, on a review that pays several (PY-5).
  */
-function OwnWarning({ account, nth }: { account?: number; nth?: number }) {
+export function OwnWarning({ account, nth }: { account?: number; nth?: number }) {
   const t = useT();
-  const { several } = useAccounts();
+  const { accounts, several } = useAccounts();
   const whose =
     several && account !== undefined
-      ? t("accountPicker.numbered", { number: account + 1 })
+      ? t("accountPicker.numbered", { number: ownAccountNumber(accounts, account) })
       : t("withdraw.warn.publicAccount");
   return (
     <Callout tone="warn" testId="withdraw-own">

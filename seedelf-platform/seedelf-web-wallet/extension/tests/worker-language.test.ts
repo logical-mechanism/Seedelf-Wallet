@@ -1,14 +1,18 @@
 // The worker speaks the user's language (sw.ts). Nothing in it used to start
-// the language, so every message it sends a page or a site, about 300 of
-// them, reached a Spanish or Japanese wallet in English. This runs the real
-// worker against a fake Chrome whose read of the stored language is held
-// back: an answer that went out before the read ends would be English, so
-// a worker that stops waiting for its language fails here, not in a review.
+// the language, so every message it sends a page, about 300 of them, reached
+// a Spanish or Japanese wallet in English. This runs the real worker against
+// a fake Chrome whose read of the stored language is held back: an answer
+// that went out before the read ends would be English, so a worker that
+// stops waiting for its language fails here, not in a review.
+//
+// A site hears English whatever the language (the release review): CIP-30's
+// `info` is for the dApp's developer, and in the user's language it told any
+// https page, connected or not, which one the wallet is set to.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { i18n } from "../src/i18n/core";
 import { APIError, DAPP_PORT } from "../src/shared/dapp";
-import { LOCAL_LANGUAGE } from "../src/shared/preferences";
+import { LOCAL_LANGUAGE, LOCAL_PREFERENCES } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
 import { loadTestWasm } from "./fakes";
 
@@ -72,6 +76,20 @@ function ask(message: object) {
   return page;
 }
 
+/** An https site's page calls `method`, through the bridge's port: connected or not, as any page's script can. */
+function call(id: string, method: string) {
+  const site = port(DAPP_PORT, {
+    id: ID,
+    url: "https://app.example/",
+    origin: "https://app.example",
+    frameId: 0,
+    tab: { title: "App" } as chrome.tabs.Tab,
+  });
+  for (const l of heard.connect) l(site);
+  site.deliver({ id, method, args: [] });
+  return site;
+}
+
 beforeAll(async () => {
   const gate = new Promise<void>((r) => (open = r));
   const ignored = { addListener: () => undefined };
@@ -105,31 +123,21 @@ afterAll(async () => {
 });
 
 describe("the worker's language", () => {
-  it("is the one stored, and nothing the worker says goes out before it has it", async () => {
+  it("is the one stored, and nothing the worker says to a page goes out before it has it", async () => {
     const page = ask({ type: "account" });
-    // A site's call the wallet doesn't know is answered before the worker starts anything else: it waits too.
-    const site = port(DAPP_PORT, {
-      id: ID,
-      url: "https://app.example/",
-      origin: "https://app.example",
-      frameId: 0,
-      tab: { title: "App" } as chrome.tabs.Tab,
-    });
-    for (const l of heard.connect) l(site);
-    site.deliver({ id: "1", method: "notAMethod", args: [] });
+    // A site's call the wallet doesn't know is answered at once, in English: it needs no language.
+    const site = call("1", "notAMethod");
 
-    // The stored language is still being read: neither has its answer.
+    // The stored language is still being read: the page has no answer yet.
     await new Promise((r) => setTimeout(r, 50));
     expect(page.posted).toEqual([]);
-    expect(site.posted).toEqual([]);
+    expect(site.posted).toEqual([{ id: "1", error: { code: APIError.InvalidRequest, info: i18n.t("dapp.unknownMethod", { lng: "en" }) } }]);
+    expect(i18n.t("dapp.unknownMethod", { lng: "es" })).not.toBe(i18n.t("dapp.unknownMethod", { lng: "en" }));
 
     open();
     await vi.waitFor(() => expect(page.posted).toHaveLength(1));
-    await vi.waitFor(() => expect(site.posted).toHaveLength(1));
     // No wallet here: the account is refused as locked, in Spanish.
     expect(page.posted[0]).toEqual({ ok: false, error: "La billetera está bloqueada." });
-    expect(site.posted[0]).toEqual({ id: "1", error: { code: APIError.InvalidRequest, info: i18n.t("dapp.unknownMethod", { lng: "es" }) } });
-    expect(i18n.t("dapp.unknownMethod", { lng: "es" })).not.toBe(i18n.t("dapp.unknownMethod", { lng: "en" }));
   });
 
   it("follows the one a page chooses after", async () => {
@@ -142,6 +150,32 @@ describe("the worker's language", () => {
     local.set(LOCAL_LANGUAGE, "ja");
     for (const l of heard.local) l({ [LOCAL_LANGUAGE]: { oldValue: "es", newValue: "ja" } });
     await vi.waitFor(() => expect(i18n.language).toBe("ja"));
+    const page = ask({ type: "account" });
+    await vi.waitFor(() => expect(page.posted).toHaveLength(1));
+    expect(page.posted[0]).toEqual({ ok: false, error: "ウォレットはロックされています。" });
+  });
+
+  it("is never what a site hears: any https page, connected or not, hears English", async () => {
+    open();
+    local.set(LOCAL_LANGUAGE, "ja");
+    for (const l of heard.local) l({ [LOCAL_LANGUAGE]: { newValue: "ja" } });
+    await vi.waitFor(() => expect(i18n.language).toBe("ja"));
+    const heardBy = async (id: string, method: string) => {
+      const site = call(id, method);
+      await vi.waitFor(() => expect(site.posted).toHaveLength(1));
+      return site.posted[0];
+    };
+    const english = (key: "dapp.connectorOff" | "dapp.notConnected") => {
+      expect(i18n.t(key, { lng: "ja" })).not.toBe(i18n.t(key, { lng: "en" }));
+      return i18n.t(key, { lng: "en" });
+    };
+
+    // The connector off: a page that kept its scripts.
+    expect(await heardBy("2", "getBalance")).toEqual({ id: "2", error: { code: APIError.Refused, info: english("dapp.connectorOff") } });
+    // On: a page that never connected, reading as any script on it can.
+    local.set(LOCAL_PREFERENCES, { dappConnector: true });
+    expect(await heardBy("3", "getUtxos")).toEqual({ id: "3", error: { code: APIError.Refused, info: english("dapp.notConnected") } });
+    // While the wallet's own pages still speak Japanese.
     const page = ask({ type: "account" });
     await vi.waitFor(() => expect(page.posted).toHaveLength(1));
     expect(page.posted[0]).toEqual({ ok: false, error: "ウォレットはロックされています。" });

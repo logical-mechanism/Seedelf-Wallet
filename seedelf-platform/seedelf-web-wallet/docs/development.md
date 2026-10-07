@@ -89,7 +89,7 @@ These hold for every change to what the wallet shows, from one label to a whole 
 - **Short enough to read at a glance** (the owner, 2026-10-06: "Using the app is damn near a reading comprehension test"). A note always on screen is about 20 words, one or two sentences, and a screen's one core warning about 30; an error says what happened and what to do; an ⓘ stays under about 40. Say each fact once per screen, lead with the consequence, and leave out how it works inside, history and examples. Facts the rules above keep are shortened, never dropped.
 - **Nothing new phones home without its own decision**, because of what a new host or query tells it. The pages' CSP keeps fonts, icons and images inside the extension (`font-src 'self'`, `img-src 'self' data:`, in `extension/src/manifest.ts`).
 - **Every feature states its Koios cost, and anything paged scales with the contract's size.** The public tier takes 5,000 requests a day and 100 every 10 s from an IP address, and the wallet keeps to 40 (`RateLimit` in `extension/src/background/koios.ts`); a response holds at most 1,000 rows. The e2e tests assert the exact requests a screen makes.
-- **Tests find controls by role, label and test id**, so a restyle doesn't break them; the few class selectors in `e2e/extension.spec.ts` only look inside a part (a phrase's words, a cut name, a review's rows). **A renamed control updates `e2e/extension.spec.ts` in the same commit, and [flows.md](flows.md) too:** the owner brought the documentation review ahead of the UX pass on 2026-10-04, on the understanding that the pass keeps the docs current as it goes.
+- **Tests find controls by role, label and test id**, so a restyle doesn't break them; the few class selectors in `e2e/extension.spec.ts` only look inside a part (a phrase's words, a cut name, a review's rows). **A renamed control updates `e2e/extension.spec.ts` in the same commit, and `e2e/store-images.spec.ts` and [flows.md](flows.md) too:** the owner brought the documentation review ahead of the UX pass on 2026-10-04, on the understanding that the pass keeps the docs current as it goes. CI doesn't run the store images' spec, which is how it rotted; `tests/store-images-copy.test.ts` now fails `npm test` when English it fills, clicks or waits for is gone from `en.json`.
 - **The name is Seedelf**, and Seedelf Wallet for the app. `extension/tests/words.test.ts` checks the source, and `extension/tests/i18n.test.ts` every locale.
 
 ## Preprod checklist before a release
@@ -98,7 +98,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
 
 1. **The automated layers:** `cargo test --workspace --locked`, the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=false npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
 2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match, and that Home says *Wallet restored* with what the phrase holds (nothing yet, for this one). Restore a 12- or 15-word phrase from Lace or Eternl, and check its account. **Restore a phrase that has used more than one account** (make one in Lace, or fund account 1's address): the picker appears on its own, and both accounts are there.
-3. **Public accounts** (chunk 18): switch from the top bar and from Settings → Public accounts, and check the balance, Activity, Receive, the UTxOs screen, Staking and the collateral are all the account you chose. Name one and check the name shows in the picker and on Home. *Look for the next account* with nothing there says so and costs one request. **Make private from two accounts, then send privately from the balance**: the review names both accounts and says the spend ties them together. Add an account by a number of your own (1338, say) that has never been used, and check it can be switched to and received into. On Send publicly, **Your accounts** offers the others and picking one says what the payment reveals rather than refusing it. The × clears each To field, on both sides and on Make public, and Make public offers **Your accounts** too. Past eight accounts the Settings list filters by number or name. **Settings → Sites picks the account sites use:** connect a site, switch the wallet to another account, and check the site still sees the dApp account and is never refused; then change the dApp account and check the site sees the new one.
+3. **Public accounts** (chunk 18): switch from Home's Public heading ("Public account 2 ▾") and from Settings → Public accounts, and check the balance, Activity, Receive, the UTxOs screen, Staking and the collateral are all the account you chose. Name one and check the name shows in the picker and on Home. *Look for the next account* with nothing there says so and costs one request. **Make private from two accounts, then send privately from the balance**: the review names both accounts and says the spend ties them together. Add an account by a number of your own (1338, say) that has never been used, and check it can be switched to and received into. On Send publicly, **Your accounts** offers the others and picking one says what the payment reveals rather than refusing it. The × clears each To field, on both sides and on Make public, and Make public offers **Your accounts** too. Past eight accounts the Settings list filters by number or name. **Settings → Sites picks the account sites use:** connect a site, switch the wallet to another account, and check the site still sees the dApp account and is never refused; then change the dApp account and check the site sees the new one.
 4. **Locking:**
    - the lock button;
    - auto-lock after 15 minutes, and after 1 minute once Settings says so;
@@ -139,23 +139,29 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
 
 ## Web Store release: copy/paste procedure
 
-This is the repeatable release path for a new Web Store version. Run it from the release commit on `main`. Change `release_version` to the new, higher version for each later release.
+This is the repeatable release path for a new Web Store version, in two parts. **The version and the refreshed token and DRep lists are committed on the release branch** (`web-wallet/release-<x.y.z>`), with the checks, and reach `main` through its PR. **The package is built after the merge, from the merge commit on `main`** in a clean tree, so the commit the handoff note records gives the same zip. Change `release_version` to the new, higher version for each later release.
 
 **Which number.** The store only demands one strictly higher than the last, so the semantics are for the wallet's own users: a **minor** bump for a release that adds something a user can do (1.1.0, the transaction view), a **patch** for a fix or a listing hotfix on its own (1.0.1). The web wallet's line runs from 1.0.0 and is deliberately apart from the Rust workspace's 0.x.y — see the root [CLAUDE.md](../../../CLAUDE.md).
 
-### 1. Set the version and run the checks
+### 1. On the release branch: set the version and run the checks
 
-From the repository root:
+From the repository root, on a `web-wallet/release-<x.y.z>` branch from `main`:
 
 ```bash
 cd seedelf-platform
 cargo test --workspace --locked
 cd seedelf-web-wallet/extension
-npm install
-release_version=1.1.0
+npm ci
+release_version=1.2.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
+git diff -- package.json package-lock.json src/tokens src/dreps
+```
+
+Read those diffs (steps 2 and 3 of [Releasing to the Web Store](#releasing-to-the-web-store) say what to look for), and commit them together. Then the checks:
+
+```bash
 npm run build
 npm test
 VITE_ENABLE_MAINNET=false npm test
@@ -165,15 +171,26 @@ node e2e/live/run.mjs all
 node e2e/live/run.mjs staking
 ```
 
-Then complete the manual [preprod checklist](#preprod-checklist-before-a-release), including the dApp, private-session, swap, and Lovejoin flows.
+Then complete the manual [preprod checklist](#preprod-checklist-before-a-release), including the dApp, private-session, swap, and Lovejoin flows. If the UI changed, regenerate the store images (`npm run store:images`), and bring the listing in [store/README.md](store/README.md) up to date. Commit them, and open the PR into `main`.
 
-### 2. Build and test the store package
+### 2. On `main`, after the merge: build and test the store package
+
+From the repository root, at the merge commit, with nothing changed or added (`git status --porcelain` prints nothing):
 
 ```bash
+git switch main
+git pull --ff-only
+git status --porcelain
+cd seedelf-platform/seedelf-web-wallet/extension
+npm ci
+release_version=1.2.0
 npm run package
 npm run e2e
 sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
+git rev-parse HEAD
 ```
+
+No `npm version`, `npm run tokens` or `npm run dreps` here. On `main` the bump fails ("Version not changed"), and the lists' refresh rewrites bundled files no commit has, so the zip wouldn't be the recorded commit's.
 
 The package to upload is:
 
@@ -181,9 +198,16 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.1.0, that file is `extension/release/seedelf-wallet-1.1.0-mainnet.zip`.
+With `package.json` at 1.2.0, that file is `extension/release/seedelf-wallet-1.2.0-mainnet.zip`.
 
-`npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it. Keep the SHA-256 output for the release record.
+`npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
+
+**Keep for the release record**, with the commit `git rev-parse HEAD` printed and the SHA-256:
+
+- `wasm/build.sh`'s last line, `C compiler: <first line of clang --version>`, or `C compiler: unknown`;
+- `scripts/package.mjs`'s `sha256 <hex>`, and the line after it, `Zipped with Node <version>, zlib <version>`.
+
+The next `npm run package` overwrites a zip of the same version, so take the hash from the zip you upload, never from one rebuilt since.
 
 `npm run package:preprod` makes a preprod-only store build (`-preprod.zip`) for tests. Never upload it.
 
@@ -194,7 +218,7 @@ With `package.json` at 1.1.0, that file is `extension/release/seedelf-wallet-1.1
 3. Complete the **Store Listing**, **Privacy**, **Distribution**, and **Test instructions** tabs using [store/README.md](store/README.md).
 4. Set visibility (**Public** for launch, or **Unlisted** for a quieter start), check the host justifications match the manifest's four hosts, and verify the privacy-policy URL resolves.
 5. Submit for review.
-6. Record the version, the commit it was built from and the zip's SHA-256 in the roadmap's handoff notes, then share the store link with the intended users.
+6. Record the version, the commit it was built from, the zip's SHA-256, and the C compiler, Node and zlib lines in the roadmap's handoff notes, then share the store link with the intended users.
 
 The official Chrome upload flow is also described in [Publish in the Chrome Web Store](https://developer.chrome.com/docs/webstore/publish/).
 
@@ -202,21 +226,25 @@ The official Chrome upload flow is also described in [Publish in the Chrome Web 
 
 The listing's text, its images and the privacy policy are in [store/](store/README.md), laid out by the dashboard's tabs. The owner of the developer account uploads the package by hand.
 
+**Steps 1 to 6 happen on the release branch and are committed in its PR; step 7 on runs on `main`'s merge commit**, in a clean tree. The privacy policy and the wallet's Settings link point at `main`, so the merge comes before `npm run package` ([store/README.md](store/README.md)).
+
 1. **Bump the version:** `npm version <x.y.z> --no-git-tag-version` in `extension/`. It updates `package.json` and `package-lock.json`, and the manifest takes its version from there. Every upload needs a higher version than the last.
 2. **Refresh the token list:** `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker.
 3. **Refresh the DRep list:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name; skim the diff for anything odd before committing it.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
-5. **Build the package:** `npm run package` in `extension/`.
+5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
+6. **Commit and merge:** the bump, both lists, the images and any change to the listing's text, in the release branch's PR into `main`.
+7. **Build the package**, on `main` at the merge commit, with `git status --porcelain` printing nothing: `npm run package` in `extension/`.
    - It builds with `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`: mainnet by default, preprod in Settings, and no dev key.
    - It refuses a `dist/` with a key, one whose version doesn't match `package.json`, and one whose manifest lacks `https://api.koios.rest/*` (a preprod-only build).
    - The WebAssembly is built from the tracked `Cargo.lock` (`--locked`) with the pinned Rust (`rust-toolchain.toml`), and carries no local path.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
-   - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints its SHA-256. The zip is reproducible: the same commit and toolchain give the same bytes.
-6. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
-7. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
-8. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
-9. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
-10. **Record it** in the roadmap's handoff notes: the version, the commit it was built from, and the zip's SHA-256.
+   - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints `sha256 <hex>`, then `Zipped with Node <version>, zlib <version>`. `wasm/build.sh` ends its part with `C compiler: <first line of clang --version>`, or `C compiler: unknown`.
+   - The zip is reproducible: the same commit and toolchain (Rust, wasm-bindgen, clang, an official Node build) give the same bytes. Official Node builds 20 to 24 zip alike, and one linked to the system's zlib may not. blst's C goes through the unpinned clang on `PATH`.
+8. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
+9. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
+10. **Upload** the zip on the dashboard's Package tab. If the listing's text changed, copy it from [store/README.md](store/README.md). Then submit for review.
+11. **Record it** in the roadmap's handoff notes: the version, the commit it was built from (`git rev-parse HEAD`), the zip's SHA-256, and the C compiler, Node and zlib lines.
 
 ## Sharing with testers before launch (history)
 

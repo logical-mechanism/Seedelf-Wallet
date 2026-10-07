@@ -14,7 +14,7 @@ import { CoinControlService } from "./coin-control";
 import { Collateral } from "./collateral";
 import { applyConnector, reachOpenPages } from "./connector";
 import { ContactsService } from "./contacts";
-import { answerSite, DappError, DappService, type DappSession } from "./dapp";
+import { answerSite, DappError, DappService, SITE_TRAPPED, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
 import { Koios, KOIOS_LIMIT } from "./koios";
@@ -44,10 +44,10 @@ const extensionOrigin = chrome.runtime.getURL("");
 
 // The worker speaks the user's language, as the pages do (i18n/core.ts): the
 // one stored, else the system's, and each change a page makes after. What it
-// says goes out as finished words (ui-port.ts, a site's answers, what a
+// says goes out as finished words (ui-port.ts, the connector's window, what a
 // session records), so every path that says anything waits for this first:
 // getContext, which each request, each site's call and the sessions alarm go
-// through, and the one answer to a site that comes before it.
+// through. A site hears English whatever the language (dapp.ts `Words`).
 const language = startI18n().catch(() => undefined);
 
 // Storage is kept from content scripts at every start (storage-access.ts).
@@ -352,9 +352,8 @@ chrome.runtime.onConnect.addListener((port) => {
     if (call.ping || typeof call.id !== "string") return;
     const id = call.id;
     if (!isDappMethod(call.method) || !Array.isArray(call.args)) {
-      // Said before getContext, so it waits for the language itself: a site
-      // hears this in the words the rest of its answers come in.
-      void language.then(() => answer({ id, error: { code: APIError.InvalidRequest, info: t("dapp.unknownMethod") } }));
+      // In English, as everything a site hears (dapp.ts `Words`): it needs no language, nor anything else started.
+      answer({ id, error: { code: APIError.InvalidRequest, info: t("dapp.unknownMethod", { lng: "en" }) } });
       return;
     }
     const method = call.method;
@@ -367,10 +366,9 @@ chrome.runtime.onConnect.addListener((port) => {
         (e: unknown) =>
           answer({
             id,
-            error:
-              e instanceof DappError
-                ? e.failure
-                : { code: APIError.InternalError, info: e instanceof Error ? e.message : String(e) },
+            // Anything else's words may be in the user's language (Koios's, the lock's): the site hears only that it
+            // wasn't answered, in English, as everything it hears.
+            error: e instanceof DappError ? e.failure : { code: APIError.InternalError, info: SITE_TRAPPED("en") },
           }),
       );
   });

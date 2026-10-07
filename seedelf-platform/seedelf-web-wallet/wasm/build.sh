@@ -9,7 +9,8 @@
 # The crates are the ones Cargo.lock records (--locked: the build stops rather
 # than resolve others), and no path on this machine goes into the module
 # (--remap-path-prefix), so the same commit and toolchain give the same bytes
-# on any machine (launch review #61).
+# on any machine (launch review #61). The toolchain is the pinned Rust and
+# wasm-bindgen, and clang, which nothing pins: the end prints which.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -71,3 +72,6 @@ if grep -aq -e "$HOME/" -e "/home/" "$wasm"; then
   exit 1
 fi
 echo "Built $(du -h "$wasm" | cut -f1) ($(gzip -9 -c "$wasm" | wc -c | awk '{printf "%d KB", $1 / 1024}') gzipped) -> $here/pkg"
+# blst's C goes through this compiler, and another version gives another
+# module: for the release record, never a check.
+echo "C compiler: $("$CC_wasm32_unknown_unknown" --version 2>/dev/null | sed -n 1p || echo unknown)"

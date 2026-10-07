@@ -189,9 +189,10 @@ describe("Remove wallet's screen", () => {
       .replaceAll("&#x27;", "'")
       .replace(/\s+/g, " ");
     expect(html).not.toContain("your recovery phrase brings them back");
-    // In plain words, not "private sessions' one-time accounts" (chunk 23's second review, SE-4).
+    // In plain words, not "private sessions' one-time accounts" (chunk 23's second review, SE-4). Only the accounts
+    // a restore looks at, in order: never one added by number past an unused one (release review C09).
     expect(html).toContain(
-      "Your recovery phrase brings back your accounts, private balance and Lovejoin boxes, not yet a private session's money.",
+      "Your recovery phrase brings back your private balance, Lovejoin boxes and accounts up to the first unused one, not yet a private session's money.",
     );
     // Until the worker says what's open, it can't be removed.
     expect(html).toContain("Checking…");
@@ -232,7 +233,9 @@ describe("Remove wallet's screen", () => {
       .replace(/<[^>]+>/g, " ")
       .replaceAll("&#x27;", "'")
       .replace(/\s+/g, " ");
-    expect(html).toContain("Your phrase brings back your accounts, private balance and Lovejoin boxes, not yet a private session's money.");
+    expect(html).toContain(
+      "Your phrase brings back your private balance, Lovejoin boxes and accounts up to the first unused one, not yet a private session's money.",
+    );
     // It runs locked, and keeps a payment that may still go through: it says so, and what brings it back.
     expect(html).toContain(
       "Restoring the same phrase here keeps watching a payment that may still go through, unless another wallet is made or restored here first.",

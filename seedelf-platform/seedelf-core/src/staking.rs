@@ -285,13 +285,18 @@ impl Staking {
                 if drep_state.registered {
                     bail!("This account is a DRep already");
                 }
+                // Missing, or off the network's (`ProtocolParameters::drep_deposit`).
                 let deposit = params.drep_deposit.ok_or_else(|| {
                     anyhow!(
-                        "Koios didn't say what registering a DRep locks up. Nothing was built; try again later"
+                        "Koios didn't give a usable figure for what registering a DRep locks up. Nothing was built; try again later"
                     )
                 })?;
                 certificates.push(Certificate::RegDRepCert(cred, deposit, nullable(anchor)));
-                if *delegate && !drep_state.own_vote {
+                // Even when Koios says the vote is on it already: a DRep that
+                // isn't registered holds no delegations, so that's stale, and
+                // the review says the vote is delegated (release review C35).
+                // Delegating again to it is valid.
+                if *delegate {
                     certificates.push(vote_delegation(stake, stake_state, drep.drep(), params));
                 }
             }
@@ -561,7 +566,8 @@ pub fn pool_id(hash: &Hash<28>) -> String {
 
 /// A vote delegation: [`ALWAYS_ABSTAIN`], [`ALWAYS_NO_CONFIDENCE`], or a
 /// DRep's ID. IDs are read in CIP-129 form (`drep1…` with a header byte, as
-/// Koios gives them) and CIP-105's (`drep1…` for a key, `drep_script1…`).
+/// Koios gives them), CIP-105's (`drep_vkh1…` for a key, `drep_script1…`),
+/// and CIP-105's deprecated `drep1…` for a key, the bare hash.
 pub fn parse_drep(id: &str) -> Result<DRep> {
     let id = id.trim();
     match id {
@@ -582,9 +588,11 @@ pub fn parse_drep(id: &str) -> Result<DRep> {
             DREP_SCRIPT_HEADER => Ok(DRep::Script(hash(&data[1..])?)),
             _ => bail!("That isn't a DRep ID: its header names something else"),
         },
-        ("drep", 28) => Ok(DRep::Key(hash(&data)?)),
+        ("drep" | "drep_vkh", 28) => Ok(DRep::Key(hash(&data)?)),
         ("drep_script", 28) => Ok(DRep::Script(hash(&data)?)),
-        ("drep" | "drep_script", _) => bail!("That isn't a DRep ID: it's the wrong length"),
+        ("drep" | "drep_vkh" | "drep_script", _) => {
+            bail!("That isn't a DRep ID: it's the wrong length")
+        }
         _ => bail!("That isn't a DRep ID: DRep IDs start drep1"),
     }
 }

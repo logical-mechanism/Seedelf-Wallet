@@ -8,7 +8,7 @@
 // the pool's details and the account's DRep, fresh: two requests, or three
 // (the DRep deposit, or its profile's check).
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { type I18nKey, t, useT } from "../../i18n";
 
 import {
@@ -41,12 +41,15 @@ import { useAmounts, usePreferences } from "../preferences";
 import {
   BecomeDrep,
   DrepCard,
+  type DrepFormView,
   DrepProfileEdit,
+  forgetUnlisted,
   GovActions,
   rememberVote,
   shortAction,
   useActionType,
   useVoteLabel,
+  votesOut,
 } from "./Governance";
 import { NEW_POOLS_VIEW, Pools, SharedTicker, type PoolsView } from "./Pools";
 import { sharedDrepName, Voting, type VoteView } from "./Voting";
@@ -67,8 +70,6 @@ interface Chosen {
   /** A vote's governance action, and the DRep's vote on it before, if any. */
   govAction?: GovAction;
   before?: GovVote;
-  /** Retiring moves the account's own vote, which was the DRep's, to always abstain. */
-  ownVoteMoves?: boolean;
 }
 
 /**
@@ -166,9 +167,14 @@ export function Staking({
   const [govOpen, setGovOpen] = useState<GovAction>();
   // The vote just sent from the open action, said on it while it's on its way (GV-6).
   const [voteSent, setVoteSent] = useState<{ id: string; vote: GovVote }>();
-  // The pool browser's and Voting power's choices, kept here so Back from a review returns to them (ST-11).
+  // The pool browser's, Voting power's and the DRep forms' choices, kept here so Back from a review returns to them
+  // (ST-11, release review C15).
   const [poolsView, setPoolsView] = useState<PoolsView>(NEW_POOLS_VIEW);
   const [voteView, setVoteView] = useState<VoteView>();
+  const [drepView, setDrepView] = useState<DrepFormView>();
+  // The page Become a DRep was opened from, which its Back returns to: it went to the overview, losing Voting power's
+  // pick or the action open (release review C42).
+  const [becomeFrom, setBecomeFrom] = useState<Page>("overview");
 
   // The pool's details, fresh each time the page opens, and again on Try again.
   const poolId = staking.pool?.id;
@@ -191,6 +197,49 @@ export function Staking({
   const free = account && unlocked(account);
   const noFunds = noFundsReason(account);
   const why = blocked ?? noFunds;
+
+  // A vote sent from an action is on its way while Home watches it. Once the watch ends (confirmed, dropped, or after
+  // 10 minutes), the actions are read again, and the vote stays on its way until they are: the list read before it
+  // then said "Not voted", with the same vote's button live again (GV-6, release review C16).
+  const watched = useRef(blocked !== undefined);
+  const readAgain = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [voteLanding, setVoteLanding] = useState(false);
+  const showGov = (view: GovernanceView) => {
+    setGovView(view);
+    setVoteLanding(false);
+  };
+  // Nothing is asked again once the page is gone.
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      clearTimeout(readAgain.current);
+    };
+  }, []);
+  useEffect(() => {
+    const ended = watched.current && blocked === undefined;
+    watched.current = blocked !== undefined;
+    if (!ended || !govView || !votesOut(network, active, govView.votes)) return;
+    setVoteLanding(true);
+    // Not listed yet, or not read, it's asked once more 20 s later: Koios answers from several servers, and the one
+    // asked can be a block behind the one that saw it confirmed. Then the list says where it stands, and a vote it
+    // still doesn't show isn't said to be on its way any more. Failed twice, it is, until the list's Refresh.
+    const later = () => {
+      if (alive.current) readAgain.current = setTimeout(() => read(true), 20_000);
+    };
+    const read = (last: boolean): void => {
+      call("governance", {}).then(
+        (view) => {
+          if (!last && votesOut(network, active, view.votes)) return later();
+          if (last) forgetUnlisted(network, active, view.votes);
+          showGov(view);
+        },
+        () => (last ? undefined : later()),
+      );
+    };
+    read(false);
+  }, [blocked]);
 
   async function build(action: StakingAction, chosen: Chosen = {}, from: Building = "review") {
     if (busy) return;
@@ -246,9 +295,24 @@ export function Staking({
       setPoolsView(NEW_POOLS_VIEW);
       setVoteView(undefined);
       setVoteSent(undefined);
+      setDrepView(undefined);
     }
     setPage(to);
   };
+  // Become a DRep, from `from`, where its Back returns.
+  const become = (from: Page) => () => {
+    setBecomeFrom(from);
+    back("drep-register")();
+  };
+  // Leaving a DRep form starts it afresh, wherever Back goes.
+  const leaveDrepForm = (to: Page) => () => {
+    setDrepView(undefined);
+    back(to)();
+  };
+  // Become a DRep from Governance actions after the page's own read of the DRep failed: the one the actions read
+  // will do. It opened the overview instead, unexplained (release review C42). Its deposit shows as unknown; the
+  // review gives it.
+  const becomeAs = drep ?? govView?.drep;
 
   if (review) {
     return (
@@ -283,16 +347,18 @@ export function Staking({
       />
     );
   }
-  if (page === "drep-register" && drep) {
+  if (page === "drep-register" && becomeAs) {
     return (
       <BecomeDrep
-        drep={drep}
+        drep={becomeAs}
         staking={staking}
         spendable={free?.lovelace}
         blocked={why}
         busy={busy}
         error={error}
-        onBack={back("overview")}
+        view={drepView}
+        onView={setDrepView}
+        onBack={leaveDrepForm(becomeFrom)}
         onReview={(delegate, anchor) => void build({ kind: "drep-register", delegate, ...(anchor ? { anchor } : {}) })}
       />
     );
@@ -304,7 +370,9 @@ export function Staking({
         blocked={why}
         building={building}
         error={error}
-        onBack={back("overview")}
+        view={drepView}
+        onView={setDrepView}
+        onBack={leaveDrepForm("overview")}
         onReview={(anchor) =>
           void build({ kind: "drep-update", ...(anchor ? { anchor } : {}) }, {}, anchor ? "review" : "remove-profile")
         }
@@ -316,13 +384,13 @@ export function Staking({
       <GovActions
         building={building}
         blocked={why}
-        waiting={blocked !== undefined}
+        waiting={blocked !== undefined || voteLanding}
         sent={voteSent}
         error={error}
         onBack={back("overview")}
-        onBecome={back("drep-register")}
+        onBecome={become("governance")}
         view={govView}
-        onView={setGovView}
+        onView={showGov}
         open={govOpen}
         onOpen={(action) => {
           setGovOpen(action);
@@ -357,7 +425,7 @@ export function Staking({
         }
         own={drep}
         ownError={drepError}
-        onBecome={back("drep-register")}
+        onBecome={become("vote")}
       />
     );
   }
@@ -504,10 +572,10 @@ export function Staking({
         staking={staking}
         blocked={why}
         building={building}
-        onBecome={back("drep-register")}
+        onBecome={become("overview")}
         onActions={back("governance")}
         onProfile={back("drep-profile")}
-        onRetire={() => void build({ kind: "drep-retire" }, { ownVoteMoves: !!drep && staking.drep === drep.id }, "retire")}
+        onRetire={() => void build({ kind: "drep-retire" }, {}, "retire")}
         onDelegateOwn={() =>
           drep && void build({ kind: "vote", drep: drep.id }, { drepName: t("drep.yourOwn") }, "delegate-own")
         }
@@ -707,7 +775,6 @@ export function StakingReview({
   drepInactive = false,
   govAction,
   before,
-  ownVoteMoves = false,
   total,
   busy,
   error,
@@ -886,7 +953,9 @@ export function StakingReview({
       )}
       {stakeDeposit > 0n && <p className="note">{t("staking.review.depositNote")}</p>}
       {drepDeposit > 0n && <p className="note">{t("staking.review.drepDepositNote")}</p>}
-      {action.kind === "drep-retire" && ownVoteMoves && (
+      {/* From the worker's fresh read the build used, not the page's: they could differ, and the review then left out
+          the move it signs, or claimed one it doesn't make (release review C35). */}
+      {action.kind === "drep-retire" && summary.ownVoteMoves && (
         <Callout tone="warn" testId="drep-retire-vote">
           {t("staking.warn.retireOwnVote")}
         </Callout>

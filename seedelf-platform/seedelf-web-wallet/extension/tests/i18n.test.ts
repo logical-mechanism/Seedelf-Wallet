@@ -143,6 +143,9 @@ describe("a translation that quietly says the opposite", () => {
     // because a real sentence used it and this check flagged it wrongly.
     ja: /(ない|ません|ありませ|せず|ずに|なく|なし|不可|決して)/,
   };
+  // "No" is a vote's name there, not a negation: Japanese says 反対 ("against"),
+  // which negates nothing (the sign window's ballots, release review C14).
+  const NAMED_NO = new Set(["dappUi.privacy.ballot.no"]);
 
   it.each(others)("%s keeps a negation where English has one, for every critical key", (file) => {
     const code = codeOf(file);
@@ -152,7 +155,7 @@ describe("a translation that quietly says the opposite", () => {
     const lost: string[] = [];
     for (const [key, value] of Object.entries(got)) {
       const source = en[key] ?? en[`${baseOf(key)}_other`] ?? en[`${baseOf(key)}_one`];
-      if (source === undefined) continue;
+      if (source === undefined || NAMED_NO.has(key)) continue;
       if (!NEGATED.en!.test(source) || test.test(value)) continue;
       if (isCritical(key)) lost.push(`${key}: ${value}`);
     }

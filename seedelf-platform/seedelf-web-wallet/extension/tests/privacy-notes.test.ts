@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PendingTx, SessionView } from "../src/shared/rpc";
 import { ExplorerLink } from "../src/ui/components/ExplorerLink";
-import { PendingBanner, PRIVATE_KINDS } from "../src/ui/components/PendingBanner";
+import { PendingBanner, privateBanner, PRIVATE_KINDS } from "../src/ui/components/PendingBanner";
 import { NetworkContext } from "../src/ui/network";
 import { ExportNote } from "../src/ui/screens/Activity";
 import { SiteSession } from "../src/ui/screens/SiteSessions";
@@ -77,26 +77,41 @@ describe("a link to Cardanoscan", () => {
 });
 
 describe("Home's banner for a sent transaction", () => {
-  const sent = (kind: PendingTx["kind"]): PendingTx => ({
+  // What the public account signs carries its slot (account.ts validUntil); a Seedelf spend carries none.
+  const IN_THE_OPEN = new Set<PendingTx["kind"]>(["move-in", "mint", "send", "collateral", "stake", "vote"]);
+  const sent = (kind: PendingTx["kind"], slot = IN_THE_OPEN.has(kind)): PendingTx => ({
     kind,
     network: "preprod",
     txHash: HASH,
     submittedAt: 0,
     confirmations: 1,
+    ...(slot ? { invalidHereafter: 90_000_000 } : {}),
   });
-  const banner = (kind: PendingTx["kind"]) =>
-    text(markup(createElement(PendingBanner, { pending: sent(kind), watching: false, onDismiss: () => undefined })));
+  const banner = (pending: PendingTx) =>
+    text(markup(createElement(PendingBanner, { pending, watching: false, onDismiss: () => undefined })));
 
   it("warns on a private payment, a session's step and a Lovejoin box", () => {
     for (const kind of ["transfer", "withdraw", "remove", "session-out", "session-back", "lovejoin-withdraw", "lovejoin-mix"] as const) {
-      expect(banner(kind), kind).toContain(WARNING);
+      expect(banner(sent(kind)), kind).toContain(WARNING);
     }
   });
 
-  it("stays plain for what the public account signs in the open", () => {
-    for (const kind of ["move-in", "mint", "send", "collateral", "stake", "vote"] as const) {
+  it("warns on a stealth mint, paid from the private balance: a mint of the same kind, with no slot", () => {
+    // The very mint meant to hide who paid: its banner linked to Cardanoscan without the note, while its Activity
+    // entry had it.
+    const stealth = sent("mint", false);
+    expect(privateBanner(stealth)).toBe(true);
+    expect(banner(stealth)).toContain(WARNING);
+    // On its way, and maybe sent, it says so too.
+    expect(banner({ ...stealth, confirmations: null })).toContain(WARNING);
+    expect(banner({ ...stealth, confirmations: null, maybeSent: true })).toContain(WARNING);
+  });
+
+  it("stays plain for what the public account signs in the open, an account-paid mint included", () => {
+    for (const kind of IN_THE_OPEN) {
       expect(PRIVATE_KINDS.has(kind)).toBe(false);
-      expect(banner(kind), kind).not.toContain("tells Cardanoscan");
+      expect(privateBanner(sent(kind)), kind).toBe(false);
+      expect(banner(sent(kind)), kind).not.toContain("tells Cardanoscan");
     }
   });
 });

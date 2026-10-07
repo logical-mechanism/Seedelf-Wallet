@@ -92,7 +92,7 @@ The one-time key of a script spend is HKDF-SHA-256 of the Seedelf scalar (salt `
 
 The output is an ES module (`--target web`). Load it with `init()` or `initSync()`.
 
-The build is reproducible: it takes only the crates `Cargo.lock` records (`--locked`), and no path on the machine goes into the module, so the same commit and toolchain give the same bytes (launch review #61).
+The build is reproducible: it takes only the crates `Cargo.lock` records (`--locked`), and no path on the machine goes into the module, so the same commit and toolchain (the pinned Rust, wasm-bindgen, and clang) give the same bytes (launch review #61). Nothing pins clang, which compiles blst's C, so the script's last line names it (`C compiler: …`) for the release record.
 
 **It's built for size** with the workspace's `wasm-release` profile (`opt-level = "z"`, LTO, one codegen unit, stripped). The CLI keeps the plain release profile. `node bench.mjs [pkg-dir]` prints a build's size (raw, gzip, brotli), how long the module takes to compile, and the median time of a key derivation, the ownership check, a re-randomization, a proof, a transfer (`buildTransfer`) and a move-in.
 

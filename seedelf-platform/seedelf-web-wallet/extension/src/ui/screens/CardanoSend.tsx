@@ -15,6 +15,7 @@ import { joinSentences, useT } from "../../i18n";
 import type { Balances, PendingTx, SendPaid, SendSummary } from "../../shared/rpc";
 import { useAccounts } from "../accounts";
 import { call } from "../background";
+import { ownAccountNumber } from "../components/AccountRecipients";
 import { BuildStage } from "../components/BuildStage";
 import { AdaInput, amountText, MinimumHint, MinimumNote } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
@@ -283,7 +284,7 @@ export function CardanoSend({
               known={reads[d.id]}
               onRead={(r) => setReads((all) => ({ ...all, [d.id]: r }))}
               seedelfs
-              ownAccounts
+              ownAccounts="public"
             />
             {read.state === "read" &&
               read.destination.own &&
@@ -431,13 +432,15 @@ function OwnNote({ nth }: { nth?: number }) {
  * Another of the user's own public accounts: said, not refused (the owner,
  * 2026-10-02). Moving money between your own accounts is a thing people want
  * to do, and accounts aren't necessarily unlinked — so this is a known link
- * like any other: the wallet makes it visible and the user decides.
+ * like any other: the wallet makes it visible and the user decides. Named by
+ * its number and, renamed, its name too: the picker shows only the name.
  */
-function OtherAccountNote({ index }: { index: number }) {
+export function OtherAccountNote({ index }: { index: number }) {
   const t = useT();
+  const { accounts } = useAccounts();
   return (
     <Callout tone="privacy" testId="send-other-account">
-      {t("send.privacy.otherAccount", { number: index + 1 })}
+      {t("send.privacy.otherAccount", { number: ownAccountNumber(accounts, index) })}
     </Callout>
   );
 }

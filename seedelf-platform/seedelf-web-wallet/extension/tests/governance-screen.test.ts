@@ -6,11 +6,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { i18n } from "../src/i18n/core";
+import { epochStart } from "../src/networks";
 import type { OwnDrep, StakeInfo, StakingSummary } from "../src/shared/rpc";
-import { anchorUrlProblem, BecomeDrep, DrepCard } from "../src/ui/screens/Governance";
+import {
+  anchorUrlProblem,
+  BecomeDrep,
+  DrepCard,
+  type DrepFormView,
+  DrepProfileEdit,
+} from "../src/ui/screens/Governance";
 import { StakingReview } from "../src/ui/screens/Staking";
 import { pickOf, Voting } from "../src/ui/screens/Voting";
-import { epochEnds } from "../src/ui/format";
+import { dayText, epochEnds } from "../src/ui/format";
 import { NetworkContext } from "../src/ui/network";
 
 const markup = (element: ReactElement) =>
@@ -89,12 +96,21 @@ describe("the DRep card", () => {
     expect(shown).toContain(`Active until ${epochEnds("preprod", 340)} (epoch 340)`);
     // What staying active asks of it (GV-7).
     expect(shown).toContain("Your DRep must vote or update its profile now and then, or its voting power stops counting.");
-    expect(epochEnds("preprod", 340)).toMatch(/^(30|31) Jan 2027$/);
+    expect(epochEnds("preprod", 340)).toMatch(/^(30|31) Jan 2027, \d{2}:\d{2}$/);
     expect(shown).toContain("Voting power");
     expect(shown).toContain("Governance actions");
     expect(shown).toContain("Retire as a DRep");
     expect(shown).not.toContain("isn't behind your DRep's votes");
     expect(shown).not.toContain("Delegate your voting power to it");
+  });
+
+  it("says when an epoch ends to the minute, never late: voting closes then, part-way through a day", () => {
+    // Mainnet's epoch 661 starts at 21:44:51 UTC, so 660's last vote is due then: in the device's own time zone, the
+    // seconds dropped. A day alone read as through that day, and voting had closed hours before in Tokyo.
+    const start = new Date(epochStart("mainnet", 661));
+    expect(start.toISOString()).toBe("2026-10-11T21:44:51.000Z");
+    const hhmm = [start.getHours(), start.getMinutes()].map((n) => String(n).padStart(2, "0")).join(":");
+    expect(epochEnds("mainnet", 660)).toBe(`${dayText(start.getTime())}, ${hhmm}`);
   });
 
   it("says when the account's own vote isn't behind its DRep, and when the DRep is inactive or its profile invalid", () => {
@@ -177,6 +193,74 @@ describe("Become a DRep", () => {
       }),
     );
     expect(text(unregistered)).toContain("You need over 503 ₳");
+  });
+
+  it("comes back from its review as it was left: the switch, the profile, its file and where it's published", () => {
+    const url = "ipfs://bafkreigzvg5nbyngh2hfxrptxmh2jturifcsq5v2gbaz7hfg6ccvhlzgxu";
+    const view: DrepFormView = {
+      delegate: false,
+      withProfile: true,
+      form: {
+        profile: { givenName: "Tester", objectives: "Keep fees low", doNotList: false },
+        file: { file: "{}", hash: "ab".repeat(32) },
+        stale: false,
+        changed: false,
+        url,
+      },
+    };
+    const html = markup(
+      createElement(BecomeDrep, { drep: none, staking, busy: false, view, onBack: noop, onReview: noop }),
+    );
+    // The switch stays off: it went back on, and a Review pressed unawares delegated the vote it had kept apart.
+    expect(html).toContain('aria-checked="false" aria-labelledby="drep-delegate-label"');
+    expect(text(html)).toContain("Your voting power stays with Always abstain, not your DRep.");
+    // The profile, its file and the address it's published at: typed again a byte apart, the published file no
+    // longer matched the registration's hash.
+    expect(html).toMatch(/<input id="drep-name"[^>]*value="Tester"/);
+    expect(html).toMatch(/<textarea id="drep-objectives"[^>]*>Keep fees low<\/textarea>/);
+    expect(html).toContain('aria-checked="false" aria-labelledby="drep-do-not-list-label"');
+    expect(html).toContain('data-testid="drep-profile-hash"');
+    expect(html).toMatch(new RegExp(`<input id="drep-url"[^>]*value="${url}"`));
+    expect(text(html)).toContain("Go without a profile");
+
+    // Your DRep's profile keeps its own the same way.
+    const edit = markup(
+      createElement(DrepProfileEdit, { drep: registered, view: { form: view.form! }, onBack: noop, onReview: noop }),
+    );
+    expect(edit).toMatch(/<input id="drep-name"[^>]*value="Tester"/);
+    expect(edit).toMatch(new RegExp(`<input id="drep-url"[^>]*value="${url}"`));
+
+    // With nothing kept, each starts as it always did.
+    const fresh = markup(createElement(BecomeDrep, { drep: none, staking, busy: false, onBack: noop, onReview: noop }));
+    expect(fresh).toContain('aria-checked="true" aria-labelledby="drep-delegate-label"');
+    expect(text(fresh)).toContain("Add a profile");
+    expect(fresh).not.toContain("drep-profile-form");
+  });
+
+  it("says under Review why it can't be pressed, not in a tooltip alone (PY-9)", () => {
+    const become = (over: Record<string, unknown> = {}) =>
+      markup(createElement(BecomeDrep, { drep: none, staking, busy: false, onBack: noop, onReview: noop, ...over }));
+    const why = (html: string, testId: string) =>
+      new RegExp(`data-testid="${testId}">([^<]*)</p>`).exec(html)?.[1]?.replaceAll("&#x27;", "'");
+    expect(why(become(), "drep-register-why")).toBeUndefined();
+    // A transaction on its way, which nothing on the page said.
+    expect(become({ blocked: "Wait for the last transaction to confirm" })).toContain(
+      '<p class="note foot-note" data-testid="drep-register-why">Wait for the last transaction to confirm</p>',
+    );
+    // A profile asked for and not yet written and published.
+    expect(why(become({ view: { withProfile: true } }), "drep-register-why")).toBe(
+      "Write the profile and say where it's published first",
+    );
+    // Too little to pay is said above it once, not twice.
+    expect(why(become({ spendable: "230500000" }), "drep-register-why")).toBeUndefined();
+
+    // Your DRep's profile opens with Review greyed: it says why from the start, and Remove's reason too.
+    const edit = (over: Record<string, unknown> = {}) =>
+      markup(createElement(DrepProfileEdit, { drep: registered, onBack: noop, onReview: noop, ...over }));
+    expect(why(edit(), "drep-update-why")).toBe("Write the profile and say where it's published first");
+    const withProfile = { ...registered, profile: { url: "ipfs://bafy", hash: "ab".repeat(32), valid: true } };
+    const blocked = "Wait for the last transaction to confirm";
+    expect(why(edit({ drep: withProfile, blocked }), "drep-update-why")).toBe(blocked);
   });
 
   it("takes a profile's address the ledger takes, and nothing else", () => {
@@ -285,11 +369,11 @@ describe("a DRep transaction's review", () => {
   it("retiring: the deposit back, what ends, a danger button, and the account's own vote moving to Always abstain", () => {
     const html = markup(
       createElement(StakingReview, {
-        summary: summary({ kind: "drep-retire" }, { refund: "500000000" }),
+        // The move as the build found it, on its own fresh read (governance.test.ts): the page's could be older.
+        summary: summary({ kind: "drep-retire" }, { refund: "500000000", ownVoteMoves: true }),
         busy: false,
         onBack: noop,
         onSend: noop,
-        ownVoteMoves: true,
       }),
     );
     const shown = text(html);
@@ -302,6 +386,18 @@ describe("a DRep transaction's review", () => {
     expect(shown).toContain("You can become a DRep again later, with a new deposit.");
     expect(html).toMatch(/<button type="button" class="danger"[^>]*>Retire as a DRep<\/button>/);
     expect(shown).toContain("Retiring moves your own voting power to Always abstain, so your rewards stay withdrawable.");
+
+    // The build moves nothing when the vote is elsewhere, and the review says nothing of a move.
+    const elsewhere = markup(
+      createElement(StakingReview, {
+        summary: summary({ kind: "drep-retire" }, { refund: "500000000" }),
+        busy: false,
+        onBack: noop,
+        onSend: noop,
+      }),
+    );
+    expect(elsewhere).not.toContain("drep-retire-vote");
+    expect(text(elsewhere)).not.toContain("Always abstain");
   });
 });
 
