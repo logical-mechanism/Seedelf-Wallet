@@ -85,6 +85,7 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 2. WingRiders' smoke test (owner).
 3. `DanogoCLMMV1` routed on mainnet, once Foundation 2 is in. **Owner:** one small swap.
 4. Candidates, not committed:
+   - `SundaeSwapV4`: **when Minswap routes it** (the owner, 2026-10-07). On 2026-10-07 Minswap's router didn't name it on either network. Sundae's SDK 3.0.0 builds its orders: `owner` and a `destination` as V3's, plus a service budget (3 ₳), partial fills (`max_per_execution`) and its batcher's own two-pool routes. Partial fills need the runner to follow an order a fill leaves behind; a two-pool route meets the one-leg rule. Its contracts are private, and no audit is published.
    - `VyFinance`: its owner is a 56-byte field (payment key hash ‖ stake key hash), the datum travels by hash, and it uses 313 enterprise order scripts.
    - `SundaeSwapStable`, once a Minswap-built order is seen.
    - `CswapV1`: closed source, pinned staking part `ec39fae0…`.
@@ -154,7 +155,11 @@ Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777
 - **No screen wording changed.** None promises that an order expires. "The order is waiting for a DEX's batcher to fill it. If it doesn't, cancel it." fits V3.
 - **Owner: the live runs.**
   - **Preprod's V3 pools quote, but nothing fills them** (read from preprod's chain, 2026-10-07). Since about 2026-09-10 every spend of a V3 order there has been its owner's cancel, and 93 orders sit open. Minswap's preprod router sends tADA→USDRF, tADA→USDCx (policy `31dde3db…`) and tADA→PPEE through `SundaeSwapV3` alone, at 10, 50 and 200 tADA.
-  1. On preprod, the Stop run: a small tADA→USDRF swap, its route SundaeSwapV3. It places and waits. Stop: the cancel is signed by both keys, lands, and everything comes back.
+  - **The wallet can't buy any of those three on preprod**: it swaps only into tADA, a token on its own list (preprod's holds tUSDM and MIN, neither routed through V3) or one Minswap verifies (on preprod, only MIN). Selling into tADA needs no verification: USDR (`f0f202a8…55534472`), USDRF and PPEE all sell to tADA through `SundaeSwapV3` alone, at 1 to 20.
+  1. On preprod, the Stop run, with USDR:
+     - From another preprod wallet (Eternl or Lace) on Minswap's preprod site, swap about 10 tADA for USDR. It routes through Minswap V2, whose preprod batcher filled orders on 2026-10-07.
+     - Send the USDR to the public account, then Make private.
+     - Swap 1–5 USDR for tADA: the route says SundaeSwapV3. It places and waits. Stop: the cancel is signed by both keys, lands, and everything comes back.
   2. On mainnet, the fill: one small swap whose fresh quote shows SundaeSwapV3 in its route (it depends on the pair and amount). It should place, fill and come back.
 
 **Danogo's swap part (2026-10-06).**
