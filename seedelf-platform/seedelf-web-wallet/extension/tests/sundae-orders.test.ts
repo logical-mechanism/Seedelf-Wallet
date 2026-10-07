@@ -127,15 +127,16 @@ describe("a route through SundaeSwap V3", () => {
   const leg = minswapEstimate.estimate.paths[0]![0]!;
   const route = (...paths: string[][]) => ({ paths: paths.map((p) => p.map((protocol) => ({ ...leg, protocol }))) });
 
-  it("goes through V3 only as a path of its own", () => {
+  it("goes through V3 only as a path of its own, as through any DEX", () => {
     expect(outOfPlace(route(["SundaeSwapV3"]))).toEqual([]);
     expect(outOfPlace(route(["SundaeSwapV3"], ["MinswapV2"]))).toEqual([]);
-    expect(outOfPlace(route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["SundaeSwapV3"]);
-    expect(outOfPlace(route(["SundaeSwapV3", "WingRidersV2"]))).toEqual(["SundaeSwapV3"]);
-    expect(outOfPlace(route(["MinswapV2", "WingRidersV2"]))).toEqual([]);
-    // On either network: a later leg's order is placed by the first leg's batcher, and the check never sees it.
-    expect(uncheckedProtocols("preprod", route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["SundaeSwapV3"]);
-    expect(uncheckedProtocols("mainnet", route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["SundaeSwapV3"]);
+    // A path of more than one leg, whichever DEXes: a later leg's order is placed by the first leg's batcher.
+    expect(outOfPlace(route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["MinswapV2", "SundaeSwapV3"]);
+    expect(outOfPlace(route(["SundaeSwapV3", "WingRidersV2"]))).toEqual(["SundaeSwapV3", "WingRidersV2"]);
+    expect(outOfPlace(route(["MinswapV2", "WingRidersV2"]))).toEqual(["MinswapV2", "WingRidersV2"]);
+    // On either network: the check never sees a later leg's order.
+    expect(uncheckedProtocols("preprod", route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["MinswapV2", "SundaeSwapV3"]);
+    expect(uncheckedProtocols("mainnet", route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["MinswapV2", "SundaeSwapV3"]);
   });
 
   it("is asked for again without V3 when Minswap's best puts it beside another leg, and the order is built from that one", async () => {

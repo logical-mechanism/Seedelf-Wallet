@@ -207,15 +207,6 @@ export const SUNDAE_V3: Readonly<Record<"preprod" | "mainnet", { order: string; 
 };
 
 /**
- * DEXes a route may go through only as a path of their own, one leg. As the
- * first of two legs, a SundaeSwap V3 order pays Minswap's adapter and is
- * owned by Minswap's key, so the session could never cancel it; as a later
- * leg, it's placed by the first leg's batcher, and the session never sees it.
- * Either way, an order nobody the wallet holds can cancel that never expires.
- */
-const ONE_LEG_ONLY = ["SundaeSwapV3"];
-
-/**
  * Danogo's concentrated-liquidity pools' script, by network: a DEX that
  * swaps against its pools in the swap itself, with no order (chunk 24). A
  * session's direct swap spends UTxOs at it and nothing else of anyone's but
@@ -245,15 +236,21 @@ export function againstPools(est: Pick<Estimate, "paths">): boolean {
 
 /**
  * The DEXes of `est`'s route that sit where a session's check can't follow
- * them, to be asked for again without: one that may go only in a path of its
- * own, in a longer one (ONE_LEG_ONLY), and one that swaps against its pools
- * beside any other leg (DIRECT_CHECKED). Danogo split across two of its own
- * pools is one swap, and fine.
+ * them, to be asked for again without: any in a path of more than one leg,
+ * and one that swaps against its pools beside any other leg (DIRECT_CHECKED).
+ * Danogo split across two of its own pools is one swap, and fine.
+ *
+ * Routes are asked for direct (`routed`), so a longer path is Minswap not
+ * keeping to that. Its later legs' orders are placed by the leg before's
+ * batcher, and the session's check never sees them; and its first leg pays
+ * the next leg's order or Minswap's adapter, not the session. A SundaeSwap
+ * V3 first leg paying the adapter is owned by Minswap's key too, so the
+ * session could never cancel it, and it never expires (seen on mainnet,
+ * 2026-10-06).
  */
 export function outOfPlace(est: Pick<Estimate, "paths">): string[] {
   const legs = est.paths.flat().map((leg) => leg.protocol);
-  const long = est.paths.filter((path) => path.length > 1).flatMap((path) => path.map((leg) => leg.protocol));
-  const found = long.filter((p) => ONE_LEG_ONLY.includes(p) || DIRECT_CHECKED.includes(p));
+  const found = est.paths.filter((path) => path.length > 1).flatMap((path) => path.map((leg) => leg.protocol));
   for (const p of DIRECT_CHECKED) if (legs.includes(p) && legs.some((q) => q !== p)) found.push(p);
   return [...new Set(found)];
 }
@@ -417,7 +414,12 @@ export class Minswap {
   }
 }
 
-/** An ask as Minswap's estimate takes it: the route through DEXes that take orders only. */
+/**
+ * An ask as Minswap's estimate takes it: the route through DEXes that take
+ * orders only, and direct, one leg a path (`outOfPlace`). Minswap routes
+ * direct unless asked otherwise (seen on both networks, 2026-10-06), but its
+ * documentation gives no default, so it's asked.
+ */
 function routed(ask: SwapAsk, exclude: string[]) {
   return {
     amount: ask.amount,
@@ -425,6 +427,7 @@ function routed(ask: SwapAsk, exclude: string[]) {
     token_out: ask.tokenOut,
     slippage: ask.slippage,
     exclude_protocols: [...new Set(exclude)],
+    allow_multi_hops: false,
   };
 }
 

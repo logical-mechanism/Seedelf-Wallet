@@ -564,9 +564,9 @@ export function slippageKeeping(amountOut: bigint, least: bigint): number {
 /**
  * Minswap's route for `ask`, and what it was asked to leave out besides the
  * usual, for the build that follows (`avoid`): a route that puts a DEX
- * where the session's check can't follow it (`outOfPlace`: SundaeSwap V3 in
- * a longer path, Danogo beside anything else) is asked for again without
- * that DEX, rather than refused (chunk 24).
+ * where the session's check can't follow it (`outOfPlace`: any DEX in a
+ * path of more than one leg, Danogo beside anything else) is asked for
+ * again without that DEX, rather than refused (chunk 24).
  */
 export async function routeOf(minswap: Minswap, ask: SwapAsk): Promise<{ est: Estimate; avoid: string[] }> {
   const est = await minswap.estimate(ask);

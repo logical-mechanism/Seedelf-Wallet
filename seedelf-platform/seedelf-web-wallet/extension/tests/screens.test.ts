@@ -417,7 +417,8 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     const pools = text(
       createElement(SwapApproval, {
         summary,
-        quote: { ...quote, againstPools: true },
+        // Danogo's estimate has no deposits: nothing is locked in an order.
+        quote: { ...quote, deposits: "0", againstPools: true },
         lovejoin: through,
         pay,
         get,
@@ -430,6 +431,14 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     expect(pools).toContain("Stop works until the swap goes out.");
     expect(pools).toContain("Swapped against the DEX's pools");
     expect(pools).not.toContain("Order placed");
+    // No order deposit row, and the parts still add up: the room takes what the deposit would have.
+    expect(pools).not.toContain("Order deposit");
+    expect(pools).toContain("The swap and its costs 16 ₳ The swap 10 ₳ DEX fee 2 ₳ Room for network fees 4 ₳, what's left comes back");
+    // Its network fees: the swap runs the pools' scripts, about 0.75 ₳, and the note names no order.
+    expect(pools).toContain(
+      "Network fees: this payment's, then about 0.75 ₳ for the swap against the DEX's pools and 0.25 ₳ each for Lovejoin's deposit and the return",
+    );
+    expect(pools).not.toContain("for the order");
   });
 
   it("says the slippage, that it relies on Minswap for the minimum, and what the swap and its costs pay for (chunk 23's second review, DX-2, DX-3)", () => {

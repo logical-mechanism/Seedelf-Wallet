@@ -1874,6 +1874,8 @@
   "swaps.costs.network": "Network fees, about",
   "swaps.costs.note": "Network fees: this payment's, then about {{each}} ₳ each for the order and the return, from the room for them.",
   "swaps.costs.noteLovejoin": "Network fees: this payment's, then about {{each}} ₳ each for the order, Lovejoin's deposit and the return, from the room for them.",
+  "swaps.costs.notePools": "Network fees: this payment's, then about {{swap}} ₳ for the swap against the DEX's pools and {{each}} ₳ for the return, from the room for them.",
+  "swaps.costs.notePoolsLovejoin": "Network fees: this payment's, then about {{swap}} ₳ for the swap against the DEX's pools and {{each}} ₳ each for Lovejoin's deposit and the return, from the room for them.",
   "swaps.costs.title": "What the swap costs, and what comes back",
   "swaps.costs.total": "Costs in all, about",
   "swaps.cta.enterAmount": "Enter an amount",

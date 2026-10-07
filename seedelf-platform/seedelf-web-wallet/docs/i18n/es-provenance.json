@@ -1972,6 +1972,8 @@
   "swaps.costs.network": "machine",
   "swaps.costs.note": "machine",
   "swaps.costs.noteLovejoin": "machine",
+  "swaps.costs.notePools": "mtpe",
+  "swaps.costs.notePoolsLovejoin": "mtpe",
   "swaps.costs.title": "machine",
   "swaps.costs.total": "machine",
   "swaps.cta.enterAmount": "machine",

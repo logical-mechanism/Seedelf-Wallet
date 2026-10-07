@@ -97,16 +97,18 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] Foundation 2 (Danogo): a real transaction read, the checks, the runner's fill, tests.
 - [x] SundaeSwap V3's swap part: routed on mainnet, both networks pinned, the docs. **Owner: its live runs** (below).
 - [x] Danogo's swap part: routed on both networks, the swap page's words, the docs. **Owner: its live runs** (below).
-- [ ] WingRiders' smoke test, the owner's live runs, and the multi-hop question.
-- [ ] At the end: update [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described ("orders only"); then the post-release roadmap, the handoff note, and this plan to the archive.
+- [x] The multi-hop question: routes are direct, asked so explicitly, with any longer path refused. The Danogo approval's cost rows: checked and fixed (below, *Direct routes and Danogo's costs*).
+- [x] [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described: the last "orders only" (flows.md's quote) is gone.
+- [ ] WingRiders' smoke test and the owner's live runs.
+- [ ] At the end: the post-release roadmap, the handoff note, and this plan to the archive.
 
 ## Built (2026-10-06)
 
-Uncommitted on the branch until the owner says.
+Committed and pushed: the foundation (7886971), SundaeSwap V3's swap part (29777c2) and Danogo's (04d0022). *Direct routes and Danogo's costs* (below) is uncommitted until the owner says.
 
 - **Mainnet routing:** SplashStable out. SundaeSwap V3 and Danogo went on in their own swap parts (below).
 - **Tests:**
-  - The suites: Vitest 1,748 on both builds; Playwright 80 on the built `dist/`.
+  - The suites: Vitest 1,756 on both builds; Playwright 80 on the built `dist/`.
   - New files: `tests/sundae-orders.test.ts` (11) and `tests/direct-swaps.test.ts` (8).
   - Each new rule was mutation-checked: switched off, it fails the test meant to catch it.
 - **Strings:** four new refusals, each back-translated blind (`docs/i18n/verified-critical-*.json`): `sundaeNotOurs`, `sundaeCancelKeys`, `notPool` and `tooLittle`.
@@ -177,12 +179,27 @@ Uncommitted on the branch until the owner says.
     - the timeline's words;
     - no Stop after the send;
     - the swap landing as **Filled** with no wait;
-    - everything coming back.
+    - everything coming back;
+    - the swap transaction's real fee beside the review's "about 0.75 ₳" (*Direct routes and Danogo's costs*, below).
 
-**Not done, for the swap parts.**
+**Wording outside the swap page:** checked. Two lines on the approval were wrong for a pool swap, and are fixed:
 
-- **Wording outside the swap page:** checked. Two lines on the approval were wrong for a pool swap, and are fixed:
-  - the warning that the wallet relies on Minswap for the minimum is hidden, since the wallet checks it itself;
-  - "Stop works until the order fills" reads "until the swap goes out" (`swaps.review.approvesPools`).
-- **Not checked:** the approval's cost rows for a Danogo route. "DEX fee" and "Order deposit" may read 0, or say an order. Look at them on the owner's first preprod run.
-- **A question for the owner, found on the way:** any multi-hop route places its second leg's order from the first leg's batcher, so the session's check never sees it. If that order sat unfilled, could the session cancel it? This applies to the DEXes already on `MAINNET_PROTOCOLS`, not just V3. Worth a look at a real Minswap multi-hop order before launch.
+- the warning that the wallet relies on Minswap for the minimum is hidden, since the wallet checks it itself;
+- "Stop works until the order fills" reads "until the swap goes out" (`swaps.review.approvesPools`).
+
+**Direct routes and Danogo's costs (2026-10-06).**
+
+- **The multi-hop question, answered: the wallet's routes never had a second leg.**
+  - Minswap's `estimate` and `build-tx` route through more than one pool only when asked with `allow_multi_hops: true`, which the wallet never sent. Its documentation gives no default.
+  - Seen on both networks. Mainnet NIGHT→STRIKE has no direct pool: no route without the flag, MinswapV2→MinswapV2 with it. Mainnet 200,000 MIN→iUSD: one pool without it, two with it.
+  - Excluding Minswap's own pools (`exclude_protocols: ["MinswapV2"]`) is ignored, with no error.
+- **Now asked explicitly** (`routed` in `minswap.ts`: `allow_multi_hops: false`, in every estimate and build), so it doesn't rest on a default nobody wrote down.
+- **The route rule widened from V3 to every DEX** (`outOfPlace`): any DEX in a path of more than one leg is asked for again without, and refused at the quote and before the order if Minswap still routes so, on either network. It reuses the existing "routes this swap through …" refusal, so no new strings. `ONE_LEG_ONLY` is gone.
+- **What it costs:** some pairs quote worse. 200,000 MIN→iUSD quoted 379 iUSD through the one pool and 766 through two. That was already so; turning multi-hop on would need its own research: each later leg's order, who owns it, and whether the session could cancel it, Minswap's adapter `0e56d46a…` included.
+- **The Danogo approval's cost rows, checked** against Minswap's estimates (mainnet ADA→USDCx, USDCx→ADA; preprod MIN→ADA) and over the e2e fakes at 360×640:
+  - **DEX fee:** 0.1 ₳ a pool, as Minswap's estimate says. Fine.
+  - **Order deposit:** 0, and the row spoke of an order. Now hidden when it's 0, in the quote's details and the funding's parts, as Minswap's fee row already was. The parts still add up: the room shows the 2 ₳.
+  - **Network fees:** the note priced the swap's transaction as an order's, about 0.25 ₳. A swap against Danogo's pools runs their scripts: 0.48 ₳ for one pool to 0.92 ₳ for four, in six swaps Minswap built on mainnet, and 0.64 ₳ in a preprod build. Now about 0.75 ₳ (`POOL_SWAP_FEE_ESTIMATE` in `ui/swap.ts`), and the note says "about 0.75 ₳ for the swap against the DEX's pools and 0.25 ₳ for the return". Two new strings, `mtpe`; not critical.
+- **Tests:** `tests/swap-routes.test.ts` (both routing rules), `tests/swap-form.test.ts` and `tests/screens.test.ts` (the cost rows). The routing rules and the hidden deposit row were each mutation-checked.
+- **A flake, not chased:** one run of the preprod-only Vitest build failed one test, unnamed; three reruns passed in full.
+- **For the owner's preprod runs:** preprod leaves out fewer DEXes than mainnet, as only the check stands there. Preprod USDCx→USDRF routes through SundaeSwapStable, whose orders the check doesn't read, so that pair may pause after funding (Stop brings it back). The live runs above don't use it.

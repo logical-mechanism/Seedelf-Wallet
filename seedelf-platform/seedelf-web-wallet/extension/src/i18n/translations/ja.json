@@ -1776,6 +1776,8 @@
   "swaps.costs.network": "ネットワーク手数料（概算）",
   "swaps.costs.note": "ネットワーク手数料: この支払いの分と、注文と返却にそれぞれ約 {{each}} ₳ で、後の 2 件は手数料の余裕分から支払われます。",
   "swaps.costs.noteLovejoin": "ネットワーク手数料: この支払いの分と、注文、Lovejoin へのデポジット、返却にそれぞれ約 {{each}} ₳ で、後の 3 件は手数料の余裕分から支払われます。",
+  "swaps.costs.notePools": "ネットワーク手数料: この支払いの分と、DEX のプールとのスワップに約 {{swap}} ₳、返却に約 {{each}} ₳ で、後の 2 件は手数料の余裕分から支払われます。",
+  "swaps.costs.notePoolsLovejoin": "ネットワーク手数料: この支払いの分と、DEX のプールとのスワップに約 {{swap}} ₳、Lovejoin へのデポジットと返却にそれぞれ約 {{each}} ₳ で、後の 3 件は手数料の余裕分から支払われます。",
   "swaps.costs.title": "スワップの費用と戻ってくるもの",
   "swaps.costs.total": "費用の合計（概算）",
   "swaps.cta.enterAmount": "金額を入力",

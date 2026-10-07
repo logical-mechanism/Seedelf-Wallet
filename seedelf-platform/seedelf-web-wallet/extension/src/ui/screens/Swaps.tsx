@@ -110,6 +110,7 @@ import {
   impactLevel,
   maxAdaIn,
   parseSlippage,
+  POOL_SWAP_FEE_ESTIMATE,
   rateOf,
   sameAsk,
   SLIPPAGE_HIGH,
@@ -1053,10 +1054,13 @@ export function NewSwap({
               {shown.aggregatorFee !== "0" && (
                 <Detail label={tr("swaps.detail.minswapFee")} value={`${formatAda(shown.aggregatorFee)}\u00a0₳`} />
               )}
-              <Detail
-                label={tr("swaps.detail.deposit")}
-                value={tr("swaps.detail.depositValue", { ada: formatAda(shown.deposits) })}
-              />
+              {/* None for a swap against a DEX's pools: there's no order (chunk 24). */}
+              {shown.deposits !== "0" && (
+                <Detail
+                  label={tr("swaps.detail.deposit")}
+                  value={tr("swaps.detail.depositValue", { ada: formatAda(shown.deposits) })}
+                />
+              )}
             </dl>
           )}
         </div>
@@ -1221,8 +1225,9 @@ export function SwapApproval({
 /**
  * What a swap costs, all told, and what comes back (blind test §9.8, T10):
  * the DEX's fee, Minswap's, the network fees of its transactions (this
- * payment's exact, the later ones' about SESSION_FEE_ESTIMATE each, as
- * nothing has built them yet), and Lovejoin's when its return goes through
+ * payment's exact, the later ones' about SESSION_FEE_ESTIMATE each, a swap
+ * against a DEX's pools POOL_SWAP_FEE_ESTIMATE, as nothing has built them
+ * yet), and Lovejoin's when its return goes through
  * it; then what comes back into the private balance: what's received, and
  * the ADA that isn't used up. Exported for its test.
  */
@@ -1261,7 +1266,12 @@ export function SwapCosts({
           transactions, three network fees" gave a figure for the first only (blind test T10). This payment's own is
           its row above. */}
       <p className="note" data-testid="swap-costs-note">
-        {tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", { each: aboutAda(SESSION_FEE_ESTIMATE) })}
+        {quote.againstPools
+          ? tr(costs.later > 2 ? "swaps.costs.notePoolsLovejoin" : "swaps.costs.notePools", {
+              swap: aboutAda(POOL_SWAP_FEE_ESTIMATE),
+              each: aboutAda(SESSION_FEE_ESTIMATE),
+            })
+          : tr(costs.later > 2 ? "swaps.costs.noteLovejoin" : "swaps.costs.note", { each: aboutAda(SESSION_FEE_ESTIMATE) })}
       </p>
     </>
   );
@@ -1443,8 +1453,9 @@ export function Unverified({ pick }: { pick: Pick }) {
 /**
  * What "For the swap" pays for, a row each, so the rows add up to it (chunk
  * 23's second review, DX-3): the ADA swapped, the DEX's fee, Minswap's, the
- * order's deposit, back with the proceeds, and the room left for the network
- * fees, whose rest comes back. Nothing when they don't add up (fundParts).
+ * order's deposit, back with the proceeds (none against a DEX's pools, chunk
+ * 24), and the room left for the network fees, whose rest comes back.
+ * Nothing when they don't add up (fundParts).
  */
 function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
   const tr = useT();
@@ -1457,7 +1468,9 @@ function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
       {parts.swapped !== "0" && <Row label={tr("swaps.review.part.swapped")} value={ada(parts.swapped)} part />}
       <Row label={tr("swaps.detail.dexFee")} value={ada(parts.dexFee)} part />
       {parts.aggregatorFee !== "0" && <Row label={tr("swaps.detail.minswapFee")} value={ada(parts.aggregatorFee)} part />}
-      <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} part />
+      {parts.deposits !== "0" && (
+        <Row label={tr("swaps.detail.deposit")} value={tr("swaps.detail.depositValue", { ada: formatAda(parts.deposits) })} part />
+      )}
       <Row label={tr("swaps.review.part.room")} value={tr("swaps.review.part.roomValue", { ada: formatAda(parts.room) })} part />
     </>
   );

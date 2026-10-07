@@ -1972,6 +1972,8 @@
   "swaps.costs.network": "Comisiones de red (aprox.)",
   "swaps.costs.note": "Comisiones de red: la de este pago, y luego aproximadamente {{each}} ₳ cada una para la orden y la vuelta, que salen del margen reservado para ellas.",
   "swaps.costs.noteLovejoin": "Comisiones de red: la de este pago, y luego aproximadamente {{each}} ₳ cada una para la orden, el depósito en Lovejoin y la vuelta, que salen del margen reservado para ellas.",
+  "swaps.costs.notePools": "Comisiones de red: la de este pago, y luego aproximadamente {{swap}} ₳ para el intercambio contra los pools del DEX y {{each}} ₳ para la vuelta, que salen del margen reservado para ellas.",
+  "swaps.costs.notePoolsLovejoin": "Comisiones de red: la de este pago, y luego aproximadamente {{swap}} ₳ para el intercambio contra los pools del DEX y {{each}} ₳ cada una para el depósito en Lovejoin y la vuelta, que salen del margen reservado para ellas.",
   "swaps.costs.title": "Lo que cuesta el intercambio, y lo que vuelve",
   "swaps.costs.total": "Costos en total (aprox.)",
   "swaps.cta.enterAmount": "Ingresa una cantidad",

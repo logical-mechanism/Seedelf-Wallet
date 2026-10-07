@@ -224,8 +224,9 @@ describe("a route through Danogo", () => {
     // Split across two of its own pools: one direct swap.
     expect(outOfPlace(route(["DanogoCLMMV1"], ["DanogoCLMMV1"]))).toEqual([]);
     expect(outOfPlace(route(["DanogoCLMMV1"], ["MinswapV2"]))).toEqual(["DanogoCLMMV1"]);
-    expect(outOfPlace(route(["MinswapV2", "DanogoCLMMV1"]))).toEqual(["DanogoCLMMV1"]);
-    expect(outOfPlace(route(["DanogoCLMMV1"], ["MinswapV2", "SundaeSwapV3"])).sort()).toEqual(["DanogoCLMMV1", "SundaeSwapV3"]);
+    // In a longer path, every DEX of it is, as any route of more than one leg.
+    expect(outOfPlace(route(["MinswapV2", "DanogoCLMMV1"]))).toEqual(["MinswapV2", "DanogoCLMMV1"]);
+    expect(outOfPlace(route(["DanogoCLMMV1"], ["MinswapV2", "SundaeSwapV3"])).sort()).toEqual(["DanogoCLMMV1", "MinswapV2", "SundaeSwapV3"]);
   });
 });
 
