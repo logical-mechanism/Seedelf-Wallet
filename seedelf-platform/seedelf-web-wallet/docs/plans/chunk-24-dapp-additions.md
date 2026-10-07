@@ -100,7 +100,7 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 - [x] Danogo's swap part: routed on both networks, the swap page's words, the docs. **Owner: its live runs** (below).
 - [x] The multi-hop question: routes are direct, asked so explicitly, with any longer path refused. The Danogo approval's cost rows: checked and fixed (below, *Direct routes and Danogo's costs*).
 - [x] [flows.md](../flows.md), [privacy.md](../privacy.md) and [architecture.md](../architecture.md) where a DEX is named or routing is described: the last "orders only" (flows.md's quote) is gone.
-- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. **Owner: the live cancel of the stuck preprod order**, then a mainnet Stop.
+- [x] **Step 3: Stop's own cancel** (below), built and tested 2026-10-07. The stuck preprod V3 order cancelled live and its money came back (the owner, 2026-10-07). **Owner: a mainnet Stop.**
 - [ ] WingRiders' smoke test and the owner's live runs.
 - [ ] At the end: the post-release roadmap, the handoff note, and this plan to the archive.
 
@@ -108,7 +108,7 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 
 **Why.** The owner's preprod Stop of a SundaeSwap V3 order (`70773ee9…#0`, 14 USDR) never cancelled it:
 
-- **Minswap's `POST /aggregator/cancel-tx` answers 404, "Route … not found", on mainnet and preprod.** Its documentation still lists it. `build-tx`, `pending-orders` and `finalize-and-submit-tx` still answer. No live cancel through it was ever recorded, so released wallets can't cancel a placed order on any DEX either.
+- **Minswap's `POST /aggregator/cancel-tx` answers 404, "Route … not found", on mainnet and preprod.** Its documentation still lists it. `build-tx`, `pending-orders` and `finalize-and-submit-tx` still answer. That's what the research's probes saw; the owner has seen 1.2.0's Stop cancel some orders through it and not others (2026-10-07), so released wallets' Stop is partly broken, not wholly.
 - **Minswap's `pending-orders` doesn't list every order.** On preprod it lists nothing for that session; on mainnet it listed one of two V3 orders Minswap built.
 - **The page said nothing.** Stopped, with no order listed and nothing arrived, the runner returned before noting the order open, so the swap sat on "cancelling".
 - Minswap's own app still cancels, through a route the wallet doesn't know (37 "Minswap: Aggregator Cancel Order" transactions at Splash's script in the week to 2026-10-07).
@@ -143,7 +143,7 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
 5. **The order check** (`checkOrder`): every order sits at a script the table knows, owned by the session's own key, paying the session's address. Anything else is refused before it's signed. **So every order the wallet places is one it can cancel itself.**
 6. **Stop:** the orders to cancel are the swap's recorded ones that are still unspent, and any order under the session's stake key (a partial fill's), from Koios, never Minswap's list. One group a transaction, then the return. A swap waiting on an order it can't cancel says so.
 7. **Tests:** for each DEX, a real order cancelled through its real script in the local evaluator, and refused with the wrong key.
-8. **Live:** the stuck preprod V3 order first; then a preprod Minswap V2 order; then the owner's mainnet runs.
+8. **Live:** the stuck preprod V3 order first; then a preprod Minswap V1 order (tADA→MIN, the only preprod pair the wallet can buy that routes to a batcher that fills: tADA→tUSDM has no route, 2026-10-07), stopped before its fill; then the owner's mainnet runs, Minswap V2's cancel among them.
 
 **Built (2026-10-07).**
 
@@ -162,7 +162,8 @@ The session refuses all of it today. Chunk 15b listed what allowing it takes ([a
   - The preprod MinswapV2 fixture is synthetic in one way: the real order's owner had an enterprise address, which no session has, so its two receivers were given a staking part. The script reads only the canceller.
   - Vitest 1,755 on both builds; Playwright 80. The swap tests now drive the wallet's own cancel through the worker: a Minswap V1 order (the fixtures' order moved to Minswap V1's real script) and a SundaeSwap V3 order with Sundae's real reference script, signed by both keys.
 - **Not tested in the worker:** a Splash order's partial fill (`liveOrders`' `address_utxos` look). Splash is mainnet only, and the worker's tests run on preprod. The Rust side cancels a real Splash order.
-- **Released wallets** (1.2.0 and before) still ask Minswap's `cancel-tx`, so their Stop can't cancel a placed order. This is the fix; when it ships is the owner's call.
+- **Live (the owner, 2026-10-07):** the stuck preprod V3 order (`70773ee9…#0`, 14 USDR) cancelled at Refresh, and its money came back: the first cancel the wallet built itself, through a reference script, signed by both keys.
+- **Released wallets** (1.2.0 and before) still ask Minswap's `cancel-tx`, which cancels some orders and not others (the owner, 2026-10-07). This is the fix; when it ships is the owner's call.
 
 ## Built (2026-10-06)
 
