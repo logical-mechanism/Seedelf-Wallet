@@ -80,13 +80,19 @@ import type {
 import { merged, sessionClass, type HistoryClass } from "../shared/histories";
 import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
-import { bodyOutpoints, txId, txInputs } from "./cbor";
+import { bodyOutpoints, txId, txInputs, txWithdrawals } from "./cbor";
 import { CollateralError, CollateralRefusedError, StaleReviewError } from "./collateral";
 import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosTrouble, type KoiosUtxo } from "./koios";
 import {
   builtOutputs,
+  DANOGO_POOL,
+  MINSWAP_SUNDAE_STAKE,
   MinswapError,
+  outOfPlace,
+  SUNDAE_V3_ORDER,
+  sundaeV3Order,
   uncheckedProtocols,
+  witnessedKeys,
   type BuiltOutput,
   type Estimate,
   type Minswap,
@@ -232,6 +238,11 @@ type RecordedTx = SessionTx & {
   inputs?: string[];
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`), recorded before it's sent. */
   orders?: string[];
+  /**
+   * A direct swap (Danogo's, chunk 24): against a DEX's pools, with no order.
+   * Its proceeds come in itself, so once it lands it's the fill.
+   */
+  direct?: boolean;
   /**
    * A return whose private history isn't written yet: what its review said,
    * recorded with it before it's sent, and gone once its history is. One
@@ -412,6 +423,8 @@ interface KeptTx {
   quote?: SwapQuote;
   /** A swap's orders: its outputs to the DEXes' contracts (`txhash#index`). */
   orders?: string[];
+  /** A direct swap: against a DEX's pools, with no order, its proceeds paid in itself (chunk 24). */
+  direct?: boolean;
   builtAt: number;
 }
 
@@ -546,6 +559,19 @@ export function slippageKeeping(amountOut: bigint, least: bigint): number {
   if (room <= 0n) return 0;
   const steps = (room * 1_000_000n) / (least + 1n) - 1n;
   return steps > 0n ? Number(steps) / 10_000 : 0;
+}
+
+/**
+ * Minswap's route for `ask`, and what it was asked to leave out besides the
+ * usual, for the build that follows (`avoid`): a route that puts a DEX
+ * where the session's check can't follow it (`outOfPlace`: SundaeSwap V3 in
+ * a longer path, Danogo beside anything else) is asked for again without
+ * that DEX, rather than refused (chunk 24).
+ */
+export async function routeOf(minswap: Minswap, ask: SwapAsk): Promise<{ est: Estimate; avoid: string[] }> {
+  const est = await minswap.estimate(ask);
+  const avoid = outOfPlace(est);
+  return avoid.length ? { est: await minswap.estimate(ask, avoid), avoid } : { est, avoid };
 }
 
 /** A quote from Minswap's estimate, with what a session for it is funded with. */
@@ -929,7 +955,7 @@ export class SessionService {
    */
   async quote(network: NetworkName, ask: SwapAsk): Promise<SwapQuote> {
     const checked = checkAsk(ask);
-    const est = await this.deps.minswap(network).estimate(checked);
+    const { est } = await routeOf(this.deps.minswap(network), checked);
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
       throw new Error(t("sess.routesThrough", { protocols: unchecked.join(t("histories.list.and")) }));
@@ -1594,13 +1620,13 @@ export class SessionService {
     if (!rows.length) throw new Error(t("sess.accountEmptyYet"));
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
-    const est = await minswap.estimate(ask);
+    const { est, avoid } = await routeOf(minswap, ask);
     // Its route now, as the runner's order checks it (independent review M17).
     const unchecked = uncheckedProtocols(network, est);
     if (unchecked.length) {
       throw new Error(t("sess.nowRoutesThrough", { protocols: unchecked.join(t("histories.list.and")) }));
     }
-    const txCbor = await minswap.buildTx(address, est.min_amount_out, ask);
+    const txCbor = await minswap.buildTx(address, est.min_amount_out, ask, avoid);
     return this.review(network, s, "swap", txCbor, rows, { quote: quoteOf(network, ask, est) });
   }
 
@@ -2094,6 +2120,16 @@ export class SessionService {
       if (auto.stopping) await go(() => this.cancel(network, s, address, rows, orders));
       return;
     }
+    // A direct swap paid its proceeds in itself (chunk 24): landed, it's the fill, with no order to wait on.
+    if (!kinds.has("cancel") && s.txs.some((t) => t.kind === "swap" && t.confirmed && !t.replaced && t.direct)) {
+      if (!auto.filled) {
+        s = await this.update(network, s.index, (r) => {
+          r.auto!.filled = now();
+        });
+      }
+      s = await this.noteOrderOpen(network, s, false);
+      return go(() => this.bringBack(network, s.index, rows));
+    }
     // Minswap no longer lists the order. A fill or a refund spends it, and comes
     // in a transaction the session didn't make; a cancel's refund in its own.
     if (!kinds.has("cancel")) {
@@ -2247,7 +2283,7 @@ export class SessionService {
     const approved = s.auto!.approved;
     const minswap = this.deps.minswap(network);
     const ask = checkAsk(s.swap);
-    const est = await minswap.estimate(ask);
+    const { est, avoid } = await routeOf(minswap, ask);
     // Routed afresh: never through a DEX whose orders the wallet can't check, whatever the quote went
     // through. It pauses, as the quote would have refused it (independent review M17).
     const unchecked = uncheckedProtocols(network, est);
@@ -2264,11 +2300,12 @@ export class SessionService {
     const asked = dipped ? { ...ask, slippage: slippageKeeping(BigInt(est.amount_out), least) } : ask;
     // At least what the user approved, or more when the price has moved their way.
     const min = dipped ? approved.minAmountOut : est.min_amount_out;
-    const txCbor = await minswap.buildTx(address, min, asked);
+    const txCbor = await minswap.buildTx(address, min, asked, avoid);
     // Minswap's fee is bounded by what was approved, not by what it quotes now.
     const quote = { ...quoteOf(network, asked, est), minAmountOut: min, aggregatorFee: approved.aggregatorFee ?? "0" };
     const built = await this.inspect(network, s, "swap", txCbor, rows, quote);
-    withinFunding(paidOut(built.summary, address), built.summary.fee, approved.fund);
+    if (built.direct) withinNet(built.summary, approved.fund);
+    else withinFunding(paidOut(built.summary, address), built.summary.fee, approved.fund);
     await this.signAndSend(network, built);
   }
 
@@ -2322,20 +2359,26 @@ export class SessionService {
   ): Promise<KeptTx & { summary: DappTxSummary }> {
     const { wasm, wallet, now } = this.deps;
     const { index } = s;
-    let refs: string[];
+    let bytes: Uint8Array;
+    let spends: string[];
+    let collateral: string[];
     let outputs: BuiltOutput[];
     try {
-      const bytes = hexBytes(txCbor);
-      refs = [...new Set([...(bodyOutpoints(bytes, 0) ?? []), ...(bodyOutpoints(bytes, 13) ?? [])])];
+      bytes = hexBytes(txCbor);
+      spends = bodyOutpoints(bytes, 0) ?? [];
+      collateral = bodyOutpoints(bytes, 13) ?? [];
       outputs = builtOutputs(bytes);
     } catch {
       throw new Error(t("sess.cannotRead"));
     }
+    const refs = [...new Set([...spends, ...collateral])];
     const own = new Map(rows.map((r) => [outpoint(r), r]));
     const others = refs.filter((r) => !own.has(r));
-    // A swap spends only the session's UTxOs; a cancel also spends its orders, at the DEXes' contracts.
-    if (kind === "swap" && others.length) throw new Refused(t("sess.refuse.warn.spendsOther"));
     const foreign = others.length ? await this.deps.koios(network).utxoInfo(others) : [];
+    // A swap spends only the session's UTxOs, bar a direct one (Danogo's): its pools', and a collateral its owner
+    // signed already (chunk 24). A cancel also spends its orders, at the DEXes' contracts.
+    const direct = kind === "swap" && others.length > 0;
+    const signed = direct ? directSpends(network, bytes, { spends, collateral, others, foreign }, this.deps.wasm) : 0;
     const request = JSON.stringify({
       network,
       txCbor,
@@ -2343,7 +2386,8 @@ export class SessionService {
       // Its own stake key: what pays its address back is its own (a session from before has the shared one).
       stakeIndex: s.ownStake ? index : 0,
       inputs: [...refs.flatMap((r) => own.get(r) ?? []), ...foreign],
-      partialSign: false,
+      // A direct swap needs its collateral owner's signature too, which it carries already.
+      partialSign: direct,
     });
     let summary: DappTxSummary;
     try {
@@ -2355,14 +2399,36 @@ export class SessionService {
       // What WebAssembly won't read (an output on another network, say) won't read any better later: pause.
       throw new Refused(clauseOf(message));
     }
-    refuseOddities(summary, index);
+    // Stop's cancel of a SundaeSwap V3 order needs its owner's signature too: the session's own stake key (chunk 24).
+    const ownStake = s.ownStake === true;
+    const stake = kind === "cancel" && ownStake && foreign.some((r) => r.payment_cred === SUNDAE_V3_ORDER);
+    refuseOddities(summary, index, { stake, ...(direct ? { direct: { signed } } : {}) });
     let orders: string[] | undefined;
     if (kind === "swap") {
       const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
-      const at = checkOrder(outputs, { address: wasm.cip30Address(address), keyHash }, BigInt(quote?.aggregatorFee ?? "0"));
-      orders = at.map((i) => `${summary.txHash}#${i}`);
+      const session = { address: wasm.cip30Address(address), keyHash, ownStake };
+      const fee = BigInt(quote?.aggregatorFee ?? "0");
+      if (direct) {
+        const paid = checkDirect(outputs, session, DANOGO_POOL[network], fee);
+        if (quote) checkProceeds(summary, quote, paid);
+        orders = [];
+      } else {
+        orders = checkOrder(outputs, session, fee).map((i) => `${summary.txHash}#${i}`);
+      }
     }
-    return { network, index, kind, txHash: summary.txHash, txCbor, request, quote, orders, builtAt: now(), summary };
+    return {
+      network,
+      index,
+      kind,
+      txHash: summary.txHash,
+      txCbor,
+      request,
+      quote,
+      orders,
+      ...(direct ? { direct } : {}),
+      builtAt: now(),
+      summary,
+    };
   }
 
   /** Reads a transaction Minswap built, and keeps it for the user's Send. */
@@ -2393,6 +2459,7 @@ export class SessionService {
       // Recorded with it, before it's sent: whichever copy of the swap lands, its own orders are the ones looked
       // at, and its own minimum the one shown.
       orders: built.kind === "swap" ? built.orders : undefined,
+      direct: built.direct,
       minAmountOut: built.kind === "swap" ? built.quote?.minAmountOut : undefined,
       after: (s) => {
         if (built.kind === "swap" && built.quote && s.swap) {
@@ -2961,12 +3028,14 @@ export class SessionService {
       after,
       keptHash = txHash,
       orders,
+      direct,
       summary,
       minAmountOut,
     }: {
       after?: (s: SessionRecord) => void;
       keptHash?: string;
       orders?: string[];
+      direct?: boolean;
       summary?: RecordedTx["summary"];
       minAmountOut?: string;
     } = {},
@@ -2995,6 +3064,7 @@ export class SessionService {
           at: now(),
           sending: true,
           ...(orders ? { orders } : {}),
+          ...(direct ? { direct } : {}),
           ...(minAmountOut ? { minAmountOut } : {}),
           ...(summary ? { summary } : {}),
         });
@@ -3591,16 +3661,28 @@ function withinFunding(paid: DappTxSummary["paid"], fee: string, fund: SwapQuote
  *   There's one at least;
  * - at most one other output, Minswap's fee, wherever it goes: ADA alone,
  *   and no more than `aggregatorFee` quoted (none on preprod).
- * Anything else is refused. Which script an order goes to isn't checked:
- * no DEX's order contract is pinned, so that's Minswap's to build, as the
- * order's receivers are; on mainnet, Minswap is asked to leave out every
- * DEX the wallet doesn't check, and the estimate the order is built from is
- * checked (excludedProtocols, uncheckedProtocols, independent review M17).
- * Nor is its minimum read back: it's what the wallet
- * asks Minswap for, and Minswap builds the order. Returns the orders' output
+ * Anything else is refused. Which script an order goes to isn't checked,
+ * bar SundaeSwap V3's: no other DEX's order contract is pinned, so that's
+ * Minswap's to build, as the order's receivers are; on mainnet, Minswap is
+ * asked to leave out every DEX the wallet doesn't check, and the estimate
+ * the order is built from is checked (excludedProtocols, uncheckedProtocols,
+ * independent review M17). Nor is its minimum read back: it's what the
+ * wallet asks Minswap for, and Minswap builds the order.
+ *
+ * An output at SundaeSwap V3's order script is read exactly (chunk 24): it's
+ * the session's order only if it sits under the session's staking part, none
+ * or Minswap's (MINSWAP_SUNDAE_STAKE, at this script alone), is owned by the
+ * session's own stake key, and pays the session's address with no datum.
+ * V3's orders never expire, so one the session couldn't cancel is never
+ * signed: a session from before each had its own stake key (`ownStake`)
+ * carries the shared one, which never signs. Returns the orders' output
  * indexes.
  */
-export function checkOrder(outputs: BuiltOutput[], session: { address: string; keyHash: string }, aggregatorFee: bigint): number[] {
+export function checkOrder(
+  outputs: BuiltOutput[],
+  session: { address: string; keyHash: string; ownStake?: boolean },
+  aggregatorFee: bigint,
+): number[] {
   // A base address's staking part: bytes 29 to 57, after the header and the payment part.
   const stake = session.address.slice(58, 114);
   const orders: number[] = [];
@@ -3612,6 +3694,11 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
     const script = type <= 7 && type % 2 === 1;
     if (!script && o.address.slice(2, 58) === session.keyHash) {
       throw new Refused(t("sess.refuse.warn.otherStake"));
+    }
+    if (script && o.address.slice(2, 58) === SUNDAE_V3_ORDER) {
+      if (!sundaeOrderOurs(o, type, { ...session, stake })) throw new Refused(t("sess.refuse.warn.sundaeNotOurs"));
+      orders.push(i);
+      return;
     }
     const staked = type === 1 ? o.address.slice(58, 114) === stake : type === 7;
     if (script && staked && o.datum && names(o.datum, session.keyHash)) {
@@ -3631,6 +3718,115 @@ export function checkOrder(outputs: BuiltOutput[], session: { address: string; k
   return orders;
 }
 
+/**
+ * What a direct swap spends of anyone else's, before the session's key signs
+ * it (chunk 24): its inputs at Danogo's pool script, and a collateral whose
+ * owner's key has signed it already, as Minswap's comes; and its
+ * withdrawals, zero, from that script or a spent pool's staking script.
+ * Anything else is refused. Returns how many keys of others signed it.
+ */
+function directSpends(
+  network: NetworkName,
+  tx: Uint8Array,
+  at: { spends: string[]; collateral: string[]; others: string[]; foreign: KoiosUtxo[] },
+  wasm: { cip30Address(address: string): string },
+): number {
+  const pool = DANOGO_POOL[network];
+  const rows = new Map(at.foreign.map((r) => [outpoint(r), r]));
+  // One Koios doesn't know can't be shown to be a pool's.
+  if (at.others.some((r) => !rows.has(r))) throw new Refused(t("sess.refuse.warn.spendsOther"));
+  const witnessed = witnessedKeys(tx);
+  // Who may be withdrawn from: the pools' script, and each spent pool's own staking script.
+  const stakes = new Set([pool]);
+  const signers = new Set<string>();
+  for (const ref of at.others) {
+    const address = wasm.cip30Address(rows.get(ref)!.address);
+    // The header's high four bits: an odd one up to 7 pays a script; 3 is a script under a script's staking part.
+    const type = Number.parseInt(address.charAt(0), 16);
+    const script = type <= 7 && type % 2 === 1;
+    const payment = address.slice(2, 58);
+    if (at.spends.includes(ref)) {
+      if (!script || payment !== pool) throw new Refused(t("sess.refuse.warn.spendsOther"));
+      if (type === 3) stakes.add(address.slice(58, 114));
+    }
+    if (at.collateral.includes(ref)) {
+      if (script || !witnessed.has(payment)) throw new Refused(t("sess.refuse.warn.otherSignature"));
+      signers.add(payment);
+    }
+  }
+  for (const w of txWithdrawals(tx)) {
+    // A script's reward address starts 0xf0 (a test network) or 0xf1.
+    if (w.lovelace !== 0n || w.account.charAt(0) !== "f" || !stakes.has(w.account.slice(2))) {
+      throw new Refused(t("sess.refuse.warn.staking"));
+    }
+  }
+  return signers.size;
+}
+
+/**
+ * Where a direct swap pays, before the session's key signs it (chunk 24):
+ * - back to the session's own address, its proceeds and change;
+ * - Danogo's pools, recreated at `pool`;
+ * - at most one other output, Minswap's fee: ADA alone, and no more than
+ *   `aggregatorFee` quoted.
+ * No order: a route that puts one beside it isn't taken (minswap.ts
+ * `outOfPlace`). Anything else is refused. Returns what it pays Minswap.
+ */
+export function checkDirect(outputs: BuiltOutput[], session: { address: string; keyHash: string }, pool: string, aggregatorFee: bigint): bigint {
+  let fee: bigint | undefined;
+  for (const o of outputs) {
+    if (o.address === session.address) continue;
+    const type = Number.parseInt(o.address.charAt(0), 16);
+    const script = type <= 7 && type % 2 === 1;
+    if (script && o.address.slice(2, 58) === pool) continue;
+    if (!script && o.address.slice(2, 58) === session.keyHash) throw new Refused(t("sess.refuse.warn.otherStake"));
+    if (fee === undefined && !o.tokens && o.lovelace <= aggregatorFee) {
+      fee = o.lovelace;
+      continue;
+    }
+    throw new Refused(t(script ? "sess.refuse.warn.notPool" : "sess.refuse.warn.otherAddress"));
+  }
+  return fee ?? 0n;
+}
+
+/**
+ * What a direct swap gives the session, read from the session's own change
+ * (chunk 24): at least the approved minimum of what it buys. No batcher
+ * holds it to a minimum, so this does. ADA bought comes in less the
+ * transaction's fee and Minswap's (`paid`), which the minimum doesn't count.
+ */
+export function checkProceeds(summary: DappTxSummary, quote: Pick<SwapQuote, "ask" | "minAmountOut">, paid: bigint): void {
+  const out = quote.ask.tokenOut;
+  const got =
+    out === "lovelace"
+      ? BigInt(summary.netLovelace) + BigInt(summary.fee) + paid
+      : BigInt(summary.netTokens.find((x) => x.policyId + x.assetName === out)?.quantity ?? "0");
+  if (got < BigInt(quote.minAmountOut)) throw new Refused(t("sess.refuse.warn.tooLittle"));
+}
+
+/**
+ * The runner's limit on a direct swap (chunk 24): what leaves the session's
+ * account, net, its fee included, is no more than was funded. The pools'
+ * outputs aren't counted as an order's are: they hold the pools' own.
+ */
+function withinNet(summary: DappTxSummary, fund: SwapQuote["fund"]): void {
+  if (-BigInt(summary.netLovelace) > BigInt(fund.lovelace)) throw new Refused(t("sess.refuse.warn.moreAda"));
+  for (const x of summary.netTokens) {
+    const out = -BigInt(x.quantity);
+    if (out <= 0n) continue;
+    const funded = fund.tokens.find((f) => f.policyId + f.assetName === x.policyId + x.assetName);
+    if (!funded || out > BigInt(funded.quantity)) throw new Refused(t("sess.refuse.warn.moreTokens"));
+  }
+}
+
+/** Whether output `o`, at SundaeSwap V3's order script, is the session's own order, as `checkOrder` says. */
+function sundaeOrderOurs(o: BuiltOutput, type: number, session: { keyHash: string; stake: string; ownStake?: boolean }): boolean {
+  if (!session.ownStake || !o.datum) return false;
+  const under = type === 7 || (type === 1 && [session.stake, MINSWAP_SUNDAE_STAKE].includes(o.address.slice(58, 114)));
+  const order = under ? sundaeV3Order(o.datum) : null;
+  return order?.owner === session.stake && order.pays?.payment === session.keyHash && order.pays.stake === session.stake;
+}
+
 /** Whether CBOR (hex) holds `keyHash` as a byte string of its own. */
 function names(cbor: string, keyHash: string): boolean {
   const needle = `581c${keyHash}`;
@@ -3642,13 +3838,25 @@ function names(cbor: string, keyHash: string): boolean {
  * What a session's key never signs, whatever Minswap sent: anything that needs
  * another key, staking or governance, minting, a spend the wallet can't see,
  * or a gift to the treasury, which no output shows and withinFunding
- * wouldn't count.
+ * wouldn't count. `stakeSigns`: a cancel of a SundaeSwap V3 order, which
+ * the session's stake key signs too, as the order's owner (chunk 24); then
+ * both sign, or it's refused, as the cancel couldn't work without it. With
+ * certificates, withdrawals and votes refused, its signature only meets a
+ * required signer.
  */
-function refuseOddities(s: DappTxSummary, index: number): void {
-  if (!s.complete || s.othersSign) throw new Refused(t("sess.refuse.warn.otherSignature"));
-  if (s.signs.length !== 1 || s.signs[0] !== `0/${index}`) throw new Refused(t("sess.refuse.warn.notOnlyKey"));
+function refuseOddities(s: DappTxSummary, index: number, allow: { stake?: boolean; direct?: { signed: number } } = {}): void {
+  // A direct swap's collateral owner's signature, there already (directSpends), is all else it needs.
+  const others = allow.direct?.signed ?? 0;
+  if (s.unknownInputs.length || s.othersSign !== others || (!others && !s.complete)) {
+    throw new Refused(t("sess.refuse.warn.otherSignature"));
+  }
+  const keys = allow.stake ? [`0/${index}`, "stake"] : [`0/${index}`];
+  if (s.signs.length !== keys.length || s.signs.some((k, i) => k !== keys[i])) {
+    throw new Refused(t(allow.stake ? "sess.refuse.warn.sundaeCancelKeys" : "sess.refuse.warn.notOnlyKey"));
+  }
   if (s.unknownInputs.length) throw new Refused(t("sess.refuse.warn.unknownInputs"));
-  if (s.certificates.length || s.withdrawals.length || s.votes || s.proposals) {
+  // A direct swap's zero withdrawals, from its DEX's scripts, are checked with its spends (directSpends).
+  if (s.certificates.length || (s.withdrawals.length && !allow.direct) || s.votes || s.proposals) {
     throw new Refused(t("sess.refuse.warn.staking"));
   }
   if (s.mint.length) throw new Refused(t("sess.refuse.warn.mints"));

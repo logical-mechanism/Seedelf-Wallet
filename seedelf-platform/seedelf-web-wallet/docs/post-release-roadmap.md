@@ -273,6 +273,8 @@ Parity and the public side have landed, so the list is the owner's to write now.
 
 **Not counted in parity, and ongoing.** The dApps page's catalogue is the one part of the wallet that grows after feature-complete: each entry is a claim that the dApp works *privately*, through a one-time account with the money coming back, so each needs its own test run before it ships. Minswap is the first, Lovejoin is in, and A2 ([O4](#owed)) is the next shape of it.
 
+🚧 **Chunk 24** (`web-wallet/dapp-additions`, plan [plans/chunk-24-dapp-additions.md](plans/chunk-24-dapp-additions.md)): more of the high-volume DEXes through Minswap's router — SundaeSwap V3 first, then Danogo's direct swaps; the foundation in the session's checks first, then each DEX turned on with its live swap (the owner, 2026-10-06).
+
 **Minswap's own site never offers Seedelf Wallet.** Its wallet list is fixed (its `WalletProvider` enum), and inside a frame it connects only to Eternl, through Eternl's bridge; answering as Eternl would be impersonation. Asking Minswap to list Seedelf Wallet would open its site to the public connector and private CIP-30 (chunk 15). ⬜ owner's
 
 ## The documentation review
