@@ -3,10 +3,11 @@
 // is, and the slippage a user types. Amounts are raw integer strings, as
 // Minswap's. And what a private session's transactions after its funding are
 // expected to cost, which a swap's review, Lovejoin's page and a site's
-// session all say before anything is built (blind test §9.8).
+// session all say before anything is built (blind test §9.8); and what a
+// swap against a DEX's pools puts into them, as its review says it.
 
-import type { SwapAsk, SwapQuote } from "../shared/rpc";
-import { formatAda, formatQuantity } from "./format";
+import type { DappToken, DappTxSummary, SwapAsk, SwapQuote } from "../shared/rpc";
+import { formatAda, formatQuantity, tokenKey } from "./format";
 
 /**
  * About what one of a private session's own transactions costs, for those
@@ -202,6 +203,29 @@ export function fundParts(
     deposits: quote.deposits,
     room: room.toString(),
   };
+}
+
+/**
+ * What a swap against a DEX's pools puts into them, as its review says it
+ * (chunk 24; the 1.3.0 release review, C10): what leaves the session, by its
+ * own net, less the network fee and what it pays anyone but the pools
+ * (Minswap's fee, a row of its own). Its outputs at the pools' script can't
+ * say it: each is a pool's whole UTxO, the pool's reserves with what the
+ * session puts in. ADA when the session's goes down by more than those (none
+ * when it gets ADA back, a token swapped for ADA), and each token it gives
+ * up.
+ */
+export function intoPools(
+  summary: Pick<DappTxSummary, "netLovelace" | "netTokens" | "fee" | "paid">,
+): { lovelace: string; tokens: DappToken[] } {
+  const others = summary.paid.filter((p) => !p.script);
+  const lovelace = -BigInt(summary.netLovelace) - BigInt(summary.fee) - others.reduce((sum, p) => sum + BigInt(p.lovelace), 0n);
+  const paid = new Map<string, bigint>();
+  for (const t of others.flatMap((p) => p.tokens)) paid.set(tokenKey(t), (paid.get(tokenKey(t)) ?? 0n) + BigInt(t.quantity));
+  const tokens = summary.netTokens
+    .map((t) => ({ ...t, quantity: (-BigInt(t.quantity) - (paid.get(tokenKey(t)) ?? 0n)).toString() }))
+    .filter((t) => BigInt(t.quantity) > 0n);
+  return { lovelace: (lovelace > 0n ? lovelace : 0n).toString(), tokens };
 }
 
 /** A slippage typed in percent ("1.5", "2%"), if it's one the wallet takes: 0.1% to 20%, two places at most. */

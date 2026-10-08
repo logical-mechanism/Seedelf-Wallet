@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LOVEJOIN_WITHDRAW_ESTIMATE, SWAP_MARGIN } from "../src/background/sessions";
-import type { SwapQuote } from "../src/shared/rpc";
+import type { DappTxSummary, SwapQuote } from "../src/shared/rpc";
 import {
   aboutAda,
   adaShort,
@@ -9,6 +9,7 @@ import {
   fundParts,
   halfOf,
   impactLevel,
+  intoPools,
   maxAdaIn,
   parseSlippage,
   POOL_SWAP_FEE_ESTIMATE,
@@ -173,5 +174,49 @@ describe("what a swap takes, all told (blind test §9.8, T10)", () => {
     expect(aboutAda(0n)).toBe("0");
     // The page and the worker's Lovejoin quote say one figure.
     expect(BOX_BACK_ESTIMATE).toBe(LOVEJOIN_WITHDRAW_ESTIMATE);
+  });
+});
+
+describe("what a swap against a DEX's pools puts in, as its review says it (release review C10)", () => {
+  // tests/direct-swaps.test.ts's swap of 10 ₳ for MIN through Danogo, as the real WebAssembly reads it: the pool
+  // recreated with its reserves and the session's 10 ₳ together, Minswap's 0.85 ₳ fee, a 0.6 ₳ network fee, and the
+  // session's net −11.45 ₳ and +906.5941 MIN.
+  const MIN = { policyId: "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72", assetName: "4d494e" };
+  type Paid = DappTxSummary["paid"][number];
+  const out = (lovelace: string, script: boolean, tokens: Paid["tokens"] = []): Paid => ({
+    address: script ? "addr_test1xpool" : "addr_test1vfee",
+    lovelace,
+    tokens,
+    datum: script ? "inline" : null,
+    script,
+    seedelf: null,
+    ownPaymentKey: false,
+  });
+  const pool = out("2010000000", true, [{ ...MIN, quantity: "99093405900" }]);
+  const fee = out("850000", false);
+  const bought = { netLovelace: "-11450000", netTokens: [{ ...MIN, quantity: "906594100" }], fee: "600000", paid: [pool, fee] };
+
+  it("is what leaves the session less the network fee and Minswap's, never the pool's reserves", () => {
+    expect(intoPools(bought)).toEqual({ lovelace: "10000000", tokens: [] });
+  });
+
+  it("shows more of the session's ADA put into the pool, as much as it is", () => {
+    // 50 ₳ more of the session's ADA in the pool's output: the review shows the 60 ₳ that leave for it.
+    expect(intoPools({ ...bought, netLovelace: "-61450000", paid: [out("2060000000", true, pool.tokens), fee] })).toEqual({
+      lovelace: "60000000",
+      tokens: [],
+    });
+  });
+
+  it("is the tokens a swap for ADA gives up, and no ADA when ADA comes back", () => {
+    // 906.5941 MIN for 9.8 ₳: the session's ADA goes up by the proceeds less the two fees.
+    const sold = { netLovelace: "8350000", netTokens: [{ ...MIN, quantity: "-906594100" }], fee: "600000", paid: [pool, fee] };
+    expect(intoPools(sold)).toEqual({ lovelace: "0", tokens: [{ ...MIN, quantity: "906594100" }] });
+  });
+
+  it("leaves out what's paid to anyone but the pools, which has its own row", () => {
+    const tip = out("1000000", false, [{ ...MIN, quantity: "5" }]);
+    const sold = { netLovelace: "7350000", netTokens: [{ ...MIN, quantity: "-906594105" }], fee: "600000", paid: [pool, fee, tip] };
+    expect(intoPools(sold)).toEqual({ lovelace: "0", tokens: [{ ...MIN, quantity: "906594100" }] });
   });
 });

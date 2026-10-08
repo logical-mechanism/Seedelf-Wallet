@@ -32,11 +32,14 @@ describe("SundaeSwapV3 on mainnet (independent review M16, chunk 24)", () => {
     const t = await unlocked();
     t.minswap.estimate = via("SundaeSwapV3");
     await expect(t.sessions.quote("mainnet", selling)).resolves.toMatchObject({ route: ["SundaeSwapV3"] });
-    // Beside another leg its order is Minswap's to cancel, and never expires: refused if Minswap still routes so.
+    // Beside another leg its order is Minswap's to cancel, and never expires: refused if Minswap still routes so, in
+    // words that don't call DEXes the wallet checks ones it can't (release review C34).
     t.minswap.estimate = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "MinswapV2" }, { ...leg, protocol: "SundaeSwapV3" }]] };
-    await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
-      "Minswap routes this swap through MinswapV2 and SundaeSwapV3, which the wallet can't check yet, so it won't swap this way",
+    const refused = t.sessions.quote("mainnet", selling);
+    await expect(refused).rejects.toThrow(
+      "Minswap routes this swap through MinswapV2 and SundaeSwapV3 in a way the wallet's check can't follow, so it won't swap this way",
     );
+    await expect(refused).rejects.not.toThrow(/can't check yet/);
   });
 });
 
@@ -110,9 +113,42 @@ describe("a route of more than one leg (chunk 24)", () => {
     const t = await unlocked();
     t.minswap.estimate = hops;
     for (const network of ["preprod", "mainnet"] as const) {
-      await expect(t.sessions.quote(network, selling)).rejects.toThrow(
-        "Minswap routes this swap through MinswapV2, which the wallet can't check yet, so it won't swap this way",
+      // MinswapV2 is a DEX the wallet checks: the words say it's the way through it (release review C34).
+      const refused = t.sessions.quote(network, selling);
+      await expect(refused).rejects.toThrow(
+        "Minswap routes this swap through MinswapV2 in a way the wallet's check can't follow, so it won't swap this way. Try another amount or pair.",
       );
+      await expect(refused).rejects.not.toThrow(/can't check yet/);
     }
+  });
+
+  it("pauses a funded swap Minswap still routes so, in those words, and Review it myself says the same: neither builds", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    t.minswap.estimate = hops;
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({
+      why: "refused",
+      detail: "Minswap now routes it through MinswapV2 in a way the wallet's check can't follow.",
+    });
+    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow(
+      "Minswap now routes this swap through MinswapV2 in a way the wallet's check can't follow, so it won't swap this way. Try again later, or Stop to bring it back.",
+    );
+    expect(t.minswap.calls.map((c) => c.path)).not.toContain("build-tx");
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+
+  it("is refused through a DEX the wallet doesn't know in that DEX's words first, on mainnet, legs or not", async () => {
+    const t = await unlocked();
+    t.minswap.estimate = { ...minswapEstimate.estimate, paths: [[{ ...leg, protocol: "MinswapV2" }, { ...leg, protocol: "CswapV1" }]] };
+    await expect(t.sessions.quote("mainnet", selling)).rejects.toThrow(
+      "Minswap routes this swap through CswapV1, which the wallet can't check yet, so it won't swap this way.",
+    );
+    // On preprod, where only the check stands, it's the route's way that's refused.
+    await expect(t.sessions.quote("preprod", selling)).rejects.toThrow(
+      "Minswap routes this swap through MinswapV2 and CswapV1 in a way the wallet's check can't follow",
+    );
   });
 });

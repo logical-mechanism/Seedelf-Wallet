@@ -155,3 +155,61 @@ describe("a private session's signing prompt, with several public accounts", () 
     expect(approval).not.toHaveProperty("ties");
   });
 });
+
+describe("a private session's signatures, whichever public account sites use (1.3.0's release review, X03)", () => {
+  // The dApp account Settings chooses is the public side's. A session signs with its own keys, and its requests are
+  // read for no public account, so a change declines none of them and refuses none as it's approved. The public
+  // side's checks read a missing account as account 0 (`sameAccount`), and a session is let through by its own guard
+  // there: without it, every session's signature would be refused with AccountChange whenever the dApp account isn't
+  // index 0, and no other test would notice.
+  const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
+  const theirs = (t: T) => paying([SESSION_INPUT], [t.deps.wasm.cip30Address(THEIRS)]);
+
+  /** What the site heard, once its call is refused. */
+  function refusal(call: Promise<unknown>) {
+    const heard: { failure?: unknown } = {};
+    call.catch((e: { failure?: unknown }) => (heard.failure = e.failure ?? String(e)));
+    return heard;
+  }
+
+  it("shows and signs a session's signTx and signData while the dApp account isn't Account 1", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const [own] = (await dapp.call(s, "getUsedAddresses", [])) as string[];
+    // Settings → Sites: the account sites use is Account 2 (index 1) before the site asks.
+    await t.preferences.set({ dappAccount: 1 });
+    const signing = dapp.call(s, "signTx", [theirs(t), false]);
+    const tx = refusal(signing);
+    await until(() => dapp.approvals().length === 1 || tx.failure !== undefined);
+    expect(tx.failure).toBeUndefined();
+    expect(await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({});
+    expect(await signing).toEqual(expect.any(String));
+    const message = dapp.call(s, "signData", [own, hex("Sign in: nonce 7")]);
+    const data = refusal(message);
+    await until(() => dapp.approvals().length === 1 || data.failure !== undefined);
+    expect(data.failure).toBeUndefined();
+    expect(await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({});
+    expect(await message).toMatchObject({ signature: expect.any(String) });
+  });
+
+  it("keeps a session's signTx and signData waiting as Settings moves the dApp account off Account 1, and signs them", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const [own] = (await dapp.call(s, "getUsedAddresses", [])) as string[];
+    const signing = dapp.call(s, "signTx", [theirs(t), false]);
+    const message = dapp.call(s, "signData", [own, hex("Sign in: nonce 7")]);
+    // Caught, so neither rejects unheard before the test looks.
+    signing.catch(() => undefined);
+    message.catch(() => undefined);
+    await until(() => dapp.approvals().length === 2);
+    // Index 0 to 1, as Settings' change is made (handlers.ts, `preferences-set`): written, then the connector told.
+    await t.preferences.set({ dappAccount: 1 });
+    await dapp.dappAccountChanged();
+    expect(dapp.approvals().map((a) => a.kind).sort()).toEqual(["sign-data", "sign-tx"]);
+    for (const a of dapp.approvals()) expect(await dapp.answer(a.id, true, PASSWORD)).toEqual({});
+    expect(await signing).toEqual(expect.any(String));
+    expect(await message).toMatchObject({ signature: expect.any(String) });
+  });
+});

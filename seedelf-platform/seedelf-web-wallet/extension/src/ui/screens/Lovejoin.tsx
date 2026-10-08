@@ -34,7 +34,8 @@
 // deposit, and why no mix followed, the wallet can't know), and one Koios
 // hasn't said of waits the same way until it has (independent review M14).
 // The chains that aren't all sent are listed: being sent (no box comes back
-// meanwhile), or stopped partway, and why. A mix from the private balance
+// meanwhile), or stopped partway, and why; read again from the device every
+// few seconds while one is being sent. A mix from the private balance
 // can be stopped before its boxes go in: it then comes back directly. What
 // the wallet has in the pool is hidden with the balances (#56), and so is
 // how many boxes, since every box is 10 ₳ (privacy review §2.16); the Mix
@@ -76,7 +77,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
-import { TxDetailButton, entryLabel } from "../components/TxDetail";
+import { TxDetailButton, TxDetailModal, entryLabel } from "../components/TxDetail";
 import { Tabs } from "../components/Tabs";
 import { adaText, formatAda, formatPercent, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
@@ -94,6 +95,8 @@ const MAX_BOXES = 10;
 const MAX_SEED_BOXES = 96;
 /** A running mix's page asks the worker to move it on this often. */
 const ADVANCE_EVERY_MS = 20_000;
+/** And reads its chains' rows again this often while one is being sent: from the device, no Koios request. */
+const CHAINS_EVERY_MS = 5_000;
 
 type Source = "private" | "public";
 type PrivateSummary = SessionOutSummary & { mix: LovejoinFunding };
@@ -304,9 +307,10 @@ const chainName = (c: LovejoinChainView) =>
  * holds every box back until it's done; one that stopped partway says why,
  * and the boxes it didn't mix wait for Mix my boxes again. One whose boxes
  * were all mixed again or brought back since isn't listed (lovejoin.ts
- * `shown`).
+ * `shown`). `onOpen`: the page opens a transaction of one in its own view
+ * (ChainTxs).
  */
-export function Chains({ chains }: { chains: LovejoinChainView[] }) {
+export function Chains({ chains, onOpen }: { chains: LovejoinChainView[]; onOpen?: OpenChainTx }) {
   const amounts = useAmounts();
   const tr = useT();
   if (!chains.length) return null;
@@ -338,7 +342,7 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
                 ? tr("lovejoin.chains.whyStopped", { why: withoutStop(c.stopped) })
                 : tr("lovejoin.chains.waitAll")}
             </p>
-            {c.txs && <ChainTxs txs={c.txs} />}
+            {c.txs && <ChainTxs txs={c.txs} onOpen={onOpen} />}
           </li>
         ))}
       </ul>
@@ -346,21 +350,36 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
   );
 }
 
-/** Where each transaction of a chain being sent is: what its row says beside it. */
+/** Opens a chain's transaction `txHash`, its `i`th, in Transaction details, held by the page. */
+type OpenChainTx = (txHash: string, i: number) => void;
+
+/**
+ * Where each transaction of a chain being sent is: what its row says beside
+ * it. One whose send began, or may have reached a node, is being sent, never
+ * not sent yet (1.3.0's release review, C29).
+ */
 const TX_STATE: Record<LovejoinChainTx["state"], I18nKey> = {
   landed: "lovejoin.chains.tx.landed",
   sent: "lovejoin.chains.tx.sent",
+  sending: "lovejoin.chains.tx.sending",
   waiting: "lovejoin.chains.tx.waiting",
 };
 
 /**
- * A chain's transactions while it's being sent, under its row: each by what
- * it is (the deposit, each mix, the return), opening in Transaction details,
- * with where it is. The review showed the one the money goes in through; the
- * whole chain is looked at here, as it goes (the owner, 2026-10-01: "audit
- * is about the whole chain, afterwards").
+ * A chain's transactions while some of it is still to send, under its row:
+ * each by what it is (the deposit, each mix, the return), opening in
+ * Transaction details, with where it is. The review showed the one the money
+ * goes in through; the rest are looked at here while they're sent. Once the
+ * last is sent the wallet holds none of them, and the list goes, though up
+ * to four may not be on chain yet; a chain of four or fewer goes whole at
+ * once (at Send; from the private balance, in the runner's step once its
+ * funding lands) and is never listed. The owner's words (2026-10-01) were
+ * "audit is about the whole chain, afterwards", in Activity or the chain's
+ * own row: keeping a sent chain's list until it lands is theirs to decide
+ * (1.3.0's release review, C28). `onOpen`: the page holds the view it opens,
+ * so this list going doesn't close it.
  */
-function ChainTxs({ txs }: { txs: LovejoinChainTx[] }) {
+function ChainTxs({ txs, onOpen }: { txs: LovejoinChainTx[]; onOpen?: OpenChainTx }) {
   const tr = useT();
   // Each mix by its place among the mixes: the deposit and the return aren't counted.
   const mixNumber = (i: number) => txs.slice(0, i + 1).filter((tx) => tx.kind === "mix").length;
@@ -380,6 +399,7 @@ function ChainTxs({ txs }: { txs: LovejoinChainTx[] }) {
                     : tr("lovejoin.chains.tx.mix", { n: mixNumber(i) })
               }
               testId={`lovejoin-chain-tx-${i}`}
+              onOpen={onOpen && (() => onOpen(tx.txHash, i))}
             />
             <span className="note">{tr(TX_STATE[tx.state])}</span>
           </li>
@@ -544,6 +564,12 @@ export function Lovejoin({
   const amounts = useAmounts();
   const tr = useT();
   const [status, setStatus] = useState<LovejoinStatus>();
+  // The chains' rows: status's, then read again while one is being sent (lovejoin-chains), from the device alone.
+  const [rows, setRows] = useState<LovejoinChainView[]>([]);
+  const lookChains = useCallback(() => call("lovejoin-chains", {}).then(setRows, () => undefined), []);
+  // A chain's transaction open in Transaction details, held here: its list going (all sent, or stopped) doesn't
+  // close it (1.3.0's release review, C28).
+  const [opened, setOpened] = useState<{ txHash: string; i: number }>();
   const [mixes, setMixes] = useState<SessionView[]>([]);
   // Asked first: bringing back a box not mixed yet, stopping a mix, or mixing a public mix's boxes again from the private balance.
   const [asking, setAsking] = useState<{ anyway: true } | { stop: number } | { privateAnyway: true }>();
@@ -572,6 +598,7 @@ export function Lovejoin({
     try {
       const [s, all] = await Promise.all([call("lovejoin-status", {}), call("sessions", {})]);
       setStatus(s);
+      setRows(s.chains);
       setMixes(all.filter((x) => x.mix));
       setUpdatedAt(Date.now());
       setError(undefined);
@@ -579,10 +606,12 @@ export function Lovejoin({
     } catch (e) {
       setError((e as Error).message);
       setReadFailed(true);
+      // The chains need no pool read: listed from the device all the same.
+      void lookChains();
     } finally {
       setReading(false);
     }
-  }, []);
+  }, [lookChains]);
 
   useEffect(() => {
     void load();
@@ -623,13 +652,30 @@ export function Lovejoin({
   useEffect(() => {
     void call("lovejoin-mix-public-progress", {}).then(setSending, () => undefined);
   }, []);
+
+  // The chains' rows, read again from the device while one is being sent (no Koios request): a chain all sent or
+  // stopped since the pool was read leaves its row, or says so, rather than listing transactions the wallet no
+  // longer holds; and the public mix's row never comes back, from the read at its Send, once its section goes
+  // (1.3.0's release review, C28).
+  const rowsSending = rows.some((c) => !c.stopped);
+  useEffect(() => {
+    if (!rowsSending) return;
+    const timer = setInterval(() => void lookChains(), CHAINS_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [rowsSending, lookChains]);
+
   useEffect(() => {
     if (!sendingPublic && !publicRunning) return;
     const timer = setInterval(() => {
-      call("lovejoin-mix-public-progress", { advance: !sendingPublic }).then(setSending, () => undefined);
+      call("lovejoin-mix-public-progress", { advance: !sendingPublic }).then(async (s) => {
+        // All sent, or stopped, as the page sent the rest: the rows are read again first, so the mix's row from the
+        // read at its Send never shows as its section goes.
+        if (!sendingPublic && !s?.txs) await lookChains();
+        setSending(s);
+      }, () => undefined);
     }, sendingPublic ? 1000 : 5000);
     return () => clearInterval(timer);
-  }, [sendingPublic, publicRunning]);
+  }, [sendingPublic, publicRunning, lookChains]);
 
   // What the chosen number of boxes takes: WebAssembly and the settings, no Koios.
   useEffect(() => {
@@ -888,7 +934,7 @@ export function Lovejoin({
   const mixingAgain = mixes.some(isMixingAgain);
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   // The public mix being sent shows its own progress below: the list takes the others.
-  const chains = (status?.chains ?? []).filter((c) => !(sending && c.session === undefined));
+  const chains = rows.filter((c) => !(sending && c.session === undefined));
   // The pool can't be mixed in yet: seeding is the only thing that starts one.
   const short = !!status?.available && status.others < status.floor;
   // What it still needs, which is what a seed defaults to: one transaction's
@@ -1031,7 +1077,7 @@ export function Lovejoin({
         </div>
       )}
 
-      <Chains chains={chains} />
+      <Chains chains={chains} onOpen={(txHash, i) => setOpened({ txHash, i })} />
 
       {sending && (
         <div className="stack" data-testid="lovejoin-public-sending">
@@ -1047,8 +1093,12 @@ export function Lovejoin({
           {sending.stopped && (
             <p className="token-row__detail">{tr("lovejoin.detail.whyStopped", { why: withoutStop(sending.stopped) })}</p>
           )}
-          {!sending.stopped && sending.txs && <ChainTxs txs={sending.txs} />}
+          {!sending.stopped && sending.txs && <ChainTxs txs={sending.txs} onOpen={(txHash, i) => setOpened({ txHash, i })} />}
         </div>
+      )}
+      {/* A chain's transaction opened from either list above, held by the page: the list going doesn't close it. */}
+      {opened && (
+        <TxDetailModal txHash={opened.txHash} testId={`lovejoin-chain-tx-${opened.i}`} onClose={() => setOpened(undefined)} />
       )}
 
       {status?.available && (

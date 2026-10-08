@@ -123,10 +123,13 @@ export interface KoiosTxOut {
   asset_list: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
 }
 
-/** What a transaction spent: `tx_info`'s inputs, each where it sat (`cred`: its payment key or script hash, hex). */
+/**
+ * What a transaction spent: `tx_info`'s inputs, each where it sat (`cred`: its payment key or script hash,
+ * hex), and which output it was (`tx_hash`, `tx_index`), as Koios gives every input.
+ */
 export interface KoiosTxSpends {
   tx_hash: string;
-  inputs: Array<{ payment_addr: { bech32: string; cred?: string | null } }> | null;
+  inputs: Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_hash?: string; tx_index?: number }> | null;
 }
 
 /** A stake key's standing: `account_info`. No row at all means it was never registered. */

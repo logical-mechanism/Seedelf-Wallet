@@ -1500,6 +1500,9 @@ describe("a chain's boxes", CHAINS, () => {
     await t.lovejoin.recordChain("preprod", { progress: key, txs: txs("b1"), leaves: [], boxes: 1 });
     const { chains } = await t.lovejoin.status("preprod");
     expect(chains.map((c) => c.stopped)).toEqual([CHAIN_CUT(), "The network rejected the transaction: X"]);
+    // Neither lists transactions: a stopped chain's won't go, and the progress there is the newer chain's, which
+    // the older one never lists as its own (lovejoin.ts chainTxs; 1.3.0's release review, C30).
+    expect(chains.map((c) => c.txs)).toEqual([undefined, undefined]);
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 2, sent: 1, stopped: "The network rejected the transaction: X" });
   });
 

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { CardanoAccount, Network, SeedelfKey, buildAccountSend, lovejoinOwned } from "./wasm.mjs";
+import { CardanoAccount, Network, SeedelfKey, buildAccountSend, cip30Address, lovejoinOwned, readDexOrder } from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const vectors = json("../../../seedelf-crypto/tests/vectors/cardano_account.json").vectors;
@@ -78,4 +78,25 @@ test("a stranger's deep UTxO at mix_box leaves the Lovejoin pool readable", () =
   // The module is still whole.
   assert.deepEqual(JSON.parse(lovejoinOwned(key, JSON.stringify({ network: "preprod", pool }))), owned);
   key.free();
+});
+
+test("a stranger's deep datum at a Splash order's address is no order of the session's, and leaves the module whole", () => {
+  // Anyone can pay a spent Splash order's address an output, which the web wallet reads (liveOrders); Pallas's
+  // decoder recurses a call a level, so a datum this deep, read unwalked, overflowed the module's stack and trapped
+  // it (the 1.3.0 release review, C06).
+  const splash = json("../../../seedelf-core/tests/fixtures/order_cancels.json").find(
+    (f) => f.protocol === "Splash" && f.network === "mainnet",
+  );
+  const account = CardanoAccount.fromPhrase(phrase, 0);
+  const session = account.receiveAddress(Network.Mainnet, 0);
+  const address = cip30Address(splash.order.address);
+  const read = (datum) => JSON.parse(readDexOrder(JSON.stringify({ network: "mainnet", address, datum, session })));
+  const deep = read(`${"81".repeat(LEVELS)}00`);
+  assert.deepEqual([deep.known, deep.protocol, deep.ours], [true, "Splash", false]);
+  assert.match(deep.why, /details aren't in the shape the wallet reads/);
+  // The module is still whole: the real order's datum still reads (someone else's), and an address still converts.
+  const real = read(splash.datum);
+  assert.deepEqual([real.known, real.ours, real.why], [true, false, null]);
+  assert.equal(cip30Address(splash.order.address), address);
+  account.free();
 });

@@ -135,8 +135,10 @@ The per-host rows above stay: they're the fuller answer if a reviewer asks about
 **Remote code:** No, I am not using remote code.
 
 ```text
-All code ships in the package, including the WebAssembly module (Rust compiled to wasm). The page CSP's 'wasm-unsafe-eval' is only there to compile that bundled module. The extension fetches data (JSON and CBOR) from Koios, giveme.my, CoinGecko (ADA's price) and, for swaps, Minswap's aggregator, and an NFT's image file from Blockfrost's IPFS gateway when the user asks to see it, never code.
+All code ships in the package, including the WebAssembly module (Rust compiled to wasm). The page CSP's 'wasm-unsafe-eval' is only there to compile that bundled module. No JavaScript or WebAssembly is ever fetched. The extension fetches data (JSON and CBOR) from Koios, giveme.my, CoinGecko (ADA's price) and, for swaps, Minswap's aggregator, and an NFT's image file from Blockfrost's IPFS gateway when the user asks to see it. One kind of that data is evaluated: a DEX order's validator, a Cardano Plutus script that, for most DEXes, is read from the blockchain through Koios. Before the wallet signs a swap, and when the user stops one, its bundled Plutus evaluator runs that script on the order's cancel, to check the cancel works and what it costs. A script is used only if it hashes to the value the package pins (orders.json), and the evaluator is a pure interpreter: a script gets no access to the browser, the network or the extension.
 ```
+
+**Why it stays No** (1.3.0's release review, C38): the dashboard asks about JavaScript or WebAssembly that isn't in the package. A DEX's Plutus validator is neither: it runs only in the wallet's own evaluator, and only when its hash is the one the package pins. The text above says so rather than "never code", which stopped being true when Stop's cancel began measuring each order's own script (chunk 24). It comes to 943 characters.
 
 **Data usage.** Check these two, then the two under them, and leave the rest unchecked:
 

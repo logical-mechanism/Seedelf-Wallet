@@ -82,6 +82,35 @@ describe("a mix from the public account and its record (independent review L28)"
     expect(await t.lovejoin.progress("preprod")).toEqual({ total: 2, sent: 0, txs: expect.any(Array) });
   });
 
+  it("lists none of an older chain's transactions under a newer one whose progress isn't where it waits yet", async () => {
+    const t = await publicFunded();
+    // An older mix, stopped, its progress still where the public account's mix waits.
+    const older = chainOf("a1");
+    await t.lovejoin.recordChain("preprod", { progress: KEY, txs: older, leaves: [], boxes: 1 });
+    await t.wallet.withKeys(() => t.session.set(KEY, { txs: older, next: 1, flying: [], stopped: "The network rejected the transaction: X" }));
+    const newer = chainOf("b1");
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let entered!: () => void;
+    const starting = new Promise<void>((resolve) => (entered = resolve));
+    const recorded = t.lovejoin.recordChain("preprod", { progress: KEY, txs: newer, leaves: [], boxes: 1 }, async () => {
+      entered();
+      await gate;
+      await t.wallet.withKeys(() => t.session.set(KEY, { txs: newer, next: 0, flying: [] }));
+    });
+    await starting;
+    // Meanwhile the slot holds the older chain's progress: the newer chain's row lists none of it (lovejoin.ts
+    // chainTxs, 1.3.0's release review, C30).
+    const rows = (await t.lovejoin.status("preprod")).chains;
+    expect(rows.map((c) => [c.stopped === undefined ? "sending" : "stopped", c.txs])).toEqual([
+      ["stopped", undefined],
+      ["sending", undefined],
+    ]);
+    open();
+    await recorded;
+    expect((await t.lovejoin.chains("preprod")).at(-1)!.txs?.map((tx) => tx.txHash)).toEqual(newer.map((tx) => tx.txHash));
+  });
+
   it("is taken for one a lock cut once the worker that was putting its progress there has stopped", async () => {
     const t = await publicFunded();
     const txs = chainOf("b1");

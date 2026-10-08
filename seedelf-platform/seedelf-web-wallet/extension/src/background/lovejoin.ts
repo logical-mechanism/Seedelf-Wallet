@@ -94,6 +94,7 @@ import type {
   LeftOutUtxo,
   LovejoinFunding,
   LovejoinChainTx,
+  LovejoinChainView,
   LovejoinHeld,
   LovejoinPublicSummary,
   LovejoinStatus,
@@ -321,15 +322,24 @@ export interface ChainProgress {
 /**
  * A chain's transactions as its progress has them: what each is, and whether
  * it's on chain (sent, and no longer waiting to be seen), sent and not seen
- * yet (`flying`), or not sent yet (from `next` on). For the Lovejoin page,
- * which opens each in Transaction details (chunk 25).
+ * yet (`flying`), being sent, or not sent yet (from `next` on). For the
+ * Lovejoin page, which opens each in Transaction details (chunk 25).
+ *
+ * The next is being sent while a send of it began and hasn't finished
+ * (`sending`, through every back-off), or once a try of it Koios didn't
+ * answer may have put it in (a public mix's `reached`): it may be in a
+ * mempool, or on chain, already, so it's never said not to be sent
+ * (independent review L5's rule; 1.3.0's release review, C29). Nor is it said to
+ * be sent: the count beside the list counts only sends that finished (`next`).
  */
-export function chainTxsOf(progress: ChainProgress): LovejoinChainTx[] {
+export function chainTxsOf(progress: ChainProgress & { reached?: number }): LovejoinChainTx[] {
   const flying = new Set(progress.flying);
+  const begun = progress.sending === progress.next || progress.reached === progress.next;
   return progress.txs.map((tx, i) => ({
     txHash: tx.txHash,
     kind: tx.kind,
-    state: i >= progress.next ? "waiting" : flying.has(tx.txHash) ? "sent" : "landed",
+    state:
+      i < progress.next ? (flying.has(tx.txHash) ? "sent" : "landed") : i === progress.next && begun ? "sending" : "waiting",
   }));
 }
 
@@ -2930,30 +2940,64 @@ export class LovejoinService {
       ...(deposits.length ? { deposits } : {}),
       fromPublic: publicBoxes,
       ...(otherAccounts.length ? { otherAccounts } : {}),
-      chains: await Promise.all(
-        chains.filter(shown).map(async (c) => {
-          const txs = await this.chainTxs(c);
-          return {
-            ...(c.session !== undefined ? { session: c.session } : {}),
-            boxes: c.boxes,
-            total: c.total,
-            sent: c.sent,
-            at: c.at,
-            ...(c.stopped ? { stopped: c.stopped } : {}),
-            ...(c.maybe && c.ended ? { maybeSent: true as const } : {}),
-            ...(txs ? { txs } : {}),
-          };
-        }),
-      ),
+      chains: await this.rows(chains),
     };
+  }
+
+  /**
+   * The wallet's chains not all sent, as status lists them, read again from
+   * the device alone: no Koios request, so the Lovejoin page asks every few
+   * seconds while one is being sent. A chain all sent, or stopped, since the
+   * page read the pool then leaves its row, or says so, rather than listing
+   * transactions the wallet no longer holds (1.3.0's release review, C28).
+   */
+  async chains(network: NetworkName): Promise<LovejoinChainView[]> {
+    if (!this.available(network)) return [];
+    await this.cuts(network);
+    return this.rows((await this.read(network)).chains);
+  }
+
+  /** The rows the Lovejoin page lists for `chains`: those it shows (shown), each one's transactions while it's sent. */
+  private rows(chains: ChainRecord[]): Promise<LovejoinChainView[]> {
+    return Promise.all(
+      chains.filter(shown).map(async (c) => {
+        const txs = await this.chainTxs(c);
+        return {
+          ...(c.session !== undefined ? { session: c.session } : {}),
+          boxes: c.boxes,
+          total: c.total,
+          sent: c.sent,
+          at: c.at,
+          ...(c.stopped ? { stopped: c.stopped } : {}),
+          ...(c.maybe && c.ended ? { maybeSent: true as const } : {}),
+          ...(txs ? { txs } : {}),
+        };
+      }),
+    );
+  }
+
+  /**
+   * Whether `txHash` is a transaction of one of the wallet's chains on
+   * `network` its schedule still records (its deposit, a mix, or its last):
+   * from the device alone. Transaction details asks it of a hash it no longer
+   * holds, which a chain's list read earlier, or its review, named
+   * (tx-view.ts).
+   */
+  async inChain(network: NetworkName, txHash: string): Promise<boolean> {
+    if (!this.available(network)) return false;
+    const wanted = txHash.trim().toLowerCase();
+    return (await this.read(network)).chains.some((c) => c.id === wanted || c.deposit === wanted || c.mixes.includes(wanted));
   }
 
   /**
    * A chain's transactions while it's being sent, from where it waits
    * (`progress`), for its row on the Lovejoin page: each one's kind, and
-   * whether it's on chain, sent and not seen yet, or not sent yet. None once
-   * it's stopped or all sent (its progress is gone), nor while locked. The
-   * same record is what Transaction details reads each from (tx-view.ts).
+   * whether it's on chain, sent and not seen yet, being sent, or not sent
+   * yet (chainTxsOf). None once it's all sent (its progress is gone), nor
+   * once it's stopped (a session's progress is dropped as it stops; a
+   * public mix's stays until its next mix or a lock, and is left out here),
+   * nor while locked. The same record is what Transaction details
+   * reads each from (tx-view.ts).
    */
   private async chainTxs(c: ChainRecord): Promise<LovejoinChainTx[] | undefined> {
     if (c.stopped) return undefined;

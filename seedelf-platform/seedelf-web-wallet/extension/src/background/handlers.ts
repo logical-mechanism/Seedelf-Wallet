@@ -267,7 +267,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "preferences-set": {
       const { type: _type, ...change } = message;
       const prefs = await ctx.preferences.set(change);
-      // Another dApp account: a site's signature waiting was checked for the one it left (chunk 25).
+      // Another dApp account: a site's signature waiting was checked for the one it left (chunk 25). Told once it's
+      // written: a request's last look before its window then sees the new one, or it's waiting by now (dapp.ts
+      // `sameAccount`; 1.3.0's release review, C27).
       if (typeof change.dappAccount === "number") await ctx.dapp.dappAccountChanged();
       if (typeof change.dappConnector === "boolean") {
         // Off: nothing a site asked for waits on (independent review L33).
@@ -333,6 +335,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
           ...ctx,
           knownAccounts: () => ctx.accounts.known().then((all) => all.map((a) => a.index)),
           sessionIndices: (network) => ctx.sessions.indices(network),
+          // A chain's transaction it no longer holds says its chain moved on (1.3.0's release review, C28).
+          inChain: (network, txHash) => ctx.lovejoin.inChain(network, txHash),
         },
         ctx.network,
         message.txHash,
@@ -413,6 +417,10 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.lovejoin.status(ctx.network);
     case "lovejoin-held":
       return ctx.lovejoin.held(ctx.network);
+    // The Lovejoin page's chain rows, read again while one is sent: the device alone, no Koios (1.3.0's release
+    // review, C28).
+    case "lovejoin-chains":
+      return ctx.lovejoin.chains(ctx.network);
     case "lovejoin-funding":
       return ctx.lovejoin.funding(ctx.network, message.boxes);
     case "lovejoin-mix-private-build":

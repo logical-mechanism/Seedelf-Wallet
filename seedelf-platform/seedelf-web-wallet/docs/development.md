@@ -152,7 +152,7 @@ cd seedelf-platform
 cargo test --workspace --locked
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.2.0
+release_version=1.3.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -183,7 +183,7 @@ git pull --ff-only
 git status --porcelain
 cd seedelf-platform/seedelf-web-wallet/extension
 npm ci
-release_version=1.2.0
+release_version=1.3.0
 npm run package
 npm run e2e
 sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
@@ -198,7 +198,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.2.0, that file is `extension/release/seedelf-wallet-1.2.0-mainnet.zip`.
+With `package.json` at 1.3.0, that file is `extension/release/seedelf-wallet-1.3.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 
@@ -229,8 +229,8 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 **Steps 1 to 6 happen on the release branch and are committed in its PR; step 7 on runs on `main`'s merge commit**, in a clean tree. The privacy policy and the wallet's Settings link point at `main`, so the merge comes before `npm run package` ([store/README.md](store/README.md)).
 
 1. **Bump the version:** `npm version <x.y.z> --no-git-tag-version` in `extension/`. It updates `package.json` and `package-lock.json`, and the manifest takes its version from there. Every upload needs a higher version than the last.
-2. **Refresh the token list:** `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker.
-3. **Refresh the DRep list:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name; skim the diff for anything odd before committing it.
+2. **Refresh the token list, every release** (the owner, 2026-10-08): `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker. The handoff note says what changed, or that nothing did.
+3. **Refresh the DRep list, every release:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name. **Koios's servers disagree about DRep metadata** (1.3.0's prep had three single-pass runs name 371, 407 and 406 mainnet DReps against the committed 449, each missing a different set), so the script asks again for the DReps still unnamed, in up to three passes. A DRep the committed list names that's still registered but that no pass names keeps its committed name, and a list that would still lose more than 5% of the committed one is refused with nothing written: run it again later. Its line for each network says how many passes it took, how many names it kept as committed, and how many committed DReps are no longer registered. Skim the diff for anything odd before committing it; the handoff note says what changed.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
 6. **Commit and merge:** the bump, both lists, the images and any change to the listing's text, in the release branch's PR into `main`.

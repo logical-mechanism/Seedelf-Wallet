@@ -63,6 +63,14 @@ export interface TxViewDeps {
   knownAccounts?: () => Promise<number[]>;
   /** The private sessions used on a network, by index (sessions.ts `indices`): so is one to their one-time accounts. */
   sessionIndices?: (network: NetworkName) => Promise<number[]>;
+  /**
+   * Whether a hash the view doesn't hold is a transaction of one of the
+   * wallet's chains through Lovejoin (lovejoin.ts `inChain`), from the device
+   * alone: its chain was all sent, or stopped, since the Lovejoin page listed
+   * it or its review showed it, and the view says so rather than "Review it
+   * again" (1.3.0's release review, C28).
+   */
+  inChain?: (network: NetworkName, txHash: string) => Promise<boolean>;
 }
 
 /**
@@ -106,9 +114,17 @@ async function chainKeys(deps: TxViewDeps, network: NetworkName): Promise<string
 export const NOT_HELD = () => t("worker.txView.notHeld");
 
 /**
- * The transaction `txHash`, decoded. It looks in what the wallet built and is
- * holding for Send, and in a chain through Lovejoin being sent, then in what
- * a site is waiting for a signature on (`waiting`, the connector's queue).
+ * What it says instead when that's one of a chain's transactions: the chain
+ * was all sent, or stopped, since the Lovejoin page listed it or its review
+ * showed it, and there's nothing to review again.
+ */
+export const CHAIN_MOVED = () => t("worker.txView.chainMoved");
+
+/**
+ * The transaction `txHash`, decoded. It looks in a chain through Lovejoin
+ * being sent, and in what the wallet built and is holding for Send, then in
+ * what a site is waiting for a signature on (`waiting`, the connector's
+ * queue). Found in a chain, the answer says so (`chain`).
  */
 export async function txView(
   deps: TxViewDeps,
@@ -124,9 +140,18 @@ export async function txView(
   // in the connector's window can still be read while it's locked.
   const kept = await wallet
     .withKeys(async () => {
-      for (const key of [...BUILT_KEYS, ...chains]) {
-        const found = cborOf(await session.get<unknown>(key), wanted, network);
-        if (found) return found;
+      // Where a chain is sent from first: a session's return keeps its whole chain for Send (SESSION_BACK) until
+      // its first transaction's submit, after its progress is already there. The bytes are the same in both (a
+      // chain is signed whole as it's built); found there, it's a chain's being sent, which no confirm waits for
+      // (1.3.0's release review, C17).
+      for (const [keys, chain] of [
+        [chains, true],
+        [BUILT_KEYS, false],
+      ] as const) {
+        for (const key of keys) {
+          const cbor = cborOf(await session.get<unknown>(key), wanted, network);
+          if (cbor) return { cbor, chain };
+        }
       }
       return undefined;
     })
@@ -134,15 +159,23 @@ export async function txView(
       if (waiting?.(wanted) === undefined) throw e;
       return undefined;
     });
-  const cbor = kept ?? waiting?.(wanted);
-  if (!cbor) throw new Error(NOT_HELD());
+  const cbor = kept?.cbor ?? waiting?.(wanted);
+  if (!cbor) {
+    // One a chain's list or review named, opened after the chain was all sent or stopped: it's gone from the
+    // wallet's hands, and there's no review to build again (1.3.0's release review, C28).
+    const chained = await deps.inChain?.(network, wanted).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+      return false;
+    });
+    throw new Error(chained ? CHAIN_MOVED() : NOT_HELD());
+  }
   const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
   const detail = JSON.parse(wasm.decodeTx(net, cbor)) as TxDetail;
   // Never in the way of the view: locked, or with nothing known, nothing is marked.
   await markYours(deps, network, detail).catch((e: unknown) => {
     if (isTrap(e)) throw e;
   });
-  return { detail, cbor };
+  return { detail, cbor, ...(kept?.chain ? { chain: true as const } : {}) };
 }
 
 /** An address's payment key hash (hex), when a key and not a script pays it: none for a reward or Byron address. */

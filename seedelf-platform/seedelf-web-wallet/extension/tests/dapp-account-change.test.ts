@@ -11,9 +11,11 @@
 import { describe, expect, it } from "vitest";
 
 import { type DappSession } from "../src/background/dapp";
+import type { KoiosUtxo } from "../src/background/koios";
+import { witnessedKeys } from "../src/background/minswap";
 import { SESSION_SEND } from "../src/background/send";
 import { APIError } from "../src/shared/dapp";
-import { testBalances, vectors } from "./fakes";
+import { busyFor, koiosPreprod, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 /** The one vector phrase with both accounts recorded: account 0 holds UTxOs, account 1 none. */
@@ -22,6 +24,8 @@ const phrase = (account: 0 | 1) =>
 const THEIRS = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 15)!.preprod
   .receive_0 as string;
 const BAD_INPUTS = '{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["BadInputsUTxO"]}}}}';
+/** A test whose cases run in a loop, a wallet made for each or twenty signatures approved: past Vitest's 5 s on CI's runners. */
+const SLOW = { timeout: 30_000 };
 
 let pages = 0;
 const site = (origin = "https://app.example.com"): DappSession => ({ id: `change${++pages}`, origin, title: "Example" });
@@ -202,5 +206,225 @@ describe("a site's signature waiting as the dApp account changes (chunk 25)", ()
     await t.preferences.set({ dappAccount: 0 });
     await t.dapp.dappAccountChanged();
     expect(t.dapp.approvals()).toHaveLength(2);
+  });
+});
+
+describe("a site's signature still being read, or being approved, as the dApp account changes (1.3.0's release review)", () => {
+  // Read for account 0, a request was inspected, put in front of the user and signed with whatever the dApp account
+  // was at each step, read again every time. A change while it was read had it refused as nothing of the account's
+  // to sign (ProofGeneration, not AccountChange), or shown after Settings' decline had run; one landing as it was
+  // approved, past the first check, had the new account's keys sign it (C26, C27).
+  const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
+  const moved = { code: APIError.AccountChange, info: expect.stringContaining("The account sites use changed") };
+
+  /** Settings' change as the worker makes it (handlers.ts, `preferences-set`): written, then the connector told. */
+  async function change(t: T, account: number) {
+    await t.preferences.set({ dappAccount: account });
+    await t.dapp.dappAccountChanged();
+  }
+
+  /** How a site's call ended, once it has: its answer, or what the site heard. */
+  function ending(call: Promise<unknown>) {
+    const end: { done: boolean; value?: unknown; failure?: unknown } = { done: false };
+    call.then(
+      (value) => Object.assign(end, { done: true, value }),
+      (e: { failure?: unknown }) => Object.assign(end, { done: true, failure: e.failure ?? String(e) }),
+    );
+    return end;
+  }
+
+  /** The public accounts whose keys the wallet is asked for, as it's asked. */
+  function accountsUsed(t: T): number[] {
+    const real = t.wallet.withAccount.bind(t.wallet);
+    const used: number[] = [];
+    t.wallet.withAccount = ((index: number, task: Parameters<typeof real>[1]) => {
+      used.push(index);
+      return real(index, task);
+    }) as typeof t.wallet.withAccount;
+    return used;
+  }
+
+  async function payment(t: T) {
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    return (await t.session.get<{ txCbor: string }>(SESSION_SEND))!.txCbor;
+  }
+
+  it("refuses a signTx and a signData being read as the change lands with AccountChange, and never shows them", async () => {
+    const t = await on();
+    const a = await connect(t);
+    const tx = await payment(t);
+    const own = t.deps.wasm.cip30Address(phrase(0).preprod.receive_0 as string);
+    // The kept reading has aged: both read account 0 again, and Koios is slow to answer.
+    t.clock.now += 31_000;
+    let release!: () => void;
+    t.koios.hold = new Promise<void>((r) => (release = r));
+    const asked = t.koios.calls.length;
+    const shown = t.dappWindow.shown;
+    const signing = ending(t.dapp.call(a, "signTx", [tx, false]));
+    const message = ending(t.dapp.call(a, "signData", [own, hex("Sign in: nonce 7")]));
+    await until(() => t.koios.calls.length > asked);
+    await change(t, 1);
+    release();
+    t.koios.hold = undefined;
+    await until(() => signing.done && message.done);
+    expect(signing.failure).toEqual(moved);
+    expect(message.failure).toEqual(moved);
+    expect(t.dapp.approvals()).toEqual([]);
+    expect(t.dappWindow.shown).toBe(shown);
+  });
+
+  it("refuses one whose change lands as its prompt is made ready, before or after its last look at the account", SLOW, async () => {
+    // The worker writes the setting, then declines what waits. Started as the prompt's ties to the wallet's other
+    // accounts are read, the change is seen by the request's last look before the window, which refuses it; started
+    // just after that look read the old account, it finds the request waiting, and declines it. Never left in front
+    // of the user for the account Settings left, whatever turn it lands on.
+    for (const after of ["ties", "look"] as const) {
+      for (let skew = 0; skew < 4; skew++) {
+        const t = await on();
+        const a = await connect(t);
+        const tx = await payment(t);
+        let changing: Promise<void> | undefined;
+        const start = () =>
+          (changing ??= (async () => {
+            for (let i = 0; i < skew; i++) await Promise.resolve();
+            await change(t, 1);
+          })());
+        const indices = t.sessions.indices.bind(t.sessions);
+        let tied = false;
+        t.sessions.indices = async (network) => {
+          tied = true;
+          if (after === "ties") start();
+          return indices(network);
+        };
+        const get = t.preferences.get.bind(t.preferences);
+        t.preferences.get = async () => {
+          const prefs = await get();
+          if (after === "look" && tied) start();
+          return prefs;
+        };
+        const signing = ending(t.dapp.call(a, "signTx", [tx, false]));
+        await until(() => changing !== undefined);
+        await changing;
+        await until(() => signing.done);
+        expect(signing.failure).toEqual(moved);
+        expect(t.dapp.approvals()).toEqual([]);
+      }
+    }
+  });
+
+  it("reads the account it was asked for afresh, not the one Settings moved to, for an input the kept reading lacks", async () => {
+    const t = await on();
+    const a = await connect(t);
+    const tx = await payment(t);
+    await t.dapp.call(a, "getUtxos", []);
+    // The kept reading of account 0 lacks what the transaction spends, so the request reads the account again.
+    const KEY = "seedelf.dapp.view.preprod";
+    await t.session.set(KEY, { ...(await t.session.get<object>(KEY)), utxos: [] });
+    // The change lands as the kept reading is looked at: between it and the fresh one.
+    const get = t.session.get.bind(t.session);
+    let changed = false;
+    t.session.get = (async (key: string) => {
+      const value = await get(key);
+      if (key === KEY && !changed) {
+        changed = true;
+        await change(t, 1);
+      }
+      return value;
+    }) as typeof t.session.get;
+    const signing = ending(t.dapp.call(a, "signTx", [tx, false]));
+    await until(() => signing.done);
+    expect(changed).toBe(true);
+    expect(signing.failure).toEqual(moved);
+    expect(t.dapp.approvals()).toEqual([]);
+  });
+
+  it("refuses it with AccountChange when the change lands as it's approved, and the new account's keys sign nothing", async () => {
+    const t = await on();
+    const a = await connect(t);
+    const tx = await payment(t);
+    const signing = ending(t.dapp.call(a, "signTx", [tx, false]));
+    await until(() => t.dapp.approvals().length === 1);
+    // Settings' change lands past the approval's first look at the account, as the user's locks are read again.
+    const choices = t.coins.choices.bind(t.coins);
+    let changed = false;
+    t.coins.choices = async (network, account) => {
+      if (!changed) {
+        changed = true;
+        await change(t, 1);
+      }
+      return choices(network, account);
+    };
+    const used = accountsUsed(t);
+    expect(await t.dapp.answer(t.dapp.approvals()[0]!.id, true)).toEqual({
+      error: expect.stringContaining("The account sites use changed"),
+    });
+    await until(() => signing.done);
+    expect(changed).toBe(true);
+    expect(signing.failure).toEqual(moved);
+    expect(used).not.toContain(1);
+  });
+
+  it("never has the new account's keys sign, wherever the change falls as it's approved", SLOW, async () => {
+    // A transaction with a part for each account, for a partial signature: read for account 0, which signs its own
+    // input, while account 1's is someone else's to the review. Settings' change lands just before the approval's
+    // first read of the setting, then its second, and so on, past the last.
+    const t = await on();
+    const { wasm } = t.deps;
+    const ours = [...koiosPreprod.accounts[phrase(0).preprod.stake as string]!.account_utxos].sort((x, y) =>
+      Number(BigInt(y.value) - BigInt(x.value)),
+    )[0]!;
+    const theirs: KoiosUtxo = {
+      ...ours,
+      tx_hash: "ab".repeat(32),
+      tx_index: 0,
+      value: "50000000",
+      address: phrase(1).preprod.receive_0 as string,
+      payment_cred: wasm.cip30Address(phrase(1).preprod.receive_0 as string).slice(2, 58),
+      stake_address: phrase(1).preprod.stake as string,
+      asset_list: [],
+    };
+    t.koios.addedToAccounts.push(theirs);
+    // Both inputs, and 4 ₳ to someone else. Nothing balances it: the wallet only reads and signs it.
+    const input = (u: KoiosUtxo) =>
+      `825820${u.tx_hash}${u.tx_index < 24 ? "" : "18"}${u.tx_index.toString(16).padStart(2, "0")}`;
+    const tx = `84a30082${input(ours)}${input(theirs)}0181825839${wasm.cip30Address(THEIRS)}1a003d0900021a00029810a0f5f6`;
+    const own = wasm.cip30Address(phrase(0).preprod.receive_0 as string);
+    const a = await connect(t);
+
+    let from: number | undefined;
+    let reads = 0;
+    const get = t.preferences.get.bind(t.preferences);
+    t.preferences.get = async () => {
+      const prefs = await get();
+      return from !== undefined && reads++ >= from ? { ...prefs, dappAccount: 1 } : prefs;
+    };
+    const used = accountsUsed(t);
+    const ends = new Set<string>();
+    for (const method of ["signTx", "signData"] as const) {
+      for (let at = 0; at < 10; at++) {
+        // A minute on each time, so the site's fresh readings and lookups (`PER_MINUTE`) come back.
+        await busyFor(t, 61_000);
+        const call = ending(t.dapp.call(a, method, method === "signTx" ? [tx, true] : [own, hex("Sign in: nonce 7")]));
+        await until(() => t.dapp.approvals().length === 1);
+        from = at;
+        reads = 0;
+        used.length = 0;
+        await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+        await until(() => call.done);
+        from = undefined;
+        expect(used).not.toContain(1);
+        if (call.failure !== undefined) {
+          expect(call.failure).toEqual(moved);
+        } else if (method === "signTx") {
+          // The witness set alone, as a transaction with an empty body, for the keys it carries.
+          const keys = witnessedKeys(Buffer.from(`84a0${call.value as string}f5f6`, "hex"));
+          expect([...keys]).toEqual([ours.payment_cred]);
+        }
+        ends.add(`${method} ${call.failure === undefined ? "signed" : "refused"}`);
+      }
+    }
+    // A change up to the last look at the account was refused; past it nothing reads the setting, and account 0
+    // alone signed.
+    expect([...ends].sort()).toEqual(["signData refused", "signData signed", "signTx refused", "signTx signed"]);
   });
 });

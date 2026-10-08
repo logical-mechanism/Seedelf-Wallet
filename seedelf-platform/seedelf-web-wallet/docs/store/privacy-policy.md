@@ -1,6 +1,6 @@
 # Seedelf Wallet privacy policy
 
-**Effective 7 October 2026** (updated for mainnet, the network switch, Lovejoin, a privacy review, what removing the wallet keeps, NFT images, being your own DRep, several public accounts, the language, a governance action's text, pages already open when sites can connect, the links to GitHub, Chrome's Translate, a swap's orders read from Koios, and nothing kept in your browser's cache: see *Changes*). This policy covers the Seedelf Wallet browser extension, published by Logical Mechanism LLC.
+**Effective 8 October 2026** (updated for mainnet, the network switch, Lovejoin, a privacy review, what removing the wallet keeps, NFT images, being your own DRep, several public accounts, the language, a governance action's text, pages already open when sites can connect, the links to GitHub, Chrome's Translate, a swap's orders read from Koios, nothing kept in your browser's cache, and the DEX order scripts the wallet runs: see *Changes*). This policy covers the Seedelf Wallet browser extension, published by Logical Mechanism LLC.
 
 **In short:** no accounts, analytics, crash reports or ads. One service the wallet uses, giveme.my, is ours: it receives your IP address and each private transaction you send, to add its collateral. Never your recovery phrase or your keys. To work, the extension also talks to Koios, a public Cardano API, and on mainnet to CoinGecko, for ADA's price. When you swap, it also talks to Minswap, and when you ask to see an NFT's image, to Blockfrost's IPFS gateway. Nothing else: Lovejoin, the mixer, is a contract on the Cardano blockchain, reached through Koios. Sites see your public account, or a private session's account, only if you turn on connecting sites and connect them.
 
@@ -70,7 +70,7 @@ If you use Chrome's Translate on the wallet, Chrome sends the page's text to Goo
 - We don't collect, sell or share any data. The one service of ours, giveme.my, receives what's above to add its collateral, and nothing else.
 - We don't track what you do in the extension or on other websites.
 - The extension doesn't read web pages. Only if you turn on connecting sites does it add the standard Cardano wallet entry (`window.cardano.seedelf`) to https pages, and nothing else: to pages already open as you turn it on, and to those you open after. Turning it off stops that; a page still open keeps the entry until it's reloaded, and it refuses every call. While it's on, every https site you open, and the scripts on it, can see that you use Seedelf Wallet, even sites you never connect (not your addresses or balance until you connect).
-- The extension runs no code from outside its package.
+- The extension never fetches JavaScript or WebAssembly to run: its code all ships in its package. The one program it takes from outside is a DEX order's script, read from the Cardano blockchain, which the wallet's own evaluator runs to check that it can cancel a swap's order. That evaluator gives the script no access to your browser, and runs it only if it matches the hash the package carries.
 
 ## Your control
 
@@ -83,6 +83,7 @@ If you use Chrome's Translate on the wallet, Chrome sends the page's text to Goo
 
 If the extension's data handling changes, we'll update this page and its date, and list the change under Changes below, before the new version ships.
 
+- **8 October 2026:** corrects what this page said about code. The extension never fetches JavaScript or WebAssembly to run, but since the wallet builds a swap's cancel itself, it runs a DEX order's script, read from the blockchain, in its own evaluator, and only one that matches the hash the extension carries. Before, this page said it ran no code from outside its package.
 - **7 October 2026:** no request to a service is kept in your browser's cache. Before, Chrome could keep one on the disk, including a few that name an ADA Handle you looked up or your DRep ID; only an NFT's image was kept out.
 - **7 October 2026:** a swap's orders are no longer looked up or cancelled through Minswap. The wallet reads them from Koios, which already sees the one-time account and its transactions, and builds and signs the cancel itself; Minswap is no longer sent the account's address to list its orders.
 - **6 October 2026:** says that the wallet asks Koios about your public account's DRep, by its ID, whether or not you've made the account one; and names GitHub, which the links in Settings to the source code, this policy and **Report a translation error** open in your browser, and where an issue you open is public; and says that Chrome's Translate, used on the wallet's page, sends its text to Google.

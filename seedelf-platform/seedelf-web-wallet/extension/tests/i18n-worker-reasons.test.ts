@@ -71,6 +71,12 @@ const RUNTIME: Array<{ key: string; file: string; error: string; why: string }> 
     why: "the review's alert shows a Refused's own words (swapBuild, inspect)",
   },
   {
+    key: "sess.refuse.warn.cancelRefused",
+    file: "background/sessions.ts",
+    error: "Refused",
+    why: "the alert shows a refusal of the wallet's own cancel in its own words (cancelBuild: cancelOf, inspect), release review C19",
+  },
+  {
     key: "worker.record.warn.unreadable",
     file: "background/private-store.ts",
     error: "UnreadableRecordError",
@@ -85,6 +91,7 @@ const RUNTIME: Array<{ key: string; file: string; error: string; why: string }> 
  */
 const SHOWN_IN: Array<{ field: string; frame: string; placeholder: string }> = [
   { field: "SessionPause.detail (a Refused's)", frame: "swaps.pause.warn.refused", placeholder: "detail" },
+  { field: "SessionPause.detail (a Refused's, after Stop: the wallet's own cancel)", frame: "swaps.pause.warn.cancelRefused", placeholder: "detail" },
   { field: "SwapLovejoin.skipped (poolShort's)", frame: "swaps.lovejoin.warn.pool", placeholder: "why" },
   { field: "SessionBackSummary.lovejoinSkipped", frame: "lovejoin.warn.skippedThis", placeholder: "why" },
   { field: "SessionView.lovejoinSkipped", frame: "lovejoin.warn.skippedIts", placeholder: "why" },
