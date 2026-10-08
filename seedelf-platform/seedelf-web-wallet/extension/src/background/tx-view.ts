@@ -1,5 +1,6 @@
 // The transaction view: the transaction the wallet is about to sign or send,
-// decoded from its own bytes (wasm/src/decode.rs `decodeTx`).
+// or one of a chain through Lovejoin it's still sending, decoded from its own
+// bytes (wasm/src/decode.rs `decodeTx`).
 //
 // It is the cheapest handler in the worker: no Koios request, no storage write,
 // nothing kept. It finds the bytes the review is already about and hands them
@@ -35,10 +36,11 @@ import { CONTRACT_V1 } from "./balances";
 import { GAP_LIMIT } from "./chain";
 import { SESSION_MINT } from "./mint";
 import { SESSION_BUILT } from "./move-in";
-import { SESSION_LOVEJOIN_PUBLIC } from "./lovejoin";
+import { SESSION_LOVEJOIN_PUBLIC, SESSION_LOVEJOIN_SENDING } from "./lovejoin";
 import { SESSION_COLLATERAL, SESSION_SEND } from "./send";
 import {
   SESSION_BACK,
+  SESSION_CHAIN_PREFIX,
   SESSION_CLAIM,
   SESSION_MIX_OUT,
   SESSION_OUT,
@@ -88,13 +90,25 @@ export const BUILT_KEYS: readonly string[] = [
   SESSION_LOVEJOIN_PUBLIC,
 ];
 
+/**
+ * Where a chain through Lovejoin waits while it's being sent, on `network`:
+ * the public account's mix, and each session's return or mix (sessions.ts
+ * `pendingKey`). Its transactions move there from the key it was kept for
+ * Send under, and the Lovejoin page's row for it opens each (chunk 17's
+ * handoff note: a chain in flight was invisible to the view).
+ */
+async function chainKeys(deps: TxViewDeps, network: NetworkName): Promise<string[]> {
+  const indices = (await deps.sessionIndices?.(network).catch(() => [])) ?? [];
+  return [SESSION_LOVEJOIN_SENDING + network, ...indices.map((i) => `${SESSION_CHAIN_PREFIX}${network}.${i}`)];
+}
+
 /** What the view says when it isn't holding the transaction asked for. */
 export const NOT_HELD = () => t("worker.txView.notHeld");
 
 /**
  * The transaction `txHash`, decoded. It looks in what the wallet built and is
- * holding for Send, then in what a site is waiting for a signature on
- * (`waiting`, the connector's queue).
+ * holding for Send, and in a chain through Lovejoin being sent, then in what
+ * a site is waiting for a signature on (`waiting`, the connector's queue).
  */
 export async function txView(
   deps: TxViewDeps,
@@ -104,12 +118,13 @@ export async function txView(
 ): Promise<TxView> {
   const { wasm, wallet, session } = deps;
   const wanted = txHash.trim().toLowerCase();
+  const chains = await chainKeys(deps, network);
   // The kept records are behind the keys, so a locked wallet reads none of
   // them. A site's own bytes aren't the wallet's secret, so a request waiting
   // in the connector's window can still be read while it's locked.
   const kept = await wallet
     .withKeys(async () => {
-      for (const key of BUILT_KEYS) {
+      for (const key of [...BUILT_KEYS, ...chains]) {
         const found = cborOf(await session.get<unknown>(key), wanted, network);
         if (found) return found;
       }

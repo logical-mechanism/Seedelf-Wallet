@@ -1042,7 +1042,7 @@ describe("a chain's resend while tx_status is down", CHAINS, () => {
     await t.wallet.touch();
     expect(await lovejoin.pumpPublic("preprod")).toBe(true);
     expect(net.refused()).toBe(4);
-    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4 });
+    expect(await lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4, txs: expect.any(Array) });
     // tx_status answers again: the last mix goes.
     down = false;
     expect(await lovejoin.pumpPublic("preprod")).toBe(false);
@@ -2217,7 +2217,7 @@ describe("mixing from the tile", CHAINS, () => {
     await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("still being sent");
     t.koios.confirmations = 1;
     expect(await t.lovejoin.pumpPublic("preprod")).toBe(false);
-    expect(counted).toEqual([0, 1, 2, 3, 4].map((sent) => ({ total: 5, sent })));
+    expect(counted).toEqual([0, 1, 2, 3, 4].map((sent) => ({ total: 5, sent, txs: expect.any(Array) })));
     expect(await t.lovejoin.progress("preprod")).toBeNull();
     expect(pending).toMatchObject({ kind: "lovejoin-mix", txHash: summary.txHash });
     const sent = t.koios.submitted.slice(before);

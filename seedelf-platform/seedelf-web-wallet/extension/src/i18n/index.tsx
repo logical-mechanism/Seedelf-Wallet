@@ -10,7 +10,7 @@ import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { i18n, t, type Translate } from "./core";
 import type { I18nKey } from "./translations";
 
-export { currentLanguage, joinList, joinSentences, sentenceGap, setLanguage, startI18n, t } from "./core";
+export { currentLanguage, dateLocale, joinList, joinSentences, sentenceGap, setLanguage, startI18n, t } from "./core";
 export { availableLanguages, DEFAULT_LANGUAGE, type LanguageCode } from "./translations";
 export type { I18nKey };
 

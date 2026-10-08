@@ -1,5 +1,5 @@
 {
-  "//": "Fungible tokens the wallet knows by name, per network: each unit pinned with the ticker the Cardano token registry must give it. On a test network, a token the registry lacks can carry `unregistered`: its name and decimals, vetted by hand, and their source (never on mainnet). Vet every entry before adding it; `npm run tokens` rebuilds registry.<network>.json. Left out on purpose (mainnet): tickers with several registry entries (MILK, C3, NMKR, MELD, WRT, WMTX), BOOK (its asset name reads HODOR) and USDCx (not confirmed).",
+  "//": "Fungible tokens the wallet knows by name, per network: each unit pinned with the ticker the Cardano token registry must give it. On a test network, a token the registry lacks can carry `unregistered`: its name and decimals, vetted by hand, and their source (never on mainnet). Vet every entry before adding it; `npm run tokens` rebuilds registry.<network>.json. MILK, C3, NMKR, MELD, WRT and WMTX each have several registry entries: the one listed is the one Minswap verifies, and USDCx (one entry) is Minswap-verified too (vetted 2026-10-07). Left out on purpose (mainnet): BOOK, whose only registry entry is a joke token named HODOR (0 decimals), which Minswap doesn't verify.",
   "preprod": [
     { "ticker": "tUSDM", "policy": "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde", "name": "0014df10745553444d" },
     {
@@ -21,6 +21,7 @@
     { "ticker": "iETH", "policy": "f66d78b4a3cb3d37afa0ec36461e51ecbde00f26c8f0a68f94b69880", "name": "69455448" },
     { "ticker": "USDM", "policy": "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad", "name": "0014df105553444d" },
     { "ticker": "USDA", "policy": "fe7c786ab321f41c654ef6c1af7b3250a613c24e4213e0425a7ae456", "name": "55534441" },
+    { "ticker": "USDCx", "policy": "1f3aec8bfe7ea4fe14c5f121e2a92e301afe414147860d557cac7e34", "name": "5553444378" },
     { "ticker": "MIN", "policy": "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c6", "name": "4d494e" },
     { "ticker": "SNEK", "policy": "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f", "name": "534e454b" },
     { "ticker": "HOSKY", "policy": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235", "name": "484f534b59" },
@@ -38,6 +39,12 @@
     { "ticker": "NEWM", "policy": "682fe60c9918842b3323c43b5144bc3d52a23bd2fb81345560d73f63", "name": "4e45574d" },
     { "ticker": "STRIKE", "policy": "f13ac4d66b3ee19a6aa0f2a22298737bd907cc95121662fc971b5275", "name": "535452494b45" },
     { "ticker": "XER", "policy": "6d06570ddd778ec7c0cca09d381eca194e90c8cffa7582879735dbde", "name": "584552" },
-    { "ticker": "NIGHT", "policy": "0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa", "name": "4e49474854" }
+    { "ticker": "NIGHT", "policy": "0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa", "name": "4e49474854" },
+    { "ticker": "MILK", "policy": "afbe91c0b44b3040e360057bf8354ead8c49c4979ae6ab7c4fbdc9eb", "name": "4d494c4b7632" },
+    { "ticker": "C3", "policy": "8e51398904a5d3fc129fbf4f1589701de23c7824d5c90fdb9490e15a", "name": "434841524c4933" },
+    { "ticker": "NMKR", "policy": "5dac8536653edc12f6f5e1045d8164b9f59998d3bdc300fc92843489", "name": "4e4d4b52" },
+    { "ticker": "MELD", "policy": "a2944573e99d2ed3055b808eaa264f0bf119e01fc6b18863067c63e4", "name": "4d454c44" },
+    { "ticker": "WRT", "policy": "c0ee29a85b13209423b10447d3c2e6a50641a15c57770e27cb9d5073", "name": "57696e67526964657273" },
+    { "ticker": "WMTX", "policy": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a", "name": "576f726c644d6f62696c65546f6b656e58" }
   ]
 }

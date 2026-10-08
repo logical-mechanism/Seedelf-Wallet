@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { type DappSession } from "../src/background/dapp";
 import { SESSION_SEND } from "../src/background/send";
+import { APIError } from "../src/shared/dapp";
 import { testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -130,5 +131,76 @@ describe("a change of the dApp account", () => {
     // Back on account 0, its change is offered again: it's that account's.
     await t.preferences.set({ dappAccount: 0 });
     expect(((await t.dapp.call(a, "getUtxos", [])) as string[]).some((u) => u.includes(id))).toBe(true);
+  });
+});
+
+describe("a site's signature waiting as the dApp account changes (chunk 25)", () => {
+  // Read and checked for account 0 (its inputs, its prompt's ties), then signed on approval with whatever the dApp
+  // account was by then. Lace refuses a signData so, with CIP-30's AccountChange, but not a signTx; here both are.
+  const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
+
+  async function waiting(t: T) {
+    const a = await connect(t);
+    await t.send.build("preprod", [{ to: THEIRS, lovelace: "3000000", tokens: [] }]);
+    const tx = (await t.session.get<{ txCbor: string }>(SESSION_SEND))!.txCbor;
+    const own = t.deps.wasm.cip30Address(phrase(0).preprod.receive_0 as string);
+    const signing = t.dapp.call(a, "signTx", [tx, false]);
+    const message = t.dapp.call(a, "signData", [own, hex("Sign in: nonce 7")]);
+    // Caught, so neither rejects unheard before the test looks.
+    signing.catch(() => undefined);
+    message.catch(() => undefined);
+    await until(() => t.dapp.approvals().length === 2);
+    return { signing, message };
+  }
+  const accountChange = { failure: { code: APIError.AccountChange, info: expect.stringContaining("The account sites use changed") } };
+
+  it("is declined with AccountChange once Settings chooses another, and a connect waits on", async () => {
+    const t = await on();
+    const { signing, message } = await waiting(t);
+    // A connect isn't read for any account: it waits on, and connects to the one chosen.
+    const enabling = t.dapp.call(site("https://new.example"), "enable", []);
+    await until(() => t.dapp.approvals().length === 3);
+
+    await t.preferences.set({ dappAccount: 1 });
+    await t.dapp.dappAccountChanged();
+    await expect(signing).rejects.toMatchObject(accountChange);
+    await expect(message).rejects.toMatchObject(accountChange);
+    expect(t.dapp.approvals().map((a) => a.kind)).toEqual(["connect"]);
+    await t.dapp.answer(t.dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+  });
+
+  it("is refused if approved after a change it wasn't declined for, and nothing is signed", async () => {
+    const t = await on();
+    const { signing, message } = await waiting(t);
+    // Changed with no word to the connector (another window, a race): the approval itself finds it.
+    await t.preferences.set({ dappAccount: 1 });
+    const [first] = t.dapp.approvals();
+    expect(await t.dapp.answer(first!.id, true)).toEqual({ error: expect.stringContaining("The account sites use changed") });
+    await expect(signing).rejects.toMatchObject(accountChange);
+    await expect(message).rejects.toMatchObject(accountChange);
+    expect(t.dapp.approvals()).toEqual([]);
+  });
+
+  it("is refused if the change lands while the password is checked, past the first look", async () => {
+    const t = await on();
+    await t.preferences.set({ dappPassword: true });
+    const { signing } = await waiting(t);
+    const check = t.wallet.checkPassword.bind(t.wallet);
+    t.wallet.checkPassword = async (password: string) => {
+      await check(password);
+      await t.preferences.set({ dappAccount: 1 });
+    };
+    const tx = t.dapp.approvals().find((a) => a.kind === "sign-tx")!;
+    expect(await t.dapp.answer(tx.id, true, PASSWORD)).toMatchObject({ error: expect.stringContaining("The account sites use changed") });
+    await expect(signing).rejects.toMatchObject(accountChange);
+  });
+
+  it("stays as it was when the account is chosen again as it is", async () => {
+    const t = await on();
+    await waiting(t);
+    await t.preferences.set({ dappAccount: 0 });
+    await t.dapp.dappAccountChanged();
+    expect(t.dapp.approvals()).toHaveLength(2);
   });
 });

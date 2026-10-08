@@ -1,7 +1,7 @@
 // Display formatting for amounts and token names. Amounts arrive as integer
 // strings and are handled as bigint, so nothing is rounded on the way.
 
-import { currentLanguage, t } from "../i18n";
+import { currentLanguage, dateLocale, t } from "../i18n";
 import { epochStart, type NetworkName } from "../networks";
 import {
   ALWAYS_ABSTAIN,
@@ -104,33 +104,33 @@ export function timeAgo(then: number, now: number): string {
 /** When something happened, in a list: "Today, 14:02", "Yesterday, 09:12", "23 Mar, 18:40", and the year if it isn't this one. */
 export function whenOf(at: number, now: Date): string {
   const d = new Date(at);
-  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
   const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
   if (days === 0) return t("format.today", { time });
   if (days === 1) return t("format.yesterday", { time });
   const year = d.getFullYear() === now.getFullYear() ? {} : ({ year: "numeric" } as const);
-  return t("format.dateAndTime", { date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...year }), time });
+  return t("format.dateAndTime", { date: d.toLocaleDateString(dateLocale(), { day: "numeric", month: "short", ...year }), time });
 }
 
 /**
  * When epoch `epoch` ends on `network`, as the next starts: "9 Oct 2026, 21:44". The time too, since voting closes
  * then, part-way through the day: mainnet's epochs end at 21:44:51 UTC (release review C43). Its seconds are
  * dropped, so it's never late.
- * Counted from Shelley's start (networks.ts), so no request. Pinned to en-GB as every date in the wallet is, for now
- * (a known gap, chunk 19's plan).
+ * Counted from Shelley's start (networks.ts), so no request. In the language's own way (`dateLocale`).
  */
 export function epochEnds(network: NetworkName, epoch: number): string {
   const ms = epochStart(network, epoch + 1);
-  const time = new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const time = new Date(ms).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
   return t("format.dateAndTime", { date: dayText(ms), time });
 }
 
 /**
- * A day as the wallet writes one, "23 Sept 2026": pinned to en-GB with the rest. The browser's own short date was
- * "10/5/2026" on the connected sites, which reads as either month (the pass-two visual review).
+ * A day as the wallet writes one, "23 Sept 2026", in the language's own way (`dateLocale`), the month in words. The
+ * browser's own short date was "10/5/2026" on the connected sites, which reads as either month (the pass-two visual
+ * review).
  */
 export function dayText(ms: number): string {
-  return new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(ms).toLocaleDateString(dateLocale(), { day: "numeric", month: "short", year: "numeric" });
 }
 
 /** A typed ADA amount as a lovelace string, or undefined if it isn't one ("1,234.5" and "1234.5" both work). */

@@ -2778,5 +2778,15 @@
   "worker.wallet.trapped": "machine",
   "worker.wasm.notLoaded": "machine",
   "worker.withdraw.empty": "machine",
-  "worker.withdraw.notASeedelf": "machine"
+  "worker.withdraw.notASeedelf": "machine",
+  "lovejoin.chains.tx.back": "mtpe",
+  "lovejoin.chains.tx.deposit": "mtpe",
+  "lovejoin.chains.tx.landed": "mtpe",
+  "lovejoin.chains.tx.mix": "mtpe",
+  "lovejoin.chains.tx.sent": "mtpe",
+  "lovejoin.chains.tx.waiting": "mtpe",
+  "lovejoin.chains.txs": "mtpe",
+  "txBanner.onCardanoscanFirst": "mtpe",
+  "dapp.accountMoved": "mtpe",
+  "lock.warn.chainSending": "mtpe"
 }

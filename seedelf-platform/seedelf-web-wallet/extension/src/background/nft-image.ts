@@ -18,8 +18,8 @@
 // file under its CID, so it comes from the one gateway instead.
 //
 // The file comes back to the page as a data URI and is kept nowhere: no
-// cookies or referrer go out (SERVICE_FETCH), and `no-store` keeps it out of
-// Chrome's cache on the disk, so the disk never says which NFTs this wallet
+// cookies or referrer go out, and `no-store` keeps it out of Chrome's cache on
+// the disk (SERVICE_FETCH, as for every service), so the disk never says which NFTs this wallet
 // looked at, as it never says which contract UTxOs are the user's
 // (privacy.md). The page holds what it shows until the wallet locks.
 
@@ -34,9 +34,6 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /** How long the gateway has to send the whole file. */
 const TIMEOUT_MS = 30_000;
-
-/** What every image request goes out with: no cookies, no referrer, and nothing left in Chrome's cache. */
-export const IMAGE_FETCH = { ...SERVICE_FETCH, cache: "no-store" } as const satisfies RequestInit;
 
 /** The gateway's host, as the words name it. */
 export const GATEWAY_HOST = new URL(IPFS_GATEWAY).host;
@@ -87,7 +84,7 @@ export class NftImageService {
     const get = this.deps.fetch ?? ((u: string, init: RequestInit) => fetch(u, init));
     let response: Response;
     try {
-      response = await get(url, { ...IMAGE_FETCH, method: "GET", signal: AbortSignal.timeout(TIMEOUT_MS) });
+      response = await get(url, { ...SERVICE_FETCH, method: "GET", signal: AbortSignal.timeout(TIMEOUT_MS) });
     } catch (e) {
       throw new Error(failed(e));
     }

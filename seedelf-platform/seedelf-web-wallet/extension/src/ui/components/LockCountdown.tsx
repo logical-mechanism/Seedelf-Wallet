@@ -4,7 +4,9 @@
 // as Stay unlocked does; nothing else counts (mouse movement doesn't).
 // Asked again every few seconds, and when the page comes back into view,
 // since the wallet's other page (the side panel and a tab) may have put it
-// off; at 0:00, asking locks it.
+// off; at 0:00, asking locks it. While it shows, it also asks whether a
+// chain through Lovejoin is being sent, which only goes while the wallet is
+// unlocked: locking then stops it partway (privacy review §6).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
@@ -64,6 +66,16 @@ export function LockCountdown() {
     };
   }, [ask]);
 
+  // While it shows: whether a chain is being sent, asked as often as the deadline. Neither counts as activity.
+  const [chain, setChain] = useState(false);
+  useEffect(() => {
+    if (!near) return;
+    const look = () => call("chains-sending", {}).then(setChain, () => undefined);
+    look();
+    const timer = setInterval(look, ASK_NEAR_MS);
+    return () => clearInterval(timer);
+  }, [near]);
+
   // The countdown, each second; at 0:00 the worker is asked, which locks.
   useEffect(() => {
     if (!near) return;
@@ -120,6 +132,7 @@ export function LockCountdown() {
       <div className="callout__body">
         <strong className="lock-countdown__time">{t("lock.lockingIn", { time: clock(left) })}</strong>
         <div>{t("lock.idle")}</div>
+        {chain && <div data-testid="lock-countdown-chain">{t("lock.warn.chainSending")}</div>}
       </div>
       <button type="button" className="chip lock-countdown__stay" onClick={stay} data-testid="lock-stay">
         {t("lock.stayUnlocked")}

@@ -131,6 +131,6 @@ describe("two pages and a mix from the public account (independent review L30)",
     expect([a.status, b.status].sort()).toEqual(["fulfilled", "rejected"]);
     expect(String((a.status === "rejected" ? a : (b as PromiseRejectedResult)).reason)).toMatch("isn't ready to send");
     expect(t.koios.submitted.length - submits).toBe(4);
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4 });
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 5, sent: 4, txs: expect.any(Array) });
   });
 });

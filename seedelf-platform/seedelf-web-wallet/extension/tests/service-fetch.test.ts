@@ -1,6 +1,7 @@
 // Every request to a service goes out without the browser's cookies or a
-// referrer (privacy review §2.14): Koios, giveme.my, CoinGecko, Minswap and
-// the IPFS gateway for an NFT's image.
+// referrer (privacy review §2.14), and leaves nothing in Chrome's cache on the
+// disk: Koios, giveme.my, CoinGecko, Minswap and the IPFS gateway for an NFT's
+// image.
 // The worker holds a host permission for most of them, and a fetch with it
 // would carry any cookie the browser has for that host; one of giveme.my's
 // would tie every private payment to this browser.
@@ -27,10 +28,12 @@ function recording(body: unknown) {
 const privately = (init: RequestInit) => {
   expect(init.credentials).toBe("omit");
   expect(init.referrerPolicy).toBe("no-referrer");
+  // The disk never says what the wallet asked about: an ADA Handle, a DRep ID, an NFT, or when.
+  expect(init.cache).toBe("no-store");
 };
 
 describe("a service request", () => {
-  it("to Koios carries no cookies or referrer: a read, a POST and a submit", async () => {
+  it("to Koios carries no cookies or referrer, and isn't cached: a read, a POST and a submit", async () => {
     const { inits, fetchFn } = recording([]);
     const koios = new Koios("https://preprod.koios.rest/api/v1", fetchFn, async () => undefined);
     await koios.credentialUtxos(["94bc"]);
@@ -76,8 +79,6 @@ describe("a service request", () => {
     await images.show("preprod", "ab".repeat(28), "01");
     expect(gateway.inits).toHaveLength(1);
     [...koios.inits, ...gateway.inits].forEach(privately);
-    // The disk never says which NFTs this wallet looked at (privacy.md).
-    expect(gateway.inits[0]!.cache).toBe("no-store");
   });
 
   it("to Minswap carries none", async () => {

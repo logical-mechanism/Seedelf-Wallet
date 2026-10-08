@@ -111,6 +111,18 @@ describe("Home's banner for a payment Koios didn't answer (launch review #10)", 
     expect(banner(pub, true)).toContain(`It can land until about ${tomorrow}, 01:17`);
   });
 
+  it("names a chain's first transaction, the one its review showed, until its last lands (O3)", () => {
+    const chain = { ...sent, kind: "lovejoin-mix" as const, txHash: "ee".repeat(32), chain: { first: "11".repeat(32), total: 14 } };
+    const waiting = renderToStaticMarkup(createElement(PendingBanner, { pending: chain, watching: true, onDismiss: () => undefined }));
+    expect(waiting).toContain(`/transaction/${"11".repeat(32)}`);
+    expect(waiting).not.toContain("ee".repeat(32));
+    expect(banner(chain, true)).toContain("on Cardanoscan, the first of 14");
+    // Landed: the last, which brought it in, with no count.
+    const done = renderToStaticMarkup(createElement(PendingBanner, { pending: { ...chain, confirmations: 1 }, watching: false, onDismiss: () => undefined }));
+    expect(done).toContain(`/transaction/${"ee".repeat(32)}`);
+    expect(banner({ ...chain, confirmations: 1 }, false)).not.toContain("the first of");
+  });
+
   it("says a private one is let go 20 minutes on, since it carries no slot", () => {
     const priv = { ...sent, kind: "transfer" as const, maybeSent: true };
     expect(validUntil(priv)).toBeUndefined();
@@ -968,6 +980,42 @@ describe("Lovejoin's page (launch review H2)", () => {
     expect(line).toContain(
       "From your public account, 2 boxes Stopped Stopped after 4 of 9 transactions Why it stopped: The wallet locked, or the browser closed, while its chain was being sent. Mix my boxes again mixes the boxes it didn't.",
     );
+  });
+
+  it("lists a chain's transactions while it's being sent, each by what it is and where it is, each opening its details (O3)", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        shown(
+          createElement(Chains, {
+            chains: [
+              {
+                session: 1,
+                boxes: 2,
+                total: 4,
+                sent: 2,
+                at: 1,
+                txs: [
+                  { txHash: "a1".repeat(32), kind: "deposit", state: "landed" },
+                  { txHash: "a2".repeat(32), kind: "mix", state: "sent" },
+                  { txHash: "a3".repeat(32), kind: "mix", state: "waiting" },
+                  { txHash: "a4".repeat(32), kind: "back", state: "waiting" },
+                ],
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    const line = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    expect(line).toContain("Its transactions");
+    expect(line).toContain("Deposit On chain Mix 1 Sent, not on chain yet Mix 2 Not sent yet Return Not sent yet");
+    // Under a disclosure, so the row reads as before until it's opened.
+    expect(html).toContain('<details class="disclosure chain-txs"');
+    expect(html).toContain('data-testid="lovejoin-chain-tx-3-open"');
+    // None while it isn't being sent: stopped, its transactions aren't held.
+    expect(text(shown(chains))).not.toContain("Its transactions");
   });
 
   it("hides how many boxes with the balances, each being 10 ₳, but not how far a chain has got (privacy review §2.16)", () => {

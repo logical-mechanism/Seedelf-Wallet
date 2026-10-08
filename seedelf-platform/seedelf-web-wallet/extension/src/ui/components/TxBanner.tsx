@@ -22,6 +22,7 @@ export function TxBanner({
   onDismiss,
   testId,
   private: isPrivate = false,
+  firstOf,
 }: {
   /** Waiting for the network, confirmed, or no longer watched. */
   state: "waiting" | "done" | "stale";
@@ -34,6 +35,8 @@ export function TxBanner({
   testId: string;
   /** A private transaction: its link says what opening it tells Cardanoscan. */
   private?: boolean;
+  /** `txHash` is the first of a chain of this many transactions: its link says so. */
+  firstOf?: number;
 }) {
   const t = useT();
   return (
@@ -58,7 +61,9 @@ export function TxBanner({
         </div>
       )}
       <ExplorerLink network={network} tx={txHash} private={isPrivate} className="banner__link">
-        {t("txBanner.onCardanoscan", { hash: shortHex(txHash, 10, 6) })}
+        {firstOf && firstOf > 1
+          ? t("txBanner.onCardanoscanFirst", { hash: shortHex(txHash, 10, 6), total: firstOf })
+          : t("txBanner.onCardanoscan", { hash: shortHex(txHash, 10, 6) })}
       </ExplorerLink>
       {onDismiss && (
         <button type="button" className="tx-banner__dismiss" onClick={onDismiss}>

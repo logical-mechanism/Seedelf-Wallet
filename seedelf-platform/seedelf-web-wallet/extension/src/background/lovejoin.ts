@@ -93,6 +93,7 @@ import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
   LovejoinFunding,
+  LovejoinChainTx,
   LovejoinHeld,
   LovejoinPublicSummary,
   LovejoinStatus,
@@ -315,6 +316,21 @@ export interface ChainProgress {
    * stops.
    */
   resentFor?: number;
+}
+
+/**
+ * A chain's transactions as its progress has them: what each is, and whether
+ * it's on chain (sent, and no longer waiting to be seen), sent and not seen
+ * yet (`flying`), or not sent yet (from `next` on). For the Lovejoin page,
+ * which opens each in Transaction details (chunk 25).
+ */
+export function chainTxsOf(progress: ChainProgress): LovejoinChainTx[] {
+  const flying = new Set(progress.flying);
+  return progress.txs.map((tx, i) => ({
+    txHash: tx.txHash,
+    kind: tx.kind,
+    state: i >= progress.next ? "waiting" : flying.has(tx.txHash) ? "sent" : "landed",
+  }));
 }
 
 /**
@@ -1263,7 +1279,7 @@ export class LovejoinService {
   async progress(
     network: NetworkName,
     advance = false,
-  ): Promise<{ total: number; sent: number; stopped?: string; maybeSent?: true } | null> {
+  ): Promise<{ total: number; sent: number; stopped?: string; maybeSent?: true; txs?: LovejoinChainTx[] } | null> {
     if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
     let s = await this.sendingOf(network);
     // Stopped at a transaction that may have gone through: looked for first, now and then, and said as it now stands.
@@ -1272,7 +1288,16 @@ export class LovejoinService {
       s = await this.sendingOf(network);
     }
     const maybe = (m: unknown) => (m !== undefined ? { maybeSent: true as const } : {});
-    if (s) return { total: s.txs.length, sent: s.next, ...(s.stopped ? { stopped: s.stopped } : {}), ...maybe(s.maybe) };
+    if (s) {
+      return {
+        total: s.txs.length,
+        sent: s.next,
+        ...(s.stopped ? { stopped: s.stopped } : {}),
+        ...maybe(s.maybe),
+        // Each transaction and where it is, while it's being sent: the Lovejoin page lists them (chunk 25).
+        ...(s.stopped ? {} : { txs: chainTxsOf(s) }),
+      };
+    }
     // Its progress is gone: a lock, a closed browser or an update cut it, and its record says how far it got.
     if (!this.available(network)) return null;
     await this.cuts(network);
@@ -1948,18 +1973,18 @@ export class LovejoinService {
     const { now } = this.deps;
     // One Send at a time on a network, and never while the last mix from the account is still being sent: its
     // progress stays its own (independent review L30).
-    await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
+    const chain = await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
-    const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null };
+    const pending: PendingTx = { kind: "lovejoin-mix", network, txHash, submittedAt: now(), confirmations: null, chain };
     await this.deps.wallet.withKeys(() => this.deps.session.remove(SESSION_BALANCES_PREFIX + network));
     await watchSent(this.deps, pending);
     return pending;
   }
 
   /** Records the mix kept for Send (`txHash`), reserves what it spends, and puts its progress where it's sent from. */
-  private async publicStart(network: NetworkName, txHash: string): Promise<void> {
+  private async publicStart(network: NetworkName, txHash: string): Promise<NonNullable<PendingTx["chain"]>> {
     const { wallet, session, now } = this.deps;
     const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
     if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY());
@@ -1997,6 +2022,7 @@ export class LovejoinService {
         throw e;
       }
     });
+    return { first: built.chain[0]!.txHash, total: built.chain.length };
   }
 
   /**
@@ -2904,18 +2930,38 @@ export class LovejoinService {
       ...(deposits.length ? { deposits } : {}),
       fromPublic: publicBoxes,
       ...(otherAccounts.length ? { otherAccounts } : {}),
-      chains: chains
-        .filter(shown)
-        .map((c) => ({
-          ...(c.session !== undefined ? { session: c.session } : {}),
-          boxes: c.boxes,
-          total: c.total,
-          sent: c.sent,
-          at: c.at,
-          ...(c.stopped ? { stopped: c.stopped } : {}),
-          ...(c.maybe && c.ended ? { maybeSent: true as const } : {}),
-        })),
+      chains: await Promise.all(
+        chains.filter(shown).map(async (c) => {
+          const txs = await this.chainTxs(c);
+          return {
+            ...(c.session !== undefined ? { session: c.session } : {}),
+            boxes: c.boxes,
+            total: c.total,
+            sent: c.sent,
+            at: c.at,
+            ...(c.stopped ? { stopped: c.stopped } : {}),
+            ...(c.maybe && c.ended ? { maybeSent: true as const } : {}),
+            ...(txs ? { txs } : {}),
+          };
+        }),
+      ),
     };
+  }
+
+  /**
+   * A chain's transactions while it's being sent, from where it waits
+   * (`progress`), for its row on the Lovejoin page: each one's kind, and
+   * whether it's on chain, sent and not seen yet, or not sent yet. None once
+   * it's stopped or all sent (its progress is gone), nor while locked. The
+   * same record is what Transaction details reads each from (tx-view.ts).
+   */
+  private async chainTxs(c: ChainRecord): Promise<LovejoinChainTx[] | undefined> {
+    if (c.stopped) return undefined;
+    const { wallet, session } = this.deps;
+    const progress = await wallet.withKeys(() => session.get<ChainProgress>(c.progress)).catch(() => undefined);
+    // Where a session's chain waits holds its newest: one of an older chain of that session isn't this one's.
+    if (!progress?.txs?.length || progress.txs.at(-1)!.txHash !== c.id) return undefined;
+    return chainTxsOf(progress);
   }
 
   /**

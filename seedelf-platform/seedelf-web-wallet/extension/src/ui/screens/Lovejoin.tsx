@@ -41,10 +41,11 @@
 // form and the reviews show what's being sent. The page says Lovejoin has
 // had no third-party audit.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { joinSentences, sentenceGap, t, useT } from "../../i18n";
+import { dateLocale, type I18nKey, joinSentences, sentenceGap, t, useT } from "../../i18n";
 
 import type {
   Balances,
+  LovejoinChainTx,
   LovejoinChainView,
   LovejoinFunding,
   LovejoinPublicSummary,
@@ -282,7 +283,8 @@ export function detailOf(s: SessionView): string | undefined {
   if (s.mix?.skipped) lines.push(t("lj.leftOut", { reason: withoutStop(s.mix.skipped) }));
   if (s.chain?.stopped) lines.push(t("lovejoin.detail.whyStopped", { why: withoutStop(s.chain.stopped) }));
   if (s.auto?.retry && !isOver(s)) {
-    const at = new Date(s.auto.retry.at).toLocaleTimeString();
+    // The wallet's language, as every time is, not the browser's; to the second, as a retry is often under a minute off.
+    const at = new Date(s.auto.retry.at).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     lines.push(t("lovejoin.detail.triesAgain", { at, error: withoutStop(s.auto.retry.error) }));
   }
   if (unseen(s)) lines.push(t("lovejoin.detail.mayLand"));
@@ -336,10 +338,54 @@ export function Chains({ chains }: { chains: LovejoinChainView[] }) {
                 ? tr("lovejoin.chains.whyStopped", { why: withoutStop(c.stopped) })
                 : tr("lovejoin.chains.waitAll")}
             </p>
+            {c.txs && <ChainTxs txs={c.txs} />}
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+/** Where each transaction of a chain being sent is: what its row says beside it. */
+const TX_STATE: Record<LovejoinChainTx["state"], I18nKey> = {
+  landed: "lovejoin.chains.tx.landed",
+  sent: "lovejoin.chains.tx.sent",
+  waiting: "lovejoin.chains.tx.waiting",
+};
+
+/**
+ * A chain's transactions while it's being sent, under its row: each by what
+ * it is (the deposit, each mix, the return), opening in Transaction details,
+ * with where it is. The review showed the one the money goes in through; the
+ * whole chain is looked at here, as it goes (the owner, 2026-10-01: "audit
+ * is about the whole chain, afterwards").
+ */
+function ChainTxs({ txs }: { txs: LovejoinChainTx[] }) {
+  const tr = useT();
+  // Each mix by its place among the mixes: the deposit and the return aren't counted.
+  const mixNumber = (i: number) => txs.slice(0, i + 1).filter((tx) => tx.kind === "mix").length;
+  return (
+    <details className="disclosure chain-txs" data-testid="lovejoin-chain-txs">
+      <summary>{tr("lovejoin.chains.txs")}</summary>
+      <ol>
+        {txs.map((tx, i) => (
+          <li key={tx.txHash} className="field-row">
+            <TxDetailButton
+              txHash={tx.txHash}
+              label={
+                tx.kind === "deposit"
+                  ? tr("lovejoin.chains.tx.deposit")
+                  : tx.kind === "back"
+                    ? tr("lovejoin.chains.tx.back")
+                    : tr("lovejoin.chains.tx.mix", { n: mixNumber(i) })
+              }
+              testId={`lovejoin-chain-tx-${i}`}
+            />
+            <span className="note">{tr(TX_STATE[tx.state])}</span>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 
@@ -565,7 +611,13 @@ export function Lovejoin({
 
   // The public mix being sent: how many of its transactions are in so far. Its Send sends the first few;
   // while the page is open, it sends the rest as blocks make room (the alarm does too, once a minute).
-  const [sending, setSending] = useState<{ total: number; sent: number; stopped?: string; maybeSent?: true } | null>(null);
+  const [sending, setSending] = useState<{
+    total: number;
+    sent: number;
+    stopped?: string;
+    maybeSent?: true;
+    txs?: LovejoinChainTx[];
+  } | null>(null);
   const sendingPublic = busy && review?.source === "public";
   const publicRunning = !!sending && !sending.stopped;
   useEffect(() => {
@@ -995,6 +1047,7 @@ export function Lovejoin({
           {sending.stopped && (
             <p className="token-row__detail">{tr("lovejoin.detail.whyStopped", { why: withoutStop(sending.stopped) })}</p>
           )}
+          {!sending.stopped && sending.txs && <ChainTxs txs={sending.txs} />}
         </div>
       )}
 

@@ -182,6 +182,16 @@ describe("handlers", () => {
     });
     expect(await handle({ type: "price" }, ctx)).toBeNull();
     expect(t.coingecko.state.urls).toEqual([]);
+
+    // Another dApp account tells the connector, which declines a site's signature checked for the one it left
+    // (chunk 25); any other setting doesn't.
+    let told = 0;
+    ctx.dapp.dappAccountChanged = async () => {
+      told++;
+    };
+    await handle({ type: "preferences-set", dappAccount: 1 }, ctx);
+    await handle({ type: "preferences-set", hideBalances: false }, ctx);
+    expect(told).toBe(1);
   });
 
   it("keeps a wallet from before the switch on preprod, and a new one on the network it's made on", async () => {

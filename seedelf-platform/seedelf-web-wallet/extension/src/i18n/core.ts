@@ -102,6 +102,18 @@ export async function setLanguage(code: LanguageCode): Promise<void> {
 export const currentLanguage = (): LanguageCode =>
   isSupportedLanguage(i18next.language) ? i18next.language : DEFAULT_LANGUAGE;
 
+/** Each language's dates and times: day before month in English, as en-GB writes them, and Spanish's and Japanese's own. */
+const DATE_LOCALES: Record<LanguageCode, string> = { en: "en-GB", es: "es-ES", ja: "ja-JP" };
+
+/**
+ * The locale a date or a time is written in, for the language on (chunk 25;
+ * every one was en-GB). A function, read at each use: a constant would keep
+ * the language of the moment this file was imported. Numbers keep the
+ * English grouping on purpose: an amount reads as its field writes it
+ * ("1,234.5", `format.ts`), which a Spanish "1.234,5" would contradict.
+ */
+export const dateLocale = (): string => DATE_LOCALES[currentLanguage()];
+
 let following = false;
 
 /**
