@@ -1284,13 +1284,18 @@ describe("a swap that runs itself", () => {
   });
 
   it("cancels an order with the wallet's own cancel, everything back for a small fee, and pauses rather than sign one with a large fee (chunk 24, Step 3)", async () => {
-    // A cancel the builder got wrong, as it would carry it: the checks before signing still hold it.
-    const cancelTx = (fee: number, donation?: number) => {
+    // A cancel the builder got wrong, as it would carry it: the checks before signing still hold it. `gift`: what it
+    // pays someone else.
+    const cancelTx = (fee: number, donation?: number, gift?: number) => {
       const own = bytes(SESSION_ADDRESS);
+      const other = new Map<number, Cbor>([[0, bytes(`00${"c4".repeat(28)}${"c5".repeat(28)}`)], [1, gift ?? 0]]);
       const body = new Map<number, Cbor>([
         // The swap's change, and its order at the DEX's contract.
         [0, { tag: 258, of: [[bytes(SWAP_TX), 1], [bytes(SWAP_TX), 0]] }],
-        [1, [new Map<number, Cbor>([[0, own], [1, 131_585_414 + 14_000_000 - fee - (donation ?? 0)]])]],
+        [
+          1,
+          [new Map<number, Cbor>([[0, own], [1, 131_585_414 + 14_000_000 - fee - (donation ?? 0) - (gift ?? 0)]]), ...(gift ? [other] : [])],
+        ],
         [2, fee],
         [3, 134_639_865],
         [13, { tag: 258, of: [[bytes(SWAP_TX), 1]] }],
@@ -1334,6 +1339,10 @@ describe("a swap that runs itself", () => {
     // So is 13 ₳ of the order's given to the treasury.
     const gift = await stopped(cancelTx(400_000, 13_000_000));
     expect(gift.view.auto!.paused).toMatchObject({ why: "refused", detail: "it gives ADA to the treasury." });
+    // And 1 ₳ of it paid to someone else: a cancel pays only the session (release review C04).
+    const paysOther = await stopped(cancelTx(400_000, undefined, 1_000_000));
+    expect(paysOther.view.auto!.paused).toMatchObject({ why: "refused", detail: "its cancel pays someone other than this session." });
+    expect(paysOther.sent).toBe(2);
   });
 
   it("reads where a swap pays the same way on the order Minswap's aggregator really built", async () => {
@@ -1354,6 +1363,52 @@ describe("a swap that runs itself", () => {
     await started(sessions);
     funded(t);
     await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("The wallet won't sign what Minswap built: it places an order the wallet couldn't cancel");
+  });
+
+  it("has Minswap build Review it myself's swap as the route it asked for again, leaving out the DEX the first put out of place (release review C41)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    // Minswap's best splits across Danogo and Minswap V2; asked again without Danogo, it's Minswap V2 alone.
+    const leg = minswapEstimate.estimate.paths[0]![0]!;
+    const route = (...paths: string[][]) => ({ paths: paths.map((p) => p.map((protocol) => ({ ...leg, protocol }))) });
+    const more = (BigInt(minswapEstimate.estimate.amount_out) * 2n).toString();
+    const legged = { ...minswapEstimate.estimate, amount_out: more, ...route(["DanogoCLMMV1"], ["MinswapV2"]) };
+    const around = { ...minswapEstimate.estimate, ...route(["MinswapV2"]) };
+    const answer = t.minswap.fetch;
+    t.minswap.fetch = async (url, init) => {
+      const body = init.body ? JSON.parse(String(init.body)) : {};
+      const left: string[] = body.exclude_protocols ?? body.estimate?.exclude_protocols ?? [];
+      t.minswap.estimate = left.includes("DanogoCLMMV1") ? around : legged;
+      return answer(url, init);
+    };
+    t.minswap.calls.length = 0;
+    const review = await sessions.swapBuild("preprod", 0);
+    const asked = t.minswap.calls.map((c) => [c.path, (c.body?.exclude_protocols ?? c.body?.estimate?.exclude_protocols ?? []).includes("DanogoCLMMV1")]);
+    expect(asked).toEqual([
+      ["estimate", false],
+      ["estimate", true],
+      ["build-tx", true],
+    ]);
+    expect(review.quote!.route).toEqual(["MinswapV2"]);
+  });
+
+  it("says in the wallet's words that no order waits once the swap's is filled, and builds no cancel (release review C41)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    const review = await sessions.swapBuild("preprod", 0);
+    await sessions.txSubmit("preprod", review.txHash, "swap");
+    ordered(t);
+    expect(await sessions.orders("preprod", 0)).toHaveLength(1);
+    // It fills before Cancel is pressed.
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("f1".repeat(32), 0, "2000000", [[MIN, "902083681"]]));
+    const before = t.koios.calls.length;
+    await expect(sessions.cancelBuild("preprod", 0)).rejects.toThrow(/^No order of this session is waiting: it was filled, or cancelled already\.$/);
+    expect(t.koios.calls.slice(before).map((c) => c.path)).not.toContain("epoch_params");
   });
 
   it("pauses rather than sign a swap that spends UTxOs that aren't the session's, as a DEX swapping against its pools does", async () => {
@@ -1681,6 +1736,38 @@ describe("bring everything back", () => {
     expect(views.find((v) => v.index === 3)!.stage).toBe("returning");
     // Sent once: asked again, there's nothing ready.
     await expect(t.sessions.claimSubmit("preprod", returns.map((r) => r.txHash))).rejects.toThrow("aren't ready to send");
+  });
+
+  it("leaves out a swap sent by hand while its order waits, says why, and takes it once the order is spent (release review C41)", async () => {
+    const t = await unlocked();
+    const now = t.clock.now;
+    // A swap from before swaps ran themselves (no `auto`), sent by hand: its order recorded with it.
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [
+            { kind: "out", txHash: "01".repeat(32), at: now, confirmed: true },
+            { kind: "swap", txHash: SWAP_TX, at: now, confirmed: true, orders: [`${SWAP_TX}#0`] },
+          ],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+        },
+      ],
+    });
+    // Its order waits at the DEX; its change is at the account.
+    t.koios.addedToAccounts.push(atSession(SWAP_TX, 1, "131585414"), orderRow(SWAP_TX, 0, "14000000"));
+    const first = await t.sessions.claimBuild("preprod", [0]);
+    expect(first.returns).toEqual([]);
+    expect(first.skipped).toEqual([{ index: 0, reason: "An order of this session is still waiting." }]);
+    // Filled: it comes back, the proceeds with the change.
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("f1".repeat(32), 0, "2000000", [[MIN, "902083681"]]));
+    const again = await t.sessions.claimBuild("preprod", [0]);
+    expect(again.skipped).toEqual([]);
+    expect(again.returns.map((r) => [r.index, r.inputs])).toEqual([[0, 2]]);
   });
 });
 

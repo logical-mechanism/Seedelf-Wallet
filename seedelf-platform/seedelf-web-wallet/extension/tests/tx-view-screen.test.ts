@@ -200,8 +200,9 @@ describe("the transaction view's page", () => {
     expect(shown(cborOf("payment"))).toContain("Signatures None yet");
     // The wallet's transfer carries its redeemers and no signature yet: still unsigned.
     expect(shown(transferPreprod.final.txCbor)).toContain("Signatures None yet");
-    // One that has been signed says how many have signed it, and that it hasn't gone: the sheet is only ever
-    // shown for a transaction the wallet holds, before Send (chunk 23's second review, PY-7). Counted, never
+    // One that has been signed says how many have signed it, and that it hasn't gone: a review's sheet is shown
+    // for a transaction the wallet holds, before Send (chunk 23's second review, PY-7); a chain's being sent says
+    // so in words of its own (chain-in-view.test.ts, 1.3.0's release review, C17). Counted, never
     // "Signed", which on a review read as consent already given (blind test §4 entry 16), and said to come from
     // preparing it.
     const detail = { ...read(cborOf("payment")), signatures: [{ publicKey: "ab".repeat(32), keyHash: "cd".repeat(28) }] };

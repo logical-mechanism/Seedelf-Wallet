@@ -2506,10 +2506,19 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect.poll(() => koios.submitted.length).toBe(4);
   await expect(page.getByTestId("lovejoin-public-sending")).toContainText("4 of 5 transactions sent");
   await expect(page.getByTestId("pending-tx")).toContainText("Mixes into Lovejoin sent. Waiting for the network…");
+  // Its deposit, open in Transaction details while the page sends the rest (1.3.0's release review, C28).
+  await page.getByTestId("lovejoin-public-sending").getByText("Its transactions").click();
+  await page.getByTestId("lovejoin-chain-tx-0-open").click();
+  await expect(page.getByTestId("lovejoin-chain-tx-0-output-list")).toBeVisible();
   // A block takes them: the open page sends the last, and the banner sees it in.
   koios.confirmations = 1;
   await expect.poll(() => koios.submitted.length, { timeout: 20_000 }).toBe(5);
   await expect(page.getByTestId("lovejoin-public-sending")).toHaveCount(0, { timeout: 20_000 });
+  // The list went with it, but not the details open over it; and the page's rows, read again, don't bring the mix
+  // back as being sent from the read at its Send.
+  await expect(page.getByTestId("lovejoin-chain-tx-0-output-list")).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("lovejoin-chains")).toHaveCount(0);
   await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on their way to your private balance", { timeout: 20_000 });
 
   // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page.
@@ -2737,7 +2746,9 @@ test("auto-lock counts down its last minutes on any screen: Stay unlocked puts i
   await idle(15 * 60_000 - 100_000);
   await expect(countdown).toContainText(/Locking in 1:[34]\d/);
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  // No chain through Lovejoin is being sent, so nothing says locking would stop one.
+  // No chain through Lovejoin is being sent, so nothing says locking would stop one: once the worker has said so,
+  // not before it answers (1.3.0's release review, C30).
+  await expect(countdown).toHaveAttribute("data-chain-sending", "false");
   await expect(page.getByTestId("lock-countdown-chain")).toHaveCount(0);
   await snap(page, "lock-countdown");
 
@@ -2799,6 +2810,9 @@ test("a mix being sent: Home's banner names its first transaction, each opens in
   await snap(page, "lovejoin-chain-txs");
   await page.getByTestId("lovejoin-chain-tx-0-open").click();
   await expect(page.getByTestId("lovejoin-chain-tx-0-hash")).toHaveAttribute("data-value", koios.submitted[0]!);
+  // Sent: its signature was made as the chain was prepared, and no confirm waits (1.3.0's release review, C17).
+  await expect(page.getByTestId("lovejoin-chain-tx-0")).toContainText("made when the chain was prepared");
+  await expect(page.getByTestId("lovejoin-chain-tx-0")).not.toContainText("not sent until you confirm");
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await page.getByTestId("lovejoin-chain-tx-4-open").click();
   await expect(page.getByTestId("lovejoin-chain-tx-4-output-list")).toBeVisible();

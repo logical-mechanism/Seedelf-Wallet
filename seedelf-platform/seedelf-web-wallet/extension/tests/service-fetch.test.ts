@@ -13,6 +13,7 @@ import { Minswap } from "../src/background/minswap";
 import { NftImageService } from "../src/background/nft-image";
 import { PreferencesService } from "../src/background/preferences";
 import { PriceService } from "../src/background/prices";
+import { ADA_HANDLE_POLICY } from "../src/shared/handles";
 import { memoryArea } from "./fakes";
 
 /** A fetch that keeps what each request went out with, and answers `body`. */
@@ -33,16 +34,21 @@ const privately = (init: RequestInit) => {
 };
 
 describe("a service request", () => {
-  it("to Koios carries no cookies or referrer, and isn't cached: a read, a POST and a submit", async () => {
+  it("to Koios carries no cookies or referrer, and isn't cached: the GETs that name an ADA Handle or a DRep ID, POSTs and a submit", async () => {
     const { inits, fetchFn } = recording([]);
     const koios = new Koios("https://preprod.koios.rest/api/v1", fetchFn, async () => undefined);
+    // A GET's address and answer are what Chrome's disk cache would keep, and these name what the wallet asked
+    // about: a handle Withdraw resolved, and the DRep whose votes Voting read (1.3.0's release review, C33).
+    await koios.assetNftAddress(ADA_HANDLE_POLICY, "6d7968616e646c65");
+    await koios.drepVotes("drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a", ["gov_action1abc"]);
+    expect(inits.map((i) => i.method)).toEqual(["GET", "GET"]);
     await koios.credentialUtxos(["94bc"]);
     await koios.txStatus(["ab"]).catch(() => undefined);
     const submit = recording("ab");
     await new Koios("https://preprod.koios.rest/api/v1", submit.fetchFn, async () => undefined)
       .submitTx(new Uint8Array([0x84]))
       .catch(() => undefined);
-    expect(inits.length).toBeGreaterThanOrEqual(2);
+    expect(inits.filter((i) => i.method === "POST").length).toBeGreaterThanOrEqual(2);
     expect(submit.inits).toHaveLength(1);
     [...inits, ...submit.inits].forEach(privately);
   });

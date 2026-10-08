@@ -3,7 +3,10 @@
 // said so; now it reads the swap's orders from chain and cancels them with
 // its own cancel, so Stop brings the money back whatever Minswap lists. A
 // record from before that still says the swap waits is cleared at its next
-// run. The page and the row still say it plainly while a record holds it.
+// run. The runner still waits, and says so, on an order of the swap Koios
+// can't find yet (a backend behind the others): it can't cancel that one
+// yet, and nothing comes back meanwhile (release review C16). The page and
+// the row say it plainly while a record holds it.
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -29,9 +32,14 @@ const UNLISTED = `${SWAP_TX}#2`;
  * account holds its collateral. `cancelled`: a cancel of the first landed;
  * without it, the first filled before Stop. Either way the second is still
  * at the DEX, and Minswap lists nothing. `orderOpen`: the record says the
- * swap waits on it, as the runner before Step 3 wrote.
+ * swap waits on it, as the runner before Step 3 wrote. `known`: Koios's
+ * `utxo_info` knows the second; without it, a backend behind the others
+ * doesn't yet.
  */
-async function stoppedSwap(t: T, { cancelled = true, stopping = true, orderOpen }: { cancelled?: boolean; stopping?: boolean; orderOpen?: number } = {}) {
+async function stoppedSwap(
+  t: T,
+  { cancelled = true, stopping = true, orderOpen, known = true }: { cancelled?: boolean; stopping?: boolean; orderOpen?: number; known?: boolean } = {},
+) {
   const now = t.clock.now;
   const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
   await t.store.set("sessions.preprod", {
@@ -55,7 +63,7 @@ async function stoppedSwap(t: T, { cancelled = true, stopping = true, orderOpen 
       },
     ],
   });
-  t.koios.addedToAccounts.push(atContract(SWAP_TX, 0), atContract(SWAP_TX, 2), atSession("0c".repeat(32), 1, "5000000"));
+  t.koios.addedToAccounts.push(atContract(SWAP_TX, 0), ...(known ? [atContract(SWAP_TX, 2)] : []), atSession("0c".repeat(32), 1, "5000000"));
   t.koios.addedToAccounts.push(
     cancelled ? atSession(CANCEL, 0, "9000000") : atSession("bb".repeat(32), 0, "2000000", [[MIN, "400000000"]]),
   );
@@ -165,6 +173,67 @@ describe("a stopped swap whose order Minswap doesn't list (independent review L1
     t.koios.addedToAccounts.push(atSession(txIdOf(cancel), 0, "13700000"));
     const view = await sessions.advance("preprod", 0, true);
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "cancel", "back"]);
+  });
+});
+
+describe("a stopped swap whose order Koios can't find yet (independent review L16, release review C16)", () => {
+  it("waits after a cancel, keeps what's at the account, and says so from the first run on, across runs, a new worker and a lock", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await stoppedSwap(t, { known: false });
+    const first = t.clock.now;
+    let view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.auto).toMatchObject({ step: "cancelling", stopping: true, orderOpen: first });
+    expect(await recorded(t)).toMatchObject({ orderOpen: first });
+
+    // Half an hour of runs: still waiting, from the first time it was found so.
+    await busy(t, 30 * 60_000);
+    view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.auto!.orderOpen).toBe(first);
+    expect((await signing(t).list("preprod"))[0]!.auto!.orderOpen).toBe(first);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    await busy(t, 5 * 60_000);
+    view = await signing(t).advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.auto!.orderOpen).toBe(first);
+  });
+
+  it("cancels it once Koios finds it, and no longer says it waits", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await stoppedSwap(t, { known: false });
+    await sessions.advance("preprod", 0, true);
+    t.koios.addedToAccounts.push(atContract(SWAP_TX, 2));
+    const view = await sessions.advance("preprod", 0, true);
+    expect(cancels(t, UNLISTED)).toBe(1);
+    expect(view.auto!.orderOpen).toBeUndefined();
+    expect(await recorded(t)).not.toHaveProperty("orderOpen");
+  });
+
+  it("brings everything back once Koios finds it filled, and no longer says it waits", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await stoppedSwap(t, { known: false });
+    await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    t.koios.addedToAccounts.push(atContract(SWAP_TX, 2), atSession("aa".repeat(32), 0, "2000000", [[MIN, "400000000"]]));
+    t.koios.spent.add(UNLISTED);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.orderOpen).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "back"]);
+    expect(t.koios.submitted).toHaveLength(1);
+  });
+
+  it("waits before a cancel too, when what arrived can't be the fill while an order isn't spent, and says so", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await stoppedSwap(t, { cancelled: false, known: false });
+    const view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.auto).toMatchObject({ step: "cancelling", orderOpen: t.clock.now });
   });
 });
 

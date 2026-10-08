@@ -648,6 +648,14 @@ pub mod api {
         pub datum: String,
         /// The session's address, bech32: its payment key and stake key.
         pub session: String,
+        /// The output holds its datum inline, not by hash (`false` when not
+        /// said): a Plutus V1 order script can never spend such an output.
+        #[serde(default)]
+        pub inline: bool,
+        /// The output carries a script (`false` when not said): the wallet
+        /// can't cancel such an order.
+        #[serde(default)]
+        pub script_ref: bool,
     }
 
     /// What [`read_dex_order`] found.
@@ -657,13 +665,15 @@ pub mod api {
         /// It sits at an order script the wallet can cancel at.
         pub known: bool,
         pub protocol: Option<String>,
-        /// Cancelled by the session's own key, and paying the session alone.
+        /// Cancelled by the session's own key, paying the session alone, in a
+        /// form its script can spend.
         pub ours: bool,
         /// Its cancel is signed by the session's stake key too.
         pub stake_signs: bool,
         /// Where its script is read from, `hash#index`, when by reference.
         pub reference: Option<String>,
-        /// Why its datum couldn't be read, when it couldn't.
+        /// Why it can never be cancelled (its form: `inline`, `scriptRef`), or
+        /// why its datum couldn't be read.
         pub why: Option<String>,
     }
 
@@ -712,9 +722,19 @@ pub mod api {
         let Some(entry) = seedelf_core::orders::entry(network_flag, &script)? else {
             return Ok(unknown);
         };
-        let (ours, why) = match seedelf_core::orders::read(entry.protocol, &datum) {
-            Ok(read) => (session.owns(&read), None),
-            Err(e) => (false, Some(e.to_string())),
+        // An output no script can spend is never an order the session places,
+        // whatever its datum says.
+        let unspendable =
+            seedelf_core::orders::unspendable(&entry, request.inline, request.script_ref);
+        let (ours, why) = match unspendable {
+            Some(why) => (
+                false,
+                Some(format!("This {} order {why}", entry.protocol.name())),
+            ),
+            None => match seedelf_core::orders::read(entry.protocol, &datum) {
+                Ok(read) => (session.owns(&read), None),
+                Err(e) => (false, Some(e.to_string())),
+            },
         };
         Ok(DexOrderResult {
             known: true,
@@ -808,6 +828,90 @@ pub mod api {
             fee: built.fee.to_string(),
             covers: built.covers,
             stake_signs: built.stake_signs,
+        })
+    }
+
+    /// A swap built for a session, before its key signs it: the orders it
+    /// places, each to be cancelled in a dry run. As JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OrderCancelsRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The session's address, bech32: whose orders they are, and where
+        /// each cancel pays everything back.
+        pub session: String,
+        /// The swap, as built (neither signed nor on chain): its CBOR, hex.
+        pub tx_cbor: String,
+        /// Its order outputs' indexes (the order check's).
+        pub orders: Vec<u64>,
+        /// The reference UTxOs the orders' scripts are read from, as Koios's
+        /// `utxo_info` lists them (spent or not), with their scripts: what
+        /// `buildOrderCancel` takes. A Plutus V1 order needs none.
+        pub references: Vec<UtxoResponse>,
+    }
+
+    /// What [`check_order_cancels`] found, order by order as asked.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OrderCancelsResult {
+        pub orders: Vec<OrderCancelCheck>,
+    }
+
+    /// One order a swap places, and whether the wallet's own cancel of it
+    /// builds and runs.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct OrderCancelCheck {
+        /// Its output's index in the swap.
+        pub index: u64,
+        /// `hash#index`: the order, once the swap is on chain.
+        pub order: String,
+        /// The DEX whose order script it sits at, when the wallet knows it.
+        pub protocol: Option<String>,
+        /// Its cancel built, and its script ran it, in the wallet.
+        pub cancels: bool,
+        /// What that cancel would pay in fees, lovelace, when it built.
+        pub fee: Option<String>,
+        /// Why it can't be cancelled, when it can't.
+        pub why: Option<String>,
+    }
+
+    /// Before a session signs a swap, builds the wallet's own cancel of each
+    /// order it places and runs the order's real script on it
+    /// (`seedelf_core::orders::check_cancels`): stand-in funds and collateral
+    /// of ADA alone at the session's address, each order alone. A swap or a
+    /// session address that can't be read throws; an order that can't be
+    /// cancelled says why.
+    pub fn check_order_cancels(request: OrderCancelsRequest) -> Result<OrderCancelsResult> {
+        let network_flag = network_flag(&request.network)?;
+        let params = ProtocolParameters::from_koios(&request.params)?;
+        let session = session_keys(&request.session, network_flag)?;
+        let address = Address::from_bech32(&request.session)
+            .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
+        let tx = hex::decode(&request.tx_cbor).map_err(|e| anyhow!("The swap isn't hex: {e}"))?;
+        let checks = seedelf_core::orders::check_cancels(&seedelf_core::orders::SwapCheck {
+            params: &params,
+            network_flag,
+            session,
+            address: &address,
+            tx_cbor: &tx,
+            orders: &request.orders,
+            references: &request.references,
+        })?;
+        Ok(OrderCancelsResult {
+            orders: checks
+                .into_iter()
+                .map(|c| OrderCancelCheck {
+                    index: c.index,
+                    order: c.order,
+                    protocol: c.protocol.map(|p| p.name().to_string()),
+                    cancels: c.why.is_none(),
+                    fee: c.fee.map(|f| f.to_string()),
+                    why: c.why,
+                })
+                .collect(),
         })
     }
 
@@ -3376,6 +3480,204 @@ pub mod api {
             assert_eq!(e.to_string(), "the session's own failed");
         }
     }
+
+    /// `readDexOrder` and the dry run of a swap's cancels (chunk 24, Step 3;
+    /// the 1.3.0 review), on the real orders seedelf-core's tests cancel.
+    #[cfg(test)]
+    mod dex_order_tests {
+        use super::*;
+        use serde_json::{Value, json};
+
+        fn fixtures() -> Vec<Value> {
+            serde_json::from_str(include_str!(
+                "../../../seedelf-core/tests/fixtures/order_cancels.json"
+            ))
+            .unwrap()
+        }
+
+        fn fixture(protocol: &str, network: &str) -> Value {
+            fixtures()
+                .into_iter()
+                .find(|f| {
+                    f["protocol"] == protocol && f["network"] == network && f["stuck"] != true
+                })
+                .unwrap()
+        }
+
+        /// The order's owner as a session's address: a base address of the
+        /// keys its datum pays.
+        fn session_of(f: &Value) -> String {
+            let protocol: seedelf_core::orders::Protocol =
+                serde_json::from_value(f["protocol"].clone()).unwrap();
+            let datum = hex::decode(f["datum"].as_str().unwrap()).unwrap();
+            let read = seedelf_core::orders::read(protocol, &datum).unwrap();
+            let (
+                seedelf_core::orders::Credential::Key(payment),
+                Some(seedelf_core::orders::Credential::Key(stake)),
+            ) = (read.pays[0].payment, read.pays[0].stake)
+            else {
+                panic!("not a base address of keys");
+            };
+            let network = if f["network"] == "preprod" {
+                AddressNetwork::Testnet
+            } else {
+                AddressNetwork::Mainnet
+            };
+            Address::Shelley(pallas_addresses::ShelleyAddress::new(
+                network,
+                ShelleyPaymentPart::key_hash(payment),
+                ShelleyDelegationPart::key_hash(stake),
+            ))
+            .to_bech32()
+            .unwrap()
+        }
+
+        /// `readDexOrder` on the fixture's order output, its request with
+        /// `extra`'s fields too.
+        fn read(f: &Value, datum: &str, extra: Value) -> DexOrderResult {
+            let address = Address::from_bech32(f["order"]["address"].as_str().unwrap())
+                .unwrap()
+                .to_vec();
+            let mut request = json!({
+                "network": f["network"],
+                "address": hex::encode(address),
+                "datum": datum,
+                "session": session_of(f),
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                request[k] = v.clone();
+            }
+            read_dex_order(serde_json::from_value(request).unwrap()).unwrap()
+        }
+
+        #[test]
+        fn an_order_output_no_script_can_spend_is_never_the_sessions() {
+            for f in fixtures() {
+                let name = format!("{} on {}", f["protocol"], f["network"]);
+                let datum = f["datum"].as_str().unwrap();
+                // Asked as before, without the output's form: every real order is the session's.
+                let plain = read(&f, datum, json!({}));
+                assert!(plain.known && plain.ours, "{name}: {plain:?}");
+                // With its real form, the same.
+                let inline = f["datumInline"] == true;
+                let real = read(&f, datum, json!({ "inline": inline, "scriptRef": false }));
+                assert!(real.ours && real.why.is_none(), "{name}: {real:?}");
+                // Carrying a script, no order is one the wallet can cancel.
+                let scripted = read(&f, datum, json!({ "inline": inline, "scriptRef": true }));
+                assert!(scripted.known && !scripted.ours, "{name}: {scripted:?}");
+                assert!(scripted.why.is_some(), "{name}");
+            }
+            // A Plutus V1 order holding its datum inline: its script can never spend it.
+            for protocol in ["Minswap", "SundaeSwap", "WingRiders"] {
+                let f = fixture(protocol, "mainnet");
+                let held = read(&f, f["datum"].as_str().unwrap(), json!({ "inline": true }));
+                assert!(held.known && !held.ours, "{protocol}: {held:?}");
+                assert!(
+                    held.why.as_deref().unwrap_or_default().contains("inline"),
+                    "{protocol}: {held:?}"
+                );
+            }
+        }
+
+        /// Minswap's aggregator's real preprod swap
+        /// (`tests/fixtures/minswap-swap-preprod.json`): a Minswap V1 order
+        /// at output 0, kept by hash with its datum in the witnesses, made
+        /// out to the account that asked, and its change at output 1.
+        #[test]
+        fn a_real_swaps_order_is_cancelled_in_a_dry_run_before_it_is_signed() {
+            let fixture: Value =
+                serde_json::from_str(include_str!("../tests/fixtures/minswap-swap-preprod.json"))
+                    .unwrap();
+            let params: Value = serde_json::from_str::<Value>(include_str!(
+                "../../../seedelf-core/tests/fixtures/epoch_params.json"
+            ))
+            .unwrap()[0]
+                .clone();
+            let tx_cbor = fixture["cbor"].as_str().unwrap();
+            let swap = seedelf_core::build::tx_id(&hex::decode(tx_cbor).unwrap()).unwrap();
+            let request = json!({
+                "network": "preprod",
+                "params": params,
+                "session": fixture["sender"],
+                "txCbor": tx_cbor,
+                "orders": [0, 1, 9],
+                "references": [],
+            });
+            let result =
+                check_order_cancels(serde_json::from_value(request.clone()).unwrap()).unwrap();
+            let answer = serde_json::to_value(&result).unwrap();
+            let orders = answer["orders"].as_array().unwrap();
+            assert_eq!(orders.len(), 3);
+            for o in orders {
+                let keys: Vec<&String> = o.as_object().unwrap().keys().collect();
+                assert_eq!(
+                    keys,
+                    ["cancels", "fee", "index", "order", "protocol", "why"],
+                    "{o}"
+                );
+            }
+            // The order: its cancel builds through Minswap V1's bundled script.
+            assert_eq!(orders[0]["order"], format!("{swap}#0"));
+            assert_eq!(orders[0]["index"], 0);
+            assert_eq!(orders[0]["protocol"], "Minswap");
+            assert_eq!(orders[0]["cancels"], true, "{}", orders[0]);
+            assert!(orders[0]["why"].is_null());
+            let fee: u64 = orders[0]["fee"].as_str().unwrap().parse().unwrap();
+            assert!(fee > 150_000 && fee < 3_000_000, "{fee}");
+            // The change, at the account's key: no order to cancel.
+            assert_eq!(orders[1]["cancels"], false);
+            assert!(orders[1]["fee"].is_null());
+            assert!(
+                orders[1]["why"]
+                    .as_str()
+                    .unwrap()
+                    .contains("doesn't sit at a script"),
+                "{}",
+                orders[1]
+            );
+            // An output the swap doesn't have.
+            assert_eq!(orders[2]["cancels"], false);
+            assert!(orders[2]["why"].as_str().unwrap().contains("no output 9"));
+            // For anyone but the order's owner, it isn't a cancel the session can build.
+            let mut theirs = request.clone();
+            theirs["session"] = json!(nobodys_address());
+            theirs["orders"] = json!([0]);
+            let answer = check_order_cancels(serde_json::from_value(theirs).unwrap()).unwrap();
+            let why = answer.orders[0].why.clone().unwrap_or_default();
+            assert!(!answer.orders[0].cancels);
+            assert!(why.contains("isn't this session's to cancel"), "{why}");
+            // A swap that isn't hex, or a session that isn't one, throws.
+            let mut bad = request.clone();
+            bad["txCbor"] = json!("zz");
+            assert!(check_order_cancels(serde_json::from_value(bad).unwrap()).is_err());
+            let mut bad = request;
+            bad["session"] = json!("addr_test1wrong");
+            assert!(check_order_cancels(serde_json::from_value(bad).unwrap()).is_err());
+        }
+
+        /// A base address of keys on preprod that's nobody's: no order is its.
+        fn nobodys_address() -> String {
+            Address::Shelley(pallas_addresses::ShelleyAddress::new(
+                AddressNetwork::Testnet,
+                ShelleyPaymentPart::key_hash(Hash::new([0xee; 28])),
+                ShelleyDelegationPart::key_hash(Hash::new([0xdd; 28])),
+            ))
+            .to_bech32()
+            .unwrap()
+        }
+
+        #[test]
+        fn a_datum_nested_too_deep_is_never_the_sessions() {
+            let f = fixture("Splash", "mainnet");
+            let deep = format!("{}00", "81".repeat(100_000));
+            let read_deep = read(&f, &deep, json!({ "inline": true }));
+            assert!(read_deep.known && !read_deep.ours, "{read_deep:?}");
+            assert!(read_deep.why.is_some());
+            // And the reader is whole after it.
+            let real = read(&f, f["datum"].as_str().unwrap(), json!({ "inline": true }));
+            assert!(real.ours, "{real:?}");
+        }
+    }
 }
 
 fn js_error(e: anyhow::Error) -> JsError {
@@ -3758,6 +4060,14 @@ pub fn read_dex_order(request: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = buildOrderCancel)]
 pub fn build_order_cancel(request: &str) -> Result<String, JsError> {
     to_json(&api::build_order_cancel(from_json(request)?).map_err(js_error)?)
+}
+
+/// Before a session signs a swap, the dry run of Stop's cancel of each order
+/// it places: built in the wallet and run through the order's real script
+/// (`api::OrderCancelsRequest` → `api::OrderCancelsResult`).
+#[wasm_bindgen(js_name = checkOrderCancels)]
+pub fn check_order_cancels(request: &str) -> Result<String, JsError> {
+    to_json(&api::check_order_cancels(from_json(request)?).map_err(js_error)?)
 }
 
 /// How many Lovejoin boxes a session's spare ADA pays for at `depth`, before

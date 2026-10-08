@@ -214,7 +214,7 @@ export interface FakeKoios {
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
   /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
-  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null } }>>;
+  txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_hash?: string; tx_index?: number }>>;
   /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
   usedStakes: Set<string>;
   /** The slot of the newest block, as `tip` answers. */

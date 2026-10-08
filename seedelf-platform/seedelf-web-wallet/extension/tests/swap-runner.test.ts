@@ -1,10 +1,16 @@
 // A swap that runs itself, against what its orders did on chain
 // (independent review L15, L16, M18, D2): a copy Koios didn't answer whose
 // order landed all the same, the close while an order may still pay the
-// account, the return after a cancel, and a refund told from a fill.
+// account, the return after a cancel, and a refund told from a fill; what
+// Stop's own cancel spends and puts up, a cancel the fill beat, or that went
+// unseen and is sent again, and the return after one as Koios lists it
+// (release review C03, C04, C12, C16, C18, C25, C32); that cancel sent again
+// while its first copy waits in a mempool, and Review it myself and Stop
+// after a copy was given up (cross-area review X01, X04).
 import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
+import { builtOutputs } from "../src/background/minswap";
 import { txIdOf } from "./fixtures/cbor";
 import { slippageKeeping } from "../src/background/sessions";
 import {
@@ -137,12 +143,15 @@ describe("a swap's copy tx_status doesn't show (independent review L15)", () => 
       ["swap", true],
     ]);
     expect(t.koios.submitted).toHaveLength(2);
+    // The page says what it waits on: an order Koios can't find yet (release review C16).
+    expect(view.auto).toMatchObject({ step: "cancelling", orderOpen: t.clock.now });
 
     // utxo_info catches up: its order is on chain, and Stop's own cancel of it goes (chunk 24, Step 3).
     t.koios.addedToAccounts.push(atContract(SWAP_TX, 0));
     view = await sessions.advance("preprod", 0, true);
     expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toContain(`${SWAP_TX}#0`);
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    expect(view.auto!.orderOpen).toBeUndefined();
   });
 
   it("is built again, as before, when no order of it is on chain", async () => {
@@ -152,6 +161,124 @@ describe("a swap's copy tx_status doesn't show (independent review L15)", () => 
     await busy(t, 16 * 60_000);
     await sessions.advance("preprod", 0, true);
     expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(2);
+  });
+
+  it("never places a second order, nor brings anything back, while a copy given up has its order open, and Stop cancels that order (release review C18)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    t.koios.addedToAccounts.push(atSession("0c".repeat(32), 1, "5000000"));
+    // Sent, and tx_status doesn't show it for 16 minutes: given up. The copy built again spends what it did, still
+    // counted spent: refused, so it pauses.
+    t.koios.missing.add(SWAP_TX);
+    await sessions.advance("preprod", 0);
+    await busy(t, 16 * 60_000);
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({ why: "refused" });
+    // Review it myself is refused too, before Minswap is asked: what an order swap Koios took spends stays counted
+    // spent, so it's never built again by hand (cross-area review X04).
+    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("This session's swap was sent already.");
+    const builds = t.minswap.calls.filter((c) => c.path === "build-tx").length;
+    // Its order is on chain after all, and open; the swap's change isn't listed yet. The run's first utxo_info,
+    // where it looks for the copy's orders, reaches a backend behind the others: the copy stays given up, and only
+    // the read of the swap's open orders finds it.
+    t.koios.spent.add(FUNDING);
+    t.koios.addedToAccounts.push(orderRow(SWAP_TX));
+    const real = t.koios.fetch;
+    let behind = 0;
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      const asked = init.body ? (JSON.parse(String(init.body)) as { _utxo_refs?: string[] }) : {};
+      if (!url.endsWith("/utxo_info") || !asked._utxo_refs?.includes(`${SWAP_TX}#0`) || behind <= 0) return answer;
+      behind--;
+      const rows = (await answer.json()) as Array<{ tx_hash: string; tx_index: number }>;
+      return Response.json(rows.filter((r) => `${r.tx_hash}#${r.tx_index}` !== `${SWAP_TX}#0`));
+    };
+    behind = 1;
+    view = await sessions.resume("preprod", 0);
+    expect(behind).toBe(0);
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
+    expect(t.koios.submitted).toHaveLength(2);
+    expect((await bookOf(t)).sessions[0]!.txs.find((x) => x.txHash === SWAP_TX)).toMatchObject({ replaced: true });
+    // Stop: the order is cancelled first, never left at the DEX for a session that's over.
+    behind = 1;
+    view = await sessions.stop("preprod", 0);
+    expect(behind).toBe(0);
+    expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toContain(`${SWAP_TX}#0`);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "cancel"]);
+    // The page showed no swap: Stop's late warning names an order, which the wallet cancels (cross-area review X04).
+    expect(view).toMatchObject({ ordered: true });
+    expect(view).not.toHaveProperty("orderedPools");
+  });
+});
+
+describe("Review it myself after a copy of the swap was given up (cross-area review X04)", () => {
+  it("builds the swap again by hand from the funding that copy spent, until Koios knows that copy's order", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    // Koios didn't answer its order: what it spends is freed once it's given up, and the swap built again pauses.
+    await unansweredOrder(t, sessions);
+    t.minswap.estimate = { ...t.minswap.estimate, amount_out: "900000000", min_amount_out: "895500000" };
+    await busy(t, 16 * 60_000);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({ why: "price" });
+    expect(view.txs.map((x) => x.kind)).toEqual(["out"]);
+    expect((await bookOf(t)).sessions[0]!.txs.find((x) => x.txHash === SWAP_TX)).toMatchObject({ replaced: true });
+    expect((await sessions.swapBuild("preprod", 0)).kind).toBe("swap");
+
+    // Its order is on chain after all: that copy landed, and it's the swap. Minswap isn't asked.
+    t.koios.addedToAccounts.push(orderRow(SWAP_TX));
+    const builds = t.minswap.calls.filter((c) => c.path === "build-tx").length;
+    await expect(sessions.swapBuild("preprod", 0)).rejects.toThrow("This session's swap was sent already.");
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(builds);
+  });
+});
+
+describe("Stop's own cancel, what it spends and puts up (release review C04)", () => {
+  /** Session 0, stopped while its swap's order waits at the DEX: the account holds `held`. */
+  async function stoppedWith(t: T, held: Array<ReturnType<typeof atSession>>) {
+    const now = t.clock.now;
+    const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", "01".repeat(32)), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, stopping: now },
+        },
+      ],
+    });
+    t.koios.addedToAccounts.push(atContract(SWAP_TX, 0), ...held);
+  }
+
+  it("pauses, saying why in the wallet's words, when the account holds no UTxO of ADA alone to put up as collateral", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await stoppedWith(t, [atSession("bb".repeat(32), 0, "6000000", [[MIN, "400000000"]])]);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toMatchObject({
+      why: "refused",
+      detail: "this session's account holds no UTxO of ADA alone to put up as collateral for cancelling the order.",
+    });
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  it("leaves out of it a stranger's UTxO holding a datum, which it couldn't spend, and cancels all the same", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const stranger = { ...atSession("dd".repeat(32), 0, "2000000"), inline_datum: { bytes: "d87980", value: null } };
+    await stoppedWith(t, [atSession("0c".repeat(32), 1, "5000000"), atSession(SWAP_TX, 1, "1500000"), stranger]);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.paused).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    const cancel = bodyOutpoints(t.koios.submitted.at(-1)!, 0)!;
+    expect(cancel).toContain(`${SWAP_TX}#0`);
+    expect(cancel).not.toContain(`${"dd".repeat(32)}#0`);
   });
 });
 
@@ -192,17 +319,24 @@ describe("a swap's close (independent review L15, D2)", () => {
 
   it("closes once the swap's own orders are spent, whatever Minswap lists or whether it answers (chunk 24, Step 3)", async () => {
     for (const how of ["runner", "refresh"] as const) {
-      const t = await unlocked();
-      const sessions = signing(t);
-      await broughtBack(t, [`${SWAP_TX}#0`]);
-      t.koios.addedToAccounts.push(atContract(SWAP_TX, 0));
-      t.koios.spent.add(`${SWAP_TX}#0`);
-      // An order Minswap lists that isn't one the session placed holds nothing open, and Minswap isn't asked.
-      t.minswap.orders = [{ ...ORDER, tx_in: `${"bb".repeat(32)}#1` }];
-      t.minswap.fetch = async () => new Response("", { status: 503 });
-      const stage = how === "runner" ? (await sessions.advance("preprod", 0, true)).stage : (await sessions.list("preprod", true))[0]!.stage;
-      expect(stage).toBe("closed");
-      expect(t.minswap.calls).toHaveLength(0);
+      for (const answers of [true, false]) {
+        const t = await unlocked();
+        const sessions = signing(t);
+        await broughtBack(t, [`${SWAP_TX}#0`]);
+        t.koios.addedToAccounts.push(atContract(SWAP_TX, 0));
+        t.koios.spent.add(`${SWAP_TX}#0`);
+        // An order Minswap lists that isn't one the session placed holds nothing open, and Minswap isn't asked:
+        // answering, it would serve that list; down, every call it gets is still recorded, then answered 503
+        // (release review C25).
+        t.minswap.orders = [{ ...ORDER, tx_in: `${"bb".repeat(32)}#1` }];
+        if (!answers) {
+          const listing = t.minswap.fetch;
+          t.minswap.fetch = async (url, init) => (await listing(url, init), new Response("", { status: 503 }));
+        }
+        const stage = how === "runner" ? (await sessions.advance("preprod", 0, true)).stage : (await sessions.list("preprod", true))[0]!.stage;
+        expect(stage).toBe("closed");
+        expect(t.minswap.calls).toHaveLength(0);
+      }
     }
   });
 
@@ -263,6 +397,367 @@ describe("a swap's return after Stop's cancel (independent review L16)", () => {
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "cancel", "back"]);
     expect(t.koios.submitted).toHaveLength(2);
   });
+});
+
+/** A running swap, funded with the recorded swap's UTxO and 5 ₳ of collateral, its order on chain and waiting. */
+async function orderWaits(t: T, sessions: ReturnType<typeof signing>) {
+  await started(sessions);
+  funded(t);
+  t.koios.addedToAccounts.push(atSession("0c".repeat(32), 1, "5000000"));
+  await sessions.advance("preprod", 0);
+  ordered(t);
+  t.clock.now += 20_000;
+  const view = await sessions.advance("preprod", 0, true);
+  expect(view.auto).toMatchObject({ step: "filling", filled: false });
+}
+
+describe("a cancel Koios took that the batcher's fill beat (release review C03)", () => {
+  it("frees what it spent once it's given up, so the return takes the swap's change too, and the session ends", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    await sessions.stop("preprod", 0, true);
+    // The wallet's own cancel spends every UTxO of ADA alone but its collateral: the swap's change too.
+    const cancel = t.koios.submitted.at(-1)!;
+    expect(bodyOutpoints(cancel, 0)!.sort()).toEqual([`${SWAP_TX}#0`, `${SWAP_TX}#1`].sort());
+    // Koios took it, but the fill won the order: the cancel never lands, and the proceeds are at the account.
+    t.koios.missing.add(txIdOf(cancel));
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "902083681"]]));
+
+    // Unseen for 15 minutes, it's given up: what it spent is free again, and everything comes back in one return.
+    await busy(t, 16 * 60_000);
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    const back = t.koios.submitted.at(-1)!;
+    expect(bodyOutpoints(back, 0)!.sort()).toEqual([`${SWAP_TX}#1`, `${"0c".repeat(32)}#1`, `${"aa".repeat(32)}#0`].sort());
+
+    // It lands. The cancel is looked for its two hours, and then the session is over.
+    for (const o of bodyOutpoints(back, 0)!) t.koios.spent.add(o);
+    fundingOutsSpent(t);
+    await busy(t, 2 * 60 * 60_000);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.stage).toBe("closed");
+    expect(t.koios.submitted.filter((x) => txIdOf(x) !== txIdOf(cancel))).toHaveLength(3);
+  });
+
+  it("brings back what's left of the session's own once the fill is recorded and a return is in, though nothing new arrived", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", "01".repeat(32)), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] }), done("back", "05".repeat(32))],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, filled: now },
+        },
+      ],
+    });
+    // The fill came back, but its return left the swap's own change behind (counted spent then, by a step given up).
+    t.koios.addedToAccounts.push(atContract(SWAP_TX, 0), atSession(SWAP_TX, 1, "131585414"));
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back", "back"]);
+    expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toEqual([`${SWAP_TX}#1`]);
+  });
+
+  it("still waits for the fill itself before the first return, whatever the swap's own change", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    const now = t.clock.now;
+    const done = (kind: string, txHash: string, extra = {}) => ({ kind, txHash, at: now, confirmed: true, ...extra });
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: now,
+          txs: [done("out", "01".repeat(32)), done("swap", SWAP_TX, { orders: [`${SWAP_TX}#0`] })],
+          swap: { ...ASK, amountOut: "906594100", minAmountOut: "902083681" },
+          // Seen filled, and its return not sent yet: one that failed, say.
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } }, filled: now },
+        },
+      ],
+    });
+    // The listing is behind: the fill's proceeds aren't there yet, only the swap's change.
+    t.koios.addedToAccounts.push(atContract(SWAP_TX, 0), atSession(SWAP_TX, 1, "131585414"));
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(t.koios.submitted).toHaveLength(0);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
+  });
+});
+
+describe("the return after Stop's cancel, as Koios lists it (release review C12)", () => {
+  it("brings nothing back until Koios lists what the cancel paid: never the 5 ₳ alone, and the order's funds later", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    await sessions.stop("preprod", 0);
+    const cancel = t.koios.submitted.at(-1)!;
+    // It lands: tx_status shows it, utxo_info its order spent. The listing is a block behind: the swap's change it
+    // spent is still there, and what it paid isn't yet.
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.clock.now += 20_000;
+    let view = await sessions.advance("preprod", 0, true);
+    expect(view.auto!.retry).toBeUndefined();
+    expect(t.koios.submitted).toHaveLength(3);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+
+    // Koios lists it: one return, of the 5 ₳ and the order's funds together.
+    t.koios.spent.add(`${SWAP_TX}#1`);
+    builtOutputs(cancel).forEach((o, i) => t.koios.addedToAccounts.push(atSession(txIdOf(cancel), i, o.lovelace.toString())));
+    t.clock.now += 20_000;
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "back"]);
+    expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)).toEqual(expect.arrayContaining([`${"0c".repeat(32)}#1`, `${txIdOf(cancel)}#0`]));
+  });
+});
+
+describe("a cancel built again after it went unseen (release review C32)", () => {
+  /** From here on, what's submitted waits in a mempool: Koios takes it, and tx_status doesn't show it. */
+  function inMempool(t: T) {
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      if (url.endsWith("/submittx")) t.koios.missing.add(txIdOf(t.koios.submitted.at(-1)!));
+      return answer;
+    };
+  }
+
+  /** The cancels of the swap's order submitted, by id, each once. */
+  const cancels = (t: T) => [...new Set(t.koios.submitted.filter((x) => bodyOutpoints(x, 0)?.includes(`${SWAP_TX}#0`)).map((x) => txIdOf(x)))];
+
+  /** The record's cancels. */
+  const recordedCancels = async (t: T) => (await bookOf(t)).sessions[0]!.txs.filter((x) => x.kind === "cancel");
+
+  /** Runner steps 20 s apart while the cancel waits in the mempool, then it lands: everything comes back, once. */
+  async function waitsThenLands(t: T, sessions: ReturnType<typeof signing>, cancel: string) {
+    let view = await sessions.advance("preprod", 0);
+    for (let i = 0; i < 3; i++) {
+      t.clock.now += 20_000;
+      view = await sessions.advance("preprod", 0);
+    }
+    expect(cancels(t)).toEqual([cancel]);
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    const sent = t.koios.submitted.find((x) => txIdOf(x) === cancel)!;
+    t.koios.missing.delete(cancel);
+    t.koios.spent.add(`${SWAP_TX}#0`).add(`${SWAP_TX}#1`);
+    builtOutputs(sent).forEach((o, i) => t.koios.addedToAccounts.push(atSession(cancel, i, o.lovelace.toString())));
+    t.clock.now += 20_000;
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "back"]);
+    expect(view.auto!.refunded).toBeUndefined();
+    expect(cancels(t)).toEqual([cancel]);
+  }
+
+  it("is that very cancel sent again, looked for afresh, and no second one goes beside it while it waits (Koios never passed it on)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    // Koios's gateway times out on Stop's cancel, never having passed it on.
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("upstream request timeout", { status: 504 }) : real(url, init));
+    await sessions.stop("preprod", 0);
+    t.koios.fetch = real;
+    const [first] = await recordedCancels(t);
+    const cancel = first!.txHash as string;
+    expect(cancels(t)).toEqual([]);
+    t.koios.missing.add(cancel);
+    inMempool(t);
+
+    // Unseen for 15 minutes: built again byte for byte (a cancel has no validity interval), and sent again as that
+    // very cancel, the step's live copy, looked for from now.
+    await busy(t, 16 * 60_000);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    expect(cancels(t)).toEqual([cancel]);
+    const again = await recordedCancels(t);
+    expect(again).toHaveLength(1);
+    expect(again[0]).not.toHaveProperty("replaced");
+    expect(again[0]!.at).toBe(t.clock.now);
+    await waitsThenLands(t, sessions, cancel);
+  });
+
+  it("is that very cancel sent again by a worker started after one stopped mid-send, and no second one goes beside it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    // Chrome stops the worker as the cancel goes out: recorded on its way, never submitted.
+    const real = t.koios.fetch;
+    t.koios.fetch = (url, init) => (url.endsWith("/submittx") ? new Promise<Response>(() => undefined) : real(url, init));
+    void sessions.stop("preprod", 0);
+    for (let i = 0; i < 400 && !(await recordedCancels(t)).some((x) => x.sending); i++) await new Promise((r) => setTimeout(r, 5));
+    t.koios.fetch = real;
+    const [first] = await recordedCancels(t);
+    expect(first).toMatchObject({ sending: true });
+    const cancel = first!.txHash as string;
+    t.koios.missing.add(cancel);
+    inMempool(t);
+
+    // A new worker, three minutes on: built again byte for byte, and sent as that cancel.
+    await busy(t, 3 * 60_000);
+    const restarted = signing(t);
+    const view = await restarted.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    expect(cancels(t)).toEqual([cancel]);
+    const again = await recordedCancels(t);
+    expect(again).toHaveLength(1);
+    expect(again[0]).not.toHaveProperty("replaced");
+    expect(again[0]!.at).toBe(t.clock.now);
+    await waitsThenLands(t, restarted, cancel);
+  });
+
+  /**
+   * From here on, a node's mempool behind Koios: what's submitted is taken (202) and waits there, tx_status not
+   * showing it, unless it's one waiting there already, or it spends what one waiting or the chain spent: then it's
+   * refused as spent, as a node answers ("All inputs are spent", BadInputsUTxO). `cutOff`: the first one it takes,
+   * its answer never comes back (Chrome stops the worker mid-send).
+   */
+  function node(t: T, { cutOff = false } = {}) {
+    const waiting = new Map<string, string[]>();
+    const taken: string[] = [];
+    const refused: string[] = [];
+    let took: () => void = () => undefined;
+    /** Settles once the node has taken a transaction. */
+    const tookOne = new Promise<void>((settle) => (took = settle));
+    const real = t.koios.fetch;
+    let cut = cutOff;
+    t.koios.fetch = async (url, init) => {
+      if (!url.endsWith("/submittx")) return real(url, init);
+      const bytes = new Uint8Array(init.body as Uint8Array);
+      const id = txIdOf(bytes);
+      const ins = bodyOutpoints(bytes, 0) ?? [];
+      const spent = new Set([...waiting.values()].flat());
+      if (waiting.has(id) || ins.some((o) => spent.has(o) || t.koios.spent.has(o))) {
+        refused.push(id);
+        if (!waiting.has(id)) t.koios.missing.add(id);
+        t.koios.calls.push({ path: "submittx", query: "", body: null });
+        const why = waiting.has(id) ? "All inputs are spent. Transaction has probably already been included" : "BadInputsUTxO";
+        return new Response(why, { status: 400 });
+      }
+      waiting.set(id, ins);
+      taken.push(id);
+      t.koios.missing.add(id);
+      const answer = real(url, init);
+      took();
+      if (!cut) return answer;
+      cut = false;
+      return new Promise<Response>(() => undefined);
+    };
+    return {
+      taken,
+      refused,
+      tookOne,
+      /** Gone from the mempool, never to land: the fill took the order it cancels. */
+      drop(id: string) {
+        waiting.delete(id);
+      },
+      /** On chain: what it spends is spent, and what it pays is at the session's account. */
+      land(id: string) {
+        for (const o of waiting.get(id) ?? []) t.koios.spent.add(o);
+        waiting.delete(id);
+        t.koios.missing.delete(id);
+        const sent = t.koios.submitted.find((x) => txIdOf(x) === id)!;
+        builtOutputs(sent).forEach((o, i) => t.koios.addedToAccounts.push(atSession(id, i, o.lovelace.toString())));
+      },
+    };
+  }
+
+  /**
+   * Stop's cancel sent again as it waits in a mempool, and refused as spent: still the step, listed, and looked for
+   * from the resend, so nothing goes again for 15 minutes. Then the first copy lands, and everything comes back.
+   */
+  async function keptThenLands(t: T, sessions: ReturnType<typeof signing>, pool: ReturnType<typeof node>, cancel: string) {
+    const again = await recordedCancels(t);
+    expect(again).toHaveLength(1);
+    expect(again[0]).not.toHaveProperty("unsent");
+    expect(again[0]).not.toHaveProperty("replaced");
+    expect(again[0]!.at).toBe(t.clock.now);
+    let view = (await sessions.list("preprod"))[0]!;
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    for (let i = 0; i < 14; i++) {
+      await busy(t, 60_000);
+      view = await sessions.advance("preprod", 0);
+    }
+    expect(pool.taken).toEqual([cancel]);
+    expect(pool.refused).toEqual([cancel]);
+    expect(view.auto!.retry).toBeUndefined();
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+    pool.land(cancel);
+    view = await sessions.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel", "back"]);
+    expect(view.auto!.refunded).toBeUndefined();
+  }
+
+  it("is that very cancel when Koios took it and it still waits in a mempool: refused as spent, it stays the step, and nothing is sent again meanwhile (cross-area review X01)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    const pool = node(t);
+    await sessions.stop("preprod", 0);
+    const cancel = (await recordedCancels(t))[0]!.txHash as string;
+    expect(pool.taken).toEqual([cancel]);
+
+    // Unseen for 15 minutes: given up, built again byte for byte and sent again. The node still holds the first copy.
+    await busy(t, 16 * 60_000);
+    await sessions.advance("preprod", 0, true);
+    expect(pool.refused).toEqual([cancel]);
+    await keptThenLands(t, sessions, pool, cancel);
+  }, 30_000);
+
+  it("is that very cancel when the node took it as Chrome stopped the worker mid-send: a new worker's resend, refused as spent, stays the step (cross-area review X01)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    const pool = node(t, { cutOff: true });
+    void sessions.stop("preprod", 0);
+    await pool.tookOne;
+    const [first] = await recordedCancels(t);
+    expect(first).toMatchObject({ sending: true });
+    const cancel = first!.txHash as string;
+    expect(pool.taken).toEqual([cancel]);
+
+    await busy(t, 3 * 60_000);
+    const restarted = signing(t);
+    await restarted.advance("preprod", 0, true);
+    expect(pool.refused).toEqual([cancel]);
+    await keptThenLands(t, restarted, pool, cancel);
+  }, 30_000);
+
+  it("frees what that resent cancel spends once it's given up, when the fill won the order: the return takes the swap's change too (cross-area review X01)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    const pool = node(t, { cutOff: true });
+    void sessions.stop("preprod", 0, true);
+    await pool.tookOne;
+    const cancel = (await recordedCancels(t))[0]!.txHash as string;
+    await busy(t, 3 * 60_000);
+    const restarted = signing(t);
+    let view = await restarted.advance("preprod", 0, true);
+    expect(pool.refused).toEqual([cancel]);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "cancel"]);
+
+    // The batcher's fill wins the order: the cancel leaves the mempool, never to land, and the proceeds arrive.
+    pool.drop(cancel);
+    t.koios.spent.add(`${SWAP_TX}#0`);
+    t.koios.addedToAccounts.push(atSession("aa".repeat(32), 0, "2000000", [[MIN, "902083681"]]));
+    // Unseen for 15 minutes from the resend: given up, what it spends is free again, and it all comes back in one return.
+    await busy(t, 16 * 60_000);
+    view = await restarted.advance("preprod", 0, true);
+    expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap", "back"]);
+    expect(bodyOutpoints(t.koios.submitted.at(-1)!, 0)!.sort()).toEqual([`${SWAP_TX}#1`, `${"0c".repeat(32)}#1`, `${"aa".repeat(32)}#0`].sort());
+  }, 30_000);
 });
 
 describe("the least a swap's order asks for (independent review L24)", () => {

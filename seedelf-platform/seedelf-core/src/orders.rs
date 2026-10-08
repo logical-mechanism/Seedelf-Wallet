@@ -1,20 +1,25 @@
 //! The DEX orders a private session places through Minswap's aggregator, read
-//! exactly, and their cancels, built in the wallet (chunk 24, Step 3 in
+//! for who cancels them and whom they pay, and their cancels, built in the
+//! wallet (chunk 24, Step 3 in
 //! `seedelf-web-wallet/docs/archive/plans/chunk-24-dapp-additions.md`).
 //!
 //! Minswap's `cancel-tx` route answers 404 on both networks (2026-10-07), and
 //! its `pending-orders` doesn't list every order, so a session can't count on
 //! Minswap to get its money back. Every order a session places sits at a
 //! script this table knows ([`read_order`]; the web wallet's order check
-//! refuses any other), owned by the session's own key, and [`cancel_orders`]
-//! spends it back with the session's own keys and collateral.
+//! refuses any other), owned by the session's own key, in a form its script
+//! can spend ([`unspendable`]), and its cancel is built and run before the
+//! session signs the swap ([`check_cancels`]). [`cancel_orders`] spends it
+//! back with the session's own keys and collateral.
 //!
 //! The table (`orders.json`) pins each DEX's order script by network: its
 //! Plutus version, and where the script is read from, a reference UTxO
 //! (checked on chain) or, for a Plutus V1 script, bytes bundled here, which
-//! the transaction carries. What each cancel needs was read from real owner
-//! cancels on chain, and each DEX's source or bytecode, on 2026-10-07: no
-//! validity interval, withdrawal or mint; the canceller's key a required
+//! the transaction carries. A reference spent since (by whoever holds it)
+//! still gives its script through Koios: checked against the pinned hash, the
+//! transaction carries it instead. What each cancel needs was read from real
+//! owner cancels on chain, and each DEX's source or bytecode, on 2026-10-07:
+//! no validity interval, withdrawal or mint; the canceller's key a required
 //! signer; Splash's refund first and exact.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,21 +29,25 @@ use pallas_addresses::Address;
 use pallas_codec::minicbor;
 use pallas_crypto::hash::{Hash, Hasher};
 use pallas_primitives::Fragment;
-use pallas_primitives::conway::{self, PlutusData};
+use pallas_primitives::conway::{self, PlutusData, PseudoDatumOption, PseudoScript};
+use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::{
     BuildConway, BuiltTransaction, ExUnits, Input, Output, ScriptKind, StagingTransaction,
 };
-use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{
+    Asset as KoiosAsset, InlineDatum, ProtocolParameters, ReferenceScript, UtxoResponse,
+};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::assets::Assets;
 use crate::build::{
-    Budget, Budgets, MAX_TX_BUDGET, NotEnough, Patches, change_outputs, even, input_of, linear_fee,
-    reference_script_fee, settle, tx_id,
+    Budget, Budgets, MAX_TX_BUDGET, NotEnough, Patches, change_outputs, even, input_of, is_short,
+    linear_fee, reference_script_fee, settle, tx_id,
 };
 use crate::eval::{self, Resolved};
 use crate::staking::Staking;
-use crate::transaction::computation_fee;
+use crate::transaction::{address_minimum_lovelace_with_assets, computation_fee};
 use crate::utxos::assets_of;
 
 /// The pinned table: see the module comment.
@@ -358,7 +367,36 @@ fn key_of(a: &PlutusAddress) -> Option<Hash<28>> {
     }
 }
 
+fn is_bytes(d: &PlutusData) -> bool {
+    matches!(d, PlutusData::BoundedBytes(_))
+}
+
+fn is_int(d: &PlutusData) -> bool {
+    matches!(d, PlutusData::BigInt(_))
+}
+
+/// An asset class: `Constr 0 [policy, name]`.
+fn is_asset(d: &PlutusData) -> bool {
+    matches!(constr(d), Some((0, [policy, name])) if is_bytes(policy) && is_bytes(name))
+}
+
+/// A ratio: `Constr 0 [numerator, denominator]`.
+fn is_ratio(d: &PlutusData) -> bool {
+    matches!(constr(d), Some((0, [n, m])) if is_int(n) && is_int(m))
+}
+
+/// A list of byte strings (key hashes).
+fn is_byte_list(d: &PlutusData) -> bool {
+    matches!(d, PlutusData::Array(items) if items.iter().all(is_bytes))
+}
+
 /// Reads `protocol`'s order datum: who cancels it, and whom it pays.
+///
+/// Anyone can pay an order's address an output with any datum (the web
+/// wallet reads what's at a spent Splash order's address), and Pallas's
+/// decoder goes a call deeper for each level of nesting: a datum nested past
+/// [`crate::cbor::MAX_DEPTH`] (real orders' are 10 to 14 deep) is refused
+/// unread, before it can overflow WebAssembly's stack.
 pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
     let unreadable = || {
         anyhow!(
@@ -366,6 +404,9 @@ pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
             protocol.name()
         )
     };
+    if !crate::cbor::within_depth(datum, crate::cbor::MAX_DEPTH) {
+        return Err(unreadable());
+    }
     let data = PlutusData::decode_fragment(datum).map_err(|_| unreadable())?;
     let read = || -> Option<(Hash<28>, Vec<PlutusAddress>)> {
         let (0, fields) = constr(&data)? else {
@@ -435,12 +476,44 @@ pub fn read(protocol: Protocol, datum: &[u8]) -> Result<OrderRead> {
                 let owner = address(fields.get(2)?)?;
                 Some((key_of(&owner)?, vec![beneficiary, owner]))
             }
-            // Twelve fields: 9 the redeemer address, 10 the cancelling key.
+            // [tag, beacon, input, tradable input, cost per step, least marginal output,
+            // output, base price, fee, redeemer address, cancelling key, permitted executors]:
+            // 9 the redeemer address, 10 the cancelling key. Splash's script decodes all
+            // twelve, so each is held to the type the real order read from chain has
+            // (tests/fixtures/order_cancels.json): a datum the script couldn't decode is
+            // no order the session can cancel.
             Protocol::Splash => {
-                if fields.len() != 12 {
+                let [
+                    tag,
+                    beacon,
+                    input,
+                    tradable,
+                    step_cost,
+                    least_output,
+                    output,
+                    price,
+                    fee,
+                    redeemer,
+                    canceller,
+                    executors,
+                ] = fields
+                else {
+                    return None;
+                };
+                let typed = is_bytes(tag)
+                    && is_bytes(beacon)
+                    && is_asset(input)
+                    && is_int(tradable)
+                    && is_int(step_cost)
+                    && is_int(least_output)
+                    && is_asset(output)
+                    && is_ratio(price)
+                    && is_int(fee)
+                    && is_byte_list(executors);
+                if !typed {
                     return None;
                 }
-                Some((key(&fields[10])?, vec![address(&fields[9])?]))
+                Some((key(canceller)?, vec![address(redeemer)?]))
             }
         }
     };
@@ -473,6 +546,23 @@ pub fn read_order(
     };
     let read = read(entry.protocol, datum)?;
     Ok(Some((entry, read)))
+}
+
+/// Why an output at `entry`'s order script can never be cancelled, from its
+/// form alone, or `None` when its form is one its script spends: `inline`, it
+/// holds its datum inline, which the ledger never lets a Plutus V1 script
+/// spend; `script`, it carries a reference script, which a V1 script can't
+/// spend either and the wallet's evaluator doesn't take ([`eval::refusal`]).
+/// Words that follow "Order `hash#index`" or "This order". The web wallet's
+/// order check (`readDexOrder`) and [`cancel_orders`] both ask it.
+pub fn unspendable(entry: &Entry, inline: bool, script: bool) -> Option<&'static str> {
+    if script {
+        Some("carries a reference script, so the wallet can't cancel it")
+    } else if inline && entry.plutus == 1 {
+        Some("holds its datum inline, which its Plutus V1 script can never spend")
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -551,11 +641,43 @@ const DRAFT_ORDER_BUDGET: Budget = Budget {
     steps: 1_000_000_000,
 };
 
+/// The fee a draft is staged at, to be measured: `settle`'s own first guess,
+/// about what a cancel pays (0.19 to 0.3 ADA). The order scripts read neither
+/// the fee nor the change, and the cancel sent is priced again. Even, so the
+/// collateral's 3/2 of it is whole.
+const DRAFT_FEE: u64 = 200_000;
+
+/// A session's collateral as its funding pays one: exactly 5 ADA of ADA
+/// alone, which its return puts up for Lovejoin (the web wallet's
+/// `collateralFits`). A cancel that has to spend the collateral for its fee
+/// leaves one behind where what's left allows.
+const SESSION_COLLATERAL: u64 = 5_000_000;
+
+/// The fee at which a cancel that spends the collateral decides whether it
+/// can leave an exact one behind: more than a cancel pays (0.19 to 0.3 ADA
+/// for one order), so the decision holds at the fee it settles at, and the
+/// cancel's outputs don't change while its fee does.
+const KEEP_AT_FEE: u64 = 1_000_000;
+
+/// The orders' ADA and the session's funds can't pay the fee and the change.
+const CANCEL_SHORT: NotEnough = NotEnough("The orders and the session can't pay the cancel's fee");
+
+/// A Splash order's ADA all goes back in its refund, and the session's funds
+/// can't pay the fee and the change.
+const REFUND_SHORT: NotEnough = NotEnough("The session can't pay the cancel's fee");
+
+/// The collateral must cover 1.5 times the fee, and what it gets back is an
+/// output, held to the least one holds.
+const COLLATERAL_SHORT: &str =
+    "The session's collateral is too small to cover the cancel's fee and come back as an output";
+
 /// Cancels the session's orders: the first of `c.orders` and those that can
 /// share its transaction. Each must be the session's ([`Session::owns`]) at
-/// a script the table holds. Everything comes back to the session's
-/// address, a Splash order's exact refund first; the fee comes from the
-/// orders' ADA and the session's funds. Measured in the wallet.
+/// a script the table holds, in a form its script spends ([`unspendable`]).
+/// Everything comes back to the session's address, a Splash order's exact
+/// refund first. The fee comes from the orders' ADA and the session's funds,
+/// and from its collateral too only when they can't pay it and a change
+/// output. Measured in the wallet.
 pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
     let collateral_ref = format!("{}#{}", c.collateral.tx_hash, c.collateral.tx_index);
     if c.collateral
@@ -568,7 +690,8 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         bail!("The session's collateral must hold ADA alone");
     }
 
-    // Read every order, and check it's the session's to cancel.
+    // Read every order, and check it's the session's to cancel, in a form its
+    // script can spend.
     let mut read = Vec::with_capacity(c.orders.len());
     for order in c.orders {
         let at = format!("{}#{}", order.utxo.tx_hash, order.utxo.tx_index);
@@ -576,6 +699,13 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             .with_context(|| format!("Order {at} doesn't sit at a script"))?;
         let entry = entry(c.network_flag, &script)?
             .with_context(|| format!("Order {at} sits at a script the wallet can't cancel at"))?;
+        if let Some(why) = unspendable(
+            &entry,
+            order.utxo.inline_datum.is_some(),
+            order.utxo.reference_script.is_some(),
+        ) {
+            bail!("Order {at} {why}");
+        }
         match (&order.utxo.inline_datum, &order.utxo.datum_hash) {
             (Some(inline), _) => {
                 if hex::decode(&inline.bytes)? != order.datum {
@@ -612,21 +742,23 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         })
         .collect::<Result<_>>()?;
     let version = placed[0].entry.plutus;
-    let splash = placed[0].entry.protocol.alone();
 
-    // The scripts: by reference, each checked against the table, or carried.
-    let mut references: BTreeMap<String, (Input, Resolved, u64)> = BTreeMap::new();
-    let mut carried: BTreeMap<Hash<28>, Vec<u8>> = BTreeMap::new();
+    // The scripts: by reference, each checked against the table, or carried:
+    // a Plutus V1 script's bundled bytes, and a reference's spent since.
+    let mut scripts = Scripts {
+        references: BTreeMap::new(),
+        carried: BTreeMap::new(),
+    };
     for p in &placed {
         if let Some(bytes) = &p.entry.inline {
-            carried.insert(p.entry.script, bytes.clone());
+            scripts.carried.insert(p.entry.script, bytes.clone());
             continue;
         }
         let at = p
             .entry
             .reference_outpoint()
             .context("A script with nowhere to read it from")?;
-        if references.contains_key(&at) {
+        if scripts.references.contains_key(&at) || scripts.carried.contains_key(&p.entry.script) {
             continue;
         }
         let row = c
@@ -636,9 +768,6 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             .with_context(|| {
                 format!("The wallet doesn't have {at}, where the order's script is read from")
             })?;
-        if row.is_spent {
-            bail!("{at}, where the order's script was read from, has been spent");
-        }
         let bytes = row
             .reference_script
             .as_ref()
@@ -649,8 +778,15 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         if script_hash(version, &bytes) != p.entry.script {
             bail!("{at} doesn't hold the order's script");
         }
+        // Spent by whoever held it (SundaeSwap V3's mainnet reference sits at
+        // Sundae's own key), it still gives its script: checked against the
+        // pinned hash above, the transaction carries it instead.
+        if row.is_spent {
+            scripts.carried.insert(p.entry.script, bytes);
+            continue;
+        }
         let size = p.entry.reference.map_or(0, |(_, _, size)| size);
-        references.insert(
+        scripts.references.insert(
             at,
             (
                 input_of(row)?,
@@ -659,18 +795,44 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             ),
         );
     }
-    if version == 1 && !references.is_empty() {
+    if version == 1 && !scripts.references.is_empty() {
         bail!("A Plutus V1 script can't be read by reference");
     }
 
     // The fee comes from the orders' ADA (bar Splash's, refunded whole) and
-    // the session's funds; the collateral too when nothing else can pay.
+    // the session's funds; from the collateral too, only when they can't pay
+    // it and a change output.
     let funds: Vec<&UtxoResponse> = c
         .funds
         .iter()
         .filter(|u| format!("{}#{}", u.tx_hash, u.tx_index) != collateral_ref)
         .collect();
-    let spend_collateral = splash && funds.is_empty();
+    match build_cancel(c, &placed, &scripts, &funds, false) {
+        Err(e) if is_short(&e) => build_cancel(c, &placed, &scripts, &funds, true),
+        built => built,
+    }
+}
+
+/// A cancel's scripts: those read by reference (each reference UTxO, as the
+/// evaluator needs it, and its script's size), and those it carries, by
+/// hash.
+struct Scripts {
+    references: BTreeMap<String, (Input, Resolved, u64)>,
+    carried: BTreeMap<Hash<28>, Vec<u8>>,
+}
+
+/// [`cancel_orders`]' transaction, built and measured: the orders `placed`,
+/// paid for by the session's `funds` (its collateral not among them) and,
+/// when `spend_collateral`, its collateral too.
+fn build_cancel(
+    c: &Cancel,
+    placed: &[Placed],
+    scripts: &Scripts,
+    funds: &[&UtxoResponse],
+    spend_collateral: bool,
+) -> Result<FinalCancel> {
+    let version = placed[0].entry.plutus;
+    let splash = placed[0].entry.protocol.alone();
     let mut spent: Vec<UtxoResponse> = placed.iter().map(|p| p.order.utxo.clone()).collect();
     spent.extend(funds.iter().map(|u| (*u).clone()));
     if spend_collateral {
@@ -698,6 +860,13 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         .value
         .parse()
         .context("The collateral's value can't be read")?;
+    // What the collateral gives back is an output too, which the ledger holds
+    // to the least one holds.
+    let bech32 = c
+        .address
+        .to_bech32()
+        .map_err(|e| anyhow!("The session's address can't be written: {e}"))?;
+    let least_back = address_minimum_lovelace_with_assets(c.params, &bech32, Assets::new())?;
 
     let mut signers: BTreeSet<Hash<28>> = placed.iter().map(|p| p.read.signer).collect();
     let stake_signs = signers.contains(&c.session.stake);
@@ -718,18 +887,44 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         bail!("Koios gave no Plutus V{version} cost model, so the cancel can't be priced");
     }
 
+    // What comes back besides a Splash refund. A collateral spent for the fee
+    // leaves an exact one behind where what's left allows (5 ADA, and the rest
+    // an output of its own), so the session's return still finds one to put
+    // up for Lovejoin: decided once, at a fee above what the cancel pays.
+    let refunded_lovelace = refund.as_ref().map_or(0, |(lovelace, _)| *lovelace);
+    let kept_tokens = match &refund {
+        Some((_, refunded)) => tokens_in.separate(refunded.clone())?,
+        None => tokens_in.clone(),
+    };
+    let keep = spend_collateral
+        && lovelace_in
+            .checked_sub(refunded_lovelace + KEEP_AT_FEE + SESSION_COLLATERAL)
+            .and_then(|rest| {
+                change_outputs(c.params, c.address, rest, &kept_tokens, CANCEL_SHORT).ok()
+            })
+            .is_some_and(|rest| !rest.is_empty());
+    let change = |remaining: u64, tokens: &Assets| -> Result<Vec<Output>> {
+        if keep
+            && let Some(rest) = remaining.checked_sub(SESSION_COLLATERAL)
+            && let Ok(rest) = change_outputs(c.params, c.address, rest, tokens, CANCEL_SHORT)
+        {
+            let mut outputs = vec![Output::new(c.address.clone(), SESSION_COLLATERAL)];
+            outputs.extend(rest);
+            return Ok(outputs);
+        }
+        change_outputs(c.params, c.address, remaining, tokens, CANCEL_SHORT)
+    };
+
     let stage = |fee: u64, budgets: Option<&[Budget]>| -> Result<StagingTransaction> {
         let mut tx = StagingTransaction::new();
         for row in &spent {
             tx = tx.input(input_of(row)?);
         }
-        for (input, _, _) in references.values() {
+        for (input, _, _) in scripts.references.values() {
             tx = tx.reference_input(input.clone());
         }
         // A Splash order's refund is output 0, its own value exactly.
-        let mut remaining = lovelace_in
-            .checked_sub(fee)
-            .context("The orders and the session can't pay the cancel's fee")?;
+        let mut remaining = lovelace_in.checked_sub(fee).ok_or(CANCEL_SHORT)?;
         let mut tokens: Assets = tokens_in.clone();
         if let Some((lovelace, refunded)) = &refund {
             let mut out = Output::new(c.address.clone(), *lovelace);
@@ -739,18 +934,10 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
                     .context("Failed To Add An Asset")?;
             }
             tx = tx.output(out);
-            remaining = remaining
-                .checked_sub(*lovelace)
-                .context("The session can't pay the cancel's fee")?;
+            remaining = remaining.checked_sub(*lovelace).ok_or(REFUND_SHORT)?;
             tokens = tokens.separate(refunded.clone())?;
         }
-        for out in change_outputs(
-            c.params,
-            c.address,
-            remaining,
-            &tokens,
-            NotEnough("The orders and the session can't pay the cancel's fee"),
-        )? {
+        for out in change(remaining, &tokens)? {
             tx = tx.output(out);
         }
         for (i, p) in placed.iter().enumerate() {
@@ -767,8 +954,9 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
                 tx = tx.datum(p.order.datum.clone());
             }
         }
-        for bytes in carried.values() {
-            tx = tx.script(ScriptKind::PlutusV1, bytes.clone());
+        // A group is of one Plutus version, so every carried script is too.
+        for bytes in scripts.carried.values() {
+            tx = tx.script(kind, bytes.clone());
         }
         for signer in &signers {
             tx = tx.disclosed_signer(*signer);
@@ -777,7 +965,8 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
         let held = fee.checked_mul(3).context("Fee overflow")? / 2;
         let back = collateral_lovelace
             .checked_sub(held)
-            .context("The session's collateral can't cover the cancel's fee")?;
+            .filter(|back| *back >= least_back)
+            .context(COLLATERAL_SHORT)?;
         Ok(tx
             .language_view(kind, model.clone())
             .collateral_input(input_of(c.collateral)?)
@@ -785,10 +974,14 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             .fee(fee))
     };
 
-    // Measure: a draft at a generous fee, then the cancel as it will be sent.
+    // Measure: a draft at a first guess at the fee, then the cancel as it
+    // will be sent.
     let mut known: Vec<Resolved> = spent.iter().map(eval::resolve_row).collect::<Result<_>>()?;
-    known.push(eval::resolve_row(c.collateral)?);
-    known.extend(references.values().map(|(_, r, _)| r.clone()));
+    if !spend_collateral {
+        known.push(eval::resolve_row(c.collateral)?);
+    }
+    known.extend(scripts.references.values().map(|(_, r, _)| r.clone()));
+    let positions = ledger_positions(&spent, placed)?;
     let measure = |tx: &BuiltTransaction| -> Result<Vec<Budget>> {
         let answer = eval::evaluate_with(
             &tx.tx_bytes.0,
@@ -798,9 +991,12 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             &c.params.cost_model_v3,
             c.network_flag,
         )?;
+        // A cancel runs no script but its orders': one refusing it is a DEX's.
+        if let Some(error) = answer.get("error") {
+            bail!(order_refusal(error, &positions, placed));
+        }
         let measured = Budgets::from_ogmios(&answer)?;
-        let order = ledger_positions(&spent, &placed)?;
-        order
+        positions
             .iter()
             .map(|index| {
                 measured
@@ -809,11 +1005,11 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             })
             .collect()
     };
-    let draft = stage(even(1_000_000), None)?
+    let draft = stage(DRAFT_FEE, None)?
         .build_conway_raw()
         .context("Failed To Build The Draft Cancel")?;
     let mut budgets = measure(&draft)?;
-    let reference_bytes: u64 = references.values().map(|(_, _, size)| *size).sum();
+    let reference_bytes: u64 = scripts.references.values().map(|(_, _, size)| *size).sum();
     let script_reference = reference_script_fee(c.params, reference_bytes)?;
     let vkeys = signers.len();
     for _ in 0..3 {
@@ -872,6 +1068,247 @@ pub fn cancel_orders(c: &Cancel) -> Result<FinalCancel> {
             .collect();
     }
     bail!("The cancel's script budgets did not settle")
+}
+
+/// The evaluator's `error` (in Ogmios's shape) when an order's own script
+/// refused the cancel, in words naming the DEX and the order, never the
+/// Seedelf contract, as `Budgets::from_ogmios` would put a failed spend: a
+/// cancel runs no script but its orders'. `positions` are the orders' spent
+/// inputs in the ledger's order, as `placed`. It starts with an ordinary
+/// word, which the web wallet lowers to fit it into its own sentence.
+fn order_refusal(error: &Value, positions: &[u64], placed: &[Placed]) -> String {
+    let failures: Vec<String> = error
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let reason = item
+                .pointer("/error/data/validationError")
+                .and_then(Value::as_str)
+                .and_then(|e| e.lines().map(str::trim).rfind(|l| !l.is_empty()))
+                .or_else(|| item.pointer("/error/message").and_then(Value::as_str))
+                .unwrap_or("failed");
+            let spend = item.pointer("/validator/purpose").and_then(Value::as_str) == Some("spend");
+            let index = item.pointer("/validator/index").and_then(Value::as_u64)?;
+            let order = positions
+                .iter()
+                .position(|p| spend && *p == index)
+                .map(|k| &placed[k]);
+            Some(match order {
+                Some(p) => format!(
+                    "{} order {}#{}: {reason}",
+                    p.entry.protocol.name(),
+                    p.order.utxo.tx_hash,
+                    p.order.utxo.tx_index
+                ),
+                None => reason.to_string(),
+            })
+        })
+        .collect();
+    if failures.is_empty() {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("no reason given");
+        format!("The wallet couldn't run the cancel's scripts: {message}")
+    } else {
+        format!(
+            "The DEX's order script refused the wallet's cancel ({})",
+            failures.join("; ")
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Checking a swap's orders before the session signs it.
+// ---------------------------------------------------------------------------
+
+/// What a swap places, checked before the session's key signs it
+/// ([`check_cancels`]).
+pub struct SwapCheck<'a> {
+    pub params: &'a ProtocolParameters,
+    /// `true` is preprod.
+    pub network_flag: bool,
+    pub session: Session,
+    /// The session's address, where a cancel pays everything back.
+    pub address: &'a Address,
+    /// The swap, as built: neither signed nor on chain.
+    pub tx_cbor: &'a [u8],
+    /// Its orders' output indexes.
+    pub orders: &'a [u64],
+    /// The reference UTxOs the orders' scripts are read from, as Koios lists
+    /// them (spent or not) with their scripts' bytes.
+    pub references: &'a [UtxoResponse],
+}
+
+/// One order a swap places, and whether the wallet's own cancel of it builds
+/// and runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelCheck {
+    /// Its output's index in the swap.
+    pub index: u64,
+    /// `hash#index`: the order, once the swap is on chain.
+    pub order: String,
+    /// The DEX whose order script it sits at, when the table holds that.
+    pub protocol: Option<Protocol>,
+    /// What its cancel pays in fees, when it builds.
+    pub fee: Option<u64>,
+    /// Why its cancel can't be built, or its script refuses it.
+    pub why: Option<String>,
+}
+
+/// The ADA-alone UTxO a dry run's cancel pays its fee from: more than any
+/// cancel may pay ([`crate::build::MAX_FEE`]) and its change, so the check is
+/// of the order and its script, not of what the session will hold.
+const CHECK_FUNDS: u64 = 20_000_000;
+
+/// Builds the cancel of each order a swap places, each alone, as Stop builds
+/// it once the swap is on chain ([`cancel_orders`]), and runs the order's
+/// own script in the wallet's evaluator, before the session signs the swap.
+/// An order its cancel can't spend (a datum its script can't decode, its
+/// datum inline at a Plutus V1 script, a script on it) would keep the swap's
+/// money where Stop can't bring it back. The session's funds and collateral
+/// are stand-ins of ADA alone at its address. A swap that can't be read is an
+/// error; anything about one order is that order's `why`.
+pub fn check_cancels(s: &SwapCheck) -> Result<Vec<CancelCheck>> {
+    let tx = MultiEraTx::decode(s.tx_cbor).map_err(|e| anyhow!("The swap can't be read: {e}"))?;
+    let swap = tx.hash();
+    let fund = stand_in(s.address, &swap, 0, CHECK_FUNDS)?;
+    let collateral = stand_in(s.address, &swap, 1, SESSION_COLLATERAL)?;
+    let mut checks = Vec::with_capacity(s.orders.len());
+    for &index in s.orders {
+        let mut check = CancelCheck {
+            index,
+            order: format!("{swap}#{index}"),
+            protocol: None,
+            fee: None,
+            why: None,
+        };
+        match order_at(&tx, index) {
+            Err(e) => check.why = Some(format!("{e:#}")),
+            Ok(order) => {
+                check.protocol = hash28(&order.utxo.payment_cred)
+                    .ok()
+                    .and_then(|script| entry(s.network_flag, &script).ok().flatten())
+                    .map(|e| e.protocol);
+                match cancel_orders(&Cancel {
+                    params: s.params,
+                    network_flag: s.network_flag,
+                    session: s.session,
+                    address: s.address,
+                    orders: std::slice::from_ref(&order),
+                    funds: std::slice::from_ref(&fund),
+                    collateral: &collateral,
+                    references: s.references,
+                }) {
+                    Ok(built) => check.fee = Some(built.fee),
+                    Err(e) => check.why = Some(format!("{e:#}")),
+                }
+            }
+        }
+        checks.push(check);
+    }
+    Ok(checks)
+}
+
+/// Output `index` of `tx`, a swap not on chain yet, in the shape of the Koios
+/// row it will have once it is, with its datum's bytes: inline, or the ones
+/// the swap carries for its hash.
+fn order_at(tx: &MultiEraTx, index: u64) -> Result<OrderToCancel> {
+    let output = usize::try_from(index)
+        .ok()
+        .and_then(|i| tx.output_at(i))
+        .with_context(|| format!("The swap has no output {index}"))?;
+    let address = output
+        .address()
+        .map_err(|e| anyhow!("The swap's output {index} has an unreadable address: {e}"))?;
+    let payment_cred = match &address {
+        Address::Shelley(a) if a.payment().is_script() => hex::encode(a.payment().as_hash()),
+        _ => String::new(),
+    };
+    let address = address
+        .to_bech32()
+        .map_err(|e| anyhow!("The swap's output {index} has an unreadable address: {e}"))?;
+    let value = output.value();
+    let mut asset_list = Vec::new();
+    for policy in value.assets() {
+        for asset in policy.assets() {
+            asset_list.push(KoiosAsset {
+                decimals: 0,
+                quantity: asset.output_coin().unwrap_or(0).to_string(),
+                policy_id: hex::encode(policy.policy()),
+                asset_name: hex::encode(asset.name()),
+                fingerprint: String::new(),
+            });
+        }
+    }
+    let (inline_datum, datum_hash, datum) = match output.datum() {
+        Some(PseudoDatumOption::Data(data)) => {
+            let bytes = data.raw_cbor().to_vec();
+            let inline = InlineDatum {
+                bytes: hex::encode(&bytes),
+                value: Value::Null,
+            };
+            (Some(inline), None, bytes)
+        }
+        Some(PseudoDatumOption::Hash(hash)) => {
+            let carried = tx
+                .plutus_data()
+                .iter()
+                .find(|d| Hasher::<256>::hash(d.raw_cbor()) == hash)
+                .with_context(|| {
+                    format!("The swap doesn't carry the datum its output {index} names")
+                })?;
+            (None, Some(hex::encode(hash)), carried.raw_cbor().to_vec())
+        }
+        None => (None, None, Vec::new()),
+    };
+    let reference_script = output.script_ref().map(|script| {
+        let (kind, bytes) = match &script {
+            PseudoScript::NativeScript(s) => ("timelock", s.raw_cbor().to_vec()),
+            PseudoScript::PlutusV1Script(s) => ("plutusV1", s.as_ref().to_vec()),
+            PseudoScript::PlutusV2Script(s) => ("plutusV2", s.as_ref().to_vec()),
+            PseudoScript::PlutusV3Script(s) => ("plutusV3", s.as_ref().to_vec()),
+        };
+        ReferenceScript {
+            hash: None,
+            size: Some(bytes.len() as u64),
+            kind: Some(kind.to_string()),
+            bytes: Some(hex::encode(bytes)),
+        }
+    });
+    Ok(OrderToCancel {
+        utxo: UtxoResponse {
+            tx_hash: hex::encode(tx.hash()),
+            tx_index: index,
+            address,
+            value: value.coin().to_string(),
+            payment_cred,
+            datum_hash,
+            inline_datum,
+            reference_script,
+            asset_list: Some(asset_list),
+            ..Default::default()
+        },
+        datum,
+    })
+}
+
+/// One of the session's UTxOs of ADA alone, made up for a dry run: at an
+/// outpoint no transaction has, the hash of the swap's own id and `tag`.
+fn stand_in(address: &Address, swap: &Hash<32>, tag: u8, lovelace: u64) -> Result<UtxoResponse> {
+    let mut seed = swap.to_vec();
+    seed.push(tag);
+    Ok(UtxoResponse {
+        tx_hash: hex::encode(Hasher::<256>::hash(&seed)),
+        tx_index: 0,
+        address: address
+            .to_bech32()
+            .map_err(|e| anyhow!("The session's address can't be written: {e}"))?,
+        value: lovelace.to_string(),
+        ..Default::default()
+    })
 }
 
 /// A transaction's script data hash, as the ledger checks it: its redeemers
@@ -969,4 +1406,56 @@ fn ledger_positions(spent: &[UtxoResponse], placed: &[Placed]) -> Result<Vec<u64
                 .context("An order is missing from the cancel")
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An order of `protocol` at a script of Plutus `plutus`, as [`group`]
+    /// sees it.
+    fn order(protocol: Protocol, plutus: u8) -> (Entry, OrderRead) {
+        (
+            Entry {
+                protocol,
+                script: Hash::new([plutus; 28]),
+                plutus,
+                reference: None,
+                inline: None,
+            },
+            OrderRead {
+                protocol,
+                signer: Hash::new([0; 28]),
+                pays: Vec::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn a_cancel_takes_the_first_order_and_those_of_its_plutus_version() {
+        use Protocol::*;
+        let group_of = |orders: &[(Protocol, u8)]| {
+            group(&orders.iter().map(|&(p, v)| order(p, v)).collect::<Vec<_>>())
+        };
+        // One language view a transaction: the first order's version, wherever the others sit.
+        assert_eq!(
+            group_of(&[(MinswapV2, 2), (Minswap, 1), (WingRidersV2, 2)]),
+            [0, 2]
+        );
+        assert_eq!(
+            group_of(&[(Minswap, 1), (MinswapV2, 2), (SundaeSwap, 1)]),
+            [0, 2]
+        );
+        assert_eq!(
+            group_of(&[(SundaeSwapStable, 3), (MinswapV2, 2), (SundaeSwapStable, 3)]),
+            [0, 2]
+        );
+        // A Splash order goes alone, first or not.
+        assert_eq!(group_of(&[(Splash, 2), (MinswapV2, 2), (Splash, 2)]), [0]);
+        assert_eq!(
+            group_of(&[(MinswapV2, 2), (Splash, 2), (SundaeSwapV3, 2)]),
+            [0, 2]
+        );
+        assert!(group_of(&[]).is_empty());
+    }
 }

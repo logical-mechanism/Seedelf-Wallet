@@ -18,7 +18,11 @@
 //             on the network the wallet left is declined (`networkChanged`).
 //             So is a signature waiting when Settings chooses another dApp
 //             account, with CIP-30's AccountChange: it was checked for the
-//             account it left (`dappAccountChanged`, chunk 25).
+//             account it left (`dappAccountChanged`, chunk 25). One still
+//             being read, or being approved, is refused so too
+//             (`sameAccount`), and only the keys of the account it was read
+//             for ever read or sign it (`withViewKeys`; 1.3.0's release
+//             review, C26, C27).
 // Locked      Nothing a site hears changes at the moment of an unlock unless
 //             it asked for it (privacy review §2.11). `isEnabled()` answers
 //             whether it's connected, as last read. Which sites are is
@@ -380,10 +384,11 @@ interface Waiting {
   network: NetworkName;
   /**
    * A public-side signature's: the dApp account its transaction or address
-   * was read and checked for (`View.account`). Declined once Settings chooses
-   * another (`dappAccountChanged`), and refused if approved after: the new
-   * account's keys would sign what was inspected for the old one. None for a
-   * connect, which no account is read for, or a private session's.
+   * was read and checked for (`View.account`), whose keys alone sign it
+   * (`withViewKeys`). Declined once Settings chooses another
+   * (`dappAccountChanged`), and refused if approved after: sites talk to the
+   * new one now, and AccountChange asks the site to `enable()` again. None
+   * for a connect, which no account is read for, or a private session's.
    */
   account?: number;
   /** Runs on Approve, with what the window chose beside it: governance for a connect (CIP-95). */
@@ -1252,9 +1257,11 @@ export class DappService {
   }
 
   /**
-   * The keys a request is read and signed with: a private session's are the
+   * The keys a site's call is answered with: a private session's are the
    * wallet's own one-time accounts, and everything else is the **dApp
-   * account's**, whichever account the wallet is working on.
+   * account's**, whichever account the wallet is working on. A signature is
+   * read and signed with those of the account it was read for instead
+   * (`withViewKeys`).
    *
    * That is the whole point of having one: a site always talks to the same
    * account, so switching accounts can never hand it a second account's
@@ -1264,6 +1271,21 @@ export class DappService {
   private async withDappKeys<T>(holder: Holder, task: (keys: Keys) => T | Promise<T>): Promise<T> {
     const { wallet } = this.deps;
     return holder ? wallet.withKeys(task) : wallet.withAccount(await this.dappAccount(), task);
+  }
+
+  /**
+   * The keys of the account `view` was read for (`View.account`), never the
+   * setting read again: a signature is read, shown and signed for that one
+   * account. Read again at each step, a change in Settings while a request
+   * was read had the new account's keys find nothing of theirs in it, and one
+   * landing as it was approved, past its check, had them sign it (1.3.0's
+   * release review, C26, C27). A public reading always says its account; one
+   * that didn't would be account 0's, as `ofAccount` reads it. A private
+   * session's are the wallet's own, as for `withDappKeys`.
+   */
+  private withViewKeys<T>(holder: Holder, view: View, task: (keys: Keys) => T | Promise<T>): Promise<T> {
+    const { wallet } = this.deps;
+    return holder ? wallet.withKeys(task) : wallet.withAccount(view.account ?? 0, task);
   }
 
   /**
@@ -1291,18 +1313,31 @@ export class DappService {
   /**
    * Refuses unless the connector is still on and `origin` still connected on
    * `network`, to `holder`, and, on the public side, the dApp account still
-   * `account`: what a request was read for. Checked as it's approved, after
-   * the password (independent review L33). A dApp account changed in
+   * the one `view` was read for (`sameAccount`). Checked as it's approved,
+   * after the password (independent review L33). A dApp account changed in
    * Settings meanwhile is CIP-30's AccountChange, which asks the site to
    * `enable()` again (Lace refuses a signData so; chunk 25).
    */
-  private async stillConnected(network: NetworkName, origin: string, holder: Holder, account?: number): Promise<void> {
+  private async stillConnected(network: NetworkName, origin: string, holder: Holder, view: View): Promise<void> {
     if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
     const site = await this.site(network, origin);
     if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
-    if (!holder && account !== undefined && account !== (await this.dappAccount())) {
-      throw siteError(APIError.AccountChange, ACCOUNT_MOVED);
-    }
+    await this.sameAccount(holder, view);
+  }
+
+  /**
+   * Refuses a public-side signature read for a dApp account Settings has
+   * since left, with CIP-30's AccountChange (chunk 25). Looked at last before
+   * it's put in front of the user: `ask` puts it in `waiting` at once, and
+   * Settings writes the account before it declines what waits, so a change
+   * is seen here or finds it there. And last before it's signed, past
+   * whatever else an approval reads; one landing after can't move the keys,
+   * which are the account's it was read for (`withViewKeys`; 1.3.0's release
+   * review, C26, C27). A private session's has its own account.
+   */
+  private async sameAccount(holder: Holder, view: View): Promise<void> {
+    if (holder || (view.account ?? 0) === (await this.dappAccount())) return;
+    throw siteError(APIError.AccountChange, ACCOUNT_MOVED);
   }
 
   /**
@@ -1472,14 +1507,15 @@ export class DappService {
   /**
    * The account, read at most every 30 s (or now, with `fresh`), less what
    * this wallet has spent since. Calls while it's being read wait for that
-   * reading, so a site asking many things at once costs one.
+   * reading, so a site asking many things at once costs one. `pinned`: the
+   * public account to read, for a request read for one already (`resolve`).
    */
-  private async view(network: NetworkName, holder: Holder, fresh = false): Promise<View> {
+  private async view(network: NetworkName, holder: Holder, fresh = false, pinned?: number): Promise<View> {
     const { wallet, session, now } = this.deps;
     // The public side's is the dApp account's, read once here: kept, and shared while it's read, under that account
     // alone. Keyed by network only, a change in Settings answered every site, new ones too, with the account it left
     // for 30 s, beside the new one's addresses (the release review).
-    const account = holder ? undefined : await this.dappAccount();
+    const account = holder ? undefined : (pinned ?? (await this.dappAccount()));
     const key = SESSION_DAPP_VIEW + network + suffix(holder, account);
     const [kept, spent] = await wallet.withKeys(async () => [await session.get<View>(key), await spentSet(session)] as const);
     if (kept && !fresh && now() - kept.readAt < VIEW_MS && kept.account === account) {
@@ -1679,7 +1715,9 @@ export class DappService {
     };
     let { found, missing } = find(view);
     if (missing.length && this.allow(origin, "fresh")) {
-      view = await this.view(network, holder, true);
+      // The account the request is read for, whatever Settings says now. Read for a new one, it found nothing of that
+      // one's to sign, and was refused so, not as AccountChange (`sameAccount`; 1.3.0's release review, C27).
+      view = await this.view(network, holder, true, view.account);
       ({ found, missing } = find(view));
     }
     if (missing.length && !this.allow(origin, "lookup")) {
@@ -1819,7 +1857,9 @@ export class DappService {
     if (holder) return (address) => keysOf(wasm, address).payment === holder.keyHash;
     const stake = keysOf(wasm, view.stake).stake;
     const payment = new Set(
-      await this.withDappKeys(holder, ({ cardano }) => view.keys.map((k) => cardano.paymentKeyHash(k.role, k.index))),
+      await this.withViewKeys(holder, view, ({ cardano }) =>
+        view.keys.map((k) => cardano.paymentKeyHash(k.role, k.index)),
+      ),
     );
     return (address) => {
       const keys = keysOf(wasm, address);
@@ -1930,8 +1970,9 @@ export class DappService {
     };
     let summary: DappTxSummary;
     try {
-      summary = await this.withDappKeys(
+      summary = await this.withViewKeys(
         holder,
+        view,
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.inspectSessionTx(oneTime, request) : wasm.inspectDappTx(cardano, request)) as DappTxSummary,
       );
@@ -2010,6 +2051,8 @@ export class DappService {
       if (isTrap(e)) throw e;
       return undefined;
     });
+    // Read for a dApp account Settings has left meanwhile: refused, never shown. The last await before `ask`.
+    await this.sameAccount(holder, view);
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,
@@ -2029,11 +2072,14 @@ export class DappService {
         // waited, the site may have been disconnected or moved to another
         // account, a Lovejoin chain started that needs what it uses, or the
         // user locked a UTxO it spends.
-        await this.stillConnected(network, session.origin, holder, view.account);
+        await this.stillConnected(network, session.origin, holder, view);
         await this.heldForLovejoin(network, holder, inputs, collateral);
         await this.keptApart(network, holder, view, inputs, collateral);
+        // The account again, the last look before signing: a change that landed while those read is refused too,
+        // and one after can't move the keys, which are the account's it was read for (1.3.0's release review, C26).
+        await this.sameAccount(holder, view);
         // And which public account's keys signed it, which its outputs are kept as (`ofAccount`).
-        const { account, ...signed } = await this.withDappKeys(holder, ({ cardano, oneTime, account }) => ({
+        const { account, ...signed } = await this.withViewKeys(holder, view, ({ cardano, oneTime, account }) => ({
           ...(JSON.parse(holder ? wasm.signSessionTx(oneTime, request) : wasm.signDappTx(cardano, request)) as SignedTx),
           account,
         }));
@@ -2216,8 +2262,9 @@ export class DappService {
     });
     let signer: { address: string; key: "payment" | "stake" | "drep" } | null;
     try {
-      signer = await this.withDappKeys(
+      signer = await this.withViewKeys(
         holder,
+        view,
         ({ cardano, oneTime }) =>
           JSON.parse(holder ? wasm.sessionDataSigner(oneTime, request) : wasm.dataSigner(cardano, request)) as typeof signer,
       );
@@ -2228,6 +2275,8 @@ export class DappService {
     if (!signer) {
       throw siteError(DataSignError.ProofGeneration, (lng) => t("dapp.addressNotOurs", { whose: whoseKeys(holder, lng), lng }));
     }
+    // As a signTx's: read for a dApp account Settings has left meanwhile, never shown. The last await before `ask`.
+    await this.sameAccount(holder, view);
     const text = readableText(hex);
     return this.ask(
       session,
@@ -2243,10 +2292,12 @@ export class DappService {
       },
       DataSignError.UserDeclined,
       async () => {
-        // Still connected, to the same account, as it's approved (independent review L33).
-        await this.stillConnected(network, session.origin, holder, view.account);
-        return this.withDappKeys(
+        // Still connected, to the same account, as it's approved (independent review L33): the last look before
+        // it's signed, by the keys of the account it was read for (1.3.0's release review, C26).
+        await this.stillConnected(network, session.origin, holder, view);
+        return this.withViewKeys(
           holder,
+          view,
           ({ cardano, oneTime }) =>
             JSON.parse(holder ? wasm.signSessionData(oneTime, request) : wasm.signDappData(cardano, request)) as unknown,
         );

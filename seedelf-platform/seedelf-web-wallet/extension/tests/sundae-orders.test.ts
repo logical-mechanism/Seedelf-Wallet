@@ -40,7 +40,14 @@ const keyAddress = (payment: string, stake?: string) => c(0, c(0, bytes(payment)
 const v3Datum = ({ owner = c(0, bytes(STAKE)), destination = c(0, keyAddress(PAYMENT, STAKE), c(0)) }: { owner?: Cbor; destination?: Cbor } = {}) =>
   hex(cbor(c(0, c(0, bytes("3e".repeat(28))), owner, 1_280_000, destination, c(1, [bytes(""), bytes(""), 10_000_000], [bytes("ab".repeat(28)), bytes("4d494e"), 1]), bytes("d87980"))));
 
-const at = (address: string, datum: string | null): BuiltOutput => ({ address, lovelace: 5_280_000n, tokens: false, datum });
+const at = (address: string, datum: string | null): BuiltOutput => ({
+  address,
+  lovelace: 5_280_000n,
+  tokens: false,
+  datum,
+  inline: false,
+  scriptRef: false,
+});
 const ours = { address: SESSION_ADDRESS, keyHash: PAYMENT, ownStake: true };
 const change = at(SESSION_ADDRESS, null);
 
@@ -150,9 +157,13 @@ describe("a route through SundaeSwap V3", () => {
     expect(outOfPlace(route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["MinswapV2", "SundaeSwapV3"]);
     expect(outOfPlace(route(["SundaeSwapV3", "WingRidersV2"]))).toEqual(["SundaeSwapV3", "WingRidersV2"]);
     expect(outOfPlace(route(["MinswapV2", "WingRidersV2"]))).toEqual(["MinswapV2", "WingRidersV2"]);
-    // On either network: the check never sees a later leg's order.
-    expect(uncheckedProtocols("preprod", route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["MinswapV2", "SundaeSwapV3"]);
-    expect(uncheckedProtocols("mainnet", route(["MinswapV2", "SundaeSwapV3"]))).toEqual(["MinswapV2", "SundaeSwapV3"]);
+    // On either network the check never sees a later leg's order, but its DEXes are ones the wallet checks: the
+    // route's way is outOfPlace's alone, refused in words of its own, and only a DEX the wallet doesn't know, on
+    // mainnet, is unchecked (release review C34).
+    expect(uncheckedProtocols("preprod", route(["MinswapV2", "SundaeSwapV3"]))).toEqual([]);
+    expect(uncheckedProtocols("mainnet", route(["MinswapV2", "SundaeSwapV3"]))).toEqual([]);
+    expect(uncheckedProtocols("mainnet", route(["MinswapV2", "CswapV1"]))).toEqual(["CswapV1"]);
+    expect(uncheckedProtocols("preprod", route(["MinswapV2", "CswapV1"]))).toEqual([]);
   });
 
   it("is asked for again without V3 when Minswap's best puts it beside another leg, and the order is built from that one", async () => {

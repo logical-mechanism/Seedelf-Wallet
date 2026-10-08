@@ -1,6 +1,6 @@
-// The transaction view: the transaction itself, under every review and under
-// the connector's sign window. Eternl is the model — a detail view with a way
-// to read the CBOR.
+// The transaction view: the transaction itself, under every review, under
+// the connector's sign window, and in the Lovejoin page's list of a chain
+// being sent. Eternl is the model — a detail view with a way to read the CBOR.
 //
 // It is a modal of its own, for that one transaction, closed with Escape, a
 // click around it or its Close button. Nothing of the transaction lives here:
@@ -39,28 +39,33 @@ import { tokenDecimals, tokenText } from "../tokens";
 
 /**
  * The control that opens the view, for a transaction the wallet is holding:
- * every review's, and a site's waiting for a signature. `label` names it where
- * "Transaction details" doesn't read right. `site`: the site built it and
- * sends it, and the wallet only adds its signature (the connector's sign
- * window).
+ * every review's, a site's waiting for a signature, and each of a chain's
+ * through Lovejoin being sent. `label` names it where "Transaction details"
+ * doesn't read right. `site`: the site built it and sends it, and the wallet
+ * only adds its signature (the connector's sign window). `onOpen`: the page
+ * opens the view itself (TxDetailModal), where a list that can go while it's
+ * open would take a view of its own with it (the Lovejoin page's chains, 1.3.0's
+ * release review, C28).
  */
 export function TxDetailButton({
   txHash,
   label,
   testId = "tx-detail",
   site = false,
+  onOpen,
 }: {
   txHash: string;
   label?: string;
   testId?: string;
   site?: boolean;
+  onOpen?: () => void;
 }) {
   const tr = useT();
   const [open, setOpen] = useState(false);
   return (
     <>
       <div className="tx-detail__open">
-        <button type="button" className="chip" onClick={() => setOpen(true)} data-testid={`${testId}-open`}>
+        <button type="button" className="chip" onClick={() => (onOpen ? onOpen() : setOpen(true))} data-testid={`${testId}-open`}>
           <ExpandIcon size={13} />
           {label ?? tr("tx.detailsButton")}
         </button>
@@ -85,15 +90,20 @@ export function entryLabel({ txs, again }: { txs: number; again?: boolean }): st
 
 type Tab = "transaction" | "cbor";
 
-function TxDetailModal({
+/**
+ * The view itself, for transaction `txHash`: what TxDetailButton opens, or a
+ * page that keeps which one is open (TxDetailButton `onOpen`). It asks the
+ * worker for the bytes once, as it opens, and shows them until it's closed.
+ */
+export function TxDetailModal({
   txHash,
   testId,
-  site,
+  site = false,
   onClose,
 }: {
   txHash: string;
   testId: string;
-  site: boolean;
+  site?: boolean;
   onClose: () => void;
 }) {
   const tr = useT();
@@ -155,7 +165,7 @@ function TxDetailModal({
             />
             <div id={`${testId}-panel-${tab}`} role="tabpanel" aria-labelledby={`${testId}-tab-${tab}`} className="stack">
               {tab === "transaction" ? (
-                <TxDetailBody detail={view.detail} network={network} testId={testId} site={site} />
+                <TxDetailBody detail={view.detail} network={network} testId={testId} site={site} chain={view.chain === true} />
               ) : (
                 <Raw cbor={view.cbor} testId={testId} />
               )}
@@ -246,12 +256,19 @@ export function TxDetailBody({
   network,
   testId,
   site = false,
+  chain = false,
 }: {
   detail: Detail;
   network: NetworkName;
   testId: string;
   /** A site's transaction, in the connector's sign window: the wallet neither prepared it nor sends it. */
   site?: boolean;
+  /**
+   * One of a chain through Lovejoin being sent, or stopped partway (the worker
+   * found it there, TxView `chain`): its Send was pressed, or a mix's own run
+   * sent it, and the wallet sends each in turn with no confirm of its own.
+   */
+  chain?: boolean;
 }) {
   const tr = useT();
   const amount = (t: TxAsset) => {
@@ -354,21 +371,26 @@ export function TxDetailBody({
           <Row label={tr("tx.size")} value={tr("tx.sizeValue", { size: d.size, body: d.bodySize })} />
           {/* What matters is whether anything has signed it, not what else the
               witness set carries: a transaction with its redeemers and no
-              signature is unsigned. Signed, it still hasn't gone, and says so:
-              this sheet only shows a transaction the wallet holds, and "2
-              signatures so far" before Send read as sent (chunk 23's second
-              review, PY-7). Counted, not "Signed": on a review, before its
-              button or a password, "Signed 3 signatures" read as consent
-              already given (blind test §4 entry 16; T12, T14, T14r, E04). The
-              wallet signs as it prepares a review, so it can show the exact
-              transaction. A site's arrives as the site prepared it, and the
-              site sends it: the wallet promises only what it does, adding the
-              user's signature on Sign (the pass-two cross-area review). */}
+              signature is unsigned. Signed, a review's still hasn't gone, and
+              says so: "2 signatures so far" before Send read as sent (chunk
+              23's second review, PY-7). Counted, not "Signed": on a review,
+              before its button or a password, "Signed 3 signatures" read as
+              consent already given (blind test §4 entry 16; T12, T14, T14r,
+              E04). The wallet signs as it prepares a review, so it can show
+              the exact transaction. A site's arrives as the site prepared it,
+              and the site sends it: the wallet promises only what it does,
+              adding the user's signature on Sign (the pass-two cross-area
+              review). A chain's being sent was signed whole as it was
+              prepared, and no confirm waits: the line says only when its
+              signatures were made, and the chain's list beside it says where
+              each one is (1.3.0's release review, C17). */}
           <Row
             label={tr("tx.signed")}
             value={
               d.signatures.length
-                ? tr(site ? "tx.siteSignatures" : "tx.signaturesSoFar", { count: d.signatures.length })
+                ? tr(site ? "tx.siteSignatures" : chain ? "tx.chainSignatures" : "tx.signaturesSoFar", {
+                    count: d.signatures.length,
+                  })
                 : tr("tx.notYet")
             }
           />

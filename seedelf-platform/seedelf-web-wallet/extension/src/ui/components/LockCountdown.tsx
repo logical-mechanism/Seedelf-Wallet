@@ -67,13 +67,23 @@ export function LockCountdown() {
   }, [ask]);
 
   // While it shows: whether a chain is being sent, asked as often as the deadline. Neither counts as activity.
-  const [chain, setChain] = useState(false);
+  // Unknown until the worker answers, and again once the countdown goes, so a chain's line from before never
+  // shows when it comes back; the countdown says which it is (`data-chain-sending`), so the e2e test waits for the
+  // answer rather than looking before it (1.3.0's release review, C30).
+  const [chain, setChain] = useState<boolean>();
   useEffect(() => {
-    if (!near) return;
-    const look = () => call("chains-sending", {}).then(setChain, () => undefined);
+    if (!near) {
+      setChain(undefined);
+      return;
+    }
+    let live = true;
+    const look = () => call("chains-sending", {}).then((sending) => live && setChain(sending), () => undefined);
     look();
     const timer = setInterval(look, ASK_NEAR_MS);
-    return () => clearInterval(timer);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   }, [near]);
 
   // The countdown, each second; at 0:00 the worker is asked, which locks.
@@ -125,7 +135,14 @@ export function LockCountdown() {
 
   if (!near || left === undefined) return null;
   return (
-    <section ref={setBox} className="callout callout--warn lock-countdown" role="timer" aria-label={t("lock.autoLock")} data-testid="lock-countdown">
+    <section
+      ref={setBox}
+      className="callout callout--warn lock-countdown"
+      role="timer"
+      aria-label={t("lock.autoLock")}
+      data-testid="lock-countdown"
+      data-chain-sending={chain === undefined ? undefined : String(chain)}
+    >
       <span className="callout__icon">
         <LockIcon size={16} />
       </span>

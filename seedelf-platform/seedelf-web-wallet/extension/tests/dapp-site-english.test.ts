@@ -127,4 +127,97 @@ describe("a site's refusals, with the wallet in Japanese", () => {
     await expect(signing).rejects.toMatchObject(refusal(TxSignError.ProofGeneration, usesLocked(free!, "en")));
     expect(usesLocked(free!, "ja")).not.toBe(usesLocked(free!, "en"));
   });
+
+  // Every way a site hears CIP-30's AccountChange once Settings chooses another dApp account (chunk 25; 1.3.0's
+  // release review, C35): each is its own line in dapp.ts, and the tests that change the account run in English.
+  const hex = (text: string) => Buffer.from(text, "utf8").toString("hex");
+
+  /** The account's 5 ₳ and a signTx and a signData to ask of it, with the dApp account 0 and the password on. */
+  async function asking(t: Awaited<ReturnType<typeof on>>) {
+    await t.preferences.set({ dappPassword: true });
+    const s = await connected(t);
+    await t.balances.get("preprod");
+    const [free] = (await t.coins.lists("preprod")).cardano.filter((u) => !u.collateral).map((u) => `${u.txHash}#${u.index}`);
+    return () => {
+      const signing = t.dapp.call(s, "signTx", [siteTx([free!]), false]);
+      const message = t.dapp.call(s, "signData", [loadTestWasm().cip30Address(OWN), hex("Sign in")]);
+      // Caught, so neither rejects unheard before the test looks.
+      signing.catch(() => undefined);
+      message.catch(() => undefined);
+      return { signing, message };
+    };
+  }
+
+  it("are English when the dApp account changes under a waiting signature, while the window says it in Japanese", async () => {
+    const t = await on();
+    const ask = await asking(t);
+    const moved = refusal(APIError.AccountChange, english("dapp.accountMoved"));
+    const shown = { error: i18n.t("dapp.accountMoved", { lng: "ja" }) };
+    const waiting = async () => {
+      await t.preferences.set({ dappAccount: 0 });
+      const asked = ask();
+      await until(() => t.dapp.approvals().length === 2);
+      return asked;
+    };
+
+    // Settings chooses another: both are declined (`dappAccountChanged`, through `decline`).
+    let asked = await waiting();
+    await t.preferences.set({ dappAccount: 1 });
+    await t.dapp.dappAccountChanged();
+    await expect(asked.signing).rejects.toMatchObject(moved);
+    await expect(asked.message).rejects.toMatchObject(moved);
+
+    // Approved after a change the connector wasn't told of: refused before the password (`answer`).
+    asked = await waiting();
+    await t.preferences.set({ dappAccount: 1 });
+    expect(await t.dapp.answer(t.dapp.approvals()[0]!.id, true, PASSWORD)).toEqual(shown);
+    await expect(asked.signing).rejects.toMatchObject(moved);
+    await expect(asked.message).rejects.toMatchObject(moved);
+
+    // Changed while the password is checked: refused as it's approved (`stillConnected`).
+    asked = await waiting();
+    const check = t.wallet.checkPassword.bind(t.wallet);
+    t.wallet.checkPassword = async (password: string) => {
+      await check(password);
+      await t.preferences.set({ dappAccount: 1 });
+    };
+    expect(await t.dapp.answer(t.dapp.approvals().find((a) => a.kind === "sign-tx")!.id, true, PASSWORD)).toEqual(shown);
+    await expect(asked.signing).rejects.toMatchObject(moved);
+    t.wallet.checkPassword = check;
+    await t.dapp.dappAccountChanged();
+    await expect(asked.message).rejects.toMatchObject(moved);
+
+    // Changed past the password, as the locks are read again: the last look before signing.
+    asked = await waiting();
+    const choices = t.coins.choices.bind(t.coins);
+    t.coins.choices = async (network, account) => {
+      t.coins.choices = choices;
+      await t.preferences.set({ dappAccount: 1 });
+      return choices(network, account);
+    };
+    expect(await t.dapp.answer(t.dapp.approvals().find((a) => a.kind === "sign-tx")!.id, true, PASSWORD)).toEqual(shown);
+    await expect(asked.signing).rejects.toMatchObject(moved);
+    await t.dapp.dappAccountChanged();
+    await expect(asked.message).rejects.toMatchObject(moved);
+  });
+
+  it("are English when the dApp account changes under a signature still being read, which is never shown", async () => {
+    const t = await on();
+    const ask = await asking(t);
+    // The kept reading has aged: both read the account again, and Koios is slow to answer.
+    t.clock.now += 31_000;
+    let release!: () => void;
+    t.koios.hold = new Promise<void>((r) => (release = r));
+    const before = t.koios.calls.length;
+    const asked = ask();
+    await until(() => t.koios.calls.length > before);
+    await t.preferences.set({ dappAccount: 1 });
+    await t.dapp.dappAccountChanged();
+    release();
+    t.koios.hold = undefined;
+    const moved = refusal(APIError.AccountChange, english("dapp.accountMoved"));
+    await expect(asked.signing).rejects.toMatchObject(moved);
+    await expect(asked.message).rejects.toMatchObject(moved);
+    expect(t.dapp.approvals()).toEqual([]);
+  });
 });

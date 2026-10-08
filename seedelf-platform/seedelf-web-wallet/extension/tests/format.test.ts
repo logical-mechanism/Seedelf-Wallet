@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { i18n } from "../src/i18n/core";
+import type { PendingTx } from "../src/shared/rpc";
+import { validUntil } from "../src/ui/components/PendingBanner";
 import { dayText, formatAda, formatQuantity, shortHex, timeAgo, tokenName, whenOf } from "../src/ui/format";
+import { dayHeading } from "../src/ui/screens/Activity";
 
 describe("formatting", () => {
   it("formats lovelace as ADA exactly", () => {
@@ -67,6 +70,37 @@ describe("dates in the language on (the post-release roadmap's O8, chunk 25)", (
     // Read at each use: back in English, as before.
     await i18n.changeLanguage("en");
     expect(dayText(day)).toBe("31 Dec 2025");
+  });
+
+  // Where the screens write a date themselves rather than through format.ts: each was "en-GB" before chunk 25, and
+  // one put back would show English months on a Spanish or Japanese screen, in a test that runs in English
+  // (1.3.0's release review, C40). date-locale.test.ts scans for the rest.
+  it("heads Activity's days two or more back with the date, in the language on", async () => {
+    const now = new Date(2026, 2, 25, 9, 30);
+    const day = new Date(2025, 11, 31, 7, 0).getTime();
+    expect(dayHeading(day, now)).toBe("31 Dec 2025");
+    await i18n.changeLanguage("es");
+    expect(dayHeading(day, now)).toBe("31 dic 2025");
+    await i18n.changeLanguage("ja");
+    expect(dayHeading(day, now)).toBe("2025年12月31日");
+  });
+
+  it("says until when Home's banner's payment can land, past midnight, with the date in the language on", async () => {
+    const late = new Date(2026, 9, 5, 23, 17).getTime();
+    const pub: PendingTx = {
+      kind: "send",
+      network: "preprod",
+      txHash: "ab".repeat(32),
+      submittedAt: late,
+      confirmations: null,
+      maybeSent: true,
+      invalidHereafter: 123_456,
+    };
+    expect(validUntil(pub, late)).toBe("6 Oct, 01:17");
+    await i18n.changeLanguage("es");
+    expect(validUntil(pub, late)).toBe("6 oct, 01:17");
+    await i18n.changeLanguage("ja");
+    expect(validUntil(pub, late)).toBe("10月6日 01:17");
   });
 });
 

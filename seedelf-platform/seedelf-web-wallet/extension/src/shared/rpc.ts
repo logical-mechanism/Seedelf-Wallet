@@ -830,11 +830,14 @@ export interface PendingTx {
    */
   dropped?: "expired" | "unseen";
   /**
-   * A chain through Lovejoin (a session's return, a mix from the public
-   * account), which `txHash`, its last transaction, ends: its first, the one
-   * its review showed and the first to land, and how many it has. Home's
-   * banner names that first one until the last lands, not a hash the user
-   * never saw (chunk 17's handoff note).
+   * A chain through Lovejoin, which `txHash`, its last transaction, ends: its
+   * first, the one its review showed and the first to land, and how many it
+   * has. A mix from the public account's is in Home's watch (lovejoin.ts
+   * publicSubmit, watchSent), and Home's banner names that first one until
+   * the last lands, not a hash the user never saw (chunk 17's handoff note).
+   * A session's return carries it too, but its page watches it, not Home's
+   * banner (sessions.ts sendRecorded), and nothing reads it there (1.3.0's
+   * release review, C45).
    */
   chain?: { first: string; total: number };
 }
@@ -1260,6 +1263,14 @@ export interface TxView {
   detail: TxDetail;
   /** The transaction's CBOR, hex: the Raw CBOR tab, and a copy button. */
   cbor: string;
+  /**
+   * Found where a chain through Lovejoin is sent from (tx-view.ts
+   * `chainKeys`): one being sent, or stopped partway, whose transactions the
+   * wallet sends one after another with no confirm of their own. Its
+   * signatures were made as the chain was prepared, and Transaction details
+   * says so, never that it waits for a confirm (1.3.0's release review, C17).
+   */
+  chain?: true;
 }
 
 /**
@@ -1463,7 +1474,7 @@ export interface SessionTx {
 export type SessionPause =
   /** The fresh quote expects `amountOut`, less than the least the user approved: the order couldn't fill. */
   | { at: number; why: "price"; amountOut: string }
-  /** What Minswap built failed a check (`detail` says which), so the wallet didn't sign it. */
+  /** What Minswap built, or the wallet's own cancel after Stop, failed a check (`detail` says which), so the wallet didn't sign it. */
   | { at: number; why: "refused"; detail: string };
 
 /**
@@ -1492,7 +1503,11 @@ export interface SessionAuto {
    * codes, whose `error` is English, the one language the worker wrote then.
    */
   retry?: { at: number; error: string; reason?: RetryReason };
-  /** The user pressed Stop: any order is cancelled, then everything comes back. */
+  /**
+   * The user pressed Stop: any order is cancelled, then everything comes
+   * back. A swap against a DEX's pools that went out first has no order to
+   * cancel: it lands as it is or not at all, then everything comes back.
+   */
   stopping: boolean;
   /** The order was filled: `partly`, part of it (a split route), the rest refunded. */
   filled: boolean;
@@ -1511,6 +1526,13 @@ export interface SessionAuto {
   approvedMinOut: string;
   /** Its swap went against a DEX's pools (Danogo's), with no order: filled in the swap itself (chunk 24). */
   againstPools?: boolean;
+  /**
+   * Approved against a DEX's pools, and no swap sent yet: words alone, the
+   * timeline's for a swap the runner places against the pools or not at
+   * all (release review C09, C13). Never what Stop reads: Stop stays until
+   * the swap goes out (`againstPools`).
+   */
+  approvedPools?: boolean;
   /**
    * The least the order placed asks for, once one is: Review it myself, or
    * a fresh quote above the approved least, asks for other than was
@@ -1625,7 +1647,7 @@ export interface SessionOutSummary extends WithdrawSummary {
   address: string;
 }
 
-/** A transaction Minswap built for a session (a swap, a cancel), read by WebAssembly and waiting for Send. */
+/** A swap Minswap built for a session, or the wallet's own cancel of its orders, read by WebAssembly and waiting for Send. */
 export interface SessionTxReview {
   network: NetworkName;
   index: number;
@@ -1636,6 +1658,12 @@ export interface SessionTxReview {
   quote?: SwapQuote;
   /** A cancel's orders. */
   orders?: number;
+  /**
+   * A swap built against a DEX's pools (Danogo, chunk 24), read from the
+   * transaction itself: no order, no fill to wait for and no Stop once sent.
+   * Its outputs at the pools' script hold the pools' own reserves.
+   */
+  againstPools?: boolean;
 }
 
 /** Bringing a session back into the private balance, built and signed, waiting for Send. Amounts in lovelace. */
@@ -1826,7 +1854,8 @@ export interface LovejoinChainView {
   /**
    * Its transactions in order, while it's being sent and the wallet holds
    * them: what each is, and whether it's on chain, sent and not seen yet,
-   * or not sent yet. Each opens in Transaction details (tx-view.ts).
+   * being sent, or not sent yet. Each opens in Transaction details
+   * (tx-view.ts).
    */
   txs?: LovejoinChainTx[];
 }
@@ -1835,7 +1864,13 @@ export interface LovejoinChainView {
 export interface LovejoinChainTx {
   txHash: string;
   kind: "deposit" | "mix" | "back";
-  state: "landed" | "sent" | "waiting";
+  /**
+   * On chain; sent and not seen yet; being sent: its send began and hasn't
+   * finished, or a try Koios didn't answer may have put it in, so it may be in
+   * a mempool already, and is never said not to be sent (the release review,
+   * C29); or not sent yet.
+   */
+  state: "landed" | "sent" | "sending" | "waiting";
 }
 
 /**
@@ -2110,7 +2145,7 @@ export interface Requests {
   "session-swap-submit": { payload: { txHash: string }; result: PendingTx };
   /** The session's orders that aren't filled yet. */
   "session-orders": { payload: { index: number }; result: SessionOrder[] };
-  /** Has Minswap build a cancel of the session's open orders, and reads it. */
+  /** Builds the wallet's own cancel of the session's open orders (chunk 24), and reads it. */
   "session-cancel-build": { payload: { index: number }; result: SessionTxReview };
   "session-cancel-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds and signs the return of everything at the session's account into the private balance. */
@@ -2140,6 +2175,13 @@ export interface Requests {
   "lovejoin-status": { payload: Record<string, never>; result: LovejoinStatus };
   /** The boxes on their way back, from this device's schedule alone: no Koios request. */
   "lovejoin-held": { payload: Record<string, never>; result: LovejoinHeld };
+  /**
+   * The chains lovejoin-status lists (its `chains`), read again from this
+   * device alone: no Koios request. The Lovejoin page asks every few seconds
+   * while one is being sent, so a chain all sent or stopped since leaves its
+   * row, or says so (1.3.0's release review, C28).
+   */
+  "lovejoin-chains": { payload: None; result: LovejoinChainView[] };
   /** What mixing `boxes` boxes at the set depth takes. */
   "lovejoin-funding": { payload: { boxes: number }; result: LovejoinFunding };
   /** Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself once sent. */
@@ -2189,8 +2231,10 @@ export interface Requests {
    * Stops the swap: its order is cancelled, then everything comes back into
    * the private balance (`direct`: not through Lovejoin, whatever was approved).
    * `ordered`: an order had gone out, or may have, when Stop took effect.
+   * `orderedPools`: the latest swap that had, shown or given up, went against
+   * a DEX's pools, so it isn't an order the wallet cancels.
    */
-  "session-stop": { payload: { index: number; direct?: boolean }; result: SessionView & { ordered?: boolean } };
+  "session-stop": { payload: { index: number; direct?: boolean }; result: SessionView & { ordered?: boolean; orderedPools?: boolean } };
   /** What Stop would bring back through Lovejoin, for its dialog; null when it comes back directly. */
   "session-stop-cost": { payload: { index: number }; result: SwapLovejoin | null };
   /** Goes on after a pause or a failure: the step is tried again now. */
@@ -2325,6 +2369,7 @@ const REQUEST_LIST = [
   "lovejoin-status",
   "lovejoin-withdraw-now",
   "lovejoin-held",
+  "lovejoin-chains",
   "lovejoin-funding",
   "lovejoin-mix-private-build",
   "lovejoin-again-build",

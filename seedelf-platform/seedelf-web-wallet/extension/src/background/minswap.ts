@@ -1,7 +1,9 @@
 // Minswap's aggregator API (https://docs.minswap.org/developer/aggregator-api),
-// for swaps in private sessions: a quote, an unsigned swap for a sender, the
-// sender's open orders, and an unsigned cancel. It routes across Cardano's
-// DEXes; the orders it places are filled by each DEX's batchers.
+// for swaps in private sessions: a quote, an unsigned swap for a sender, and
+// its token search. It routes across Cardano's DEXes; the orders it places
+// are filled by each DEX's batchers. A session's orders are read from chain
+// and cancelled by the wallet itself (sessions.ts `liveOrders`, seedelf-core's
+// orders.rs), never through Minswap (chunk 24).
 //
 // `build-tx` takes only a sender: it picks the sender's UTxOs from its own
 // view of the chain, and the proceeds and any refund go back to the sender.
@@ -119,9 +121,12 @@ const PREPROD_BROKEN = ["Splash", "SplashStable"];
  * The DEXes a mainnet swap goes through: those whose orders the wallet can
  * cancel itself (chunk 24, Step 3). Each order script is pinned, with its
  * cancel, in seedelf-core's `orders.json`, and WebAssembly reads each order
- * exactly (`readDexOrder`, which sessions.ts `checkOrder` asks): cancelled by
- * the session's own key, and paying the session's address alone. So Stop
- * brings the money back whatever Minswap lists, from any of them:
+ * (`readDexOrder`, which sessions.ts `checkOrder` asks): cancelled by the
+ * session's own key, paying the session's address alone, in a form its
+ * script can spend; then it builds each order's cancel and runs the order's
+ * script on it before the swap is signed (`checkOrderCancels`, release
+ * review C05). So Stop brings the money back whatever Minswap lists, from
+ * any of them:
  * - Minswap (V1), MinswapV2 and MinswapStable (one order script a pool);
  * - SundaeSwap (V1) and SundaeSwapV3, the latter owned by the session's own
  *   stake key, which signs its cancel too, and only as a path of its own
@@ -172,9 +177,10 @@ const MAINNET_REFUSED = ["VyFinance", "MuesliSwap", "SplashStable"];
  * 2026-10-06). A single-leg order names the sender's stake key as its owner,
  * whose signature alone cancels it, and the sender's address as its
  * destination, with no datum; V3's pools pay the destination exactly, and
- * its orders never expire. WebAssembly reads one exactly (`readDexOrder`,
- * seedelf-core orders.rs), and Stop's own cancel of one is signed by the
- * session's stake key too.
+ * its orders never expire. WebAssembly reads one's owner and destination
+ * (`readDexOrder`, seedelf-core orders.rs), and runs its cancel through V3's
+ * own script before the swap is signed (`checkOrderCancels`), and Stop's own
+ * cancel of one is signed by the session's stake key too.
  */
 export const SUNDAE_V3: Readonly<Record<"preprod" | "mainnet", { order: string; stake: string }>> = {
   mainnet: {
@@ -191,10 +197,10 @@ export const SUNDAE_V3: Readonly<Record<"preprod" | "mainnet", { order: string; 
  * Danogo's concentrated-liquidity pools' script, by network: a DEX that
  * swaps against its pools in the swap itself, with no order (chunk 24). A
  * session's direct swap spends UTxOs at it and nothing else of anyone's but
- * a collateral signed already, recreates its pools there, and withdraws
- * zero from it and from each spent pool's staking script (sessions.ts
- * `directSpends`, `checkDirect`). Seen in swaps Minswap built, on mainnet and
- * on preprod, 2026-10-06.
+ * a collateral signed already, recreates each pool it spends where that
+ * pool was, once, and withdraws zero from it and from each spent pool's
+ * staking script (sessions.ts `directSpends`, `checkDirect`). Seen in swaps
+ * Minswap built, on mainnet and on preprod, 2026-10-06.
  */
 export const DANOGO_POOL: Readonly<Record<"preprod" | "mainnet", string>> = {
   mainnet: "d8b69fc53637bcfadbc4469083f706bc293f4d9d2296646c5ca167bb",
@@ -285,17 +291,16 @@ export function excludedProtocols(network: "preprod" | "mainnet"): string[] {
 }
 
 /**
- * The DEXes of `est`'s route a swap on `network` doesn't go through: on
- * mainnet, any not on MAINNET_PROTOCOLS (CswapV1, whose orders the wallet
- * doesn't know, or one Minswap adds later); on either network, one where
- * the session's check can't follow it (`outOfPlace`). Otherwise none on
- * preprod, where only the check stands.
+ * The DEXes of `est`'s route a mainnet swap doesn't go through because the
+ * wallet doesn't check them: any not on MAINNET_PROTOCOLS (CswapV1, whose
+ * orders the wallet doesn't know, or one Minswap adds later). None on
+ * preprod, where only the check stands. A route that puts DEXes the wallet
+ * checks where the session's check can't follow them is `outOfPlace`'s, and
+ * refused in words of its own (sessions.ts, release review C34).
  */
 export function uncheckedProtocols(network: "preprod" | "mainnet", est: Pick<Estimate, "paths">): string[] {
-  const legged = outOfPlace(est);
-  if (network !== "mainnet") return legged;
-  const unknown = est.paths.flat().map((leg) => leg.protocol).filter((p) => !MAINNET_PROTOCOLS.includes(p));
-  return [...new Set([...unknown, ...legged])];
+  if (network !== "mainnet") return [];
+  return [...new Set(est.paths.flat().map((leg) => leg.protocol).filter((p) => !MAINNET_PROTOCOLS.includes(p)))];
 }
 
 const TIMEOUT_MS = 20_000;
@@ -407,13 +412,20 @@ export interface BuiltOutput {
    * carry.
    */
   datum: string | null;
+  /**
+   * It holds its datum inline (`[1, #6.24(datum)]`), not by hash: a Plutus
+   * V1 order script can never spend such an output (release review C05).
+   */
+  inline: boolean;
+  /** It carries a script (an output map's key 3): no cancel the wallet builds can spend such an order. */
+  scriptRef: boolean;
 }
 
 /**
  * Where a transaction Minswap built pays: each output's address, ADA and
- * datum. An order's datum is its details (who it's for, what it gives); a
- * DEX that keeps it by hash carries it in the witness set, as Minswap's V1
- * orders do. Throws on bytes it can't read.
+ * datum, and the form it's in. An order's datum is its details (who it's
+ * for, what it gives); a DEX that keeps it by hash carries it in the
+ * witness set, as Minswap's V1 orders do. Throws on bytes it can't read.
  */
 export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
   if (tx[0] !== 0x84) throw new Error(t("worker.cbor.notFourItems"));
@@ -430,7 +442,9 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
   if (!outputs) throw new Error(t("minswap.cbor.noOutputs"));
   return items(tx, outputs[1]).map((o) => {
     const fields = new Map<number, number>();
-    if (head(tx, o).major === 5) {
+    // A map output (Babbage's) may hold its datum inline, and a script; a legacy one, neither.
+    const map = head(tx, o).major === 5;
+    if (map) {
       for (const [key, at] of entries(tx, o)) fields.set(key, at);
     } else {
       items(tx, o).forEach((at, i) => fields.set(i, at));
@@ -443,20 +457,22 @@ export function builtOutputs(tx: Uint8Array): BuiltOutput[] {
       coin.major === 0 ? [coin.n, false] : [head(tx, items(tx, value)[0]!).n, head(tx, items(tx, value)[1]!).n > 0n];
     // A legacy output's third field is its datum's hash; a map's, `[0, hash]` or `[1, #6.24(datum)]`.
     let datum: string | null = null;
+    let inline = false;
     const option = fields.get(2);
-    if (option !== undefined && head(tx, o).major === 5) {
+    if (option !== undefined && map) {
       const [which, inner] = items(tx, option);
       if (head(tx, which!).n === 1n) {
         const tag = head(tx, inner!);
         if (tag.major !== 6 || tag.n !== 24n) throw new Error(t("minswap.cbor.datumNotWrapped"));
         datum = hex(bytesAt(tx, tag.p));
+        inline = true;
       } else {
         datum = carried.get(hex(bytesAt(tx, inner))) ?? null;
       }
     } else if (option !== undefined) {
       datum = carried.get(hex(bytesAt(tx, option))) ?? null;
     }
-    return { address: hex(address), lovelace, tokens, datum };
+    return { address: hex(address), lovelace, tokens, datum, inline, scriptRef: map && fields.has(3) };
   });
 }
 

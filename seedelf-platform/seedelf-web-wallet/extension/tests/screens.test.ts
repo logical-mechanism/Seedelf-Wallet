@@ -353,6 +353,12 @@ describe("a swap's approval (launch review #21, #26)", () => {
       "The wallet won't sign what Minswap built: it places no order. Try again asks Minswap to build it afresh.",
     );
   });
+
+  it("says a refusal after Stop is of the wallet's own cancel, which Try again builds afresh (release review C15)", () => {
+    expect(pauseText({ at: 0, why: "refused", detail: "its cancel's fee is more than a cancel takes." }, "1", undefined, true)).toBe(
+      "The wallet couldn't cancel the order: its cancel's fee is more than a cancel takes. Try again builds the cancel afresh.",
+    );
+  });
 });
 
 describe("a swap's way back, on its approval and at Stop (privacy review §2.7, §2.8, §4.1)", () => {
@@ -999,7 +1005,9 @@ describe("Lovejoin's page (launch review H2)", () => {
                 txs: [
                   { txHash: "a1".repeat(32), kind: "deposit", state: "landed" },
                   { txHash: "a2".repeat(32), kind: "mix", state: "sent" },
-                  { txHash: "a3".repeat(32), kind: "mix", state: "waiting" },
+                  // Its send began, or a try of it may have reached a node: never "Not sent yet" (1.3.0's release
+                  // review, C29).
+                  { txHash: "a3".repeat(32), kind: "mix", state: "sending" },
                   { txHash: "a4".repeat(32), kind: "back", state: "waiting" },
                 ],
               },
@@ -1010,11 +1018,12 @@ describe("Lovejoin's page (launch review H2)", () => {
     );
     const line = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     expect(line).toContain("Its transactions");
-    expect(line).toContain("Deposit On chain Mix 1 Sent, not on chain yet Mix 2 Not sent yet Return Not sent yet");
+    expect(line).toContain("Deposit On chain Mix 1 Sent, not on chain yet Mix 2 Being sent Return Not sent yet");
     // Under a disclosure, so the row reads as before until it's opened.
     expect(html).toContain('<details class="disclosure chain-txs"');
     expect(html).toContain('data-testid="lovejoin-chain-tx-3-open"');
-    // None while it isn't being sent: stopped, its transactions aren't held.
+    // A row the worker sends no transactions for (stopped, or all sent) lists none. Which rows carry them is the
+    // worker's rule, pinned there (lovejoin.test.ts, chain-record.test.ts; 1.3.0's release review, C30).
     expect(text(shown(chains))).not.toContain("Its transactions");
   });
 

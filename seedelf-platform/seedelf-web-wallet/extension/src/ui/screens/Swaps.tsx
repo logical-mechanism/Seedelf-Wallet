@@ -108,6 +108,7 @@ import {
   fundParts,
   halfOf,
   impactLevel,
+  intoPools,
   maxAdaIn,
   parseSlippage,
   POOL_SWAP_FEE_ESTIMATE,
@@ -250,12 +251,24 @@ function subOf(s: SessionView, now: number): string {
   if (isOver(s)) return whenOf(s.createdAt, new Date(now));
   if (!s.auto) return t(s.stage === "open" ? "swaps.sub.nextIsYours" : STAGE[s.stage]);
   if (fundingUnseen(s)) return t("swaps.sub.fundingUnseen");
-  if (s.auto.paused) return t(PAUSED[s.auto.paused.why]);
+  // Refused after Stop, it was the cancel, which the wallet builds itself (chunk 24 Step 3; the 1.3.0 release
+  // review, C15): stopping, the runner builds nothing else that can be refused (pauseText).
+  if (s.auto.paused) {
+    return s.auto.paused.why === "refused" && s.auto.stopping ? t("swaps.paused.cancelRefused") : t(PAUSED[s.auto.paused.why]);
+  }
   if (s.auto.orderOpen !== undefined) return t("swaps.sub.orderOpen");
+  // A swap against a DEX's pools has no order to place: it's swapping, though Stop was pressed as it went out
+  // (chunk 24). It lands as it is or not at all.
+  if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
   // Stopped before its order: it comes back rather than place one.
   if (s.auto.stopping && s.auto.step === "ordering") return t(STEP.returning);
-  // A swap against a DEX's pools has no order to place: it's swapping (chunk 24).
-  if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
+  // Its fill or refund read, or a swap against a DEX's pools landed, which fills in itself: nothing waits on a DEX,
+  // and its return goes next, once an unlock's wait or Koios's listing lets it (as the timeline's third step says).
+  if (s.auto.step === "filling" || s.auto.step === "cancelling") {
+    if (s.auto.refunded) return t("swaps.tag.refunded");
+    if (s.auto.partly) return t("swaps.tag.partly");
+    if (s.auto.filled || s.auto.againstPools) return t("swaps.plan.filled");
+  }
   return t(STEP[s.auto.step]);
 }
 
@@ -273,6 +286,20 @@ const stoppable = (a: SessionAuto) =>
   !a.refunded &&
   !a.againstPools &&
   (a.step === "funding" || a.step === "ordering" || a.step === "filling");
+
+/**
+ * What Stop's dialog makes of the record as it opens, which may be ahead of
+ * the page's last reading (independent review L22): whether a swap has gone
+ * out (`placed`), and whether there's nothing left to stop (`over`), as
+ * `stoppable` has it: a swap against a DEX's pools went out, which can't be
+ * cancelled (chunk 24; the 1.3.0 release review, C24), its order filled or
+ * was refunded, or it's stopping already. Over, the dialog closes, rather
+ * than speak of cancelling an order, and the page takes the record's reading,
+ * which says where the swap is. Exported for its test.
+ */
+export function stopReading(fresh: SessionView | undefined): { over: boolean; placed: boolean } {
+  return { over: !!fresh?.auto && !stoppable(fresh.auto), placed: !!fresh?.txs.some((t) => t.kind === "swap") };
+}
 
 /** A swap's state as a small pill: a live dot, a tick, a warning, a stop, or a cross. */
 export function SwapTag({ tone, label }: { tone: SwapTone; label: string }) {
@@ -1784,9 +1811,9 @@ export function Session({
   const [stopThrough, setStopThrough] = useState(true);
   // Whether an order has gone out, as the record says as Stop's dialog opens: the page's last reading may be
   // behind the runner. And one went out before Stop took effect, though the dialog said none had (independent
-  // review L22).
+  // review L22): an order, or a swap against a DEX's pools, which can't be cancelled (chunk 24).
   const [placedNow, setPlacedNow] = useState(false);
-  const [stoppedLate, setStoppedLate] = useState(false);
+  const [stoppedLate, setStoppedLate] = useState<LateStop>();
   const [forgetting, setForgetting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -1835,6 +1862,12 @@ export function Session({
     if (s.auto || s.stage !== "open" || !swapped) return;
     call("session-orders", { index: s.index }).then(setOrders, (e: Error) => setError(e.message));
   }, [s.auto, s.index, s.stage, swapped, updatedAt]);
+  // Nothing left to stop, by the page's reading: a swap against a DEX's pools went out under Stop's dialog, say
+  // (chunk 24). The dialog closes rather than speak of cancelling an order, unless its Stop is under way, and
+  // doesn't come back by itself if the swap is built again.
+  useEffect(() => {
+    if (s.auto && !stoppable(s.auto) && !busy) setStopping(false);
+  }, [s, busy]);
 
   const sides = sidesOf(network, s);
   const act = async (task: () => Promise<void>) => {
@@ -1864,74 +1897,20 @@ export function Session({
   };
 
   if (review) {
-    const paid = review.summary.paid;
     return (
-      <Screen
-        title={tr(review.kind === "swap" ? "swaps.tx.reviewOrder" : "swaps.tx.reviewCancel")}
-        titleId="session-tx-review"
-        review
-        onBack={() => setReview(undefined)}
-        backDisabled={busy}
-        aside={tr("swaps.tx.aside")}
+      <SessionTxReviewScreen
+        review={review}
+        s={s}
+        busy={busy}
         error={error}
-        foot={
-          <button
-            type="button"
-            className="primary"
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                await call(review.kind === "swap" ? "session-swap-submit" : "session-cancel-submit", { txHash: review.txHash });
-                await sent();
-              })
-            }
-          >
-            {busy ? tr("common.sending") : tr("common.send")}
-          </button>
+        onBack={() => setReview(undefined)}
+        onSend={() =>
+          void act(async () => {
+            await call(review.kind === "swap" ? "session-swap-submit" : "session-cancel-submit", { txHash: review.txHash });
+            await sent();
+          })
         }
-      >
-        <ReviewRows testId="session-tx-review">
-          {review.kind === "swap" && review.quote && sides && (
-            <>
-              <Row label={tr("swaps.tx.getAbout")} value={amountOf(review.quote.amountOut, sides.get)} strong />
-              <Row label={tr("swaps.tx.askedLeast")} value={amountOf(review.quote.minAmountOut, sides.get)} />
-            </>
-          )}
-          {review.kind === "cancel" && (
-            <Row label={tr("swaps.tx.cancels")} value={tr("swaps.tx.orderCount", { count: review.orders ?? 0 })} strong />
-          )}
-          {paid.map((p, i) => (
-            <Row
-              key={i}
-              label={tr(p.script ? "swaps.tx.intoOrder" : "lovejoin.review.to")}
-              value={
-                p.tokens.length
-                  ? tr("format.adaAndTokens", { ada: formatAda(p.lovelace), count: p.tokens.length })
-                  : `${formatAda(p.lovelace)}\u00a0₳`
-              }
-              title={p.address}
-            />
-          ))}
-          <Row label={tr("review.fee")} value={`${formatAda(review.summary.fee)}\u00a0₳`} />
-          <Row label={tr("swaps.tx.backToSession")} value={`${formatAda(review.summary.returnedLovelace)}\u00a0₳`} />
-          {review.summary.collateral && (
-            <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(review.summary.collateral.atRisk)}\u00a0₳`} />
-          )}
-        </ReviewRows>
-        <TxDetailButton txHash={review.txHash} testId="session-tx-detail" />
-        {review.summary.note && (
-          <p className="note">{tr("swaps.tx.minswapNote", { note: review.summary.note.join("") })}</p>
-        )}
-        <p className="note">
-          {tr(
-            review.kind !== "swap"
-              ? "swaps.tx.afterCancel"
-              : s.auto
-                ? "swaps.tx.afterOrderAuto"
-                : "swaps.tx.afterOrder",
-          )}
-        </p>
-      </Screen>
+      />
     );
   }
 
@@ -2053,9 +2032,19 @@ export function Session({
       setStopThrough(true);
       setPlacedNow(false);
       setStopping(true);
-      // The record as it is now (no Koios read), not the page's last reading: the runner may have placed the order since.
+      // The record as it is now (no Koios read), not the page's last reading: the runner may have placed the order
+      // since, or sent a swap against a DEX's pools, which leaves nothing to stop (stopReading).
       call("sessions", {}).then(
-        (all) => setPlacedNow(!!all.find((x) => x.index === index)?.txs.some((t) => t.kind === "swap")),
+        (all) => {
+          const fresh = all.find((x) => x.index === index);
+          const now = stopReading(fresh);
+          if (fresh && now.over) {
+            setS(fresh);
+            setStopping(false);
+            return;
+          }
+          setPlacedNow(now.placed);
+        },
         () => undefined,
       );
       // A pool read the worker keeps five minutes; without it, Stop says only what it always did.
@@ -2098,7 +2087,9 @@ export function Session({
           <Callout tone="warn" testId="session-paused">
             <div className="stack-tight">
               <strong>{tr("swaps.paused.title")}</strong>
-              <span data-testid="session-paused-why">{pauseText(auto.paused, auto.approvedMinOut, sides?.get)}</span>
+              <span data-testid="session-paused-why">
+                {pauseText(auto.paused, auto.approvedMinOut, sides?.get, auto.stopping, !!auto.againstPools || !!auto.approvedPools)}
+              </span>
               <span className="row-links">
                 <button
                   type="button"
@@ -2122,9 +2113,7 @@ export function Session({
             </div>
           </Callout>
         )}
-        {stoppedLate && (
-          <Callout tone="warn" testId="session-stop-ordered">{tr("swaps.warn.stoppedLate")}</Callout>
-        )}
+        {stoppedLate && <StoppedLate late={stoppedLate} />}
         <Timeline
           s={s}
           busy={busy}
@@ -2134,7 +2123,9 @@ export function Session({
         {rows}
         <LeftBehindNote leftBehind={s.leftBehind} />
         {forgetModal}
-        {stopping && (
+        {/* Not once the page's own reading says there's nothing left to stop (a swap against a DEX's pools sent
+            under it, say), unless its Stop is under way. */}
+        {stopping && (stoppable(auto) || busy) && (
           <StopDialog
             placed={placed || placedNow}
             cost={stopCost}
@@ -2144,10 +2135,10 @@ export function Session({
             onClose={() => setStopping(false)}
             onStop={(direct) =>
               void act(async () => {
-                const { ordered, ...stopped } = await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) });
+                const { ordered, orderedPools, ...stopped } = await call("session-stop", { index: s.index, ...(direct ? { direct } : {}) });
                 setS(stopped);
                 // The runner was placing it as the dialog said none was: Stop says what it does now.
-                setStoppedLate(!!ordered && !placed && !placedNow);
+                setStoppedLate(lateStopOf(ordered, placed || placedNow, stopped, orderedPools));
                 setStopping(false);
               })
             }
@@ -2187,6 +2178,118 @@ export function Session({
       </p>
     </Screen>
   );
+}
+
+/**
+ * A swap or a cancel built for one session, to read before its Send: Review
+ * it myself on a paused swap, or a step of a session from before swaps ran
+ * themselves. A swap against a DEX's pools (`againstPools`, read from the
+ * transaction itself, chunk 24) has no order, and each of its outputs at the
+ * pools' script is a pool's whole UTxO, the pool's reserves with what the
+ * session puts in: it says what the session puts in (`intoPools`), that
+ * nothing waits to fill and there's no Stop once it's sent, and that its
+ * collateral's owner signs it too, and puts up no collateral of the
+ * session's (the 1.3.0 release review, C10). A cancel is the wallet's own
+ * build (chunk 24 Step 3, C15). Exported for its test.
+ */
+export function SessionTxReviewScreen({
+  review,
+  s,
+  busy,
+  error,
+  onBack,
+  onSend,
+}: {
+  review: SessionTxReview;
+  s: SessionView;
+  busy: boolean;
+  error?: string;
+  onBack: () => void;
+  onSend: () => void;
+}) {
+  const tr = useT();
+  const network = useNetwork();
+  const sides = sidesOf(network, s);
+  const pools = review.kind === "swap" && !!review.againstPools;
+  // The pools' own outputs aren't what the session pays: what it puts into them is one row of its own.
+  const paid = pools ? review.summary.paid.filter((p) => !p.script) : review.summary.paid;
+  const into = pools ? intoPools(review.summary) : undefined;
+  const collateral = review.summary.collateral;
+  const after =
+    review.kind === "cancel"
+      ? tr("swaps.tx.afterCancel")
+      : pools
+        ? s.auto
+          ? tr("swaps.tx.afterPoolsAuto")
+          : tr("swaps.tx.afterPools")
+        : s.auto
+          ? tr("swaps.tx.afterOrderAuto")
+          : tr("swaps.tx.afterOrder");
+  return (
+    <Screen
+      title={review.kind === "cancel" ? tr("swaps.tx.reviewCancel") : pools ? tr("swaps.tx.reviewSwap") : tr("swaps.tx.reviewOrder")}
+      titleId="session-tx-review"
+      review
+      onBack={onBack}
+      backDisabled={busy}
+      aside={review.kind === "cancel" ? tr("swaps.tx.asideCancel") : pools ? tr("swaps.tx.asidePools") : tr("swaps.tx.aside")}
+      error={error}
+      foot={
+        <button type="button" className="primary" disabled={busy} onClick={onSend}>
+          {busy ? tr("common.sending") : tr("common.send")}
+        </button>
+      }
+    >
+      <ReviewRows testId="session-tx-review">
+        {review.kind === "swap" && review.quote && sides && (
+          <>
+            <Row label={tr("swaps.tx.getAbout")} value={amountOf(review.quote.amountOut, sides.get)} strong />
+            <Row label={tr("swaps.tx.askedLeast")} value={amountOf(review.quote.minAmountOut, sides.get)} />
+          </>
+        )}
+        {review.kind === "cancel" && (
+          <Row label={tr("swaps.tx.cancels")} value={tr("swaps.tx.orderCount", { count: review.orders ?? 0 })} strong />
+        )}
+        {into && <Row label={tr("swaps.tx.intoPools")} value={poolsText(into, s, network)} testId="session-tx-into-pools" />}
+        {paid.map((p, i) => (
+          <Row
+            key={i}
+            label={p.script ? tr("swaps.tx.intoOrder") : tr("lovejoin.review.to")}
+            value={
+              p.tokens.length
+                ? tr("format.adaAndTokens", { ada: formatAda(p.lovelace), count: p.tokens.length })
+                : `${formatAda(p.lovelace)}\u00a0₳`
+            }
+            title={p.address}
+          />
+        ))}
+        <Row label={tr("review.fee")} value={`${formatAda(review.summary.fee)}\u00a0₳`} />
+        <Row label={tr("swaps.tx.backToSession")} value={`${formatAda(review.summary.returnedLovelace)}\u00a0₳`} />
+        {/* Only what the session puts up itself: a swap against a DEX's pools carries its collateral owner's. */}
+        {collateral && collateral.own > 0 && (
+          <Row label={tr("swaps.tx.collateralAtRisk")} value={`${formatAda(collateral.atRisk)}\u00a0₳`} />
+        )}
+      </ReviewRows>
+      <TxDetailButton txHash={review.txHash} testId="session-tx-detail" />
+      {review.summary.note && (
+        <p className="note">{tr("swaps.tx.minswapNote", { note: review.summary.note.join("") })}</p>
+      )}
+      <p className="note">{after}</p>
+    </Screen>
+  );
+}
+
+/**
+ * What a swap against a DEX's pools puts into them, in a line: its ADA, and
+ * each token named as every text view names one, the one the swap pays in
+ * the decimals it was approved with.
+ */
+function poolsText(into: ReturnType<typeof intoPools>, s: SessionView, network: NetworkName): string {
+  const pay = sidesOf(network, s)?.pay;
+  const tokens = into.tokens.map((q) =>
+    pay && pay.id !== "lovelace" && tokenKey(q) === tokenKeyOf(pay.id) ? amountOf(q.quantity, pay) : tokenAmountText(network, q),
+  );
+  return joinList([...(into.lovelace !== "0" || !tokens.length ? [`${formatAda(into.lovelace)}\u00a0₳`] : []), ...tokens]);
 }
 
 /**
@@ -2313,6 +2416,39 @@ export function StopDialog({
   );
 }
 
+/** What went out before Stop took effect: an order, which the wallet cancels, or a swap against a DEX's pools. */
+type LateStop = "order" | "pools";
+
+/**
+ * Whether a swap went out before Stop took effect though the dialog said none
+ * had (independent review L22), and which: `ordered`, as Stop's answer says;
+ * `shown`, the page or the dialog's fresh read had one; `stopped`, the page
+ * as Stop left it, whose swap shown says if it went against a DEX's pools
+ * (chunk 24; the 1.3.0 release review, C24); `pools`, Stop's answer that the
+ * latest swap it counts did, one given up too, which the page doesn't show
+ * (cross-area review X04). Exported for its test.
+ */
+export function lateStopOf(ordered: boolean | undefined, shown: boolean, stopped: SessionView, pools = false): LateStop | undefined {
+  if (!ordered || shown) return undefined;
+  return pools || stopped.auto?.againstPools ? "pools" : "order";
+}
+
+/**
+ * Stop's warning when a swap went out before it took effect (independent
+ * review L22): an order is cancelled unless it fills first; a swap against a
+ * DEX's pools can't be, and lands as it is or not at all, and either way
+ * everything comes back (the 1.3.0 release review, C24). Exported for its
+ * test.
+ */
+export function StoppedLate({ late }: { late: LateStop }) {
+  const tr = useT();
+  return (
+    <Callout tone="warn" testId="session-stop-ordered">
+      {late === "pools" ? tr("swaps.warn.stoppedLatePools") : tr("swaps.warn.stoppedLate")}
+    </Callout>
+  );
+}
+
 /**
  * A token the session holds or brings back, as every text view names one
  * (`tokenAmountText`): what the swap gets is in the quote's decimals.
@@ -2326,15 +2462,24 @@ function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): strin
 /**
  * Why a swap that runs itself waits for the user, in words: the price, or
  * which of the wallet's checks what Minswap built failed (`detail`, launch
- * review #21). It shows in the paused warning, built here rather than in its
- * JSX, so its keys are named `.warn.`: the name is what keeps them checked.
+ * review #21). `cancelling`: Stop was pressed, so a refusal is of the cancel,
+ * which the wallet builds itself and asks Minswap nothing for (chunk 24 Step
+ * 3; the 1.3.0 release review, C15): stopping, the runner never places the
+ * swap, and its return is never refused. `pools`: approved or sent against a
+ * DEX's pools, as the timeline under it says, so the price is what swapping
+ * now would give, never an order (cross-area review X05). It shows in the
+ * paused warning, built here rather than in its JSX, so its keys are named
+ * `.warn.`: the name is what keeps them checked.
  */
-export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick): string {
+export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick, cancelling = false, pools = false): string {
   if (p.why === "refused") {
-    return t("swaps.pause.warn.refused", { detail: withStop(p.detail) });
+    return cancelling
+      ? t("swaps.pause.warn.cancelRefused", { detail: withStop(p.detail) })
+      : t("swaps.pause.warn.refused", { detail: withStop(p.detail) });
   }
   const amount = (q: string) => (out ? amountOf(q, out) : q);
-  return t("swaps.pause.warn.price", { now: amount(p.amountOut), approved: amount(approvedMinOut) });
+  const amounts = { now: amount(p.amountOut), approved: amount(approvedMinOut) };
+  return pools ? t("swaps.pause.warn.pricePools", amounts) : t("swaps.pause.warn.price", amounts);
 }
 
 /** When a failed step is tried again. */
@@ -2391,7 +2536,12 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const unordered = auto.stopping && !tx("swap");
   // Stopped, but an order Koios can't find yet is still open: not cancelled (independent review L16).
   const open = auto.orderOpen !== undefined;
-  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded);
+  // Nor a swap against a DEX's pools that went out before Stop took effect: it has no order to cancel, and lands as
+  // it is, filled in itself, or not at all (chunk 24; the 1.3.0 release review, C24). One that never lands isn't
+  // shown, and reads as stopped before any.
+  const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded && !auto.againstPools);
+  // Its words: a swap against a DEX's pools once one has gone out, or before, approved so (release review C13).
+  const pools = !!auto.againstPools || !!auto.approvedPools;
   const state = (i: number): StepState => {
     if (failed) return i === 0 ? "failed" : "skipped";
     if ((i === 1 || i === 2) && unordered) return "skipped";
@@ -2411,7 +2561,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
       tx: tx("out"),
     },
     {
-      title: tr(unordered ? "swaps.step.noOrder" : auto.againstPools ? "swaps.plan.swapped" : "swaps.plan.ordered"),
+      title: tr(unordered ? "swaps.step.noOrder" : pools ? "swaps.plan.swapped" : "swaps.plan.ordered"),
       sub: unordered
         ? tr("swaps.step.stoppedBefore")
         : least
@@ -2446,7 +2596,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
                   ? "swaps.step.partlySub"
                   : auto.filled
                     ? "swaps.step.proceedsAt"
-                    : auto.againstPools
+                    : pools
                       ? "swaps.step.filledInSwap"
                       : "swaps.plan.filledSub",
       ),
@@ -2531,7 +2681,12 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
 /** A stopped swap waiting on an order Koios can't find yet (independent review L16). */
 const ORDER_OPEN = () => t("swaps.now.orderOpen");
 
-/** What's happening now, in plain words. */
+/**
+ * What's happening now, in plain words. A swap against a DEX's pools has no
+ * order: it's on its way, Stop pressed as it went out or not, then filled in
+ * itself as it lands, and nothing is cancelled (chunk 24; the 1.3.0 release
+ * review, C13, C24).
+ */
 export function nowLine(s: SessionView): string {
   const a = s.auto!;
   if (s.stage === "failed") return s.unsent ? neverSent(s) : t("swaps.now.fundingUnseen");
@@ -2539,13 +2694,19 @@ export function nowLine(s: SessionView): string {
     case "funding":
       return t(a.stopping ? "swaps.now.stoppingAtFunding" : "swaps.now.funding");
     case "ordering":
+      if (a.againstPools) return t("swaps.now.swapOnItsWay");
       if (a.stopping) return t("swaps.now.stoppingBringingBack");
       return t(s.txs.some((x) => x.kind === "swap") ? "swaps.now.orderOnItsWay" : "swaps.now.quoting");
     case "filling":
+      // Filled or refunded, or landed against a DEX's pools: nothing waits on a DEX, and there's no Stop. Its return
+      // goes next, once an unlock's wait or Koios's listing lets it.
+      if (a.filled || a.refunded || a.againstPools) return t("swaps.now.comingBackNext");
       return t("swaps.now.filling");
     case "cancelling":
       // An order Koios can't find yet can't be cancelled: what the swap waits on, plainly (independent review L16).
       if (a.orderOpen !== undefined) return ORDER_OPEN();
+      // Stopped, but filled or refunded first, or landed against a DEX's pools: there's nothing to cancel.
+      if (a.filled || a.refunded || a.againstPools) return t("swaps.now.comingBackNext");
       return t("swaps.now.cancelling");
     case "returning":
       if (s.chain) {
