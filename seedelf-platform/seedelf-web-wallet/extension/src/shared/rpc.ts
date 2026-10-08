@@ -829,6 +829,14 @@ export interface PendingTx {
    * network said it had, held as long as it could be.
    */
   dropped?: "expired" | "unseen";
+  /**
+   * A chain through Lovejoin (a session's return, a mix from the public
+   * account), which `txHash`, its last transaction, ends: its first, the one
+   * its review showed and the first to land, and how many it has. Home's
+   * banner names that first one until the last lands, not a hash the user
+   * never saw (chunk 17's handoff note).
+   */
+  chain?: { first: string; total: number };
 }
 
 /**
@@ -1815,6 +1823,19 @@ export interface LovejoinChainView {
   stopped?: string;
   /** It stopped at a transaction that may have gone through, not seen yet: none from the account is built meanwhile. */
   maybeSent?: true;
+  /**
+   * Its transactions in order, while it's being sent and the wallet holds
+   * them: what each is, and whether it's on chain, sent and not seen yet,
+   * or not sent yet. Each opens in Transaction details (tx-view.ts).
+   */
+  txs?: LovejoinChainTx[];
+}
+
+/** One transaction of a chain through Lovejoin, as its row on the Lovejoin page lists it. */
+export interface LovejoinChainTx {
+  txHash: string;
+  kind: "deposit" | "mix" | "back";
+  state: "landed" | "sent" | "waiting";
 }
 
 /**
@@ -1869,6 +1890,8 @@ export interface Requests {
    * past the deadline, asking locks it.
    */
   "lock-deadline": { payload: None; result: { at: number | null; lockAfterMs: number } };
+  /** Whether a chain through Lovejoin is being sent on any network: locking stops it partway. Read from the device; not activity. */
+  "chains-sending": { payload: None; result: boolean };
   account: { payload: None; result: Account };
   /** The last reading, or a new one if there is none or `refresh` is set. */
   /** `kept`: the worker's kept reading alone, never read again: Home's look right after a send (blind test §9.3). */
@@ -2149,8 +2172,11 @@ export interface Requests {
    */
   "lovejoin-mix-public-progress": {
     payload: { advance?: boolean };
-    /** `maybeSent`: it stopped at a transaction that may have gone through, not seen yet (independent review L5). */
-    result: { total: number; sent: number; stopped?: string; maybeSent?: true } | null;
+    /**
+     * `maybeSent`: it stopped at a transaction that may have gone through, not seen yet (independent review L5).
+     * `txs`: while it's being sent, each transaction and where it is (chunk 25).
+     */
+    result: { total: number; sent: number; stopped?: string; maybeSent?: true; txs?: LovejoinChainTx[] } | null;
   };
   /**
    * Withdraws one of the wallet's boxes now, whatever its wait (`box`, or the
@@ -2208,6 +2234,7 @@ const REQUEST_LIST = [
   "lock",
   "activity",
   "lock-deadline",
+  "chains-sending",
   "account",
   "balances",
   "wordlist",

@@ -16,6 +16,9 @@
 //             (Settings switches it): `getNetworkId` says which, and a site
 //             connected on one isn't on the other. What sites were asking
 //             on the network the wallet left is declined (`networkChanged`).
+//             So is a signature waiting when Settings chooses another dApp
+//             account, with CIP-30's AccountChange: it was checked for the
+//             account it left (`dappAccountChanged`, chunk 25).
 // Locked      Nothing a site hears changes at the moment of an unlock unless
 //             it asked for it (privacy review §2.11). `isEnabled()` answers
 //             whether it's connected, as last read. Which sites are is
@@ -375,6 +378,14 @@ interface Waiting {
   session: DappSession;
   /** The network it was asked on: declined once the wallet moves to another (`networkChanged`). */
   network: NetworkName;
+  /**
+   * A public-side signature's: the dApp account its transaction or address
+   * was read and checked for (`View.account`). Declined once Settings chooses
+   * another (`dappAccountChanged`), and refused if approved after: the new
+   * account's keys would sign what was inspected for the old one. None for a
+   * connect, which no account is read for, or a private session's.
+   */
+  account?: number;
   /** Runs on Approve, with what the window chose beside it: governance for a connect (CIP-95). */
   approve: (answer: Answer) => Promise<unknown>;
   resolve: (value: unknown) => void;
@@ -463,6 +474,8 @@ const DECLINED: Words = (lng) => t("dapp.userDeclined", { lng });
 const PAGE_GONE: Words = (lng) => t("dapp.pageGone", { lng });
 /** What a site asking on the network the wallet left hears, and the window says. */
 const NETWORK_LEFT: Words = (lng) => t("dapp.networkMoved", { lng });
+/** What a site hears when the dApp account changed while its signature waited: CIP-30's AccountChange. */
+const ACCOUNT_MOVED: Words = (lng) => t("dapp.accountMoved", { lng });
 /** What a site that wasn't given governance hears when it asks for CIP-95's keys. */
 const NO_GOVERNANCE: Words = (lng) => t("dapp.noGovernance", { lng });
 /** What a site on a private session hears: a session has no DRep, so there's nothing to ask for. */
@@ -637,6 +650,11 @@ export class DappService {
       await this.networkChanged();
       return { error: NETWORK_LEFT() };
     }
+    // Read for the dApp account Settings has since left: never signed with the one it's on (chunk 25).
+    if (asked.account !== undefined && asked.account !== (await this.dappAccount())) {
+      await this.dappAccountChanged();
+      return { error: ACCOUNT_MOVED() };
+    }
     // A signature, or a private session's funding, needs the password when the setting says so.
     const guarded = approval.kind === "connect" ? !!fund : true;
     if (approve && guarded && approval.password) {
@@ -793,6 +811,18 @@ export class DappService {
   }
 
   /**
+   * Settings chose another dApp account: a public-side signature waiting was
+   * read and checked for the one it left, so it's declined with CIP-30's
+   * AccountChange, which asks the site to `enable()` again; on its approval
+   * the new account's keys would have signed it (chunk 25). A connect waits
+   * on, as no account is read for it, and a private session's has its own.
+   */
+  async dappAccountChanged(): Promise<void> {
+    const account = await this.dappAccount();
+    this.decline((w) => w.account !== undefined && w.account !== account, ACCOUNT_MOVED, APIError.AccountChange);
+  }
+
+  /**
    * The connector was turned off (Settings, Chrome's access to sites taken
    * away, or the wallet removed): everything sites wait for is declined, a
    * private session's funding waiting for the chain too, whose money stays
@@ -804,12 +834,15 @@ export class DappService {
     if (!this.decline(() => true, OFF) && unlocking.length) this.deps.changed();
   }
 
-  /** Declines what `which` picks of what's waiting, with `info`, as the user saying no would; whether any was. */
-  private decline(which: (w: Waiting) => boolean, info: Words): boolean {
+  /**
+   * Declines what `which` picks of what's waiting, with `info`, as the user
+   * saying no would, or with `code` in place of that; whether any was.
+   */
+  private decline(which: (w: Waiting) => boolean, info: Words, code?: number): boolean {
     const out = this.waiting.filter(which);
     if (!out.length) return false;
     remove(this.waiting, (w) => out.includes(w));
-    for (const w of out) w.reject(new DappError({ ...w.declined, info: info("en") }));
+    for (const w of out) w.reject(new DappError({ ...w.declined, ...(code === undefined ? {} : { code }), info: info("en") }));
     this.deps.changed();
     return true;
   }
@@ -1257,13 +1290,19 @@ export class DappService {
 
   /**
    * Refuses unless the connector is still on and `origin` still connected on
-   * `network`, to `holder`: what a request was read for. Checked as it's
-   * approved, after the password (independent review L33).
+   * `network`, to `holder`, and, on the public side, the dApp account still
+   * `account`: what a request was read for. Checked as it's approved, after
+   * the password (independent review L33). A dApp account changed in
+   * Settings meanwhile is CIP-30's AccountChange, which asks the site to
+   * `enable()` again (Lace refuses a signData so; chunk 25).
    */
-  private async stillConnected(network: NetworkName, origin: string, holder: Holder): Promise<void> {
+  private async stillConnected(network: NetworkName, origin: string, holder: Holder, account?: number): Promise<void> {
     if (!(await this.deps.preferences.get()).dappConnector) throw refused(OFF);
     const site = await this.site(network, origin);
     if (!site || site.session !== holder?.index) throw refused(DISCONNECTED);
+    if (!holder && account !== undefined && account !== (await this.dappAccount())) {
+      throw siteError(APIError.AccountChange, ACCOUNT_MOVED);
+    }
   }
 
   /**
@@ -1389,6 +1428,8 @@ export class DappService {
     approve: (answer: Answer) => Promise<T>,
     /** A signature's transaction, hex, for the transaction view. */
     txCbor?: string,
+    /** A public-side signature's dApp account, as its request was read (`Waiting.account`). */
+    account?: number,
   ): Promise<T> {
     // Its page went away while it was read: nobody would answer it (independent review L31).
     if (this.gonePages.has(session.id)) throw refused(PAGE_GONE);
@@ -1409,6 +1450,7 @@ export class DappService {
         reject,
         declined: failure,
         ...(txCbor === undefined ? {} : { txCbor }),
+        ...(account === undefined ? {} : { account }),
       };
       this.waiting.push(entry);
     });
@@ -1987,7 +2029,7 @@ export class DappService {
         // waited, the site may have been disconnected or moved to another
         // account, a Lovejoin chain started that needs what it uses, or the
         // user locked a UTxO it spends.
-        await this.stillConnected(network, session.origin, holder);
+        await this.stillConnected(network, session.origin, holder, view.account);
         await this.heldForLovejoin(network, holder, inputs, collateral);
         await this.keptApart(network, holder, view, inputs, collateral);
         // And which public account's keys signed it, which its outputs are kept as (`ofAccount`).
@@ -2001,6 +2043,7 @@ export class DappService {
         return signed.witnessSet;
       },
       (tx as string).trim(),
+      view.account,
     );
   }
 
@@ -2201,13 +2244,15 @@ export class DappService {
       DataSignError.UserDeclined,
       async () => {
         // Still connected, to the same account, as it's approved (independent review L33).
-        await this.stillConnected(network, session.origin, holder);
+        await this.stillConnected(network, session.origin, holder, view.account);
         return this.withDappKeys(
           holder,
           ({ cardano, oneTime }) =>
             JSON.parse(holder ? wasm.signSessionData(oneTime, request) : wasm.signDappData(cardano, request)) as unknown,
         );
       },
+      undefined,
+      view.account,
     );
   }
 

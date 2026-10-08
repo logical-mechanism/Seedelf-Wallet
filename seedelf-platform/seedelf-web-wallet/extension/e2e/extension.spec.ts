@@ -2737,6 +2737,8 @@ test("auto-lock counts down its last minutes on any screen: Stay unlocked puts i
   await idle(15 * 60_000 - 100_000);
   await expect(countdown).toContainText(/Locking in 1:[34]\d/);
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  // No chain through Lovejoin is being sent, so nothing says locking would stop one.
+  await expect(page.getByTestId("lock-countdown-chain")).toHaveCount(0);
   await snap(page, "lock-countdown");
 
   // Stay unlocked is activity: the lock is 15 minutes off again.
@@ -2750,6 +2752,67 @@ test("auto-lock counts down its last minutes on any screen: Stay unlocked puts i
   await expect(countdown).toContainText(/Locking in 0:0\d/);
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible({ timeout: 10_000 });
   await expect(countdown).toHaveCount(0);
+});
+
+test("a mix being sent: Home's banner names its first transaction, each opens in Transaction details, and the countdown says locking stops it (chunk 25)", async ({
+  context,
+  koios,
+}) => {
+  const phrase = vector(12).phrase;
+  koios.addedToAccounts.push(...lovejoinPool);
+  const spend = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  koios.evaluation = (body: { params: { additionalUtxo?: unknown[] } }) =>
+    body.params.additionalUtxo ? { jsonrpc: "2.0", method: "evaluateTransaction", result: [] } : spend;
+  // The public account: a collateral, and ADA alone to mix.
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  const at = (tx: string, value: string) => ({ ...rich!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] }) as never;
+  koios.addedToAccounts.push(at("e5", "5000000"), at("e6", "30000000"));
+
+  const page = await openApp(context);
+  await restore(page, phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+  await page.getByRole("tab", { name: "Public account" }).click();
+  await page.getByTestId("lovejoin-mix").click();
+  await expect(page.getByTestId("lovejoin-public-review")).toContainText("Transactions5");
+  await page.getByTestId("lovejoin-send").click();
+  // Four go now, and nothing lands: the chain is being sent.
+  await expect.poll(() => koios.submitted.length).toBe(4);
+  const sending = page.getByTestId("lovejoin-public-sending");
+  await expect(sending).toContainText("4 of 5 transactions sent");
+
+  // The banner names the first, the deposit its review showed, not the last, which isn't sent yet (O3).
+  const banner = page.getByTestId("pending-tx");
+  await expect(banner).toContainText("the first of 5");
+  await expect(banner.locator("a")).toHaveAttribute("href", new RegExp(`/transaction/${koios.submitted[0]}$`));
+
+  // Each transaction where it is, and each opens: the deposit, and the last mix, not sent yet.
+  await sending.getByText("Its transactions").click();
+  const txs = sending.getByTestId("lovejoin-chain-txs");
+  await expect(txs).toContainText("Deposit");
+  await expect(txs).toContainText("Mix 4");
+  await expect(txs).toContainText("Sent, not on chain yet");
+  await expect(txs).toContainText("Not sent yet");
+  await snap(page, "lovejoin-chain-txs");
+  await page.getByTestId("lovejoin-chain-tx-0-open").click();
+  await expect(page.getByTestId("lovejoin-chain-tx-0-hash")).toHaveAttribute("data-value", koios.submitted[0]!);
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("lovejoin-chain-tx-4-open").click();
+  await expect(page.getByTestId("lovejoin-chain-tx-4-output-list")).toBeVisible();
+  await expect(page.getByTestId("lovejoin-chain-tx-4-error")).toHaveCount(0);
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+
+  // The last minutes before auto-lock say that locking now stops the chain partway (privacy review §6).
+  await page.evaluate(async (at) => {
+    await chrome.storage.session.set({ "seedelf.lastActivity": at });
+    window.dispatchEvent(new Event("focus"));
+  }, Date.now() - (15 * 60_000 - 100_000));
+  await expect(page.getByTestId("lock-countdown")).toContainText(/Locking in 1:[34]\d/);
+  await expect(page.getByTestId("lock-countdown-chain")).toHaveText("A Lovejoin chain is being sent: locking now stops it partway.");
+  await snap(page, "lock-countdown-chain");
 });
 
 test("a private swap paused by a price move, then stopped: everything comes back and nothing is ordered", async ({

@@ -252,12 +252,20 @@ export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
  * What every request to a service goes out with (Koios, giveme.my, CoinGecko,
- * Minswap): no cookies, and no referrer. With a host permission, the
- * worker's fetch would otherwise carry any cookie the browser holds for that
- * host, and one of giveme.my's would tie every private payment to this
- * browser (privacy review §2.14). No service needs one.
+ * Minswap, the IPFS gateway): no cookies, no referrer, and nothing kept in
+ * Chrome's cache. With a host permission, the worker's fetch would otherwise
+ * carry any cookie the browser holds for that host, and one of giveme.my's
+ * would tie every private payment to this browser (privacy review §2.14). No
+ * service needs one.
+ *
+ * `no-store`: a GET's address and answer would otherwise stay in the cache on
+ * the disk, and some name what's private: an ADA Handle (`asset_nft_address`),
+ * the account's DRep ID (`vote_list`), an NFT's image; CoinGecko's would leave
+ * the time the wallet was used. Nothing is lost: Koios sends no caching
+ * headers, so its answers were never reused, and the wallet keeps what it
+ * reuses itself, in session storage.
  */
-export const SERVICE_FETCH = { credentials: "omit", referrerPolicy: "no-referrer" } as const satisfies RequestInit;
+export const SERVICE_FETCH = { credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" } as const satisfies RequestInit;
 
 const PAGE_SIZE = 1000;
 

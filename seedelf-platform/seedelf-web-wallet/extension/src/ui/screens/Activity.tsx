@@ -20,7 +20,7 @@
 // press, and Back from it comes back here (E01, the owner's call).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { type I18nKey, joinSentences, t, useT } from "../../i18n";
+import { dateLocale, type I18nKey, joinSentences, t, useT } from "../../i18n";
 
 import { entrySession, type ActivityEntry } from "../../shared/rpc";
 import {
@@ -107,10 +107,10 @@ export function dayHeading(at: number, now: Date): string {
   const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
   if (days === 0) return t("activity.day.today");
   if (days === 1) return t("activity.day.yesterday");
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString(dateLocale(), { day: "numeric", month: "short", year: "numeric" });
 }
 
-const time = (at: number) => (at ? new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "");
+const time = (at: number) => (at ? new Date(at).toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" }) : "");
 
 /** What Save as CSV's file holds, said under it: on the private side, all that it ties together. */
 export function ExportNote({ of, listed, more }: { of: Of; listed: number; more: boolean }) {
@@ -345,7 +345,7 @@ export function Activity({
                 value={`${amounts.ada(open.staking.rewards)}\u00a0₳`}
               />
             )}
-            <Row label={t("activity.row.when")} value={open.at ? new Date(open.at).toLocaleString("en-GB") : t("activity.row.beforeWallet")} />
+            <Row label={t("activity.row.when")} value={open.at ? new Date(open.at).toLocaleString(dateLocale()) : t("activity.row.beforeWallet")} />
             {/* The list said Pending, and the details dropped it (blind test T07). */}
             {pending(open) && <Row label={t("activity.row.status")} value={t("activity.row.pending")} />}
           </ReviewRows>

@@ -358,7 +358,9 @@ describe("a reason as it came, set before the next sentence", () => {
 
   it("is ended by its line's own stop in a mix's detail, and a stop it brought isn't doubled", async () => {
     const at = Date.UTC(2026, 9, 4, 3);
-    const time = new Date(at).toLocaleTimeString();
+    // In the wallet's language, not the browser's (chunk 25), to the second.
+    const clock = (locale: string) => new Date(at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const time = clock("en-GB");
     const mix = (why: string): SessionView => ({
       index: 3,
       network: "preprod",
@@ -376,7 +378,7 @@ describe("a reason as it came, set before the next sentence", () => {
     const cut = t("lj.chainCut");
     expect(detailOf(mix(cut))).toBe(`Why it stopped: ${cut} It tries again at ${time}. What went wrong: ${cut}`);
     await japanese();
-    expect(detailOf(mix(refusal()))).toBe(`停止した理由: ${refusal()}。${time} にもう一度試します。問題の内容: ${refusal()}。`);
+    expect(detailOf(mix(refusal()))).toBe(`停止した理由: ${refusal()}。${clock("ja-JP")} にもう一度試します。問題の内容: ${refusal()}。`);
     expect(detailOf(mix(t("lj.chainCut")))).not.toContain("。。");
   });
 

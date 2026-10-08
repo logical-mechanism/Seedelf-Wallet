@@ -1,6 +1,6 @@
 # Seedelf Wallet privacy policy
 
-**Effective 6 October 2026** (updated for mainnet, the network switch, Lovejoin, a privacy review, what removing the wallet keeps, NFT images, being your own DRep, several public accounts, the language, a governance action's text, pages already open when sites can connect, the links to GitHub, and Chrome's Translate: see *Changes*). This policy covers the Seedelf Wallet browser extension, published by Logical Mechanism LLC.
+**Effective 7 October 2026** (updated for mainnet, the network switch, Lovejoin, a privacy review, what removing the wallet keeps, NFT images, being your own DRep, several public accounts, the language, a governance action's text, pages already open when sites can connect, the links to GitHub, Chrome's Translate, a swap's orders read from Koios, and nothing kept in your browser's cache: see *Changes*). This policy covers the Seedelf Wallet browser extension, published by Logical Mechanism LLC.
 
 **In short:** no accounts, analytics, crash reports or ads. One service the wallet uses, giveme.my, is ours: it receives your IP address and each private transaction you send, to add its collateral. Never your recovery phrase or your keys. To work, the extension also talks to Koios, a public Cardano API, and on mainnet to CoinGecko, for ADA's price. When you swap, it also talks to Minswap, and when you ask to see an NFT's image, to Blockfrost's IPFS gateway. Nothing else: Lovejoin, the mixer, is a contract on the Cardano blockchain, reached through Koios. Sites see your public account, or a private session's account, only if you turn on connecting sites and connect them.
 
@@ -30,7 +30,7 @@ The extension runs on Cardano mainnet, and can switch to preprod, Cardano's test
 
 ## The services the extension talks to
 
-Every request goes without your browser's cookies or a referrer.
+Every request goes without your browser's cookies or a referrer, and none is kept in your browser's cache.
 
 - **Koios** (`api.koios.rest` on mainnet, `preprod.koios.rest` on preprod), a public Cardano API run by the Koios community.
   - It sees your IP address and what the wallet asks: your public account and its staking, one account at a time (though while a connected site uses a different public account from the one you're looking at, Koios sees both, from one IP address), the whole Seedelf contract, Lovejoin's pool when you use Lovejoin, and at times what made some of your Lovejoin boxes (below), the pools and DReps you look at, your own DRep and its votes, each NFT whose image you ask to see, and the transactions you submit, with a check of each one's status.
@@ -83,6 +83,7 @@ If you use Chrome's Translate on the wallet, Chrome sends the page's text to Goo
 
 If the extension's data handling changes, we'll update this page and its date, and list the change under Changes below, before the new version ships.
 
+- **7 October 2026:** no request to a service is kept in your browser's cache. Before, Chrome could keep one on the disk, including a few that name an ADA Handle you looked up or your DRep ID; only an NFT's image was kept out.
 - **7 October 2026:** a swap's orders are no longer looked up or cancelled through Minswap. The wallet reads them from Koios, which already sees the one-time account and its transactions, and builds and signs the cancel itself; Minswap is no longer sent the account's address to list its orders.
 - **6 October 2026:** says that the wallet asks Koios about your public account's DRep, by its ID, whether or not you've made the account one; and names GitHub, which the links in Settings to the source code, this policy and **Report a translation error** open in your browser, and where an issue you open is public; and says that Chrome's Translate, used on the wallet's page, sends its text to Google.
 - **5 October 2026:** turning on connecting sites now adds the wallet's entry to https pages already open as well as those you open after, so every open page can see at that moment that you use Seedelf Wallet; turning it off stops it being added, and a page still open keeps it until it's reloaded, refusing every call. The list of connected sites also keeps the title each page had as it asked to connect, encrypted like the rest of the list. A site you decline has to wait before it can ask again: the wallet keeps the declined site's address and its wait in the browser's memory-only session storage, which closing the browser clears.

@@ -140,6 +140,12 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return null;
     case "lock-deadline":
       return wallet.lockDeadline();
+    // Asked by the lock countdown while it shows (privacy review §6): a chain is sent only while the wallet is
+    // unlocked. From what the device keeps, on every network the wallet has; locked, there's none to stop.
+    case "chains-sending": {
+      const sending = await Promise.all(ctx.networks.map((n) => ctx.lovejoin.chainsSending(n).catch(() => false)));
+      return sending.some(Boolean);
+    }
     case "account":
       return wallet.account(ctx.network);
     case "balances":
@@ -261,6 +267,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "preferences-set": {
       const { type: _type, ...change } = message;
       const prefs = await ctx.preferences.set(change);
+      // Another dApp account: a site's signature waiting was checked for the one it left (chunk 25).
+      if (typeof change.dappAccount === "number") await ctx.dapp.dappAccountChanged();
       if (typeof change.dappConnector === "boolean") {
         // Off: nothing a site asked for waits on (independent review L33).
         if (!prefs.dappConnector) ctx.dapp.connectorOff();

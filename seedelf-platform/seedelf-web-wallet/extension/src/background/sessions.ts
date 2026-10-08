@@ -2952,7 +2952,14 @@ export class SessionService {
     }
     await this.deps.alarm?.start();
     await this.pump(network, built.index, budgetMs);
-    return { kind: "session-back", network, txHash: built.txHash, submittedAt: this.deps.now(), confirmations: null };
+    return {
+      kind: "session-back",
+      network,
+      txHash: built.txHash,
+      submittedAt: this.deps.now(),
+      confirmations: null,
+      chain: { first: txs![0]!.txHash, total: txs!.length },
+    };
   }
 
   /**

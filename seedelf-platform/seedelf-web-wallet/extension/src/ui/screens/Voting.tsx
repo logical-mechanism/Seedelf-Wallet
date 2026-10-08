@@ -11,7 +11,7 @@
 // (launch review #59).
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { type I18nKey, joinList, t, useT } from "../../i18n";
+import { dateLocale, type I18nKey, joinList, t, useT } from "../../i18n";
 
 import { ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, type DrepDetails, type OwnDrep } from "../../shared/rpc";
 import { call } from "../background";
@@ -368,7 +368,7 @@ function DrepSearch({
 /** "24 Sep 2026" for the list's "2026-09-24". */
 const dateOf = (day: string) =>
   day
-    ? new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+    ? new Date(`${day}T00:00:00Z`).toLocaleDateString(dateLocale(), { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
     : t("vote.noDate");
 
 /**

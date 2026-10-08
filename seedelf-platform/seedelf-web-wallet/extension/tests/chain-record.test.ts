@@ -79,7 +79,7 @@ describe("a mix from the public account and its record (independent review L28)"
     open();
     await recorded;
     expect(await t.lovejoin.held("preprod")).toMatchObject({ stopped: 0 });
-    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 2, sent: 0 });
+    expect(await t.lovejoin.progress("preprod")).toEqual({ total: 2, sent: 0, txs: expect.any(Array) });
   });
 
   it("is taken for one a lock cut once the worker that was putting its progress there has stopped", async () => {

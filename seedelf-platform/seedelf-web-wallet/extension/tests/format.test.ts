@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { formatAda, formatQuantity, shortHex, timeAgo, tokenName, whenOf } from "../src/ui/format";
+import { i18n } from "../src/i18n/core";
+import { dayText, formatAda, formatQuantity, shortHex, timeAgo, tokenName, whenOf } from "../src/ui/format";
 
 describe("formatting", () => {
   it("formats lovelace as ADA exactly", () => {
@@ -42,6 +43,30 @@ describe("formatting", () => {
     expect(whenOf(new Date(2026, 2, 24, 23, 59).getTime(), now)).toBe("Yesterday, 23:59");
     expect(whenOf(new Date(2026, 2, 23, 18, 40).getTime(), now)).toBe("23 Mar, 18:40");
     expect(whenOf(new Date(2025, 11, 31, 7, 0).getTime(), now)).toBe("31 Dec 2025, 07:00");
+  });
+});
+
+describe("dates in the language on (the post-release roadmap's O8, chunk 25)", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
+  it("writes a date Spanish's and Japanese's own way, and keeps numbers as the amount fields write them", async () => {
+    const now = new Date(2026, 2, 25, 9, 30);
+    const day = new Date(2025, 11, 31, 7, 0).getTime();
+    const march = new Date(2026, 2, 23, 18, 40).getTime();
+    await i18n.changeLanguage("es");
+    expect(whenOf(day, now)).toBe("31 dic 2025, 07:00");
+    expect(whenOf(march, now)).toBe("23 mar, 18:40");
+    expect(dayText(day)).toBe("31 dic 2025");
+    expect(formatAda("1234500000")).toBe("1,234.5");
+    await i18n.changeLanguage("ja");
+    expect(whenOf(day, now)).toBe("2025年12月31日 07:00");
+    expect(dayText(day)).toBe("2025年12月31日");
+    expect(formatAda("1234500000")).toBe("1,234.5");
+    // Read at each use: back in English, as before.
+    await i18n.changeLanguage("en");
+    expect(dayText(day)).toBe("31 Dec 2025");
   });
 });
 

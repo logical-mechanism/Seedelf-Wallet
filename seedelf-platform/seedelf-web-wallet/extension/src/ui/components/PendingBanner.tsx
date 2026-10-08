@@ -16,7 +16,7 @@
 import { useState } from "react";
 
 import type { PendingTx } from "../../shared/rpc";
-import { type I18nKey, t, useT } from "../../i18n";
+import { dateLocale, type I18nKey, t, useT } from "../../i18n";
 import { TxBanner } from "./TxBanner";
 
 /**
@@ -147,9 +147,9 @@ export function validUntil(pending: PendingTx, now?: number): string | undefined
 /** A time to the minute, and its date when it isn't on `now`'s day (none given: the time alone). */
 function clock(at: number, now?: number): string {
   const d = new Date(at);
-  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit" });
   if (now === undefined || d.toDateString() === new Date(now).toDateString()) return time;
-  return t("format.dateAndTime", { date: d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }), time });
+  return t("format.dateAndTime", { date: d.toLocaleDateString(dateLocale(), { day: "numeric", month: "short" }), time });
 }
 
 /** Why a payment Koios didn't answer is still shown as on its way: said first, under the title. */
@@ -221,12 +221,24 @@ export function PendingBanner({
   const what = tr(SENT[pending.kind]);
   const shared = {
     network: pending.network,
-    txHash: pending.txHash,
+    // A chain through Lovejoin: its first transaction, the one its review showed and the first to land, until the
+    // last, which the watch waits on, is in (chunk 17's handoff note: the banner showed a hash the user never saw).
+    txHash: pending.chain?.first ?? pending.txHash,
+    firstOf: pending.chain?.total,
     testId: "pending-tx",
     private: privateBanner(pending),
   };
   if (pending.confirmations !== null) {
-    return <TxBanner {...shared} state="done" title={tr(CONFIRMED[pending.kind])} onDismiss={watching ? undefined : onDismiss} />;
+    return (
+      <TxBanner
+        {...shared}
+        txHash={pending.txHash}
+        firstOf={undefined}
+        state="done"
+        title={tr(CONFIRMED[pending.kind])}
+        onDismiss={watching ? undefined : onDismiss}
+      />
+    );
   }
   if (pending.dropped) {
     const dropped = pending.dropped === "unseen" && pending.inMempool ? HELD_TOO_LONG : DROPPED[pending.dropped];

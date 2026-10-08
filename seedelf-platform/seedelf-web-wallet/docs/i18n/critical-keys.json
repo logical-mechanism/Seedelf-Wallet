@@ -132,6 +132,7 @@
   "lj.skip.warn.needsMore",
   "lj.skip.warn.noneLeft",
   "lj.skip.warn.untoldAll",
+  "lock.warn.chainSending",
   "lockFailed.warn.message",
   "lovejoin.anyway.privacy.deposit",
   "lovejoin.anyway.privacy.publicDeposit",

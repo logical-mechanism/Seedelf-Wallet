@@ -3739,6 +3739,21 @@ button.dapp-tile:hover {
   justify-content: flex-end;
 }
 
+/* A chain's transactions, under its row on the Lovejoin page: each opens Transaction details. */
+.chain-txs {
+  grid-column: 2 / -1;
+  margin-top: var(--s1);
+}
+
+.chain-txs > ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
 .tx-detail__hash {
   display: flex;
   align-items: center;
