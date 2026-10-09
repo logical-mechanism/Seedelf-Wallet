@@ -33,6 +33,13 @@ const MAX_ADDRESSES: usize = 20;
 /// Outpoints in one `utxo_info`, and datum hashes in one `datum_info` (`REFS_PER_REQUEST`).
 const MAX_REFS: usize = 60;
 
+/// The most unspent outputs one listing gathers. Any credential or address
+/// may be asked about, and one with 220,000 outputs read 2.4 GB from disk
+/// for every page; no wallet comes near this many. Past it, the answer is a
+/// 503, and the wallet reads Koios. The contract's and the mix box's
+/// listings are kept a block for everyone, so they have no cap.
+const MAX_GATHERED: i64 = 20_000;
+
 #[derive(Serialize)]
 pub struct Utxo {
     tx_hash: String,
@@ -94,15 +101,21 @@ const OUT_COLUMNS: &str = "o.id, o.tx_id, o.index, o.address_id, o.stake_address
      o.data_hash, o.inline_datum_id, o.reference_script_id, o.consumed_by_tx_id";
 
 impl Outs {
-    fn cte(self) -> String {
+    /// `capped`: at most one past [`MAX_GATHERED`], so a listing that big can be refused.
+    fn cte(self, capped: bool) -> String {
+        let cap = if capped {
+            format!("limit {}", MAX_GATHERED + 1)
+        } else {
+            String::new()
+        };
         match self {
             Outs::Credentials => format!(
                 "select {OUT_COLUMNS} from address a join tx_out o on o.address_id = a.id \
-                 where a.payment_cred = any($1::bytea[]) and o.consumed_by_tx_id is null"
+                 where a.payment_cred = any($1::bytea[]) and o.consumed_by_tx_id is null {cap}"
             ),
             Outs::Addresses => format!(
                 "select {OUT_COLUMNS} from address a join tx_out o on o.address_id = a.id \
-                 where a.raw = any($1::bytea[]) and o.consumed_by_tx_id is null"
+                 where a.raw = any($1::bytea[]) and o.consumed_by_tx_id is null {cap}"
             ),
             Outs::Refs => format!(
                 "select {OUT_COLUMNS} from unnest($1::bytea[], $2::int[]) as r(hash, idx) \
@@ -114,12 +127,18 @@ impl Outs {
 
 /// A page's rows. `paged`: ordered by outpoint from after `$2`/`$3` (both
 /// null for the first page), at most [`PAGE`], and in blocks after `$4`
-/// (null for any). Otherwise every row `outs` found, in the order db-sync made them.
-fn listing(outs: Outs, paged: bool) -> String {
+/// (null for any). Otherwise every row `outs` found, in the order db-sync
+/// made them. Each row says whether `outs` passed [`MAX_GATHERED`].
+///
+/// `block` is joined for the page's own rows only: for every gathered row it
+/// was 40% of a large listing's reads. A block after height `$4` is one with
+/// a larger id, since db-sync numbers blocks in chain order.
+fn listing(outs: Outs, paged: bool, capped: bool) -> String {
     let (filter, order, limit) = if paged {
         (
             "where ($2::bytea is null or (t.hash, o.index::int) > ($2::bytea, $3::int)) \
-             and ($4::bigint is null or b.block_no > $4::bigint)",
+             and ($4::bigint is null \
+                  or t.block_id > (select id from block where block_no = $4::bigint))",
             "t.hash, o.index",
             format!("limit {PAGE}"),
         )
@@ -129,13 +148,13 @@ fn listing(outs: Outs, paged: bool) -> String {
     format!(
         "with outs as materialized ({cte}), \
          page as ( \
-           select o.*, t.hash as tx_hash, b.epoch_no, b.block_no, b.time \
-           from outs o join tx t on t.id = o.tx_id join block b on b.id = t.block_id \
+           select o.*, t.hash as tx_hash, t.block_id \
+           from outs o join tx t on t.id = o.tx_id \
            {filter} order by {order} {limit}) \
          select encode(p.tx_hash, 'hex') as tx_hash, p.index::int as tx_index, \
            a.address::text as address, p.value::text as value, sa.view::text as stake_address, \
-           encode(a.payment_cred, 'hex') as payment_cred, p.epoch_no::bigint as epoch_no, \
-           p.block_no::bigint as block_height, extract(epoch from p.time)::bigint as block_time, \
+           encode(a.payment_cred, 'hex') as payment_cred, b.epoch_no::bigint as epoch_no, \
+           b.block_no::bigint as block_height, extract(epoch from b.time)::bigint as block_time, \
            encode(p.data_hash, 'hex') as datum_hash, encode(d.bytes, 'hex') as datum, \
            encode(s.hash, 'hex') as script_hash, encode(s.bytes, 'hex') as script_bytes, \
            s.type::text as script_type, s.serialised_size::bigint as script_size, \
@@ -144,13 +163,14 @@ fn listing(outs: Outs, paged: bool) -> String {
            (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), encode(m.name, 'hex'), \
                    m.fingerprint::text, mto.quantity::text) order by mto.id), '[]')::text \
               from ma_tx_out mto join multi_asset m on m.id = mto.ident \
-              where mto.tx_out_id = p.id) as assets \
-         from page p join address a on a.id = p.address_id \
+              where mto.tx_out_id = p.id) as assets, \
+           (select count(*) from outs) > {MAX_GATHERED} as over \
+         from page p join block b on b.id = p.block_id join address a on a.id = p.address_id \
          left join stake_address sa on sa.id = p.stake_address_id \
          left join datum d on d.id = p.inline_datum_id \
          left join script s on s.id = p.reference_script_id \
          order by {outer}",
-        cte = outs.cte(),
+        cte = outs.cte(capped),
         outer = if paged { "p.tx_hash, p.index" } else { "p.id" },
     )
 }
@@ -283,6 +303,7 @@ async fn page(
     outs: Outs,
     keys: &[Vec<u8>],
     page: &Page,
+    capped: bool,
 ) -> Result<Bytes, ApiError> {
     let (hash, index) = match &page.after {
         Some((hash, index)) => (Some(hash.clone()), Some(*index)),
@@ -290,9 +311,34 @@ async fn page(
     };
     let client = state.chain.public().await?;
     let rows = client
-        .query(&listing(outs, true), &[&keys, &hash, &index, &page.above])
+        .query(
+            &listing(outs, true, capped),
+            &[&keys, &hash, &index, &page.above],
+        )
         .await
         .map_err(anyhow::Error::from)?;
+    // A capped listing past the cap may have lost the rows a page wanted, so
+    // an empty page is only the end once the count says so.
+    let over = match rows.first() {
+        Some(row) => row
+            .try_get::<_, bool>("over")
+            .map_err(anyhow::Error::from)?,
+        None if capped => {
+            let count = format!(
+                "select count(*) > {MAX_GATHERED} from ({}) gathered",
+                outs.cte(true)
+            );
+            let row = client
+                .query_one(&count, &[&keys])
+                .await
+                .map_err(anyhow::Error::from)?;
+            row.try_get(0).map_err(anyhow::Error::from)?
+        }
+        None => false,
+    };
+    if over {
+        return Err(ApiError::Heavy);
+    }
     let utxos = rows
         .iter()
         .map(|row| read_utxo(row, state))
@@ -326,10 +372,12 @@ pub async fn credential_utxos(
             raw.as_deref().unwrap_or_default()
         );
         state
-            .cached_bytes(&tip, &key, || page(&state, Outs::Credentials, &creds, &at))
+            .cached_bytes(&tip, &key, || {
+                page(&state, Outs::Credentials, &creds, &at, false)
+            })
             .await?
     } else {
-        page(&state, Outs::Credentials, &creds, &at).await?
+        page(&state, Outs::Credentials, &creds, &at, true).await?
     };
     Ok(json(answer))
 }
@@ -348,7 +396,9 @@ pub async fn address_utxos(
     let addresses = list(&request._addresses, MAX_ADDRESSES, address_bytes)?;
     let at = Page::parse(raw.as_deref(), false)?;
     state.fresh_tip()?;
-    Ok(json(page(&state, Outs::Addresses, &addresses, &at).await?))
+    Ok(json(
+        page(&state, Outs::Addresses, &addresses, &at, true).await?,
+    ))
 }
 
 /// The outputs named (`<tx hash>#<index>`), spent or not.
@@ -372,7 +422,7 @@ pub async fn utxo_info(
     let (hashes, indexes): (Vec<Vec<u8>>, Vec<i32>) = refs.into_iter().unzip();
     let client = state.chain.public().await?;
     let rows = client
-        .query(&listing(Outs::Refs, false), &[&hashes, &indexes])
+        .query(&listing(Outs::Refs, false, false), &[&hashes, &indexes])
         .await
         .map_err(anyhow::Error::from)?;
     let utxos = rows

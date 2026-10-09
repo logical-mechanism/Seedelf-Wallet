@@ -19,6 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::sync::Semaphore;
+
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
 use axum::http::HeaderMap;
@@ -36,6 +38,12 @@ const LIST_KEEP: Duration = Duration::from_secs(3600);
 
 /// How long one pool's details are kept: its live stake moves with every block, slowly.
 const INFO_KEEP: Duration = Duration::from_secs(600);
+
+/// How long a pool whose live figures couldn't be worked out gets the snapshot instead.
+const FAILED_KEEP: Duration = Duration::from_secs(300);
+
+/// Pools whose live figures are worked out at once, at most.
+const REFRESHING: usize = 2;
 
 /// Rows in a page of the pool list, as the wallet asks for them.
 const PAGE: usize = 1000;
@@ -60,7 +68,12 @@ impl Rewards {
     /// The sums for `accounts` at `epoch` that are known, and the accounts whose aren't.
     fn known(&self, epoch: i64, accounts: &[i64]) -> (HashMap<i64, i128>, Vec<i64>) {
         let mut held = self.0.lock().expect("rewards lock");
-        if held.0 != epoch {
+        // Only ever forward: a read begun before an epoch's start mustn't
+        // wipe the sums already kept for the new one.
+        if held.0 > epoch {
+            return (HashMap::new(), accounts.to_vec());
+        }
+        if held.0 < epoch {
             *held = (epoch, HashMap::new());
         }
         let mut known = HashMap::new();
@@ -138,10 +151,11 @@ pub async fn pool_list(
     if !offset.is_multiple_of(PAGE) {
         return Err(NOT_ASKED);
     }
-    state.fresh_tip()?;
-    // Kept as one row a line, so a page is cut without reading the JSON again.
+    let tip = state.fresh_tip()?;
+    // Kept as one row a line, so a page is cut without reading the JSON again,
+    // and by epoch: the active stake is the epoch's.
     let lines = state
-        .lasting("pool_list", LIST_KEEP, || async {
+        .lasting(&format!("pool_list/{}", tip.epoch), LIST_KEEP, || async {
             let client = state.chain.public().await?;
             let rows = client.query(LIST, &[]).await.map_err(anyhow::Error::from)?;
             let mut lines = Vec::new();
@@ -217,23 +231,17 @@ const POOL: &str = "with cur as materialized (select max(epoch_no) as no from ep
 
 /// The pool's live delegators (`$1`, its `pool_hash.id`), each with all it
 /// holds but its rewards: unspent outputs, instant rewards and refunds, less
-/// what it has withdrawn.
+/// what it has withdrawn. A delegator is one whose latest delegation is to
+/// the pool, not since deregistered, and in this epoch's stake: Koios's
+/// `pool_delegators_list` adds back every such account its cache lacks.
+/// `epoch_stake` already leaves out what a pool's retirement dropped.
 const DELEGATORS: &str = "with cur as materialized (select max(epoch_no) as no from epoch_param), \
      latest as materialized ( \
        select d.addr_id from delegation d \
        where d.pool_hash_id = $1::bigint \
          and not exists (select 1 from delegation d2 where d2.addr_id = d.addr_id and d2.id > d.id) \
          and not exists (select 1 from stake_deregistration sd where sd.addr_id = d.addr_id and sd.tx_id > d.tx_id) \
-         and exists (select 1 from epoch_stake es where es.addr_id = d.addr_id and es.epoch_no = (select no from cur)) \
-         and not exists ( \
-           select 1 from pool_retire pr join tx dt on dt.id = d.tx_id join block db on db.id = dt.block_id \
-           where pr.hash_id = d.pool_hash_id and pr.retiring_epoch <= (select no from cur) \
-             and pr.retiring_epoch > db.epoch_no \
-             and not exists ( \
-               select 1 from pool_update pu where pu.hash_id = d.pool_hash_id \
-                 and pu.registered_tx_id >= pr.announced_tx_id \
-                 and pu.registered_tx_id <= (select max(t.id) from tx t where t.block_id = \
-                   (select max(b.id) from block b where b.epoch_no = pr.retiring_epoch - 1 and b.tx_count > 0))))) \
+         and exists (select 1 from epoch_stake es where es.addr_id = d.addr_id and es.epoch_no = (select no from cur))) \
      select l.addr_id, \
        (coalesce((select sum(o.value) from tx_out o where o.stake_address_id = l.addr_id \
                     and o.consumed_by_tx_id is null), 0) \
@@ -434,15 +442,28 @@ fn info_row(pool: &Pool, figures: &Figures) -> Result<InfoRow, ApiError> {
     })
 }
 
-/// Works a pool's row out with its live figures and keeps it; an empty one
-/// if db-sync doesn't know the pool.
+/// Works a pool's row out with its live figures and keeps it. One db-sync
+/// doesn't know isn't kept: anyone can ask about made-up pools. One whose
+/// figures can't be worked out is remembered a while, so its next looks go
+/// straight to the snapshot rather than try again.
 async fn refresh(state: &AppState, key: &str, raw: &[u8]) -> Result<(), ApiError> {
-    let row = match read_pool(state, raw).await? {
-        Some(pool) => to_json(&info_row(&pool, &live(state, &pool).await?)?)?,
-        None => Bytes::new(),
-    };
-    state.keep(key, INFO_KEEP, row);
-    Ok(())
+    let worked = async {
+        if let Some(pool) = read_pool(state, raw).await? {
+            let row = to_json(&info_row(&pool, &live(state, &pool).await?)?)?;
+            state.keep(key, INFO_KEEP, row);
+        }
+        Ok(())
+    }
+    .await;
+    if worked.is_err() {
+        state.keep(&failed(key), FAILED_KEEP, Bytes::from_static(b"1"));
+    }
+    worked
+}
+
+/// Where a pool's failed refresh is remembered.
+fn failed(key: &str) -> String {
+    format!("{key}/failed")
 }
 
 /// A pool's row with the epoch's snapshot in place of its live figures.
@@ -457,37 +478,57 @@ async fn from_snapshot(state: &AppState, raw: &[u8]) -> Result<Option<Bytes>, Ap
 }
 
 /// One pool's row, its live figures kept for 10 minutes. Past them, the old
-/// row answers at once while a fresh one is worked out behind it.
-async fn one_pool(state: &Arc<AppState>, id: &str, raw: &[u8]) -> Result<Option<Bytes>, ApiError> {
-    let key = format!("pool_info/{id}");
-    let found = |row: Bytes| (!row.is_empty()).then_some(row);
+/// row answers at once while a fresh one is worked out behind it, for 10
+/// minutes more at most. Rows are kept by epoch, since a pool's status turns
+/// at an epoch's start, and by the pool's bytes, not the text asked.
+///
+/// At most [`REFRESHING`] pools are worked out at once: each holds a public
+/// connection for up to 10 s, and a request naming several slow pools must
+/// not hold them all. Past that, a look gets the epoch's snapshot.
+async fn one_pool(
+    state: &Arc<AppState>,
+    epoch: i64,
+    raw: &[u8],
+) -> Result<Option<Bytes>, ApiError> {
+    static REFRESHES: Semaphore = Semaphore::const_new(REFRESHING);
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    let key = format!("pool_info/{epoch}/{hex}");
     if let Some(row) = state.kept(&key) {
-        return Ok(found(row));
+        return Ok(Some(row));
     }
-    if let Some(row) = state.kept_stale(&key) {
-        if let Some(working) = state.start(&key) {
+    let stale = state.kept_stale(&key, INFO_KEEP);
+    let free = || REFRESHES.try_acquire().ok();
+    let start = || {
+        if state.kept(&failed(&key)).is_some() {
+            return None;
+        }
+        let working = state.start(&key)?;
+        Some((working, free()?))
+    };
+    if let Some(row) = stale {
+        if let Some((working, permit)) = start() {
             let (state, key, raw) = (state.clone(), key.clone(), raw.to_vec());
             tokio::spawn(async move {
-                let _working = working;
+                let _held = (working, permit);
                 let _ = refresh(&state, &key, &raw).await;
             });
         }
-        return Ok(found(row));
+        return Ok(Some(row));
     }
-    let Some(working) = state.start(&key) else {
-        // Another request is working it out.
+    // Another request is working it out, it failed lately, or too many are being worked out.
+    let Some((working, permit)) = start() else {
         return from_snapshot(state, raw).await;
     };
     let task = {
         let (state, key, raw) = (state.clone(), key.clone(), raw.to_vec());
         tokio::spawn(async move {
-            let _working = working;
+            let _held = (working, permit);
             refresh(&state, &key, &raw).await
         })
     };
     match tokio::time::timeout(LIVE_BUDGET, task).await {
         Ok(Ok(Ok(()))) => match state.kept(&key) {
-            Some(row) => Ok(found(row)),
+            Some(row) => Ok(Some(row)),
             None => from_snapshot(state, raw).await,
         },
         Ok(Ok(Err(error))) => Err(error),
@@ -515,10 +556,10 @@ pub async fn pool_info(
         .iter()
         .map(|id| pool_bytes(id).map(|raw| (id, raw)).ok_or(NOT_ASKED))
         .collect::<Result<Vec<_>, _>>()?;
-    state.fresh_tip()?;
+    let tip = state.fresh_tip()?;
     let mut rows = Vec::new();
-    for (id, raw) in pools {
-        if let Some(row) = one_pool(&state, id, &raw).await? {
+    for (_, raw) in pools {
+        if let Some(row) = one_pool(&state, tip.epoch, &raw).await? {
             rows.push(String::from_utf8(row.to_vec()).map_err(anyhow::Error::from)?);
         }
     }
@@ -552,5 +593,9 @@ mod tests {
         // Sums read for an epoch that has since ended aren't kept.
         rewards.keep(660, &HashMap::from([(1, 5)]));
         assert!(rewards.known(661, &[1]).0.is_empty());
+        // Nor does a late read for the old epoch wipe the new one's.
+        rewards.keep(661, &HashMap::from([(1, 7)]));
+        assert_eq!(rewards.known(660, &[1]).1, [1]);
+        assert_eq!(rewards.known(661, &[1]).0[&1], 7);
     }
 }

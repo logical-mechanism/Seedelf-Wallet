@@ -257,11 +257,13 @@ pub async fn drep_info(
         return Err(NOT_ASKED);
     }
     let dreps = dreps(&headers, &bytes)?;
-    state.fresh_tip()?;
+    let tip = state.fresh_tip()?;
     let mut rows = Vec::new();
     for (asked, drep) in dreps {
+        // By epoch: a DRep's activity and expiry turn at an epoch's start.
+        let key = format!("drep_info/{}/{asked}", tip.epoch);
         let kept = state
-            .lasting(&format!("drep_info/{asked}"), DREP_KEEP, || async {
+            .lasting(&key, DREP_KEEP, || async {
                 let client = state.chain.public().await?;
                 match drep_hash_id(&client, &drep).await? {
                     Some(id) => to_json(&drep_state(&client, id).await?),
@@ -347,9 +349,10 @@ pub async fn proposal_list(
     if !offset.is_multiple_of(PAGE) {
         return Err(NOT_ASKED);
     }
-    state.fresh_tip()?;
+    let tip = state.fresh_tip()?;
+    // By epoch: actions are ratified, enacted, dropped and expire at an epoch's start.
     let lines = state
-        .lasting("proposal_list", PROPOSALS_KEEP, || async {
+        .lasting(&format!("proposal_list/{}", tip.epoch), PROPOSALS_KEEP, || async {
             let client = state.chain.public().await?;
             let read = |error: tokio_postgres::Error| ApiError::from(anyhow::Error::from(error));
             let mut rows = Vec::new();

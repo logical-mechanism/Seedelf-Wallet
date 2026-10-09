@@ -108,13 +108,20 @@ fn cip67_label(name: &[u8]) -> Option<u16> {
 
 /// A minted token's metadata, by Koios's rule: the metadata of its latest
 /// minting transaction that carried any, or else of its latest mint.
+///
+/// Mints are read newest first along `unique_ma_tx_mint` (token, tx), and
+/// only the latest 10,000: a token minted 573,000 times took past 20 s read
+/// whole, and 0.1 s this way. Only a token whose metadata is older than its
+/// last 10,000 mints would differ from Koios, and no NFT is minted so often.
 const MINTED: &str = "with token as materialized ( \
        select m.id from multi_asset m where m.policy = $1::bytea and m.name = $2::bytea), \
-     mints as materialized ( \
-       select mtm.tx_id, exists (select 1 from tx_metadata tm where tm.tx_id = mtm.tx_id) as has_meta \
-       from token t join ma_tx_mint mtm on mtm.ident = t.id where mtm.quantity > 0), \
-     chosen as ( \
-       select coalesce((select max(tx_id) from mints where has_meta), (select max(tx_id) from mints)) as tx_id) \
+     recent as materialized ( \
+       select mtm.tx_id from ma_tx_mint mtm where mtm.ident = (select id from token) and mtm.quantity > 0 \
+       order by mtm.ident desc, mtm.tx_id desc limit 10000), \
+     chosen as (select coalesce( \
+       (select r.tx_id from recent r where exists (select 1 from tx_metadata tm where tm.tx_id = r.tx_id) \
+          order by r.tx_id desc limit 1), \
+       (select max(tx_id) from recent)) as tx_id) \
      select c.tx_id is not null, \
        (select json_object_agg(tm.key::text, tm.json order by tm.key)::text \
           from tx_metadata tm where tm.tx_id = c.tx_id) \

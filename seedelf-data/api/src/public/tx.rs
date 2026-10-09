@@ -20,6 +20,7 @@ use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
+use tokio_postgres::types::ToSql;
 
 use super::query::{NOT_ASKED, Query};
 use super::utxos::Asset;
@@ -324,11 +325,30 @@ pub async fn tx_info(
         return Ok(answer(array::<TxInfo>(&[])?));
     }
 
-    for row in client
-        .query(OUTS, &[&ids, &parts.assets])
-        .await
-        .map_err(db)?
-    {
+    // The rest at once, pipelined on the one connection: two round trips to
+    // home in all, not six. A part the request doesn't select isn't read.
+    let by_ids: &[&(dyn ToSql + Sync)] = &[&ids];
+    let outs_params: &[&(dyn ToSql + Sync)] = &[&ids, &parts.assets];
+    let read = |wanted: bool, sql: &'static str| {
+        let client = &client;
+        async move {
+            if wanted {
+                client.query(sql, by_ids).await
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    };
+    let (outs, withdrawals, metadata, certs, votes) = tokio::try_join!(
+        client.query(OUTS, outs_params),
+        read(parts.withdrawals, WITHDRAWALS),
+        read(parts.metadata, METADATA),
+        read(parts.certs, CERTS),
+        read(parts.governance, VOTES),
+    )
+    .map_err(db)?;
+
+    for row in outs {
         let made: i64 = row.try_get(0).map_err(db)?;
         let spent: Option<i64> = row.try_get(1).map_err(db)?;
         let out = read_out(&row, &state).map_err(ApiError::from)?;
@@ -349,40 +369,32 @@ pub async fn tx_info(
         tx.outputs.sort_by_key(|o| o.tx_index);
     }
 
-    if parts.withdrawals {
-        for row in client.query(WITHDRAWALS, &[&ids]).await.map_err(db)? {
-            let id: i64 = row.try_get(0).map_err(db)?;
-            txs[at[&id]].withdrawals.push(Withdrawal {
-                amount: row.try_get(1).map_err(db)?,
-                stake_addr: row.try_get(2).map_err(db)?,
-            });
-        }
+    for row in withdrawals {
+        let id: i64 = row.try_get(0).map_err(db)?;
+        txs[at[&id]].withdrawals.push(Withdrawal {
+            amount: row.try_get(1).map_err(db)?,
+            stake_addr: row.try_get(2).map_err(db)?,
+        });
     }
-    if parts.metadata {
-        for row in client.query(METADATA, &[&ids]).await.map_err(db)? {
-            let id: i64 = row.try_get(0).map_err(db)?;
-            let text: String = row.try_get(1).map_err(db)?;
-            txs[at[&id]].metadata = Some(RawValue::from_string(text).map_err(anyhow::Error::from)?);
-        }
+    for row in metadata {
+        let id: i64 = row.try_get(0).map_err(db)?;
+        let text: String = row.try_get(1).map_err(db)?;
+        txs[at[&id]].metadata = Some(RawValue::from_string(text).map_err(anyhow::Error::from)?);
     }
-    if parts.certs {
-        for row in client.query(CERTS, &[&ids]).await.map_err(db)? {
-            let id: i64 = row.try_get(0).map_err(db)?;
-            let (kind, info) = cert_info(&row).map_err(ApiError::from)?;
-            txs[at[&id]].certificates.push(Certificate {
-                index: row.try_get(1).map_err(db)?,
-                kind,
-                info,
-            });
-        }
+    for row in certs {
+        let id: i64 = row.try_get(0).map_err(db)?;
+        let (kind, info) = cert_info(&row).map_err(ApiError::from)?;
+        txs[at[&id]].certificates.push(Certificate {
+            index: row.try_get(1).map_err(db)?,
+            kind,
+            info,
+        });
     }
-    if parts.governance {
-        for row in client.query(VOTES, &[&ids]).await.map_err(db)? {
-            let id: i64 = row.try_get(0).map_err(db)?;
-            txs[at[&id]]
-                .voting_procedures
-                .push(read_vote(&row).map_err(ApiError::from)?);
-        }
+    for row in votes {
+        let id: i64 = row.try_get(0).map_err(db)?;
+        txs[at[&id]]
+            .voting_procedures
+            .push(read_vote(&row).map_err(ApiError::from)?);
     }
     Ok(answer(array(&txs)?))
 }

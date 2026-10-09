@@ -154,26 +154,32 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 
 | Route | What the wallet asks | Kept |
 |---|---|---|
-| `credential_utxos` | up to 75 payment credentials' unspent outputs, 1,000 a page by outpoint, optionally only blocks after a height | a block, for the contract's or mix box's; otherwise never |
-| `address_utxos` | up to 20 addresses' unspent outputs, paged the same way | never |
+| `credential_utxos` | up to 75 payment credentials' unspent outputs, 1,000 a page by outpoint, optionally only blocks after a height; at most 20,000 in all (but the contract's and mix box's) | a block, for the contract's or mix box's; otherwise never |
+| `address_utxos` | up to 20 addresses' unspent outputs, paged the same way; at most 20,000 in all | never |
 | `utxo_info` | up to 60 outputs, spent or not | never |
 | `datum_info` | up to 60 datums' CBOR | never |
 | `tip` | the newest block | read every 2 s |
 | `tx_status` | up to 100 transactions' confirmations | never |
 | `epoch_params` | the newest epoch's parameters | a block |
 | `totals` | the newest epoch's supply | a block |
-| `account_addresses` | up to 75 stake keys' addresses, empty ones too | never |
-| `account_info` | up to 10 stake keys' standing | never |
-| `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on | never |
+| `account_addresses` | up to 20 stake keys' addresses, empty ones too | never |
+| `account_info` | one stake key's standing | never |
+| `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on; for a key with at most 200,000 outputs | never |
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
-| `pool_list` | the registered pools, 1,000 a page | an hour |
-| `pool_info` | up to 5 pools' details and live stake | 10 minutes |
-| `drep_info` | up to 5 DReps' standing | 10 minutes |
+| `pool_list` | the registered pools, 1,000 a page | an hour, within its epoch |
+| `pool_info` | up to 5 pools' details and live stake | 10 minutes, within its epoch |
+| `drep_info` | up to 5 DReps' standing | 10 minutes, within its epoch |
 | `drep_metadata` | up to 5 DReps' profile names | 10 minutes |
-| `proposal_list` | the live governance actions | 5 minutes |
+| `proposal_list` | the live governance actions | 5 minutes, within its epoch |
 | `vote_list` | one DRep's votes on up to 40 actions | never |
 | `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |
 | `asset_info` | one token's CIP-25 and CIP-68 metadata | never |
+
+**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` at most 200,000 outputs. Past either, the answer is a 503, `{"error":"too large for this server"}`, and the wallet reads Koios. No wallet comes near either number. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
+
+**Answers kept for a time are kept within their epoch,** since a pool's status, a DRep's activity and the live actions turn at an epoch's start. Not-found answers aren't kept: anyone can ask about made-up IDs. When the store is full, the answer due to expire soonest makes room.
+
+**An ID has one spelling:** the bech32 the wallet sends, re-encoded exactly. The decoder also takes a Bech32m checksum and stray padding bits, which would let one pool be asked for, cached and worked out under several names.
 
 **Only the wallet's requests.** Each route takes exactly the query string and body `koios.ts` sends: its parameters, in its order, at its sizes. Anything else is a 400, `{"error":"not a request Seedelf Wallet makes"}`, before any query runs, so no caller can compose an expensive one.
 
@@ -191,9 +197,11 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 **What stands in for Koios's caches:**
 - **Token decimals** come from the Cardano token registry, Koios's own source: a file made by `scripts/token-decimals.py` from a checkout of it (`MAINNET_TOKEN_DECIMALS`). Without the file, every token is 0. Refresh it the way the wallet refreshes its token list.
 - **A pool's state** is worked out per request from its latest update and any retirement after it.
-- **A pool's live stake** is summed over its live delegators. Their reward sums change only at an epoch's start, so each account's is kept in memory for the epoch.
+- **A pool's live stake** is summed over its live delegators: each account whose latest delegation is to the pool, not since deregistered, and in this epoch's stake, as Koios's `pool_delegators_list` counts them. Their reward sums change only at an epoch's start, so each account's is kept in memory for the epoch.
   - A first look at a large pool, read from a cold disk, took 12 s. So a request waits at most 3 s for the live figures, then answers with the epoch's snapshot (`pool_stat`) while they're finished in the background and kept.
-  - Once a pool's figures are 10 minutes old, the next look gets them at once while fresh ones are worked out behind it.
+  - Once a pool's figures are 10 minutes old, the next look gets them at once while fresh ones are worked out behind it, for 10 minutes more at most.
+  - At most 2 pools are worked out at once, and a pool whose figures failed gets the snapshot for 5 minutes: a request naming several slow pools can't hold the public connections.
+- **A token's latest minting metadata** is looked for among its latest 10,000 mints. Read whole, a token minted 573,000 times took past 20 s; this way, 0.1 s.
 - **A token's supply and latest mint** are read from `ma_tx_mint`, which db-sync indexes by token.
 
 **Every connection runs with `jit = off`.** JIT compiled plans whose estimates db-sync's `ma_tx_out` inflates: 76 of a UTxO query's 80 ms.
@@ -204,10 +212,14 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **While db-sync is down** (two failed reads of its tip), every public route answers 503 at once, kept answers included.
 - A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
 
+**`account_txs` never joins a whole history.** A transaction's id rises with its block, so a page takes the newest ids it needs, widened to the whole of the oldest block they reach, and joins only those: 0.5 s a page for a key with 221,000 transactions, against 2.3 s before, and the same rows.
+
+**`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
+
 **Known slow cases:**
-- `account_txs` for an account with a very long history: 1.8 s a page for one with 189,000 transactions.
 - `account_info` reads `delegation_vote` whole, which isn't indexed by account at home: 19 of its 20 ms.
-- `drep_info` reads it whole too, for a DRep's delegators: 250 ms for the DRep with the most, then kept.
+- `drep_info` reads it whole too, for a DRep's delegators: 250–400 ms for the DReps with the most, then kept.
+- **A shared answer shows it was asked for.** A kept `drep_info` comes back in under a millisecond instead of 200–400 ms, so a prober could tell someone asked about that DRep in the last 10 minutes. Sharing answers is what keeps home's load flat, so this stands, as it does for every kept answer.
 
 ## The submit part
 

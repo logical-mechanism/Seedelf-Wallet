@@ -11,13 +11,17 @@ pub fn encode(hrp: &str, bytes: &[u8]) -> String {
     bech32::encode::<Bech32>(hrp, bytes).expect("an ID is short enough for bech32")
 }
 
-/// The HRP and bytes of a lowercase bech32 string: what the wallet sends, and nothing else.
+/// The HRP and bytes of a lowercase bech32 string: what the wallet sends, and
+/// nothing else. One spelling per ID: the decoder also takes a Bech32m
+/// checksum and stray padding bits, which would let one pool or DRep be
+/// asked for under several names (and cached, and worked out, under each).
 pub fn decode(text: &str) -> Option<(String, Vec<u8>)> {
     if text.bytes().any(|b| b.is_ascii_uppercase()) {
         return None;
     }
     let (hrp, bytes) = bech32::decode(text).ok()?;
-    Some((hrp.to_string(), bytes))
+    let canonical = bech32::encode::<Bech32>(hrp, &bytes).ok()?;
+    (canonical == text).then(|| (hrp.to_string(), bytes))
 }
 
 /// A mainnet address's bytes (`address.raw`): Shelley addresses only, as `addr1…`.
@@ -151,6 +155,17 @@ mod tests {
     const GOV_ACTION: &str =
         "gov_action17m7nv7839mw93hv889tqzj0umv9ckm780f0nq02fep78f50uedxqq6g5mt9";
     const GOV_ACTION_TX: &str = "f6fd3678f12edc58dd8739560149fcdb0b8b6fc77a5f303d49c87c74d1fccb4c";
+
+    #[test]
+    fn an_id_has_one_spelling() {
+        let (hrp, bytes) = decode(DREP).unwrap();
+        // The same bytes under Bech32m's checksum: the decoder alone would take it.
+        let hrp = bech32::Hrp::parse(&hrp).unwrap();
+        let other = bech32::encode::<bech32::Bech32m>(hrp, &bytes).unwrap();
+        assert!(bech32::decode(&other).is_ok());
+        assert_eq!(decode(&other), None);
+        assert!(decode(DREP).is_some());
+    }
 
     #[test]
     fn a_cip129_drep_id_reads_back_as_written() {

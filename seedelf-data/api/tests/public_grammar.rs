@@ -142,6 +142,18 @@ async fn account_routes() {
     assert_eq!(post("/api/v1/account_addresses", keys).await.0, OK);
     let unused = json!({ "_stake_addresses": [STAKE], "_empty": false });
     assert_eq!(post("/api/v1/account_addresses", unused).await.0, BAD);
+    // The wallet's own sizes: 20 keys probed at a time, and its one account's standing.
+    let key = |i: u8| {
+        let mut bytes = vec![0xe1];
+        bytes.extend([i; 28]);
+        seedelf_data_api::ids::encode("stake", &bytes)
+    };
+    let probe =
+        |n: u8| json!({ "_stake_addresses": (0..n).map(key).collect::<Vec<_>>(), "_empty": true });
+    assert_eq!(post("/api/v1/account_addresses", probe(20)).await.0, OK);
+    assert_eq!(post("/api/v1/account_addresses", probe(21)).await.0, BAD);
+    let two = json!({ "_stake_addresses": [key(1), key(2)] });
+    assert_eq!(post("/api/v1/account_info", two).await.0, BAD);
     assert_eq!(
         post(
             "/api/v1/account_info",

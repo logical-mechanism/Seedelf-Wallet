@@ -20,10 +20,16 @@ use crate::ids::{drep_shown, stake_bytes};
 use crate::state::{ApiError, AppState, json};
 
 /// Stake addresses in one `account_addresses`: the wallet probes 20 at a time (`INDEX_PROBE`).
-const MAX_STAKE_ADDRESSES: usize = 75;
+const MAX_STAKE_ADDRESSES: usize = 20;
 
 /// Stake addresses in one `account_info`: the wallet asks about its own, one.
-const MAX_ACCOUNTS: usize = 10;
+/// Each sums its whole unspent set, so no more than the wallet sends.
+const MAX_ACCOUNTS: usize = 1;
+
+/// The most outputs `account_txs` gathers for one stake key. Any key may be
+/// asked about, and one with 507,000 outputs took 2.3 s a page; no wallet
+/// comes near this many. Past it, a 503, and the wallet reads Koios.
+const MAX_OUTPUTS: i64 = 200_000;
 
 /// The most of an account's transactions one `account_txs` gives.
 const MAX_TXS: i64 = 1000;
@@ -259,19 +265,54 @@ struct TxRow {
 
 /// Every transaction that made or spent an output at one of the stake key's
 /// addresses, in blocks from `$2` on (Koios's `_after_block_height` takes
-/// that block too), newest first, a page of them. An account with a long
-/// history pays for it here: one with 189,000 transactions takes 1.8 s a page.
-const TXS: &str = "with addrs as materialized ( \
-       select a.id from stake_address sa join address a on a.stake_address_id = sa.id \
-       where sa.hash_raw = $1::bytea), \
-     outs as materialized ( \
-       select o.tx_id, o.consumed_by_tx_id from tx_out o where o.address_id in (select id from addrs)), \
-     ids as (select tx_id as id from outs \
-             union select consumed_by_tx_id from outs where consumed_by_tx_id is not null) \
-     select encode(t.hash, 'hex'), b.epoch_no::bigint, b.block_no::bigint, extract(epoch from b.time)::bigint \
-     from ids join tx t on t.id = ids.id join block b on b.id = t.block_id \
-     where b.block_no >= $2::bigint \
-     order by b.block_no desc, t.hash offset $3::bigint limit $4::bigint";
+/// that block too), newest first, a page of them.
+///
+/// A transaction's id rises with its block, so the query never joins the
+/// whole history (2.3 s a page for 221,000 transactions, 0.5 s this way):
+/// - `from`: blocks from `$2` on are transactions from the first one in the
+///   first block there with any (Koios's own `_tx_id_min`);
+/// - `top`: the page and everything before it are among the `$3 + $4`
+///   newest ids, widened to the whole of the oldest block they reach, so
+///   that block's transactions sort by hash as Koios's do.
+///
+/// The last column says whether the key's outputs passed [`MAX_OUTPUTS`].
+fn txs() -> String {
+    format!(
+        "with addrs as materialized ( \
+           select a.id from stake_address sa join address a on a.stake_address_id = sa.id \
+           where sa.hash_raw = $1::bytea), \
+         outs as materialized ( \
+           select o.tx_id, o.consumed_by_tx_id from tx_out o \
+           where o.address_id in (select id from addrs) limit {gather}), \
+         first as (select min(t.id) as id from tx t where t.block_id = ( \
+           select b.id from block b where b.block_no >= $2::bigint and b.tx_count > 0 \
+           order by b.block_no limit 1)), \
+         ids as materialized ( \
+           select tx_id as id from outs where tx_id >= (select id from first) \
+           union select consumed_by_tx_id from outs where consumed_by_tx_id >= (select id from first)), \
+         top as (select id from ids order by id desc limit $3::bigint + $4::bigint), \
+         wanted as (select ids.id from ids where ids.id >= ( \
+           select min(t2.id) from tx t2 where t2.block_id = ( \
+             select t1.block_id from tx t1 where t1.id = (select min(id) from top)))) \
+         select encode(t.hash, 'hex'), b.epoch_no::bigint, b.block_no::bigint, \
+           extract(epoch from b.time)::bigint, (select count(*) from outs) > {max} as over \
+         from wanted join tx t on t.id = wanted.id join block b on b.id = t.block_id \
+         order by b.block_no desc, t.hash offset $3::bigint limit $4::bigint",
+        gather = MAX_OUTPUTS + 1,
+        max = MAX_OUTPUTS,
+    )
+}
+
+/// Whether a stake key's outputs pass [`MAX_OUTPUTS`], for a page that came back empty.
+fn too_many() -> String {
+    format!(
+        "select count(*) > {MAX_OUTPUTS} from ( \
+           select 1 from stake_address sa join address a on a.stake_address_id = sa.id \
+           join tx_out o on o.address_id = a.id where sa.hash_raw = $1::bytea \
+           limit {}) gathered",
+        MAX_OUTPUTS + 1
+    )
+}
 
 /// An account's transactions, newest first: a page of them by `offset` and
 /// `limit`, or, with `_after_block_height`, every one from that block on (at most 1,000).
@@ -304,9 +345,23 @@ pub async fn account_txs(
     state.fresh_tip()?;
     let client = state.chain.public().await?;
     let rows = client
-        .query(TXS, &[&key, &from, &offset, &limit])
+        .query(&txs(), &[&key, &from, &offset, &limit])
         .await
         .map_err(anyhow::Error::from)?;
+    // Past the cap, the gathered outputs may have lost the page's rows, so
+    // an empty page is only the end once the count says so.
+    let over = match rows.first() {
+        Some(row) => row.try_get::<_, bool>(4).map_err(anyhow::Error::from)?,
+        None => client
+            .query_one(&too_many(), &[&key])
+            .await
+            .map_err(anyhow::Error::from)?
+            .try_get(0)
+            .map_err(anyhow::Error::from)?,
+    };
+    if over {
+        return Err(ApiError::Heavy);
+    }
     let rows = rows
         .iter()
         .map(|row| {

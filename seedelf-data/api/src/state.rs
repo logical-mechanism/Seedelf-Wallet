@@ -285,7 +285,11 @@ impl AppState {
             return Ok(hit);
         }
         let bytes = make().await?;
-        self.keep(key, keep, bytes.clone());
+        // An empty answer is "not found": anyone can ask about made-up IDs,
+        // so those aren't kept, or they'd crowd out the real ones.
+        if !bytes.is_empty() {
+            self.keep(key, keep, bytes.clone());
+        }
         Ok(bytes)
     }
 
@@ -297,22 +301,32 @@ impl AppState {
     }
 
     /// Keeps `bytes` as [`Self::lasting`]'s answer for `key`, for `keep`.
+    /// When full, the answer due to expire soonest makes room.
     pub fn keep(&self, key: &str, keep: Duration, bytes: Bytes) {
         let now = Instant::now();
         let mut lasting = self.lasting.lock().expect("lasting lock");
-        if lasting.len() >= MAX_LASTING {
+        if lasting.len() >= MAX_LASTING && !lasting.contains_key(key) {
             lasting.retain(|_, (until, _)| now < *until);
+            if lasting.len() >= MAX_LASTING {
+                let soonest = lasting
+                    .iter()
+                    .min_by_key(|(_, (until, _))| *until)
+                    .map(|(key, _)| key.clone());
+                if let Some(soonest) = soonest {
+                    lasting.remove(&soonest);
+                }
+            }
         }
-        if lasting.len() < MAX_LASTING {
-            lasting.insert(key.to_string(), (now + keep, bytes));
-        }
+        lasting.insert(key.to_string(), (now + keep, bytes));
     }
 
-    /// A [`Self::lasting`] answer however old, while it's still held: to
-    /// answer at once while a fresh one is worked out behind it.
-    pub fn kept_stale(&self, key: &str) -> Option<Bytes> {
+    /// A [`Self::lasting`] answer past its time by at most `within`: to answer
+    /// at once while a fresh one is worked out behind it, never with one so old
+    /// it misleads (a pool that has since announced its retirement).
+    pub fn kept_stale(&self, key: &str, within: Duration) -> Option<Bytes> {
         let lasting = self.lasting.lock().expect("lasting lock");
-        lasting.get(key).map(|(_, hit)| hit.clone())
+        let (until, hit) = lasting.get(key)?;
+        (Instant::now() < *until + within).then(|| hit.clone())
     }
 
     /// Marks `key` as being worked out until the guard is dropped, however
@@ -440,6 +454,9 @@ pub enum ApiError {
     Behind,
     /// Every connection is in use: 503 at once, rather than a queue.
     Busy,
+    /// More than this server reads for one request (a credential with tens of
+    /// thousands of outputs): 503, and the wallet reads Koios.
+    Heavy,
     /// db-sync couldn't answer: 503.
     Unavailable(anyhow::Error),
 }
@@ -456,6 +473,7 @@ impl IntoResponse for ApiError {
             ApiError::Bad(why) => (StatusCode::BAD_REQUEST, why),
             ApiError::Behind => (StatusCode::SERVICE_UNAVAILABLE, "behind"),
             ApiError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
+            ApiError::Heavy => (StatusCode::SERVICE_UNAVAILABLE, "too large for this server"),
             ApiError::Unavailable(error) => {
                 static FAILED: Throttle = Throttle::new();
                 if FAILED.due() {
@@ -637,11 +655,42 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_answer_is_still_held() {
+    fn a_stale_answer_is_held_a_while() {
         let state = state();
         state.keep("k", Duration::ZERO, Bytes::from_static(b"1"));
         assert!(state.kept("k").is_none());
-        assert_eq!(state.kept_stale("k").unwrap().as_ref(), b"1");
+        let within = Duration::from_secs(60);
+        assert_eq!(state.kept_stale("k", within).unwrap().as_ref(), b"1");
+        assert!(state.kept_stale("k", Duration::ZERO).is_none());
+    }
+
+    #[tokio::test]
+    async fn not_found_isnt_kept() {
+        let state = state();
+        let keep = Duration::from_secs(60);
+        state
+            .lasting("gone", keep, || async { Ok(Bytes::new()) })
+            .await
+            .unwrap();
+        assert!(state.kept("gone").is_none());
+        state
+            .lasting("here", keep, || async { to_json(&1) })
+            .await
+            .unwrap();
+        assert!(state.kept("here").is_some());
+    }
+
+    #[test]
+    fn a_full_store_makes_room() {
+        let state = state();
+        let bytes = Bytes::from_static(b"1");
+        state.keep("soon", Duration::from_secs(1), bytes.clone());
+        for i in 1..MAX_LASTING {
+            state.keep(&format!("k{i}"), Duration::from_secs(600), bytes.clone());
+        }
+        state.keep("new", Duration::from_secs(600), bytes);
+        assert!(state.kept("new").is_some());
+        assert!(state.kept("soon").is_none());
     }
 
     #[test]
