@@ -9,8 +9,10 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
 - **The public routes:** the other 20 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
+- **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
+- **The deploy files and runbook,** [deploy/README.md](deploy/README.md): home's services through a WireGuard tunnel, and the API behind Caddy on a VPS.
 
-**Still to come:** the VPS layer: rate limits, CORS, TLS.
+**Still to come:** putting it on the VPS, at the end of chunk 26.
 
 ## Run it locally
 
@@ -20,7 +22,7 @@ cargo run -p seedelf-data-api
 curl http://127.0.0.1:8099/health
 ```
 
-**Listening:** it listens on loopback (`DATA_LISTEN`, `127.0.0.1:8099` by default). Nothing limits it yet, so don't expose it.
+**Listening:** it listens on loopback (`DATA_LISTEN`, `127.0.0.1:8099` by default). On the VPS, Caddy is in front of it ([deploy/README.md](deploy/README.md)); never expose it without TLS.
 
 **Logging:** it logs its start and failed queries only. It never logs a request's address, path or body.
 
@@ -59,7 +61,9 @@ cargo fmt --check
 
 **One test at a time:** the database role allows 10 connections, and a running server holds some of them.
 
-**What the offline tests check,** beyond each module's own: the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`). A fork under a cursor answers `reset`, and with no source fresh the index answers 503.
+**What the offline tests check,** beyond each module's own:
+- the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`): a fork under a cursor answers `reset`, and with no source fresh the index answers 503;
+- the whole app behind its edge (`tests/edge.rs`): CORS for the wallet's origin alone, a 429 the wallet can read, a bucket per client Caddy names, and the month's ceiling.
 
 **What the live tests check:**
 
@@ -77,6 +81,28 @@ cargo fmt --check
 - **The submit part,** at no cost, since nothing sent can ever land: bytes that aren't a transaction, the contract's first transaction resubmitted (`All inputs are spent`), and Ogmios's error for evaluating it, each passed through as the service gave it. It also covers what the server refuses itself.
 
 **Checked end to end (2026-10-09):** the server run once as is and once with db-sync unreachable gave byte-identical contract snapshots, `since` answers and names at the same tip. The Lovejoin answers differed only in `made_by.inputs`.
+
+## The edge
+
+What stands between the internet and the routes, in `src/edge.rs`. Caddy in front does TLS and nothing else, so every limit is in code anyone can audit.
+
+| Setting | What it does |
+|---|---|
+| `DATA_ORIGINS` | the origins CORS lets read answers, comma-separated: the wallet's `chrome-extension://<id>`. The wallet then needs no host permission. `Retry-After` is exposed, and a 429 carries CORS too, so the wallet can read why it waits. |
+| `DATA_TRUST_PROXY=true` | behind Caddy on loopback: the client is the last `X-Forwarded-For` address. From anywhere else the header is ignored. |
+| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. It's kept in `egress.json` in systemd's `StateDirectory` (or `DATA_STATE_DIR`), so a restart doesn't forget it. The node's P2P traffic through the tunnel isn't counted. |
+
+**A bucket per client:** 300 units, refilled at 10 a second. IPv6 addresses are taken by their /64.
+
+| Request | Costs |
+|---|---|
+| the private index, `/health`, and the shared public answers: `tip`, `epoch_params`, `totals`, `pool_list`, `proposal_list` | 1 |
+| any other public route: one user's live SQL | 4 |
+| `submittx`, `ogmios` | 10 |
+
+- **Past it, a 429** with `Retry-After`. A wallet paces itself well under this: `koios.ts` keeps to 40 requests every 10 s.
+- **IPs exist only in memory:** a bucket is forgotten once it's full again, and nothing logs an address.
+- **At most 200,000 buckets.** Past that, a new client gets 503.
 
 ## The private index
 
@@ -99,7 +125,8 @@ All routes are under `/seedelf/v1/mainnet/`.
 
 **What a cursor is:** `<slot>.<block hash>`: a slot that's a multiple of 200, at least 200 slots below the tip (about 10 blocks), and the hash of the newest block at or before it. The server refuses any other slot. Deep cursors almost never roll back. Shared cursors mean a request shows only roughly when its wallet last read, and that one answer serves everyone at that point.
 
-**Two sources, one answer.** db-sync answers first (the owner, 2026-10-08). Kupo answers instead while db-sync's tip can't be read, is over 3 minutes old, or is more than 60 slots (about 3 blocks) behind Kupo's, and whenever a db-sync read fails.
+**Two sources, one answer.** db-sync answers first (the owner, 2026-10-08). Kupo answers instead while db-sync is down, its tip over 3 minutes old, or more than 60 slots (about 3 blocks) behind Kupo's, and whenever a db-sync read fails.
+- **A source is down** once its tip fails two reads in a row (4 s), and up again at the next good one. Requests then skip it at once, rather than each waiting on a timeout. Checked by dropping each link mid-run: the private index answered from Kupo within 5 s, and with both gone, every route answered 503 at once.
 - Both know every block by slot and hash, so a cursor from one is answered by the other, and a wallet never sees a switch.
 - Their rows are the same, field for field and in the same order, with one exception: from Kupo, a box's `made_by.inputs` is `null`. Kupo indexes outputs at our two credentials, not who paid for a transaction.
 - A source whose tip hasn't reached a cursor passes it to the other. If neither can answer, the route gives 503 with `Retry-After`, and the wallet goes to Koios.
@@ -160,7 +187,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 
 **The public routes have their own connections:** 6, beside the private index's 3, so a burst of them never holds the private index up.
 - A query that waits 2 s for a connection, or runs past 10 s, answers 503, so the wallet goes to Koios rather than queueing.
-- A connection that takes 3 s to open has failed, rather than waiting minutes on TCP: the private index then reads Kupo, and the public routes answer 503.
+- A connection that takes 3 s to open has failed, rather than waiting minutes on TCP.
+- **While db-sync is down** (two failed reads of its tip), every public route answers 503 at once, kept answers included.
 - A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
 
 **Known slow cases:**
@@ -176,7 +204,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `POST /api/v1/ogmios` | Ogmios, `POST /` | a JSON-RPC 2.0 `evaluateTransaction` and no other method (400); at most 64 KiB; at most 2 in flight |
 
 - **Answers pass through untouched,** status and body. Koios fronts the same two services, so the error strings the wallet classifies stay what they are. They matched Koios's byte for byte on 2026-10-08.
-- **No answer** is a 502 (unreachable) or a 504 (timed out after 30 s): to the wallet, either one means "maybe sent".
+- **No answer** is a 502 (unreachable, or no connection within 3 s) or a 504 (timed out after 30 s): to the wallet, either one means "maybe sent".
 - **It depends on the node alone,** so db-sync can be down.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL. reqwest's own error messages carry the URL, so errors are logged by kind only.
 

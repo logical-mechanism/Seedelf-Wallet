@@ -1,0 +1,33 @@
+# /etc/caddy/Caddyfile on the VPS. Caddy does TLS and passes requests on;
+# every limit is the API's own (src/edge.rs). It names the client in
+# X-Forwarded-For, which the API trusts from loopback alone.
+
+{
+	# Caddy's own log, less the loggers that carry a request: an error's
+	# entry names the client's address and the path it asked for. Check it
+	# with a forced error (deploy/README.md, "Checks").
+	log default {
+		output stderr
+		exclude http.log.error http.handlers.reverse_proxy
+	}
+	# Let's Encrypt writes here about the certificate.
+	email <an address for certificate notices>
+}
+
+mainnet.<domain> {
+	# No `log` directive: no access log.
+	request_body {
+		# The largest body the API takes (an evaluation).
+		max_size 64KB
+	}
+	reverse_proxy 127.0.0.1:8099 {
+		transport http {
+			# A submit waits up to 30 s on home.
+			response_header_timeout 40s
+		}
+	}
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

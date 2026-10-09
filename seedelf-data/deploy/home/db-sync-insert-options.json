@@ -1,0 +1,19 @@
+{
+  "_comment": "The insert_options the API's SQL relies on: Koios's own (guild-operators' files/configs/mainnet/db-sync-config.json). tx_out consumed and the address table can only be set on an empty database. offchain_vote_data has been its own option, off by default, since 13.7.0.1: without it, governance actions lose their titles and DReps their names, with no error. tx_cbor is optional: the API never reads it.",
+  "insert_options": {
+    "tx_out": {
+      "value": "consumed",
+      "use_address_table": true
+    },
+    "ledger": "enable",
+    "shelley": { "enable": true },
+    "multi_asset": { "enable": true },
+    "metadata": { "enable": true },
+    "plutus": { "enable": true },
+    "governance": "enable",
+    "json_type": "text",
+    "offchain_pool_data": "enable",
+    "offchain_vote_data": "enable",
+    "pool_stat": "enable"
+  }
+}

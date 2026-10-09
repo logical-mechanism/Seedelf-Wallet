@@ -1012,6 +1012,7 @@ dependencies = [
  "bech32",
  "deadpool-postgres",
  "dotenvy",
+ "http-body-util",
  "percent-encoding",
  "reqwest",
  "serde",

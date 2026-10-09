@@ -1,0 +1,37 @@
+# /etc/systemd/system/kupo-seedelf.service
+#
+# The Seedelf-only Kupo: the private index's second source. It runs beside
+# any other Kupo on the box, never inside one: adding a pattern to another
+# Kupo rolls its whole index back. Unpruned, so spent outputs keep their
+# spending transaction; its database stays a few MB.
+#
+# Gotchas, each found the hard way (chunk 26's plan, The private index):
+# - StateDirectory must match --workdir, or Kupo can't write its database.
+# - Every ExecStart line but the last ends in a backslash, or the --match
+#   lines after a break are silently dropped.
+# - No --defer-db-indexes: the API's queries need the indexes from the start.
+# - --since is block 11,305,804, the one before the contract's first output.
+#   Changing the patterns or --since means deleting the workdir and syncing again.
+
+[Unit]
+Description=Kupo for Seedelf Wallet: the contract and Lovejoin's mix box
+Wants=network-online.target
+After=network-online.target cardano-node.service wg-quick@wg0.service
+
+[Service]
+User=<the user cardano-node runs as>
+StateDirectory=kupo-seedelf
+ExecStart=/usr/local/bin/kupo \
+  --node-socket <cardano-node socket> \
+  --node-config <cardano-node config.json> \
+  --workdir /var/lib/kupo-seedelf \
+  --host <home wg0 address> \
+  --port 1443 \
+  --since 144386185.af5f8c02581c857a39218fcfab037817d470e8f4ca347ae04ffb328c16e7d11b \
+  --match 94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469/* \
+  --match c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad/*
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

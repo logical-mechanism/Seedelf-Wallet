@@ -29,6 +29,11 @@ pub const MAX_AGE_SECS: i64 = 180;
 /// How often db-sync's and Kupo's tips are read.
 pub const WATCH_EVERY: Duration = Duration::from_secs(2);
 
+/// A source whose tip fails this many reads in a row is down: its part
+/// answers 503 at once (the private index goes to the other source), rather
+/// than letting every request wait on a timeout. One failed read is a blip.
+pub const FAILED_READS: u32 = 2;
+
 /// Answers held for one tip, at most: past this, nothing more is kept until it moves.
 const MAX_CACHED: usize = 1024;
 
@@ -43,9 +48,12 @@ pub struct AppState {
     /// Accounts' reward sums for the epoch, for pools' live stake.
     pub rewards: Rewards,
     tip: RwLock<Option<Tip>>,
-    /// db-sync's tip couldn't be read last time: the private index goes to Kupo at once.
+    /// db-sync's tip failed [`FAILED_READS`] reads in a row: the public routes
+    /// answer 503 at once, and the private index reads Kupo.
     db_failing: AtomicBool,
     kupo_tip: RwLock<Option<Block>>,
+    /// The same for Kupo: the private index reads db-sync alone.
+    kupo_failing: AtomicBool,
     /// Answers made from db-sync, for its tip; the private index's made from Kupo, for Kupo's.
     cache: Mutex<Cached>,
     kupo_cache: Mutex<Cached>,
@@ -80,6 +88,7 @@ impl AppState {
             tip: RwLock::new(None),
             db_failing: AtomicBool::new(false),
             kupo_tip: RwLock::new(None),
+            kupo_failing: AtomicBool::new(false),
             cache: Mutex::new(Cached::default()),
             kupo_cache: Mutex::new(Cached::default()),
             lasting: Mutex::new(HashMap::new()),
@@ -115,6 +124,7 @@ impl AppState {
 
     /// Takes Kupo's newly read tip; a new block drops the answers made from it.
     pub fn set_kupo_tip(&self, tip: Block) {
+        self.kupo_failing.store(false, Ordering::Relaxed);
         let mut held = self.kupo_tip.write().expect("tip lock");
         if held.as_ref() != Some(&tip) {
             self.kupo_cache
@@ -129,35 +139,31 @@ impl AppState {
         self.kupo_tip.read().expect("tip lock").clone()
     }
 
-    /// The tip, if it's fresh enough to answer from.
+    /// db-sync's tip, if it's fresh enough to answer from and still reads.
     pub fn fresh_tip(&self) -> Result<Tip, ApiError> {
         let tip = self.tip().ok_or(ApiError::Behind)?;
-        if age(&tip) > MAX_AGE_SECS {
+        if age(&tip) > MAX_AGE_SECS || self.db_failing.load(Ordering::Relaxed) {
             return Err(ApiError::Behind);
         }
         Ok(tip)
     }
 
     /// The private index's sources that can answer now, best first, each with
-    /// its tip: db-sync while its tip reads and is fresh, unless Kupo is well
-    /// ahead of it; Kupo while its tip is fresh.
+    /// its tip: each while its tip reads and is fresh, db-sync first unless
+    /// Kupo is well ahead of it.
     pub fn private_sources(&self) -> Vec<(Source, Block)> {
-        let db_sync = self
-            .tip()
-            .filter(|tip| !self.db_failing.load(Ordering::Relaxed) && age(tip) <= MAX_AGE_SECS)
-            .map(|tip| {
-                (
-                    Source::DbSync(self.chain.clone()),
-                    Block {
-                        slot: tip.slot,
-                        hash: tip.hash,
-                    },
-                )
-            });
-        let kupo = self
-            .kupo
-            .clone()
-            .zip(self.kupo_tip().filter(|tip| block_age(tip) <= MAX_AGE_SECS));
+        let db_sync = self.fresh_tip().ok().map(|tip| {
+            (
+                Source::DbSync(self.chain.clone()),
+                Block {
+                    slot: tip.slot,
+                    hash: tip.hash,
+                },
+            )
+        });
+        let kupo = self.kupo.clone().zip(self.kupo_tip().filter(|tip| {
+            block_age(tip) <= MAX_AGE_SECS && !self.kupo_failing.load(Ordering::Relaxed)
+        }));
         source::order(db_sync, kupo.map(|(kupo, tip)| (Source::Kupo(kupo), tip)))
     }
 
@@ -326,22 +332,22 @@ pub fn block_age(block: &Block) -> i64 {
 pub async fn watch_tip(state: Arc<AppState>) {
     let mut every = tokio::time::interval(WATCH_EVERY);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut failing = false;
+    let mut failed = 0;
     loop {
         every.tick().await;
         match state.chain.tip().await {
             Ok(tip) => {
-                if failing {
+                if failed >= FAILED_READS {
                     info!("db-sync's tip reads again");
-                    failing = false;
                 }
+                failed = 0;
                 state.set_tip(tip);
             }
             Err(error) => {
-                state.db_failing.store(true, Ordering::Relaxed);
-                if !failing {
+                failed += 1;
+                if failed == FAILED_READS {
+                    state.db_failing.store(true, Ordering::Relaxed);
                     warn!(error = failure(&error), "db-sync's tip couldn't be read");
-                    failing = true;
                 }
             }
         }
@@ -355,21 +361,22 @@ pub async fn watch_kupo(state: Arc<AppState>) {
     };
     let mut every = tokio::time::interval(WATCH_EVERY);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut failing = false;
+    let mut failed = 0;
     loop {
         every.tick().await;
         match kupo.tip().await {
             Ok(tip) => {
-                if failing {
+                if failed >= FAILED_READS {
                     info!("Kupo's tip reads again");
-                    failing = false;
                 }
+                failed = 0;
                 state.set_kupo_tip(tip);
             }
             Err(error) => {
-                if !failing {
+                failed += 1;
+                if failed == FAILED_READS {
+                    state.kupo_failing.store(true, Ordering::Relaxed);
                     warn!(%error, "Kupo's tip couldn't be read");
-                    failing = true;
                 }
             }
         }

@@ -2,7 +2,7 @@
 
 Branch `web-wallet/data-layer`, from `main`.
 
-**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, with Kupo as its second source, the submit part and the 20 public routes are built and checked (2026-10-09). Next: the deploy files, then the wallet's side.
+**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, with Kupo as its second source, the submit part, the 20 public routes, the edge and the deploy files are built and checked (2026-10-09). Next: one optimisation and review pass over `seedelf-data/`, then the wallet's side.
 
 **For the API as built, [seedelf-data/README.md](../../../../seedelf-data/README.md) is the reference.** This plan says why; that README says what the routes return.
 
@@ -493,7 +493,10 @@ Monthly and rough; check prices when buying.
         - an NFT's `asset_info` equals Koios's recorded answer, and the other routes match the recorded fixtures' shapes.
       - **Found at home:** db-sync has fetched no off-chain vote data since 2026-03-17. Anchors since then (4,886) have no data, so newer governance actions have no title or abstract and newer DRep profiles no name, from this server.
         - The cause is db-sync 13.7.0.1's new `offchain_vote_data` option, off by default ([Home](#home)). It's on since 2026-10-09, and the backlog is being fetched.
-   3. alongside: `deploy/home`, `deploy/edge` and a runbook. Secrets are never committed.
+   3. ✅ alongside: `deploy/home`, `deploy/edge` and a runbook, [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md) (2026-10-09). Secrets are never committed.
+      - **The edge is the API's own code** (`src/edge.rs`), so Caddy stays stock: buckets per IP, weighted 1 for a shared answer, 4 for live SQL and 10 for a submit or evaluation; the month's egress ceiling, kept across restarts; CORS for the wallet's origins only, a 429 included.
+      - **A source is down after two failed reads of its tip** (4 s). Its part answers 503 at once, rather than each request waiting on a timeout. Dropping each link mid-run checked it: the private index moved to Kupo within 5 s, and with both gone, every route answered 503 at once.
+      - **Only the node's and db-sync's traffic goes through the tunnel,** routed by user. The mainnet box runs another project, which a moved default route would move too. If the tunnel drops, the node loses its peers rather than reaching them directly. Ogmios serves that project too, so its bind stays, and nftables on `wg0` decides what reaches it.
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
 4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.

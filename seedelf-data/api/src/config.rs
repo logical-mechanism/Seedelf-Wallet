@@ -3,6 +3,7 @@
 //! is config, so moving behind the tunnel changes values, not code.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
@@ -20,6 +21,14 @@ pub struct Config {
     pub ogmios_url: Option<String>,
     /// The token registry's decimals (`decimals.rs`): every token is 0 without it.
     pub token_decimals: Option<String>,
+    /// The wallet's origins, `chrome-extension://<id>`, that CORS lets read answers.
+    pub origins: Vec<String>,
+    /// Behind Caddy on loopback: the client is the last `X-Forwarded-For` address.
+    pub trust_proxy: bool,
+    /// The month's ceiling on the API's own traffic, in bytes.
+    pub egress_ceiling: Option<u64>,
+    /// Where the month's traffic is kept: systemd's `StateDirectory`, or `DATA_STATE_DIR`.
+    pub state_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -38,6 +47,25 @@ impl Config {
             submit_api_url: optional("MAINNET_SUBMIT_API_URL"),
             ogmios_url: optional("MAINNET_OGMIOS_URL"),
             token_decimals: optional("MAINNET_TOKEN_DECIMALS"),
+            origins: optional("DATA_ORIGINS")
+                .map(|list| {
+                    list.split(',')
+                        .map(|origin| origin.trim().to_string())
+                        .filter(|origin| !origin.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            trust_proxy: optional("DATA_TRUST_PROXY").is_some_and(|v| v == "true"),
+            egress_ceiling: optional("DATA_EGRESS_GB_MONTH")
+                .map(|gb| {
+                    gb.parse::<f64>()
+                        .context("DATA_EGRESS_GB_MONTH isn't a number")
+                })
+                .transpose()?
+                .map(|gb| (gb * 1e9) as u64),
+            state_dir: optional("DATA_STATE_DIR")
+                .or_else(|| optional("STATE_DIRECTORY"))
+                .map(PathBuf::from),
         })
     }
 }

@@ -31,6 +31,10 @@ const EVALUATIONS_IN_FLIGHT: usize = 2;
 /// As long as the wallet waits for a submit (`SUBMIT_TIMEOUT_MS`).
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A connection that takes longer than this won't come: home is unreachable,
+/// and the wallet should resend through Koios now, not in 30 s.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
 pub struct Submit {
     http: reqwest::Client,
     submit_api: Option<String>,
@@ -44,6 +48,7 @@ impl Submit {
         Ok(Submit {
             http: reqwest::Client::builder()
                 .timeout(UPSTREAM_TIMEOUT)
+                .connect_timeout(CONNECT_TIMEOUT)
                 .build()?,
             submit_api: submit_api.map(|url| url.trim_end_matches('/').to_string()),
             ogmios: ogmios.map(|url| url.trim_end_matches('/').to_string()),

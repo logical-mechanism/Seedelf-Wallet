@@ -25,6 +25,9 @@ use crate::row::{MadeBy, Point, Row, Spend, Spent};
 /// contract's snapshot over the LAN): one that takes seconds is down to us.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A connection that takes longer than this won't come: home is unreachable.
+const CONNECT: Duration = Duration::from_secs(3);
+
 /// How many times an answer's reads are made again when a block lands between them.
 const TRIES: usize = 3;
 
@@ -142,7 +145,10 @@ impl Match {
 impl Kupo {
     pub fn new(url: &str) -> Result<Self> {
         Ok(Kupo {
-            http: reqwest::Client::builder().timeout(TIMEOUT).build()?,
+            http: reqwest::Client::builder()
+                .timeout(TIMEOUT)
+                .connect_timeout(CONNECT)
+                .build()?,
             base: url.trim_end_matches('/').to_string(),
         })
     }
