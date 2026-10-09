@@ -107,6 +107,7 @@ import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activ
 import { txInputs } from "./cbor";
 import { GAP_LIMIT } from "./chain";
 import { KoiosBusyError, KoiosError, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
+import { IndexDown, type IndexRow, utxoOf } from "./private-index";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
@@ -1259,6 +1260,13 @@ export class LovejoinService {
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
   /**
+   * Who made each box in the pool the private index listed last, by the
+   * transaction that made it (madeBy): what the index says of a box beside
+   * it, so the wallet asks nobody about one box. None while the pool was
+   * read from Koios, whose tx_info madeBy asks instead.
+   */
+  private provenance = new Map<NetworkName, Map<string, NonNullable<IndexRow["made_by"]>>>();
+  /**
    * The chains recorded whose progress is being put where they wait
    * (recordChain), by id: not cut meanwhile (cuts). In memory: a worker that
    * stops in between never put it there, and the chain was cut.
@@ -1344,16 +1352,35 @@ export class LovejoinService {
     return { depth: p.lovejoinDepth, delay: p.lovejoinDelay };
   }
 
-  /** The pool as Koios lists it (a read), and what the wallet's sent transactions spend. */
+  /** The pool as the private index or Koios lists it (a read), and what the wallet's sent transactions spend. */
   private async listing(network: NetworkName): Promise<{ rows: KoiosUtxo[]; spent: Set<string> }> {
     const hash = NETWORKS[network].lovejoin?.mixBox;
     if (!hash) throw new Error(t("lj.notOnNetwork"));
     const { wallet, session } = this.deps;
-    const [rows, spent] = await Promise.all([
-      this.deps.koios(network).credentialUtxos([hash]),
-      wallet.withKeys(() => spentSet(session)),
-    ]);
+    const [rows, spent] = await Promise.all([this.poolRows(network, hash), wallet.withKeys(() => spentSet(session))]);
     return { rows, spent };
+  }
+
+  /**
+   * The pool's rows at the tip: from the private index where it's up, each
+   * box with who made it (`provenance`), as Koios rows; from Koios's
+   * credential_utxos otherwise, as before (chunk 26b).
+   */
+  private async poolRows(network: NetworkName, mixBox: string): Promise<KoiosUtxo[]> {
+    const index = await this.deps.index?.(network);
+    if (index) {
+      try {
+        const { rows } = await index.poolNow();
+        const made = new Map<string, NonNullable<IndexRow["made_by"]>>();
+        for (const r of rows) if (r.made_by) made.set(r.ref.slice(0, r.ref.lastIndexOf("#")), r.made_by);
+        this.provenance.set(network, made);
+        return rows.map((r) => utxoOf(r, mixBox, network));
+      } catch (e) {
+        if (!(e instanceof IndexDown)) throw e;
+      }
+    }
+    this.provenance.delete(network);
+    return this.deps.koios(network).credentialUtxos([mixBox]);
   }
 
   /**
@@ -2765,9 +2792,10 @@ export class LovejoinService {
   }
 
   /**
-   * What made each of `txHashes`, as Koios's tx_info says of its inputs: a
-   * mix, when one sat at Lovejoin's mix_box; a public account, and which,
-   * when one was under one of its payment keys (accountKeys), whichever
+   * What made each of `txHashes`, as its inputs say (inputsOf: the private
+   * index's pool listing, or Koios's tx_info): a mix, when one sat at
+   * Lovejoin's mix_box; a public account, and which, when one was under one
+   * of its payment keys (accountKeys), whichever
    * account is active: a restore opens on account 0, and the answer is kept.
    * Only a payment key says so: anyone can pay from an address of their own
    * payment key and an account's stake key, without the account's signature,
@@ -2781,22 +2809,10 @@ export class LovejoinService {
    */
   private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Told>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
-    const koios = this.deps.koios(network);
-    const rows: KoiosTxSpends[] = [];
-    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
-      try {
-        rows.push(...(await koios.txSpends(txHashes.slice(i, i + TXS_PER_REQUEST))));
-      } catch (e) {
-        if (e instanceof KoiosError) break;
-        throw e;
-      }
-    }
     const told = new Map<string, Told>();
-    const asked = new Set(txHashes);
-    const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
-    if (!mixBox || !read.length) return told;
+    const spent = await this.inputsOf(network, txHashes);
+    if (!mixBox || !spent.length) return told;
     const accounts = await this.accountKeys(network);
-    const spent = read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
     // The stake key alone never makes an input an account's: its payment key is looked for further (independent review M14).
     for (const a of accounts) {
       if (a.stake === undefined) continue;
@@ -2817,6 +2833,41 @@ export class LovejoinService {
       });
     }
     return told;
+  }
+
+  /**
+   * Each of `txHashes`' inputs, as their payment and stake keys: what the
+   * private index's last pool listing said made each box (`provenance`),
+   * asking nobody; or, while the pool came from Koios, its tx_info. A
+   * transaction the index's row has no inputs for (Kupo answered) is left
+   * out, as one Koios doesn't answer for, and asked of again at the next
+   * look.
+   */
+  private async inputsOf(
+    network: NetworkName,
+    txHashes: string[],
+  ): Promise<Array<readonly [string, Array<{ cred?: string; stake?: string }>]>> {
+    const provenance = this.provenance.get(network);
+    if (provenance) {
+      return txHashes.flatMap((tx) => {
+        const inputs = provenance.get(tx)?.inputs;
+        if (!inputs?.length) return [];
+        return [[tx, inputs.map(([cred, stake]) => ({ ...(cred ? { cred } : {}), ...(stake ? { stake } : {}) }))] as const];
+      });
+    }
+    const koios = this.deps.koios(network);
+    const rows: KoiosTxSpends[] = [];
+    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
+      try {
+        rows.push(...(await koios.txSpends(txHashes.slice(i, i + TXS_PER_REQUEST))));
+      } catch (e) {
+        if (e instanceof KoiosError) break;
+        throw e;
+      }
+    }
+    const asked = new Set(txHashes);
+    const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
+    return read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
   }
 
   /**

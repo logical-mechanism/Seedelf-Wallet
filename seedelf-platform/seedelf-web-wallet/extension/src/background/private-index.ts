@@ -16,7 +16,7 @@
 // Its own part of the data layer (`private`): a failure marks it down, and
 // the caller reads Koios instead (`IndexDown`).
 
-import { epochAt, NETWORKS, type NetworkName, dataOrigin } from "../networks";
+import { dataOrigin, epochAt, type NetworkName } from "../networks";
 import { assetFingerprint } from "../shared/fingerprint";
 import { DATA_LIMIT, DATA_READ_TIMEOUT_MS, type DataDeps, type DataParts } from "./data-layer";
 import { type FetchLike, type KoiosUtxo, RateLimit, retryAfterMs, SERVICE_FETCH } from "./koios";
@@ -75,6 +75,12 @@ export interface IndexNames {
 /** The private index couldn't answer: its part is down, and the caller reads Koios. */
 export class IndexDown extends Error {}
 
+/** `rows`, as of a cursor, at the tip a `since` from it reached: what it made added, everything spent taken out. */
+export function atTip(rows: IndexRow[], since: Extract<IndexSince, { reset?: undefined }>): IndexRow[] {
+  const gone = new Set([...since.spent.map((s) => s.ref), ...since.created.filter((r) => r.spent).map((r) => r.ref)]);
+  return [...rows, ...since.created].filter((r) => !gone.has(r.ref));
+}
+
 const REF = /^[0-9a-f]{64}#\d+$/;
 const HEX = /^([0-9a-f]{2})*$/;
 
@@ -94,9 +100,15 @@ function isRow(row: unknown): row is IndexRow {
       (Array.isArray(r.assets) &&
         r.assets.every(
           (a) => Array.isArray(a) && typeof a[0] === "string" && typeof a[1] === "string" && typeof a[2] === "string",
-        )))
+        ))) &&
+    (r.made_by === undefined || isMadeBy(r.made_by))
   );
 }
+
+const credOrNull = (c: unknown) => c === null || (typeof c === "string" && /^[0-9a-f]{56}$/.test(c));
+const isMadeBy = (m: IndexRow["made_by"]) =>
+  typeof m?.mixed === "boolean" &&
+  (m.inputs === null || (Array.isArray(m.inputs) && m.inputs.every((i) => Array.isArray(i) && credOrNull(i[0]) && credOrNull(i[1]))));
 
 const isPoint = (p: unknown): p is IndexPoint =>
   typeof (p as IndexPoint | null)?.slot === "number" && typeof (p as IndexPoint).time === "number";
@@ -134,6 +146,25 @@ export class PrivateIndex {
   /** Lovejoin's pool: every box unspent as of a stable cursor, with who made each. */
   async pool(): Promise<IndexSnapshot> {
     return this.snapshotAt("lovejoin/pool");
+  }
+
+  /** What changed in Lovejoin's pool after `cursor`. */
+  async poolSince(cursor: string): Promise<IndexSince> {
+    return this.sinceAt(`lovejoin/since/${cursor}`);
+  }
+
+  /**
+   * Lovejoin's pool at the tip: the snapshot, and what changed since its
+   * cursor, both answers every wallet shares. A pool read at the stable
+   * cursor alone would be ten blocks behind, and a chain drawing from it
+   * would take boxes spent since.
+   */
+  async poolNow(): Promise<{ tip: IndexTip; rows: IndexRow[] }> {
+    const snapshot = await this.pool();
+    const since = await this.poolSince(snapshot.cursor);
+    // Rolled back since the snapshot, a moment ago: Koios this once.
+    if (since.reset) throw new IndexDown("Lovejoin's pool was rolled back as it was read.");
+    return { tip: since.tip, rows: atTip(snapshot.rows, since) };
   }
 
   private async snapshotAt(path: string): Promise<IndexSnapshot> {
@@ -246,5 +277,3 @@ export function utxoOf(row: IndexRow, paymentCred: string, network: NetworkName 
   };
 }
 
-/** The mix box's script hash on `network`, for its rows' `payment_cred`. */
-export const mixBoxOf = (network: NetworkName) => NETWORKS[network].lovejoin?.mixBox ?? "";

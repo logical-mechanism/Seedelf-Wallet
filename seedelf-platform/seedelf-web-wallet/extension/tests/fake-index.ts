@@ -62,7 +62,8 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
     calls: [],
     advance: (slots) => void (fake.tip += slots),
     fetch: async (url) => {
-      const path = new URL(url).pathname.replace(/^\/seedelf\/v1\/mainnet\//, "");
+      // Mainnet's, or another network's where a test points its client there.
+      const path = new URL(url).pathname.replace(/^\/seedelf\/v1\/\w+\//, "");
       fake.calls.push(path);
       if (fake.fail === "unreachable") throw new TypeError("Failed to fetch");
       if (fake.fail) return fake.fail.clone();
