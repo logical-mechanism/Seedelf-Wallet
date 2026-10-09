@@ -299,7 +299,7 @@ Home shows the private balance at once, marked stale until the delta lands. That
 
 - `tx_out: {value: "consumed", use_address_table: true}`, and `ledger: "enable"`;
 - shelley, multi_asset, metadata and plutus on;
-- governance, both off-chain fetchers and `pool_stat` set to `"enable"`;
+- governance, both off-chain fetchers (`offchain_pool_data` and `offchain_vote_data`, each its own option since 13.7.0.1) and `pool_stat` set to `"enable"`;
 - `json_type: "text"`;
 - `tx_cbor: "disable"`.
 
@@ -321,12 +321,14 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 ## Home
 
-- **What's there already (checked 2026-10-08).** The mainnet server runs db-sync 13.7.0.1 (schema 15.50.6), 5 s behind the chain, with **exactly Koios's options**:
+- **What's there already (checked 2026-10-08).** The mainnet server runs db-sync 13.7.0.1 (schema 15.50.6), 5 s behind the chain, with Koios's options but one:
   - `tx_out` is `consumed`: `consumed_by_tx_id` is filled, and `tx_in` is empty;
   - the address table is on;
   - the ledger is on (rewards, epoch stake and DRep distribution are filled);
-  - off-chain pool and vote data are on;
-  - `tx_cbor` is on.
+  - off-chain pool data is on;
+  - `tx_cbor` is on;
+  - **off-chain vote data is off** (corrected 2026-10-09). Since 13.7.0.1 it has its own `"offchain_vote_data"` option, which defaults to `"disable"`; before, `"governance"` covered it. The config never got the new option, so fetching stopped at the upgrade, on 2026-03-17, with no error. The fix is `"offchain_vote_data": "enable"` in `insert_options` and a db-sync restart. Koios's own config sets it.
+- **Postgres must wait for the network** (found 2026-10-09). After a reboot it started before the server had its LAN address, couldn't bind it, and listened on localhost alone, with only a warning. A restart fixes it once. `After=network-online.target` in a drop-in for its unit fixes it for good, and it applies to `wg0` later too.
 
   No `grest` schema is installed yet. The node and Kupo run there too.
 - **RAM.** Mainnet alone fits in memory on 64 GB: about 24 GB for the node and 21 GB for db-sync, plus Postgres, Kupo and Ogmios. If it's tight, `ledger_backend: "lsm"` cuts db-sync to about 2–3 GB.
@@ -484,9 +486,8 @@ Monthly and rough; check prices when buying.
         - the contract's and mix box's listings equal the private index;
         - every `tx_info` balances;
         - an NFT's `asset_info` equals Koios's recorded answer, and the other routes match the recorded fixtures' shapes.
-      - **Found at home:** db-sync's off-chain vote fetcher has fetched nothing since 2026-03-17. Anchors since then (4,886) have no data, so newer governance actions have no title or abstract and newer DRep profiles no name, from this server.
-        - Pool metadata still fetches (the newest 2026-10-08).
-        - It's the owner's server, so it's left as found. A db-sync restart may wake it.
+      - **Found at home:** db-sync has fetched no off-chain vote data since 2026-03-17. Anchors since then (4,886) have no data, so newer governance actions have no title or abstract and newer DRep profiles no name, from this server.
+        - The cause is db-sync 13.7.0.1's new `offchain_vote_data` option, off by default ([Home](#home)). A restart doesn't change it.
    3. alongside: `deploy/home`, `deploy/edge` and a runbook. Secrets are never committed.
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
