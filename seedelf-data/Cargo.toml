@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["api"]
+
+# Seedelf Wallet's data layer (web wallet chunk 26). Its own workspace, apart
+# from seedelf-platform/, so nothing here ever moves the CLI's Cargo.lock.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Logical Mechanism LLC <support@logicalmechanism.io>"]
+repository = "https://github.com/logical-mechanism/Seedelf-Wallet"

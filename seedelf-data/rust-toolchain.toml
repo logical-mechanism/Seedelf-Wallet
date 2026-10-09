@@ -1,0 +1,5 @@
+# The same Rust as seedelf-platform/rust-toolchain.toml; bump the two together.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
