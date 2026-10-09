@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Layout
 
-This is a multi-language monorepo for **Seedelf**, a Cardano stealth wallet. Two top-level components:
+This is a multi-language monorepo for **Seedelf**, a Cardano stealth wallet. Three top-level components:
 
 - [seedelf-contracts/](seedelf-contracts/) — on-chain validators written in **Aiken**.
 - [seedelf-platform/](seedelf-platform/) — a Cargo workspace of Rust crates implementing the CLI and supporting libraries.
   - It also holds the Chrome web wallet (Seedelf Wallet), [seedelf-platform/seedelf-web-wallet/](seedelf-platform/seedelf-web-wallet/), where nearly all work now happens. Start with its [README](seedelf-platform/seedelf-web-wallet/README.md) and [seedelf-platform/CLAUDE.md](seedelf-platform/CLAUDE.md).
+- [seedelf-data/](seedelf-data/) — the web wallet's mainnet data layer (chunk 26), its own Cargo workspace: `seedelf-data-api`, live at `https://mainnet.seedelf.logicalmechanism.io` on a DigitalOcean droplet, reading home's node, db-sync and Kupo through WireGuard.
 
 The Rust code hardcodes the deployed contracts' script hashes, reference UTxOs and reference outputs, per variant (`seedelf-core`'s `constants.rs` and `references.rs`). Variant 1 is what's on chain and it's frozen: commit `5b82530`, built with Aiken v1.1.9 (see [seedelf-contracts/README.md](seedelf-contracts/README.md)). The contracts' current source, `contracts/` and `hashes/` are a later revision that was never deployed, so never copy `hashes/` into the Rust constants. Changing validator code, the toolchain or the `acabcafe` random seed changes the hashes: putting that on chain is a new variant with its own reference UTxOs, added beside variant 1, never an edit to it.
 
@@ -48,6 +49,17 @@ npm run e2e         # Playwright, on the built dist/
 ```
 
 `wasm/build.sh` needs the toolchain [seedelf-platform/rust-toolchain.toml](seedelf-platform/rust-toolchain.toml) pins (with `wasm32-unknown-unknown`), `clang` with a wasm32 backend, `llvm-ar`, and `wasm-bindgen-cli` at `Cargo.lock`'s version; it says what's missing. CI is [.github/workflows/web-wallet.yml](.github/workflows/web-wallet.yml). There's no prettier config: don't run a formatter. Everything else — the store package, live runs, the docs — starts at [docs/development.md](seedelf-platform/seedelf-web-wallet/docs/development.md).
+
+### Data layer ([seedelf-data/](seedelf-data/))
+
+```bash
+cd seedelf-data
+cargo run -p seedelf-data-api                    # the API, with seedelf-data/.env (never committed)
+cargo test                                       # offline; CI is .github/workflows/data-layer.yml
+cargo test -- --ignored --test-threads=1         # the live tests, against home's services
+```
+
+[seedelf-data/README.md](seedelf-data/README.md) is the API's reference, and [deploy/README.md](seedelf-data/deploy/README.md) the runbook for home and the VPS. Deploys go through [.github/workflows/data-layer-deploy.yml](.github/workflows/data-layer-deploy.yml) alone: run by hand on `main` (`deploy`, `rollback`, `status`), and the owner approves each run. Never copy a binary to the VPS by hand. Home's mainnet node is a stake pool's relay: its own traffic never goes through the VPS.
 
 ## Architecture
 

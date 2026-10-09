@@ -23,9 +23,12 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
   - every refusal: another command, a glob, a smuggled `;`, a wrong checksum, a file that isn't ELF, one over 64 MiB, and a terminal;
   - `status` through SSH with the real key.
 
-  GitHub only offers a manual workflow once it's on `main`, so the first run waits for this branch's merge.
+  GitHub only offers a manual workflow once it's on `main`, so the first run waited for #291's merge.
+- **the workflow's first run** (2026-10-09, after #291): it built `main` in 1.5 minutes, installed it, and `/health` and the store's CORS line passed. The hand-built binary became `.prev`. A `status` run tested the path where the build is skipped. Its actions were then moved to their Node 24 majors (`checkout` 7, `upload-artifact` 7, `download-artifact` 8, which refuses a digest mismatch), with no git token left for the build.
 
-Next: merge, and the workflow's first run. Then crt.sh's listing (not indexed yet that night), home's logs (Postgres's and Kupo's), CI, and the drills.
+- **CI for `seedelf-data/`** (`.github/workflows/data-layer.yml`): on every PR that touches it, `fmt`, `clippy -D warnings`, the tests (the live ones stay ignored), and `shellcheck` on the deploy script.
+
+Next: crt.sh's listing (not indexed yet that night), home's logs (Postgres's and Kupo's), and the drills.
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
@@ -120,7 +123,7 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
 
 ## Gotchas known now
 
-- **Root during setup is temporary.** `/etc/sudoers.d/90-seedelf-setup` gives `seedelf` `sudo` with no password while Claude sets the droplet up. Delete it once the `deploy` user and its one script exist.
+- **Root during setup was temporary.** `/etc/sudoers.d/90-seedelf-setup` gave `seedelf` `sudo` with no password while Claude set the droplet up. It was deleted on 2026-10-09, after the first deploy through the workflow. `seedelf` keeps `sudo` with its password.
 - **Ship the binary `cargo build` makes, never one left by `cargo test`.** `cargo test --release` relinks `target/release/seedelf-data-api` with the test dependencies' features mixed in: a different binary at the same path. The deploy workflow's build job runs `cargo build` alone.
 - **Caddy's apt repository (Cloudsmith) answered 402 on 2026-10-09,** from anywhere. Caddy is the GitHub release's `.deb`, checked against its checksums file, so apt never updates it (runbook, *Routine*).
 - **Caddy's own errors carry no CORS headers:** its 502 while the API restarts, and its 413. The wallet reads them as a lost connection, which 26b made safe for submits.
