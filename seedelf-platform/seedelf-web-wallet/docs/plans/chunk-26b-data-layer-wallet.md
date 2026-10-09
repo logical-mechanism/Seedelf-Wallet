@@ -277,7 +277,7 @@ Built 2026-10-09. Where the build departs from the steps above, and why:
 - **A feed watch needs a cursor from before its transaction went out** (Step 6), and a cursor is only ever one the server handed out. So `feed.ts` keeps them in session storage, one every 5 minutes for 6 hours, the sealed one from before a lock included. A watch with none old enough asks `tx_status`, as one whose part is down does: a Lovejoin chain that started before a lock, say.
 - **Each private watch names the one feed it shows in:** the contract's for a Seedelf spend, a move-in, an account-paid mint or send to a Seedelf (read from what the transaction pays), and a session's way out and back; the pool's for Lovejoin's chains, withdraws and a session's return through it. A taken Seedelf spend's watch now keeps `contract: true` so it stays on the feed.
 - **Submits** (Step 2): a 413 and a 415 go straight to Koios too: the node never saw them. After a lost connection, which is taken as never sent, Koios calling an input spent is read as maybe sent: it may be this very transaction.
-- **The switch** sits in Settings' *Sites and mixing* section, as the plan's Privacy section, shown only where the build has a data layer. Its heading doesn't name it: the owner may prefer it under *Network*.
+- **The switch** sits in Settings' *Network* section (the owner, 2026-10-09), not the Privacy section the plan named, shown only where the build has a data layer.
 - **The UTxOs screen** gets a *Made* line (`utxos.made`) for a private coin with no block height, beside *Block*, rather than changing *Block*'s key.
 - **Still on `tx_status` or `utxo_info`, rare paths, for a follow-up:**
   - a chain's resend refused as spent (`sentAlready`);

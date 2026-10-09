@@ -199,7 +199,6 @@ export function Settings({
             />
           )}
         </ul>
-        {dataOrigin(status.network, __DATA_ORIGIN__) && <KoiosOnly />}
       </section>
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
@@ -599,7 +598,8 @@ export const MOVE_TO: Record<NetworkName, string> = {
  * mainnet, and preprod for testing). Moving asks first, and says plainly what
  * the other network is. The worker takes the choice at its next request, and
  * every page starts afresh on it; swaps, Lovejoin and payments on their way
- * carry on, on their own network.
+ * carry on, on their own network. Where the network has Seedelf Wallet's own
+ * data layer, the Koios-only switch is here too.
  */
 export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (status: Status) => void }) {
   const [asking, setAsking] = useState<NetworkName>();
@@ -661,6 +661,8 @@ export function NetworkSection({ status, onMoved }: { status: Status; onMoved: (
           {error}
         </p>
       )}
+      {/* Where the network is read from: beside which network it is (the owner, 2026-10-09). */}
+      {dataOrigin(status.network, __DATA_ORIGIN__) && <KoiosOnly />}
     </section>
   );
 }
