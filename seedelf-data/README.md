@@ -106,7 +106,7 @@ What stands between the internet and the routes, in `src/edge.rs`. Caddy in fron
 - **IPs exist only in memory:** a bucket is forgotten once it's full again, and nothing logs an address.
 - **At most 200,000 buckets.** Past that, refilled ones are dropped on the spot, at most once a second; if none are, a new client gets 503.
 
-**Logs can't be turned up to show a request.** The database driver logs every query's parameters at debug, and axum's rejections quote bodies: those libraries are held at a fixed level that `RUST_LOG` can't raise.
+**Logs can't be turned up to show a request.** The database driver logs every query's parameters at debug, and axum's rejections quote bodies. Those libraries are held by a filter of their own, which every line must pass as well as `RUST_LOG`'s, so no directive there can raise them, however narrow its target. Checked with `RUST_LOG=tokio_postgres::query=debug`: no query parameters were logged.
 
 ## The private index
 
@@ -175,7 +175,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |
 | `asset_info` | one token's CIP-25 and CIP-68 metadata | never |
 
-**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` at most 200,000 outputs. Past either, the answer is a 503, `{"error":"too large for this server"}`, and the wallet reads Koios. No wallet comes near either number. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
+**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` at most 200,000 outputs. Past either, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios. No wallet comes near either number. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
 
 **Answers kept for a time are kept within their epoch,** since a pool's status, a DRep's activity and the live actions turn at an epoch's start. Not-found answers aren't kept: anyone can ask about made-up IDs. When the store is full, the answer due to expire soonest makes room.
 
@@ -183,7 +183,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 
 **Only the wallet's requests.** Each route takes exactly the query string and body `koios.ts` sends: its parameters, in its order, at its sizes. Anything else is a 400, `{"error":"not a request Seedelf Wallet makes"}`, before any query runs, so no caller can compose an expensive one.
 
-**Answers about one user are never cached.** Answers that are the same for everyone are kept for the time above.
+**Answers about one user are never cached.** Answers that are the same for everyone are kept for the time above. A request waits at most 5 s for a shared answer, its queue included, then gets a 503.
 
 **Koios's names and types,** for every field the wallet reads. **What it never reads is left out:**
 - the JSON of a datum or a script (`value` is null): `trimmed()` drops both, registers come from the bytes, and anyone can nest a datum thousands of levels deep;

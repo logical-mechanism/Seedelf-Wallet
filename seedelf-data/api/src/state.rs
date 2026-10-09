@@ -55,9 +55,13 @@ const ALWAYS_KEPT: [&str; 5] = [
     "totals",
 ];
 
-/// A failure logged at most once in this long, per kind: a source that's
-/// down fails every request, and one line says it.
+/// A failure logged at most once in this long, from each place that logs
+/// one: a source that's down fails every request, and one line says it.
 const LOG_EVERY_SECS: i64 = 10;
+
+/// How long a request waits for a shared public answer, its queue included,
+/// before a 503 sends the wallet to Koios.
+const SHARED_WAIT: Duration = Duration::from_secs(5);
 
 /// Answers held for a time, at most (`lasting`).
 const MAX_LASTING: usize = 4096;
@@ -231,7 +235,15 @@ impl AppState {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Bytes, ApiError>>,
     {
-        self.cached_in(Upstream::DbSync, &tip.hash, key, make).await
+        // A shared read waits at most this long, queue and all: requests that
+        // miss together wait on one read, and one that fails leaves the next
+        // to try, so without it a failing read becomes a queue.
+        tokio::time::timeout(
+            SHARED_WAIT,
+            self.cached_in(Upstream::DbSync, &tip.hash, key, make),
+        )
+        .await
+        .unwrap_or(Err(ApiError::Busy))
     }
 
     /// The answer for `key` made from `upstream` at its tip `tip`, from that
@@ -469,6 +481,9 @@ impl From<anyhow::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Not for one too large: it would be as large on a retry, and the
+        // wallet should go to Koios, not wait.
+        let retry = !matches!(self, ApiError::Heavy);
         let (status, error) = match self {
             ApiError::Bad(why) => (StatusCode::BAD_REQUEST, why),
             ApiError::Behind => (StatusCode::SERVICE_UNAVAILABLE, "behind"),
@@ -484,7 +499,7 @@ impl IntoResponse for ApiError {
         };
         let mut response =
             (status, axum::Json(serde_json::json!({ "error": error }))).into_response();
-        if status == StatusCode::SERVICE_UNAVAILABLE {
+        if status == StatusCode::SERVICE_UNAVAILABLE && retry {
             response
                 .headers_mut()
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("30"));
@@ -636,6 +651,29 @@ mod tests {
             .cached_in(Upstream::DbSync, "a", "k", || async { to_json(&2) })
             .await;
         assert_eq!(next.unwrap(), Bytes::from("2"));
+    }
+
+    #[test]
+    fn too_large_says_go_elsewhere_not_wait() {
+        let heavy = ApiError::Heavy.into_response();
+        assert_eq!(heavy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(heavy.headers().get(header::RETRY_AFTER).is_none());
+        let busy = ApiError::Busy.into_response();
+        assert!(busy.headers().get(header::RETRY_AFTER).is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_shared_read_has_a_deadline() {
+        let state = state();
+        let now = tip("a", i64::MAX / 2);
+        state.set_tip(now.clone());
+        let stuck = state
+            .cached_bytes(&now, "k", || async {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                to_json(&1)
+            })
+            .await;
+        assert!(matches!(stuck, Err(ApiError::Busy)));
     }
 
     #[test]

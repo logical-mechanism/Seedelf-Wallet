@@ -132,13 +132,15 @@ impl Outs {
 ///
 /// `block` is joined for the page's own rows only: for every gathered row it
 /// was 40% of a large listing's reads. A block after height `$4` is one with
-/// a larger id, since db-sync numbers blocks in chain order.
+/// a larger id than the last block at or below it, since db-sync numbers
+/// blocks in chain order. Mainnet has no block 0 (its first is 1), so `gt.0`
+/// is every block.
 fn listing(outs: Outs, paged: bool, capped: bool) -> String {
     let (filter, order, limit) = if paged {
         (
             "where ($2::bytea is null or (t.hash, o.index::int) > ($2::bytea, $3::int)) \
-             and ($4::bigint is null \
-                  or t.block_id > (select id from block where block_no = $4::bigint))",
+             and ($4::bigint is null or t.block_id > coalesce( \
+                  (select id from block where block_no <= $4::bigint order by block_no desc limit 1), 0))",
             "t.hash, o.index",
             format!("limit {PAGE}"),
         )
@@ -164,13 +166,19 @@ fn listing(outs: Outs, paged: bool, capped: bool) -> String {
                    m.fingerprint::text, mto.quantity::text) order by mto.id), '[]')::text \
               from ma_tx_out mto join multi_asset m on m.id = mto.ident \
               where mto.tx_out_id = p.id) as assets, \
-           (select count(*) from outs) > {MAX_GATHERED} as over \
+           {over} as over \
          from page p join block b on b.id = p.block_id join address a on a.id = p.address_id \
          left join stake_address sa on sa.id = p.stake_address_id \
          left join datum d on d.id = p.inline_datum_id \
          left join script s on s.id = p.reference_script_id \
          order by {outer}",
         cte = outs.cte(capped),
+        // The cap's count, only where there's a cap: the contract's listing has none.
+        over = if capped {
+            format!("(select count(*) from outs) > {MAX_GATHERED}")
+        } else {
+            "false".to_string()
+        },
         outer = if paged { "p.tx_hash, p.index" } else { "p.id" },
     )
 }

@@ -31,4 +31,6 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+# test-util: a test's clock can be paused, to check a deadline without waiting it out.
+tokio = { version = "1.52", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

@@ -73,6 +73,18 @@ fn dreps(headers: &HeaderMap, bytes: &[u8]) -> Result<Vec<(String, Drep)>, ApiEr
         .collect()
 }
 
+/// A DRep as kept answers know it: by its bytes, so its CIP-105 and CIP-129
+/// IDs share one answer. Each is made from the DRep, never from the text asked.
+fn drep_key(drep: &Drep) -> String {
+    match drep {
+        Drep::Credential { raw, script } => {
+            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            format!("{}{hex}", if *script { "script/" } else { "key/" })
+        }
+        Drep::Predefined(name) => (*name).to_string(),
+    }
+}
+
 /// A DRep's `drep_hash.id`, if db-sync knows it.
 const DREP_HASH: &str = "select id from drep_hash where raw = $1::bytea and has_script = $2::bool";
 const PREDEFINED_HASH: &str = "select id from drep_hash where raw is null and view = $1::text";
@@ -259,9 +271,9 @@ pub async fn drep_info(
     let dreps = dreps(&headers, &bytes)?;
     let tip = state.fresh_tip()?;
     let mut rows = Vec::new();
-    for (asked, drep) in dreps {
+    for (_, drep) in dreps {
         // By epoch: a DRep's activity and expiry turn at an epoch's start.
-        let key = format!("drep_info/{}/{asked}", tip.epoch);
+        let key = format!("drep_info/{}/{}", tip.epoch, drep_key(&drep));
         let kept = state
             .lasting(&key, DREP_KEEP, || async {
                 let client = state.chain.public().await?;
@@ -295,18 +307,22 @@ pub async fn drep_metadata(
     let dreps = dreps(&headers, &bytes)?;
     state.fresh_tip()?;
     let mut rows = Vec::new();
-    for (asked, drep) in dreps {
+    for (_, drep) in dreps {
         let kept = state
-            .lasting(&format!("drep_metadata/{asked}"), DREP_KEEP, || async {
-                let client = state.chain.public().await?;
-                let Some(id) = drep_hash_id(&client, &drep).await? else {
-                    return Ok(Bytes::new());
-                };
-                match drep_profile(&client, id, &drep).await? {
-                    Some(profile) => to_json(&profile),
-                    None => Ok(Bytes::new()),
-                }
-            })
+            .lasting(
+                &format!("drep_metadata/{}", drep_key(&drep)),
+                DREP_KEEP,
+                || async {
+                    let client = state.chain.public().await?;
+                    let Some(id) = drep_hash_id(&client, &drep).await? else {
+                        return Ok(Bytes::new());
+                    };
+                    match drep_profile(&client, id, &drep).await? {
+                        Some(profile) => to_json(&profile),
+                        None => Ok(Bytes::new()),
+                    }
+                },
+            )
             .await?;
         if !kept.is_empty() {
             let row: Value = serde_json::from_slice(&kept).map_err(anyhow::Error::from)?;

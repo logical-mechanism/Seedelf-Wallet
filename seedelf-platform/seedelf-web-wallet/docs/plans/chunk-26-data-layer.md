@@ -2,7 +2,7 @@
 
 Branch `web-wallet/data-layer`, from `main`.
 
-**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, with Kupo as its second source, the submit part, the 20 public routes, the edge and the deploy files are built and checked (2026-10-09). Next: one optimisation and review pass over `seedelf-data/`, then the wallet's side.
+**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, with Kupo as its second source, the submit part, the 20 public routes, the edge and the deploy files are built, checked and reviewed (2026-10-09). Next: the wallet's side.
 
 **For the API as built, [seedelf-data/README.md](../../../../seedelf-data/README.md) is the reference.** This plan says why; that README says what the routes return.
 
@@ -351,6 +351,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 - The home IP is known only to the VPS and its provider.
 - Once synced, home's default route is `wg0`. Measure the node's P2P traffic first: the docs say about 1 GB an hour for a relay, and an outbound-only node uses less.
+- **As built (2026-10-09): only the node's and db-sync's traffic goes through the tunnel, routed by user, and it fails closed.** The mainnet box runs another project, which a moved default route would move too. The rules live apart from wg-quick, and a kill switch drops any of their packets not bound for `wg0`, loopback or the LAN, IPv6 included. With the tunnel down they reach nothing, never anyone from the home IP. Lookups go over TLS to a resolver that passes on no client subnet, since anyone can make db-sync look up a name. See [deploy/README.md](../../../../seedelf-data/deploy/README.md).
 
 **The VPS:**
 
@@ -499,7 +500,13 @@ Monthly and rough; check prices when buying.
       - **Only the node's and db-sync's traffic goes through the tunnel,** routed by user. The mainnet box runs another project, which a moved default route would move too. If the tunnel drops, the node loses its peers rather than reaching them directly. Ogmios serves that project too, so its bind stays, and nftables on `wg0` decides what reaches it.
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
+   4. ✅ **The optimisation and review pass** (2026-10-09, the owner's order: once building was done). Four reviewers covered the private index, the public routes (in two halves), and the edge with the deploy files; a fifth then reviewed the fixes together. The fixes are in three commits, each checked live.
+      - **Private:** a tunnel that drops packets no longer hangs the tip read, the tip has its own connection, misses share one read, caches are bounded by bytes, and cursors never go back.
+      - **Edge:** the tunnel's routing fails closed; a web page can't spend the month's traffic or reach Ogmios; answers charge their bytes; the logs can't be turned up to show a request.
+      - **Public:** what one request may gather is capped, so a heavy credential costs a 503, not gigabytes. `account_txs` is 4× faster, a delegators clause Koios doesn't have is gone (some pools timed out on every look), and IDs have one spelling.
+      - **Left for later, measured and small:** `query_typed` for one round trip a statement; one pass for every DRep's delegators; single-flight for answers kept a while; live tests over the heaviest keys.
 4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.
+   - **Found in the review, a wallet bug today, with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passes it through (`staking.ts`) and Voting checks for `"retired"` (`Voting.tsx`), so a picked DRep that has retired shows no warning. The account's own DRep is mapped right (`governance.ts`).
 5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
 6. **The drills**, then 1.4.0.
 

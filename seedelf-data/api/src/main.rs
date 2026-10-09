@@ -8,30 +8,35 @@ use seedelf_data_api::edge::{self, Edge, Egress};
 use seedelf_data_api::kupo::Kupo;
 use seedelf_data_api::state::{AppState, watch_kupo, watch_tip};
 use seedelf_data_api::submit::Submit;
+use tracing::Level;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::{FilterExt, LevelFilter, Targets};
+use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // seedelf-data/.env while it runs locally; a missing file is fine.
     let _ = dotenvy::dotenv();
-    let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     // Libraries that log a request's contents when asked for detail (the
     // database driver logs every query's parameters at debug, axum's
-    // rejections quote bodies): held where RUST_LOG can't raise them.
-    for quiet in [
-        "tokio_postgres=info",
-        "postgres_protocol=info",
-        "hyper=warn",
-        "hyper_util=warn",
-        "reqwest=warn",
-        "h2=warn",
-        "tower_http=warn",
-        "axum::rejection=off",
-    ] {
-        filter = filter.add_directive(quiet.parse()?);
-    }
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // rejections quote bodies): held in a filter of their own, which every
+    // line must pass as well as RUST_LOG's, so no directive there (however
+    // narrow its target) can raise them.
+    let quiet = Targets::new()
+        .with_default(LevelFilter::TRACE)
+        .with_target("tokio_postgres", Level::INFO)
+        .with_target("postgres_protocol", Level::INFO)
+        .with_target("hyper", Level::WARN)
+        .with_target("hyper_util", Level::WARN)
+        .with_target("reqwest", Level::WARN)
+        .with_target("h2", Level::WARN)
+        .with_target("tower_http", Level::WARN)
+        .with_target("axum::rejection", LevelFilter::OFF);
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(env.and(quiet)))
+        .init();
 
     let config = Config::from_env()?;
     let decimals = match &config.token_decimals {
