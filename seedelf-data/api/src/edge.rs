@@ -285,8 +285,8 @@ pub fn cors(origins: &[String]) -> CorsLayer {
 /// The API's own traffic this calendar month (UTC), against a ceiling, so no
 /// bill can surprise anyone. Each day gets an equal share of what's left of
 /// the month, so a flood costs a day, not the rest of the month. Kept in a
-/// file, so a restart doesn't forget it. The node's P2P traffic through the
-/// tunnel isn't counted here: the VPS's own meter is for that (deploy/README.md).
+/// file, so a restart doesn't forget it. TLS and headers aren't counted here:
+/// the VPS's own meter is for that (deploy/README.md).
 pub struct Egress {
     ceiling: Option<u64>,
     bytes: AtomicU64,

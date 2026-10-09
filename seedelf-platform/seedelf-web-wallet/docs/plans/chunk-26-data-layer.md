@@ -69,6 +69,7 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
    - **PostgREST is never run or exposed.**
 3. **Every line of custom code lives on the VPS.** Home runs stock software plus SQL: the node, db-sync, Postgres, Kupo, Ogmios and submit-api.
 4. **Once synced, home reaches the internet only through the tunnel.** Otherwise the node's P2P traffic, the propagation of submits and db-sync's off-chain metadata fetches would each show strangers the home IP. A peer watching where Seedelf transactions are first seen could pin it down.
+   - **Dropped in 26c (2026-10-09):** home's node is a stake pool's relay. It must keep its inbound peers, and its registration publishes the home IP already, so the tunnel carries only the API's calls to home ([runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes)).
 5. **Kupo and Ogmios must support the node's version.** Kupo 2.12 and Ogmios v7.0.0 are tested against node 11.0.1, and the current node is 11.1.3. With no preprod to try an upgrade on first, check both projects' compatibility tables before each node upgrade.
 
 ## The shape
@@ -254,7 +255,7 @@ Home shows the private balance at once, marked stale until the delta lands. That
   - a bucket per IP;
   - at most 4 in flight to home.
 - **It depends on the node alone,** so submits keep working while db-sync resyncs.
-- **The transaction spreads from the home node,** whose traffic leaves through the tunnel. The network sees the VPS's IP.
+- **The transaction spreads from the home node,** a stake pool's relay: the network sees the relay's IP, which its registration publishes already. (Planned: through the tunnel, from the VPS's IP. Changed in 26c.)
 - **Ogmios** (`evaluateTransaction` only) shares this part and its health check, with at most 2 in flight.
 - **A "maybe sent" answer** goes through the wallet's existing resend logic. That may resend through Koios if ours is down, which is safe: the same signed transaction can be sent twice.
 
@@ -342,6 +343,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
   - its own VLAN: no port forwards, no UPnP, an outbound-only node;
   - Postgres, Kupo, Ogmios and submit-api listen on localhost and `wg0` only;
   - nftables lets in the VPS and nothing else.
+  - **As built (26c):** the box is a stake pool's relay, so the relay's port is forwarded. Kupo, Ogmios and submit-api listen on every address, the router forwards none of their ports, and nftables on `wg0` lets in the VPS alone.
 - **Power.** A UPS with NUT shuts things down in order: db-sync, Postgres, Kupo, the node. An unclean stop costs a long ledger replay.
 - **Status.** A one-row `seedelf.host_status` table gives `/health` the home's state without another channel. A timer fills it with free disk and each service's state.
 - **Start mainnet db-sync now: it takes days.** The node, bootstrapped with Mithril, and Kupo take hours.
@@ -352,13 +354,14 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 - The home IP is known only to the VPS and its provider.
 - Once synced, home's default route is `wg0`. Measure the node's P2P traffic first: the docs say about 1 GB an hour for a relay, and an outbound-only node uses less.
+- **Dropped in 26c (2026-10-09): the tunnel carries only the API's calls.** Home's node is a stake pool's relay, which must keep its inbound peers and publishes the home IP already ([runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes)). The bullet below is what was built first.
 - **As built (2026-10-09): only the node's and db-sync's traffic goes through the tunnel, routed by user, and it fails closed.** The mainnet box runs another project, which a moved default route would move too. The rules live apart from wg-quick, and a kill switch drops any of their packets not bound for `wg0`, loopback or the LAN, IPv6 included. With the tunnel down they reach nothing, never anyone from the home IP. Lookups go over TLS to a resolver that passes on no client subnet, since anyone can make db-sync look up a name. See [deploy/README.md](../../../../seedelf-data/deploy/README.md).
 
 **The VPS:**
 
 - 2 vCPU and 4 GB, in the region nearest home;
 - L3/L4 DDoS filtering that never terminates TLS ([roadmap](../post-release-roadmap.md#dos-protection-on-clearnet--the-owners-question): "an upstream that sees only encrypted bytes");
-- traffic for the P2P relay, about 1–2 TB a month;
+- traffic for the P2P relay, about 1–2 TB a month (none since 26c: only the API's);
 - **terms that allow blockchain workloads.** Hetzner's don't: it has banned running nodes since 2022.
 
 **Caddy terminates TLS, with no access log.**
@@ -499,7 +502,7 @@ Monthly and rough; check prices when buying.
    3. ✅ alongside: `deploy/home`, `deploy/edge` and a runbook, [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md) (2026-10-09). Secrets are never committed.
       - **The edge is the API's own code** (`src/edge.rs`), so Caddy stays stock: buckets per IP, weighted 1 for a shared answer, 4 for live SQL and 10 for a submit or evaluation; the month's egress ceiling, kept across restarts; CORS for the wallet's origins only, a 429 included.
       - **A source is down after two failed reads of its tip** (4 s). Its part answers 503 at once, rather than each request waiting on a timeout. Dropping each link mid-run checked it: the private index moved to Kupo within 5 s, and with both gone, every route answered 503 at once.
-      - **Only the node's and db-sync's traffic goes through the tunnel,** routed by user. The mainnet box runs another project, which a moved default route would move too. If the tunnel drops, the node loses its peers rather than reaching them directly. Ogmios serves that project too, so its bind stays, and nftables on `wg0` decides what reaches it.
+      - **Only the node's and db-sync's traffic goes through the tunnel,** routed by user. The mainnet box runs another project, which a moved default route would move too. If the tunnel drops, the node loses its peers rather than reaching them directly. Ogmios serves that project too, so its bind stays, and nftables on `wg0` decides what reaches it. (Dropped in 26c: the node is a stake pool's relay.)
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
    4. ✅ **The optimisation and review pass** (2026-10-09, the owner's order: once building was done). Four reviewers covered the private index, the public routes (in two halves), and the edge with the deploy files; a fifth then reviewed the fixes together. The fixes are in three commits, each checked live.

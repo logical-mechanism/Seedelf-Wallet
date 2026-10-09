@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -34,8 +35,10 @@ async fn main() -> anyhow::Result<()> {
         .with_target("h2", Level::WARN)
         .with_target("tower_http", Level::WARN)
         .with_target("axum::rejection", LevelFilter::OFF);
+    // Colour in a terminal only: under systemd it's escape codes in the journal.
+    let fmt = tracing_subscriber::fmt::layer().with_ansi(std::io::stdout().is_terminal());
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(env.and(quiet)))
+        .with(fmt.with_filter(env.and(quiet)))
         .init();
 
     let config = Config::from_env()?;

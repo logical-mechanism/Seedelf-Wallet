@@ -1,0 +1,125 @@
+#!/bin/sh
+# /usr/local/sbin/seedelf-data-deploy on the VPS: root's, mode 0755. The
+# deploy user's key runs this and nothing else (deploy-authorized_keys),
+# through sudo (sudoers-seedelf-deploy). The workflow is
+# .github/workflows/data-layer-deploy.yml:
+#
+#   ssh deploy@<VPS> "deploy <the binary's sha256>" < seedelf-data-api
+#   ssh deploy@<VPS> rollback
+#   ssh deploy@<VPS> status
+#
+# deploy installs the binary from stdin and keeps the running one as .prev;
+# rollback swaps the two. Both restart the API and check it: /health as well
+# as before the change, and the store's origin in CORS. A deploy that fails
+# its check puts the old binary back by itself. status changes nothing.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+BIN=/usr/local/bin/seedelf-data-api
+PREV=$BIN.prev
+UNIT=seedelf-data-api
+API=http://127.0.0.1:8099
+# The store build's origin. A wrong DATA_ORIGINS is silent (every wallet
+# falls back to Koios), so every change checks it.
+STORE=chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp
+MAX=$((64 * 1024 * 1024))
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'FAILED: %s\n' "$*"; exit 1; }
+sum() { sha256sum "$1" | cut -d' ' -f1; }
+health() { curl -s -m 5 -o /dev/null -w '%{http_code}' "$API/health" || true; }
+cors() {
+  curl -s -m 5 -D - -o /dev/null -X OPTIONS "$API/api/v1/tip" \
+    -H "Origin: $STORE" -H 'Access-Control-Request-Method: GET' |
+    tr -d '\r' | grep -qix "access-control-allow-origin: $STORE"
+}
+
+# Waits up to 30 s for the API to answer as well as it did before: 200 if it
+# was 200, and any answer (a 503 while home is down) if it wasn't.
+check() {
+  was=$1 i=0 code=
+  while [ "$i" -lt 30 ]; do
+    code=$(health)
+    if [ "$code" = 200 ] || { [ "$was" != 200 ] && [ "$code" = 503 ]; }; then
+      cors || { say "check: /health $code, but CORS doesn't answer the store's origin"; return 1; }
+      say "check: /health $code (was $was), CORS answers the store's origin"
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  say "check: /health ${code:-silent} after 30 s (was $was)"
+  return 1
+}
+
+if [ "${1:-}" = status ]; then
+  [ "$#" -eq 1 ] || die "usage: status"
+  say "running: $(sum "$BIN")"
+  if [ -e "$PREV" ]; then say ".prev:   $(sum "$PREV")"; else say ".prev:   none"; fi
+  say "/health: $(health)"
+  if cors; then say "CORS:    answers the store's origin"; else say "CORS:    doesn't answer the store's origin"; fi
+  exit 0
+fi
+
+exec 9>/run/lock/seedelf-data-deploy.lock
+flock -n 9 || die "another deploy is running"
+
+case "${1:-}" in
+deploy)
+  [ "$#" -eq 2 ] || die "usage: deploy <sha256>"
+  want=$2
+  case "$want" in *[!0-9a-f]* | '') die "not a sha256: $want" ;; esac
+  [ "${#want}" -eq 64 ] || die "not a sha256: $want"
+
+  tmp=$(mktemp "$BIN.new.XXXXXX")
+  trap 'rm -f "$tmp"' EXIT
+  head -c $((MAX + 1)) >"$tmp"
+  [ "$(stat -c %s "$tmp")" -le "$MAX" ] || die "larger than 64 MiB"
+  [ "$(sum "$tmp")" = "$want" ] || die "what arrived isn't $want: a broken transfer"
+  [ "$(head -c 4 "$tmp" | od -An -tx1 | tr -d ' \n')" = 7f454c46 ] || die "not an ELF binary"
+
+  old=$(sum "$BIN")
+  if [ "$old" = "$want" ]; then
+    say "already running $want: nothing to do"
+    exit 0
+  fi
+  before=$(health)
+  chown root:root "$tmp"
+  chmod 0755 "$tmp"
+  # The running binary waits as .old: it becomes .prev only once the new
+  # one passes, so a failed deploy leaves .prev as it was.
+  cp -p "$BIN" "$BIN.old"
+  mv -f "$tmp" "$BIN"
+  trap - EXIT
+  systemctl restart "$UNIT"
+  say "installed $want (was $old)"
+  if check "$before"; then
+    mv -f "$BIN.old" "$PREV"
+    say "DEPLOYED $want ($old kept as .prev)"
+    exit 0
+  fi
+  say "the new binary failed its check: putting $old back"
+  mv -f "$BIN.old" "$BIN"
+  systemctl restart "$UNIT"
+  check "$before" || say "and $old fails its check too: look at the API (journalctl -u $UNIT)"
+  die "not deployed; running $old"
+  ;;
+rollback)
+  [ "$#" -eq 1 ] || die "usage: rollback"
+  [ -e "$PREV" ] || die "there's no previous binary"
+  cur=$(sum "$BIN")
+  prev=$(sum "$PREV")
+  [ "$cur" != "$prev" ] || die "the previous binary is the one running"
+  before=$(health)
+  mv -f "$BIN" "$BIN.swap"
+  mv -f "$PREV" "$BIN"
+  mv -f "$BIN.swap" "$PREV"
+  systemctl restart "$UNIT"
+  say "rolled back to $prev (was $cur, kept as .prev: a second rollback undoes this)"
+  check "$before" || die "rolled back, but $prev fails its check: look at the API (journalctl -u $UNIT)"
+  say "ROLLED BACK to $prev"
+  ;;
+*)
+  die "usage: deploy <sha256> (the binary on stdin) | rollback | status"
+  ;;
+esac

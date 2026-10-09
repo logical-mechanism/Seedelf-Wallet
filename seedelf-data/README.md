@@ -90,7 +90,7 @@ What stands between the internet and the routes, in `src/edge.rs`. Caddy in fron
 |---|---|
 | `DATA_ORIGINS` | the origins CORS lets read answers, comma-separated: the wallet's `chrome-extension://<id>`. The wallet then needs no host permission. `Retry-After` is exposed, and a 429 carries CORS too, so the wallet can read why it waits. |
 | `DATA_TRUST_PROXY=true` | behind Caddy on loopback: the client is the last `X-Forwarded-For` address. From anywhere else the header is ignored. |
-| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. Each day gets an equal share of what's left, so a flood costs a day, not the rest of the month. It's kept in `egress.json` in systemd's `StateDirectory` (or `DATA_STATE_DIR`), so a restart doesn't forget it. The node's P2P traffic through the tunnel isn't counted. |
+| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. Each day gets an equal share of what's left, so a flood costs a day, not the rest of the month. It's kept in `egress.json` in systemd's `StateDirectory` (or `DATA_STATE_DIR`), so a restart doesn't forget it. It counts response bodies alone: TLS and headers come on top, so watch the VPS's own meter too. |
 
 **A bucket per client:** 300 units, refilled at 10 a second. IPv6 addresses are taken by their /64.
 

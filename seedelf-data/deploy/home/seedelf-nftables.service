@@ -1,0 +1,27 @@
+# /etc/systemd/system/seedelf-nftables.service on the home server: loads the
+# Seedelf table alone, beside ufw's rules (and Docker's, where it runs).
+#
+# Never nftables.service on this box: Ubuntu's flushes the whole ruleset
+# when it stops, and its stock /etc/nftables.conf flushes it when it starts,
+# taking ufw's rules (and Docker's) with them.
+#
+# wg0 requires this unit, so the tunnel never comes up unfiltered. Change a
+# rule with `systemctl reload seedelf-nftables`: a restart restarts wg0 too.
+# There's no ExecStop: stopping the unit leaves the rules in place.
+
+[Unit]
+Description=Seedelf: the tunnel's nftables rules, beside ufw's
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target wg-quick@wg0.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/seedelf.conf
+ExecReload=/usr/sbin/nft -f /etc/nftables.d/seedelf.conf
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=wg-quick@wg0.service
