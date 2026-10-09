@@ -21,6 +21,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
@@ -35,7 +36,7 @@ use crate::constants::{CONTRACT_HASH, MIXBOX_HASH, slot_time};
 use crate::cursor::{Cursor, CursorError, stable_slot};
 use crate::row::{Row, Spent};
 use crate::source::Source;
-use crate::state::{ApiError, AppState, failure, json, to_json};
+use crate::state::{ApiError, AppState, Throttle, failure, json, to_json};
 
 /// The two credentials the private index watches.
 #[derive(Clone, Copy)]
@@ -119,11 +120,11 @@ enum Since {
         created: Vec<Row>,
         spent: Vec<Spent>,
     },
+    /// No cursor: the wallet starts again from a snapshot, which gives one.
     Reset {
         network: &'static str,
         tip: TipView,
         reset: bool,
-        cursor: String,
     },
 }
 
@@ -162,6 +163,10 @@ async fn lovejoin_since(
     since(&state, Watched::Lovejoin, &cursor).await
 }
 
+/// How long one source has to answer before the other is asked: a read takes
+/// milliseconds, so one that takes seconds is stuck behind a dead connection.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// `make`'s answer from the first source that gives one, kept in that
 /// source's cache until its tip moves. A source that fails passes the request
 /// on: a 400 is the request's own fault, and goes back at once.
@@ -170,18 +175,22 @@ where
     F: Fn(Source, Block) -> Fut,
     Fut: Future<Output = Result<Bytes, ApiError>>,
 {
+    static PASSED_ON: Throttle = Throttle::new();
     let sources = state.private_sources();
     let count = sources.len();
     for (i, (source, tip)) in sources.into_iter().enumerate() {
         let upstream = source.upstream();
-        match state
-            .cached_in(upstream, &tip.hash, key, || make(source, tip.clone()))
+        let read = state.cached_in(upstream, &tip.hash, key, || make(source, tip.clone()));
+        let answer = tokio::time::timeout(READ_TIMEOUT, read)
             .await
-        {
+            .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))));
+        match answer {
             Ok(answer) => return Ok(answer),
             Err(ApiError::Bad(why)) => return Err(ApiError::Bad(why)),
             Err(error) if i + 1 < count => {
-                if let ApiError::Unavailable(error) = &error {
+                if let ApiError::Unavailable(error) = &error
+                    && PASSED_ON.due()
+                {
                     let error = failure(error);
                     warn!(
                         source = upstream.name(),
@@ -244,15 +253,23 @@ async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Respo
             if tip.slot <= from.slot {
                 return Err(ApiError::Behind);
             }
-            let (cursor, _) = stable(&source, &tip).await?;
-            let block = source.block_before(from.slot).await?;
+            let (stable, block) = tokio::try_join!(stable(&source, &tip), async {
+                Ok(source.block_before(from.slot).await?)
+            })?;
             let Some(block) = block.filter(|block| block.hash == from.hash) else {
                 return to_json(&Since::Reset {
                     network: "mainnet",
                     tip: (&tip).into(),
                     reset: true,
-                    cursor: cursor.to_string(),
                 });
+            };
+            // Never back: a source a little behind the one that handed out
+            // `from` has a stable cursor below it. Nothing at or below `from`
+            // is in the answer, so `from` stays the settled point.
+            let cursor = if stable.0.slot < from.slot {
+                from.clone()
+            } else {
+                stable.0
             };
             let (created, spent) = source
                 .since(watched.cred(), block.slot, watched.provenance())

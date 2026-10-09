@@ -26,6 +26,7 @@ struct Script {
     /// Slot to header hash.
     blocks: BTreeMap<i64, String>,
     outputs: Vec<Output>,
+    forks: u32,
 }
 
 #[derive(Clone)]
@@ -47,10 +48,12 @@ impl Script {
         }
     }
 
-    /// The blocks after `from` replaced by others: a fork.
+    /// The blocks from `from` on replaced by others: a fork. Each fork's
+    /// hashes are its own, as a real chain's descendants' are.
     fn fork(&mut self, from: i64) {
+        self.forks += 1;
         for (slot, hash) in self.blocks.range_mut(from..) {
-            *hash = format!("{:064x}", slot + 1);
+            *hash = format!("{:056x}{:08x}", slot, self.forks);
         }
     }
 }
@@ -164,7 +167,11 @@ async fn scripted_kupo() -> (String, Shared) {
             spent: None,
         },
     ];
-    let script = Arc::new(Mutex::new(Script { blocks, outputs }));
+    let script = Arc::new(Mutex::new(Script {
+        blocks,
+        outputs,
+        forks: 0,
+    }));
     let app = Router::new()
         .route("/checkpoints", get(checkpoints))
         .route("/checkpoints/{slot}", get(checkpoint))
@@ -227,13 +234,22 @@ async fn kupo_answers_while_db_sync_is_down_and_a_fork_resets() {
     assert_eq!(changes["spent"][0]["by"], "dd".repeat(32));
     assert!(changes.get("reset").is_none());
 
-    // The cursor's own block is forked away: the wallet starts again.
+    // A fork above the cursor changes only what the wallet holds as provisional.
+    script.lock().unwrap().fork(stable + 1);
+    state.set_kupo_tip(Kupo::new(&url).unwrap().tip().await.unwrap());
+    let (status, changes) = get_json(&app, &since).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.get("reset").is_none());
+    assert_eq!(refs(&changes["created"]), ["cc"]);
+
+    // The cursor's own block is forked away: the wallet starts again from a
+    // snapshot, and the reset carries no cursor it could take by mistake.
     script.lock().unwrap().fork(stable - 100);
     state.set_kupo_tip(Kupo::new(&url).unwrap().tip().await.unwrap());
     let (status, reset) = get_json(&app, &since).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(reset["reset"], true);
-    assert_ne!(reset["cursor"].as_str().unwrap(), cursor);
+    assert!(reset.get("cursor").is_none());
 }
 
 #[tokio::test]

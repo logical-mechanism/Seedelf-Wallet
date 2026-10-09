@@ -14,6 +14,7 @@ use deadpool_postgres::{
     Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod, Runtime,
 };
 use tokio_postgres::NoTls;
+use tokio_postgres::types::ToSql;
 
 use crate::row::{Row, Spent, read_row, read_spend};
 use crate::state::ApiError;
@@ -47,15 +48,24 @@ pub fn era(major: i32, minor: i32) -> Option<&'static str> {
     })
 }
 
-/// Connections for the private index and the tip; the public routes have their
-/// own, so a burst of them never holds the private index up. The role allows
-/// 10 in all, and leaves one for a person.
-const PRIVATE_CONNECTIONS: usize = 3;
+/// Connections for the private index, and one of its own for the tip, so no
+/// burst of requests can starve the read that says whether db-sync is up.
+/// The public routes have their own too, so a burst of them never holds the
+/// private index up. The role allows 10 in all, and leaves one for a person.
+const TIP_CONNECTIONS: usize = 1;
+const PRIVATE_CONNECTIONS: usize = 2;
 const PUBLIC_CONNECTIONS: usize = 6;
 
 /// How long a query waits for a connection before its route answers 503: past
 /// it, the wallet does better going to Koios than queueing here.
 const WAIT: Duration = Duration::from_secs(2);
+
+/// A connection whose sent bytes go unacknowledged this long is closed, and
+/// one idle this long is probed. A tunnel that drops packets rather than
+/// closing sockets would otherwise hold a query for TCP's own timeout (about
+/// 15 minutes), and the pool would keep handing out the dead connection.
+const UNACKNOWLEDGED: Duration = Duration::from_secs(5);
+const KEEPALIVE: Duration = Duration::from_secs(10);
 
 /// How long a new connection may take: past it, home is unreachable, and
 /// waiting on the kernel's TCP timeout (minutes) would hold every request.
@@ -80,6 +90,7 @@ pub struct Block {
 
 #[derive(Clone)]
 pub struct Chain {
+    tip: Pool,
     pool: Pool,
     public: Pool,
 }
@@ -137,7 +148,13 @@ impl Chain {
         let pool = |options: &str, size: usize| -> Result<Pool> {
             let mut config =
                 tokio_postgres::Config::from_str(url).context("MAINNET_DATABASE_URL")?;
-            config.options(options).connect_timeout(CONNECT);
+            config
+                .options(options)
+                .connect_timeout(CONNECT)
+                .tcp_user_timeout(UNACKNOWLEDGED)
+                .keepalives_idle(KEEPALIVE)
+                .keepalives_interval(UNACKNOWLEDGED)
+                .keepalives_retries(1);
             let manager = Manager::from_config(
                 config,
                 NoTls,
@@ -153,6 +170,7 @@ impl Chain {
                 .build()?)
         };
         Ok(Chain {
+            tip: pool(OPTIONS, TIP_CONNECTIONS)?,
             pool: pool(OPTIONS, PRIVATE_CONNECTIONS)?,
             public: pool(PUBLIC_OPTIONS, PUBLIC_CONNECTIONS)?,
         })
@@ -167,7 +185,7 @@ impl Chain {
     }
 
     pub async fn tip(&self) -> Result<Tip> {
-        let client = self.pool.get().await?;
+        let client = self.tip.get().await?;
         let row = client.query_one(TIP, &[]).await?;
         let version: (Option<i32>, Option<i32>) = (row.try_get(6)?, row.try_get(7)?);
         Ok(Tip {
@@ -228,11 +246,14 @@ impl Chain {
              {JOINS} where b.slot_no <= $2 and cb.slot_no > $2 \
              order by cb.slot_no, ct.hash, o.id"
         );
+        // On one connection, pipelined: one round trip to home, not two.
         let client = self.pool.get().await?;
-        let created = client
-            .query(&created, &[&cred, &after, &provenance])
-            .await?;
-        let spent = client.query(&spent, &[&cred, &after]).await?;
+        let (created_params, spent_params): (&[&(dyn ToSql + Sync)], &[&(dyn ToSql + Sync)]) =
+            (&[&cred, &after, &provenance], &[&cred, &after]);
+        let (created, spent) = tokio::try_join!(
+            client.query(&created, created_params),
+            client.query(&spent, spent_params),
+        )?;
         Ok((
             created
                 .iter()

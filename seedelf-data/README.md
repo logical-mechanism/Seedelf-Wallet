@@ -121,12 +121,18 @@ All routes are under `/seedelf/v1/mainnet/`.
 1. **A snapshot gives the settled view** as of a stable cursor `C`.
 2. **`since/C` gives the changes after it.** The settled view plus `created` minus every spend is the view at the tip.
 3. **The answer's `cursor` is the new settled point `C'`.** Apply only the entries at or below `C'` to the settled view. Everything above it is recomputed from the next answer, so a fork above a cursor never needs undoing.
-4. **`reset: true`** means the cursor's own block was rolled back: start again from a snapshot.
+4. **`reset: true`** means the cursor's own block was rolled back: start again from a snapshot. A reset carries no cursor, so none can be taken by mistake.
+
+**An answer's cursor never goes back.** A source a little behind the one that handed out `from` answers with `from` itself as the cursor.
 
 **What a cursor is:** `<slot>.<block hash>`: a slot that's a multiple of 200, at least 200 slots below the tip (about 10 blocks), and the hash of the newest block at or before it. The server refuses any other slot. Deep cursors almost never roll back. Shared cursors mean a request shows only roughly when its wallet last read, and that one answer serves everyone at that point.
 
 **Two sources, one answer.** db-sync answers first (the owner, 2026-10-08). Kupo answers instead while db-sync is down, its tip over 3 minutes old, or more than 60 slots (about 3 blocks) behind Kupo's, and whenever a db-sync read fails.
-- **A source is down** once its tip fails two reads in a row (4 s), and up again at the next good one. Requests then skip it at once, rather than each waiting on a timeout. Checked by dropping each link mid-run: the private index answered from Kupo within 5 s, and with both gone, every route answered 503 at once.
+- **A source is down** once its tip fails two reads in a row, and up again at the next good one. A read that takes 2 s has failed. Requests then skip that source at once, rather than each waiting on a timeout.
+  - **The tip has a connection of its own,** so no burst of requests can starve the read that says whether db-sync is up.
+  - **A read for a request gets 5 s** before the other source is asked.
+  - **Postgres connections close** once sent bytes go 5 s unacknowledged, and idle ones are probed. A tunnel that drops packets would otherwise hold a dead connection for TCP's own 15 minutes.
+  - **Checked by cutting each link mid-run,** both by closing it and by freezing it so nothing answers. The private index answered from Kupo within 8 s; with both gone, every route answered 503 at once; and both came back within 8 s.
 - Both know every block by slot and hash, so a cursor from one is answered by the other, and a wallet never sees a switch.
 - Their rows are the same, field for field and in the same order, with one exception: from Kupo, a box's `made_by.inputs` is `null`. Kupo indexes outputs at our two credentials, not who paid for a transaction.
 - A source whose tip hasn't reached a cursor passes it to the other. If neither can answer, the route gives 503 with `Retry-After`, and the wallet goes to Koios.
@@ -134,6 +140,9 @@ All routes are under `/seedelf/v1/mainnet/`.
 - Kupo keeps every block's checkpoint from its start, block 11,305,805, the contract's first output. A cursor from before that is a `reset` from Kupo.
 
 **Caching:** each source's answers are kept until its tip moves. Both tips are read every 2 s, so one set of reads per block serves every request.
+- **Requests that miss together share one read.**
+- **Each source keeps at most 4,096 answers and 64 MB.** A `since` answer from an old cursor can be hundreds of KB, and anyone can ask for one. The answers every wallet reads (the snapshots, the names, `epoch_params`, `totals`) are kept whatever the budget holds.
+- **A failure is logged at most once every 10 s:** a source that's down fails every request.
 
 ## The public routes
 

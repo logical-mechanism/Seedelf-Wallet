@@ -111,6 +111,55 @@ async fn every_cursor_replays_to_the_tip() {
     }
 }
 
+/// The wallet's own step, which can't race: everything at or below the new
+/// cursor is settled. The view at cursor `C`, plus the changes `since(C)`
+/// up to `C'`, is the view at `C'`.
+async fn steps_to(source: &Source, cred: &str, provenance: bool, from: i64, to: i64) {
+    let from = source.block_before(from).await.unwrap().unwrap().slot;
+    let to = source.block_before(to).await.unwrap().unwrap().slot;
+    let mut view: HashSet<String> = source
+        .unspent_as_of(cred, from, provenance)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.reference)
+        .collect();
+    let (created, spent) = source.since(cred, from, provenance).await.unwrap();
+    for row in created {
+        let gone = row.spent.as_ref().is_some_and(|spend| spend.at.slot <= to);
+        if row.created.slot <= to && !gone {
+            view.insert(row.reference);
+        }
+    }
+    for spent in spent {
+        if spent.spend.at.slot <= to {
+            view.remove(&spent.reference);
+        }
+    }
+    let settled: HashSet<String> = source
+        .unspent_as_of(cred, to, provenance)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.reference)
+        .collect();
+    assert_eq!(view, settled, "{cred} from {from} to {to}");
+}
+
+#[tokio::test]
+#[ignore = "live db-sync and Kupo"]
+async fn a_wallets_step_lands_on_the_next_cursor() {
+    let tip = common_tip().await;
+    let (db_sync, kupo) = (db_sync(), kupo());
+    let to = stable_slot(tip);
+    for (cred, provenance) in WATCHED {
+        for from in cursors(tip).into_iter().skip(1).chain([KUPO_FIRST]) {
+            steps_to(&db_sync, cred, provenance, from, to).await;
+            steps_to(&kupo, cred, provenance, from, to).await;
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "live db-sync and Kupo"]
 async fn both_sources_name_the_same_blocks() {

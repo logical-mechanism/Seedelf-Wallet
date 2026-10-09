@@ -28,10 +28,15 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// A connection that takes longer than this won't come: home is unreachable.
 const CONNECT: Duration = Duration::from_secs(3);
 
+/// Where Kupo was when it answered: its newest checkpoint's slot and header hash.
+type At = (i64, Option<String>);
+
 /// How many times an answer's reads are made again when a block lands between them.
 const TRIES: usize = 3;
 
-/// The header Kupo stamps every answer with: the slot it had indexed to.
+/// The headers Kupo stamps every answer with: the slot it had indexed to,
+/// and (as the ETag) that block's header hash. A fork can replace a block
+/// at the same slot, so a checkpoint is both.
 const CHECKPOINT: &str = "x-most-recent-checkpoint";
 
 #[derive(Clone)]
@@ -154,7 +159,7 @@ impl Kupo {
     }
 
     /// `path`'s answer, and the checkpoint Kupo gave it at.
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<(T, i64)> {
+    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<(T, At)> {
         // Errors by kind only: reqwest's own carry the URL, which names home.
         let response = self
             .http
@@ -165,11 +170,17 @@ impl Kupo {
         if !response.status().is_success() {
             bail!("Kupo answered {}", response.status().as_u16());
         }
-        let checkpoint = response
-            .headers()
-            .get(CHECKPOINT)
-            .and_then(|value| value.to_str().ok()?.parse().ok())
+        let header = |name| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let slot = header(CHECKPOINT)
+            .and_then(|slot| slot.parse().ok())
             .context("Kupo's answer has no checkpoint")?;
+        let checkpoint = (slot, header(reqwest::header::ETAG.as_str()));
         let body = response
             .bytes()
             .await

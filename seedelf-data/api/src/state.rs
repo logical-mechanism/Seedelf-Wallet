@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +12,7 @@ use axum::body::Bytes;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use tokio::sync::OnceCell;
 use tracing::{info, warn};
 
 use crate::chain::{Block, Chain, Tip};
@@ -29,13 +30,34 @@ pub const MAX_AGE_SECS: i64 = 180;
 /// How often db-sync's and Kupo's tips are read.
 pub const WATCH_EVERY: Duration = Duration::from_secs(2);
 
+/// A tip read that takes longer than this has failed: a tunnel that drops
+/// packets doesn't close sockets, so nothing else would end it soon.
+pub const TIP_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// A source whose tip fails this many reads in a row is down: its part
 /// answers 503 at once (the private index goes to the other source), rather
 /// than letting every request wait on a timeout. One failed read is a blip.
 pub const FAILED_READS: u32 = 2;
 
-/// Answers held for one tip, at most: past this, nothing more is kept until it moves.
-const MAX_CACHED: usize = 1024;
+/// Answers held for one source's tip, at most, by count and by size: past
+/// either, nothing more is kept until it moves. A `since` answer from an old
+/// cursor can be hundreds of KB, and anyone can ask for one.
+const MAX_CACHED: usize = 4096;
+const MAX_CACHED_BYTES: usize = 64 << 20;
+
+/// What every wallet reads: always kept, whatever the budget holds, so no
+/// flood of other requests can push them out.
+const ALWAYS_KEPT: [&str; 5] = [
+    "contract/snapshot",
+    "lovejoin/snapshot",
+    "names",
+    "epoch_params",
+    "totals",
+];
+
+/// A failure logged at most once in this long, per kind: a source that's
+/// down fails every request, and one line says it.
+const LOG_EVERY_SECS: i64 = 10;
 
 /// Answers held for a time, at most (`lasting`).
 const MAX_LASTING: usize = 4096;
@@ -62,11 +84,13 @@ pub struct AppState {
     working: Mutex<HashSet<String>>,
 }
 
-/// Answers kept for one source's tip, dropped when it moves.
+/// Answers kept for one source's tip, dropped when it moves. Each is a cell
+/// filled once: requests that miss together wait on one read, not one each.
 #[derive(Default)]
 struct Cached {
     tip: String,
-    answers: HashMap<String, Bytes>,
+    answers: HashMap<String, Arc<OnceCell<Bytes>>>,
+    bytes: usize,
 }
 
 impl Cached {
@@ -74,7 +98,25 @@ impl Cached {
         if self.tip != hash {
             self.tip = hash.to_string();
             self.answers.clear();
+            self.bytes = 0;
         }
+    }
+
+    /// The cell for `key` at `tip`: the one there, a new one if there's
+    /// room, or none (an old tip, or a full cache).
+    fn cell(&mut self, tip: &str, key: &str) -> Option<Arc<OnceCell<Bytes>>> {
+        if self.tip != tip {
+            return None;
+        }
+        if let Some(cell) = self.answers.get(key) {
+            return Some(cell.clone());
+        }
+        let room = self.answers.len() < MAX_CACHED && self.bytes < MAX_CACHED_BYTES;
+        (room || ALWAYS_KEPT.contains(&key)).then(|| {
+            let cell = Arc::new(OnceCell::new());
+            self.answers.insert(key.to_string(), cell.clone());
+            cell
+        })
     }
 }
 
@@ -209,19 +251,22 @@ impl AppState {
             Upstream::DbSync => &self.cache,
             Upstream::Kupo => &self.kupo_cache,
         };
-        let hit = {
-            let cache = cache.lock().expect("cache lock");
-            (cache.tip == tip).then(|| cache.answers.get(key).cloned())
+        let cell = cache.lock().expect("cache lock").cell(tip, key);
+        let Some(cell) = cell else {
+            return make().await;
         };
-        if let Some(hit) = hit.flatten() {
-            return Ok(hit);
-        }
-        let bytes = make().await?;
-        let mut cache = cache.lock().expect("cache lock");
-        if cache.tip == tip && cache.answers.len() < MAX_CACHED {
-            cache.answers.insert(key.to_string(), bytes.clone());
-        }
-        Ok(bytes)
+        // A failed or abandoned read leaves the cell empty, for the next request to fill.
+        let bytes = cell
+            .get_or_try_init(|| async {
+                let bytes = make().await?;
+                let mut cache = cache.lock().expect("cache lock");
+                if cache.tip == tip {
+                    cache.bytes += bytes.len();
+                }
+                Ok::<_, ApiError>(bytes)
+            })
+            .await?;
+        Ok(bytes.clone())
     }
 
     /// The answer for `key` made within `keep`, whatever the tip has done
@@ -287,7 +332,7 @@ impl AppState {
     #[cfg(test)]
     fn lookup(&self, tip: &str, key: &str) -> Option<Bytes> {
         let cache = self.cache.lock().expect("cache lock");
-        (cache.tip == tip).then(|| cache.answers.get(key).cloned())?
+        (cache.tip == tip).then(|| cache.answers.get(key)?.get().cloned())?
     }
 }
 
@@ -335,7 +380,8 @@ pub async fn watch_tip(state: Arc<AppState>) {
     let mut failed = 0;
     loop {
         every.tick().await;
-        match state.chain.tip().await {
+        let read = tokio::time::timeout(TIP_TIMEOUT, state.chain.tip()).await;
+        match read.unwrap_or_else(|_| Err(anyhow::anyhow!("timed out"))) {
             Ok(tip) => {
                 if failed >= FAILED_READS {
                     info!("db-sync's tip reads again");
@@ -364,7 +410,8 @@ pub async fn watch_kupo(state: Arc<AppState>) {
     let mut failed = 0;
     loop {
         every.tick().await;
-        match kupo.tip().await {
+        let read = tokio::time::timeout(TIP_TIMEOUT, kupo.tip()).await;
+        match read.unwrap_or_else(|_| Err(anyhow::anyhow!("Kupo timed out"))) {
             Ok(tip) => {
                 if failed >= FAILED_READS {
                     info!("Kupo's tip reads again");
@@ -410,7 +457,10 @@ impl IntoResponse for ApiError {
             ApiError::Behind => (StatusCode::SERVICE_UNAVAILABLE, "behind"),
             ApiError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
             ApiError::Unavailable(error) => {
-                warn!(error = failure(&error), "a query failed");
+                static FAILED: Throttle = Throttle::new();
+                if FAILED.due() {
+                    warn!(error = failure(&error), "a query failed");
+                }
                 (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
             }
         };
@@ -432,13 +482,55 @@ pub fn failure(error: &anyhow::Error) -> String {
     let postgres = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<tokio_postgres::Error>());
+    // An I/O error says what happened to a connection (refused, reset, timed
+    // out) by its kind, which names no address.
+    let io = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .or_else(|| {
+            let mut source = std::error::Error::source(postgres?);
+            while let Some(cause) = source {
+                if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                    return Some(io);
+                }
+                source = cause.source();
+            }
+            None
+        });
     match postgres.and_then(|e| e.code()) {
         Some(code) => format!("postgres {}", code.code()),
-        None => match postgres {
-            Some(e) if e.is_closed() => "postgres connection closed".into(),
-            Some(_) => "postgres".into(),
-            None => error.to_string(),
+        None => match (postgres, io) {
+            (Some(_), Some(io)) => format!("postgres connection: {}", io.kind()),
+            (Some(e), None) if e.is_closed() => "postgres connection closed".into(),
+            (Some(_), None) => "postgres".into(),
+            (None, _) => error.to_string(),
         },
+    }
+}
+
+/// Lets a log line through at most once in [`LOG_EVERY_SECS`].
+pub struct Throttle(AtomicI64);
+
+impl Throttle {
+    pub const fn new() -> Self {
+        Throttle(AtomicI64::new(i64::MIN))
+    }
+
+    /// Whether to log now; if so, nothing more is for a while.
+    pub fn due(&self) -> bool {
+        let now = now();
+        let last = self.0.load(Ordering::Relaxed);
+        now.saturating_sub(last) >= LOG_EVERY_SECS
+            && self
+                .0
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+    }
+}
+
+impl Default for Throttle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -490,6 +582,49 @@ mod tests {
         state.cached(&old, "k", || async { Ok(1) }).await.unwrap();
         assert!(state.lookup("new", "k").is_none());
         assert!(state.lookup("old", "k").is_none());
+    }
+
+    #[tokio::test]
+    async fn requests_that_miss_together_share_one_read() {
+        let state = state();
+        let now = tip("a", i64::MAX / 2);
+        state.set_tip(now.clone());
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        let read = || async {
+            reads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            to_json(&1)
+        };
+        let (a, b) = tokio::join!(
+            state.cached_in(Upstream::DbSync, "a", "k", read),
+            state.cached_in(Upstream::DbSync, "a", "k", read),
+        );
+        assert_eq!(
+            (a.unwrap(), b.unwrap()),
+            (Bytes::from("1"), Bytes::from("1"))
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_leaves_the_answer_for_the_next() {
+        let state = state();
+        state.set_tip(tip("a", i64::MAX / 2));
+        let failed = state
+            .cached_in(Upstream::DbSync, "a", "k", || async { Err(ApiError::Busy) })
+            .await;
+        assert!(matches!(failed, Err(ApiError::Busy)));
+        let next = state
+            .cached_in(Upstream::DbSync, "a", "k", || async { to_json(&2) })
+            .await;
+        assert_eq!(next.unwrap(), Bytes::from("2"));
+    }
+
+    #[test]
+    fn a_throttle_lets_one_line_through_a_while() {
+        let throttle = Throttle::new();
+        assert!(throttle.due());
+        assert!(!throttle.due());
     }
 
     #[test]
