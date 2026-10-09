@@ -18,7 +18,14 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
   - a Caddy 502 (API stopped), a 403 and a 413 left no client address and no path in either journal;
   - no `Server` header, HSTS on, HTTP/3 offered, HTTP redirected.
 
-Next: crt.sh's listing (not indexed yet that night), home's logs (Postgres's and Kupo's), the drills, then the deploy workflow and CI.
+- the deploy workflow (`.github/workflows/data-layer-deploy.yml`), built that night. On the droplet: the `deploy` user, its key held to `seedelf-data-deploy`, and the sudoers line. On GitHub: the `data-layer` environment (the owner's approval, `main` alone), its key secret, and the host and host key as variables. Checked on the droplet:
+  - a deploy, a rollback, and a binary that can't serve, which put the old one back by itself in 30 s and left `.prev` as it was;
+  - every refusal: another command, a glob, a smuggled `;`, a wrong checksum, a file that isn't ELF, one over 64 MiB, and a terminal;
+  - `status` through SSH with the real key.
+
+  GitHub only offers a manual workflow once it's on `main`, so the first run waits for this branch's merge.
+
+Next: merge, and the workflow's first run. Then crt.sh's listing (not indexed yet that night), home's logs (Postgres's and Kupo's), CI, and the drills.
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
@@ -75,6 +82,7 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
 
 - **Basic, 2 vCPU, 4 GB: $24 a month,** with 4 TB of outbound transfer a month. Inbound is free, the allowance is pooled across the team's droplets, and more costs $0.01 a GiB ([pricing](https://docs.digitalocean.com/platform/billing/bandwidth/)).
 - **In the region nearest home,** x86_64.
+- **The region stays nyc1 (owner, 2026-10-09),** for Europe and both US coasts. Measured that day: a route the API hasn't cached pays the VPS–home round trip once per query it makes in sequence (`account_info` makes two, nearly all its time on the VPS), and a user's round trip once, plus a preflight for a POST. Cached routes answer in under a millisecond. Moving is a snapshot copied to another region, the DNS record and home's `Endpoint`, with no release. Fewer sequential queries per route help wherever the droplet is.
 - **What was made (2026-10-09):** `seedelf-data-layer` in nyc1, `142.93.120.105`, no IPv6, **Ubuntu 26.04 LTS** (glibc 2.43, and `sudo` is sudo-rs). SSH as `seedelf`, keys only, no root login. It came with `ufw` on; nftables replaced it.
 - **Traffic:** the API's alone, since the node keeps its own route (2026-10-09). Its ceiling, `DATA_EGRESS_GB_MONTH`, is 1,500 GB to start; `vnstat` on the droplet is the real meter. The droplet was sized for the node's traffic too (about 1.4 TB a month), so once the API's use is measured, a smaller one may do.
 - **DDoS:** DigitalOcean's [free protection](https://www.digitalocean.com/products/ddos-protection) covers layers 3 and 4 inside its network and never terminates TLS, as the runbook asks. Layer 7 is the API's own buckets (`src/edge.rs`).
@@ -93,6 +101,7 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
    - **build:** `cargo build --release -p seedelf-data-api` with the pinned toolchain (`seedelf-data/rust-toolchain.toml`) on `ubuntu-24.04`. Its glibc (2.39) is older than the droplet's (2.43), which is the safe direction; the binary needs 2.34. The token decimals are built in (`api/data/token-decimals.json`), so refreshing them is a deploy too;
    - **ship:** over SSH, as a `deploy` user. Its key in `authorized_keys` may only run one fixed script (`command=`), which takes the binary on stdin;
      - the key and the droplet's host key are secrets of a GitHub environment that asks the owner to approve each run;
+     - **as built:** the host key and the host are the environment's variables, not secrets: neither is secret, and a variable can be read back to check. A `status` action joins `deploy` and `rollback`;
    - **install, check, roll back:** the script keeps the running binary as `.prev`, puts the new one in place and restarts the service. It then checks `/health` and the store ID's CORS line, and puts `.prev` back and restarts if either fails;
    - **roll back by hand:** the same workflow with a `rollback` input swaps `.prev` back;
    - **what's on the droplet:** the script, the `deploy` user, and a sudoers line for that script alone. All three are templates in `deploy/edge/`.
