@@ -30,7 +30,10 @@ jobs:
       run:
         working-directory: seedelf-data
     steps:
-      - uses: actions/checkout@v4
+      # No token left in .git: the build runs every dependency's build script.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # The toolchain seedelf-data/rust-toolchain.toml pins: keep the two in
       # step. ubuntu-24.04's glibc (2.39) is older than the droplet's, the
@@ -48,7 +51,7 @@ jobs:
         working-directory: seedelf-data/target/release
         run: sha256sum seedelf-data-api | tee seedelf-data-api.sha256
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: seedelf-data-api
           path: |
@@ -68,7 +71,8 @@ jobs:
       name: data-layer
       url: https://mainnet.seedelf.logicalmechanism.io/health
     steps:
-      - uses: actions/download-artifact@v4
+      # v8 refuses an artifact whose digest doesn't match the upload's.
+      - uses: actions/download-artifact@v8
         if: inputs.action == 'deploy'
         with:
           name: seedelf-data-api
