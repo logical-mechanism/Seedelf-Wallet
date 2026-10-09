@@ -17,8 +17,9 @@
 mainnet.<domain> {
 	# No `log` directive: no access log.
 	request_body {
-		# The largest body the API takes (an evaluation).
-		max_size 64KB
+		# The largest body the API takes (an evaluation): KiB, as the API
+		# counts. Caddy's KB is 1,000 bytes, and its 413 carries no CORS.
+		max_size 64KiB
 	}
 	reverse_proxy 127.0.0.1:8099 {
 		transport http {

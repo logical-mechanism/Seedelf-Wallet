@@ -17,6 +17,11 @@ end $$;
 grant usage on schema public to seedelf_reader;
 grant select on all tables in schema public to seedelf_reader;
 
+-- Before Postgres 15, anyone may create objects in schema public: a
+-- function that shadows one db-sync calls, or a table that fills the disk.
+-- Only db-sync's own role (the schema's owner) should.
+revoke create on schema public from public;
+
 -- db-sync makes new tables when it migrates: let the role read those too.
 -- Default privileges follow the role that creates the tables: db-sync's writer.
 alter default privileges for role <the role db-sync writes with> in schema public

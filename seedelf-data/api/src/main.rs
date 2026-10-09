@@ -15,11 +15,23 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> anyhow::Result<()> {
     // seedelf-data/.env while it runs locally; a missing file is fine.
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    let mut filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Libraries that log a request's contents when asked for detail (the
+    // database driver logs every query's parameters at debug, axum's
+    // rejections quote bodies): held where RUST_LOG can't raise them.
+    for quiet in [
+        "tokio_postgres=info",
+        "postgres_protocol=info",
+        "hyper=warn",
+        "hyper_util=warn",
+        "reqwest=warn",
+        "h2=warn",
+        "tower_http=warn",
+        "axum::rejection=off",
+    ] {
+        filter = filter.add_directive(quiet.parse()?);
+    }
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let config = Config::from_env()?;
     let decimals = match &config.token_decimals {
@@ -41,7 +53,11 @@ async fn main() -> anyhow::Result<()> {
         config.egress_ceiling,
         config.state_dir.map(|dir| dir.join("egress.json")),
     );
-    let edge = Arc::new(Edge::new(config.trust_proxy, egress));
+    let edge = Arc::new(Edge::new(
+        config.trust_proxy,
+        config.origins.clone(),
+        egress,
+    ));
     tokio::spawn(edge::keep(edge.clone()));
     info!(
         origins = config.origins.len(),

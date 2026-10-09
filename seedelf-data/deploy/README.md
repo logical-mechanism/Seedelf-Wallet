@@ -61,32 +61,42 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
    - fill in `edge/seedelf-data.env` as `/etc/seedelf-data/env`, mode `0600`;
    - install `edge/seedelf-data-api.service`, then `systemctl enable --now seedelf-data-api`;
    - `curl 127.0.0.1:8099/health` answers 200 with `"source":"db-sync"`.
-6. **DNS:** an A record (and AAAA, if the VPS has IPv6) for `mainnet.<domain>`, to the VPS.
-7. **Caddy:** fill in `edge/Caddyfile` as `/etc/caddy/Caddyfile`, then `systemctl reload caddy`. It gets its certificate by itself.
+
+**Nothing is public yet:** no DNS name leads here. Step 3 comes first, so that no transaction sent through the API is ever relayed from the home IP.
 
 ## 3. Home's traffic into the tunnel
 
-The plan sends home's own traffic out through the VPS once everything is synced. Otherwise the node's peers, db-sync's metadata fetches and the first relay of every submitted transaction would show strangers the home IP.
+Once everything is synced, home's own traffic goes out through the VPS. Otherwise the node's peers, db-sync's metadata fetches and the first relay of every submitted transaction would show strangers the home IP.
 
-**Only the node's and db-sync's traffic moves.** The box runs another project, and moving its default route would move that project too. Routing by user does it.
+**Only the node's and db-sync's traffic moves, routed by user.** The box runs another project, and moving its default route would move that project too.
+
+**It fails closed:** with the tunnel down or restarting, the node and db-sync reach nothing, rather than reaching the internet from the home IP. Two layers make it so, and neither depends on wg-quick:
+- `home/seedelf-tunnel-routes.service` sends their traffic to table 51820, which holds only the tunnel's route and an unreachable fallback. Their IPv6 is unreachable, since the tunnel carries IPv4.
+- `home/nftables-seedelf-egress.conf` drops any packet of theirs that isn't for `wg0`, loopback or the LAN.
+
+**Whatever runs as the node's user is held to the same rules:** Kupo (`home/kupo-seedelf.service` runs it so), and Ogmios and submit-api if they do too. Their answers to the VPS (through `wg0`), to this box and to the IPv4 LAN pass. Add any other local network that reaches them, such as a container bridge, to both files' LAN prefix.
 
 1. **Measure first.** Watch the node's traffic for a day with `vnstat`. The docs say about 1 GB an hour for a relay, and less for an outbound-only node. It all crosses the VPS twice: in from the internet, then out to home.
-2. **Add the rules to `home/wg0.conf`,** so they come and go with the tunnel:
+2. **DNS without the home IP.** The node's and db-sync's lookups go through the box's resolver, outside the tunnel. A resolver that recurses at home lets a name's own nameserver see the home IP, and anyone can make db-sync look a name up (a DRep's or a pool's metadata URL). So send the box's lookups over TLS to a public resolver that passes on no client subnet. In `/etc/systemd/resolved.conf`:
 
    ```ini
-   PostUp = ip route add default dev wg0 table 51820
-   PostUp = ip rule add to <LAN prefix> lookup main priority 90
-   PostUp = ip rule add uidrange <node uid>-<node uid> lookup 51820 priority 100
-   PostUp = ip rule add uidrange <db-sync uid>-<db-sync uid> lookup 51820 priority 101
-   PostDown = ip rule del priority 101; ip rule del priority 100; ip rule del priority 90
+   DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net
+   DNSOverTLS=yes
    ```
 
-   The tunnel's own packets are the kernel's, and leave by the main table.
-   - **If the tunnel drops, the node loses its peers rather than reaching them directly.** That fails closed: it never shows them the home IP.
-   - DNS lookups still go to the usual resolver, which sees names (pool metadata hosts), not who asked.
-3. **Restart the tunnel, the node and db-sync.** Check that the node's connections leave through `wg0`: `ss -tnp | grep cardano-node` shows source `10.88.0.2`.
+   Then restart `systemd-resolved`.
+3. **Install the routes unit** (`systemctl enable --now seedelf-tunnel-routes`) and the kill switch (`home/nftables-seedelf-egress.conf`, loaded with the rest of nftables at boot). Then give the node's and db-sync's units `After=seedelf-tunnel-routes.service wg-quick@wg0.service`. Don't add `BindsTo`: a node restart costs a ledger replay, and the rules already cut it off.
+4. **Restart the tunnel, the node and db-sync.** Check that their connections leave through `wg0`:
+   - `ss -tnp | grep cardano-node` shows source `10.88.0.2`;
+   - `sudo -u <node user> curl -s https://ifconfig.me` shows the VPS's address, and `sudo -u <node user> curl -6 https://ifconfig.me` fails;
+   - with `systemctl stop wg-quick@wg0`, the same `curl` fails at once. Start the tunnel again after.
 
-## 4. Checks
+## 4. Going public
+
+1. **DNS:** an A record (and AAAA, if the VPS has IPv6) for `mainnet.<domain>`, to the VPS.
+2. **Caddy:** fill in `edge/Caddyfile` as `/etc/caddy/Caddyfile`, then `systemctl reload caddy`. It gets its certificate by itself.
+
+## 5. Checks
 
 - **Health:** `curl https://mainnet.<domain>/health` answers 200, `private`, `public` and `egress` all `ok`.
 - **CORS:** a preflight from the wallet's origin is answered with it, and any other origin gets no CORS headers:
@@ -95,23 +105,25 @@ The plan sends home's own traffic out through the VPS once everything is synced.
   curl -si -X OPTIONS https://mainnet.<domain>/api/v1/tip \
     -H 'Origin: chrome-extension://<ID>' -H 'Access-Control-Request-Method: GET' | grep -i access-control
   ```
-- **Limits:** about 75 quick `POST /api/v1/account_info` from one address end in a 429 with `Retry-After`. Run it from a third machine, never the owner's.
+- **Limits,** from a third machine, never the owner's:
+  - about 75 quick `POST /api/v1/account_info` from one address end in a 429 with `Retry-After`;
+  - a request with `Sec-Fetch-Mode: no-cors`, or from another `Origin`, gets 403: a web page can't spend the API's traffic.
 - **No address or path in any log:**
   1. stop the API and request something, so Caddy answers 502;
   2. send a request the API refuses;
   3. `journalctl -u caddy -u seedelf-data-api --since -10min` shows neither the client's address nor the path.
 
-  On home, Postgres's log holds no statement.
+  On home, Postgres's log holds no statement, and Kupo's no request path.
 - **DNS and certificates:** crt.sh lists `mainnet.<domain>` and nothing that leads home.
 - **The drills** ([Verification](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#verification)):
 
   | Stop | Expect |
   |---|---|
   | Kupo | nothing changes: it's the spare |
-  | Postgres | within 4 s (two failed reads of its tip), `/health` says `"source":"kupo"` and the public routes answer 503; the wallet goes to Koios for the public side |
+  | Postgres | within 6 s (two failed reads of its tip), `/health` says `"source":"kupo"` and the public routes answer 503; the wallet goes to Koios for the public side |
   | db-sync alone | the private index moves to Kupo once db-sync is 60 slots behind it; the public routes answer 503 once its tip is 3 minutes old |
   | the node | every part 503 within 3 minutes; the wallet goes to Koios for everything |
-  | the tunnel | every part 503 within 4 s, submits too (3 s to connect); the node keeps no peers |
+  | the tunnel | every part 503 within 6 s, and a submit 502 within 3 s (it can't connect); the node and db-sync reach nothing |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
 

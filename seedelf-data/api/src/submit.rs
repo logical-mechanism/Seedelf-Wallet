@@ -49,6 +49,9 @@ impl Submit {
             http: reqwest::Client::builder()
                 .timeout(UPSTREAM_TIMEOUT)
                 .connect_timeout(CONNECT_TIMEOUT)
+                // A fresh connection for each: a kept one that died with the
+                // tunnel would hold a submit for the full 30 s.
+                .pool_max_idle_per_host(0)
                 .build()?,
             submit_api: submit_api.map(|url| url.trim_end_matches('/').to_string()),
             ogmios: ogmios.map(|url| url.trim_end_matches('/').to_string()),
@@ -103,7 +106,15 @@ async fn submittx(State(submit): State<Arc<Submit>>, headers: HeaderMap, body: B
 }
 
 /// One JSON-RPC call, and only `evaluateTransaction`: the wallet's only use of Ogmios.
-async fn ogmios(State(submit): State<Arc<Submit>>, body: Bytes) -> Response {
+async fn ogmios(State(submit): State<Arc<Submit>>, headers: HeaderMap, body: Bytes) -> Response {
+    // JSON, as the wallet sends it: a text/plain POST needs no CORS
+    // preflight, so any web page could make its visitors send one.
+    if !is_type(&headers, "application/json") {
+        return refuse(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "an evaluation is application/json",
+        );
+    }
     if let Err(why) = only_evaluate(&body) {
         return refuse(StatusCode::BAD_REQUEST, why);
     }

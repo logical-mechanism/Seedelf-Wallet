@@ -90,7 +90,7 @@ What stands between the internet and the routes, in `src/edge.rs`. Caddy in fron
 |---|---|
 | `DATA_ORIGINS` | the origins CORS lets read answers, comma-separated: the wallet's `chrome-extension://<id>`. The wallet then needs no host permission. `Retry-After` is exposed, and a 429 carries CORS too, so the wallet can read why it waits. |
 | `DATA_TRUST_PROXY=true` | behind Caddy on loopback: the client is the last `X-Forwarded-For` address. From anywhere else the header is ignored. |
-| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. It's kept in `egress.json` in systemd's `StateDirectory` (or `DATA_STATE_DIR`), so a restart doesn't forget it. The node's P2P traffic through the tunnel isn't counted. |
+| `DATA_EGRESS_GB_MONTH` | the API's own traffic a calendar month (UTC), in GB, before every route but `/health` answers 503. Each day gets an equal share of what's left, so a flood costs a day, not the rest of the month. It's kept in `egress.json` in systemd's `StateDirectory` (or `DATA_STATE_DIR`), so a restart doesn't forget it. The node's P2P traffic through the tunnel isn't counted. |
 
 **A bucket per client:** 300 units, refilled at 10 a second. IPv6 addresses are taken by their /64.
 
@@ -100,9 +100,13 @@ What stands between the internet and the routes, in `src/edge.rs`. Caddy in fron
 | any other public route: one user's live SQL | 4 |
 | `submittx`, `ogmios` | 10 |
 
+- **Answers cost what they send:** a unit more for every 16 KB, charged after. A bucket can go below empty, to a full bucket's worth.
 - **Past it, a 429** with `Retry-After`. A wallet paces itself well under this: `koios.ts` keeps to 40 requests every 10 s.
+- **A web page's requests are refused** with 403: a browser fetch that isn't CORS (an image, a `no-cors` fetch, a page load), or one from an origin that isn't the wallet's. The browser would hide the answer from the page but still download it, so any site's visitors could spend the month's traffic. A request with neither header (curl, a monitor) passes, and `/health` always does.
 - **IPs exist only in memory:** a bucket is forgotten once it's full again, and nothing logs an address.
-- **At most 200,000 buckets.** Past that, a new client gets 503.
+- **At most 200,000 buckets.** Past that, refilled ones are dropped on the spot, at most once a second; if none are, a new client gets 503.
+
+**Logs can't be turned up to show a request.** The database driver logs every query's parameters at debug, and axum's rejections quote bodies: those libraries are held at a fixed level that `RUST_LOG` can't raise.
 
 ## The private index
 
@@ -210,10 +214,10 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | Route | Upstream | The server's own checks |
 |---|---|---|
 | `POST /api/v1/submittx` | cardano-submit-api, `POST /api/submit/tx` | the body is `application/cbor` (415 if not) and at most 16 KiB, the ledger's `max_tx_size` (413 if more); at most 4 in flight (503 past it) |
-| `POST /api/v1/ogmios` | Ogmios, `POST /` | a JSON-RPC 2.0 `evaluateTransaction` and no other method (400); at most 64 KiB; at most 2 in flight |
+| `POST /api/v1/ogmios` | Ogmios, `POST /` | `application/json` (415 if not: a `text/plain` POST needs no CORS preflight, so a web page could send one); a JSON-RPC 2.0 `evaluateTransaction` and no other method (400); at most 64 KiB; at most 2 in flight |
 
 - **Answers pass through untouched,** status and body. Koios fronts the same two services, so the error strings the wallet classifies stay what they are. They matched Koios's byte for byte on 2026-10-08.
-- **No answer** is a 502 (unreachable, or no connection within 3 s) or a 504 (timed out after 30 s): to the wallet, either one means "maybe sent".
+- **No answer** is a 502 (unreachable, or no connection within 3 s) or a 504 (timed out after 30 s): to the wallet, either one means "maybe sent". Each request opens a fresh connection, so one that died with the tunnel can't hold a submit for the full 30 s.
 - **It depends on the node alone,** so db-sync can be down.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL. reqwest's own error messages carry the URL, so errors are logged by kind only.
 

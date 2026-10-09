@@ -12,6 +12,8 @@
 # - No --defer-db-indexes: the API's queries need the indexes from the start.
 # - --since is block 11,305,804, the one before the contract's first output.
 #   Changing the patterns or --since means deleting the workdir and syncing again.
+# - The HTTP server's log at Warning: at Info, Kupo logs every request's path,
+#   and the API's paths carry a wallet's cursor.
 
 [Unit]
 Description=Kupo for Seedelf Wallet: the contract and Lovejoin's mix box
@@ -27,6 +29,7 @@ ExecStart=/usr/local/bin/kupo \
   --workdir /var/lib/kupo-seedelf \
   --host <home wg0 address> \
   --port 1443 \
+  --log-level-http-server Warning \
   --since 144386185.af5f8c02581c857a39218fcfab037817d470e8f4ca347ae04ffb328c16e7d11b \
   --match 94bca9c099e84ffd90d150316bb44c31a78702239076a0a80ea4a469/* \
   --match c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad/*

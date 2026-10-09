@@ -23,7 +23,11 @@ fn app(ceiling: Option<u64>) -> Router {
         Chain::connect("postgresql://nobody@127.0.0.1:1/nothing").unwrap(),
     ));
     let submit = Arc::new(Submit::new(None, None).unwrap());
-    let edge = Arc::new(Edge::new(true, Egress::new(ceiling, None)));
+    let edge = Arc::new(Edge::new(
+        true,
+        vec![WALLET.to_string()],
+        Egress::new(ceiling, None),
+    ));
     seedelf_data_api::app(state, submit, edge, &[WALLET.to_string()])
 }
 
@@ -108,6 +112,47 @@ async fn a_client_over_its_bucket_waits_and_the_wallet_can_read_why() {
 }
 
 #[tokio::test]
+async fn a_web_pages_requests_are_refused() {
+    let app = app(None);
+    // An <img> or a no-cors fetch: the browser would download the answer
+    // and hide it from the page, so any site's visitors could spend traffic.
+    let mut image = from("203.0.113.7", Method::GET, "/api/v1/pool_list");
+    image
+        .headers_mut()
+        .insert("sec-fetch-mode", "no-cors".parse().unwrap());
+    let response = app.clone().oneshot(image).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let mut elsewhere = from("203.0.113.7", Method::GET, "/api/v1/tip");
+    elsewhere
+        .headers_mut()
+        .insert(header::ORIGIN, "https://example.com".parse().unwrap());
+    let response = app.clone().oneshot(elsewhere).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // The wallet's own fetch passes, and a browser tab can still read /health.
+    let mut wallet = from("203.0.113.7", Method::GET, "/api/v1/tip");
+    wallet
+        .headers_mut()
+        .insert("sec-fetch-mode", "cors".parse().unwrap());
+    let response = app.clone().oneshot(wallet).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    let mut tab = from("203.0.113.7", Method::GET, "/health");
+    tab.headers_mut()
+        .insert("sec-fetch-mode", "navigate".parse().unwrap());
+    let response = app.clone().oneshot(tab).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+
+    // An evaluation that isn't JSON needs no preflight: refused before Ogmios.
+    let mut plain = from("203.0.113.7", Method::POST, "/api/v1/ogmios");
+    plain
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, "text/plain".parse().unwrap());
+    let response = app.oneshot(plain).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
 async fn past_the_months_ceiling_only_health_answers() {
     let app = app(Some(1));
     // The first answer's bytes pass the ceiling of one.
@@ -124,7 +169,7 @@ async fn past_the_months_ceiling_only_health_answers() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body(response).await["error"], "over this month's traffic");
+    assert_eq!(body(response).await["error"], "over the traffic allowance");
 
     let response = app
         .oneshot(from("203.0.113.7", Method::GET, "/health"))

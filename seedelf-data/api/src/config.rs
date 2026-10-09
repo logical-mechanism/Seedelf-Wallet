@@ -5,9 +5,9 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
-/// Loopback: there are no limits in front of the API yet (chunk 26's plan).
+/// Loopback: on the VPS, Caddy is in front (deploy/README.md).
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8099";
 
 /// No `Debug`: the database URL holds a password, and nothing should print it.
@@ -55,14 +55,18 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
-            trust_proxy: optional("DATA_TRUST_PROXY").is_some_and(|v| v == "true"),
+            // A typo here would put every client in Caddy's one bucket: refuse it.
+            trust_proxy: match optional("DATA_TRUST_PROXY").as_deref() {
+                None | Some("false") => false,
+                Some("true") => true,
+                Some(_) => bail!("DATA_TRUST_PROXY is true or false"),
+            },
             egress_ceiling: optional("DATA_EGRESS_GB_MONTH")
-                .map(|gb| {
-                    gb.parse::<f64>()
-                        .context("DATA_EGRESS_GB_MONTH isn't a number")
+                .map(|gb| match gb.parse::<f64>() {
+                    Ok(gb) if gb.is_finite() && gb > 0.0 => Ok((gb * 1e9) as u64),
+                    _ => Err(anyhow!("DATA_EGRESS_GB_MONTH is a number of GB above 0")),
                 })
-                .transpose()?
-                .map(|gb| (gb * 1e9) as u64),
+                .transpose()?,
             state_dir: optional("DATA_STATE_DIR")
                 .or_else(|| optional("STATE_DIRECTORY"))
                 .map(PathBuf::from),

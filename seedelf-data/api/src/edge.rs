@@ -1,12 +1,15 @@
 //! What stands between the internet and the API on the VPS (chunk 26's
-//! *Tunnel and VPS*): buckets per IP, a monthly egress ceiling, and CORS for
-//! the wallet's own origins. Caddy in front does TLS and nothing else, so
-//! every limit is here, in code anyone can audit.
+//! *Tunnel and VPS*): buckets per IP, charged for requests and for the bytes
+//! sent back; a monthly egress ceiling, shared out by day; requests a web
+//! page could make refused; and CORS for the wallet's own origins. Caddy in
+//! front does TLS and nothing else, so every limit is here, in code anyone
+//! can audit.
 //!
 //! **IPs exist only in memory:** a bucket per address while it's refilling,
 //! dropped once full. Nothing here logs one.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,8 +32,14 @@ use tracing::warn;
 pub const CAPACITY: f64 = 300.0;
 pub const REFILL: f64 = 10.0;
 
-/// At most this many addresses have a bucket at once. Past it, a new one is
-/// a 503: the server is under more load than buckets can sort out.
+/// Every this many bytes sent back costs a unit more, after the answer: a
+/// cheap request for a large answer costs what it sends. A bucket can go
+/// below empty this way, and its client then waits until it's refilled.
+pub const BYTES_PER_UNIT: f64 = 16.0 * 1024.0;
+
+/// At most this many addresses have a bucket at once. Past it, refilled
+/// buckets are dropped on the spot (at most once a second); if none are, a
+/// new client is a 503.
 const MAX_BUCKETS: usize = 200_000;
 
 /// What a request costs: answers that are the same for everyone are kept,
@@ -72,18 +81,34 @@ struct Bucket {
     at: Instant,
 }
 
+impl Bucket {
+    fn refilled(&self, now: Instant) -> bool {
+        self.tokens + now.saturating_duration_since(self.at).as_secs_f64() * REFILL >= CAPACITY
+    }
+}
+
+#[derive(Default)]
+struct Buckets {
+    map: HashMap<IpAddr, Bucket>,
+    /// When the map was last cleared of refilled buckets because it was full.
+    swept: Option<Instant>,
+}
+
 pub struct Edge {
-    buckets: Mutex<HashMap<IpAddr, Bucket>>,
+    buckets: Mutex<Buckets>,
     /// Caddy on loopback names the client in `X-Forwarded-For`.
     trust_proxy: bool,
+    /// The wallet's origins: a request from any other is refused.
+    origins: Vec<String>,
     pub egress: Egress,
 }
 
 impl Edge {
-    pub fn new(trust_proxy: bool, egress: Egress) -> Self {
+    pub fn new(trust_proxy: bool, origins: Vec<String>, egress: Egress) -> Self {
         Edge {
-            buckets: Mutex::new(HashMap::new()),
+            buckets: Mutex::new(Buckets::default()),
             trust_proxy,
+            origins,
             egress,
         }
     }
@@ -92,10 +117,19 @@ impl Edge {
     pub fn take(&self, ip: IpAddr, weight: f64, now: Instant) -> Result<(), Refusal> {
         let mut buckets = self.buckets.lock().expect("buckets lock");
         let key = bucket_key(ip);
-        if !buckets.contains_key(&key) && buckets.len() >= MAX_BUCKETS {
-            return Err(Refusal::Full);
+        if !buckets.map.contains_key(&key) && buckets.map.len() >= MAX_BUCKETS {
+            let recently = buckets
+                .swept
+                .is_some_and(|at| now.saturating_duration_since(at) < Duration::from_secs(1));
+            if !recently {
+                buckets.map.retain(|_, b| !b.refilled(now));
+                buckets.swept = Some(now);
+            }
+            if buckets.map.len() >= MAX_BUCKETS {
+                return Err(Refusal::Full);
+            }
         }
-        let bucket = buckets.entry(key).or_insert(Bucket {
+        let bucket = buckets.map.entry(key).or_insert(Bucket {
             tokens: CAPACITY,
             at: now,
         });
@@ -112,16 +146,23 @@ impl Edge {
         }
     }
 
+    /// Charges `ip`'s bucket for `bytes` sent back to it; it may go below empty,
+    /// to at most a full bucket's worth.
+    pub fn charge(&self, ip: IpAddr, bytes: usize) {
+        let mut buckets = self.buckets.lock().expect("buckets lock");
+        if let Some(bucket) = buckets.map.get_mut(&bucket_key(ip)) {
+            bucket.tokens = (bucket.tokens - bytes as f64 / BYTES_PER_UNIT).max(-CAPACITY);
+        }
+    }
+
     /// Forgets every bucket that has refilled: its address is gone from memory.
     pub fn sweep(&self, now: Instant) {
         let mut buckets = self.buckets.lock().expect("buckets lock");
-        buckets.retain(|_, b| {
-            b.tokens + now.saturating_duration_since(b.at).as_secs_f64() * REFILL < CAPACITY
-        });
+        buckets.map.retain(|_, b| !b.refilled(now));
     }
 
     pub fn buckets(&self) -> usize {
-        self.buckets.lock().expect("buckets lock").len()
+        self.buckets.lock().expect("buckets lock").map.len()
     }
 
     /// The client's address: the peer's, or Caddy's last `X-Forwarded-For`
@@ -145,6 +186,25 @@ impl Edge {
             .and_then(|ip| ip.trim().parse().ok());
         Some(forwarded.unwrap_or(peer))
     }
+
+    /// A request a web page made rather than the wallet: a browser's fetch
+    /// that isn't CORS (an image, a `no-cors` fetch, a page load), or one from
+    /// an origin that isn't the wallet's. The browser would hide the answer
+    /// from the page, but it would still be sent: any site's visitors could
+    /// spend the month's traffic. The wallet's own fetches are CORS, from its
+    /// origin; a request with neither header (curl, a monitor) passes.
+    fn made_by_a_page(&self, request: &Request) -> bool {
+        let header = |name: &str| {
+            request
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+        };
+        let not_cors = header("sec-fetch-mode").is_some_and(|mode| mode != "cors");
+        let elsewhere = !self.origins.is_empty()
+            && header("origin").is_some_and(|origin| !self.origins.iter().any(|o| o == origin));
+        not_cors || elsewhere
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -155,19 +215,25 @@ pub enum Refusal {
     Full,
 }
 
-/// The limits, in front of every route but `/health`'s egress check.
+/// The limits, in front of every route. `/health` is exempt from the page
+/// check and the egress ceiling, so a monitor (or a browser tab) can always read it.
 pub async fn limit(State(edge): State<Arc<Edge>>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     let health = path == "/health";
+    if !health && edge.made_by_a_page(&request) {
+        let body = axum::Json(serde_json::json!({ "error": "only Seedelf Wallet reads this" }));
+        return (StatusCode::FORBIDDEN, body).into_response();
+    }
     if !health && edge.egress.over() {
         return refuse(
             StatusCode::SERVICE_UNAVAILABLE,
-            "over this month's traffic",
+            "over the traffic allowance",
             3600,
         );
     }
     // A request with no address (none reaches the server so) takes no bucket.
-    if let Some(ip) = edge.client(&request) {
+    let ip = edge.client(&request);
+    if let Some(ip) = ip {
         match edge.take(ip, weight(path), Instant::now()) {
             Ok(()) => {}
             Err(Refusal::Wait(secs)) => {
@@ -182,6 +248,9 @@ pub async fn limit(State(edge): State<Arc<Edge>>, request: Request, next: Next) 
     let body = body.map_frame(move |frame| {
         if let Some(data) = frame.data_ref() {
             edge.egress.add(data.len() as u64);
+            if let Some(ip) = ip {
+                edge.charge(ip, data.len());
+            }
         }
         frame
     });
@@ -214,37 +283,65 @@ pub fn cors(origins: &[String]) -> CorsLayer {
 }
 
 /// The API's own traffic this calendar month (UTC), against a ceiling, so no
-/// bill can surprise anyone. Kept in a file, so a restart doesn't forget it.
-/// The node's P2P traffic through the tunnel isn't counted here: the VPS's
-/// own meter is for that (deploy/README.md).
+/// bill can surprise anyone. Each day gets an equal share of what's left of
+/// the month, so a flood costs a day, not the rest of the month. Kept in a
+/// file, so a restart doesn't forget it. The node's P2P traffic through the
+/// tunnel isn't counted here: the VPS's own meter is for that (deploy/README.md).
 pub struct Egress {
     ceiling: Option<u64>,
     bytes: AtomicU64,
-    month: Mutex<String>,
+    /// The count stops here today: today's share of what was left at its start.
+    today_limit: AtomicU64,
+    held: Mutex<Kept>,
     file: Option<PathBuf>,
 }
 
-#[derive(Serialize, Deserialize)]
+/// What's written down: the month and its count, and where today started.
+#[derive(Clone, Serialize, Deserialize)]
 struct Kept {
     month: String,
     bytes: u64,
+    #[serde(default)]
+    day: i64,
+    #[serde(default)]
+    day_start: u64,
 }
 
 impl Egress {
     /// `ceiling` in bytes, if there's one; `file` where the count is kept.
     pub fn new(ceiling: Option<u64>, file: Option<PathBuf>) -> Self {
-        let month = month_of(unix_now());
-        let kept = file
-            .as_ref()
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice::<Kept>(&bytes).ok())
-            .filter(|kept| kept.month == month);
-        Egress {
+        let now = unix_now();
+        let read = file.as_ref().and_then(|path| match std::fs::read(path) {
+            Ok(bytes) => {
+                let kept = serde_json::from_slice::<Kept>(&bytes).ok();
+                if kept.is_none() {
+                    warn!("the month's traffic couldn't be read, so it counts from zero");
+                }
+                kept
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                warn!(kind = %error.kind(), "the month's traffic couldn't be read, so it counts from zero");
+                None
+            }
+        });
+        let kept = read
+            .filter(|kept| kept.month == month_of(now))
+            .unwrap_or_else(|| Kept {
+                month: month_of(now),
+                bytes: 0,
+                day: day_of(now),
+                day_start: 0,
+            });
+        let egress = Egress {
             ceiling,
-            bytes: AtomicU64::new(kept.map_or(0, |kept| kept.bytes)),
-            month: Mutex::new(month),
+            bytes: AtomicU64::new(kept.bytes),
+            today_limit: AtomicU64::new(u64::MAX),
+            held: Mutex::new(kept),
             file,
-        }
+        };
+        egress.roll(now);
+        egress
     }
 
     pub fn add(&self, bytes: u64) {
@@ -255,28 +352,51 @@ impl Egress {
         self.bytes.load(Ordering::Relaxed)
     }
 
+    /// Past the month's ceiling, or past today's share of it.
     pub fn over(&self) -> bool {
-        self.ceiling.is_some_and(|ceiling| self.used() >= ceiling)
+        self.ceiling.is_some_and(|ceiling| {
+            let used = self.used();
+            used >= ceiling || used >= self.today_limit.load(Ordering::Relaxed)
+        })
     }
 
-    /// Starts the count again in a new month, and writes it down.
-    pub fn flush(&self) {
-        let month = month_of(unix_now());
-        let mut held = self.month.lock().expect("month lock");
-        if *held != month {
+    /// Starts a new month's or a new day's count when one has begun, and sets today's share.
+    fn roll(&self, now: i64) {
+        let mut held = self.held.lock().expect("egress lock");
+        let month = month_of(now);
+        if held.month != month {
             self.bytes.store(0, Ordering::Relaxed);
-            *held = month;
+            *held = Kept {
+                month,
+                bytes: 0,
+                day: day_of(now),
+                day_start: 0,
+            };
+        } else if held.day != day_of(now) {
+            held.day = day_of(now);
+            held.day_start = self.used();
         }
+        held.bytes = self.used();
+        if let Some(ceiling) = self.ceiling {
+            let left = ceiling.saturating_sub(held.day_start);
+            let share = left / days_left(now).max(1);
+            self.today_limit
+                .store(held.day_start.saturating_add(share), Ordering::Relaxed);
+        }
+    }
+
+    /// Rolls the day or month over if it's time, and writes the count down.
+    pub fn flush(&self) {
+        self.roll(unix_now());
         let Some(path) = &self.file else { return };
-        let kept = Kept {
-            month: held.clone(),
-            bytes: self.used(),
-        };
+        let kept = self.held.lock().expect("egress lock").clone();
         let written = serde_json::to_vec(&kept)
             .map_err(std::io::Error::other)
             .and_then(|bytes| {
                 let partial = path.with_extension("partial");
-                std::fs::write(&partial, bytes)?;
+                let mut file = std::fs::File::create(&partial)?;
+                file.write_all(&bytes)?;
+                file.sync_all()?;
                 std::fs::rename(&partial, path)
             });
         if let Err(error) = written {
@@ -302,17 +422,41 @@ fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// `YYYY-MM` of a Unix time, in UTC (Howard Hinnant's days-to-civil).
-fn month_of(unix: i64) -> String {
-    let z = unix.div_euclid(86_400) + 719_468;
+fn day_of(unix: i64) -> i64 {
+    unix.div_euclid(86_400)
+}
+
+/// The UTC date of a Unix time: year, month, day (Howard Hinnant's days-to-civil).
+fn civil(unix: i64) -> (i64, i64, i64) {
+    let z = day_of(unix) + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// `YYYY-MM` of a Unix time, in UTC.
+fn month_of(unix: i64) -> String {
+    let (year, month, _) = civil(unix);
     format!("{year:04}-{month:02}")
+}
+
+/// The days left in the month of a Unix time, today included.
+fn days_left(unix: i64) -> u64 {
+    let (year, month, day) = civil(unix);
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let length = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (length - day + 1) as u64
 }
 
 #[cfg(test)]
@@ -320,7 +464,7 @@ mod tests {
     use super::*;
 
     fn edge() -> Edge {
-        Edge::new(true, Egress::new(None, None))
+        Edge::new(true, vec![], Egress::new(None, None))
     }
 
     #[test]
@@ -340,6 +484,20 @@ mod tests {
         );
         let later = start + Duration::from_secs(1);
         assert_eq!(edge.take(ip, 10.0, later), Ok(()));
+    }
+
+    #[test]
+    fn large_answers_cost_what_they_send() {
+        let edge = edge();
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let start = Instant::now();
+        edge.take(ip, 1.0, start).unwrap();
+        // 10 MB sent back: 640 units, past empty, to a full bucket below it.
+        edge.charge(ip, 10 << 20);
+        assert_eq!(edge.take(ip, 1.0, start), Err(Refusal::Wait(31)));
+        // An address with no bucket isn't given one by a charge.
+        edge.charge("203.0.113.9".parse().unwrap(), 1 << 20);
+        assert_eq!(edge.buckets(), 1);
     }
 
     #[test]
@@ -377,49 +535,72 @@ mod tests {
         assert_eq!(weight("/health"), 1.0);
     }
 
+    fn request(peer: &str, headers: &[(&str, &str)]) -> Request {
+        let mut request = Request::new(Body::empty());
+        for (name, value) in headers {
+            request.headers_mut().append(
+                axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        request
+    }
+
     #[test]
     fn the_client_is_caddys_last_forwarded_address() {
         let edge = edge();
-        let request = |peer: &str, forwarded: Option<&str>| {
-            let mut request = Request::new(Body::empty());
-            if let Some(forwarded) = forwarded {
-                request
-                    .headers_mut()
-                    .insert("x-forwarded-for", HeaderValue::from_str(forwarded).unwrap());
-            }
-            request
-                .extensions_mut()
-                .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
-            request
-        };
         let caddy = "127.0.0.1:50000";
+        let forwarded = |value| [("x-forwarded-for", value)];
         assert_eq!(
-            edge.client(&request(caddy, Some("198.51.100.1, 203.0.113.7"))),
+            edge.client(&request(caddy, &forwarded("198.51.100.1, 203.0.113.7"))),
             Some("203.0.113.7".parse().unwrap())
         );
         assert_eq!(
-            edge.client(&request(caddy, None)),
+            edge.client(&request(caddy, &[])),
             Some("127.0.0.1".parse().unwrap())
         );
         // Not from loopback: the header is anyone's to write, so it's ignored.
         assert_eq!(
-            edge.client(&request("198.51.100.9:4000", Some("203.0.113.7"))),
+            edge.client(&request("198.51.100.9:4000", &forwarded("203.0.113.7"))),
             Some("198.51.100.9".parse().unwrap())
         );
-        let direct = Edge::new(false, Egress::new(None, None));
+        let direct = Edge::new(false, vec![], Egress::new(None, None));
         assert_eq!(
-            direct.client(&request(caddy, Some("203.0.113.7"))),
+            direct.client(&request(caddy, &forwarded("203.0.113.7"))),
             Some("127.0.0.1".parse().unwrap())
         );
     }
 
     #[test]
-    fn months_are_utcs() {
+    fn only_the_wallets_own_fetches_pass() {
+        let wallet = "chrome-extension://jfekiogplaamnceifeehipmomhojngcb";
+        let edge = Edge::new(true, vec![wallet.into()], Egress::new(None, None));
+        let peer = "127.0.0.1:1";
+        let from = |headers: &[(&str, &str)]| edge.made_by_a_page(&request(peer, headers));
+        assert!(!from(&[("sec-fetch-mode", "cors"), ("origin", wallet)]));
+        assert!(!from(&[]));
+        assert!(from(&[("sec-fetch-mode", "no-cors")]));
+        assert!(from(&[("sec-fetch-mode", "navigate")]));
+        assert!(from(&[
+            ("sec-fetch-mode", "cors"),
+            ("origin", "https://example.com")
+        ]));
+    }
+
+    #[test]
+    fn dates_are_utcs() {
         assert_eq!(month_of(0), "1970-01");
         assert_eq!(month_of(1_791_519_200), "2026-10");
         // 2024-02-29T23:59:59Z, then the next second.
         assert_eq!(month_of(1_709_251_199), "2024-02");
         assert_eq!(month_of(1_709_251_200), "2024-03");
+        assert_eq!(civil(1_709_251_199), (2024, 2, 29));
+        assert_eq!(days_left(1_709_251_199), 1);
+        // 2026-10-09: 23 days left, today included.
+        assert_eq!(days_left(1_791_519_200), 23);
     }
 
     #[test]
@@ -427,14 +608,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("seedelf-egress-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("egress.json");
-        let egress = Egress::new(Some(100), Some(file.clone()));
+        let ceiling = 1_000_000;
+        let egress = Egress::new(Some(ceiling), Some(file.clone()));
         egress.add(60);
         egress.flush();
-        let again = Egress::new(Some(100), Some(file.clone()));
+        let again = Egress::new(Some(ceiling), Some(file.clone()));
         assert_eq!(again.used(), 60);
         assert!(!again.over());
-        again.add(40);
-        assert!(again.over());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_day_gets_its_share_of_what_is_left() {
+        let egress = Egress::new(Some(23_000), None);
+        let now = unix_now();
+        // Whatever today's date, today's share is what's left over the days left.
+        let share = 23_000 / days_left(now);
+        egress.add(share - 1);
+        assert!(!egress.over());
+        egress.add(1);
+        assert!(egress.over());
     }
 }

@@ -134,4 +134,13 @@ async fn what_the_server_refuses_itself() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("only evaluateTransaction"), "{body}");
+    // text/plain would be a POST a web page can send with no CORS preflight.
+    let (status, _) = send(
+        app(),
+        "/api/v1/ogmios",
+        "text/plain",
+        serde_json::to_vec(&submit).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
