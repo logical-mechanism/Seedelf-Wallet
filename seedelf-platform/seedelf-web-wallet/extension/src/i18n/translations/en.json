@@ -799,6 +799,7 @@
   "home.warn.rewardsLocked": "Your {{amount}} ₳ of staking rewards are locked until you delegate your voting power.",
   "home.warn.stale": "Couldn't refresh: these are your balances as last read",
   "koios.feeTooSmall": "The network refused it: its fee is less than the network asks. Nothing was sent. Review it again.",
+  "koios.dataNoAnswer": "Seedelf Wallet's own server didn't answer. The transaction may still go through, so the wallet keeps watching for it.",
   "koios.noParams": "Koios returned no protocol parameters.",
   "koios.noTip": "Koios returned no tip.",
   "koios.noTotals": "Koios returned no totals.",

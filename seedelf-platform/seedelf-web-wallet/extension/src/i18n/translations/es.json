@@ -838,6 +838,7 @@
   "home.warn.rewardsLocked": "Tus {{amount}} ₳ de recompensas de staking están bloqueados hasta que delegues tu poder de voto.",
   "home.warn.stale": "No se pudo actualizar: estos son tus saldos tal como se leyeron la última vez",
   "koios.feeTooSmall": "La red la rechazó: su comisión es menor que la que pide la red. No se envió nada. Revísala otra vez.",
+  "koios.dataNoAnswer": "El servidor propio de Seedelf Wallet no respondió. La transacción aún puede completarse, así que la billetera sigue atenta a ella.",
   "koios.noParams": "Koios no devolvió parámetros del protocolo.",
   "koios.noTip": "Koios no devolvió la punta de la cadena.",
   "koios.noTotals": "Koios no devolvió totales.",

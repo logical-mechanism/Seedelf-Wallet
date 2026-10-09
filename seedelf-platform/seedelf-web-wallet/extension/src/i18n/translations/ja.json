@@ -760,6 +760,7 @@
   "home.warn.rewardsLocked": "あなたの {{amount}} ₳ のステーキング報酬は、投票権を委任するまでロックされています。",
   "home.warn.stale": "更新できませんでした。最後に読み取った時点の残高を表示しています",
   "koios.feeTooSmall": "ネットワークが拒否しました。手数料がネットワークの要求額を下回っています。何も送信されていません。もう一度確認してください。",
+  "koios.dataNoAnswer": "Seedelf Wallet 自身のサーバーが応答しませんでした。トランザクションはまだ通る可能性があるため、ウォレットは引き続き確認します。",
   "koios.noParams": "Koios がプロトコルパラメータを返しませんでした。",
   "koios.noTip": "Koios がチェーンの先端を返しませんでした。",
   "koios.noTotals": "Koios が合計を返しませんでした。",

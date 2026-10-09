@@ -837,6 +837,7 @@
   "home.warn.rewardsLocked": "mtpe",
   "home.warn.stale": "machine",
   "koios.feeTooSmall": "machine",
+  "koios.dataNoAnswer": "machine",
   "koios.noParams": "machine",
   "koios.noTip": "machine",
   "koios.noTotals": "machine",
