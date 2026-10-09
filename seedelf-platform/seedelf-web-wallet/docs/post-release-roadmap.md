@@ -218,7 +218,8 @@ Treat that as a correctness-of-privacy item, not a nicety: without it, several a
 
 **The owner's calls (2026-10-08).** The plan has the rest.
 
-- **No cloud node or db-sync.** The node, db-sync and Postgres run at the owner's home, for mainnet and preprod.
+- **No cloud node or db-sync.** The node, db-sync, Postgres and Kupo run at the owner's home, on a server already running them.
+- **Mainnet only:** "We are building for mainnet. Period." Preprod stays on Koios for every part, as it is today.
 - **The API runs on a cheap VPS**, which reaches home over a WireGuard tunnel that home dials out. The home IP stays hidden, and the VPS takes the DoS.
 - **Koios is the fallback** for when the house loses power or internet.
 - **All 22 Koios endpoints the wallet uses move**, in three parts, each with its own health and its own fallback:

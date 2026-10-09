@@ -21,13 +21,18 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 
 **No cloud node, no cloud db-sync: there's no money for it.** So:
 
-- the node, db-sync and Postgres run at the owner's home, for mainnet and preprod, on hardware that's ready;
+- the node, db-sync, Postgres and Kupo run at the owner's home, **for mainnet only**, on a server that's already running them;
 - a cheap VPS holds the public API and reaches home through a tunnel, which hides the home IP and takes the DoS;
 - Koios stays as the fallback for when the house loses power or internet.
 
 ## The owner's calls (2026-10-08)
 
 - **All 22 Koios endpoints the wallet uses move** to the data layer. Koios becomes the fallback only.
+- **Mainnet only.** "We are building for mainnet. Period. And it makes sense when it comes to everyday use."
+  - **Preprod stays on Koios for every part**, as it is today. Its data-layer origin simply doesn't exist, so a preprod build has nothing to fall back from.
+  - **Why:** the preprod server at the house belongs to another project, so it can't be changed, and there's nothing else that could hold preprod. Its db-sync is also set up differently from mainnet's: `tx_out` is `enable`, there's no address table and no off-chain data. Matching mainnet would need a full resync.
+  - Preprod felt fine on Koios anyway: the slowness was a mainnet problem.
+- **Built locally first, the VPS at the end.** The API runs on a machine at home against the mainnet server's services directly. The VPS, the tunnel and the egress switch come last, before the wallet ships.
 - **Hardware:** at least 64 GB of RAM and at least 2 TB of NVMe.
 - **Settings:** one **Koios-only switch**. The default is the data layer, which falls back to Koios by itself ([private by default](../privacy.md): "default" never means "only").
 - **The code lives in this repo**, as a new top-level `seedelf-data/` with its own Cargo workspace, so the CLI's `Cargo.lock` never moves. It's open source, because the no-log promise rests on people being able to audit it.
@@ -66,16 +71,16 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
    - **PostgREST is never run or exposed.**
 3. **Every line of custom code lives on the VPS.** Home runs stock software plus SQL: the node, db-sync, Postgres, Kupo, Ogmios and submit-api.
 4. **Once synced, home reaches the internet only through the tunnel.** Otherwise the node's P2P traffic, the propagation of submits and db-sync's off-chain metadata fetches would each show strangers the home IP. A peer watching where Seedelf transactions are first seen could pin it down.
-5. **The node is pinned to 11.0.1**, which Kupo 2.12 and Ogmios v7.0.0 are tested against. The node is at 11.1.3 now. Move up only when a hard fork needs it, after Kupo and Ogmios pass on preprod.
+5. **Kupo and Ogmios must support the node's version.** Kupo 2.12 and Ogmios v7.0.0 are tested against node 11.0.1, and the current node is 11.1.3. With no preprod to try an upgrade on first, check both projects' compatibility tables before each node upgrade.
 
 ## The shape
 
 ```
  Chrome extension ──HTTPS──▶ VPS (public IP, ours)                       Home (no inbound ports, own VLAN)
- Koios on 503 /              Caddy: TLS, no access log                   cardano-node 11.0.1 ×2 (mainnet, preprod)
- timeout, per part           seedelf-data-api (Rust):                    Kupo 2.12 ×2   (Seedelf + Lovejoin patterns)
-                               /seedelf/v1  private index (in memory)    db-sync 13.7 ×2 → Postgres (grest schema)
-                               /api/v1      Koios-equivalent, 22 routes  cardano-submit-api ×2, Ogmios v7 ×2
+ Koios on 503 /              Caddy: TLS, no access log                   cardano-node (mainnet)
+ timeout, per part;          seedelf-data-api (Rust):                    Kupo           (Seedelf + Lovejoin patterns)
+ preprod: always Koios         /seedelf/v1  private index (in memory)    db-sync 13.7 → Postgres (grest schema)
+                               /api/v1      Koios-equivalent, 22 routes  cardano-submit-api, Ogmios v7
                                buckets, caches, breakers, /health        timers: Koios cache jobs, host_status
                              WireGuard server ◀══ tunnel, dialled out ══ WireGuard client (default route once synced)
 ```
@@ -86,18 +91,24 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 
 **What it serves.** The current unspent set at two script credentials, and what changed since any point:
 
-- the Seedelf contract, `94bca9c0…a469`, the same on both networks;
-- Lovejoin's mixBox: preprod `67ffe4ed…`, mainnet `c145c10f…` ([networks.ts](../../extension/src/networks.ts)).
+- the Seedelf contract, `94bca9c0…a469`;
+- Lovejoin's mainnet mixBox, `c145c10f…` ([networks.ts](../../extension/src/networks.ts)).
 
 **Every answer is the same for every user.** Each is cached once and costs home nothing per request. No request ever names a UTxO, a register or an owner.
 
-**The source: Kupo at home**, one instance per network:
+**The source: a Seedelf-only Kupo at home** (`kupo_seedelf.service`, Kupo 2.11, port 1443), on the mainnet server, set up 2026-10-08.
 
+- **It runs beside the server's existing Kupo, never inside it.** That Kupo, on 1442, is another project's: its patterns are three addresses and a stake credential, none of ours. Adding a pattern to it would roll back its whole index.
 - **Connection:** the node's socket.
-- **Patterns:** `<contract-hash>/*` and `<mixBox-hash>/*`.
-- **`--since`:** the block before the earliest deployment.
-  - No deployment slot is recorded anywhere, so find it once from db-sync. Use the reference transactions in [constants.rs](../../../seedelf-core/src/constants.rs) and Lovejoin's deployment transactions (in the gitignored `_reference/Lovejoin/artifacts/`).
-  - Record it in [seedelf-contracts/README.md](../../../../seedelf-contracts/README.md) and the data layer's config.
+- **Patterns:** `94bca9c0…a469/*` (the contract) and `c145c10f…1fad/*` (the mixBox).
+- **`--since 144386185.af5f8c02581c857a39218fcfab037817d470e8f4ca347ae04ffb328c16e7d11b`:** block 11,305,804, checked against both db-sync and Koios.
+  - The contract's first output is the next block, 11,305,805 (tx `1e491b15…`, epoch 531).
+  - The mixBox's first is block 14,001,617.
+  - Record the point in [seedelf-contracts/README.md](../../../../seedelf-contracts/README.md) too.
+- **The unit's gotchas:**
+  - `StateDirectory=kupo-seedelf` must match `--workdir /var/lib/kupo-seedelf`, or Kupo can't write its database.
+  - Every `ExecStart` line but the last needs a trailing `\`, or the `--match` lines are silently dropped.
+  - No `--defer-db-indexes`.
 - **Unpruned**, so spent outputs keep their spending transaction. The database stays MBs, and its full history is what a private-history restore could use later.
 - **Chain points, not block heights.** Kupo reports a slot and a header hash.
   - The feed's cursors are points.
@@ -216,7 +227,7 @@ Home shows the private balance at once, marked stale until the delta lands. That
 
 ## Submits
 
-**cardano-submit-api runs at home**, one per network, on the node's socket.
+**cardano-submit-api runs at home**, on the mainnet node's socket.
 
 - **It's reached only as the VPS route `POST /api/v1/submittx`:** Koios's path, `Content-Type: application/cbor`, and a 16 KiB body cap (the ledger's `max_tx_size`).
 - **Koios fronts the same service,** so the transaction ID and the error strings the wallet classifies match: `BadInputsUTxO`, `OutsideValidityIntervalUTxO`, `FeeTooSmallUTxO` and the rest.
@@ -279,7 +290,15 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 ## Home
 
-- **RAM.** With both networks on one 64 GB box, run mainnet db-sync with `ledger_backend: "lsm"`: about 2–3 GB instead of 21. Keep the nodes in memory. Kupo adds less than 2 GB each.
+- **What's there already (checked 2026-10-08).** The mainnet server runs db-sync 13.7.0.1 (schema 15.50.6), 5 s behind the chain, with **exactly Koios's options**:
+  - `tx_out` is `consumed`: `consumed_by_tx_id` is filled, and `tx_in` is empty;
+  - the address table is on;
+  - the ledger is on (rewards, epoch stake and DRep distribution are filled);
+  - off-chain pool and vote data are on;
+  - `tx_cbor` is on.
+
+  No `grest` schema is installed yet. The node and Kupo run there too.
+- **RAM.** Mainnet alone fits in memory on 64 GB: about 24 GB for the node and 21 GB for db-sync, plus Postgres, Kupo and Ogmios. If it's tight, `ledger_backend: "lsm"` cuts db-sync to about 2–3 GB.
 - **Disk.** Mainnet is about 650 GB and growing (db-sync's May 2025 figures: node 203 GB, Postgres 438 GB, ledger files 10 GB). Alert at 75%, and use high-endurance NVMe.
 - **Isolation:**
   - its own VLAN: no port forwards, no UPnP, an outbound-only node;
@@ -305,7 +324,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 **Caddy terminates TLS, with no access log.**
 
-- DNS names only the VPS: `https://mainnet.<domain>` and `https://preprod.<domain>`, the domain being the owner's pick.
+- DNS names only the VPS: `https://mainnet.<domain>`, the domain being the owner's pick.
 - **CORS answers the extension's origin only.** The wallet needs a `connect-src` entry and **no new host permission**: no install warning, nothing disabled on update, and the store's nearly full host-permission box unchanged.
 
 **Limits:**
@@ -335,7 +354,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 **Its own chunk. This contract is what it builds to.**
 
-- **`networks.ts`** gets a `data` origin beside `koios`.
+- **`networks.ts`** gets a `data` origin beside `koios`, **on mainnet only**. Preprod has none, so it reads and submits through Koios as it does today, and a preprod-only build adds nothing to `connect-src`.
 - **Fallback is per part:**
   - The private index falls back to today's Koios `credential_utxos` scan, which gives the same view, only slower.
   - The public side swaps its base URL.
@@ -390,32 +409,59 @@ Monthly and rough; check prices when buying.
 
 **The real cost is time:**
 
-- a node upgrade before every hard fork: preprod first, with Kupo and Ogmios checked each time;
+- a node upgrade before every hard fork, with Kupo's and Ogmios's support checked first, since there's no preprod to try it on;
 - db-sync upgrades once koios-artifacts publishes matching SQL, with a resync now and then, which the private part and submits ride out;
 - incidents.
 
 ## Order of work
 
-0. **Now:** start mainnet db-sync, and find both contracts' first-output points.
-1. **The preprod stack at home:**
-   - the node, Kupo, db-sync with `grest` and the cache jobs, submit-api and Ogmios;
-   - the Postgres role;
-   - the UPS.
+0. ✅ **The mainnet server** runs the node, db-sync (with Koios's options) and Kupo. `seedelf-data/` exists, with its `.env` ignored by git.
+1. **Make it reachable and safe from this machine:**
+   - ✅ **a read-only Postgres role,** `seedelf_reader`, in place of `cexplorer`, db-sync's own writer. It has SELECT only, `default_transaction_read_only`, a 60 s timeout and 10 connections. `pg_hba` admits it from the dev machine only.
+     - Still open: the `pg_hba` lines that let `cexplorer` in from the whole LAN. Narrow them once nothing else on the network needs them.
+   - ✅ **the Seedelf Kupo** on 1443, catching up from its start point;
+   - ✅ **Ogmios** is already there: v6.14.0 on 1337, synced. That release is tested with node 10.5.1, so the node is likely 10.5.x.
+   - add submit-api;
+   - install `grest` and its cache jobs;
+   - ✅ find both contracts' first-output points.
+2. **Measure.**
+   - ✅ **db-sync's speed** (2026-10-08). On the contract, which has 2 addresses, 32 unspent outputs and 117 ever:
 
-   Measure RAM, disk and sync times.
-2. **The VPS:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
-3. **`seedelf-data/`, in this order:**
+     | Query | Warm (first run) |
+     |---|---|
+     | the snapshot, with datum, assets and point | **13 ms** (96 ms) |
+     | created in the last ~day, still unspent | **1.2 ms** |
+     | spent in the last ~day, with the spending tx | **8 ms** |
+
+     The indexes it needs are already in place: `idx_address_payment_cred`, `idx_tx_out_address_id_unspent` and `idx_tx_out_consumed_by_tx_id`. **Speed is no reason to keep Kupo:** the builder reads once a block and answers from memory.
+   - Still to measure:
+     - Kupo's answer against db-sync's, once synced: the same 32 unspent, 117 ever, the same spends;
+     - **freshness**: the node's tip (Ogmios), Kupo's checkpoint and db-sync's newest block, sampled every 30 s for a day that includes an epoch boundary.
+
+     These settle whether Kupo stays. **Either way the builder can take both sources**, Kupo first and db-sync when it's down, since the three queries above are most of a db-sync version.
+3. **`seedelf-data/`, built and run locally:**
    1. the private index (the builder, `since`, shards, names, Lovejoin), then `submittx` and `ogmios`;
    2. the public routes by traffic: `credential_utxos`, `account_addresses`, `account_info`, `tip`, `epoch_params`, `tx_status`, `utxo_info`, `tx_info`, `account_txs`, then the rest;
    3. alongside: `deploy/home`, `deploy/edge` and a runbook. Secrets are never committed.
-4. **Mainnet**, with parity checked there.
-5. **The wallet's chunk.**
+
+   **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
+4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.
+5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
 6. **The drills**, then 1.4.0.
 
 ## Verification
 
-- **Private parity.** For test wallets on both networks, the private index gives the same owned set and Seedelf names as today's Koios scan. Replaying `since` from many cursors matches a fresh snapshot.
-- **Rollbacks.** A reset is forced in a test against a scripted Kupo, then real ones are watched on preprod for a day.
+**No preprod, and no real-money tests**, so verification leans on what's free:
+
+- reads against mainnet;
+- the e2e fakes;
+- the owner's everyday use.
+
+The private index is read-only: a bug shows a wrong balance or gets a transaction refused, but it can't lose funds.
+
+- **Private parity.** On mainnet, the private index gives the same owned set and Seedelf names as today's Koios scan, for the owner's own wallets. Replaying `since` from many cursors matches a fresh snapshot.
+- **Rollbacks.** A reset is forced in a test against a scripted Kupo. Then real rollbacks are watched on mainnet for a day.
+- **Submits, for free.** A deliberately invalid transaction (spent inputs, a fee too small) is refused with the same error strings Koios gives. A valid submit first happens in the owner's ordinary use, with Koios as the fallback.
 - **Scale.** Build a synthetic contract of 1M rows offline, in the WebAssembly's test harness, and measure:
   - a restore's time and peak memory;
   - shard sizes;
