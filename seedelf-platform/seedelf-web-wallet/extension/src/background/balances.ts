@@ -61,6 +61,7 @@ import { keptContractView, readContractView } from "./contract-scan";
 import { incomingOf, lessSpent, rewardAccountHex } from "./incoming";
 import type { Koios, KoiosUtxo } from "./koios";
 import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
+import type { PrivateIndex } from "./private-index";
 import type { PrivateStore } from "./private-store";
 import { heldSent } from "./sent-txs";
 import { outpoint, reservedSet, spentSet } from "./spent";
@@ -97,7 +98,8 @@ export interface BalanceDeps {
   /** chrome.storage.local, where the pool list is kept: a pool's ticker is looked up there first. */
   local?: Area;
   /** The sealed records: who paid for each Seedelf (minted-by.ts). */
-  store?: PrivateStore;
+  store?: PrivateStore;  /** The private index, where it's read now (contract-scan.ts). */
+  index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
 }
 
 /** What the device holds that says who paid for each Seedelf (minted-by.ts `paidByOf`). */

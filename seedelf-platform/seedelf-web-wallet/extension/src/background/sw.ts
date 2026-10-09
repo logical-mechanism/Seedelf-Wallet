@@ -18,6 +18,7 @@ import { answerSite, DappError, DappService, SITE_TRAPPED, type DappSession } fr
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
 import { chainClient, DataParts } from "./data-layer";
+import { privateIndexClient } from "./private-index";
 import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
@@ -173,7 +174,10 @@ function getContext(): Promise<Worker> {
     // its own, and the Koios-only switch read at each request (data-layer.ts). Every request to Koios waits its turn
     // under its public-tier limit, whatever the network.
     const dataParts = new DataParts(session);
-    const koios = chainClient({ koiosOnly: async () => (await preferences.get()).koiosOnly, parts: dataParts });
+    const dataDeps = { koiosOnly: async () => (await preferences.get()).koiosOnly, parts: dataParts };
+    const koios = chainClient(dataDeps);
+    // The contract and Lovejoin's pool from the private index, its own part (private-index.ts).
+    const index = privateIndexClient(dataDeps);
     const store = new PrivateStore({ wallet, local });
     const accounts = new AccountsService({ wasm, wallet, store, local, session, koios, now: Date.now });
     const prices = new PriceService({ session, local, preferences, now: Date.now });
@@ -181,7 +185,7 @@ function getContext(): Promise<Worker> {
     const activity = new ActivityService({ wasm, wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity, activeAccount: () => activeAccount(local) });
-    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
+    const balances = new BalanceService({ wasm, wallet, session, local, koios, index, now: Date.now, activity, coins, store });
     const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
     const spends = {
@@ -189,6 +193,7 @@ function getContext(): Promise<Worker> {
       wallet,
       session,
       koios,
+      index,
       collateral,
       now: Date.now,
       activity,

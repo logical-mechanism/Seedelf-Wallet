@@ -2,7 +2,8 @@
 // (contacts, the Seedelf history, which UTxOs are locked, the sites
 // connected to the public account, the private sessions, a payment that may
 // still go through, who paid for each Seedelf, which public accounts the
-// phrase has used and what they are called): sealed in
+// phrase has used and what they are called, and which of the contract's
+// UTxOs are its own as the private index last settled them): sealed in
 // chrome.storage.local with XChaCha20-Poly1305 under a key derived from the
 // recovery phrase's entropy (Wallet.withStoreKey). They can't be read while
 // the wallet is locked, or by anyone without the phrase, and removing the
@@ -41,6 +42,8 @@ export const PRIVATE_RECORDS = [
   "maybeSent.mainnet",
   "mintedBy.preprod",
   "mintedBy.mainnet",
+  // The private index's settled view of this wallet (contract-scan.ts): mainnet only, as the data layer is.
+  "contract.mainnet",
 ] as const;
 export type RecordName = (typeof PRIVATE_RECORDS)[number];
 
@@ -106,6 +109,7 @@ const WHAT: Record<RecordName, I18nKey> = {
   "maybeSent.mainnet": "worker.record.maybeSent",
   "mintedBy.preprod": "worker.record.mintedBy",
   "mintedBy.mainnet": "worker.record.mintedBy",
+  "contract.mainnet": "worker.record.contract",
 };
 
 /**

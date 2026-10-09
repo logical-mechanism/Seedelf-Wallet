@@ -38,6 +38,7 @@ import { forgetContractView, readContractView, type ContractView } from "./contr
 import type { Koios, KoiosUtxo } from "./koios";
 import type { PreferencesService } from "./preferences";
 import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
+import type { PrivateIndex } from "./private-index";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
 import { outpoint, reservedSet, spentSet } from "./spent";
@@ -104,7 +105,8 @@ export interface ScriptSpendDeps {
   /** Whether an account-paid spend (a mint, a send) spends staking rewards too. */
   preferences?: PreferencesService;
   /** Where a send that may still go through is sealed (pending.ts). */
-  store: PrivateStore;
+  store: PrivateStore;  /** The private index, where it's read now (contract-scan.ts). */
+  index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
 }
 
 /** A built transaction waiting in session storage for Send. */

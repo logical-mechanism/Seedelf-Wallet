@@ -515,6 +515,12 @@ export interface UtxoInfo {
   tokens: TokenAmount[];
   /** The block that made it, when known. */
   blockHeight?: number;
+  /**
+   * When it was made (ms), for one with no block height: a private coin read
+   * from the private index, which gives slots and times, never heights
+   * (chunk 26b).
+   */
+  madeAt?: number;
   /** The Cardano account's address holding it. */
   address?: string;
   /**
