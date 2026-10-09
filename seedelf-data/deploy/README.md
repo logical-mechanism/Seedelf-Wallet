@@ -35,6 +35,12 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 
 **db-sync** runs the options in `home/db-sync-insert-options.json`. They've been right since 2026-10-09, when `offchain_vote_data` was turned on. Check them again after every db-sync upgrade: 13.7.0.1 added that option switched off, and vote metadata stopped with no error.
 
+**db-sync's extra indexes** are in `home/db-sync-indexes.sql`:
+- the 13 found on the server on 2026-10-09 that db-sync doesn't make (about 79 GB);
+- 3 small ones the API adds for a wallet's first load.
+
+Run it as the role db-sync writes with. It skips any index already there, and builds the rest without holding up db-sync. Its head has the command that lists every index with its size, and the one that finds a build that failed.
+
 **The tunnel:**
 
 1. `wg genkey | tee private | wg pubkey > public`, as root, in `/etc/wireguard/`.
@@ -132,4 +138,5 @@ Once everything is synced, home's own traffic goes out through the VPS. Otherwis
 - **A new API build:** copy the binary, then `systemctl restart seedelf-data-api`. Every cache refills within a block, and the month's traffic is kept.
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.
+- **After a db-sync resync,** once it has caught up, run `home/db-sync-indexes.sql` again: a new database has only db-sync's own indexes.
 - **At every wallet release,** refresh the token decimals file along with the wallet's own token list, then restart the API.

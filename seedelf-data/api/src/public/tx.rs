@@ -162,16 +162,27 @@ const TXS: &str = "select t.id, encode(t.hash, 'hex'), encode(b.hash, 'hex'), b.
      from tx t join block b on b.id = t.block_id where t.hash = any($1::bytea[]) order by t.id";
 
 /// The outputs the transactions made and the ones they spent, with tokens when `$2`.
-const OUTS: &str = "select o.tx_id, o.consumed_by_tx_id, a.address::text, encode(a.payment_cred, 'hex'), \
+///
+/// Each transaction's are found on their own (`offset 0` keeps them apart),
+/// and an output one made and another spent is one row. db-sync's statistics
+/// put 343 outputs on every transaction (they count a million distinct
+/// transactions in `tx_out`, of 125 million), so asked for both at once the
+/// planner started parallel workers for a page's 40 rows: 5 ms, 0.6 ms this way.
+const OUTS: &str = "with ids as materialized ( \
+       select m.id from unnest($1::bigint[]) x(id) \
+         cross join lateral (select o.id from tx_out o where o.tx_id = x.id offset 0) m \
+       union select s.id from unnest($1::bigint[]) x(id) \
+         cross join lateral (select o.id from tx_out o where o.consumed_by_tx_id = x.id offset 0) s) \
+     select o.tx_id, o.consumed_by_tx_id, a.address::text, encode(a.payment_cred, 'hex'), \
        sa.view::text, encode(t.hash, 'hex'), o.index::int, o.value::text, encode(o.data_hash, 'hex'), \
        case when $2::bool then \
          (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), encode(m.name, 'hex'), \
                  m.fingerprint::text, mto.quantity::text) order by mto.id), '[]')::text \
             from ma_tx_out mto join multi_asset m on m.id = mto.ident where mto.tx_out_id = o.id) \
        else '[]' end \
-     from tx_out o join tx t on t.id = o.tx_id join address a on a.id = o.address_id \
+     from ids join tx_out o on o.id = ids.id join tx t on t.id = o.tx_id \
+     join address a on a.id = o.address_id \
      left join stake_address sa on sa.id = o.stake_address_id \
-     where o.tx_id = any($1::bigint[]) or o.consumed_by_tx_id = any($1::bigint[]) \
      order by t.hash, o.index";
 
 const WITHDRAWALS: &str = "select w.tx_id, w.amount::text, sa.view::text \

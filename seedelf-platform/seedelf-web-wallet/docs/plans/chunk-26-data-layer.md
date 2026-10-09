@@ -268,6 +268,7 @@ Home shows the private balance at once, marked stale until the delta lands. That
   - a pool's live stake is summed per pool, with accounts' reward sums kept for the epoch;
   - a token's supply and latest mint are read from `ma_tx_mint`.
 - **Where Koios relies on an index it adds, the query goes another way.** A stake key's addresses come from `address.stake_address_id`: 2 ms, against 6.7 s through `tx_out`.
+  - The exceptions are three of Koios's, on tables under 30 MB, for a wallet's first load. [deploy/home/db-sync-indexes.sql](../../../../seedelf-data/deploy/home/db-sync-indexes.sql) records them, with the 13 indexes beyond db-sync's own already on the server, so a resync gets them all back.
 - **Caching:**
   - `epoch_params` and `totals` are kept for a block, not an epoch: a millisecond each, and never last epoch's fees at a boundary;
   - `drep_metadata` is kept 10 minutes, like `drep_info`;
@@ -399,6 +400,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
   - Submits fall back to Koios's `/submittx`.
 - **What triggers it:** a transport error, a timeout (about 10 s), a 5xx, a 503 or a 429 sends that part to Koios for 5 minutes. A read restarts on Koios rather than mixing pages from two backends.
 - **Rate limiting:** `KOIOS_LIMIT` stays for Koios, and the data layer gets a limiter of its own.
+- **Home's first reading shouldn't wait on a pool's live stake** (found in the first-load pass, 2026-10-09). Staking's `poolRef` asks `pool_info` only for a ticker, and Home's reading waits for it. A pool nobody has looked at in 10 minutes makes the server work out its live stake first, for up to 3 s: 1.6 s cold for a pool of 2,000 delegators, and the full 3 s for the largest. The ticker is in `pool_list`, which every wallet shares and the server keeps for an hour.
 - **Private state:**
   - the cursor and your rows, sealed with the vault;
   - the incremental check;
@@ -505,6 +507,11 @@ Monthly and rough; check prices when buying.
       - **Edge:** the tunnel's routing fails closed; a web page can't spend the month's traffic or reach Ogmios; answers charge their bytes; the logs can't be turned up to show a request.
       - **Public:** what one request may gather is capped, so a heavy credential costs a 503, not gigabytes. `account_txs` is 4× faster, a delegators clause Koios doesn't have is gone (some pools timed out on every look), and IDs have one spelling.
       - **Left for later, measured and small:** `query_typed` for one round trip a statement; one pass for every DRep's delegators; single-flight for answers kept a while; live tests over the heaviest keys.
+   5. **The first-load pass** (2026-10-09, the owner's order: before the wallet's plan). Every query a wallet makes from create or restore to Home and Activity was put through `EXPLAIN ANALYZE` on the home db-sync, for a fresh wallet, two typical ones and a busy key.
+      - **The queries:** db-sync's statistics on `tx_out` are 100–1,000× low, so the planner chose parallel workers and whole-table reads for small lookups. `credential_utxos` and `tx_info`'s outputs now read each address's or transaction's own outputs, with the same rows. A wallet's own UTxOs went from 4–6 ms to 0.3–0.5 ms, a credential at 95,000 addresses from 4.1 s to 160 ms, and a page of Activity's outputs from 5 ms to 0.6 ms.
+      - **The indexes:** three of Koios's, for `account_info`'s DRep (16 of its 16.3 ms) and `tx_info`'s certificates and votes (15 ms and 1.7 ms). Not yet built at home.
+      - **Already fast:** `account_addresses` (under 0.2 ms), `account_txs` (1 ms; 16 ms for the busy key), the private index (under 2 ms warm, and read once a block).
+      - **Left as it is:** a pool's first look, up to 3 s on Home's path ([The wallet's side](#the-wallets-side)).
 4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.
    - **Found in the review, and fixed on this branch (2026-10-09), a wallet bug with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passed it through and Voting checked for `"retired"`. So a picked DRep that had retired, or that never registered (`"not_registered"`), wasn't blocked. It got the inactive warning instead, which says delegating to it still lets you withdraw rewards. The wallet now carries Koios's three words throughout, the account's own DRep included (the owner: "follow what koios is doing"). Voting blocks both, each with its own reason; the screens still say "Retired" and "Not registered".
 5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
