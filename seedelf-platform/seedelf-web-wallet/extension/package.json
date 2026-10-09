@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "e2e": "playwright test --project=extension",
+    "e2e:data": "VITE_DATA_ORIGIN=https://data.seedelf.test vite build && playwright test --project=data-layer",
     "store:images": "playwright test --project=store"
   },
   "dependencies": {

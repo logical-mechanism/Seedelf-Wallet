@@ -2,7 +2,7 @@
 
 Step 4 of [chunk 26](chunk-26-data-layer.md#order-of-work): Seedelf Wallet reads mainnet through `seedelf-data`, falling back to Koios one part at a time. Preprod doesn't change.
 
-**Status: 📝 planned (2026-10-09).** Branch `web-wallet/data-layer-wallet`, from `main` once #289 (the API) has merged.
+**Status: ✅ built (2026-10-09)** on `web-wallet/data-layer-wallet`, from `main` after #289. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The owner's verification ([Verification](#verification)) is next.
 
 **Read first:**
 - the parent plan's [The wallet's side](chunk-26-data-layer.md#the-wallets-side), the contract this builds to;
@@ -268,3 +268,20 @@ All of it is free. There's no preprod for the data layer, and no real-money test
 - **CI for `seedelf-data/`,** which has none today;
 - the store build's origin and the user-facing docs above;
 - home's egress through the tunnel, then the drills.
+
+## What changed from the plan
+
+Built 2026-10-09. Where the build departs from the steps above, and why:
+
+- **Lovejoin's pool is read at the tip** (Step 5): `lovejoin/pool`, then `lovejoin/since` its cursor, both shared answers. The snapshot alone is at the stable cursor, ten blocks back, and a chain drawing from it would take boxes spent since.
+- **A feed watch needs a cursor from before its transaction went out** (Step 6), and a cursor is only ever one the server handed out. So `feed.ts` keeps them in session storage, one every 5 minutes for 6 hours, the sealed one from before a lock included. A watch with none old enough asks `tx_status`, as one whose part is down does: a Lovejoin chain that started before a lock, say.
+- **Each private watch names the one feed it shows in:** the contract's for a Seedelf spend, a move-in, an account-paid mint or send to a Seedelf (read from what the transaction pays), and a session's way out and back; the pool's for Lovejoin's chains, withdraws and a session's return through it. A taken Seedelf spend's watch now keeps `contract: true` so it stays on the feed.
+- **Submits** (Step 2): a 413 and a 415 go straight to Koios too: the node never saw them. After a lost connection, which is taken as never sent, Koios calling an input spent is read as maybe sent: it may be this very transaction.
+- **The switch** sits in Settings' *Sites and mixing* section, as the plan's Privacy section, shown only where the build has a data layer. Its heading doesn't name it: the owner may prefer it under *Network*.
+- **The UTxOs screen** gets a *Made* line (`utxos.made`) for a private coin with no block height, beside *Block*, rather than changing *Block*'s key.
+- **Still on `tx_status` or `utxo_info`, rare paths, for a follow-up:**
+  - a chain's resend refused as spent (`sentAlready`);
+  - a maybe-sent Seedelf spend's mempool check, whose `utxo_info` names the wallet's own contract UTxOs to the public side, as it did to Koios;
+  - a site's own transactions, and a swap's copies, which touch only key addresses anyway.
+- **Words that name Koios for an answer the data layer may now give** ("Koios has no details for this pool", "Koios returned no tip") are left for the VPS chunk's user-facing pass, with the policy.
+

@@ -59,6 +59,20 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 - **Removing the extension deletes its storage,** including the vault. Keep the test wallet's phrase somewhere.
 - **Startup warning:** Chrome may warn about developer-mode extensions at startup. That's expected.
 
+## The data layer, locally
+
+Mainnet can read Seedelf Wallet's own data layer (chunk 26b, [architecture.md](architecture.md#chain-data)). **The store build doesn't yet:** it has no origin until the VPS chunk. A dev build reads a local API instead:
+
+1. **Run the API** from `seedelf-data/` ([its README](../../../seedelf-data/README.md)) with the dev build's pinned ID allowed: `DATA_ORIGINS=chrome-extension://jfekiogplaamnceifeehipmomhojngcb cargo run -p seedelf-data-api`. It listens on `127.0.0.1:8099`.
+2. **Build against it:** `VITE_DATA_ORIGIN=http://127.0.0.1:8099 npm run build`, and reload the extension. Its CSP's `connect-src` gains the origin; the manifest asks for no new host.
+3. **On mainnet, the worker's network panel shows:**
+   - `127.0.0.1:8099/seedelf/v1/mainnet/…`: a restore's `contract/snapshot`, then `contract/since/<cursor>` and `names` at each reading, never Koios's `credential_utxos` for the contract;
+   - `127.0.0.1:8099/api/v1/…` for the account, staking, governance and submits;
+   - after a private send, `contract/since/…` every 5 s while Home watches it, and no `tx_status` for it;
+   - with the API stopped, or started with another `DATA_ORIGINS` (403s), each part on `api.koios.rest` within one request, and back on the API 5 minutes later;
+   - with Settings' **Read Cardano through Koios only** on, nothing to `127.0.0.1:8099`.
+4. **End to end:** `npm run e2e:data` builds with `VITE_DATA_ORIGIN=https://data.seedelf.test` and runs `e2e/data-layer.spec.ts` against its fake (`e2e/data-layer.ts`). It writes that build to `dist/`: run `npm run build` again for everyday use.
+
 ## Test funds
 
 - Get preprod test ADA from the [Cardano testnet faucet](https://docs.cardano.org/cardano-testnets/tools/faucet) and send it to the wallet's Cardano account (its receive address).
@@ -72,6 +86,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 | Rust | `seedelf-crypto`, `seedelf-core`, and the wasm crate | `cargo test`. The CLI's offline integration tests (`seedelf-cli/tests/cli/`) guard the builder extraction. The WebAssembly's own JS tests run in Node once it's built: `node --test "seedelf-web-wallet/wasm/tests/*.test.mjs"` from `seedelf-platform/`, as CI runs them. |
 | Key derivation | The frozen v1 Seedelf key vectors, and the Cardano account vectors (verified against `@cardano-sdk`, Lace's library) | Checked in Rust, and again from JS through WebAssembly, so both sides agree |
 | TypeScript | The manifest, the vault and wallet state, the Koios and giveme.my clients, and the worker's services and handlers against the real WASM, over recorded preprod answers | Vitest (`npm test`) |
+| End to end, data layer | Mainnet through the data layer's fake, each part falling back to the Koios fake | `npm run e2e:data` (a build with `VITE_DATA_ORIGIN`, then `e2e/data-layer.spec.ts`), as CI runs it |
 | End to end | The built extension in a real browser | Playwright (`npm run e2e`) launches Chromium with `dist/` loaded and drives the side panel's layout and the full tab. Branded Chrome no longer accepts `--load-extension`, so it uses Playwright's Chromium. The dApp connector's tests (chunk 15) load a copy of the build whose manifest grants the sites from install, because Chrome's own dialog for an optional permission can't be answered from automation (`withSiteAccess` in `e2e/support.ts`); their dApp is a page served at `https://dapp.example/`. The harness sets the network before the wallet starts (`network`, preprod by default, as the fakes answer), so the suite runs on a dev build and on the store's mainnet build alike. |
 | Live reads | The balance scan and the ADA Handle lookup against the real preprod Koios | `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`; skipped otherwise |
 | Probes | Transactions checked against preprod's node and scripts, submitting nothing | `node tests/fixtures/probe-staking.mjs`: every staking transaction through Ogmios's decoder, and an account-paid mint with the rewards through the real policy. `probe-governance.mjs` does the same for every DRep transaction (register, update, retire, vote), and `probe-note.mjs` for a public send with a note. The `record-*.mjs` scripts do the same for the Seedelf spends, and keep what they recorded as fixtures. |

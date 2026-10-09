@@ -512,7 +512,7 @@ Monthly and rough; check prices when buying.
       - **The indexes:** three of Koios's, built at home by the owner the same day. `account_info` went from 16–19 ms to 0.1–0.4 ms, and `tx_info`'s certificates and votes from 15 ms and 1.7 ms to 0.3–0.6 ms and 0.03 ms.
       - **Already fast:** `account_addresses` (under 0.2 ms), `account_txs` (1 ms; 16 ms for the busy key), the private index (under 2 ms warm, and read once a block).
       - **Left as it is:** a pool's first look, up to 3 s on Home's path ([The wallet's side](#the-wallets-side)).
-4. **The wallet's chunk**, against the local API from a dev build only: [chunk 26b](chunk-26b-data-layer-wallet.md). The store build never carries a localhost origin.
+4. ✅ **The wallet's chunk** (built 2026-10-09), against the local API from a dev build only: [chunk 26b](chunk-26b-data-layer-wallet.md). The store build never carries a localhost origin.
    - **Found in the review, and fixed on this branch (2026-10-09), a wallet bug with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passed it through and Voting checked for `"retired"`. So a picked DRep that had retired, or that never registered (`"not_registered"`), wasn't blocked. It got the inactive warning instead, which says delegating to it still lets you withdraw rewards. The wallet now carries Koios's three words throughout, the account's own DRep included (the owner: "follow what koios is doing"). Voting blocks both, each with its own reason; the screens still say "Retired" and "Not registered".
 5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
 6. **The drills**, then 1.4.0.
