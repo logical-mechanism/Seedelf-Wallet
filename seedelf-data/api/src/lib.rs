@@ -38,12 +38,15 @@ pub fn app(state: Arc<AppState>, submit: Arc<Submit>) -> Router {
         .layer(CompressionLayer::new())
 }
 
-/// db-sync's tip and how old it is: 200 while the private index can answer, 503 when not.
+/// db-sync's tip and how old it is: 200 while the private index and the
+/// public routes can answer, 503 when not. Both rest on db-sync's tip.
 async fn health(State(state): State<Arc<AppState>>) -> Response {
     let Some(tip) = state.tip() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({ "network": "mainnet", "private": "down" })),
+            axum::Json(
+                serde_json::json!({ "network": "mainnet", "private": "down", "public": "down" }),
+            ),
         )
             .into_response();
     };
@@ -57,6 +60,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Response {
     let body = serde_json::json!({
         "network": "mainnet",
         "private": if ok { "ok" } else { "behind" },
+        "public": if ok { "ok" } else { "behind" },
         "tip": { "block": tip.height, "slot": tip.slot, "hash": tip.hash, "time": tip.time },
         "age": age,
     });

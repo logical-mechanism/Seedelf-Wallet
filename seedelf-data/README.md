@@ -83,7 +83,7 @@ All routes are under `/seedelf/v1/mainnet/`.
 | `contract/since/{cursor}` | what changed after `cursor`: `created` (each with its `spent`, if it's gone since) and `spent` (older rows spent after it), plus the new stable `cursor` |
 | `names` | every Seedelf name unspent at the tip, with the row that holds it |
 | `lovejoin/pool` and `lovejoin/since/{cursor}` | the same for the mix box. Each box carries `made_by`: whether its transaction spent a box itself, and each input's payment and stake credentials |
-| `/health` | db-sync's tip and its age: 200 while the private index answers, 503 when it's behind |
+| `/health` | db-sync's tip and its age: 200 while the private index and the public routes answer, 503 when it's behind |
 
 **How a wallet reads it:**
 
@@ -141,6 +141,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **A pool's state** is worked out per request from its latest update and any retirement after it.
 - **A pool's live stake** is summed over its live delegators. Their reward sums change only at an epoch's start, so each account's is kept in memory for the epoch.
   - A first look at a large pool, read from a cold disk, took 12 s. So a request waits at most 3 s for the live figures, then answers with the epoch's snapshot (`pool_stat`) while they're finished in the background and kept.
+  - Once a pool's figures are 10 minutes old, the next look gets them at once while fresh ones are worked out behind it.
 - **A token's supply and latest mint** are read from `ma_tx_mint`, which db-sync indexes by token.
 
 **Every connection runs with `jit = off`.** JIT compiled plans whose estimates db-sync's `ma_tx_out` inflates: 76 of a UTxO query's 80 ms.

@@ -434,40 +434,65 @@ fn info_row(pool: &Pool, figures: &Figures) -> Result<InfoRow, ApiError> {
     })
 }
 
-/// One pool's row: kept for 10 minutes once its live figures are known.
-async fn one_pool(state: &Arc<AppState>, id: &str, raw: &[u8]) -> Result<Option<String>, ApiError> {
+/// Works a pool's row out with its live figures and keeps it; an empty one
+/// if db-sync doesn't know the pool.
+async fn refresh(state: &AppState, key: &str, raw: &[u8]) -> Result<(), ApiError> {
+    let row = match read_pool(state, raw).await? {
+        Some(pool) => to_json(&info_row(&pool, &live(state, &pool).await?)?)?,
+        None => Bytes::new(),
+    };
+    state.keep(key, INFO_KEEP, row);
+    Ok(())
+}
+
+/// A pool's row with the epoch's snapshot in place of its live figures.
+async fn from_snapshot(state: &AppState, raw: &[u8]) -> Result<Option<Bytes>, ApiError> {
+    match read_pool(state, raw).await? {
+        Some(pool) => Ok(Some(to_json(&info_row(
+            &pool,
+            &snapshot(state, &pool).await?,
+        )?)?)),
+        None => Ok(None),
+    }
+}
+
+/// One pool's row, its live figures kept for 10 minutes. Past them, the old
+/// row answers at once while a fresh one is worked out behind it.
+async fn one_pool(state: &Arc<AppState>, id: &str, raw: &[u8]) -> Result<Option<Bytes>, ApiError> {
     let key = format!("pool_info/{id}");
-    if let Some(kept) = state.kept(&key) {
-        return Ok((!kept.is_empty()).then(|| String::from_utf8_lossy(&kept).into_owned()));
+    let found = |row: Bytes| (!row.is_empty()).then_some(row);
+    if let Some(row) = state.kept(&key) {
+        return Ok(found(row));
     }
-    let Some(pool) = read_pool(state, raw).await? else {
-        state.keep(&key, INFO_KEEP, Bytes::new());
-        return Ok(None);
-    };
-    let row = |figures: &Figures| -> Result<String, ApiError> {
-        Ok(serde_json::to_string(&info_row(&pool, figures)?).map_err(anyhow::Error::from)?)
-    };
-    if !state.start(&key) {
-        // Another request is working the live figures out.
-        return Ok(Some(row(&snapshot(state, &pool).await?)?));
+    if let Some(row) = state.kept_stale(&key) {
+        if let Some(working) = state.start(&key) {
+            let (state, key, raw) = (state.clone(), key.clone(), raw.to_vec());
+            tokio::spawn(async move {
+                let _working = working;
+                let _ = refresh(&state, &key, &raw).await;
+            });
+        }
+        return Ok(found(row));
     }
+    let Some(working) = state.start(&key) else {
+        // Another request is working it out.
+        return from_snapshot(state, raw).await;
+    };
     let task = {
-        let (state, pool, key) = (state.clone(), pool.clone(), key.clone());
+        let (state, key, raw) = (state.clone(), key.clone(), raw.to_vec());
         tokio::spawn(async move {
-            let figures = live(&state, &pool).await;
-            if let Ok(figures) = &figures
-                && let Ok(row) = info_row(&pool, figures).and_then(|row| to_json(&row))
-            {
-                state.keep(&key, INFO_KEEP, row);
-            }
-            state.done(&key);
-            figures
+            let _working = working;
+            refresh(&state, &key, &raw).await
         })
     };
     match tokio::time::timeout(LIVE_BUDGET, task).await {
-        Ok(Ok(figures)) => Ok(Some(row(&figures?)?)),
+        Ok(Ok(Ok(()))) => match state.kept(&key) {
+            Some(row) => Ok(found(row)),
+            None => from_snapshot(state, raw).await,
+        },
+        Ok(Ok(Err(error))) => Err(error),
         Ok(Err(error)) => Err(ApiError::from(anyhow::Error::from(error))),
-        Err(_) => Ok(Some(row(&snapshot(state, &pool).await?)?)),
+        Err(_) => from_snapshot(state, raw).await,
     }
 }
 
@@ -494,7 +519,7 @@ pub async fn pool_info(
     let mut rows = Vec::new();
     for (id, raw) in pools {
         if let Some(row) = one_pool(&state, id, &raw).await? {
-            rows.push(row);
+            rows.push(String::from_utf8(row.to_vec()).map_err(anyhow::Error::from)?);
         }
     }
     Ok(json(Bytes::from(format!("[{}]", rows.join(",")))))

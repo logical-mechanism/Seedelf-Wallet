@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
@@ -164,17 +164,25 @@ impl AppState {
         }
     }
 
-    /// Marks `key` as being worked out; false if it already is.
-    pub fn start(&self, key: &str) -> bool {
-        self.working
-            .lock()
-            .expect("working lock")
-            .insert(key.to_string())
+    /// A [`Self::lasting`] answer however old, while it's still held: to
+    /// answer at once while a fresh one is worked out behind it.
+    pub fn kept_stale(&self, key: &str) -> Option<Bytes> {
+        let lasting = self.lasting.lock().expect("lasting lock");
+        lasting.get(key).map(|(_, hit)| hit.clone())
     }
 
-    /// `key` is no longer being worked out.
-    pub fn done(&self, key: &str) {
-        self.working.lock().expect("working lock").remove(key);
+    /// Marks `key` as being worked out until the guard is dropped, however
+    /// the work ends; `None` if it already is.
+    pub fn start(self: &Arc<Self>, key: &str) -> Option<Working> {
+        let fresh = self
+            .working
+            .lock()
+            .expect("working lock")
+            .insert(key.to_string());
+        fresh.then(|| Working {
+            state: self.clone(),
+            key: key.to_string(),
+        })
     }
 
     fn lookup(&self, tip: &str, key: &str) -> Option<Bytes> {
@@ -190,6 +198,20 @@ pub fn to_json<T: Serialize>(value: &T) -> Result<Bytes, ApiError> {
     ))
 }
 
+/// An answer being worked out ([`AppState::start`]): dropped, it no longer is.
+pub struct Working {
+    state: Arc<AppState>,
+    key: String,
+}
+
+impl Drop for Working {
+    fn drop(&mut self) {
+        if let Ok(mut working) = self.state.working.lock() {
+            working.remove(&self.key);
+        }
+    }
+}
+
 /// Seconds since the tip's block was made.
 pub fn age(tip: &Tip) -> i64 {
     let now = SystemTime::now()
@@ -199,7 +221,7 @@ pub fn age(tip: &Tip) -> i64 {
 }
 
 /// Reads db-sync's tip every [`WATCH_EVERY`], for as long as the server runs.
-pub async fn watch_tip(state: std::sync::Arc<AppState>) {
+pub async fn watch_tip(state: Arc<AppState>) {
     let mut every = tokio::time::interval(WATCH_EVERY);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut failing = false;
@@ -330,6 +352,23 @@ mod tests {
         state.cached(&old, "k", || async { Ok(1) }).await.unwrap();
         assert!(state.lookup("new", "k").is_none());
         assert!(state.lookup("old", "k").is_none());
+    }
+
+    #[test]
+    fn work_is_marked_until_its_guard_drops() {
+        let state = Arc::new(state());
+        let working = state.start("k").unwrap();
+        assert!(state.start("k").is_none());
+        drop(working);
+        assert!(state.start("k").is_some());
+    }
+
+    #[test]
+    fn a_stale_answer_is_still_held() {
+        let state = state();
+        state.keep("k", Duration::ZERO, Bytes::from_static(b"1"));
+        assert!(state.kept("k").is_none());
+        assert_eq!(state.kept_stale("k").unwrap().as_ref(), b"1");
     }
 
     #[test]
