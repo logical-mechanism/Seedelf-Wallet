@@ -14,11 +14,14 @@
 #   Changing the patterns or --since means deleting the workdir and syncing again.
 # - The HTTP server's log at Warning: at Info, Kupo logs every request's path,
 #   and the API's paths carry a wallet's cursor.
+# - Every address: the LAN for building locally, wg0 for the VPS. The router
+#   forwards nothing to 1443, and nftables-seedelf.conf lets only the VPS in
+#   through wg0.
 
 [Unit]
 Description=Kupo for Seedelf Wallet: the contract and Lovejoin's mix box
 Wants=network-online.target
-After=network-online.target cardano-node.service wg-quick@wg0.service
+After=network-online.target cardano-node.service
 
 [Service]
 User=<the user cardano-node runs as>
@@ -27,7 +30,7 @@ ExecStart=/usr/local/bin/kupo \
   --node-socket <cardano-node socket> \
   --node-config <cardano-node config.json> \
   --workdir /var/lib/kupo-seedelf \
-  --host <home wg0 address> \
+  --host 0.0.0.0 \
   --port 1443 \
   --log-level-http-server Warning \
   --since 144386185.af5f8c02581c857a39218fcfab037817d470e8f4ca347ae04ffb328c16e7d11b \

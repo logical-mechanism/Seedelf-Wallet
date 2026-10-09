@@ -12,7 +12,7 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 
 ## Before you start
 
-- **A VPS** with 2 vCPU and 4 GB, near home. Its terms must allow blockchain workloads: Hetzner's don't. It needs DDoS filtering that never terminates TLS, and 1–2 TB of traffic a month for the node's P2P through it.
+- **A VPS** with 2 vCPU and 4 GB, near home. Its terms must allow blockchain workloads: Hetzner's don't. It needs DDoS filtering that never terminates TLS. Its traffic is the API's alone (§3).
 - **A domain.** The API is `https://mainnet.<domain>`, and DNS names the VPS only.
 - **The wallet's Web Store ID,** from the store's developer dashboard, for `DATA_ORIGINS`.
 - **A build of the API** for the VPS's architecture, with the pinned toolchain: `cargo build --release -p seedelf-data-api` from `seedelf-data/`.
@@ -26,11 +26,7 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 3. Install the drop-in `home/postgresql-after-network.conf`, so Postgres binds after the network and `wg0` are up. After a reboot on 2026-10-09 it bound localhost alone.
 4. `systemctl daemon-reload`, then restart Postgres.
 
-**The Seedelf Kupo** (`home/kupo-seedelf.service`) runs today with `--host` on the LAN, for building locally. Once the VPS is up, move it to the tunnel's address and restart it. Its index stays as it is. From the dev machine, reach it through SSH: `ssh -L 1443:10.88.0.2:1443 <home>`.
-
-**cardano-submit-api** takes `home/tx-submit-mainnet-config.yaml` as `--config`. Give it `--listen-address 10.88.0.2 --port 8090`.
-
-**Ogmios** serves another project too: leave how it listens alone. `home/nftables-seedelf.conf` decides what reaches it through the tunnel.
+**The Seedelf Kupo** (`home/kupo-seedelf.service`), **cardano-submit-api** (`--config home/tx-submit-mainnet-config.yaml --port 8090`) and **Ogmios** (port 1337, which serves another project too) listen on every address: the LAN for building locally, and `wg0` for the VPS. The router forwards none of their ports, and `home/nftables-seedelf.conf` lets only the VPS in through `wg0`.
 
 **db-sync** runs the options in `home/db-sync-insert-options.json`. They've been right since 2026-10-09, when `offchain_vote_data` was turned on. Check them again after every db-sync upgrade: 13.7.0.1 added that option switched off, and vote metadata stopped with no error.
 
@@ -43,22 +39,34 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
 **The tunnel:**
 
 1. `wg genkey | tee private | wg pubkey > public`, as root, in `/etc/wireguard/`.
-2. Fill in `home/wg0.conf`, then `systemctl enable --now wg-quick@wg0`.
-3. Install `home/nftables-seedelf.conf` and load it. It filters `wg0` alone; the LAN keeps its rules.
+2. Fill in `home/wg0.conf` as `/etc/wireguard/wg0.conf`, mode `0600`.
+3. **Its firewall**, which filters `wg0` alone, so the LAN keeps its rules:
+   - `home/nftables-seedelf.conf` as `/etc/nftables.d/seedelf.conf`, and `home/seedelf-nftables.service`. Then `systemctl daemon-reload` and `systemctl enable --now seedelf-nftables`.
+   - **Never `nftables.service` on this box:** Ubuntu's flushes the whole ruleset when it stops, and its stock `/etc/nftables.conf` flushes it when it starts. That would take `ufw`'s rules with them, and Docker's where it runs.
+   - A packet must pass `ufw` too: `ufw allow in on wg0 from 10.88.0.1 to any port 5432,1443,1337,8090 proto tcp comment 'Seedelf VPS'`.
+4. `systemctl enable --now wg-quick@wg0`. It requires `seedelf-nftables`, so it never comes up unfiltered.
 
 **Power.** NUT on the UPS shuts down in this order: db-sync, Postgres, Kupo, then the node. An unclean stop costs a long ledger replay.
 
 ## 2. The VPS
 
-1. **Packages:** `wireguard-tools`, `nftables`, and Caddy from its own repository.
+1. **Packages:** `wireguard-tools`, `nftables`, `vnstat`, `postgresql-client` (for `pg_isready`), and Caddy.
+   - Ubuntu's own Caddy is years old. Caddy's apt repository (Cloudsmith) answered `402 Payment Required` on 2026-10-09, so Caddy is the `.deb` from its [GitHub release](https://github.com/caddyserver/caddy/releases): check it with `grep ' caddy_<version>_linux_amd64.deb$' caddy_<version>_checksums.txt | sha512sum -c -`, then `apt install ./caddy_<version>_linux_amd64.deb`.
+   - `systemctl disable --now caddy` until step 4: its default site would answer on port 80.
 2. **WireGuard:**
    - make keys as at home, and fill in `edge/wg0.conf`;
-   - add `edge/90-seedelf-forward.conf` to `/etc/sysctl.d/`, then run `sysctl --system`;
    - `systemctl enable --now wg-quick@wg0`.
-3. **The firewall:** `edge/nftables.conf` replaces every rule on the machine. `systemctl enable --now nftables`.
+   - Nothing passes through the VPS, so `net.ipv4.ip_forward` stays `0`.
+3. **The firewall:** `edge/nftables.conf` replaces every rule on the machine.
+   - Check it first: `nft -c -f nftables.conf`.
+   - Arm a way back in case SSH is cut: `systemd-run --unit=seedelf-nft-rollback --on-active=180 /bin/sh -c 'nft flush ruleset; ufw --force enable'`.
+   - If `ufw` is on (DigitalOcean's droplet had it), `ufw --force disable` and `systemctl disable ufw`.
+   - Install it as `/etc/nftables.conf`, then `systemctl enable nftables` and `systemctl restart nftables`.
+   - Log in again from a new session, then `systemctl stop seedelf-nft-rollback.timer`.
 4. **Check home from the VPS:**
    - `pg_isready -h 10.88.0.2`;
    - `curl http://10.88.0.2:1443/health`;
+   - `curl http://10.88.0.2:1337/health` (Ogmios, which must listen on every address, not only the LAN's);
    - `curl -X POST http://10.88.0.2:8090/api/submit/tx` (an error, which proves it answers).
 5. **The API:**
    - copy the binary to `/usr/local/bin/seedelf-data-api`;
@@ -66,34 +74,17 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
    - install `edge/seedelf-data-api.service`, then `systemctl enable --now seedelf-data-api`;
    - `curl 127.0.0.1:8099/health` answers 200 with `"source":"db-sync"`.
 
-**Nothing is public yet:** no DNS name leads here. Step 3 comes first, so that no transaction sent through the API is ever relayed from the home IP.
+**Nothing is public yet:** no DNS name leads here until step 4.
 
-## 3. Home's traffic into the tunnel
+## 3. Home's own traffic stays home's
 
-Once everything is synced, home's own traffic goes out through the VPS. Otherwise the node's peers, db-sync's metadata fetches and the first relay of every submitted transaction would show strangers the home IP.
+**Home's node is a stake pool's relay,** and it must keep its inbound peers: there's no money for a second mainnet node. So the node and db-sync reach the internet from the home IP, as they always have, and the tunnel carries only the API's calls to home.
 
-**Only the node's and db-sync's traffic moves, routed by user.** The box runs another project, and moving its default route would move that project too.
+**Hiding the home IP from them would gain nothing:** a registered relay publishes it already, in the pool's certificate on chain and to every peer. What a wallet's user meets is the VPS alone. Their address stops there, and DNS names only the VPS.
 
-**It fails closed:** with the tunnel down or restarting, the node and db-sync reach nothing, rather than reaching the internet from the home IP. Two layers make it so, and neither depends on wg-quick:
-- `home/seedelf-tunnel-routes.service` sends their traffic to table 51820, which holds only the tunnel's route and an unreachable fallback. Their IPv6 is unreachable, since the tunnel carries IPv4.
-- `home/nftables-seedelf-egress.conf` drops any packet of theirs that isn't for `wg0`, loopback or the LAN.
+**What's left to see:** someone determined could tie the API to the relay, by sending a transaction through the API and watching which relay announces it first. The worst they can do with that is attack an IP that's public already, and wallets fall back to Koios.
 
-**Whatever runs as the node's user is held to the same rules:** Kupo (`home/kupo-seedelf.service` runs it so), and Ogmios and submit-api if they do too. Their answers to the VPS (through `wg0`), to this box and to the IPv4 LAN pass. Add any other local network that reaches them, such as a container bridge, to both files' LAN prefix.
-
-1. **Measure first.** Watch the node's traffic for a day with `vnstat`. The docs say about 1 GB an hour for a relay, and less for an outbound-only node. It all crosses the VPS twice: in from the internet, then out to home.
-2. **DNS without the home IP.** The node's and db-sync's lookups go through the box's resolver, outside the tunnel. A resolver that recurses at home lets a name's own nameserver see the home IP, and anyone can make db-sync look a name up (a DRep's or a pool's metadata URL). So send the box's lookups over TLS to a public resolver that passes on no client subnet. In `/etc/systemd/resolved.conf`:
-
-   ```ini
-   DNS=9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net
-   DNSOverTLS=yes
-   ```
-
-   Then restart `systemd-resolved`.
-3. **Install the routes unit** (`systemctl enable --now seedelf-tunnel-routes`) and the kill switch (`home/nftables-seedelf-egress.conf`, loaded with the rest of nftables at boot). Then give the node's and db-sync's units `After=seedelf-tunnel-routes.service wg-quick@wg0.service`. Don't add `BindsTo`: a node restart costs a ledger replay, and the rules already cut it off.
-4. **Restart the tunnel, the node and db-sync.** Check that their connections leave through `wg0`:
-   - `ss -tnp | grep cardano-node` shows source `10.88.0.2`;
-   - `sudo -u <node user> curl -s https://ifconfig.me` shows the VPS's address, and `sudo -u <node user> curl -6 https://ifconfig.me` fails;
-   - with `systemctl stop wg-quick@wg0`, the same `curl` fails at once. Start the tunnel again after.
+Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunnel, failing closed. It was dropped once it was clear the node is the pool's relay: a node that only reaches out through the VPS is no relay. Its files (`seedelf-tunnel-routes.service`, `nftables-seedelf-egress.conf`, the VPS's forwarding and NAT) are in git's history, should the relay ever move off this box.
 
 ## 4. Going public
 
@@ -127,13 +118,14 @@ Once everything is synced, home's own traffic goes out through the VPS. Otherwis
   | Postgres | within 6 s (two failed reads of its tip), `/health` says `"source":"kupo"` and the public routes answer 503; the wallet goes to Koios for the public side |
   | db-sync alone | the private index moves to Kupo once db-sync is 60 slots behind it; the public routes answer 503 once its tip is 3 minutes old |
   | the node | every part 503 within 3 minutes; the wallet goes to Koios for everything |
-  | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the node and db-sync reach nothing |
+  | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the relay carries on |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
 
 ## Routine
 
 - **A new API build:** copy the binary, then `systemctl restart seedelf-data-api`. Every cache refills within a block, and the month's traffic is kept.
+- **Caddy:** apt doesn't update it (§2, step 1). Watch its releases, and install a new one's `.deb` the same way, checked.
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.
 - **After a db-sync resync,** once it has caught up, run `home/db-sync-indexes.sql` again: a new database has only db-sync's own indexes.

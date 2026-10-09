@@ -1,7 +1,6 @@
 # /etc/caddy/Caddyfile on the VPS. Caddy does TLS and passes requests on;
 # every limit is the API's own (src/edge.rs). It names the client in
 # X-Forwarded-For, which the API trusts from loopback alone.
-
 {
 	# Caddy's own log, less the loggers that carry a request: an error's
 	# entry names the client's address and the path it asked for. Check it
@@ -10,8 +9,8 @@
 		output stderr
 		exclude http.log.error http.handlers.reverse_proxy
 	}
-	# Let's Encrypt writes here about the certificate.
-	email <an address for certificate notices>
+	# No `email`: Let's Encrypt has sent no expiry notices since 2025, and
+	# Caddy renews by itself. Watch renewals in the journal instead.
 }
 
 mainnet.<domain> {
