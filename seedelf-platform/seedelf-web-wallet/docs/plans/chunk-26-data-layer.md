@@ -327,7 +327,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
   - the ledger is on (rewards, epoch stake and DRep distribution are filled);
   - off-chain pool data is on;
   - `tx_cbor` is on;
-  - **off-chain vote data is off** (corrected 2026-10-09). Since 13.7.0.1 it has its own `"offchain_vote_data"` option, which defaults to `"disable"`; before, `"governance"` covered it. The config never got the new option, so fetching stopped at the upgrade, on 2026-03-17, with no error. The fix is `"offchain_vote_data": "enable"` in `insert_options` and a db-sync restart. Koios's own config sets it.
+  - **off-chain vote data is off** (corrected 2026-10-09). Since 13.7.0.1 it has its own `"offchain_vote_data"` option, which defaults to `"disable"`; before, `"governance"` covered it. The config never got the new option, so fetching stopped at the upgrade, on 2026-03-17, with no error. The owner enabled it on 2026-10-09 and fetching resumed: 49 anchors in its first minute, with the backlog since March to work through. Koios's own config sets it too.
 - **Postgres must wait for the network** (found 2026-10-09). After a reboot it started before the server had its LAN address, couldn't bind it, and listened on localhost alone, with only a warning. A restart fixes it once. `After=network-online.target` in a drop-in for its unit fixes it for good, and it applies to `wg0` later too.
 
   No `grest` schema is installed yet. The node and Kupo run there too.
@@ -487,7 +487,7 @@ Monthly and rough; check prices when buying.
         - every `tx_info` balances;
         - an NFT's `asset_info` equals Koios's recorded answer, and the other routes match the recorded fixtures' shapes.
       - **Found at home:** db-sync has fetched no off-chain vote data since 2026-03-17. Anchors since then (4,886) have no data, so newer governance actions have no title or abstract and newer DRep profiles no name, from this server.
-        - The cause is db-sync 13.7.0.1's new `offchain_vote_data` option, off by default ([Home](#home)). A restart doesn't change it.
+        - The cause is db-sync 13.7.0.1's new `offchain_vote_data` option, off by default ([Home](#home)). It's on since 2026-10-09, and the backlog is being fetched.
    3. alongside: `deploy/home`, `deploy/edge` and a runbook. Secrets are never committed.
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
