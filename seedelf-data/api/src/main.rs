@@ -39,10 +39,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
-    let decimals = match &config.token_decimals {
-        Some(path) => Decimals::load(path)?,
-        None => Decimals::default(),
-    };
+    let decimals = Decimals::bundled();
     info!(tokens = decimals.len(), "token decimals");
     let kupo = config.kupo_url.as_deref().map(Kupo::new).transpose()?;
     info!(kupo = kupo.is_some(), "the private index's second source");

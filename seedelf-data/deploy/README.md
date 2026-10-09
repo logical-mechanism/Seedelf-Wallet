@@ -15,7 +15,6 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 - **A VPS** with 2 vCPU and 4 GB, near home. Its terms must allow blockchain workloads: Hetzner's don't. It needs DDoS filtering that never terminates TLS, and 1–2 TB of traffic a month for the node's P2P through it.
 - **A domain.** The API is `https://mainnet.<domain>`, and DNS names the VPS only.
 - **The wallet's Web Store ID,** from the store's developer dashboard, for `DATA_ORIGINS`.
-- **The token decimals file:** `scripts/token-decimals.py` over a checkout of the token registry ([README](../README.md#reference-code)).
 - **A build of the API** for the VPS's architecture, with the pinned toolchain: `cargo build --release -p seedelf-data-api` from `seedelf-data/`.
 
 ## 1. Home
@@ -63,7 +62,6 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
    - `curl -X POST http://10.88.0.2:8090/api/submit/tx` (an error, which proves it answers).
 5. **The API:**
    - copy the binary to `/usr/local/bin/seedelf-data-api`;
-   - copy the decimals file to `/etc/seedelf-data/token-decimals.json`;
    - fill in `edge/seedelf-data.env` as `/etc/seedelf-data/env`, mode `0600`;
    - install `edge/seedelf-data-api.service`, then `systemctl enable --now seedelf-data-api`;
    - `curl 127.0.0.1:8099/health` answers 200 with `"source":"db-sync"`.

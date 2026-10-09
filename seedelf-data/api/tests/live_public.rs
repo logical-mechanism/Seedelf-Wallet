@@ -25,11 +25,9 @@ fn chain() -> Chain {
     Chain::connect(&std::env::var("MAINNET_DATABASE_URL").expect("seedelf-data/.env")).unwrap()
 }
 
-/// The token registry's decimals, when `MAINNET_TOKEN_DECIMALS` names the file; every token 0 otherwise.
+/// The token registry's decimals, as the server has them.
 fn decimals() -> Decimals {
-    std::env::var("MAINNET_TOKEN_DECIMALS")
-        .map(|path| Decimals::load(&path).unwrap())
-        .unwrap_or_default()
+    Decimals::bundled()
 }
 
 /// The public routes, with the tip read once.

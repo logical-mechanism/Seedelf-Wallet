@@ -43,11 +43,11 @@ done
 - **blockfrost-backend-ryo** is a second set of db-sync queries to compare query plans against.
 - **kupo**'s `docs/api/v2.11.0.yaml` is the HTTP API the private index's second source reads. Its filters are inclusive.
 
-**Token decimals** need a checkout of the token registry (about 500 MB), wherever it's kept:
+**Token decimals** are built in (`api/data/token-decimals.json`). Refreshing them needs a checkout of the token registry (about 500 MB), wherever it's kept, then a build:
 
 ```bash
 git clone --depth 1 https://github.com/cardano-foundation/cardano-token-registry.git
-python3 scripts/token-decimals.py cardano-token-registry > token-decimals.json
+python3 scripts/token-decimals.py cardano-token-registry > api/data/token-decimals.json
 ```
 
 ## Tests
@@ -68,7 +68,7 @@ cargo fmt --check
 **What the live tests check:**
 
 - **The public routes,** by what must hold however the chain moves:
-  - the contract's and mix box's `credential_utxos` equal the private index, each row's tokens and decimals included (with `MAINNET_TOKEN_DECIMALS` set);
+  - the contract's and mix box's `credential_utxos` equal the private index, each row's tokens and decimals included;
   - a page after any outpoint is the rest;
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
   - the pool list's pages make one sorted list;
@@ -215,7 +215,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **What doesn't work:** turning parallel workers off for every connection. It would fix the small queries but slows a large pool's live delegators from 0.4 s to 2.1 s. Raising `parallel_setup_cost` does nothing for these plans.
 
 **What stands in for Koios's caches:**
-- **Token decimals** come from the Cardano token registry, Koios's own source: a file made by `scripts/token-decimals.py` from a checkout of it (`MAINNET_TOKEN_DECIMALS`). Without the file, every token is 0. Refresh it the way the wallet refreshes its token list.
+- **Token decimals** come from the Cardano token registry, Koios's own source: `api/data/token-decimals.json`, made by `scripts/token-decimals.py` from a checkout of it and built into the API. Refresh it the way the wallet refreshes its token list: the script, a commit, a build.
 - **A pool's state** is worked out per request from its latest update and any retirement after it.
 - **A pool's live stake** is summed over its live delegators: each account whose latest delegation is to the pool, not since deregistered, and in this epoch's stake, as Koios's `pool_delegators_list` counts them. Their reward sums change only at an epoch's start, so each account's is kept in memory for the epoch.
   - A first look at a large pool, read from a cold disk, took 12 s. So a request waits at most 3 s for the live figures, then answers with the epoch's snapshot (`pool_stat`) while they're finished in the background and kept.
