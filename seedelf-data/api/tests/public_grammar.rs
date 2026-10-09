@@ -199,3 +199,116 @@ async fn a_refusal_says_why_and_nothing_of_the_request() {
     assert_eq!(status, BAD);
     assert_eq!(body, r#"{"error":"not a request Seedelf Wallet makes"}"#);
 }
+
+const POOL: &str = "pool1gaztx97t53k47fr7282d70tje8323vvzx8pshgts30t9krw62tm";
+const DREP: &str = "drep1yfzzwr8jznn02mzepvs6y9n4329eskzpgygjdh4ew28szpcd5hr4f";
+const ACTION: &str = "gov_action17m7nv7839mw93hv889tqzj0umv9ckm780f0nq02fep78f50uedxqq6g5mt9";
+
+#[tokio::test]
+async fn pool_routes() {
+    let list = "/api/v1/pool_list?pool_status=eq.registered\
+        &select=pool_id_bech32,ticker,margin,fixed_cost,pledge,active_stake,retiring_epoch\
+        &order=pool_id_bech32.asc";
+    assert_eq!(get(&format!("{list}&offset=0&limit=1000")).await, OK);
+    assert_eq!(get(&format!("{list}&offset=2000&limit=1000")).await, OK);
+    assert_eq!(get(&format!("{list}&offset=10&limit=1000")).await, BAD);
+    assert_eq!(get(&format!("{list}&offset=0&limit=10")).await, BAD);
+    assert_eq!(get("/api/v1/pool_list").await, BAD);
+
+    let info = "/api/v1/pool_info?select=pool_id_bech32,meta_json,margin,fixed_cost,pledge,live_pledge,\
+        live_stake,live_saturation,live_delegators,block_count,pool_status,retiring_epoch";
+    assert_eq!(
+        post(info, json!({ "_pool_bech32_ids": [POOL] })).await.0,
+        OK
+    );
+    assert_eq!(
+        post(info, json!({ "_pool_bech32_ids": [DREP] })).await.0,
+        BAD
+    );
+    assert_eq!(
+        post("/api/v1/pool_info", json!({ "_pool_bech32_ids": [POOL] }))
+            .await
+            .0,
+        BAD
+    );
+}
+
+#[tokio::test]
+async fn governance_routes() {
+    let info = "/api/v1/drep_info?select=drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
+    for drep in [DREP, "drep_always_abstain", "drep_always_no_confidence"] {
+        assert_eq!(
+            post(info, json!({ "_drep_ids": [drep] })).await.0,
+            OK,
+            "{drep}"
+        );
+    }
+    let standing = format!("{info},deposit,meta_url,meta_hash");
+    assert_eq!(post(&standing, json!({ "_drep_ids": [DREP] })).await.0, OK);
+    assert_eq!(
+        post(&format!("{info},meta_json"), json!({ "_drep_ids": [DREP] }))
+            .await
+            .0,
+        BAD
+    );
+    assert_eq!(post(info, json!({ "_drep_ids": [POOL] })).await.0, BAD);
+
+    for select in [
+        "drep_id,is_valid,meta_json-%3Ebody-%3EgivenName",
+        "drep_id,meta_json-%3Ebody-%3EgivenName",
+    ] {
+        let path = format!("/api/v1/drep_metadata?select={select}");
+        assert_eq!(
+            post(&path, json!({ "_drep_ids": [DREP] })).await.0,
+            OK,
+            "{select}"
+        );
+    }
+    let whole = "/api/v1/drep_metadata?select=drep_id,meta_json";
+    assert_eq!(post(whole, json!({ "_drep_ids": [DREP] })).await.0, BAD);
+
+    let proposals = "/api/v1/proposal_list?ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null\
+        &expired_epoch=is.null&select=proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,\
+        expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json-%3Ebody-%3E%3Etitle,\
+        abstract:meta_json-%3Ebody-%3E%3Eabstract,block_time,withdrawal&order=proposed_epoch.desc,proposal_id.asc";
+    assert_eq!(get(&format!("{proposals}&offset=0&limit=1000")).await, OK);
+    assert_eq!(get(&format!("{proposals}&offset=0&limit=100")).await, BAD);
+
+    let votes = format!(
+        "/api/v1/vote_list?voter_id=eq.{DREP}&proposal_id=in.({ACTION})&select=proposal_id,vote,block_time&order=block_time.desc"
+    );
+    assert_eq!(get(&votes).await, OK);
+    // Koios matches the voter's CIP-129 ID as text: the same DRep in CIP-105's form isn't the wallet's.
+    let (_, bytes) = seedelf_data_api::ids::decode(DREP).unwrap();
+    let cip105 = seedelf_data_api::ids::encode("drep", &bytes[1..]);
+    assert_eq!(get(&votes.replace(DREP, &cip105)).await, BAD);
+    let many = vec![ACTION; 41].join(",");
+    assert_eq!(get(&votes.replace(ACTION, &many)).await, BAD);
+}
+
+#[tokio::test]
+async fn asset_routes() {
+    let handle = "/api/v1/asset_nft_address?_asset_policy=f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a\
+        &_asset_name=000de14061746c61736d6f6f6e";
+    assert_eq!(get(handle).await, OK);
+    assert_eq!(get(&handle.replace("_asset_name", "asset_name")).await, BAD);
+    let info = "/api/v1/asset_info?select=minting_tx_metadata,cip68_metadata";
+    let token = json!([
+        "d5e6bf0500378d4f0da4e8dde6becec7621cd8cbf5cbb9b87013d4cc",
+        "537061636542756430"
+    ]);
+    assert_eq!(post(info, json!({ "_asset_list": [token] })).await.0, OK);
+    assert_eq!(
+        post(info, json!({ "_asset_list": [token, token] })).await.0,
+        BAD
+    );
+    assert_eq!(
+        post(
+            "/api/v1/asset_info?select=minting_tx_metadata",
+            json!({ "_asset_list": [token] })
+        )
+        .await
+        .0,
+        BAD
+    );
+}

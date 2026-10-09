@@ -294,3 +294,155 @@ async fn a_transactions_status_counts_the_blocks_since() {
     );
     assert!(rows[1]["num_confirmations"].is_null());
 }
+
+async fn get(app: &Router, path: &str) -> Value {
+    let request = Request::get(path).body(Body::empty()).unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 64 << 20).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{path}: {}",
+        String::from_utf8_lossy(&body)
+    );
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn the_pool_lists_pages_are_one_sorted_list_of_registered_pools() {
+    let (app, _) = app().await;
+    let list = "/api/v1/pool_list?pool_status=eq.registered\
+        &select=pool_id_bech32,ticker,margin,fixed_cost,pledge,active_stake,retiring_epoch\
+        &order=pool_id_bech32.asc";
+    let mut ids = Vec::new();
+    for offset in (0..).step_by(1000) {
+        let page = get(&app, &format!("{list}&offset={offset}&limit=1000")).await;
+        let page = page.as_array().unwrap();
+        assert!(page.iter().all(|p| p["retiring_epoch"].is_null()));
+        ids.extend(
+            page.iter()
+                .map(|p| p["pool_id_bech32"].as_str().unwrap().to_string()),
+        );
+        if page.len() < 1000 {
+            break;
+        }
+    }
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(ids, sorted);
+    assert!(ids.len() > 1000, "{} pools", ids.len());
+
+    // A pool from the list, in detail.
+    let info = "/api/v1/pool_info?select=pool_id_bech32,meta_json,margin,fixed_cost,pledge,live_pledge,\
+        live_stake,live_saturation,live_delegators,block_count,pool_status,retiring_epoch";
+    let rows = post(&app, info, json!({ "_pool_bech32_ids": [ids[0]] })).await;
+    assert_eq!(rows[0]["pool_id_bech32"], ids[0].as_str());
+    assert_eq!(rows[0]["pool_status"], "registered");
+    let stake: i128 = rows[0]["live_stake"].as_str().unwrap().parse().unwrap();
+    let pledged: i128 = rows[0]["live_pledge"].as_str().unwrap().parse().unwrap();
+    assert!(stake >= pledged);
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn a_dreps_standing_and_the_predefined_ones() {
+    let (app, _) = app().await;
+    let info = "/api/v1/drep_info?select=drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
+    let rows = post(&app, info, json!({ "_drep_ids": ["drep_always_abstain"] })).await;
+    assert_eq!(rows[0]["drep_id"], "drep_always_abstain");
+    assert_eq!(
+        (rows[0]["drep_status"].as_str(), rows[0]["active"].as_bool()),
+        (Some("registered"), Some(true))
+    );
+    assert!(rows[0]["live_delegator_count"].as_i64().unwrap() > 1000);
+    // A DRep the wallet's tests know, asked by its CIP-129 ID: the answer names it the same way.
+    let drep = "drep1yfzzwr8jznn02mzepvs6y9n4329eskzpgygjdh4ew28szpcd5hr4f";
+    let rows = post(&app, info, json!({ "_drep_ids": [drep] })).await;
+    assert_eq!(rows[0]["drep_id"], drep);
+    let unknown = seedelf_data_api::ids::drep_id(&[7; 28], false);
+    let rows = post(&app, info, json!({ "_drep_ids": [unknown] })).await;
+    assert_eq!(rows, json!([]));
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn the_live_actions_and_a_dreps_votes_on_them() {
+    let (app, _) = app().await;
+    let proposals = "/api/v1/proposal_list?ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null\
+        &expired_epoch=is.null&select=proposal_id,proposal_tx_hash,proposal_index,proposal_type,proposed_epoch,\
+        expiration,deposit,meta_url,meta_hash,meta_is_valid,title:meta_json-%3Ebody-%3E%3Etitle,\
+        abstract:meta_json-%3Ebody-%3E%3Eabstract,block_time,withdrawal&order=proposed_epoch.desc,proposal_id.asc\
+        &offset=0&limit=1000";
+    let actions = get(&app, proposals).await;
+    for action in actions.as_array().unwrap() {
+        let id = action["proposal_id"].as_str().unwrap();
+        let (hash, index) = seedelf_data_api::ids::gov_action_parts(id).unwrap();
+        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            (
+                action["proposal_tx_hash"].as_str().unwrap(),
+                action["proposal_index"].as_u64()
+            ),
+            (hex.as_str(), Some(u64::from(index)))
+        );
+        assert!(action["withdrawal"].is_array());
+    }
+    let ids: Vec<&str> = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["proposal_id"].as_str().unwrap())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let drep = "drep1yfzzwr8jznn02mzepvs6y9n4329eskzpgygjdh4ew28szpcd5hr4f";
+    let path = format!(
+        "/api/v1/vote_list?voter_id=eq.{drep}&proposal_id=in.({})&select=proposal_id,vote,block_time&order=block_time.desc",
+        ids.join(",")
+    );
+    let votes = get(&app, &path).await;
+    for vote in votes.as_array().unwrap() {
+        assert!(ids.contains(&vote["proposal_id"].as_str().unwrap()));
+        assert!(["Yes", "No", "Abstain"].contains(&vote["vote"].as_str().unwrap()));
+    }
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn an_nfts_metadata_is_koioss() {
+    let (app, _) = app().await;
+    // SpaceBud #0: CIP-25, minted once, so its metadata never changes. Koios's answer, as the wallet's fixture holds it.
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/nft-images.json"
+    ))
+    .unwrap();
+    let bud = fixture["mainnet"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["asset_name"] == "537061636542756430")
+        .unwrap();
+    let rows = post(
+        &app,
+        "/api/v1/asset_info?select=minting_tx_metadata,cip68_metadata",
+        json!({ "_asset_list": [[bud["policy_id"], bud["asset_name"]]] }),
+    )
+    .await;
+    assert_eq!(rows, bud["answer"]);
+
+    // A handle's holder: one address, where the handle sits.
+    let handle = "/api/v1/asset_nft_address?_asset_policy=f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a\
+        &_asset_name=000de14061746c61736d6f6f6e";
+    let holder = get(&app, handle).await;
+    assert_eq!(holder.as_array().unwrap().len(), 1);
+    assert!(
+        holder[0]["payment_address"]
+            .as_str()
+            .unwrap()
+            .starts_with("addr1")
+    );
+}

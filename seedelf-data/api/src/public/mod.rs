@@ -14,7 +14,10 @@
 //! are, and say for how long.
 
 pub mod account;
+pub mod assets;
+pub mod governance;
 pub mod ledger;
+pub mod pools;
 pub mod query;
 pub mod tx;
 pub mod utxos;
@@ -53,6 +56,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/account_info", post(account::account_info))
         .route("/api/v1/account_txs", post(account::account_txs))
         .route("/api/v1/tx_info", post(tx::tx_info))
+        .route("/api/v1/pool_list", get(pools::pool_list))
+        .route("/api/v1/pool_info", post(pools::pool_info))
+        .route("/api/v1/drep_info", post(governance::drep_info))
+        .route("/api/v1/drep_metadata", post(governance::drep_metadata))
+        .route("/api/v1/proposal_list", get(governance::proposal_list))
+        .route("/api/v1/vote_list", get(governance::vote_list))
+        .route("/api/v1/asset_nft_address", get(assets::asset_nft_address))
+        .route("/api/v1/asset_info", post(assets::asset_info))
         .layer(DefaultBodyLimit::max(MAX_BODY))
 }
 

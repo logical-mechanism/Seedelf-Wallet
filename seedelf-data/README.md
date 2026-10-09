@@ -8,10 +8,9 @@ Seedelf Wallet's data layer: the API in front of the home db-sync. **Mainnet onl
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
-- **The public routes, 12 of the 20** (`src/public/`): `credential_utxos`, `address_utxos`, `utxo_info`, `datum_info`, `tip`, `tx_status`, `epoch_params`, `totals`, `account_addresses`, `account_info`, `account_txs` and `tx_info`, in Koios's paths and JSON, taking only the requests `koios.ts` makes.
+- **The public routes:** the other 20 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 
 **Still to come:**
-- the other 8 public routes: pools, DReps, governance actions, votes and tokens;
 - Kupo as the private index's second source;
 - the VPS layer: rate limits, CORS, TLS.
 
@@ -42,6 +41,13 @@ done
 - **koios-artifacts** is the public routes' starting point. It's CC-BY-4.0, so credit it wherever its SQL is used.
 - **blockfrost-backend-ryo** is a second set of db-sync queries to compare query plans against.
 
+**Token decimals** need a checkout of the token registry (about 500 MB), wherever it's kept:
+
+```bash
+git clone --depth 1 https://github.com/cardano-foundation/cardano-token-registry.git
+python3 scripts/token-decimals.py cardano-token-registry > token-decimals.json
+```
+
 ## Tests
 
 ```bash
@@ -54,6 +60,13 @@ cargo fmt --check
 **One test at a time:** the database role allows 10 connections, and a running server holds some of them.
 
 **What the live tests check:**
+
+- **The public routes,** by what must hold however the chain moves:
+  - the contract's and mix box's `credential_utxos` equal the private index;
+  - a page after any outpoint is the rest;
+  - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
+  - the pool list's pages make one sorted list;
+  - an NFT's `asset_info` equals Koios's recorded answer.
 
 - **The private index:** from cursors a day, two days, a month back, and from before the contract existed, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials.
 - **The submit part,** at no cost, since nothing sent can ever land: bytes that aren't a transaction, the contract's first transaction resubmitted (`All inputs are spent`), and Ogmios's error for evaluating it, each passed through as the service gave it. It also covers what the server refuses itself.
@@ -82,6 +95,64 @@ All routes are under `/seedelf/v1/mainnet/`.
 **What a cursor is:** `<height>.<block hash>`, always at least 10 blocks below the tip, at a multiple of 10. The server refuses any other height. Deep cursors almost never roll back. Shared cursors mean a request shows only roughly when its wallet last read, and that one answer serves everyone at that point.
 
 **Caching:** answers are kept until db-sync's tip moves. They're read every 2 s, so one set of queries per block serves every request. A tip older than 3 minutes makes every route answer 503 with `Retry-After`, so the wallet goes to Koios.
+
+## The public routes
+
+Koios's paths and JSON, so a wallet falls back by changing its base URL. The code is `src/public/`.
+
+| Route | What the wallet asks | Kept |
+|---|---|---|
+| `credential_utxos` | up to 75 payment credentials' unspent outputs, 1,000 a page by outpoint, optionally only blocks after a height | a block, for the contract's or mix box's; otherwise never |
+| `address_utxos` | up to 20 addresses' unspent outputs, paged the same way | never |
+| `utxo_info` | up to 60 outputs, spent or not | never |
+| `datum_info` | up to 60 datums' CBOR | never |
+| `tip` | the newest block | read every 2 s |
+| `tx_status` | up to 100 transactions' confirmations | never |
+| `epoch_params` | the newest epoch's parameters | a block |
+| `totals` | the newest epoch's supply | a block |
+| `account_addresses` | up to 75 stake keys' addresses, empty ones too | never |
+| `account_info` | up to 10 stake keys' standing | never |
+| `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on | never |
+| `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
+| `pool_list` | the registered pools, 1,000 a page | an hour |
+| `pool_info` | up to 5 pools' details and live stake | 10 minutes |
+| `drep_info` | up to 5 DReps' standing | 10 minutes |
+| `drep_metadata` | up to 5 DReps' profile names | 10 minutes |
+| `proposal_list` | the live governance actions | 5 minutes |
+| `vote_list` | one DRep's votes on up to 40 actions | never |
+| `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |
+| `asset_info` | one token's CIP-25 and CIP-68 metadata | never |
+
+**Only the wallet's requests.** Each route takes exactly the query string and body `koios.ts` sends: its parameters, in its order, at its sizes. Anything else is a 400, `{"error":"not a request Seedelf Wallet makes"}`, before any query runs, so no caller can compose an expensive one.
+
+**Answers about one user are never cached.** Answers that are the same for everyone are kept for the time above.
+
+**Koios's names and types,** for every field the wallet reads. **What it never reads is left out:**
+- the JSON of a datum or a script (`value` is null): `trimmed()` drops both, registers come from the bytes, and anyone can nest a datum thousands of levels deep;
+- from `tx_info`: collateral, reference inputs, mints, scripts and proposals, and every certificate but the seven an account's own transactions make.
+
+**The SQL is the API's own.** The home Postgres has no `grest` schema and no pg_cardano, and the API reads with the read-only role, so nothing at home is installed or changed.
+- It follows Koios's `grest` functions ([koios-artifacts](https://github.com/cardano-community/koios-artifacts), CC-BY-4.0) rule for rule: an account's standing, a pool's state and live stake, a DRep's activity and delegators, a token's minting metadata.
+- **Where Koios relies on an index it adds, the query goes another way.** A stake key's addresses come from `address.stake_address_id`: 2 ms, against 6.7 s through `tx_out.stake_address_id`, which db-sync doesn't index. An address is found by its bytes (`address.raw`), not its text.
+- **IDs are made in Rust:** CIP-129 DRep, committee and governance action IDs (`src/ids.rs`).
+
+**What stands in for Koios's caches:**
+- **Token decimals** come from the Cardano token registry, Koios's own source: a file made by `scripts/token-decimals.py` from a checkout of it (`MAINNET_TOKEN_DECIMALS`). Without the file, every token is 0. Refresh it the way the wallet refreshes its token list.
+- **A pool's state** is worked out per request from its latest update and any retirement after it.
+- **A pool's live stake** is summed over its live delegators. Their reward sums change only at an epoch's start, so each account's is kept in memory for the epoch.
+  - A first look at a large pool, read from a cold disk, took 12 s. So a request waits at most 3 s for the live figures, then answers with the epoch's snapshot (`pool_stat`) while they're finished in the background and kept.
+- **A token's supply and latest mint** are read from `ma_tx_mint`, which db-sync indexes by token.
+
+**Every connection runs with `jit = off`.** JIT compiled plans whose estimates db-sync's `ma_tx_out` inflates: 76 of a UTxO query's 80 ms.
+
+**The public routes have their own connections:** 6, beside the private index's 3, so a burst of them never holds the private index up.
+- A query that waits 2 s for a connection, or runs past 10 s, answers 503, so the wallet goes to Koios rather than queueing.
+- A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
+
+**Known slow cases:**
+- `account_txs` for an account with a very long history: 1.8 s a page for one with 189,000 transactions.
+- `account_info` reads `delegation_vote` whole, which isn't indexed by account at home: 19 of its 20 ms.
+- `drep_info` reads it whole too, for a DRep's delegators: 250 ms for the DRep with the most, then kept.
 
 ## The submit part
 

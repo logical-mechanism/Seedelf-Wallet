@@ -2,7 +2,7 @@
 //! cached until the tip moves. Every answer here is the same for everyone who
 //! asks, so one query per block serves them all.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use crate::chain::{Chain, Tip};
 use crate::decimals::Decimals;
+use crate::public::pools::Rewards;
 
 /// A tip older than this is behind, and its part answers 503 so the wallet
 /// goes to Koios. Mainnet makes a block every 20 s on average, and a 3 min gap
@@ -33,9 +34,13 @@ const MAX_LASTING: usize = 4096;
 pub struct AppState {
     pub chain: Chain,
     pub decimals: Decimals,
+    /// Accounts' reward sums for the epoch, for pools' live stake.
+    pub rewards: Rewards,
     tip: RwLock<Option<Tip>>,
     cache: Mutex<Cached>,
     lasting: Mutex<HashMap<String, (Instant, Bytes)>>,
+    /// Answers being worked out in the background, so one isn't started twice.
+    working: Mutex<HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -49,9 +54,11 @@ impl AppState {
         AppState {
             chain,
             decimals: Decimals::default(),
+            rewards: Rewards::default(),
             tip: RwLock::new(None),
             cache: Mutex::new(Cached::default()),
             lasting: Mutex::new(HashMap::new()),
+            working: Mutex::new(HashSet::new()),
         }
     }
 
@@ -130,21 +137,44 @@ impl AppState {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Bytes, ApiError>>,
     {
-        let now = Instant::now();
-        if let Some((until, hit)) = self.lasting.lock().expect("lasting lock").get(key)
-            && now < *until
-        {
-            return Ok(hit.clone());
+        if let Some(hit) = self.kept(key) {
+            return Ok(hit);
         }
         let bytes = make().await?;
+        self.keep(key, keep, bytes.clone());
+        Ok(bytes)
+    }
+
+    /// A [`Self::lasting`] answer still within its time, if there is one.
+    pub fn kept(&self, key: &str) -> Option<Bytes> {
+        let lasting = self.lasting.lock().expect("lasting lock");
+        let (until, hit) = lasting.get(key)?;
+        (Instant::now() < *until).then(|| hit.clone())
+    }
+
+    /// Keeps `bytes` as [`Self::lasting`]'s answer for `key`, for `keep`.
+    pub fn keep(&self, key: &str, keep: Duration, bytes: Bytes) {
+        let now = Instant::now();
         let mut lasting = self.lasting.lock().expect("lasting lock");
         if lasting.len() >= MAX_LASTING {
             lasting.retain(|_, (until, _)| now < *until);
         }
         if lasting.len() < MAX_LASTING {
-            lasting.insert(key.to_string(), (now + keep, bytes.clone()));
+            lasting.insert(key.to_string(), (now + keep, bytes));
         }
-        Ok(bytes)
+    }
+
+    /// Marks `key` as being worked out; false if it already is.
+    pub fn start(&self, key: &str) -> bool {
+        self.working
+            .lock()
+            .expect("working lock")
+            .insert(key.to_string())
+    }
+
+    /// `key` is no longer being worked out.
+    pub fn done(&self, key: &str) {
+        self.working.lock().expect("working lock").remove(key);
     }
 
     fn lookup(&self, tip: &str, key: &str) -> Option<Bytes> {
@@ -220,7 +250,7 @@ impl IntoResponse for ApiError {
             ApiError::Behind => (StatusCode::SERVICE_UNAVAILABLE, "behind"),
             ApiError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
             ApiError::Unavailable(error) => {
-                warn!(%error, "a query failed");
+                warn!(error = failure(&error), "a query failed");
                 (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
             }
         };
@@ -232,6 +262,23 @@ impl IntoResponse for ApiError {
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("30"));
         }
         response
+    }
+}
+
+/// What a failure was, for the log, and nothing of the request: a Postgres
+/// error's SQLSTATE (its message can quote a value the request sent: 57014
+/// is a query cancelled by the statement timeout), or the error's own words.
+fn failure(error: &anyhow::Error) -> String {
+    let postgres = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<tokio_postgres::Error>());
+    match postgres.and_then(|e| e.code()) {
+        Some(code) => format!("postgres {}", code.code()),
+        None => match postgres {
+            Some(e) if e.is_closed() => "postgres connection closed".into(),
+            Some(_) => "postgres".into(),
+            None => error.to_string(),
+        },
     }
 }
 
