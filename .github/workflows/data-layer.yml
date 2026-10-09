@@ -1,0 +1,49 @@
+name: Data layer
+
+# seedelf-data/, on every PR that touches it (chunk 26c). Its live tests,
+# which need home's services, stay #[ignore]d and don't run here.
+on:
+  pull_request:
+    paths:
+      - "seedelf-data/**"
+      - ".github/workflows/data-layer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: seedelf-data
+    steps:
+      # No token left in .git: the build runs every dependency's build script.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The toolchain seedelf-data/rust-toolchain.toml pins: keep the two in
+      # step, as data-layer-deploy.yml does.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: seedelf-data
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # --locked: the crates Cargo.lock records, the graph a deploy builds.
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked
+
+      # The script the deploy key runs as root on the VPS.
+      - name: The deploy script
+        run: shellcheck -s sh deploy/edge/seedelf-data-deploy
