@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::constants::{MIXBOX_HASH, SEEDELF_POLICY, SEEDELF_PREFIX, slot_time};
+use crate::decimals::Decimals;
 
 /// Where on chain something happened: its block's slot, and its time (Unix
 /// seconds). No height: Kupo, the second source, knows blocks by slot alone.
@@ -48,9 +49,9 @@ pub struct Row {
     /// The exact bech32: both the enterprise and the staked form sit at the contract.
     pub address: String,
     pub lovelace: String,
-    /// `[policy, name, quantity]`, hex and a decimal string.
+    /// The tokens it holds, by policy and name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub assets: Vec<[String; 3]>,
+    pub assets: Vec<Asset>,
     /// The inline datum's CBOR, hex. The wallet's own parser decides what it means.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datum: Option<String>,
@@ -64,6 +65,20 @@ pub struct Row {
     /// Only for Lovejoin's boxes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub made_by: Option<MadeBy>,
+}
+
+/// A token a row holds: `[policy, name, quantity, decimals]`, the first two
+/// hex, the quantity a decimal string, and the token registry's decimals (0
+/// for a token it doesn't list), as Koios puts them in every `asset_list`.
+/// Both sources make a row's assets with 0, and the answer fills them in
+/// (`with_decimals`), so their rows stay the same.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Asset(pub String, pub String, pub String, pub u8);
+
+impl Asset {
+    pub fn new(policy: String, name: String, quantity: String) -> Self {
+        Asset(policy, name, quantity, 0)
+    }
 }
 
 /// An older row spent since a cursor.
@@ -81,14 +96,30 @@ impl Row {
     pub fn seedelf_name(&self) -> Option<&str> {
         self.assets
             .iter()
-            .find(|[policy, name, _]| policy == SEEDELF_POLICY && name.starts_with(SEEDELF_PREFIX))
-            .map(|[_, name, _]| name.as_str())
+            .find(|Asset(policy, name, ..)| {
+                policy == SEEDELF_POLICY && name.starts_with(SEEDELF_PREFIX)
+            })
+            .map(|Asset(_, name, ..)| name.as_str())
+    }
+
+    /// Its tokens' decimals, from the token registry (`decimals.rs`): what a
+    /// wallet shows a token the list it carries doesn't have by, without
+    /// asking about the token, which would say what it holds.
+    pub fn with_decimals(mut self, decimals: &Decimals) -> Self {
+        for asset in &mut self.assets {
+            asset.3 = decimals.of(&asset.0, &asset.1);
+        }
+        self
     }
 }
 
 /// Reads the shared row columns (`chain::ROW_COLUMNS`); the spend columns too when `with_spend`.
 pub fn read_row(row: &tokio_postgres::Row, with_spend: bool) -> anyhow::Result<Row> {
     let assets: Vec<[String; 3]> = serde_json::from_str(row.try_get::<_, &str>("assets")?)?;
+    let assets = assets
+        .into_iter()
+        .map(|[policy, name, quantity]| Asset::new(policy, name, quantity))
+        .collect();
     let made_by = row
         .try_get::<_, Option<&str>>("inputs")?
         .map(serde_json::from_str::<Vec<[Option<String>; 2]>>)
@@ -129,7 +160,7 @@ mod tests {
     use super::*;
     use crate::constants::CONTRACT_HASH;
 
-    fn row(assets: Vec<[String; 3]>) -> Row {
+    fn row(assets: Vec<Asset>) -> Row {
         Row {
             reference: format!("{}#0", "ab".repeat(32)),
             address: "addr1w…".into(),
@@ -143,8 +174,8 @@ mod tests {
         }
     }
 
-    fn asset(policy: &str, name: &str) -> [String; 3] {
-        [policy.into(), name.into(), "1".into()]
+    fn asset(policy: &str, name: &str) -> Asset {
+        Asset::new(policy.into(), name.into(), "1".into())
     }
 
     #[test]
@@ -160,6 +191,16 @@ mod tests {
             None
         );
         assert_eq!(row(vec![]).seedelf_name(), None);
+    }
+
+    #[test]
+    fn an_asset_is_an_array_with_the_registrys_decimals() {
+        let decimals = Decimals::parse(r#"{"aabb0011": 6}"#).unwrap();
+        let held = row(vec![asset("aabb", "0011"), asset("aabb", "0012")]).with_decimals(&decimals);
+        assert_eq!(
+            serde_json::to_value(&held).unwrap()["assets"],
+            serde_json::json!([["aabb", "0011", "1", 6], ["aabb", "0012", "1", 0]])
+        );
     }
 
     #[test]

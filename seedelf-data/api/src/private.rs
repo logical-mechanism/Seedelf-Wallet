@@ -226,7 +226,10 @@ async fn snapshot(state: &AppState, watched: Watched) -> Result<Response, ApiErr
         let (cursor, block) = stable(&source, &tip).await?;
         let rows = source
             .unspent_as_of(watched.cred(), block.slot, watched.provenance())
-            .await?;
+            .await?
+            .into_iter()
+            .map(|row| row.with_decimals(&state.decimals))
+            .collect();
         to_json(&Snapshot {
             network: "mainnet",
             tip: (&tip).into(),
@@ -274,6 +277,10 @@ async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Respo
             let (created, spent) = source
                 .since(watched.cred(), block.slot, watched.provenance())
                 .await?;
+            let created = created
+                .into_iter()
+                .map(|row| row.with_decimals(&state.decimals))
+                .collect();
             to_json(&Since::Changes {
                 network: "mainnet",
                 tip: (&tip).into(),
@@ -291,14 +298,18 @@ async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Respo
 /// Every Seedelf name unspent at the tip, with the row that holds it. One
 /// bucket, the whole list, while it's small (the plan's `names/{bucket}`).
 async fn names(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
-    let answer = from_sources(&state, "names", |source, tip| async move {
+    let state = &*state;
+    let answer = from_sources(state, "names", |source, tip| async move {
         let rows = source.unspent_now(Watched::Contract.cred(), false).await?;
         let mut seen = std::collections::HashSet::new();
         let names = rows
             .into_iter()
             .filter_map(|row| {
                 let name = row.seedelf_name()?.to_string();
-                seen.insert(name.clone()).then_some(Name { name, row })
+                seen.insert(name.clone()).then_some(Name {
+                    name,
+                    row: row.with_decimals(&state.decimals),
+                })
             })
             .collect();
         to_json(&Names {

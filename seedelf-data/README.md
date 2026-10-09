@@ -68,7 +68,7 @@ cargo fmt --check
 **What the live tests check:**
 
 - **The public routes,** by what must hold however the chain moves:
-  - the contract's and mix box's `credential_utxos` equal the private index;
+  - the contract's and mix box's `credential_utxos` equal the private index, each row's tokens and decimals included (with `MAINNET_TOKEN_DECIMALS` set);
   - a page after any outpoint is the rest;
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
   - the pool list's pages make one sorted list;
@@ -261,7 +261,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
   "ref": "<tx hash>#<index>",
   "address": "addr1…",
   "lovelace": "1749860",
-  "assets": [["<policy>", "<name>", "1"]],
+  "assets": [["<policy>", "<name>", "1", 0]],
   "datum": "d8799f5830…",
   "script": true,
   "created": { "slot": 144889937, "time": 1736456228 },
@@ -271,6 +271,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 ```
 
 - **Omitted when empty:** `assets`, `datum`, `script`, `spent` and `made_by` (Lovejoin only).
+- **An asset** is `[policy, name, quantity, decimals]`: hex, hex, a decimal string, and the token registry's decimals, 0 for a token it doesn't list, as Koios gives them in an `asset_list`. The wallet shows a token its own list lacks by these, without asking about the token. Both sources fill them from the same file, so their rows stay the same.
 - **`datum`** is the inline datum's raw CBOR. The wallet's own parser decides what it means.
 - **The address** is the exact bech32. The contract has outputs in both enterprise and staked form.
 - **A point is a slot and its time,** with no block height: Kupo has none. Every row is from Shelley on, where a slot is a second, so its time is the slot plus 1,591,566,291.
