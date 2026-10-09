@@ -203,13 +203,14 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 
 **db-sync's statistics are far off, so the hot queries don't lean on them.**
 - **The problem:** Postgres samples `tx_out` and counts 44,000 distinct addresses (there are 54 million) and a million distinct transactions (there are 125 million). It then expects 243 unspent outputs at every address and 343 outputs on every transaction.
-- **The fix:** each address's or transaction's outputs are read on their own, behind `offset 0`, so the planner can't swap the per-key lookups for something its estimates make look cheaper. Measured on 2026-10-09, with the same rows before and after:
+- **The fix:** each address's, transaction's or token's outputs are read on their own, behind `offset 0`, so the planner can't swap the per-key lookups for something its estimates make look cheaper. Measured on 2026-10-09, with the same rows before and after:
 
   | Query | Before | After |
   |---|---|---|
   | `credential_utxos`, a wallet's own 75 credentials | 4–6 ms (parallel workers for 3 rows) | 0.3–0.5 ms |
   | `credential_utxos`, a credential at 95,000 addresses | 4.1 s (it read every unspent output on the chain: 26 GB a page) | 160 ms |
   | `tx_info`'s outputs for a page of Activity | 5 ms (parallel workers for 40 rows) | 0.5–0.8 ms |
+  | `asset_nft_address`, an ADA Handle last moved five months ago | 2.5–3.5 s, and past the 10 s cap for some (it walked every output, newest first, to the handle's) | 0.4–22 ms |
 
 - **What doesn't work:** turning parallel workers off for every connection. It would fix the small queries but slows a large pool's live delegators from 0.4 s to 2.1 s. Raising `parallel_setup_cost` does nothing for these plans.
 

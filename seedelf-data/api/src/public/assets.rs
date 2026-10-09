@@ -39,8 +39,11 @@ struct HolderRow {
 
 /// Where an NFT (a token whose supply is exactly 1) sits, by Koios's rule:
 /// its unspent output, or, once it has ever been burned, the last output
-/// that held it. Its outputs are gathered first: left to itself, the planner
-/// walked every output there is, newest first, looking for one of them.
+/// that held it. Its outputs are gathered first, then each is looked up on
+/// its own (`offset 0`). Left to itself, the planner walked every output
+/// there is, newest first, until it met one of them, and a join ordered by
+/// `tx_out.id` still let it: a handle last moved five months ago took 2.5 s,
+/// some past the 10 s cap. This way, under 25 ms cold.
 const HOLDER: &str = "with token as materialized ( \
        select m.id, (select sum(quantity) from ma_tx_mint where ident = m.id) as supply, \
          exists (select 1 from ma_tx_mint where ident = m.id and quantity < 0) as burned \
@@ -49,8 +52,10 @@ const HOLDER: &str = "with token as materialized ( \
        select mto.tx_out_id as id, t.burned from token t join ma_tx_out mto on mto.ident = t.id \
        where t.supply = 1), \
      held as ( \
-       select o.id from outs join tx_out o on o.id = outs.id \
-       where outs.burned or o.consumed_by_tx_id is null order by o.id desc limit 1) \
+       select outs.id from outs cross join lateral ( \
+         select 1 from tx_out o where o.id = outs.id \
+           and (outs.burned or o.consumed_by_tx_id is null) offset 0) x \
+       order by outs.id desc limit 1) \
      select a.address::text, sa.view::text from held h join tx_out o on o.id = h.id \
      join address a on a.id = o.address_id left join stake_address sa on sa.id = o.stake_address_id";
 
