@@ -847,6 +847,13 @@ export interface PendingTx {
    * release review, C45).
    */
   chain?: { first: string; total: number };
+  /**
+   * Watched on the private index's feed, which every wallet shares and names
+   * no transaction (feed.ts): Home asks every 5 s, as the answer costs a unit
+   * at the server's edge and nothing at home (chunk 26b, choice 5). Not kept:
+   * each look says it again.
+   */
+  onFeed?: boolean;
 }
 
 /**

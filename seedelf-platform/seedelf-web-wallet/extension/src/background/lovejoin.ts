@@ -107,6 +107,7 @@ import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activ
 import { txInputs } from "./cbor";
 import { GAP_LIMIT } from "./chain";
 import { KoiosBusyError, KoiosError, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
+import { chainStatus, noteCursor, type Watching } from "./feed";
 import { IndexDown, type IndexRow, utxoOf } from "./private-index";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
@@ -1352,6 +1353,19 @@ export class LovejoinService {
     return { depth: p.lovejoinDepth, delay: p.lovejoinDelay };
   }
 
+  /**
+   * Which of `hashes`, Lovejoin's own transactions, are on chain: each spends
+   * or pays a box, so they're looked for on the pool's feed since before the
+   * earliest of `sentAt` (feed.ts), which names no transaction; with tx_status
+   * while the feed can't say.
+   */
+  private async onChain(network: NetworkName, hashes: string[], sentAt?: number[]): Promise<Set<string>> {
+    const at = sentAt?.length ? Math.min(...sentAt) : undefined;
+    const txs: Watching[] = hashes.map((txHash) => ({ txHash, feed: "lovejoin", ...(at !== undefined ? { sentAt: at } : {}) }));
+    const { statuses } = await chainStatus(this.deps, network, txs);
+    return new Set(hashes.filter((h) => statuses.get(h) != null));
+  }
+
   /** The pool as the private index or Koios lists it (a read), and what the wallet's sent transactions spend. */
   private async listing(network: NetworkName): Promise<{ rows: KoiosUtxo[]; spent: Set<string> }> {
     const hash = NETWORKS[network].lovejoin?.mixBox;
@@ -1370,7 +1384,9 @@ export class LovejoinService {
     const index = await this.deps.index?.(network);
     if (index) {
       try {
-        const { rows } = await index.poolNow();
+        const { rows, cursors } = await index.poolNow();
+        // For the private watches of mixes and withdraws (feed.ts).
+        for (const cursor of new Set(cursors)) await noteCursor(this.deps.session, network, "lovejoin", cursor, this.deps.now());
         const made = new Map<string, NonNullable<IndexRow["made_by"]>>();
         for (const r of rows) if (r.made_by) made.set(r.ref.slice(0, r.ref.lastIndexOf("#")), r.made_by);
         this.provenance.set(network, made);
@@ -2196,10 +2212,9 @@ export class LovejoinService {
             await wallet.withKeys(() => rememberSpent(session, network, bytes, this.deps.now()));
             await this.chainSent(network, id, i);
           },
-          onChain: async (hashes) => {
-            const statuses = await koios.txStatus(hashes);
-            return new Set(hashes.filter((h) => statuses.get(h) != null));
-          },
+          // Every transaction of a chain spends or pays a box: on the pool's feed, from before the first in the mempool
+          // went (feed.ts).
+          onChain: (hashes) => this.onChain(network, hashes, sending.sentAt),
           save,
           sleep,
           now: this.deps.now,
@@ -2505,7 +2520,7 @@ export class LovejoinService {
    */
   private async lookFor(network: NetworkName, m: KeptMaybe): Promise<"in" | "spent" | "never" | undefined> {
     const koios = this.deps.koios(network);
-    const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
+    const seen = await this.onChain(network, [m.txHash], [m.at]).then((on) => (on.has(m.txHash) ? 1 : null), () => undefined);
     if (seen === undefined) return undefined;
     if (seen !== null) return "in";
     const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
@@ -3567,7 +3582,7 @@ export class LovejoinService {
       if (txInputs(bytes).some((o) => !spent.has(o))) await rememberSpent(session, network, bytes, w.sentAt);
     });
     const drop = () => this.dropWithdrawing(network, w.txHash);
-    const seen = (await koios.txStatus([w.txHash]).catch(() => undefined))?.get(w.txHash);
+    const seen = await this.onChain(network, [w.txHash], [w.at]).then((on) => (on.has(w.txHash) ? 1 : null), () => undefined);
     // Taken once Koios answered, which can take a minute (final review F6).
     const now = this.deps.now();
     if (seen != null) {

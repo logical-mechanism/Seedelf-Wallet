@@ -159,12 +159,12 @@ export class PrivateIndex {
    * cursor alone would be ten blocks behind, and a chain drawing from it
    * would take boxes spent since.
    */
-  async poolNow(): Promise<{ tip: IndexTip; rows: IndexRow[] }> {
+  async poolNow(): Promise<{ tip: IndexTip; rows: IndexRow[]; cursors: string[] }> {
     const snapshot = await this.pool();
     const since = await this.poolSince(snapshot.cursor);
     // Rolled back since the snapshot, a moment ago: Koios this once.
     if (since.reset) throw new IndexDown("Lovejoin's pool was rolled back as it was read.");
-    return { tip: since.tip, rows: atTip(snapshot.rows, since) };
+    return { tip: since.tip, rows: atTip(snapshot.rows, since), cursors: [snapshot.cursor, since.cursor] };
   }
 
   private async snapshotAt(path: string): Promise<IndexSnapshot> {

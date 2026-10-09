@@ -114,6 +114,8 @@ import { Withdraw } from "./Withdraw";
 const STALE_MS = 60_000;
 /** How often to ask about a sent transaction. */
 const WATCH_EVERY_MS = 15_000;
+/** How often while it's watched on the private index's shared feed, which names no transaction (chunk 26b). */
+const FEED_EVERY_MS = 5_000;
 /** How long a sent transaction holds new payments back, unless it may have gone through (maybe sent). */
 const HOLD_MS = 10 * 60_000;
 /** How often to ask about one from the public account once it no longer holds anything back: it can land for about two hours. */
@@ -408,9 +410,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const settling = pending !== null && unsettled(pending) && pending.invalidHereafter !== undefined;
   useEffect(() => {
     if (!watching && !settling) return;
-    const timer = setInterval(() => void watch(), watching ? WATCH_EVERY_MS : SETTLE_EVERY_MS);
+    const timer = setInterval(() => void watch(), watching ? (pending?.onFeed ? FEED_EVERY_MS : WATCH_EVERY_MS) : SETTLE_EVERY_MS);
     return () => clearInterval(timer);
-  }, [watching, settling, watch]);
+  }, [watching, settling, watch, pending?.onFeed]);
   const busy = t(pending?.maybeSent ? MAYBE_BUSY : BUSY);
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];

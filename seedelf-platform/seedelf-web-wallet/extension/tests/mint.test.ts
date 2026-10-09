@@ -149,7 +149,8 @@ describe("stealth mint (paid from the Seedelf balance)", () => {
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(pending).toEqual({ kind: "mint", network: "preprod", txHash: summary.txHash, submittedAt: t.clock.now, confirmations: null });
     expect(await t.session.get(SESSION_MINT)).toBeUndefined();
-    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
+    // A Seedelf spend's watch says so, so it's looked for on the private index's feed where there is one (feed.ts).
+    expect(await t.session.get(pendingKey("preprod"))).toEqual({ ...pending, contract: true });
 
     // The shared watch reports it, and forgets it once confirmed.
     t.koios.confirmations = 1;

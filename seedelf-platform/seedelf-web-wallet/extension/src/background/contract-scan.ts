@@ -41,6 +41,7 @@ import type { NetworkName } from "../networks";
 import { CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
 import { registerOf, seedelfTokenOf, type RegisterHex } from "./chain";
 import type { Koios, KoiosUtxo } from "./koios";
+import { noteCursor } from "./feed";
 import { IndexDown, type IndexRow, type IndexSince, type PrivateIndex, utxoOf } from "./private-index";
 import { type PrivateStore, type RecordName, UnreadableRecordError } from "./private-store";
 import { outpoint, readFresh, spentSet, wait } from "./spent";
@@ -303,6 +304,9 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
   const named = await names;
   return wallet.withKeys(async (keys) => {
     same(keys);
+    // The cursors it read from and was handed, for the private watches (feed.ts): the sealed one is from before a
+    // lock, which a watch from before the lock reads from.
+    for (const cursor of new Set([settled.cursor, changes.cursor])) await noteCursor(session, network, "contract", cursor, deps.now());
     const spent = await spentSet(session);
     const owned = atTip.map((r) => utxoOf(r, contract.walletContractHash, network)).filter((u) => !spent.has(outpoint(u)));
     const seedelfs: Record<string, Locator> = {};
