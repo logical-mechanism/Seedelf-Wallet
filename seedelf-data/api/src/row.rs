@@ -3,14 +3,23 @@
 
 use serde::Serialize;
 
-use crate::constants::{MIXBOX_HASH, SEEDELF_POLICY, SEEDELF_PREFIX};
+use crate::constants::{MIXBOX_HASH, SEEDELF_POLICY, SEEDELF_PREFIX, slot_time};
 
-/// Where on chain something happened: the block's height, its slot, and its time (Unix seconds).
+/// Where on chain something happened: its block's slot, and its time (Unix
+/// seconds). No height: Kupo, the second source, knows blocks by slot alone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Point {
-    pub block: i64,
     pub slot: i64,
     pub time: i64,
+}
+
+impl Point {
+    pub fn at(slot: i64) -> Self {
+        Point {
+            slot,
+            time: slot_time(slot),
+        }
+    }
 }
 
 /// A spend: where it happened, and the transaction that made it.
@@ -24,10 +33,11 @@ pub struct Spend {
 /// Who made a Lovejoin box: whether its transaction spent a box itself, and
 /// each of its inputs' payment and stake credentials (hex), so the wallet can
 /// tell its own boxes from the feed alone, with no request about one box.
+/// `inputs` is null when Kupo answered: it knows the box's spends, not who paid.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MadeBy {
     pub mixed: bool,
-    pub inputs: Vec<[Option<String>; 2]>,
+    pub inputs: Option<Vec<[Option<String>; 2]>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -87,7 +97,7 @@ pub fn read_row(row: &tokio_postgres::Row, with_spend: bool) -> anyhow::Result<R
             mixed: inputs
                 .iter()
                 .any(|[payment, _]| payment.as_deref() == Some(MIXBOX_HASH)),
-            inputs,
+            inputs: Some(inputs),
         });
     Ok(Row {
         reference: row.try_get("ref")?,
@@ -96,11 +106,7 @@ pub fn read_row(row: &tokio_postgres::Row, with_spend: bool) -> anyhow::Result<R
         assets,
         datum: row.try_get("datum")?,
         script: row.try_get("script")?,
-        created: Point {
-            block: row.try_get("block")?,
-            slot: row.try_get("slot")?,
-            time: row.try_get("time")?,
-        },
+        created: Point::at(row.try_get("slot")?),
         spent: if with_spend { read_spend(row)? } else { None },
         made_by,
     })
@@ -112,11 +118,7 @@ pub fn read_spend(row: &tokio_postgres::Row) -> anyhow::Result<Option<Spend>> {
     Ok(match by {
         None => None,
         Some(by) => Some(Spend {
-            at: Point {
-                block: row.try_get("spent_block")?,
-                slot: row.try_get("spent_slot")?,
-                time: row.try_get("spent_time")?,
-            },
+            at: Point::at(row.try_get("spent_slot")?),
             by,
         }),
     })
@@ -135,11 +137,7 @@ mod tests {
             assets,
             datum: Some("d8799f5830".into()),
             script: false,
-            created: Point {
-                block: 1,
-                slot: 2,
-                time: 3,
-            },
+            created: Point { slot: 2, time: 3 },
             spent: None,
             made_by: None,
         }
@@ -179,16 +177,12 @@ mod tests {
     #[test]
     fn a_spend_flattens_its_point() {
         let spend = Spend {
-            at: Point {
-                block: 10,
-                slot: 20,
-                time: 30,
-            },
+            at: Point { slot: 20, time: 30 },
             by: "cd".repeat(32),
         };
         assert_eq!(
             serde_json::to_value(spend).unwrap(),
-            serde_json::json!({"block": 10, "slot": 20, "time": 30, "by": "cd".repeat(32)})
+            serde_json::json!({"slot": 20, "time": 30, "by": "cd".repeat(32)})
         );
     }
 }

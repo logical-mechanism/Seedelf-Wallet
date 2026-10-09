@@ -12,6 +12,8 @@ pub const DEFAULT_LISTEN: &str = "127.0.0.1:8099";
 /// No `Debug`: the database URL holds a password, and nothing should print it.
 pub struct Config {
     pub database_url: String,
+    /// The Seedelf-only Kupo: the private index reads db-sync alone without it.
+    pub kupo_url: Option<String>,
     pub listen: SocketAddr,
     /// cardano-submit-api and Ogmios: the submit part answers 503 without them.
     pub submit_api_url: Option<String>,
@@ -31,6 +33,7 @@ impl Config {
         let optional = |name: &str| std::env::var(name).ok().filter(|url| !url.is_empty());
         Ok(Config {
             database_url,
+            kupo_url: optional("MAINNET_KUPO_URL"),
             listen,
             submit_api_url: optional("MAINNET_SUBMIT_API_URL"),
             ogmios_url: optional("MAINNET_OGMIOS_URL"),

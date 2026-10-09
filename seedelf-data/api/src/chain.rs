@@ -57,6 +57,10 @@ const PUBLIC_CONNECTIONS: usize = 6;
 /// it, the wallet does better going to Koios than queueing here.
 const WAIT: Duration = Duration::from_secs(2);
 
+/// How long a new connection may take: past it, home is unreachable, and
+/// waiting on the kernel's TCP timeout (minutes) would hold every request.
+const CONNECT: Duration = Duration::from_secs(3);
+
 /// What every connection runs with. JIT compiles a plan whose estimates are
 /// large (db-sync's `ma_tx_out` makes most of them so), and that took 76 of a
 /// UTxO query's 80 ms; without it, 3 ms.
@@ -66,9 +70,11 @@ const OPTIONS: &str = "-c jit=off";
 /// second, and one that does is a request to refuse, not to wait for.
 const PUBLIC_OPTIONS: &str = "-c jit=off -c statement_timeout=10s";
 
-/// A block, as a cursor names it: db-sync's own id for it, and its hash.
+/// A block, as a cursor names it and both of the private index's sources
+/// know it: its slot and its header hash.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
-    pub id: i64,
+    pub slot: i64,
     pub hash: String,
 }
 
@@ -84,7 +90,8 @@ const TIP: &str = "select b.block_no::bigint, b.slot_no::bigint, encode(b.hash, 
      from (select * from block where block_no is not null order by id desc limit 1) b \
      left join epoch_param ep on ep.epoch_no = b.epoch_no";
 
-const BLOCK_AT: &str = "select id, encode(hash, 'hex') from block where block_no = $1::bigint";
+const BLOCK_BEFORE: &str = "select slot_no::bigint, encode(hash, 'hex') from block \
+     where slot_no <= $1::bigint and block_no is not null order by slot_no desc limit 1";
 
 /// `$1`: the payment credential.
 const OUTS: &str = "with outs as materialized ( \
@@ -101,8 +108,7 @@ const JOINS: &str = "from outs o \
      left join tx ct on ct.id = o.consumed_by_tx_id \
      left join block cb on cb.id = ct.block_id";
 
-const SPEND_COLUMNS: &str = "encode(ct.hash, 'hex') as spent_by, cb.block_no::bigint as spent_block, \
-     cb.slot_no::bigint as spent_slot, extract(epoch from cb.time)::bigint as spent_time";
+const SPEND_COLUMNS: &str = "encode(ct.hash, 'hex') as spent_by, cb.slot_no::bigint as spent_slot";
 
 /// The row's columns. `provenance` is the bool parameter that asks for a
 /// Lovejoin box's making: its transaction's inputs and their credentials.
@@ -111,8 +117,7 @@ fn row_columns(provenance: &str) -> String {
         "encode(t.hash, 'hex') || '#' || o.index::text as ref, \
          a.address::text as address, o.value::text as lovelace, \
          encode(d.bytes, 'hex') as datum, (o.reference_script_id is not null) as script, \
-         b.block_no::bigint as block, b.slot_no::bigint as slot, \
-         extract(epoch from b.time)::bigint as time, \
+         b.slot_no::bigint as slot, \
          (select coalesce(json_agg(json_build_array(encode(m.policy, 'hex'), encode(m.name, 'hex'), \
                  mto.quantity::text) order by m.policy, m.name), '[]'::json)::text \
             from ma_tx_out mto join multi_asset m on m.id = mto.ident \
@@ -132,7 +137,7 @@ impl Chain {
         let pool = |options: &str, size: usize| -> Result<Pool> {
             let mut config =
                 tokio_postgres::Config::from_str(url).context("MAINNET_DATABASE_URL")?;
-            config.options(options);
+            config.options(options).connect_timeout(CONNECT);
             let manager = Manager::from_config(
                 config,
                 NoTls,
@@ -143,6 +148,7 @@ impl Chain {
             Ok(Pool::builder(manager)
                 .max_size(size)
                 .wait_timeout(Some(WAIT))
+                .create_timeout(Some(CONNECT))
                 .runtime(Runtime::Tokio1)
                 .build()?)
         };
@@ -178,24 +184,24 @@ impl Chain {
         })
     }
 
-    /// The canonical block at `height`, if db-sync has one.
-    pub async fn block_at(&self, height: i64) -> Result<Option<Block>> {
+    /// The newest block at or before `slot`, if db-sync has one.
+    pub async fn block_before(&self, slot: i64) -> Result<Option<Block>> {
         let client = self.pool.get().await?;
-        let row = client.query_opt(BLOCK_AT, &[&height]).await?;
+        let row = client.query_opt(BLOCK_BEFORE, &[&slot]).await?;
         row.map(|row| {
             Ok(Block {
-                id: row.try_get(0)?,
+                slot: row.try_get(0)?,
                 hash: row.try_get(1)?,
             })
         })
         .transpose()
     }
 
-    /// The rows at `cred` unspent as of block `at` (db-sync's block id).
+    /// The rows at `cred` unspent as of the block at slot `at`.
     pub async fn unspent_as_of(&self, cred: &[u8], at: i64, provenance: bool) -> Result<Vec<Row>> {
         let sql = format!(
             "{OUTS} select {} {JOINS} \
-             where t.block_id <= $2 and (o.consumed_by_tx_id is null or ct.block_id > $2) \
+             where b.slot_no <= $2 and (o.consumed_by_tx_id is null or cb.slot_no > $2) \
              order by o.id",
             row_columns("$3")
         );
@@ -204,38 +210,44 @@ impl Chain {
         rows.iter().map(|row| read_row(row, false)).collect()
     }
 
-    /// The rows at `cred` made after block `after`, each with its spend if it's been spent since.
-    pub async fn created_since(
+    /// The rows at `cred` made after slot `after`, each with its spend if it's
+    /// been spent since, and the rows made by then and spent after it. Spends
+    /// are in the order Kupo can give too: by slot, then spending transaction.
+    pub async fn since(
         &self,
         cred: &[u8],
         after: i64,
         provenance: bool,
-    ) -> Result<Vec<Row>> {
-        let sql = format!(
-            "{OUTS} select {}, {SPEND_COLUMNS} {JOINS} where t.block_id > $2 order by o.id",
+    ) -> Result<(Vec<Row>, Vec<Spent>)> {
+        let created = format!(
+            "{OUTS} select {}, {SPEND_COLUMNS} {JOINS} where b.slot_no > $2 order by o.id",
             row_columns("$3")
         );
-        let client = self.pool.get().await?;
-        let rows = client.query(&sql, &[&cred, &after, &provenance]).await?;
-        rows.iter().map(|row| read_row(row, true)).collect()
-    }
-
-    /// The rows at `cred` made by block `after` and spent after it.
-    pub async fn spent_since(&self, cred: &[u8], after: i64) -> Result<Vec<Spent>> {
-        let sql = format!(
+        let spent = format!(
             "{OUTS} select encode(t.hash, 'hex') || '#' || o.index::text as ref, {SPEND_COLUMNS} \
-             {JOINS} where t.block_id <= $2 and ct.block_id > $2 order by ct.id, o.id"
+             {JOINS} where b.slot_no <= $2 and cb.slot_no > $2 \
+             order by cb.slot_no, ct.hash, o.id"
         );
         let client = self.pool.get().await?;
-        let rows = client.query(&sql, &[&cred, &after]).await?;
-        rows.iter()
-            .map(|row| {
-                Ok(Spent {
-                    reference: row.try_get("ref")?,
-                    spend: read_spend(row)?.context("a spent row without its spend")?,
+        let created = client
+            .query(&created, &[&cred, &after, &provenance])
+            .await?;
+        let spent = client.query(&spent, &[&cred, &after]).await?;
+        Ok((
+            created
+                .iter()
+                .map(|row| read_row(row, true))
+                .collect::<Result<_>>()?,
+            spent
+                .iter()
+                .map(|row| {
+                    Ok(Spent {
+                        reference: row.try_get("ref")?,
+                        spend: read_spend(row)?.context("a spent row without its spend")?,
+                    })
                 })
-            })
-            .collect()
+                .collect::<Result<_>>()?,
+        ))
     }
 
     /// The rows at `cred` unspent now, at db-sync's tip.

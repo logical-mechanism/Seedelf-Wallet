@@ -1,18 +1,16 @@
 # seedelf-data
 
-Seedelf Wallet's data layer: the API in front of the home db-sync. **Mainnet only.** The plan, and every decision behind it, is web wallet chunk 26, [docs/plans/chunk-26-data-layer.md](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md).
+Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node. **Mainnet only.** The plan, and every decision behind it, is web wallet chunk 26, [docs/plans/chunk-26-data-layer.md](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md).
 
 **Its own Cargo workspace,** apart from `seedelf-platform/`, so nothing here moves the CLI's `Cargo.lock`. It pins the same Rust (`rust-toolchain.toml`).
 
 ## What's built
 
-- **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
+- **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
 - **The public routes:** the other 20 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 
-**Still to come:**
-- Kupo as the private index's second source;
-- the VPS layer: rate limits, CORS, TLS.
+**Still to come:** the VPS layer: rate limits, CORS, TLS.
 
 ## Run it locally
 
@@ -33,13 +31,15 @@ curl http://127.0.0.1:8099/health
 ```bash
 mkdir -p _reference && cd _reference
 for r in cardano-community/koios-artifacts blockfrost/blockfrost-backend-ryo \
-         IntersectMBO/cardano-db-sync cardano-community/guild-operators; do
+         IntersectMBO/cardano-db-sync cardano-community/guild-operators \
+         CardanoSolutions/kupo; do
   git clone --depth 1 "https://github.com/$r.git"
 done
 ```
 
 - **koios-artifacts** is the public routes' starting point. It's CC-BY-4.0, so credit it wherever its SQL is used.
 - **blockfrost-backend-ryo** is a second set of db-sync queries to compare query plans against.
+- **kupo**'s `docs/api/v2.11.0.yaml` is the HTTP API the private index's second source reads. Its filters are inclusive.
 
 **Token decimals** need a checkout of the token registry (about 500 MB), wherever it's kept:
 
@@ -59,6 +59,8 @@ cargo fmt --check
 
 **One test at a time:** the database role allows 10 connections, and a running server holds some of them.
 
+**What the offline tests check,** beyond each module's own: the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`). A fork under a cursor answers `reset`, and with no source fresh the index answers 503.
+
 **What the live tests check:**
 
 - **The public routes,** by what must hold however the chain moves:
@@ -68,10 +70,13 @@ cargo fmt --check
   - the pool list's pages make one sorted list;
   - an NFT's `asset_info` equals Koios's recorded answer.
 
-- **The private index:** from cursors a day, two days, a month back, and from before the contract existed, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials.
+- **The private index, from each source** (`tests/live_private.rs`):
+  - from cursors a day, two days and a month back, and from Kupo's first block, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials (db-sync also from before the contract existed);
+  - db-sync and Kupo name the same block at every slot asked, and give the same rows, field for field and in the same order, but for `made_by.inputs`;
+  - a box's `mixed` is the same from both.
 - **The submit part,** at no cost, since nothing sent can ever land: bytes that aren't a transaction, the contract's first transaction resubmitted (`All inputs are spent`), and Ogmios's error for evaluating it, each passed through as the service gave it. It also covers what the server refuses itself.
 
-**Checked against Kupo (2026-10-09):** the API's view of the tip matched Kupo's unspent set, 32 of 32 for the contract and 41 of 41 for the mix box. Kupo is a source independent of db-sync, so this is the end-to-end check. It held from the current cursor and from one two days back: 43 rows created there, and 91 boxes created and 41 spent.
+**Checked end to end (2026-10-09):** the server run once as is and once with db-sync unreachable gave byte-identical contract snapshots, `since` answers and names at the same tip. The Lovejoin answers differed only in `made_by.inputs`.
 
 ## The private index
 
@@ -83,7 +88,7 @@ All routes are under `/seedelf/v1/mainnet/`.
 | `contract/since/{cursor}` | what changed after `cursor`: `created` (each with its `spent`, if it's gone since) and `spent` (older rows spent after it), plus the new stable `cursor` |
 | `names` | every Seedelf name unspent at the tip, with the row that holds it |
 | `lovejoin/pool` and `lovejoin/since/{cursor}` | the same for the mix box. Each box carries `made_by`: whether its transaction spent a box itself, and each input's payment and stake credentials |
-| `/health` | db-sync's tip and its age: 200 while the private index and the public routes answer, 503 when it's behind |
+| `/health` | each part's state (`private`, `public`), the private index's `source`, and db-sync's and Kupo's tips and ages: 200 while both parts answer, 503 when either can't |
 
 **How a wallet reads it:**
 
@@ -92,9 +97,16 @@ All routes are under `/seedelf/v1/mainnet/`.
 3. **The answer's `cursor` is the new settled point `C'`.** Apply only the entries at or below `C'` to the settled view. Everything above it is recomputed from the next answer, so a fork above a cursor never needs undoing.
 4. **`reset: true`** means the cursor's own block was rolled back: start again from a snapshot.
 
-**What a cursor is:** `<height>.<block hash>`, always at least 10 blocks below the tip, at a multiple of 10. The server refuses any other height. Deep cursors almost never roll back. Shared cursors mean a request shows only roughly when its wallet last read, and that one answer serves everyone at that point.
+**What a cursor is:** `<slot>.<block hash>`: a slot that's a multiple of 200, at least 200 slots below the tip (about 10 blocks), and the hash of the newest block at or before it. The server refuses any other slot. Deep cursors almost never roll back. Shared cursors mean a request shows only roughly when its wallet last read, and that one answer serves everyone at that point.
 
-**Caching:** answers are kept until db-sync's tip moves. They're read every 2 s, so one set of queries per block serves every request. A tip older than 3 minutes makes every route answer 503 with `Retry-After`, so the wallet goes to Koios.
+**Two sources, one answer.** db-sync answers first (the owner, 2026-10-08). Kupo answers instead while db-sync's tip can't be read, is over 3 minutes old, or is more than 60 slots (about 3 blocks) behind Kupo's, and whenever a db-sync read fails.
+- Both know every block by slot and hash, so a cursor from one is answered by the other, and a wallet never sees a switch.
+- Their rows are the same, field for field and in the same order, with one exception: from Kupo, a box's `made_by.inputs` is `null`. Kupo indexes outputs at our two credentials, not who paid for a transaction.
+- A source whose tip hasn't reached a cursor passes it to the other. If neither can answer, the route gives 503 with `Retry-After`, and the wallet goes to Koios.
+- An answer Kupo makes from several reads is read again if Kupo's checkpoint moved between them (`X-Most-Recent-Checkpoint`), so it's always of one chain state.
+- Kupo keeps every block's checkpoint from its start, block 11,305,805, the contract's first output. A cursor from before that is a `reset` from Kupo.
+
+**Caching:** each source's answers are kept until its tip moves. Both tips are read every 2 s, so one set of reads per block serves every request.
 
 ## The public routes
 
@@ -148,6 +160,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 
 **The public routes have their own connections:** 6, beside the private index's 3, so a burst of them never holds the private index up.
 - A query that waits 2 s for a connection, or runs past 10 s, answers 503, so the wallet goes to Koios rather than queueing.
+- A connection that takes 3 s to open has failed, rather than waiting minutes on TCP: the private index then reads Kupo, and the public routes answer 503.
 - A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
 
 **Known slow cases:**
@@ -177,8 +190,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
   "assets": [["<policy>", "<name>", "1"]],
   "datum": "d8799f5830…",
   "script": true,
-  "created": { "block": 11330824, "slot": 144889937, "time": 1736456228 },
-  "spent": { "block": 14044000, "slot": 199943000, "time": 1791509291, "by": "<tx hash>" },
+  "created": { "slot": 144889937, "time": 1736456228 },
+  "spent": { "slot": 199943000, "time": 1791509291, "by": "<tx hash>" },
   "made_by": { "mixed": true, "inputs": [["<payment cred>", "<stake cred or null>"]] }
 }
 ```
@@ -186,6 +199,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **Omitted when empty:** `assets`, `datum`, `script`, `spent` and `made_by` (Lovejoin only).
 - **`datum`** is the inline datum's raw CBOR. The wallet's own parser decides what it means.
 - **The address** is the exact bech32. The contract has outputs in both enterprise and staked form.
+- **A point is a slot and its time,** with no block height: Kupo has none. Every row is from Shelley on, where a slot is a second, so its time is the slot plus 1,591,566,291.
+- **`made_by.inputs`** is `null` when Kupo answered.
 
 ## The SQL
 

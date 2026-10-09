@@ -2,7 +2,7 @@
 
 Branch `web-wallet/data-layer`, from `main`.
 
-**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, the submit part and the 20 public routes are built and checked (2026-10-09). Next: Kupo as the private index's second source, the deploy files, then the wallet's side.
+**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, with Kupo as its second source, the submit part and the 20 public routes are built and checked (2026-10-09). Next: the deploy files, then the wallet's side.
 
 **For the API as built, [seedelf-data/README.md](../../../../seedelf-data/README.md) is the reference.** This plan says why; that README says what the routes return.
 
@@ -55,7 +55,7 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 ## Choices made here (the owner can overturn any)
 
 1. **The private index reads db-sync first** (the owner, 2026-10-08): "the db sync queries will be more than enough for now". Its contract queries take 1–13 ms ([Order of work](#order-of-work)).
-   - **Kupo is the second source.** It's synced, and it was checked equal to db-sync on every output of both contracts. The builder switches to it when db-sync is down or behind.
+   - **Kupo is the second source** (built 2026-10-09). It's synced, and it was checked equal to db-sync on every output of both contracts. The private index switches to it when db-sync is down or behind.
      - db-sync does its heaviest work at epoch boundaries, and an upgrade sometimes means a resync of several days. Kupo needs only the node.
      - It's tiny: for two script hashes its database is MBs.
    - **The freshness log waits** until it's needed. It would sample the node's tip, Kupo's checkpoint and db-sync's newest block across an epoch boundary.
@@ -113,6 +113,8 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
   - A row's time is exact from its slot (Shelley onwards).
   - The wallet orders private coins by slot; today `coin-control.ts` orders them by `block_height`.
 
+**As built (2026-10-09), there's no builder holding rows in memory.** Each answer is read from its source when first asked for at a tip, then kept until that source's tip moves. The reads take milliseconds, and one set per block serves everyone, so a copy of the rows would only add a second truth to keep right. See [the seedelf-data README](../../../../seedelf-data/README.md#the-private-index).
+
 **The builder** lives in `seedelf-data-api`, in memory.
 
 - **Every 2 s** it reads its source's newest block.
@@ -152,12 +154,14 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 
 **As built (2026-10-09)**, three things differ from the table below. The [seedelf-data README](../../../../seedelf-data/README.md) has the details.
 
-- **Cursors:** every cursor sits at least 10 blocks below the tip, at a multiple of 10, with no separate day-long grid for old ones.
+- **Cursors are points:** `<slot>.<hash>`, a slot that's a multiple of 200, at least 200 slots (about 10 blocks) below the tip, with the hash of the newest block at or before it. There's no separate day-long grid for old ones.
+  - db-sync and Kupo both know every block by slot and hash, so either answers the other's cursor, and a switch between them needs no `reset`.
   - The wallet treats everything above its cursor as provisional and recomputes it from each answer, so a fork above a cursor never needs undoing.
   - A `created` row carries its own `spent`.
   - `reset` comes only when the cursor's own block was rolled back.
 - **Shards and buckets are left for later:** v1 serves `contract/snapshot` instead of shards, and `names` instead of `names/{bucket}`. No client exists yet, so adding them needs no compatibility work.
-- **Rows carry `created` as `{block, slot, time}`:** db-sync has the height that Kupo lacks.
+- **Rows carry `created` as `{slot, time}`, with no height:** Kupo has none, and both sources give the same row. A slot's time is exact from Shelley on.
+- **Kupo answers in place of db-sync** while db-sync's tip can't be read, is over 3 minutes old or is more than 60 slots behind Kupo's, and whenever a db-sync read fails. Its rows equal db-sync's field for field, but a box's `made_by.inputs` is `null`.
 
 | Route | Answer | Notes |
 |---|---|---|
@@ -370,7 +374,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 | Part | Healthy when |
 |---|---|
-| private | the source in use (db-sync, or Kupo when db-sync is down) is within 3 blocks of the node's tip, and that tip is under 2 min old |
+| private | the source in use (db-sync, or Kupo when db-sync is down) is within 3 blocks of the node's tip, and that tip is under 2 min old. **As built:** a source's tip under 3 min old, and db-sync within 60 slots of Kupo's |
 | public | db-sync's newest block is under 3 min old |
 | submit | the node's tip is under 2 min old |
 
@@ -478,6 +482,7 @@ Monthly and rough; check prices when buying.
    - **Deferred, "if we even need it":** freshness. That means the node's tip, Kupo's checkpoint and db-sync's newest block, every 30 s across an epoch boundary. The builder reads db-sync first and switches to Kupo, so this would only tune when it switches.
 3. **`seedelf-data/`, built and run locally:**
    1. ✅ the private index, read from db-sync (`snapshot`, `since`, `names`, the Lovejoin pool with `made_by`), and ✅ `submittx` and `ogmios`.
+      - ✅ **Kupo as its second source** (2026-10-09). Both sources give the same rows in the same order, checked live from a day, two days, a month and Kupo's first block back. With db-sync unreachable, the server's contract answers were byte-identical to db-sync's. A scripted Kupo forces the rollback `reset`.
       - **Checked live:** the view rebuilt from the API equals Kupo's unspent set, and every cursor back to before the contract existed replays to the tip. The submit part passes answers through untouched, and the tests use only sends that can't land.
       - **The SQL lesson:** every query gathers the credential's own outputs first, in a `MATERIALIZED` CTE. Left alone, the planner took 3.5 s instead of 9.5 ms.
    2. ✅ **the 20 public routes** (2026-10-09), in Koios's paths and JSON, each taking only `koios.ts`'s requests.
@@ -506,7 +511,7 @@ Monthly and rough; check prices when buying.
 The private index is read-only: a bug shows a wrong balance or gets a transaction refused, but it can't lose funds.
 
 - **Private parity.** On mainnet, the private index gives the same owned set and Seedelf names as today's Koios scan, for the owner's own wallets. Replaying `since` from many cursors matches a fresh snapshot.
-- **Rollbacks.** A reset is forced in a test against a scripted Kupo. Then real rollbacks are watched on mainnet for a day.
+- **Rollbacks.** A reset is forced in a test against a scripted Kupo (✅ 2026-10-09, `tests/scripted_kupo.rs`). Then real rollbacks are watched on mainnet for a day.
 - **Submits, for free.** A deliberately invalid transaction (spent inputs, a fee too small) is refused with the same error strings Koios gives. A valid submit first happens in the owner's ordinary use, with Koios as the fallback.
 - **Scale.** Build a synthetic contract of 1M rows offline, in the WebAssembly's test harness, and measure:
   - a restore's time and peak memory;

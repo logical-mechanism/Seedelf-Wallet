@@ -15,23 +15,27 @@
 //!    Everything above `C'` is recomputed from the next answer, so a fork
 //!    above a cursor never needs undoing.
 //! 4. `reset: true` means the cursor's own block was rolled back: start again at 1.
+//!
+//! Every answer is read from db-sync, or from Kupo when db-sync is down or
+//! behind ([`crate::source`]); a source whose read fails passes the request to the other.
 
-use std::sync::{Arc, LazyLock};
+use std::future::Future;
+use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::routing::get;
 use serde::Serialize;
+use tracing::warn;
 
-use crate::chain::Tip;
-use crate::constants::{CONTRACT_HASH, MIXBOX_HASH, bytes};
-use crate::cursor::{Cursor, CursorError, stable_height};
+use crate::chain::Block;
+use crate::constants::{CONTRACT_HASH, MIXBOX_HASH, slot_time};
+use crate::cursor::{Cursor, CursorError, stable_slot};
 use crate::row::{Row, Spent};
-use crate::state::{ApiError, AppState, json};
-
-static CONTRACT: LazyLock<Vec<u8>> = LazyLock::new(|| bytes(CONTRACT_HASH));
-static MIXBOX: LazyLock<Vec<u8>> = LazyLock::new(|| bytes(MIXBOX_HASH));
+use crate::source::Source;
+use crate::state::{ApiError, AppState, failure, json, to_json};
 
 /// The two credentials the private index watches.
 #[derive(Clone, Copy)]
@@ -41,10 +45,10 @@ enum Watched {
 }
 
 impl Watched {
-    fn cred(self) -> &'static [u8] {
+    fn cred(self) -> &'static str {
         match self {
-            Watched::Contract => &CONTRACT,
-            Watched::Lovejoin => &MIXBOX,
+            Watched::Contract => CONTRACT_HASH,
+            Watched::Lovejoin => MIXBOX_HASH,
         }
     }
 
@@ -81,19 +85,17 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 #[derive(Serialize)]
 struct TipView {
-    block: i64,
     slot: i64,
     hash: String,
     time: i64,
 }
 
-impl From<&Tip> for TipView {
-    fn from(tip: &Tip) -> Self {
+impl From<&Block> for TipView {
+    fn from(tip: &Block) -> Self {
         TipView {
-            block: tip.height,
             slot: tip.slot,
             hash: tip.hash.clone(),
-            time: tip.time,
+            time: slot_time(tip.slot),
         }
     }
 }
@@ -160,75 +162,102 @@ async fn lovejoin_since(
     since(&state, Watched::Lovejoin, &cursor).await
 }
 
-/// The stable cursor for `tip`: its height, and db-sync's id and hash for the block there.
-async fn stable(state: &AppState, tip: &Tip) -> Result<(Cursor, i64), ApiError> {
-    let height = stable_height(tip.height);
-    let block = state
-        .chain
-        .block_at(height)
+/// `make`'s answer from the first source that gives one, kept in that
+/// source's cache until its tip moves. A source that fails passes the request
+/// on: a 400 is the request's own fault, and goes back at once.
+async fn from_sources<F, Fut>(state: &AppState, key: &str, make: F) -> Result<Bytes, ApiError>
+where
+    F: Fn(Source, Block) -> Fut,
+    Fut: Future<Output = Result<Bytes, ApiError>>,
+{
+    let sources = state.private_sources();
+    let count = sources.len();
+    for (i, (source, tip)) in sources.into_iter().enumerate() {
+        let upstream = source.upstream();
+        match state
+            .cached_in(upstream, &tip.hash, key, || make(source, tip.clone()))
+            .await
+        {
+            Ok(answer) => return Ok(answer),
+            Err(ApiError::Bad(why)) => return Err(ApiError::Bad(why)),
+            Err(error) if i + 1 < count => {
+                if let ApiError::Unavailable(error) = &error {
+                    let error = failure(error);
+                    warn!(
+                        source = upstream.name(),
+                        error, "a private read failed, so the other source answers"
+                    );
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ApiError::Behind)
+}
+
+/// The stable cursor for `tip`: its grid slot, and the block there.
+async fn stable(source: &Source, tip: &Block) -> Result<(Cursor, Block), ApiError> {
+    let slot = stable_slot(tip.slot);
+    let block = source
+        .block_before(slot)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("no block at the stable height {height}"))?;
+        .ok_or_else(|| anyhow::anyhow!("no block at or before the stable slot {slot}"))?;
     Ok((
         Cursor {
-            height,
-            hash: block.hash,
+            slot,
+            hash: block.hash.clone(),
         },
-        block.id,
+        block,
     ))
 }
 
 async fn snapshot(state: &AppState, watched: Watched) -> Result<Response, ApiError> {
-    let tip = state.fresh_tip()?;
     let key = format!("{}/snapshot", watched.key());
-    let answer = state
-        .cached(&tip, &key, || async {
-            let (cursor, at) = stable(state, &tip).await?;
-            let rows = state
-                .chain
-                .unspent_as_of(watched.cred(), at, watched.provenance())
-                .await?;
-            Ok(Snapshot {
-                network: "mainnet",
-                tip: (&tip).into(),
-                cursor: cursor.to_string(),
-                rows,
-            })
+    let answer = from_sources(state, &key, |source, tip| async move {
+        let (cursor, block) = stable(&source, &tip).await?;
+        let rows = source
+            .unspent_as_of(watched.cred(), block.slot, watched.provenance())
+            .await?;
+        to_json(&Snapshot {
+            network: "mainnet",
+            tip: (&tip).into(),
+            cursor: cursor.to_string(),
+            rows,
         })
-        .await?;
+    })
+    .await?;
     Ok(json(answer))
 }
 
 async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Response, ApiError> {
     let from: Cursor = cursor.parse().map_err(|error| {
         ApiError::Bad(match error {
-            CursorError::Malformed => "a cursor is <height>.<block hash>",
+            CursorError::Malformed => "a cursor is <slot>.<block hash>",
             CursorError::NotQuantised => "not a cursor this server hands out",
         })
     })?;
-    let tip = state.fresh_tip()?;
     let key = format!("{}/since/{from}", watched.key());
-    let answer = state
-        .cached(&tip, &key, || async {
-            let (cursor, _) = stable(state, &tip).await?;
-            let block = if from.height <= tip.height {
-                state.chain.block_at(from.height).await?
-            } else {
-                None
-            };
+    let answer = from_sources(state, &key, |source, tip| {
+        let from = from.clone();
+        async move {
+            // A source that hasn't reached the cursor can't say what's after it.
+            if tip.slot <= from.slot {
+                return Err(ApiError::Behind);
+            }
+            let (cursor, _) = stable(&source, &tip).await?;
+            let block = source.block_before(from.slot).await?;
             let Some(block) = block.filter(|block| block.hash == from.hash) else {
-                return Ok(Since::Reset {
+                return to_json(&Since::Reset {
                     network: "mainnet",
                     tip: (&tip).into(),
                     reset: true,
                     cursor: cursor.to_string(),
                 });
             };
-            let created = state
-                .chain
-                .created_since(watched.cred(), block.id, watched.provenance())
+            let (created, spent) = source
+                .since(watched.cred(), block.slot, watched.provenance())
                 .await?;
-            let spent = state.chain.spent_since(watched.cred(), block.id).await?;
-            Ok(Since::Changes {
+            to_json(&Since::Changes {
                 network: "mainnet",
                 tip: (&tip).into(),
                 from: from.to_string(),
@@ -236,35 +265,31 @@ async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Respo
                 created,
                 spent,
             })
-        })
-        .await?;
+        }
+    })
+    .await?;
     Ok(json(answer))
 }
 
 /// Every Seedelf name unspent at the tip, with the row that holds it. One
 /// bucket, the whole list, while it's small (the plan's `names/{bucket}`).
 async fn names(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
-    let tip = state.fresh_tip()?;
-    let answer = state
-        .cached(&tip, "names", || async {
-            let rows = state
-                .chain
-                .unspent_now(Watched::Contract.cred(), false)
-                .await?;
-            let mut seen = std::collections::HashSet::new();
-            let names = rows
-                .into_iter()
-                .filter_map(|row| {
-                    let name = row.seedelf_name()?.to_string();
-                    seen.insert(name.clone()).then_some(Name { name, row })
-                })
-                .collect();
-            Ok(Names {
-                network: "mainnet",
-                tip: (&tip).into(),
-                names,
+    let answer = from_sources(&state, "names", |source, tip| async move {
+        let rows = source.unspent_now(Watched::Contract.cred(), false).await?;
+        let mut seen = std::collections::HashSet::new();
+        let names = rows
+            .into_iter()
+            .filter_map(|row| {
+                let name = row.seedelf_name()?.to_string();
+                seen.insert(name.clone()).then_some(Name { name, row })
             })
+            .collect();
+        to_json(&Names {
+            network: "mainnet",
+            tip: (&tip).into(),
+            names,
         })
-        .await?;
+    })
+    .await?;
     Ok(json(answer))
 }

@@ -14,6 +14,16 @@ pub const SEEDELF_PREFIX: &str = "5eed0e1f";
 /// Lovejoin's mix box on mainnet: `seedelf-web-wallet/extension/src/networks.ts`.
 pub const MIXBOX_HASH: &str = "c145c10ff4bcaef7f5a4dbb3fcbfddca4b6c7b08191b0690b12f1fad";
 
+/// Mainnet's Shelley era began at slot 4,492,800, Unix second 1,596,059,091,
+/// and every slot since lasts a second: a slot's time is the slot plus this.
+pub const SHELLEY_OFFSET: i64 = 1_591_566_291;
+
+/// When `slot` began, in Unix seconds: every row and tip the private index
+/// gives is from Shelley on, and both its sources agree on this exactly.
+pub fn slot_time(slot: i64) -> i64 {
+    slot + SHELLEY_OFFSET
+}
+
 /// Decodes one of the hashes above.
 pub fn bytes(hex: &str) -> Vec<u8> {
     (0..hex.len())
@@ -39,6 +49,14 @@ mod tests {
     #[test]
     fn the_mix_box_matches_the_wallets_mainnet() {
         assert!(NETWORKS.contains(&format!("mixBox: \"{MIXBOX_HASH}\"")));
+    }
+
+    #[test]
+    fn a_slot_has_its_blocks_time() {
+        // The contract's first live output (block 11,330,824), as db-sync times it.
+        assert_eq!(slot_time(144_889_937), 1_736_456_228);
+        // Shelley's first slot.
+        assert_eq!(slot_time(4_492_800), 1_596_059_091);
     }
 
     #[test]

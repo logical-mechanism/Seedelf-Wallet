@@ -1,9 +1,10 @@
-//! What the server holds: db-sync's tip, watched every 2 s, and answers
-//! cached until the tip moves. Every answer here is the same for everyone who
-//! asks, so one query per block serves them all.
+//! What the server holds: db-sync's and Kupo's tips, each watched every 2 s,
+//! and answers cached until their source's tip moves. Every answer here is
+//! the same for everyone who asks, so one query per block serves them all.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,16 +14,19 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::chain::{Chain, Tip};
+use crate::chain::{Block, Chain, Tip};
+use crate::constants::slot_time;
 use crate::decimals::Decimals;
+use crate::kupo::Kupo;
 use crate::public::pools::Rewards;
+use crate::source::{self, Source, Upstream};
 
 /// A tip older than this is behind, and its part answers 503 so the wallet
 /// goes to Koios. Mainnet makes a block every 20 s on average, and a 3 min gap
 /// comes about once in 10,000.
 pub const MAX_AGE_SECS: i64 = 180;
 
-/// How often db-sync's tip is read.
+/// How often db-sync's and Kupo's tips are read.
 pub const WATCH_EVERY: Duration = Duration::from_secs(2);
 
 /// Answers held for one tip, at most: past this, nothing more is kept until it moves.
@@ -33,30 +37,51 @@ const MAX_LASTING: usize = 4096;
 
 pub struct AppState {
     pub chain: Chain,
+    /// The private index's second source, when there is one.
+    pub kupo: Option<Kupo>,
     pub decimals: Decimals,
     /// Accounts' reward sums for the epoch, for pools' live stake.
     pub rewards: Rewards,
     tip: RwLock<Option<Tip>>,
+    /// db-sync's tip couldn't be read last time: the private index goes to Kupo at once.
+    db_failing: AtomicBool,
+    kupo_tip: RwLock<Option<Block>>,
+    /// Answers made from db-sync, for its tip; the private index's made from Kupo, for Kupo's.
     cache: Mutex<Cached>,
+    kupo_cache: Mutex<Cached>,
     lasting: Mutex<HashMap<String, (Instant, Bytes)>>,
     /// Answers being worked out in the background, so one isn't started twice.
     working: Mutex<HashSet<String>>,
 }
 
+/// Answers kept for one source's tip, dropped when it moves.
 #[derive(Default)]
 struct Cached {
     tip: String,
     answers: HashMap<String, Bytes>,
 }
 
+impl Cached {
+    fn set_tip(&mut self, hash: &str) {
+        if self.tip != hash {
+            self.tip = hash.to_string();
+            self.answers.clear();
+        }
+    }
+}
+
 impl AppState {
     pub fn new(chain: Chain) -> Self {
         AppState {
             chain,
+            kupo: None,
             decimals: Decimals::default(),
             rewards: Rewards::default(),
             tip: RwLock::new(None),
+            db_failing: AtomicBool::new(false),
+            kupo_tip: RwLock::new(None),
             cache: Mutex::new(Cached::default()),
+            kupo_cache: Mutex::new(Cached::default()),
             lasting: Mutex::new(HashMap::new()),
             working: Mutex::new(HashSet::new()),
         }
@@ -68,19 +93,40 @@ impl AppState {
         self
     }
 
+    /// Kupo, the private index's second source.
+    pub fn with_kupo(mut self, kupo: Option<Kupo>) -> Self {
+        self.kupo = kupo;
+        self
+    }
+
     /// Takes a newly read tip; a new block drops every cached answer.
     pub fn set_tip(&self, tip: Tip) {
+        self.db_failing.store(false, Ordering::Relaxed);
         let mut held = self.tip.write().expect("tip lock");
         if held.as_ref().map(|t| &t.hash) != Some(&tip.hash) {
-            let mut cache = self.cache.lock().expect("cache lock");
-            cache.tip = tip.hash.clone();
-            cache.answers.clear();
+            self.cache.lock().expect("cache lock").set_tip(&tip.hash);
             *held = Some(tip);
         }
     }
 
     pub fn tip(&self) -> Option<Tip> {
         self.tip.read().expect("tip lock").clone()
+    }
+
+    /// Takes Kupo's newly read tip; a new block drops the answers made from it.
+    pub fn set_kupo_tip(&self, tip: Block) {
+        let mut held = self.kupo_tip.write().expect("tip lock");
+        if held.as_ref() != Some(&tip) {
+            self.kupo_cache
+                .lock()
+                .expect("cache lock")
+                .set_tip(&tip.hash);
+            *held = Some(tip);
+        }
+    }
+
+    pub fn kupo_tip(&self) -> Option<Block> {
+        self.kupo_tip.read().expect("tip lock").clone()
     }
 
     /// The tip, if it's fresh enough to answer from.
@@ -90,6 +136,29 @@ impl AppState {
             return Err(ApiError::Behind);
         }
         Ok(tip)
+    }
+
+    /// The private index's sources that can answer now, best first, each with
+    /// its tip: db-sync while its tip reads and is fresh, unless Kupo is well
+    /// ahead of it; Kupo while its tip is fresh.
+    pub fn private_sources(&self) -> Vec<(Source, Block)> {
+        let db_sync = self
+            .tip()
+            .filter(|tip| !self.db_failing.load(Ordering::Relaxed) && age(tip) <= MAX_AGE_SECS)
+            .map(|tip| {
+                (
+                    Source::DbSync(self.chain.clone()),
+                    Block {
+                        slot: tip.slot,
+                        hash: tip.hash,
+                    },
+                )
+            });
+        let kupo = self
+            .kupo
+            .clone()
+            .zip(self.kupo_tip().filter(|tip| block_age(tip) <= MAX_AGE_SECS));
+        source::order(db_sync, kupo.map(|(kupo, tip)| (Source::Kupo(kupo), tip)))
     }
 
     /// The answer for `key` at `tip`, from the cache or made by `make` and kept.
@@ -114,12 +183,36 @@ impl AppState {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Bytes, ApiError>>,
     {
-        if let Some(hit) = self.lookup(&tip.hash, key) {
+        self.cached_in(Upstream::DbSync, &tip.hash, key, make).await
+    }
+
+    /// The answer for `key` made from `upstream` at its tip `tip`, from that
+    /// source's cache or made by `make` and kept until its tip moves.
+    pub async fn cached_in<F, Fut>(
+        &self,
+        upstream: Upstream,
+        tip: &str,
+        key: &str,
+        make: F,
+    ) -> Result<Bytes, ApiError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Bytes, ApiError>>,
+    {
+        let cache = match upstream {
+            Upstream::DbSync => &self.cache,
+            Upstream::Kupo => &self.kupo_cache,
+        };
+        let hit = {
+            let cache = cache.lock().expect("cache lock");
+            (cache.tip == tip).then(|| cache.answers.get(key).cloned())
+        };
+        if let Some(hit) = hit.flatten() {
             return Ok(hit);
         }
         let bytes = make().await?;
-        let mut cache = self.cache.lock().expect("cache lock");
-        if cache.tip == tip.hash && cache.answers.len() < MAX_CACHED {
+        let mut cache = cache.lock().expect("cache lock");
+        if cache.tip == tip && cache.answers.len() < MAX_CACHED {
             cache.answers.insert(key.to_string(), bytes.clone());
         }
         Ok(bytes)
@@ -185,6 +278,7 @@ impl AppState {
         })
     }
 
+    #[cfg(test)]
     fn lookup(&self, tip: &str, key: &str) -> Option<Bytes> {
         let cache = self.cache.lock().expect("cache lock");
         (cache.tip == tip).then(|| cache.answers.get(key).cloned())?
@@ -212,12 +306,20 @@ impl Drop for Working {
     }
 }
 
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// Seconds since the tip's block was made.
 pub fn age(tip: &Tip) -> i64 {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
-    now - tip.time
+    now() - tip.time
+}
+
+/// Seconds since a block was made, from its slot.
+pub fn block_age(block: &Block) -> i64 {
+    now() - slot_time(block.slot)
 }
 
 /// Reads db-sync's tip every [`WATCH_EVERY`], for as long as the server runs.
@@ -236,8 +338,37 @@ pub async fn watch_tip(state: Arc<AppState>) {
                 state.set_tip(tip);
             }
             Err(error) => {
+                state.db_failing.store(true, Ordering::Relaxed);
                 if !failing {
-                    warn!(%error, "db-sync's tip couldn't be read");
+                    warn!(error = failure(&error), "db-sync's tip couldn't be read");
+                    failing = true;
+                }
+            }
+        }
+    }
+}
+
+/// Reads Kupo's tip every [`WATCH_EVERY`], while there's a Kupo.
+pub async fn watch_kupo(state: Arc<AppState>) {
+    let Some(kupo) = state.kupo.clone() else {
+        return;
+    };
+    let mut every = tokio::time::interval(WATCH_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut failing = false;
+    loop {
+        every.tick().await;
+        match kupo.tip().await {
+            Ok(tip) => {
+                if failing {
+                    info!("Kupo's tip reads again");
+                    failing = false;
+                }
+                state.set_kupo_tip(tip);
+            }
+            Err(error) => {
+                if !failing {
+                    warn!(%error, "Kupo's tip couldn't be read");
                     failing = true;
                 }
             }
@@ -290,7 +421,7 @@ impl IntoResponse for ApiError {
 /// What a failure was, for the log, and nothing of the request: a Postgres
 /// error's SQLSTATE (its message can quote a value the request sent: 57014
 /// is a query cancelled by the statement timeout), or the error's own words.
-fn failure(error: &anyhow::Error) -> String {
+pub fn failure(error: &anyhow::Error) -> String {
     let postgres = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<tokio_postgres::Error>());
