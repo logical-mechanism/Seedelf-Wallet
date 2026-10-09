@@ -1,0 +1,4 @@
+# Credentials and local config never leave this machine.
+.env
+.env.*
+!.env.example

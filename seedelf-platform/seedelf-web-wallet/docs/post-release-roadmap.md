@@ -24,7 +24,9 @@
 4. 🚧 **[The UX and UI pass](#the-ux-and-ui-pass)** — round three, chunk 23 (`web-wallet/style-flow-3`): 2 and 3 have landed, and two adversarial usability reviews and their fixes with them ([usability-review.md](usability-review.md): its opening says what round one fixed, and §9 what round two did and what's left for the owner), then a blind task-completion test and its fixes ([blind-task-usability-test.md](blind-task-usability-test.md): §9 its ten changes, §11 what the fix round did). The owner writes the rest of its list.
 5. ✅ **[The documentation review](#the-documentation-review)** — **brought forward, ahead of the pass** (the owner, 2026-10-04): chunk 22. So the pass doesn't need a second review after it, it keeps the docs current as it goes — a renamed control or a moved screen updates [flows.md](flows.md) in the same commit, the way it updates the e2e tests.
 
-**Then [the data layer](#the-data-layer).** Parked on purpose (the owner, 2026-10-02): Koios works today, so the sequence above comes first and the data layer is thought through properly afterwards — "it will require some things that go beyond just making the wallet work as expected." The design is recorded now so the thinking isn't lost, not because it's next.
+**Then [the data layer](#the-data-layer): 1.4.0's focus** (the owner, 2026-10-08), together with whatever UX and UI fixes users send in. It is 🚧 chunk 26, [plans/chunk-26-data-layer.md](plans/chunk-26-data-layer.md).
+
+It was parked on 2026-10-02, while Koios was good enough: "it will require some things that go beyond just making the wallet work as expected." Mainnet's slow Koios reads made it next.
 
 **[dApp additions](#dapp-additions)** run alongside all of it and are not counted in parity.
 
@@ -212,11 +214,25 @@ Treat that as a correctness-of-privacy item, not a nicety: without it, several a
 
 ## The data layer
 
-> **Parked until the sequence above is done** (the owner, 2026-10-02). Koios works today. What's below is the shape as it stands, kept so the next look starts from it rather than from scratch — **it is not the next chunk.** The reason for the wait is the honest one: a service is not a feature. It goes beyond making the wallet work as expected, into something that has to stay up, stay paid for, and stay unexploited for as long as the wallet is in the store.
+> 🚧 **Chunk 26, 1.4.0's focus** (the owner, 2026-10-08): [plans/chunk-26-data-layer.md](plans/chunk-26-data-layer.md) is the plan. Below is the shape it builds on: decided on 2026-10-02, when the data layer was parked, and still holding. Being parked was the honest call at the time: a service is not a feature. It goes beyond making the wallet work as expected, into something that has to stay up, stay paid for, and stay unexploited for as long as the wallet is in the store.
+
+**The owner's calls (2026-10-08).** The plan has the rest.
+
+- **No cloud node or db-sync.** The node, db-sync, Postgres and Kupo run at the owner's home, on a server already running them.
+- **Mainnet only:** "We are building for mainnet. Period." Preprod stays on Koios for every part, as it is today.
+- **The API runs on a cheap VPS**, which reaches home over a WireGuard tunnel that home dials out. The home IP stays hidden, and the VPS takes the DoS.
+- **Koios is the fallback** for when the house loses power or internet.
+- **All 22 Koios endpoints the wallet uses move**, in three parts, each with its own health and its own fallback:
+  - **a private index** of Seedelf and Lovejoin, purpose-built, with shared snapshots and deltas read from db-sync, and Kupo as the second source;
+  - **a public side** of Koios-equivalent endpoints;
+  - **submits** through cardano-submit-api.
+- **A Koios-only switch** in Settings.
+- **The private state is kept across a lock**, sealed with the vault. The browser keeps no chain database.
+- **The code goes in `seedelf-data/`** in this repo, with its own Cargo workspace.
 
 **Decided in shape (the owner, 2026-10-02): a db-sync wrapper in Rust, for the web wallet.** Not a general API — queries written for this wallet. **The CLI stays on Koios**, which already works for it, so this is one client, not two. **giveme.my needs no fork**: the owner runs it, so it can be adjusted directly if the collateral side ever wants the same treatment.
 
-**Clearnet, and the owner is leaning yes** — because Koios is slow and its rate limit bites. **Tor is out of scope here, and that's a consequence, not a compromise:** the one client is a Chrome extension, Chrome doesn't resolve `.onion` (RFC 7686 special-use, deliberately unsupported), and the CLI — the thing Tor could have served — isn't a client. The root [README](../../../README.md#de-anonymizing-via-ip-tracking)'s Tor exploration stays a CLI and general-infrastructure aspiration. A user who routes their whole machine through Tor still reaches a clearnet endpoint over Tor, so what the wallet owes them is a **configurable endpoint** and nothing leaking around it.
+**Clearnet, decided (2026-10-08)**, because Koios is slow and its rate limit bites. **Tor is out of scope here, and that's a consequence, not a compromise:** the one client is a Chrome extension, Chrome doesn't resolve `.onion` (RFC 7686 special-use, deliberately unsupported), and the CLI — the thing Tor could have served — isn't a client. The root [README](../../../README.md#de-anonymizing-via-ip-tracking)'s Tor exploration stays a CLI and general-infrastructure aspiration. A user who routes their whole machine through Tor still reaches a clearnet endpoint over Tor, so what the wallet owes them is a **configurable endpoint** and nothing leaking around it.
 
 ### What it fixes
 
@@ -252,9 +268,17 @@ The wallet makes **two** `credential_utxos` queries, and they are opposite in ev
 
 **What the service still learns, said plainly.** The contract endpoint learns that an IP uses Seedelf. The account endpoint learns which payment credentials that IP asks about — the same thing Koios learns today, moved to us. The local ownership check is what keeps the *private balance* out of it entirely. So the no-log promise and the open source carry the account endpoint, and those are a policy and an audit trail, not a proof — which is worth saying in the privacy docs in exactly those words.
 
-### Still open, for when it's picked up
+### What was still open, answered (2026-10-08)
 
-What it costs to run, and who pays; whether it's the default with Koios as the fallback or a choice; whether a user can point the wallet at their own instance; the host-permission problem in Chrome (a new origin at install, or an optional grant when it's set); and the operational half a feature doesn't have — monitoring, what an outage looks like from inside the wallet, and what is promised to users about uptime and logging, in writing.
+- **What it costs, and who pays:** about $20–55 a month in cash, paid by the owner: a $6–15 VPS, home power and a UPS. The real cost is the owner's time: node upgrades before each hard fork, and db-sync upgrades and resyncs.
+- **Default or choice:** the default, with Koios as the automatic fallback and a Koios-only switch.
+- **Your own instance** ([privacy review §4.7](archive/plans/privacy-review.md)): still open.
+- **Chrome's host permission:** none is needed. The API answers CORS for the extension's origin only, so the wallet adds a `connect-src` entry: no install warning, and nothing disabled on update.
+- **The operational half:**
+  - a `/health` per part, and per-part breakers that answer 503 so the wallet moves to Koios;
+  - outage drills for each part;
+  - no access or body logs;
+  - the privacy policy's text, written before it ships.
 
 ## The UX and UI pass
 
@@ -296,7 +320,9 @@ Parity and the public side have landed, so the list is the owner's to write now.
 - **`web+cardano` payment links** (CIP-13), so a link can open Send with the recipient filled in. ⬜
 - **A DRep paid from a one-time account**, to keep the DRep apart from the account (chunk 21). Today the DRep is the account, and the notes say so. ⬜
 - **A translated store listing** (chunk 19): the listing is English only, though the wallet speaks three languages. ⬜
-- **"Couldn't read your balances", again and again on mainnet** (the owner, 2026-10-08). Home says it only when it has nothing to show: balances live in session storage, which a lock wipes, so it's the first read after an unlock that ran out of time (45 s, then once more). Not the contract: the whole Seedelf contract was 27 UTxOs that day, read in under a second; it's the account's own reads, on whichever Koios server answers. Two candidates, the owner's call: name the request that ran out of time in the error's details, so the slow one is known; and keep the last balances read across a lock, encrypted like the contacts, so a slow first read shows them with the stale warning instead of nothing (a privacy trade: balances kept at rest). ⬜
+- **"Couldn't read your balances", again and again on mainnet** (the owner, 2026-10-08). Home says it only when it has nothing to show: balances live in session storage, which a lock wipes, so it's the first read after an unlock that ran out of time (45 s, then once more). Not the contract: the whole Seedelf contract was 27 UTxOs that day, read in under a second; it's the account's own reads, on whichever Koios server answers. Two candidates, the owner's call: name the request that ran out of time in the error's details, so the slow one is known; and keep the last balances read across a lock, encrypted like the contacts, so a slow first read shows them with the stale warning instead of nothing (a privacy trade: balances kept at rest).
+
+🚧 **Chunk 26 takes the second candidate for the private side** (the owner, 2026-10-08). Your own rows and the feed's cursor are kept across a lock, sealed with the vault, so an unlock asks only for what changed. The public side's reading is the wallet's chunk to decide.
 
 **Left by the chunks and the reviews, moved here when [plans/](plans/) was archived (2026-10-04)** so they're tracked somewhere live. None is a promise; each is a candidate, smallest first where it's obvious.
 
