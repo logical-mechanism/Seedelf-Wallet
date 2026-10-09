@@ -8,9 +8,10 @@ Seedelf Wallet's data layer: the API in front of the home db-sync. **Mainnet onl
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
+- **The public routes, 12 of the 20** (`src/public/`): `credential_utxos`, `address_utxos`, `utxo_info`, `datum_info`, `tip`, `tx_status`, `epoch_params`, `totals`, `account_addresses`, `account_info`, `account_txs` and `tx_info`, in Koios's paths and JSON, taking only the requests `koios.ts` makes.
 
 **Still to come:**
-- the Koios-equivalent public routes (`/api/v1/…`);
+- the other 8 public routes: pools, DReps, governance actions, votes and tokens;
 - Kupo as the private index's second source;
 - the VPS layer: rate limits, CORS, TLS.
 
@@ -44,11 +45,13 @@ done
 ## Tests
 
 ```bash
-cargo test                  # offline
-cargo test -- --ignored     # against the real db-sync in .env
+cargo test                                    # offline
+cargo test -- --ignored --test-threads=1      # against the real db-sync in .env
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+**One test at a time:** the database role allows 10 connections, and a running server holds some of them.
 
 **What the live tests check:**
 

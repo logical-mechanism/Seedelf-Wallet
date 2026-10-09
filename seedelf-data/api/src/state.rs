@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Mutex, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
 use axum::http::{HeaderValue, StatusCode, header};
@@ -14,6 +14,7 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::chain::{Chain, Tip};
+use crate::decimals::Decimals;
 
 /// A tip older than this is behind, and its part answers 503 so the wallet
 /// goes to Koios. Mainnet makes a block every 20 s on average, and a 3 min gap
@@ -26,10 +27,15 @@ pub const WATCH_EVERY: Duration = Duration::from_secs(2);
 /// Answers held for one tip, at most: past this, nothing more is kept until it moves.
 const MAX_CACHED: usize = 1024;
 
+/// Answers held for a time, at most (`lasting`).
+const MAX_LASTING: usize = 4096;
+
 pub struct AppState {
     pub chain: Chain,
+    pub decimals: Decimals,
     tip: RwLock<Option<Tip>>,
     cache: Mutex<Cached>,
+    lasting: Mutex<HashMap<String, (Instant, Bytes)>>,
 }
 
 #[derive(Default)]
@@ -42,9 +48,17 @@ impl AppState {
     pub fn new(chain: Chain) -> Self {
         AppState {
             chain,
+            decimals: Decimals::default(),
             tip: RwLock::new(None),
             cache: Mutex::new(Cached::default()),
+            lasting: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Tokens' decimals from the registry, for `asset_list`s.
+    pub fn with_decimals(mut self, decimals: Decimals) -> Self {
+        self.decimals = decimals;
+        self
     }
 
     /// Takes a newly read tip; a new block drops every cached answer.
@@ -78,13 +92,57 @@ impl AppState {
         Fut: Future<Output = Result<T, ApiError>>,
         T: Serialize,
     {
+        self.cached_bytes(tip, key, || async { to_json(&make().await?) })
+            .await
+    }
+
+    /// [`Self::cached`], for an answer `make` has already written.
+    pub async fn cached_bytes<F, Fut>(
+        &self,
+        tip: &Tip,
+        key: &str,
+        make: F,
+    ) -> Result<Bytes, ApiError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Bytes, ApiError>>,
+    {
         if let Some(hit) = self.lookup(&tip.hash, key) {
             return Ok(hit);
         }
-        let bytes = Bytes::from(serde_json::to_vec(&make().await?).map_err(anyhow::Error::from)?);
+        let bytes = make().await?;
         let mut cache = self.cache.lock().expect("cache lock");
         if cache.tip == tip.hash && cache.answers.len() < MAX_CACHED {
             cache.answers.insert(key.to_string(), bytes.clone());
+        }
+        Ok(bytes)
+    }
+
+    /// The answer for `key` made within `keep`, whatever the tip has done
+    /// since: for what changes slowly (an epoch's parameters, the pools).
+    pub async fn lasting<F, Fut>(
+        &self,
+        key: &str,
+        keep: Duration,
+        make: F,
+    ) -> Result<Bytes, ApiError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Bytes, ApiError>>,
+    {
+        let now = Instant::now();
+        if let Some((until, hit)) = self.lasting.lock().expect("lasting lock").get(key)
+            && now < *until
+        {
+            return Ok(hit.clone());
+        }
+        let bytes = make().await?;
+        let mut lasting = self.lasting.lock().expect("lasting lock");
+        if lasting.len() >= MAX_LASTING {
+            lasting.retain(|_, (until, _)| now < *until);
+        }
+        if lasting.len() < MAX_LASTING {
+            lasting.insert(key.to_string(), (now + keep, bytes.clone()));
         }
         Ok(bytes)
     }
@@ -93,6 +151,13 @@ impl AppState {
         let cache = self.cache.lock().expect("cache lock");
         (cache.tip == tip).then(|| cache.answers.get(key).cloned())?
     }
+}
+
+/// `value` as JSON.
+pub fn to_json<T: Serialize>(value: &T) -> Result<Bytes, ApiError> {
+    Ok(Bytes::from(
+        serde_json::to_vec(value).map_err(anyhow::Error::from)?,
+    ))
 }
 
 /// Seconds since the tip's block was made.
@@ -131,10 +196,13 @@ pub async fn watch_tip(state: std::sync::Arc<AppState>) {
 /// Why a request got no answer. Nothing here carries the request itself.
 #[derive(Debug)]
 pub enum ApiError {
-    /// A cursor this server wouldn't have handed out: 400.
-    BadCursor(&'static str),
+    /// What this server doesn't take: a cursor it wouldn't have handed out,
+    /// or a request the wallet never makes. 400.
+    Bad(&'static str),
     /// db-sync's tip is missing or old: 503, so the wallet goes to Koios.
     Behind,
+    /// Every connection is in use: 503 at once, rather than a queue.
+    Busy,
     /// db-sync couldn't answer: 503.
     Unavailable(anyhow::Error),
 }
@@ -148,8 +216,9 @@ impl From<anyhow::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, error) = match self {
-            ApiError::BadCursor(why) => (StatusCode::BAD_REQUEST, why),
+            ApiError::Bad(why) => (StatusCode::BAD_REQUEST, why),
             ApiError::Behind => (StatusCode::SERVICE_UNAVAILABLE, "behind"),
+            ApiError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
             ApiError::Unavailable(error) => {
                 warn!(%error, "a query failed");
                 (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
@@ -181,6 +250,9 @@ mod tests {
             slot: 1,
             hash: hash.into(),
             time,
+            epoch: 1,
+            epoch_slot: 1,
+            era: Some("Conway"),
         }
     }
 

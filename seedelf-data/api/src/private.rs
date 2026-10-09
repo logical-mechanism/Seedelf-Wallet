@@ -200,7 +200,7 @@ async fn snapshot(state: &AppState, watched: Watched) -> Result<Response, ApiErr
 
 async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Response, ApiError> {
     let from: Cursor = cursor.parse().map_err(|error| {
-        ApiError::BadCursor(match error {
+        ApiError::Bad(match error {
             CursorError::Malformed => "a cursor is <height>.<block hash>",
             CursorError::NotQuantised => "not a cursor this server hands out",
         })

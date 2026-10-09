@@ -7,12 +7,16 @@
 //! to a plain type in SQL, so db-sync's domain types never reach the driver.
 
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use deadpool_postgres::{
+    Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod, Runtime,
+};
 use tokio_postgres::NoTls;
 
 use crate::row::{Row, Spent, read_row, read_spend};
+use crate::state::ApiError;
 
 /// The newest block db-sync holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,7 +26,45 @@ pub struct Tip {
     pub hash: String,
     /// Unix seconds.
     pub time: i64,
+    pub epoch: i64,
+    pub epoch_slot: i64,
+    /// The era its protocol version names (CIP-59), as Koios names it.
+    pub era: Option<&'static str>,
 }
+
+/// CIP-59's eras by protocol version, as Koios's `grest.era_map` holds them:
+/// an exact major and minor, or no era.
+pub fn era(major: i32, minor: i32) -> Option<&'static str> {
+    Some(match (major, minor) {
+        (0 | 1, 0) => "Byron",
+        (2, 0) => "Shelley",
+        (3, 0) => "Allegra",
+        (4, 0) => "Mary",
+        (5 | 6, 0) => "Alonzo",
+        (7 | 8, 0) => "Babbage",
+        (9..=11, 0) => "Conway",
+        _ => return None,
+    })
+}
+
+/// Connections for the private index and the tip; the public routes have their
+/// own, so a burst of them never holds the private index up. The role allows
+/// 10 in all, and leaves one for a person.
+const PRIVATE_CONNECTIONS: usize = 3;
+const PUBLIC_CONNECTIONS: usize = 6;
+
+/// How long a query waits for a connection before its route answers 503: past
+/// it, the wallet does better going to Koios than queueing here.
+const WAIT: Duration = Duration::from_secs(2);
+
+/// What every connection runs with. JIT compiles a plan whose estimates are
+/// large (db-sync's `ma_tx_out` makes most of them so), and that took 76 of a
+/// UTxO query's 80 ms; without it, 3 ms.
+const OPTIONS: &str = "-c jit=off";
+
+/// A public query that runs longer than this is cancelled: none should take a
+/// second, and one that does is a request to refuse, not to wait for.
+const PUBLIC_OPTIONS: &str = "-c jit=off -c statement_timeout=10s";
 
 /// A block, as a cursor names it: db-sync's own id for it, and its hash.
 pub struct Block {
@@ -33,11 +75,14 @@ pub struct Block {
 #[derive(Clone)]
 pub struct Chain {
     pool: Pool,
+    public: Pool,
 }
 
-const TIP: &str = "select block_no::bigint, slot_no::bigint, encode(hash, 'hex'), \
-     extract(epoch from time)::bigint \
-     from block where block_no is not null order by id desc limit 1";
+const TIP: &str = "select b.block_no::bigint, b.slot_no::bigint, encode(b.hash, 'hex'), \
+     extract(epoch from b.time)::bigint, b.epoch_no::bigint, b.epoch_slot_no::bigint, \
+     ep.protocol_major::int, ep.protocol_minor::int \
+     from (select * from block where block_no is not null order by id desc limit 1) b \
+     left join epoch_param ep on ep.epoch_no = b.epoch_no";
 
 const BLOCK_AT: &str = "select id, encode(hash, 'hex') from block where block_no = $1::bigint";
 
@@ -84,26 +129,52 @@ fn row_columns(provenance: &str) -> String {
 
 impl Chain {
     pub fn connect(url: &str) -> Result<Self> {
-        let config = tokio_postgres::Config::from_str(url).context("MAINNET_DATABASE_URL")?;
-        let manager = Manager::from_config(
-            config,
-            NoTls,
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            },
-        );
-        let pool = Pool::builder(manager).max_size(8).build()?;
-        Ok(Chain { pool })
+        let pool = |options: &str, size: usize| -> Result<Pool> {
+            let mut config =
+                tokio_postgres::Config::from_str(url).context("MAINNET_DATABASE_URL")?;
+            config.options(options);
+            let manager = Manager::from_config(
+                config,
+                NoTls,
+                ManagerConfig {
+                    recycling_method: RecyclingMethod::Fast,
+                },
+            );
+            Ok(Pool::builder(manager)
+                .max_size(size)
+                .wait_timeout(Some(WAIT))
+                .runtime(Runtime::Tokio1)
+                .build()?)
+        };
+        Ok(Chain {
+            pool: pool(OPTIONS, PRIVATE_CONNECTIONS)?,
+            public: pool(PUBLIC_OPTIONS, PUBLIC_CONNECTIONS)?,
+        })
+    }
+
+    /// A connection for a public route: 503 when all are busy, so the wallet goes to Koios.
+    pub async fn public(&self) -> Result<Object, ApiError> {
+        self.public.get().await.map_err(|error| match error {
+            PoolError::Timeout(_) => ApiError::Busy,
+            error => ApiError::Unavailable(error.into()),
+        })
     }
 
     pub async fn tip(&self) -> Result<Tip> {
         let client = self.pool.get().await?;
         let row = client.query_one(TIP, &[]).await?;
+        let version: (Option<i32>, Option<i32>) = (row.try_get(6)?, row.try_get(7)?);
         Ok(Tip {
             height: row.try_get(0)?,
             slot: row.try_get(1)?,
             hash: row.try_get(2)?,
             time: row.try_get(3)?,
+            epoch: row.try_get(4)?,
+            epoch_slot: row.try_get(5)?,
+            era: match version {
+                (Some(major), Some(minor)) => era(major, minor),
+                _ => None,
+            },
         })
     }
 

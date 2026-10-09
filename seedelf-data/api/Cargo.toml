@@ -11,12 +11,16 @@ description = "Seedelf Wallet's data layer: the private index, and the API in fr
 [dependencies]
 anyhow = "1.0.98"
 axum = "0.8"
+# CIP-5 and CIP-129 IDs: db-sync holds bytes, and pg_cardano, which Koios encodes them with, isn't installed.
+bech32 = "0.11"
 deadpool-postgres = "0.14"
 dotenvy = "0.15"
+percent-encoding = "2.3"
 # Plain HTTP to the home submit-api and Ogmios (LAN now, WireGuard later): no TLS.
 reqwest = { version = "0.12.9", default-features = false }
 serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
+# raw_value: transaction metadata passes through as written, however deep it nests.
+serde_json = { version = "1.0.133", features = ["raw_value"] }
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 # The home Postgres is reached over the LAN now and over WireGuard later: no TLS of its own.
 tokio-postgres = "0.7"

@@ -1,13 +1,16 @@
 //! Seedelf Wallet's data layer (web wallet chunk 26): the API in front of the
 //! home db-sync and node: the private index of the Seedelf contract and
-//! Lovejoin's mix box, and the submit part. The Koios-equivalent public
-//! routes come next. See `seedelf-data/README.md`.
+//! Lovejoin's mix box, the Koios-equivalent public routes, and the submit
+//! part. See `seedelf-data/README.md`.
 
 pub mod chain;
 pub mod config;
 pub mod constants;
 pub mod cursor;
+pub mod decimals;
+pub mod ids;
 pub mod private;
+pub mod public;
 pub mod row;
 pub mod state;
 pub mod submit;
@@ -29,6 +32,7 @@ pub fn app(state: Arc<AppState>, submit: Arc<Submit>) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(private::routes())
+        .merge(public::routes())
         .with_state(state)
         .merge(submit::routes().with_state(submit))
         .layer(CompressionLayer::new())

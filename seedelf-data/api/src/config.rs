@@ -16,6 +16,8 @@ pub struct Config {
     /// cardano-submit-api and Ogmios: the submit part answers 503 without them.
     pub submit_api_url: Option<String>,
     pub ogmios_url: Option<String>,
+    /// The token registry's decimals (`decimals.rs`): every token is 0 without it.
+    pub token_decimals: Option<String>,
 }
 
 impl Config {
@@ -32,6 +34,7 @@ impl Config {
             listen,
             submit_api_url: optional("MAINNET_SUBMIT_API_URL"),
             ogmios_url: optional("MAINNET_OGMIOS_URL"),
+            token_decimals: optional("MAINNET_TOKEN_DECIMALS"),
         })
     }
 }
