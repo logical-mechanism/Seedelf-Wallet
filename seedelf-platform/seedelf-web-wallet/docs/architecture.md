@@ -258,12 +258,25 @@ What isn't per network: the vault (keys don't depend on the network), the settin
 - **Lovejoin's per-network facts come from one place** (`lovejoin` in `networks.ts`, launch review M1): its `mix_box`, the pool's floor and what a mix measured there. `lovejoinOn(network)` is the gate the worker (`LovejoinService.available`, `pool`) and the UI (the dApps tile, Settings) share. The core's `Protocol::of` holds each network's deployment.
 - **The vault is shared,** because keys don't depend on the network. The CLI works the same way.
 - **Addresses are checked against the active network** before anything is sent. This mirrors the CLI's `is_on_correct_network`.
+- **Mainnet has a slot for Seedelf Wallet's own data layer** (`data` in `networks.ts`, chunk 26b), empty until the VPS chunk sets the API's `https://` origin. **The store build carries none, so it reads Koios alone, as before.** A dev or e2e build names one with `VITE_DATA_ORIGIN` (`dataOrigin`), which a store build refuses (`vite.config.ts`, `buildManifest`, `package.mjs`). Preprod never has one. See [Chain data](#chain-data).
 - **Preprod status on 2026-09-23:**
   - The wallet and Seedelf reference scripts are live and unspent.
   - The collateral UTxO is live, and the giveme.my preprod endpoint is up.
   - The wallet contract holds 25 UTxOs. Anyone can add to it, and it was past 1,000, more than one page of a read, by 2026-10-01.
 
 ## Chain data
+
+**Mainnet through the wallet's own data layer (chunk 26b), where the build has one.** The API is [seedelf-data/](../../../seedelf-data/README.md); the plan is [chunk 26b](plans/chunk-26b-data-layer-wallet.md). **The store build has no data layer until the VPS chunk gives it one,** so everything below this paragraph is what it does. With one:
+
+- **Three parts, each falling back to Koios on its own** (`data-layer.ts`): the public routes (Koios's own paths and JSON, under `<origin>/api/v1`), the private index (`private-index.ts`), and submits with `ogmios`.
+  - **The factory:** the worker's `koios(network)` is `chainClient`: plain Koios on preprod, and on mainnet a `DataLayerKoios`, whose every method runs on the data layer first and, on a failure, again **from its start** on Koios, so a paged read never mixes the two. The data client is the same `Koios` class with its own `Backend` (10 s reads, 35 s submits, no retries, `DATA_LIMIT` weighed per route as the edge charges), so the API sees exactly koios.ts's requests.
+  - **What sends a part to Koios for 5 minutes** (or a 429's `Retry-After`, if longer), kept in session storage: no answer, a timeout, any 5xx, a 429, a 403, a 400 for a request the API doesn't take, an answer that isn't the data. "Too large for this server" (a 503 with no `Retry-After`) sends that call alone.
+  - **Submits:** straight to Koios when the transaction can't have reached the node (no connection, a 429, a 503, a 403, a 413, a 415); maybe sent (pending.ts) on a 502, a 504 or a timeout. After a lost connection, Koios calling an input spent is read as maybe sent too: it may be this very transaction.
+  - **The Koios-only switch** (Settings, *Network*, shown only where there's a data layer) is read at each request.
+- **The private side** (`contract-scan.ts`): a restore takes the index's snapshot; every read after asks `since` the sealed cursor and checks only the new rows. The record `contract.mainnet` (private-store.ts) holds the cursor, the wallet's own rows as of it, and the newer rows already checked, tied to the Seedelf key, across a lock. Entries above an answer's cursor are never folded in; a `reset` starts again from a snapshot. Seedelf names come from the shared `names` route, so another device's spends and removed names show at once. Koios's scan below stays the fallback, and never moves the cursor. Rows become Koios's `UtxoResponse` in `utxoOf` (credential, epoch from the slot, `created.time`, CIP-14 fingerprints, the registry's decimals, height 0), so private coins sort by time and the UTxOs screen says when one was made.
+- **Lovejoin** (`lovejoin.ts`): the pool is `lovejoin/pool` and what changed since its cursor (the pool at the tip, not ten blocks back), and what made each box comes with its row (`made_by`), so `tx_info` isn't asked about the wallet's boxes. A box Kupo answered for has no inputs, and is asked of again at the next look.
+- **Private watches** (`feed.ts`): a transaction that spends or pays a Seedelf or a box is looked for in the contract's or the pool's feed since a cursor from before it went out, instead of `tx_status` naming it; Home asks every 5 s while one is. The cursors the index hands out are kept in session storage, one every 5 minutes for 6 hours, with when the wallet had each, and the sealed record's counts too: a watch reads from the newest the wallet had before its first try, stamped before the submit. What touches only key addresses still asks `tx_status`, on the public side, and so does a private one while the feed can't say.
+- **Home's reading never waits for a pool's ticker** (`readStake`): an unknown pool is its ID, and `pool_info` is asked behind it.
 
 **Koios, same as the CLI.** Balances were built in chunk 6: `extension/src/background/koios.ts` (the client), `chain.ts` (pure helpers) and `balances.ts` (the service).
 
@@ -427,7 +440,7 @@ What isn't per network: the vault (keys don't depend on the network), the settin
 
 - **React + TypeScript, bundled with Vite 8 (Rolldown) (decided).**
   - One build emits the page (the tab and the side panel), `sw.js`, the dApp connector's two content scripts, the WASM asset, and `manifest.json` (generated by `extension/src/manifest.ts`).
-  - The page CSP is `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self'` plus the build's networks' Koios and giveme.my origins (CoinGecko's in a mainnet build), Minswap's aggregators and the IPFS gateway (chunk 20) only. Styles, images and fonts come only from the extension itself; an NFT's image the user asks to see comes from the worker as data (`img-src 'self' data:`).
+  - The page CSP is `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self'` plus the build's networks' Koios and giveme.my origins (CoinGecko's in a mainnet build), Minswap's aggregators, the data layer where the build has one (chunk 26b: a dev or e2e build's `VITE_DATA_ORIGIN`; the store build has none yet), and the IPFS gateway (chunk 20) only. Styles, images and fonts come only from the extension itself; an NFT's image the user asks to see comes from the worker as data (`img-src 'self' data:`).
   - No component library, and nothing loaded from the web: the font and the icons ship inside the extension.
   - Not Lace's React Native / Expo stack.
 - **The look: Lace's dark mode in Seedelf's colours, dark only (chunk 11a, decided).**

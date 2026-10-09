@@ -515,6 +515,12 @@ export interface UtxoInfo {
   tokens: TokenAmount[];
   /** The block that made it, when known. */
   blockHeight?: number;
+  /**
+   * When it was made (ms), for one with no block height: a private coin read
+   * from the private index, which gives slots and times, never heights
+   * (chunk 26b).
+   */
+  madeAt?: number;
   /** The Cardano account's address holding it. */
   address?: string;
   /**
@@ -841,6 +847,13 @@ export interface PendingTx {
    * release review, C45).
    */
   chain?: { first: string; total: number };
+  /**
+   * Watched on the private index's feed, which every wallet shares and names
+   * no transaction (feed.ts): Home asks every 5 s, as the answer costs a unit
+   * at the server's edge and nothing at home (chunk 26b, choice 5). Not kept:
+   * each look says it again.
+   */
+  onFeed?: boolean;
 }
 
 /**

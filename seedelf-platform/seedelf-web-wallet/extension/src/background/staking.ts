@@ -7,8 +7,11 @@
 // Reading
 //   stake   Koios's `account_info` joins every balance reading
 //           (balances.ts), so Home always shows the pool and the rewards.
-//           The pool's ticker comes from what this session has read, the
-//           pool list on the device, or one `pool_info`.
+//           The pool's ticker comes from what this session has read, or the
+//           pool list on the device. Otherwise the reading shows the pool's
+//           ID, and one `pool_info` asked behind it brings the ticker to the
+//           next (balances.ts `get`): a pool nobody looked at lately made
+//           Home wait seconds for its live stake (chunk 26b).
 //   pools   every live pool (`pool_list`, 1,000 a request), with the supply
 //           and `optimal_pool_count` for saturation. It's the same for
 //           everyone, so it's kept in chrome.storage.local for a day.
@@ -70,11 +73,18 @@ export type StakingDeps = ScriptSpendDeps & { local: Area };
 
 const NOT_STAKING: StakeInfo = { registered: false, pool: null, drep: null, rewards: "0", deposit: "0" };
 
-/** The account's stake key as Koios reads it, with its pool's ticker. */
+/**
+ * The account's stake key as Koios reads it, with its pool's ticker when the
+ * device knows it. Never waits for one: an unknown pool is its ID, and its
+ * ticker is asked for behind the reading (`poolRef`).
+ */
 export async function readStake(deps: StakeDeps, network: NetworkName, stake: string): Promise<StakeInfo> {
   const info = await deps.koios(network).accountInfo(stake);
   if (!info) return NOT_STAKING;
-  const pool = info.delegated_pool ? await poolRef(deps, network, info.delegated_pool) : null;
+  const id = info.delegated_pool;
+  const known = id ? await knownPool(deps, network, id) : undefined;
+  if (id && !known) void poolRef(deps, network, id).catch(() => undefined);
+  const pool = id ? (known ?? { id }) : null;
   const read = stakeInfoOf(info, pool);
   // Whether the vote goes to the account's own DRep: its ID comes from the key, so nobody is asked.
   const own = read.drep ? await ownDrepId(deps).catch(() => undefined) : undefined;

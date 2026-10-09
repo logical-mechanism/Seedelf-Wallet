@@ -43,11 +43,11 @@ done
 - **blockfrost-backend-ryo** is a second set of db-sync queries to compare query plans against.
 - **kupo**'s `docs/api/v2.11.0.yaml` is the HTTP API the private index's second source reads. Its filters are inclusive.
 
-**Token decimals** need a checkout of the token registry (about 500 MB), wherever it's kept:
+**Token decimals** are built in (`api/data/token-decimals.json`). Refreshing them needs a checkout of the token registry (about 500 MB), wherever it's kept, then a build:
 
 ```bash
 git clone --depth 1 https://github.com/cardano-foundation/cardano-token-registry.git
-python3 scripts/token-decimals.py cardano-token-registry > token-decimals.json
+python3 scripts/token-decimals.py cardano-token-registry > api/data/token-decimals.json
 ```
 
 ## Tests
@@ -68,7 +68,7 @@ cargo fmt --check
 **What the live tests check:**
 
 - **The public routes,** by what must hold however the chain moves:
-  - the contract's and mix box's `credential_utxos` equal the private index;
+  - the contract's and mix box's `credential_utxos` equal the private index, each row's tokens and decimals included;
   - a page after any outpoint is the rest;
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
   - the pool list's pages make one sorted list;
@@ -215,7 +215,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **What doesn't work:** turning parallel workers off for every connection. It would fix the small queries but slows a large pool's live delegators from 0.4 s to 2.1 s. Raising `parallel_setup_cost` does nothing for these plans.
 
 **What stands in for Koios's caches:**
-- **Token decimals** come from the Cardano token registry, Koios's own source: a file made by `scripts/token-decimals.py` from a checkout of it (`MAINNET_TOKEN_DECIMALS`). Without the file, every token is 0. Refresh it the way the wallet refreshes its token list.
+- **Token decimals** come from the Cardano token registry, Koios's own source: `api/data/token-decimals.json`, made by `scripts/token-decimals.py` from a checkout of it and built into the API. Refresh it the way the wallet refreshes its token list: the script, a commit, a build.
 - **A pool's state** is worked out per request from its latest update and any retirement after it.
 - **A pool's live stake** is summed over its live delegators: each account whose latest delegation is to the pool, not since deregistered, and in this epoch's stake, as Koios's `pool_delegators_list` counts them. Their reward sums change only at an epoch's start, so each account's is kept in memory for the epoch.
   - A first look at a large pool, read from a cold disk, took 12 s. So a request waits at most 3 s for the live figures, then answers with the epoch's snapshot (`pool_stat`) while they're finished in the background and kept.
@@ -250,7 +250,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `POST /api/v1/ogmios` | Ogmios, `POST /` | `application/json` (415 if not: a `text/plain` POST needs no CORS preflight, so a web page could send one); a JSON-RPC 2.0 `evaluateTransaction` and no other method (400); at most 64 KiB; at most 2 in flight |
 
 - **Answers pass through untouched,** status and body. Koios fronts the same two services, so the error strings the wallet classifies stay what they are. They matched Koios's byte for byte on 2026-10-08.
-- **No answer** is a 502 (unreachable, or no connection within 3 s) or a 504 (timed out after 30 s): to the wallet, either one means "maybe sent". Each request opens a fresh connection, so one that died with the tunnel can't hold a submit for the full 30 s.
+- **No connection** to home (refused, or none within 3 s) is a 503 with `Retry-After`: nothing reached the node, so the wallet sends through Koios at once.
+- **No answer** on a connection that opened is a 502, or a 504 after 30 s: to the wallet, either one means "maybe sent". Each request opens a fresh connection, so one that died with the tunnel can't hold a submit for the full 30 s.
 - **It depends on the node alone,** so db-sync can be down.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL. reqwest's own error messages carry the URL, so errors are logged by kind only.
 
@@ -261,7 +262,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
   "ref": "<tx hash>#<index>",
   "address": "addr1…",
   "lovelace": "1749860",
-  "assets": [["<policy>", "<name>", "1"]],
+  "assets": [["<policy>", "<name>", "1", 0]],
   "datum": "d8799f5830…",
   "script": true,
   "created": { "slot": 144889937, "time": 1736456228 },
@@ -271,6 +272,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 ```
 
 - **Omitted when empty:** `assets`, `datum`, `script`, `spent` and `made_by` (Lovejoin only).
+- **An asset** is `[policy, name, quantity, decimals]`: hex, hex, a decimal string, and the token registry's decimals, 0 for a token it doesn't list, as Koios gives them in an `asset_list`. The wallet shows a token its own list lacks by these, without asking about the token. Both sources fill them from the same file, so their rows stay the same.
 - **`datum`** is the inline datum's raw CBOR. The wallet's own parser decides what it means.
 - **The address** is the exact bech32. The contract has outputs in both enterprise and staked form.
 - **A point is a slot and its time,** with no block height: Kupo has none. Every row is from Shelley on, where a slot is a second, so its time is the slot plus 1,591,566,291.

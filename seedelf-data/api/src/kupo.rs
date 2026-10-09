@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 
 use crate::chain::Block;
 use crate::constants::MIXBOX_HASH;
-use crate::row::{MadeBy, Point, Row, Spend, Spent};
+use crate::row::{Asset, MadeBy, Point, Row, Spend, Spent};
 
 /// Kupo answers from its own small database in milliseconds (4 ms for the
 /// contract's snapshot over the LAN): one that takes seconds is down to us.
@@ -126,7 +126,7 @@ impl Match {
             .iter()
             .map(|(unit, quantity)| {
                 let (policy, name) = unit.split_once('.').unwrap_or((unit, ""));
-                [policy.to_string(), name.to_string(), quantity.to_string()]
+                Asset::new(policy.to_string(), name.to_string(), quantity.to_string())
             })
             .collect();
         Ok(Row {
@@ -391,8 +391,8 @@ mod tests {
         assert_eq!(
             row.assets,
             vec![
-                ["11".repeat(28), String::new(), "7".into()],
-                ["84".repeat(28), "5eed0e1f00".into(), "1".into()],
+                Asset::new("11".repeat(28), String::new(), "7".into()),
+                Asset::new("84".repeat(28), "5eed0e1f00".into(), "1".into()),
             ]
         );
         assert_eq!(row.datum.as_deref(), Some("d8799f5830"));

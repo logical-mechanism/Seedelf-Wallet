@@ -17,7 +17,8 @@ import { ContactsService } from "./contacts";
 import { answerSite, DappError, DappService, SITE_TRAPPED, type DappSession } from "./dapp";
 import { approvalWindow } from "./dapp-window";
 import { handle, type Context } from "./handlers";
-import { Koios, KOIOS_LIMIT } from "./koios";
+import { chainClient, DataParts } from "./data-layer";
+import { privateIndexClient } from "./private-index";
 import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
@@ -169,8 +170,14 @@ function getContext(): Promise<Worker> {
         if (worker) void runSessions(worker, true).catch(() => undefined);
       },
     });
-    // Every request waits its turn under Koios's public-tier limit, whatever the network.
-    const koios = (network: keyof typeof NETWORKS) => new Koios(NETWORKS[network].koios, undefined, undefined, undefined, KOIOS_LIMIT);
+    // Mainnet reads the wallet's own data layer first where the build has one, each part falling back to Koios on
+    // its own, and the Koios-only switch read at each request (data-layer.ts). Every request to Koios waits its turn
+    // under its public-tier limit, whatever the network.
+    const dataParts = new DataParts(session);
+    const dataDeps = { koiosOnly: async () => (await preferences.get()).koiosOnly, parts: dataParts };
+    const koios = chainClient(dataDeps);
+    // The contract and Lovejoin's pool from the private index, its own part (private-index.ts).
+    const index = privateIndexClient(dataDeps);
     const store = new PrivateStore({ wallet, local });
     const accounts = new AccountsService({ wasm, wallet, store, local, session, koios, now: Date.now });
     const prices = new PriceService({ session, local, preferences, now: Date.now });
@@ -178,14 +185,15 @@ function getContext(): Promise<Worker> {
     const activity = new ActivityService({ wasm, wallet, session, store, koios, local });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity, activeAccount: () => activeAccount(local) });
-    const balances = new BalanceService({ wasm, wallet, session, local, koios, now: Date.now, activity, coins, store });
-    const moveIn = new MoveInService({ wasm, wallet, session, koios, now: Date.now, activity, coins, preferences, store });
+    const balances = new BalanceService({ wasm, wallet, session, local, koios, index, now: Date.now, activity, coins, store });
+    const moveIn = new MoveInService({ wasm, wallet, session, koios, index, now: Date.now, activity, coins, preferences, store });
     const collateral = (network: keyof typeof NETWORKS) => new Collateral(NETWORKS[network].collateral);
     const spends = {
       wasm,
       wallet,
       session,
       koios,
+      index,
       collateral,
       now: Date.now,
       activity,
@@ -201,7 +209,7 @@ function getContext(): Promise<Worker> {
     const withdraw = new WithdrawService(spends);
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
-    const pending = new PendingService({ wallet, session, koios, now: Date.now, activity, store, alarm: sessionsAlarm });
+    const pending = new PendingService({ wallet, session, koios, index, now: Date.now, activity, store, alarm: sessionsAlarm });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // No box is withdrawn while a chain mixing them again may still spend it.

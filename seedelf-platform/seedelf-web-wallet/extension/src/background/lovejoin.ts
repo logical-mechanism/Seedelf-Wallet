@@ -107,6 +107,8 @@ import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activ
 import { txInputs } from "./cbor";
 import { GAP_LIMIT } from "./chain";
 import { KoiosBusyError, KoiosError, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
+import { chainStatus, noteCursor, type Watching } from "./feed";
+import { IndexDown, type IndexRow, utxoOf } from "./private-index";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
@@ -306,6 +308,12 @@ export interface ChainProgress {
   /** When each of `flying` was last sent (ms), in its order. */
   sentAt?: number[];
   /**
+   * When each transaction was first tried (ms), by hash, before its submit:
+   * never moved by a retry or a resend, so a private watch reads the pool's
+   * feed from a cursor the wallet had before it (feed.ts).
+   */
+  firstTried?: Record<string, number>;
+  /**
    * The transaction a send began for and hadn't finished when this was
    * saved: it may be in the mempool already, if the worker stopped partway
    * (Chrome stops an idle worker during a long back-off).
@@ -317,6 +325,16 @@ export interface ChainProgress {
    * stops.
    */
   resentFor?: number;
+}
+
+/**
+ * When `hashes` were first tried, for the pool's feed (feed.ts): the chain's
+ * own record of it, or, on progress saved before it kept one, when each was
+ * last sent.
+ */
+export function firstTries(chain: Pick<ChainProgress, "firstTried" | "sentAt">, hashes: string[]): number[] | undefined {
+  const tried = hashes.map((h) => chain.firstTried?.[h]);
+  return tried.every((at) => at !== undefined) ? (tried as number[]) : chain.sentAt;
 }
 
 /**
@@ -379,6 +397,8 @@ export async function pumpChain(
   const send = async (i: number, again: boolean) => {
     const maybeSent = again || chain.sending === i;
     chain.sending = i;
+    chain.firstTried = { ...chain.firstTried };
+    chain.firstTried[chain.txs[i]!.txHash] ??= io.now();
     await io.save();
     await io.send(i, maybeSent);
     delete chain.sending;
@@ -738,7 +758,7 @@ interface ChainRecord {
    * Once the mix ended, and until it's settled (publicUnsettled), no other
    * mix from the account is built.
    */
-  maybe?: { index: number; txHash: string; inputs: string[]; at: number; unanswered?: true };
+  maybe?: { index: number; txHash: string; inputs: string[]; at: number; from?: number; unanswered?: true };
 }
 
 /**
@@ -752,6 +772,8 @@ interface KeptMaybe {
   txHash: string;
   inputs: string[];
   at: number;
+  /** When it was first tried, if earlier than `at`: where the pool's feed is read from (feed.ts). */
+  from?: number;
 }
 
 /** The record KeptMaybe is sealed in, on `network`. */
@@ -1259,6 +1281,13 @@ export class LovejoinService {
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
   /**
+   * Who made each box in the pool the private index listed last, by the
+   * transaction that made it (madeBy): what the index says of a box beside
+   * it, so the wallet asks nobody about one box. None while the pool was
+   * read from Koios, whose tx_info madeBy asks instead.
+   */
+  private provenance = new Map<NetworkName, Map<string, NonNullable<IndexRow["made_by"]>>>();
+  /**
    * The chains recorded whose progress is being put where they wait
    * (recordChain), by id: not cut meanwhile (cuts). In memory: a worker that
    * stops in between never put it there, and the chain was cut.
@@ -1344,16 +1373,50 @@ export class LovejoinService {
     return { depth: p.lovejoinDepth, delay: p.lovejoinDelay };
   }
 
-  /** The pool as Koios lists it (a read), and what the wallet's sent transactions spend. */
+  /**
+   * Which of `hashes`, Lovejoin's own transactions, are on chain: each spends
+   * or pays a box, so they're looked for on the pool's feed since before the
+   * earliest of `sentAt` (feed.ts), which names no transaction; with tx_status
+   * while the feed can't say.
+   */
+  private async onChain(network: NetworkName, hashes: string[], sentAt?: number[]): Promise<Set<string>> {
+    const at = sentAt?.length ? Math.min(...sentAt) : undefined;
+    const txs: Watching[] = hashes.map((txHash) => ({ txHash, feed: "lovejoin", ...(at !== undefined ? { sentAt: at } : {}) }));
+    const { statuses } = await chainStatus(this.deps, network, txs);
+    return new Set(hashes.filter((h) => statuses.get(h) != null));
+  }
+
+  /** The pool as the private index or Koios lists it (a read), and what the wallet's sent transactions spend. */
   private async listing(network: NetworkName): Promise<{ rows: KoiosUtxo[]; spent: Set<string> }> {
     const hash = NETWORKS[network].lovejoin?.mixBox;
     if (!hash) throw new Error(t("lj.notOnNetwork"));
     const { wallet, session } = this.deps;
-    const [rows, spent] = await Promise.all([
-      this.deps.koios(network).credentialUtxos([hash]),
-      wallet.withKeys(() => spentSet(session)),
-    ]);
+    const [rows, spent] = await Promise.all([this.poolRows(network, hash), wallet.withKeys(() => spentSet(session))]);
     return { rows, spent };
+  }
+
+  /**
+   * The pool's rows at the tip: from the private index where it's up, each
+   * box with who made it (`provenance`), as Koios rows; from Koios's
+   * credential_utxos otherwise, as before (chunk 26b).
+   */
+  private async poolRows(network: NetworkName, mixBox: string): Promise<KoiosUtxo[]> {
+    const index = await this.deps.index?.(network);
+    if (index) {
+      try {
+        const { rows, cursors } = await index.poolNow();
+        // For the private watches of mixes and withdraws (feed.ts).
+        for (const cursor of new Set(cursors)) await noteCursor(this.deps.session, network, "lovejoin", cursor, this.deps.now());
+        const made = new Map<string, NonNullable<IndexRow["made_by"]>>();
+        for (const r of rows) if (r.made_by) made.set(r.ref.slice(0, r.ref.lastIndexOf("#")), r.made_by);
+        this.provenance.set(network, made);
+        return rows.map((r) => utxoOf(r, mixBox, network));
+      } catch (e) {
+        if (!(e instanceof IndexDown)) throw e;
+      }
+    }
+    this.provenance.delete(network);
+    return this.deps.koios(network).credentialUtxos([mixBox]);
   }
 
   /**
@@ -2169,10 +2232,9 @@ export class LovejoinService {
             await wallet.withKeys(() => rememberSpent(session, network, bytes, this.deps.now()));
             await this.chainSent(network, id, i);
           },
-          onChain: async (hashes) => {
-            const statuses = await koios.txStatus(hashes);
-            return new Set(hashes.filter((h) => statuses.get(h) != null));
-          },
+          // Every transaction of a chain spends or pays a box: on the pool's feed, from before the first in the mempool
+          // went (feed.ts).
+          onChain: (hashes) => this.onChain(network, hashes, firstTries(sending, hashes)),
           save,
           sleep,
           now: this.deps.now,
@@ -2209,6 +2271,8 @@ export class LovejoinService {
         txHash: step.txHash,
         inputs: txInputs(hexBytes(step.txCbor)),
         at: this.deps.now(),
+        // When it was first tried, for the pool's feed: `at` is the stop, after every retry (feed.ts).
+        ...(sending.firstTried?.[step.txHash] !== undefined ? { from: sending.firstTried[step.txHash] } : {}),
         ...(unsure !== undefined ? { unanswered: true as const } : {}),
       };
       sending.stopped =
@@ -2478,7 +2542,7 @@ export class LovejoinService {
    */
   private async lookFor(network: NetworkName, m: KeptMaybe): Promise<"in" | "spent" | "never" | undefined> {
     const koios = this.deps.koios(network);
-    const seen = (await koios.txStatus([m.txHash]).catch(() => undefined))?.get(m.txHash);
+    const seen = await this.onChain(network, [m.txHash], [m.from ?? m.at]).then((on) => (on.has(m.txHash) ? 1 : null), () => undefined);
     if (seen === undefined) return undefined;
     if (seen !== null) return "in";
     const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
@@ -2542,7 +2606,8 @@ export class LovejoinService {
     for (const network of networks) {
       const chains = await this.read(network).then((s) => s.chains, () => []);
       const m = chains.filter((r) => r.session === undefined && r.maybe).at(-1)?.maybe;
-      if (m) await this.deps.store.set(keptMaybeName(network), { txHash: m.txHash, inputs: m.inputs, at: m.at }).catch(() => undefined);
+      const kept: KeptMaybe | undefined = m && { txHash: m.txHash, inputs: m.inputs, at: m.at, ...(m.from !== undefined ? { from: m.from } : {}) };
+      if (kept) await this.deps.store.set(keptMaybeName(network), kept).catch(() => undefined);
     }
   }
 
@@ -2765,9 +2830,10 @@ export class LovejoinService {
   }
 
   /**
-   * What made each of `txHashes`, as Koios's tx_info says of its inputs: a
-   * mix, when one sat at Lovejoin's mix_box; a public account, and which,
-   * when one was under one of its payment keys (accountKeys), whichever
+   * What made each of `txHashes`, as its inputs say (inputsOf: the private
+   * index's pool listing, or Koios's tx_info): a mix, when one sat at
+   * Lovejoin's mix_box; a public account, and which, when one was under one
+   * of its payment keys (accountKeys), whichever
    * account is active: a restore opens on account 0, and the answer is kept.
    * Only a payment key says so: anyone can pay from an address of their own
    * payment key and an account's stake key, without the account's signature,
@@ -2781,22 +2847,10 @@ export class LovejoinService {
    */
   private async madeBy(network: NetworkName, txHashes: string[]): Promise<Map<string, Told>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
-    const koios = this.deps.koios(network);
-    const rows: KoiosTxSpends[] = [];
-    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
-      try {
-        rows.push(...(await koios.txSpends(txHashes.slice(i, i + TXS_PER_REQUEST))));
-      } catch (e) {
-        if (e instanceof KoiosError) break;
-        throw e;
-      }
-    }
     const told = new Map<string, Told>();
-    const asked = new Set(txHashes);
-    const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
-    if (!mixBox || !read.length) return told;
+    const spent = await this.inputsOf(network, txHashes);
+    if (!mixBox || !spent.length) return told;
     const accounts = await this.accountKeys(network);
-    const spent = read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
     // The stake key alone never makes an input an account's: its payment key is looked for further (independent review M14).
     for (const a of accounts) {
       if (a.stake === undefined) continue;
@@ -2817,6 +2871,41 @@ export class LovejoinService {
       });
     }
     return told;
+  }
+
+  /**
+   * Each of `txHashes`' inputs, as their payment and stake keys: what the
+   * private index's last pool listing said made each box (`provenance`),
+   * asking nobody; or, while the pool came from Koios, its tx_info. A
+   * transaction the index's row has no inputs for (Kupo answered) is left
+   * out, as one Koios doesn't answer for, and asked of again at the next
+   * look.
+   */
+  private async inputsOf(
+    network: NetworkName,
+    txHashes: string[],
+  ): Promise<Array<readonly [string, Array<{ cred?: string; stake?: string }>]>> {
+    const provenance = this.provenance.get(network);
+    if (provenance) {
+      return txHashes.flatMap((tx) => {
+        const inputs = provenance.get(tx)?.inputs;
+        if (!inputs?.length) return [];
+        return [[tx, inputs.map(([cred, stake]) => ({ ...(cred ? { cred } : {}), ...(stake ? { stake } : {}) }))] as const];
+      });
+    }
+    const koios = this.deps.koios(network);
+    const rows: KoiosTxSpends[] = [];
+    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
+      try {
+        rows.push(...(await koios.txSpends(txHashes.slice(i, i + TXS_PER_REQUEST))));
+      } catch (e) {
+        if (e instanceof KoiosError) break;
+        throw e;
+      }
+    }
+    const asked = new Set(txHashes);
+    const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
+    return read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
   }
 
   /**
@@ -3516,7 +3605,7 @@ export class LovejoinService {
       if (txInputs(bytes).some((o) => !spent.has(o))) await rememberSpent(session, network, bytes, w.sentAt);
     });
     const drop = () => this.dropWithdrawing(network, w.txHash);
-    const seen = (await koios.txStatus([w.txHash]).catch(() => undefined))?.get(w.txHash);
+    const seen = await this.onChain(network, [w.txHash], [w.at]).then((on) => (on.has(w.txHash) ? 1 : null), () => undefined);
     // Taken once Koios answered, which can take a minute (final review F6).
     const now = this.deps.now();
     if (seen != null) {

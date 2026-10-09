@@ -2,6 +2,12 @@
 // wallet needs. The contract query is the same one the CLI makes
 // (seedelf-koios `credential_utxos`). Results are paged 1000 rows at a time in
 // a fixed order, and rate limits or server errors are retried twice.
+//
+// The wallet's own data layer (seedelf-data/, chunk 26) answers the same
+// paths in the same JSON, and takes only the requests this file makes, so the
+// same client reads it too, with a `Backend` of its own: shorter waits, no
+// retries, and every failure said in `KoiosError.failure`, for data-layer.ts
+// to send the call to Koios instead.
 
 import { t } from "../i18n";
 export interface KoiosAsset {
@@ -341,10 +347,27 @@ export const TXS_PER_REQUEST = 20;
  */
 export type KoiosTrouble = "rate-limited" | "silent";
 
+/**
+ * What a request that failed got, for data-layer.ts to decide what goes to
+ * Koios: nothing at all, or an answer that isn't data.
+ */
+export interface Failure {
+  /** The answer's status; none when nothing came back. */
+  status?: number;
+  /** Nothing came back in time: a request that may have gone out. */
+  timeout?: boolean;
+  /** What a 429's or a 503's Retry-After asked for (ms). */
+  retryAfterMs?: number;
+  /** The server's own words for it (`{"error": …}`, the data layer's), or the submit's own trouble. */
+  error?: string;
+}
+
 export class KoiosError extends Error {
   constructor(
     message: string,
     readonly trouble?: KoiosTrouble,
+    /** What failed, when a request did: a refusal or an answer that couldn't be used has none. */
+    readonly failure?: Failure,
   ) {
     super(message);
   }
@@ -385,7 +408,8 @@ export function retryAfterMs(response: Response | undefined, now: number = Date.
  * down, every request waits, not just the one that was refused.
  */
 export class RateLimit {
-  private starts: number[] = [];
+  /** Each request let through in the window: when it started, and what it cost. */
+  private starts: Array<[at: number, units: number]> = [];
   /** Nothing starts before this (ms, `now`'s clock): what a 429 sets. */
   private until = 0;
   private restored?: Promise<void>;
@@ -399,8 +423,13 @@ export class RateLimit {
     private readonly store?: HoldStore,
   ) {}
 
-  /** Waits until a request may start, and counts it. */
-  async take(): Promise<void> {
+  /**
+   * Waits until a request costing `units` may start, and counts it: Koios
+   * counts requests, so each is 1, and the data layer's edge weighs its
+   * routes (data-layer.ts `dataCost`). One that costs more than the whole
+   * window still goes, alone.
+   */
+  async take(units = 1): Promise<void> {
     await this.restore();
     for (;;) {
       const at = this.now();
@@ -409,12 +438,13 @@ export class RateLimit {
         await this.sleep(this.until - at);
         continue;
       }
-      this.starts = this.starts.filter((s) => at - s < this.windowMs);
-      if (this.starts.length < this.max) {
-        this.starts.push(at);
+      this.starts = this.starts.filter(([s]) => at - s < this.windowMs);
+      const used = this.starts.reduce((sum, [, u]) => sum + u, 0);
+      if (used + units <= this.max || !this.starts.length) {
+        this.starts.push([at, units]);
         return;
       }
-      await this.sleep(this.starts[0]! + this.windowMs - at);
+      await this.sleep(this.starts[0]![0] + this.windowMs - at);
     }
   }
 
@@ -488,10 +518,19 @@ export class KoiosBusyError extends KoiosError {
     message: string,
     readonly maybeSent = true,
     trouble: KoiosTrouble = "silent",
+    failure?: Failure,
   ) {
-    super(message, trouble);
+    super(message, trouble, failure);
   }
 }
+
+/**
+ * A submit whose first try may have gone out (the data layer's connection
+ * lost), which Koios then refused as spent: most likely this very one, on
+ * its way. Maybe sent, and worth the mempool check a SpentInputError gets
+ * (pending.ts).
+ */
+export class SpentMaybeSentError extends KoiosBusyError {}
 
 /**
  * Whether Chrome lets the wallet reach `url`'s host. Koios's public tier sends
@@ -559,6 +598,36 @@ function stakingRefusal(text: string): string | undefined {
   return undefined;
 }
 
+/** How a client talks to the server it reads: Koios's public tier (`KOIOS_BACKEND`), or the data layer's. */
+export interface Backend {
+  /** How long a read waits. */
+  readTimeoutMs: number;
+  /** How long a submit waits. */
+  submitTimeoutMs: number;
+  /**
+   * Koios's: a read is tried again on a 429, a 5xx or no answer, and a
+   * submit Koios's node couldn't reach. The data layer's isn't: Koios is
+   * asked instead, and every failure carries its `Failure`.
+   */
+  retries: boolean;
+  /** What a request to `path` costs against the client's limit; 1 if left out. */
+  cost?: (path: string) => number;
+}
+
+export const KOIOS_BACKEND: Backend = { readTimeoutMs: TIMEOUT_MS, submitTimeoutMs: SUBMIT_TIMEOUT_MS, retries: true };
+
+/** The data layer's own `{"error": …}`, in a body read as text. */
+function serverWords(text: string): string | undefined {
+  try {
+    const body = JSON.parse(text) as { error?: unknown } | null;
+    return typeof body?.error === "string" ? body.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const isTimeout = (e: unknown) => e instanceof DOMException && e.name === "TimeoutError";
+
 export class Koios {
   constructor(
     private readonly base: string,
@@ -567,6 +636,7 @@ export class Koios {
     private readonly allowed: HostCheck = chromeAllows,
     /** The worker passes KOIOS_LIMIT; tests go unthrottled. */
     private readonly limit?: RateLimit,
+    private readonly backend: Backend = KOIOS_BACKEND,
   ) {}
 
   /**
@@ -843,36 +913,49 @@ export class Koios {
     let response: Response;
     let text: string;
     for (let attempt = 0; ; attempt++) {
-      await this.limit?.take();
+      await this.limit?.take(this.backend.cost?.("submittx"));
       try {
         response = await this.fetchFn(`${this.base}/submittx`, {
           ...SERVICE_FETCH,
           method: "POST",
           headers: { "content-type": "application/cbor" },
           body: txCbor,
-          signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.backend.submitTimeoutMs),
         });
       } catch (e) {
         if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED(), "silent");
-        throw new KoiosBusyError(unreachable(e));
+        throw new KoiosBusyError(unreachable(e), true, "silent", { timeout: isTimeout(e) });
       }
       // Koios's gateway answers a 429 before passing anything on, whatever its body.
       if (response.status === 429) {
-        this.limit?.hold(retryAfterMs(response, Date.now()));
-        throw new KoiosBusyError(koiosTrouble(429, "submittx"), false, "rate-limited");
+        const wait = retryAfterMs(response, Date.now());
+        this.limit?.hold(wait);
+        throw new KoiosBusyError(koiosTrouble(429, "submittx"), false, "rate-limited", { status: 429, retryAfterMs: wait });
       }
-      if (response.status >= 500) throw new KoiosBusyError(koiosTrouble(response.status, "submittx"));
+      if (response.status >= 500) {
+        const failure = { status: response.status, retryAfterMs: retryAfterMs(response, Date.now()) };
+        const said = this.backend.retries ? undefined : serverWords(await response.text().catch(() => ""));
+        throw new KoiosBusyError(koiosTrouble(response.status, "submittx"), true, "silent", { ...failure, error: said });
+      }
       try {
         text = await response.text();
       } catch (e) {
-        throw new KoiosBusyError(unreachable(e));
+        throw new KoiosBusyError(unreachable(e), true, "silent", { status: response.status, timeout: isTimeout(e) });
+      }
+      // The data layer's own refusal (an origin it doesn't know, a body it won't take): the node never saw it. A body
+      // too large or of the wrong type is refused before anything is read, in plain text, so it's known by status.
+      if (!this.backend.retries && !response.ok && (serverWords(text) !== undefined || response.status === 413 || response.status === 415)) {
+        throw new KoiosError(koiosTrouble(response.status, "submittx"), "silent", {
+          status: response.status,
+          error: serverWords(text),
+        });
       }
       // Found live: a Koios backend whose own node was down answered. The
       // transaction never reached the network, so it's safe to send again,
       // and the gateway likely picks another backend.
       if (!text.includes("TxSubmitConnectionError")) break;
-      if (attempt === RETRY_DELAYS_MS.length) {
-        throw new KoiosError(t("koios.nodeDown"), "silent");
+      if (attempt === RETRY_DELAYS_MS.length || !this.backend.retries) {
+        throw new KoiosError(t("koios.nodeDown"), "silent", { status: response.status, error: "TxSubmitConnectionError" });
       }
       await this.sleep(RETRY_DELAYS_MS[attempt]!);
     }
@@ -988,7 +1071,7 @@ export class Koios {
       let response: Response | undefined;
       let failure: string;
       let slow = false;
-      await this.limit?.take();
+      await this.limit?.take(this.backend.cost?.(path));
       try {
         response = await this.fetchFn(url, {
           ...SERVICE_FETCH,
@@ -998,14 +1081,23 @@ export class Koios {
               ? { accept: "application/json", "content-type": "application/json" }
               : { accept: "application/json" },
           body: method === "POST" ? JSON.stringify(body) : undefined,
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.backend.readTimeoutMs),
         });
         if (response.ok || (answer400 && response.status === 400)) return (await response.json()) as R;
         failure = koiosTrouble(response.status, path);
       } catch (e) {
         if (!(await this.allowed(url))) throw new KoiosError(KOIOS_NOT_ALLOWED(), "silent");
-        slow = e instanceof DOMException && e.name === "TimeoutError";
+        slow = isTimeout(e);
         failure = unreachable(e);
+      }
+      // The data layer's: no second try here, and what failed said, for Koios to be asked instead.
+      if (!this.backend.retries) {
+        const status = response?.status;
+        throw new KoiosError(failure, status === 429 ? "rate-limited" : "silent", {
+          ...(status === undefined ? { timeout: slow } : { status }),
+          ...(status === 429 || status === 503 ? { retryAfterMs: retryAfterMs(response, Date.now()) } : {}),
+          ...(response && !response.ok ? { error: serverWords(await response.text().catch(() => "")) } : {}),
+        });
       }
       // A 429 is the tier's limit, not this request's bad luck: hold every
       // request back, so retrying doesn't keep the limit tripped.

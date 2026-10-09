@@ -86,12 +86,24 @@ export default defineConfig(({ mode }) => {
   // the welcome screen); VITE_ENABLE_MAINNET=false makes a preprod-only one.
   const mainnetEnabled = env.VITE_ENABLE_MAINNET !== "false";
   const storeBuild = env.VITE_STORE_BUILD === "true";
+  // The data layer a dev or e2e build reads instead of networks.ts's (chunk
+  // 26b), e.g. http://127.0.0.1:8099 for a local seedelf-data-api. A store
+  // build refuses it, here and in scripts/package.mjs.
+  const dataOrigin = env.VITE_DATA_ORIGIN ?? "";
+  if (storeBuild && dataOrigin) throw new Error("A store build never takes VITE_DATA_ORIGIN: unset it.");
+  if (dataOrigin) new URL(dataOrigin);
 
   return {
-    plugins: [react(), manifest({ version: pkg.version, mainnetEnabled, storeBuild }), workerAlone(), contentScripts(mode)],
+    plugins: [
+      react(),
+      manifest({ version: pkg.version, mainnetEnabled, storeBuild, dataOrigin }),
+      workerAlone(),
+      contentScripts(mode),
+    ],
     define: {
       __MAINNET_ENABLED__: JSON.stringify(mainnetEnabled),
       __VERSION__: JSON.stringify(pkg.version),
+      __DATA_ORIGIN__: JSON.stringify(dataOrigin),
     },
     resolve: {
       alias: {

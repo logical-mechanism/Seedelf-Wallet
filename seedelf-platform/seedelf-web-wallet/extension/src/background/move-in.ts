@@ -21,6 +21,7 @@ import type { CoinControlService } from "./coin-control";
 import type { Koios } from "./koios";
 import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
 import type { PreferencesService } from "./preferences";
+import type { PrivateIndex } from "./private-index";
 import type { PrivateStore } from "./private-store";
 import { isPublicShort, publicShort } from "./short";
 import type { Area } from "./storage";
@@ -67,6 +68,8 @@ export interface MoveInDeps {
   preferences?: PreferencesService;
   /** Where a move-in that may still go through is sealed (pending.ts). */
   store: PrivateStore;
+  /** The private index, whose feed watches the move-in land (feed.ts). */
+  index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
 }
 
 export class MoveInService {

@@ -44,7 +44,9 @@ import { VALID_FOR_MS } from "./account";
 import type { ActivityService } from "./activity";
 import { txInputs } from "./cbor";
 import { forgetContractView } from "./contract-scan";
-import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import { chainStatus, feedOfTx, type Feed } from "./feed";
+import { KoiosBusyError, SpentInputError, SpentMaybeSentError, type Koios, type KoiosUtxo } from "./koios";
+import type { PrivateIndex } from "./private-index";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSent, keptAsSent, recentlySent } from "./sent-txs";
 import { forgetSpent, outpoint, rememberSpent, spentAt } from "./spent";
@@ -98,6 +100,11 @@ interface Watched extends PendingTx {
   /** When it last went again. */
   resentAt?: number;
   /**
+   * When it was first tried, before its submit: never moved, as `submittedAt` is once Koios didn't answer. A
+   * private watch reads the feed from a cursor the wallet had before it (feed.ts).
+   */
+  triedAt?: number;
+  /**
    * Put back from its sealed copy (restoreNow) within its 20 minutes, and
    * not sent again since: it isn't let go as unseen before it has been, as
    * the first resend after the unlock waits two minutes (independent review
@@ -107,6 +114,8 @@ interface Watched extends PendingTx {
   restored?: boolean;
   /** A private spend that pays the public account (`paysAccount`): its landing reads the account again too. */
   toAccount?: boolean;
+  /** One that pays a Seedelf or a Lovejoin box: the feed it's watched on (feed.ts `feedOfTx`). */
+  feed?: Feed;
   /**
    * The public account active when it was sent: kept with what it spends (sent-txs.ts), so only that account's
    * Public activity lists it as its own on its way (blind test §9.3, the fix round's review).
@@ -171,6 +180,8 @@ export interface PendingDeps {
    * going (`watch`): PendingService's, which it keeps for the whole worker.
    */
   alarm?: { start(): Promise<void> };
+  /** The private index, whose feed watches a private transaction instead of tx_status (feed.ts). */
+  index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
 }
 
 /** A kept, signed transaction on its way: what Send hands `submitWatched`. */
@@ -346,9 +357,34 @@ function shown(watched: Watched): PendingTx {
     restored: _restored,
     toAccount: _toAccount,
     account: _account,
+    feed: _feed,
     ...pending
   } = watched;
   return pending;
+}
+
+/** Lovejoin's own transactions: each spends or pays a box. */
+const LOVEJOIN_KINDS = new Set<PendingTx["kind"]>(["lovejoin-withdraw", "lovejoin-mix"]);
+
+/**
+ * The feed `w` shows in once it's on chain, if it's a private one: a Seedelf
+ * spend the contract's, Lovejoin's own the pool's, or the one it pays
+ * (`feed`). None: it touches only key addresses, and tx_status is asked.
+ */
+function feedOf(w: Pick<Watched, "contract" | "kind" | "feed">): Feed | undefined {
+  if (w.contract) return "contract";
+  if (LOVEJOIN_KINDS.has(w.kind)) return "lovejoin";
+  return w.feed;
+}
+
+/** Whether `w` is on chain (tx_status's answer, or the feed's), and the tip when the feed gave it. */
+async function lookFor(
+  deps: PendingDeps,
+  w: Pick<Watched, "network" | "txHash" | "submittedAt" | "triedAt" | "contract" | "kind" | "feed">,
+) {
+  const feed = feedOf(w);
+  const status = await chainStatus(deps, w.network, [{ txHash: w.txHash, sentAt: w.triedAt ?? w.submittedAt, ...(feed ? { feed } : {}) }]);
+  return { confirmations: status.statuses.get(w.txHash) ?? null, tip: status.tip, fed: status.fed && feed !== undefined };
 }
 
 /**
@@ -377,7 +413,9 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     if (e instanceof KoiosBusyError && e.maybeSent) return stillMaybeSent(deps, s, ahead);
     if (e instanceof SpentInputError) {
       // Spent already: by this very transaction, if an earlier try went through.
-      confirmations = (await koios.txStatus([s.txHash]).catch(() => undefined))?.get(s.txHash) ?? null;
+      confirmations =
+        (await lookFor(deps, { ...s, submittedAt: ahead.record.submittedAt, feed: ahead.record.feed }).catch(() => undefined))
+          ?.confirmations ?? null;
       // After a try Koios didn't answer, most likely that try, still on its way.
       if (confirmations === null && again) return stillMaybeSent(deps, s, ahead);
     }
@@ -398,8 +436,14 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   }
 
   const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
-  // The inputs of one that can expire, to free them if it does; a private one to the account says so.
-  const watched: Watched = s.invalidHereafter === undefined ? { ...pending, ...toAccount(s) } : { ...pending, inputs: txInputs(bytes) };
+  // The inputs of one that can expire, to free them if it does; a private one to the account says so; one that
+  // pays a Seedelf or a box, the feed it's watched on.
+  const watched: Watched = {
+    ...(s.invalidHereafter === undefined ? { ...pending, ...toAccount(s) } : { ...pending, inputs: txInputs(bytes) }),
+    ...(s.contract ? { contract: true } : paysFeed(s, bytes)),
+    // Before the submit, which may have waited on the data layer and Koios both.
+    triedAt: ahead.record.triedAt ?? ahead.record.submittedAt,
+  };
   try {
     await take(deps, watched, async () => {
       await rememberSpent(session, s.network, bytes);
@@ -417,6 +461,11 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
 }
 
 const slot = (s: { invalidHereafter?: number }) => (s.invalidHereafter === undefined ? {} : { invalidHereafter: s.invalidHereafter });
+/** The feed a transaction that isn't a Seedelf spend shows in, by what it pays (feed.ts). */
+const paysFeed = (s: Sending, bytes: Uint8Array) => {
+  const feed = s.contract ? undefined : feedOfTx(bytes, s.network);
+  return feed ? { feed } : {};
+};
 const toAccount = (s: Sending) => (s.contract && paysAccount(s.kind, s.summary) ? { toAccount: true } : {});
 
 /** What `writeAhead` wrote: the watch's record of `s`, and the sealed write, by its nonce. */
@@ -455,10 +504,12 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
     network: s.network,
     txHash: s.txHash,
     submittedAt: now(),
+    triedAt: now(),
     confirmations: null,
     maybeSent: true,
     ...slot(s),
     ...toAccount(s),
+    ...paysFeed(s, bytes),
     txCbor: s.txCbor,
     inputs: txInputs(bytes),
     contract: s.contract,
@@ -630,7 +681,8 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   const unchanged = (cur: Watched | undefined) =>
     ours(cur) && cur.maybeSent === w.maybeSent && cur.submittedAt === w.submittedAt && cur.resentAt === w.resentAt;
 
-  const confirmations = (await koios.txStatus([w.txHash])).get(w.txHash) ?? null;
+  // A private one on the private index's feed, which names no transaction; tx_status otherwise (feed.ts).
+  const { confirmations, tip, fed } = await lookFor(deps, w);
   if (confirmations !== null) {
     const { maybeSent: _maybeSent, ...seen } = { ...w, confirmations };
     await turn(async () => {
@@ -649,7 +701,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   const age = now() - w.submittedAt;
   // Past its slot by the chain's clock, not this device's, which set the slot.
   const expired =
-    w.invalidHereafter !== undefined && age > VALID_FOR_MS && (await koios.tipSlot()) > w.invalidHereafter + EXPIRED_AFTER_SLOTS;
+    w.invalidHereafter !== undefined && age > VALID_FOR_MS && (tip ?? (await koios.tipSlot())) > w.invalidHereafter + EXPIRED_AFTER_SLOTS;
   // Not while it waits in a mempool, up to HELD_IN_MEMPOOL_MS: it may still land (independent
   // review L1). Nor put back within its 20 minutes and not sent again since (independent review L9).
   const waiting = !!w.inMempool && age <= HELD_IN_MEMPOOL_MS;
@@ -716,8 +768,9 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         if (summary) await deps.activity?.sent(w.network, shown(current), summary).catch(() => undefined);
       }
     } catch (e) {
-      // Refused as spent: most likely this very one, on its way. Unanswered again: keep watching.
-      if (e instanceof SpentInputError) current = await mempool(koios, current);
+      // Refused as spent: most likely this very one, on its way (so too after the data layer's connection was
+      // lost). Unanswered again: keep watching.
+      if (e instanceof SpentInputError || e instanceof SpentMaybeSentError) current = await mempool(koios, current);
     }
     return turn(async () => {
       const after = await wallet.withKeys(async () => {
@@ -755,7 +808,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
       }),
     );
   }
-  return w;
+  return fed ? { ...w, onFeed: true } : w;
 }
 
 /**

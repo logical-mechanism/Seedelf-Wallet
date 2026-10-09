@@ -12,6 +12,8 @@ export default defineConfig({
   projects: [
     // npm run e2e
     { name: "extension", testMatch: "extension.spec.ts" },
+    // npm run e2e:data: mainnet through the data layer, on a build made with VITE_DATA_ORIGIN (chunk 26b)
+    { name: "data-layer", testMatch: "data-layer.spec.ts" },
     // npm run store:images: the Web Store's screenshots, promo tile and icon (docs/store/images/)
     { name: "store", testMatch: "store-images.spec.ts", timeout: 90_000 },
   ],

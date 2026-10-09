@@ -156,9 +156,14 @@ export function withChoices(stored: Stored | undefined, account: number, choices
 /** A pure-ADA UTxO of exactly 5 ₳: what can be the collateral. */
 export const isCollateralShaped = (u: KoiosUtxo) => BigInt(u.value) === COLLATERAL_LOVELACE && !u.asset_list?.length;
 
-/** Oldest first, then by outpoint, so the wallet's pick doesn't change between readings. */
+/**
+ * Oldest first, then by outpoint, so the wallet's pick doesn't change between readings. By block, or by time for the
+ * private index's rows, which have no height (chunk 26b).
+ */
 const oldestFirst = (a: KoiosUtxo, b: KoiosUtxo) =>
-  (a.block_height ?? 0) - (b.block_height ?? 0) || outpoint(a).localeCompare(outpoint(b));
+  (a.block_height ?? 0) - (b.block_height ?? 0) ||
+  (a.block_time ?? 0) - (b.block_time ?? 0) ||
+  outpoint(a).localeCompare(outpoint(b));
 
 /** The account's collateral among `utxos`, and who chose it. */
 export function collateralOf(
@@ -389,7 +394,7 @@ function info(u: KoiosUtxo): Omit<UtxoInfo, "locked"> {
     index: u.tx_index,
     lovelace: u.value,
     tokens: sumValue([u]).tokens,
-    ...(u.block_height ? { blockHeight: u.block_height } : {}),
+    ...(u.block_height ? { blockHeight: u.block_height } : u.block_time ? { madeAt: u.block_time * 1000 } : {}),
   };
 }
 
@@ -403,6 +408,7 @@ function asKoios(u: UtxoInfo): KoiosUtxo {
     stake_address: null,
     payment_cred: null,
     block_height: u.blockHeight ?? null,
+    ...(u.madeAt === undefined ? {} : { block_time: u.madeAt / 1000 }),
     inline_datum: null,
     asset_list: u.tokens.map((t) => ({
       policy_id: t.policyId,

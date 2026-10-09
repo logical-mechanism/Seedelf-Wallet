@@ -15,7 +15,6 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 - **A VPS** with 2 vCPU and 4 GB, near home. Its terms must allow blockchain workloads: Hetzner's don't. It needs DDoS filtering that never terminates TLS, and 1–2 TB of traffic a month for the node's P2P through it.
 - **A domain.** The API is `https://mainnet.<domain>`, and DNS names the VPS only.
 - **The wallet's Web Store ID,** from the store's developer dashboard, for `DATA_ORIGINS`.
-- **The token decimals file:** `scripts/token-decimals.py` over a checkout of the token registry ([README](../README.md#reference-code)).
 - **A build of the API** for the VPS's architecture, with the pinned toolchain: `cargo build --release -p seedelf-data-api` from `seedelf-data/`.
 
 ## 1. Home
@@ -63,7 +62,6 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
    - `curl -X POST http://10.88.0.2:8090/api/submit/tx` (an error, which proves it answers).
 5. **The API:**
    - copy the binary to `/usr/local/bin/seedelf-data-api`;
-   - copy the decimals file to `/etc/seedelf-data/token-decimals.json`;
    - fill in `edge/seedelf-data.env` as `/etc/seedelf-data/env`, mode `0600`;
    - install `edge/seedelf-data-api.service`, then `systemctl enable --now seedelf-data-api`;
    - `curl 127.0.0.1:8099/health` answers 200 with `"source":"db-sync"`.
@@ -129,7 +127,7 @@ Once everything is synced, home's own traffic goes out through the VPS. Otherwis
   | Postgres | within 6 s (two failed reads of its tip), `/health` says `"source":"kupo"` and the public routes answer 503; the wallet goes to Koios for the public side |
   | db-sync alone | the private index moves to Kupo once db-sync is 60 slots behind it; the public routes answer 503 once its tip is 3 minutes old |
   | the node | every part 503 within 3 minutes; the wallet goes to Koios for everything |
-  | the tunnel | every part 503 within 6 s, and a submit 502 within 3 s (it can't connect); the node and db-sync reach nothing |
+  | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the node and db-sync reach nothing |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
 
@@ -139,4 +137,4 @@ Once everything is synced, home's own traffic goes out through the VPS. Otherwis
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.
 - **After a db-sync resync,** once it has caught up, run `home/db-sync-indexes.sql` again: a new database has only db-sync's own indexes.
-- **At every wallet release,** refresh the token decimals file along with the wallet's own token list, then restart the API.
+- **At every wallet release,** refresh the token decimals (`api/data/token-decimals.json`, built in) along with the wallet's own token list, then deploy.

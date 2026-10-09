@@ -4027,6 +4027,8 @@ test.describe("the dApp connector", () => {
     await page.getByRole("button", { name: /^Sites/ }).click();
     await page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" }).click();
     const dapp = await openDapp(context);
+    // Turning it on reaches an open page a moment later: wait for it, as the switch's own test does.
+    await expect.poll(() => dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("object");
     const opened = connectorWindow(context);
     const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => "connected", (e: { info?: string }) => e.info));
     const connect = await opened;
@@ -4290,6 +4292,8 @@ test.describe("the dApp connector", () => {
     await page.getByRole("button", { name: /^Sites/ }).click();
     await page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" }).click();
     const dapp = await openDapp(context);
+    // Turning it on reaches an open page a moment later: wait for it, as the switch's own test does.
+    await expect.poll(() => dapp.evaluate(() => typeof (window as any).cardano?.seedelf)).toBe("object");
     expect(await dapp.evaluate(() => (window as any).cardano.seedelf.supportedExtensions)).toEqual([{ cip: 95 }]);
 
     // Asked for at connect: the public account's choice says what governance gives; a private session gets none.

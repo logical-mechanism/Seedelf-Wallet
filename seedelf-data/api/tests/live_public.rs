@@ -11,6 +11,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use seedelf_data_api::chain::Chain;
 use seedelf_data_api::constants::{CONTRACT_HASH, MIXBOX_HASH, bytes};
+use seedelf_data_api::decimals::Decimals;
 use seedelf_data_api::state::AppState;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -24,10 +25,15 @@ fn chain() -> Chain {
     Chain::connect(&std::env::var("MAINNET_DATABASE_URL").expect("seedelf-data/.env")).unwrap()
 }
 
+/// The token registry's decimals, as the server has them.
+fn decimals() -> Decimals {
+    Decimals::bundled()
+}
+
 /// The public routes, with the tip read once.
 async fn app() -> (Router, Chain) {
     let chain = chain();
-    let state = AppState::new(chain.clone());
+    let state = AppState::new(chain.clone()).with_decimals(decimals());
     state.set_tip(chain.tip().await.unwrap());
     let router = Router::new()
         .merge(seedelf_data_api::public::routes())
@@ -76,14 +82,42 @@ async fn the_contracts_listing_is_the_private_index() {
                     .all(|r| r["payment_cred"] == cred && r["is_spent"] == false)
             );
             assert!(rows.iter().all(|r| r["inline_datum"]["bytes"].is_string()));
-            let unspent: BTreeSet<String> = chain
-                .unspent_now(&bytes(cred), false)
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|row| row.reference)
-                .collect();
+            let index = chain.unspent_now(&bytes(cred), false).await.unwrap();
+            let unspent: BTreeSet<String> = index.iter().map(|row| row.reference.clone()).collect();
             if outpoints(&listed) == unspent {
+                // Each row's tokens too, decimals included (chunk 26b): the wallet reads a private row's as
+                // it reads Koios's asset_list.
+                let held = decimals();
+                let tokens = |r: &Value| -> Vec<Value> {
+                    let mut list: Vec<Value> = r["asset_list"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|a| {
+                            json!([
+                                a["policy_id"],
+                                a["asset_name"],
+                                a["quantity"],
+                                a["decimals"]
+                            ])
+                        })
+                        .collect();
+                    list.sort_by_key(|a| (a[0].to_string(), a[1].to_string()));
+                    list
+                };
+                for row in index {
+                    let row = row.with_decimals(&held);
+                    let listed = rows
+                        .iter()
+                        .find(|r| {
+                            format!("{}#{}", r["tx_hash"].as_str().unwrap(), r["tx_index"])
+                                == row.reference
+                        })
+                        .unwrap();
+                    let assets = serde_json::to_value(&row).unwrap()["assets"].clone();
+                    let assets = if assets.is_null() { json!([]) } else { assets };
+                    assert_eq!(json!(tokens(listed)), assets, "{}", row.reference);
+                }
                 agreed = true;
                 break;
             }

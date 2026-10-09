@@ -115,6 +115,7 @@ import {
   MAX_DEPOSIT_BOXES,
   MAX_MIX_BOXES,
   LovejoinSkipped,
+  firstTries,
   mayBeIn,
   mixesPerBox,
   pumpChain,
@@ -130,6 +131,7 @@ import {
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
+import { chainStatus, type Feed } from "./feed";
 import {
   changeHistory,
   keep,
@@ -814,6 +816,17 @@ function lost(t: RecordedTx, now: number): boolean {
 }
 
 /**
+ * The feed a session's transaction shows in once it's on chain (feed.ts):
+ * its way out spends Seedelf UTxOs and its way back pays them, a return
+ * through Lovejoin pays and spends boxes, and a swap or a cancel is on none.
+ */
+function sessionFeed(kind: SessionTx["kind"]): Feed | undefined {
+  if (kind === "out" || kind === "back") return "contract";
+  if (kind === "deposit" || kind === "mix") return "lovejoin";
+  return undefined;
+}
+
+/**
  * Whether a submit that failed may have gone through all the same: Koios
  * didn't answer it (a timeout, a lost connection, a 5xx). A 429 its gateway
  * turned it away with, a refusal, or one that never went out didn't.
@@ -1394,7 +1407,7 @@ export class SessionService {
       const koios = this.deps.koios(network);
       const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
       if (waiting.length) {
-        const statuses = await koios.txStatus(waiting.map((t) => t.txHash));
+        const statuses = await this.landed(network, waiting);
         const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
         if (on.size) s = await this.noteLanded(network, await this.update(network, index, (r) => void settle(r, on)));
         const recent = s.txs.some((t) => !t.confirmed && !t.unsent && now() - t.at <= FAILED_AFTER_MS);
@@ -2008,7 +2021,7 @@ export class SessionService {
     const auto = !!s.auto;
     if (s.txs.some((t) => awaitsHistory(t, now()) || (!auto && awaitsLanding(t, now())))) {
       const waiting = s.txs.filter((t) => !t.confirmed && !t.unsent);
-      const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
+      const statuses = await this.landed(network, waiting);
       const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
       if (on.size) {
         returned = waiting.some((t) => t.kind === "back" && on.has(t.txHash));
@@ -2092,7 +2105,7 @@ export class SessionService {
     // What was sent and isn't on chain yet: wait for it.
     const waiting = s.txs.filter((t) => !t.confirmed);
     if (waiting.length) {
-      const statuses = await this.deps.koios(network).txStatus(waiting.map((t) => t.txHash));
+      const statuses = await this.landed(network, waiting);
       const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
       // A swap's copy tx_status doesn't show, whose order is on chain, landed all the same: looked for
       // before it's taken for one never placed, and while it's still looked for. Never a second order,
@@ -3267,7 +3280,6 @@ export class SessionService {
   private async pump(network: NetworkName, index: number, budgetMs = CHAIN_PUMP_MS): Promise<void> {
     const pending = await this.pendingChain(network, index);
     if (!pending) return;
-    const koios = this.deps.koios(network);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const id = pending.txs.at(-1)!.txHash;
     let done: boolean;
@@ -3276,8 +3288,13 @@ export class SessionService {
         pending,
         {
           send: (i, maybeSent) => this.sendStep(network, pending, i, maybeSent),
+          // A return through Lovejoin: each of its transactions pays or spends a box, so it's on the pool's feed
+          // (feed.ts).
           onChain: async (hashes) => {
-            const statuses = await koios.txStatus(hashes);
+            const tried = firstTries(pending, hashes);
+            const at = tried?.length ? Math.min(...tried) : undefined;
+            const watched = hashes.map((txHash) => ({ txHash, feed: "lovejoin" as const, ...(at !== undefined ? { sentAt: at } : {}) }));
+            const { statuses } = await chainStatus(this.deps, network, watched);
             const on = new Set(hashes.filter((h) => statuses.get(h) != null));
             if (on.size) {
               await this.update(network, index, (s) => {
@@ -3568,10 +3585,10 @@ export class SessionService {
       let changed = false;
       let returned = false;
       let resumed = false;
-      const waiting = live.flatMap((s) => s.txs.filter((t) => !t.confirmed).map((t) => t.txHash));
+      const waiting = live.flatMap((s) => s.txs.filter((t) => !t.confirmed));
       if (waiting.length) {
-        const statuses = await koios.txStatus(waiting);
-        const on = new Set(waiting.filter((h) => statuses.get(h) != null));
+        const statuses = await this.landed(network, waiting);
+        const on = new Set(waiting.filter((t) => statuses.get(t.txHash) != null).map((t) => t.txHash));
         for (const s of live) {
           returned ||= s.txs.some((t) => t.kind === "back" && !t.confirmed && on.has(t.txHash));
           changed = settle(s, on) || changed;
@@ -3727,6 +3744,20 @@ export class SessionService {
     if (!refs.length) return new Map();
     const rows = (await this.deps.koios(network).utxoInfo(refs)) as Array<KoiosUtxo & { is_spent?: boolean }>;
     return new Map(rows.map((r) => [outpoint(r), !!r.is_spent]));
+  }
+
+  /**
+   * Which of a session's transactions `txs` are on chain: its way out and
+   * back, and a return through Lovejoin, on the private index's feeds, which
+   * name no transaction; a swap or a cancel, which touch only the session's
+   * key and the DEX, through tx_status (feed.ts).
+   */
+  private async landed(network: NetworkName, txs: Array<Pick<SessionTx, "kind" | "txHash" | "at">>): Promise<Map<string, number | null>> {
+    const watched = txs.map((t) => {
+      const feed = sessionFeed(t.kind);
+      return { txHash: t.txHash, sentAt: t.at, ...(feed ? { feed } : {}) };
+    });
+    return (await chainStatus(this.deps, network, watched)).statuses;
   }
 
   /**

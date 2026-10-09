@@ -2,22 +2,24 @@
 //! doesn't hold: Koios reads them from the Cardano token registry. The wallet
 //! takes its bundled list's first (`tokens.ts`), and these for any other token.
 //!
-//! The file (`MAINNET_TOKEN_DECIMALS`) is `{"<policy hex><name hex>": decimals}`
-//! for every registered token whose decimals aren't 0, made from a checkout of
-//! the registry by `seedelf-data/scripts/token-decimals.py`. Every other token
-//! is 0, as Koios gives it. Without the file, every token is 0.
+//! They're built in: `api/data/token-decimals.json`, `{"<policy hex><name
+//! hex>": decimals}` for every registered token whose decimals aren't 0, made
+//! from a checkout of the registry by `seedelf-data/scripts/token-decimals.py`
+//! and committed, as the wallet's own token list is. Every other token is 0, as
+//! Koios gives it. A newer registry is the script again, then a build.
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 #[derive(Default)]
 pub struct Decimals(HashMap<String, u8>);
 
 impl Decimals {
-    pub fn load(path: &str) -> Result<Decimals> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
-        Decimals::parse(&text).with_context(|| format!("reading {path}"))
+    /// The registry's, as committed (`api/data/token-decimals.json`).
+    pub fn bundled() -> Decimals {
+        Decimals::parse(include_str!("../data/token-decimals.json"))
+            .expect("api/data/token-decimals.json is the registry's decimals, as token-decimals.py writes them")
     }
 
     pub fn parse(text: &str) -> Result<Decimals> {
@@ -45,6 +47,20 @@ impl Decimals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_registrys_are_built_in() {
+        let decimals = Decimals::bundled();
+        assert!(decimals.len() > 1_000);
+        // MIN (Minswap), 6 in the registry and in the wallet's own token list.
+        assert_eq!(
+            decimals.of(
+                "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c6",
+                "4d494e"
+            ),
+            6
+        );
+    }
 
     #[test]
     fn a_registered_token_has_its_decimals_and_any_other_none() {

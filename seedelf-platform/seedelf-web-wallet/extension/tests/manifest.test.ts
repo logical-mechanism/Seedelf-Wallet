@@ -101,6 +101,29 @@ describe("manifest", () => {
     expect(m.description.length).toBeLessThanOrEqual(132);
   });
 
+  it("with no data layer origin, a mainnet build reaches nothing new (chunk 26b: the VPS chunk sets one)", () => {
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: true });
+    expect(m.content_security_policy.extension_pages).not.toMatch(/127\.0\.0\.1|http:\/\//);
+  });
+
+  it("reaches a dev build's data layer through connect-src alone, never a host permission", () => {
+    // The API answers CORS for the wallet's own origin (seedelf-data DATA_ORIGINS), so nothing more is asked at
+    // install. Mainnet only: a preprod-only build has no data layer, whatever the override.
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: false, dataOrigin: "http://127.0.0.1:8099/x" });
+    expect(m.content_security_policy.extension_pages).toContain(
+      "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org http://127.0.0.1:8099 https://ipfs.blockfrost.dev",
+    );
+    expect(m.host_permissions.join(" ")).not.toContain("127.0.0.1:8099");
+    const preprod = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: false, dataOrigin: "http://127.0.0.1:8099" });
+    expect(preprod.content_security_policy.extension_pages).not.toContain("8099");
+  });
+
+  it("a store build refuses VITE_DATA_ORIGIN", () => {
+    expect(() =>
+      buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: true, dataOrigin: "http://127.0.0.1:8099" }),
+    ).toThrow(/VITE_DATA_ORIGIN/);
+  });
+
   it("reaches the IPFS gateway for an NFT's image through the CSP alone: no host permission, no remote image", () => {
     // Chunk 20. The worker reads the gateway with Chrome's grant for that one
     // host, asked for at the first image shown, a part of the optional

@@ -22,6 +22,7 @@ import {
   MAX_DEPOSIT_BOXES,
   mixesPerBox,
   pumpChain,
+  firstTries,
   QUIET_AFTER_SEND_MS,
   POOL_SEEDABLE,
   QUIET_PUSH_MS,
@@ -224,6 +225,26 @@ describe("sending a chain a window at a time", () => {
     };
     return { chain, clock, sent, io };
   }
+
+  it("keeps when each was first tried, before its submit and its retries, never moved by a resend", async () => {
+    const { chain, clock, io } = pumped(6);
+    // Each send takes four minutes of retries before it returns.
+    io.send = async () => void (clock.now += 4 * 60_000);
+    const asked: string[][] = [];
+    io.onChain = async (hashes) => {
+      asked.push(hashes);
+      return new Set();
+    };
+    expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(false);
+    const first = { ...chain.firstTried };
+    expect(Object.values(first)).toEqual([0, 4, 8, 12].map((m) => m * 60_000));
+    // Nothing landed, so the window went again: when each was last sent moved on; when it was first tried didn't.
+    expect(chain.sentAt![0]).toBeGreaterThan(16 * 60_000);
+    expect(chain.flying.every((h) => chain.firstTried![h] === first[h])).toBe(true);
+    expect(firstTries(chain, chain.flying)).toEqual([0, 4, 8, 12].map((m) => m * 60_000));
+    // Progress saved before it kept them reads when each was last sent.
+    expect(firstTries({ sentAt: [5] }, ["t0"])).toEqual([5]);
+  });
 
   it("sees nothing yet when Koios doesn't answer the read of what's on chain, and goes on at the next call", async () => {
     const { chain, sent, io } = pumped(6);

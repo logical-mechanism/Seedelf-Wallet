@@ -278,6 +278,8 @@
   "settings.check.warn.noMatch",
   "settings.currency.privacy.coingecko",
   "settings.currency.privacy.none",
+  "settings.koiosOnly.privacy.off",
+  "settings.koiosOnly.privacy.on",
   "settings.lovejoin.privacy.returnsOff",
   "settings.password.warn.currentFirst",
   "settings.phrase.warn.anyone",

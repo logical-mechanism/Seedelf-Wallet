@@ -153,13 +153,19 @@ pub fn only_evaluate(body: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The upstream's answer as it came, or 502/504 when there's none. An error is
-/// logged by kind only: reqwest's own message carries the upstream's URL.
+/// The upstream's answer as it came, or 502/504 when there's none. A
+/// connection that never opened is a 503: nothing reached home, so the wallet
+/// sends the transaction through Koios at once, where a 502 or a 504 leaves it
+/// maybe sent. An error is logged by kind only: reqwest's own message carries
+/// the upstream's URL.
 async fn pass_through(request: reqwest::RequestBuilder, upstream: &'static str) -> Response {
     let answer = match request.send().await {
         Ok(answer) => answer,
         Err(error) => {
-            let (status, kind) = if error.is_timeout() {
+            // A connect timeout is a timeout too: asked first, it's what it is.
+            let (status, kind) = if error.is_connect() {
+                (StatusCode::SERVICE_UNAVAILABLE, "unreachable")
+            } else if error.is_timeout() {
                 (StatusCode::GATEWAY_TIMEOUT, "timed out")
             } else {
                 (StatusCode::BAD_GATEWAY, "unreachable")
@@ -213,6 +219,42 @@ mod tests {
             Err("a JSON-RPC 2.0 call")
         );
         assert_eq!(only_evaluate(b"not json"), Err("a JSON-RPC call is JSON"));
+    }
+
+    /// A home that refuses the connection: nothing reached the node, so the
+    /// wallet goes to Koios at once (503), never "maybe sent" (502).
+    #[tokio::test]
+    async fn no_connection_to_home_is_a_503() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let submit = Submit::new(Some(url.clone()), Some(url)).unwrap();
+        let app = routes().with_state(Arc::new(submit));
+        for (path, kind, body) in [
+            ("/api/v1/submittx", "application/cbor", b"\x84".to_vec()),
+            (
+                "/api/v1/ogmios",
+                "application/json",
+                br#"{"jsonrpc":"2.0","method":"evaluateTransaction","params":{"transaction":{"cbor":"84"}}}"#.to_vec(),
+            ),
+        ] {
+            let answer = app
+                .clone()
+                .oneshot(
+                    Request::post(path)
+                        .header(header::CONTENT_TYPE, kind)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert!(answer.headers().contains_key(header::RETRY_AFTER), "{path}");
+        }
     }
 
     #[test]

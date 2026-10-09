@@ -29,6 +29,12 @@ const MAINNET_KOIOS = "https://api.koios.rest/*";
 const network = process.argv[2] ?? "mainnet";
 if (network !== "mainnet" && network !== "preprod") throw new Error(`Package for mainnet or preprod, not ${network}.`);
 
+// A dev or e2e build's data layer (VITE_DATA_ORIGIN) never ships: vite.config.ts refuses it in a store build, and
+// this refuses one built before that check, or packaged from a shell that still sets it (chunk 26b).
+if (process.env.VITE_DATA_ORIGIN) throw new Error("VITE_DATA_ORIGIN is set: the store's build never takes it. Unset it and rebuild.");
+const csp = manifest.content_security_policy?.extension_pages ?? "";
+if (/\bhttp:\/\//.test(csp)) throw new Error(`dist/ reaches a plain http:// origin (${csp}). Rebuild without VITE_DATA_ORIGIN.`);
+
 // A dev build pins its ID with a key the store refuses; its version must be this one.
 if ("key" in manifest) throw new Error("dist/ is a dev build (its manifest has a key). Run `npm run package`.");
 if (manifest.version !== pkg.version) {

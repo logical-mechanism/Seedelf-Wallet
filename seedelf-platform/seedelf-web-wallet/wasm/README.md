@@ -109,6 +109,15 @@ Measured 2026-10-04 in Node 24.19.0's V8, the engine Chrome runs the worker in: 
 
 The `wasm-opt` row is 2026-09-24's and wasn't measured again, since `wasm-opt` wasn't installed: its module was that day's, less than half today's, and its transfer a draft for Ogmios (`draftTransfer`). Against that day's `wasm-release` it was 9% smaller raw and 6% larger gzipped, which is why it isn't used.
 
+**What a restore costs on a large contract** (chunk 26's *Scale*): `node --expose-gc scale.mjs [rows] [checked]` writes a synthetic `contract/snapshot` answer of `rows` rows in the data layer's row shape, parses it as one string as `response.json()` does, and checks `checked` of them the way the worker does (the register out of the datum, then `isOwned`, 200 a turn). Measured 2026-10-09 in Node 24.19.0:
+
+| Rows | Answer | Parsed rows | Peak RSS | Check, every row |
+|---|---|---|---|---|
+| 100,000 | 47 MB | 105 MB | 243 MB | 1.2 min |
+| 1,000,000 | 473 MB | 1,051 MB | 1,291 MB | 12.1 min |
+
+A row is about 473 bytes and its check about 0.73 ms, almost all of it `isOwned`'s scalar multiplication. Parsing took 0.2 s and 1.5 s. Mainnet's contract held 33 unspent rows that day.
+
 ## Test
 
 From `seedelf-platform/`:

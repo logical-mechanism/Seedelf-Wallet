@@ -61,10 +61,11 @@ import { keptContractView, readContractView } from "./contract-scan";
 import { incomingOf, lessSpent, rewardAccountHex } from "./incoming";
 import type { Koios, KoiosUtxo } from "./koios";
 import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
+import type { PrivateIndex } from "./private-index";
 import type { PrivateStore } from "./private-store";
 import { heldSent } from "./sent-txs";
 import { outpoint, reservedSet, spentSet } from "./spent";
-import { readStake } from "./staking";
+import { knownPool, readStake } from "./staking";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Keys, type Wallet } from "./wallet";
 import { isTrap } from "./wasm";
@@ -97,7 +98,8 @@ export interface BalanceDeps {
   /** chrome.storage.local, where the pool list is kept: a pool's ticker is looked up there first. */
   local?: Area;
   /** The sealed records: who paid for each Seedelf (minted-by.ts). */
-  store?: PrivateStore;
+  store?: PrivateStore;  /** The private index, where it's read now (contract-scan.ts). */
+  index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
 }
 
 /** What the device holds that says who paid for each Seedelf (minted-by.ts `paidByOf`). */
@@ -133,7 +135,7 @@ export class BalanceService {
    */
   async get(network: NetworkName, refresh = false, { kept = false }: { kept?: boolean } = {}): Promise<Balances> {
     const { balances, unkept } = kept ? await this.keptReading(network) : await this.readingNoted(network, refresh);
-    const b = await this.withIncoming(network, await this.withLocked(network, balances, unkept), unkept);
+    const b = await this.withPoolName(network, await this.withIncoming(network, await this.withLocked(network, balances, unkept), unkept));
     const failed = await this.failedSince(network, balances.updatedAt);
     return failed ? { ...b, failed } : b;
   }
@@ -275,6 +277,18 @@ export class BalanceService {
     // The history never holds up, or breaks, a balance reading.
     await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
     return reading;
+  }
+
+  /**
+   * The reading with its pool's ticker, when the device has one now: a
+   * reading never waits for it (staking.ts `readStake`), so the one asked
+   * behind it shows from the next request on.
+   */
+  private async withPoolName(network: NetworkName, b: Balances): Promise<Balances> {
+    const pool = b.cardano.staking.pool;
+    if (!pool || pool.ticker) return b;
+    const known = await knownPool(this.deps, network, pool.id).catch(() => undefined);
+    return known ? { ...b, cardano: { ...b.cardano, staking: { ...b.cardano.staking, pool: known } } } : b;
   }
 
   /** The reading with what's locked on each side now: from its own UTxOs, `unkept`, when it wasn't kept. */
@@ -479,7 +493,10 @@ export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): K
     const register = new wasm.Register(hex.generator, hex.publicValue);
     try {
       return keys.seedelf.isOwned(register);
-    } catch {
+    } catch (e) {
+      // A trap is the WebAssembly broken, not an answer: the read stops (wasm.ts) rather than take the row for
+      // someone else's, which the private index's sealed record would keep for good (contract-scan.ts).
+      if (isTrap(e)) throw e;
       // Points that don't decode, or aren't in the prime-order subgroup, can't be ours to spend.
       return false;
     } finally {

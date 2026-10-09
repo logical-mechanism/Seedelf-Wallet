@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Tokens' decimals from a checkout of the Cardano token registry, for the
-API's MAINNET_TOKEN_DECIMALS (api/src/decimals.rs).
+"""Tokens' decimals from a checkout of the Cardano token registry, built into
+the API (api/data/token-decimals.json, api/src/decimals.rs).
 
 Koios reads the same registry (koios-artifacts' asset-registry-update.sh):
 each mapping's subject is the policy (56 hex characters) and the asset name,
 and its decimals default to 0. Only tokens whose decimals aren't 0 are kept.
 
     git clone --depth 1 https://github.com/cardano-foundation/cardano-token-registry.git
-    python3 scripts/token-decimals.py cardano-token-registry > token-decimals.json
+    python3 scripts/token-decimals.py cardano-token-registry > api/data/token-decimals.json
 """
 
 import json

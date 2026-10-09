@@ -28,7 +28,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { shortHex, tokenKey } from "../format";
+import { shortHex, tokenKey, whenOf } from "../format";
 import { useAmounts } from "../preferences";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, viewToken } from "../tokens";
@@ -381,6 +381,10 @@ export function UtxoDetails({
         <ReviewRows testId="utxo-output">
           <Row label={t("utxos.output")} value={String(utxo.index)} />
           {utxo.blockHeight !== undefined && <Row label={t("utxos.block")} value={utxo.blockHeight.toLocaleString("en-GB")} />}
+          {/* The private index gives a private coin's time, never its block (chunk 26b). */}
+          {utxo.blockHeight === undefined && utxo.madeAt !== undefined && (
+            <Row label={t("utxos.made")} value={whenOf(utxo.madeAt, new Date())} />
+          )}
         </ReviewRows>
         {utxo.address && (
           <CopyField

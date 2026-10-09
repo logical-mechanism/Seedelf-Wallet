@@ -35,6 +35,14 @@ export interface NetworkConfig {
   swaps: string;
   /** Lovejoin, where it's deployed. */
   lovejoin?: LovejoinConfig;
+  /**
+   * Seedelf Wallet's own data layer (seedelf-data/, chunk 26): its origin,
+   * where the network has one. Only mainnet does; preprod reads everything
+   * through Koios. Empty until the server is up (the VPS chunk), so a store
+   * build reads Koios alone. A dev or e2e build names one with
+   * VITE_DATA_ORIGIN (`dataOrigin`).
+   */
+  data?: string;
 }
 
 export const NETWORKS: Record<NetworkName, NetworkConfig> = {
@@ -65,6 +73,8 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
       // 0.822–0.828 ₳, measured against mainnet's scripts (the launch review).
       mixCost: 825_000,
     },
+    // No origin until the VPS chunk sets the API's https:// one.
+    data: "",
   },
 };
 
@@ -134,9 +144,28 @@ export function networkOrigins(networks: NetworkName[]): string[] {
   return [...new Set(origins.map((url) => new URL(url).origin))];
 }
 
-/** Origins the pages may reach without a host permission: services that answer with CORS headers. */
-export function corsOrigins(networks: NetworkName[]): string[] {
-  return [...new Set(networks.map((n) => new URL(NETWORKS[n].swaps).origin))];
+/**
+ * The data layer's origin on `network`, if this build reads one there: the
+ * network's own, or `override` (VITE_DATA_ORIGIN, a dev or e2e build's), on a
+ * network that has a data layer at all. A store build never passes an
+ * override (vite.config.ts).
+ */
+export function dataOrigin(network: NetworkName, override = ""): string | undefined {
+  const own = NETWORKS[network].data;
+  if (own === undefined) return undefined;
+  const origin = override || own;
+  return origin ? new URL(origin).origin : undefined;
+}
+
+/**
+ * Origins the pages may reach without a host permission: services that
+ * answer with CORS headers. The data layer is one: it answers the wallet's
+ * own origin (seedelf-data's DATA_ORIGINS), so it adds nothing asked for at
+ * install.
+ */
+export function corsOrigins(networks: NetworkName[], dataOverride = ""): string[] {
+  const data = networks.flatMap((n) => dataOrigin(n, dataOverride) ?? []);
+  return [...new Set([...networks.map((n) => new URL(NETWORKS[n].swaps).origin), ...data])];
 }
 
 /**

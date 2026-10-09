@@ -67,6 +67,27 @@ async function inAMempool(t: T) {
   return { withdraw, summary, inputs: txInputs(t.koios.submitted[0]!) };
 }
 
+describe("a maybe-sent private payment's first try", () => {
+  it("is kept from before its submit, though the watch counts its 20 minutes from when Koios gave up", async () => {
+    const t = await unlocked();
+    const withdraw = privately(t);
+    const summary = await withdraw.build("preprod", [{ to: THEIRS, lovelace: "5000000", tokens: [] }]);
+    const real = t.koios.fetch;
+    const before = t.clock.now;
+    t.koios.fetch = async (url, init) => {
+      if (!url.endsWith("/submittx")) return real(url, init);
+      // Three minutes go by before the submit gives up: it may have reached a node at the start of them.
+      t.clock.now += 3 * 60_000;
+      throw new DOMException("signal timed out", "TimeoutError");
+    };
+    expect(await withdraw.submit("preprod", summary.txHash)).toMatchObject({ maybeSent: true });
+    const watched = await t.session.get<PendingTx & { triedAt?: number }>(pendingKey("preprod"));
+    expect(watched?.submittedAt).toBe(before + 3 * 60_000);
+    // Where a private watch reads the feed from (feed.ts): a cursor the wallet had before this, never after.
+    expect(watched?.triedAt).toBe(before);
+  });
+});
+
 describe("a maybe-sent private payment the network says it has", () => {
   it("is held past 20 minutes while the chain shows what it spends unspent, and says it may still land", async () => {
     const t = await unlocked();

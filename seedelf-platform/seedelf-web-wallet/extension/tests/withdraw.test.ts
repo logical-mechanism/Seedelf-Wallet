@@ -233,7 +233,9 @@ describe("withdraw", () => {
     expect(pending).toMatchObject({ kind: "withdraw", txHash: summary.txHash, confirmations: null });
     expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual([summary.txHash]);
     expect(await t.session.get(SESSION_WITHDRAW)).toBeUndefined();
-    expect(await t.session.get(pendingKey("preprod"))).toEqual(pending);
+    // A Seedelf spend's watch says so, so it's looked for on the private index's feed where there is one (feed.ts).
+    // And when it was first tried, before the submit: where the feed is read from (feed.ts).
+    expect(await t.session.get(pendingKey("preprod"))).toEqual({ ...pending, contract: true, triedAt: t.clock.now });
   });
 });
 

@@ -124,7 +124,9 @@ describe("a mix from one public account, and Mix again from my public account on
     const again = await t.lovejoin.publicAgainBuild("preprod");
     expect(again).toMatchObject({ again: true, boxes: 4 });
     const spent = (await keptInputs(t)).flat();
-    expect(spent.filter((o) => o.startsWith("f5") || o.startsWith("f6"))).toEqual([]);
+    // Account 1's two UTxOs by their outpoints: a box's own hash may start "f5" or "f6" (fundAccount).
+    const account1 = [`${"f5".repeat(32)}#0`, `${"f6".repeat(32)}#0`];
+    expect(spent.filter((o) => account1.includes(o))).toEqual([]);
     expect(spent.filter((o) => theirs.includes(o)).sort()).toEqual([...theirs].sort());
   });
 

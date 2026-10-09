@@ -114,10 +114,14 @@ import { Withdraw } from "./Withdraw";
 const STALE_MS = 60_000;
 /** How often to ask about a sent transaction. */
 const WATCH_EVERY_MS = 15_000;
+/** How often while it's watched on the private index's shared feed, which names no transaction (chunk 26b). */
+const FEED_EVERY_MS = 5_000;
 /** How long a sent transaction holds new payments back, unless it may have gone through (maybe sent). */
 const HOLD_MS = 10 * 60_000;
 /** How often to ask about one from the public account once it no longer holds anything back: it can land for about two hours. */
 const SETTLE_EVERY_MS = 60_000;
+/** When to look again for a pool's ticker the reading went without: one pool_info, asked behind it. */
+const POOL_TICKER_AFTER_MS = 3_000;
 
 type Tab = "seedelf" | "cardano";
 
@@ -359,6 +363,29 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     return () => clearInterval(tick);
   }, [load, watch]);
 
+  // A pool shown by its ID: the reading never waits for its ticker, which the worker asks for behind it
+  // (staking.ts `readStake`). The kept reading a moment later has it, asking no one.
+  const shownPool = balances?.cardano.staking.pool;
+  const poolWithoutTicker = shownPool && !shownPool.ticker ? shownPool.id : undefined;
+  useEffect(() => {
+    if (!poolWithoutTicker) return;
+    const later = setTimeout(() => {
+      call("balances", { kept: true }).then(
+        (b) => {
+          const pool = b.cardano.staking.pool;
+          if (pool?.id !== poolWithoutTicker || !pool.ticker) return;
+          setBalances((was) =>
+            was?.cardano.staking.pool?.id === pool.id
+              ? { ...was, cardano: { ...was.cardano, staking: { ...was.cardano.staking, pool } } }
+              : was,
+          );
+        },
+        () => undefined,
+      );
+    }, POOL_TICKER_AFTER_MS);
+    return () => clearTimeout(later);
+  }, [poolWithoutTicker]);
+
   // While Home shows, what's running: read from the device every 20 s, as the worker's alarm moves it on.
   useEffect(() => {
     if (screen !== "home") return;
@@ -408,9 +435,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const settling = pending !== null && unsettled(pending) && pending.invalidHereafter !== undefined;
   useEffect(() => {
     if (!watching && !settling) return;
-    const timer = setInterval(() => void watch(), watching ? WATCH_EVERY_MS : SETTLE_EVERY_MS);
+    const timer = setInterval(() => void watch(), watching ? (pending?.onFeed ? FEED_EVERY_MS : WATCH_EVERY_MS) : SETTLE_EVERY_MS);
     return () => clearInterval(timer);
-  }, [watching, settling, watch]);
+  }, [watching, settling, watch, pending?.onFeed]);
   const busy = t(pending?.maybeSent ? MAYBE_BUSY : BUSY);
 
   const seedelfs = balances?.seedelf.seedelfs ?? [];
