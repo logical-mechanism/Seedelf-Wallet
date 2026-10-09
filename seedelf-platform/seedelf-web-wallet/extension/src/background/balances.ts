@@ -64,7 +64,7 @@ import { mintedBy, paidByOf, type MintedBy } from "./minted-by";
 import type { PrivateStore } from "./private-store";
 import { heldSent } from "./sent-txs";
 import { outpoint, reservedSet, spentSet } from "./spent";
-import { readStake } from "./staking";
+import { knownPool, readStake } from "./staking";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, SESSION_PRIVATE_STALE_PREFIX, WalletLocked, type Keys, type Wallet } from "./wallet";
 import { isTrap } from "./wasm";
@@ -133,7 +133,7 @@ export class BalanceService {
    */
   async get(network: NetworkName, refresh = false, { kept = false }: { kept?: boolean } = {}): Promise<Balances> {
     const { balances, unkept } = kept ? await this.keptReading(network) : await this.readingNoted(network, refresh);
-    const b = await this.withIncoming(network, await this.withLocked(network, balances, unkept), unkept);
+    const b = await this.withPoolName(network, await this.withIncoming(network, await this.withLocked(network, balances, unkept), unkept));
     const failed = await this.failedSince(network, balances.updatedAt);
     return failed ? { ...b, failed } : b;
   }
@@ -275,6 +275,18 @@ export class BalanceService {
     // The history never holds up, or breaks, a balance reading.
     await this.deps.activity?.arrived(network, view.owned).catch(() => undefined);
     return reading;
+  }
+
+  /**
+   * The reading with its pool's ticker, when the device has one now: a
+   * reading never waits for it (staking.ts `readStake`), so the one asked
+   * behind it shows from the next request on.
+   */
+  private async withPoolName(network: NetworkName, b: Balances): Promise<Balances> {
+    const pool = b.cardano.staking.pool;
+    if (!pool || pool.ticker) return b;
+    const known = await knownPool(this.deps, network, pool.id).catch(() => undefined);
+    return known ? { ...b, cardano: { ...b.cardano, staking: { ...b.cardano.staking, pool: known } } } : b;
   }
 
   /** The reading with what's locked on each side now: from its own UTxOs, `unkept`, when it wasn't kept. */

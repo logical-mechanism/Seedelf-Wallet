@@ -3,7 +3,7 @@
 // rewards): what each screen asks Koios, the pool list kept for a day, the
 // builds signed through WebAssembly, and the rewards spent along with a
 // payment, or not.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { Koios, type FetchLike } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
@@ -53,6 +53,29 @@ describe("the stake key in the balances", () => {
     const b = await t.balances.get("preprod");
     expect(b.cardano.staking.pool).toEqual({ id: LOGIC, ticker: "LOGIC" });
     expect(paths(t)).not.toContain("pool_info");
+  });
+
+  it("never waits for a ticker: the reading shows the pool's ID, and the next one its ticker (chunk 26b)", async () => {
+    // A pool nobody had looked at in 10 minutes held Home up to 3 s on the data layer, for its live stake.
+    const t = await unlocked();
+    let answer!: () => void;
+    const slow = new Promise<void>((r) => (answer = r));
+    const waiting: FetchLike = async (url, init) => {
+      if (url.includes("pool_info")) await slow;
+      return t.koios.fetch(url, init);
+    };
+    const deps = { ...t.deps, koios: () => new Koios("https://preprod.koios.rest/api/v1", waiting, async () => undefined) };
+    const { BalanceService } = await import("../src/background/balances");
+    const balances = new BalanceService(deps);
+    const first = await balances.get("preprod", true);
+    expect(first.cardano.staking.pool).toEqual({ id: LOGIC });
+    answer();
+    await vi.waitFor(async () =>
+      expect((await balances.get("preprod")).cardano.staking.pool).toEqual({ id: LOGIC, ticker: "LOGIC", name: "Logical Mechanism" }),
+    );
+    // Asked once, and remembered for the session.
+    await balances.get("preprod", true);
+    expect(paths(t).filter((p) => p === "pool_info")).toHaveLength(1);
   });
 
   it("reads a key that was never registered as not staking", async () => {
