@@ -26,6 +26,9 @@
 //                   back directly. A swap's approval records its own.
 // lovejoinDepth,    How deep each box fans out, and the range its wait is
 // lovejoinDelay     drawn from (lovejoin.ts).
+// koiosOnly         Everything goes through Koios, never the wallet's own
+//                   data layer (data-layer.ts). Off by default; read at each
+//                   request, so turning it on needs no restart.
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts). Nor is the network, which
@@ -109,6 +112,7 @@ export class PreferencesService {
       lovejoinReturns: typeof kept.lovejoinReturns === "boolean" ? kept.lovejoinReturns : DEFAULT_PREFERENCES.lovejoinReturns,
       lovejoinDepth: isLovejoinDepth(kept.lovejoinDepth) ? kept.lovejoinDepth : DEFAULT_PREFERENCES.lovejoinDepth,
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
+      koiosOnly: typeof kept.koiosOnly === "boolean" ? kept.koiosOnly : DEFAULT_PREFERENCES.koiosOnly,
     };
   }
 
@@ -125,6 +129,7 @@ export class PreferencesService {
     if (typeof change.lovejoinReturns === "boolean") next.lovejoinReturns = change.lovejoinReturns;
     if (isLovejoinDepth(change.lovejoinDepth)) next.lovejoinDepth = change.lovejoinDepth;
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
+    if (typeof change.koiosOnly === "boolean") next.koiosOnly = change.koiosOnly;
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;
   }

@@ -27,6 +27,8 @@ describe("preferences", () => {
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
+      // Mainnet reads the wallet's own data layer first, where the build has one (chunk 26b).
+      koiosOnly: false,
     });
 
     expect(await prefs.set({ hideBalances: true, lockAfterMinutes: 60, currency: "eur" })).toEqual({
@@ -40,6 +42,7 @@ describe("preferences", () => {
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
+      koiosOnly: false,
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
 
@@ -66,6 +69,11 @@ describe("preferences", () => {
     expect((await prefs.get()).lovejoinReturns).toBe(true);
     await prefs.set({ lovejoinReturns: false });
     expect((await prefs.get()).lovejoinReturns).toBe(false);
+    // Koios only: a switch, turned on only by true.
+    await prefs.set({ koiosOnly: "yes" as never });
+    expect((await prefs.get()).koiosOnly).toBe(false);
+    await prefs.set({ koiosOnly: true });
+    expect((await prefs.get()).koiosOnly).toBe(true);
   });
 
   it("read a kept value that's no longer allowed as the default", async () => {

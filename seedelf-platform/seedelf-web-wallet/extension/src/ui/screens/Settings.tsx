@@ -24,7 +24,7 @@ import {
   useT,
 } from "../../i18n";
 
-import { lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
+import { dataOrigin, lovejoinOn, NETWORKS, type NetworkName } from "../../networks";
 import { readOpenIn, type OpenIn } from "../../shared/open-in";
 import {
   CURRENCIES,
@@ -199,6 +199,7 @@ export function Settings({
             />
           )}
         </ul>
+        {dataOrigin(status.network, __DATA_ORIGIN__) && <KoiosOnly />}
       </section>
       <SpendRewards />
       <section className="section" aria-labelledby="security-title">
@@ -1041,6 +1042,55 @@ export function DappConnector({
 export { disconnectText, SiteRows } from "./ConnectedSites";
 
 /** Whether a payment from the Cardano account withdraws the staking rewards too. */
+/**
+ * Koios for everything, never Seedelf Wallet's own data layer (chunk 26b).
+ * Shown only where the build reads one (mainnet, networks.ts `dataOrigin`):
+ * elsewhere there's nothing to turn off. The worker reads it at each request.
+ */
+function KoiosOnly() {
+  const { prefs: all, loaded, set } = usePreferences();
+  const prefs = loaded ? all : undefined;
+  const [error, setError] = useState<string>();
+
+  async function toggle() {
+    if (!prefs) return;
+    try {
+      await set({ koiosOnly: !prefs.koiosOnly });
+      setError(undefined);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <>
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="koios-only-label">{t("settings.koiosOnly")}</span>
+          <span className="note" id="koios-only-note">
+            {t(prefs?.koiosOnly ? "settings.koiosOnly.privacy.on" : "settings.koiosOnly.privacy.off")}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={prefs?.koiosOnly ?? false}
+          aria-labelledby="koios-only-label"
+          aria-describedby="koios-only-note"
+          onClick={toggle}
+          disabled={!prefs}
+        />
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
 function SpendRewards() {
   const { prefs: all, loaded, set } = usePreferences();
   const prefs = loaded ? all : undefined;

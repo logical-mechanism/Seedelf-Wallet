@@ -19,9 +19,13 @@ export interface ManifestOptions {
   version: string;
   mainnetEnabled: boolean;
   storeBuild: boolean;
+  /** VITE_DATA_ORIGIN: the data layer a dev or e2e build reads (networks.ts `dataOrigin`). Never a store build's. */
+  dataOrigin?: string;
 }
 
-export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestOptions) {
+export function buildManifest({ version, mainnetEnabled, storeBuild, dataOrigin = "" }: ManifestOptions) {
+  // The store's build reads only the origin networks.ts gives it: a local API's would ship to every user.
+  if (storeBuild && dataOrigin) throw new Error("A store build never takes VITE_DATA_ORIGIN: unset it.");
   const networks = enabledNetworks(mainnetEnabled);
   const origins = networkOrigins(networks);
   return {
@@ -60,15 +64,16 @@ export function buildManifest({ version, mainnetEnabled, storeBuild }: ManifestO
     optional_host_permissions: DAPP_ORIGINS,
     // WebAssembly needs 'wasm-unsafe-eval'; connect-src limits network access
     // to the extension itself, the wallet's own services, Minswap's
-    // aggregator for swaps in private sessions, and the IPFS gateway for an
-    // NFT's image the user asks to see (which the worker fetches, and the
-    // page shows as data). Fonts and images ship inside the extension.
+    // aggregator for swaps in private sessions, the data layer where the
+    // build has one, and the IPFS gateway for an NFT's image the user asks to
+    // see (which the worker fetches, and the page shows as data). Fonts and
+    // images ship inside the extension.
     content_security_policy: {
       extension_pages: [
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        `connect-src 'self' ${[...origins, ...corsOrigins(networks), ...grantedOrigins()].join(" ")}`,
+        `connect-src 'self' ${[...origins, ...corsOrigins(networks, dataOrigin), ...grantedOrigins()].join(" ")}`,
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",

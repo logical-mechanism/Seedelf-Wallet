@@ -133,6 +133,14 @@ export interface Preferences {
   lovejoinDepth: LovejoinDepth;
   /** Lovejoin: the range each box's wait is drawn from. */
   lovejoinDelay: LovejoinDelay;
+  /**
+   * Read and send everything through Koios, never Seedelf Wallet's own data
+   * layer (chunk 26b). Off by default: where the build has a data layer
+   * (mainnet, networks.ts `dataOrigin`), the wallet reads it first, and Koios
+   * only for a part that's down. The switch shows only where there's a data
+   * layer to turn off.
+   */
+  koiosOnly: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -146,6 +154,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lovejoinReturns: true,
   lovejoinDepth: 2,
   lovejoinDelay: "1-6",
+  koiosOnly: false,
 };
 
 export const isLovejoinDepth = (value: unknown): value is LovejoinDepth =>
