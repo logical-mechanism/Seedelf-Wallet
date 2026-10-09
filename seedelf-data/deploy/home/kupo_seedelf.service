@@ -1,4 +1,4 @@
-# /etc/systemd/system/kupo-seedelf.service
+# /etc/systemd/system/kupo_seedelf.service
 #
 # The Seedelf-only Kupo: the private index's second source. It runs beside
 # any other Kupo on the box, never inside one: adding a pattern to another

@@ -26,7 +26,7 @@ Every file here is a template. `<…>` marks a value to fill in on the machine. 
 3. Install the drop-in `home/postgresql-after-network.conf`, so Postgres binds after the network and `wg0` are up. After a reboot on 2026-10-09 it bound localhost alone.
 4. `systemctl daemon-reload`, then restart Postgres.
 
-**The Seedelf Kupo** (`home/kupo-seedelf.service`), **cardano-submit-api** (`--config home/tx-submit-mainnet-config.yaml --port 8090`) and **Ogmios** (port 1337, which serves another project too) listen on every address: the LAN for building locally, and `wg0` for the VPS. The router forwards none of their ports, and `home/nftables-seedelf.conf` lets only the VPS in through `wg0`.
+**The Seedelf Kupo** (`home/kupo_seedelf.service`), **cardano-submit-api** (`--config home/tx-submit-mainnet-config.yaml --port 8090`) and **Ogmios** (port 1337, which serves another project too) listen on every address: the LAN for building locally, and `wg0` for the VPS. The router forwards none of their ports, and `home/nftables-seedelf.conf` lets only the VPS in through `wg0`.
 
 **db-sync** runs the options in `home/db-sync-insert-options.json`. They've been right since 2026-10-09, when `offchain_vote_data` was turned on. Check them again after every db-sync upgrade: 13.7.0.1 added that option switched off, and vote metadata stopped with no error.
 
@@ -130,6 +130,8 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
   | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the relay carries on |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
+
+  The wallet goes back to the API at its first reading after a 5-minute hold, and a retry that fails starts the hold again. Postgres keeps answering on `10.88.0.2` across a restart of the tunnel. The drills as run, with their times, are in chunk 26c's plan.
 
 ## Routine
 
