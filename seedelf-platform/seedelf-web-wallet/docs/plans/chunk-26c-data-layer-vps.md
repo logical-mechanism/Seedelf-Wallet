@@ -31,7 +31,10 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
 - **the drills,** that night ([below](#the-drills-2026-10-09)): all five passed;
 - **the certificate in the public logs:** Cert Spotter lists one issuance, Let's Encrypt's, naming `mainnet.seedelf.logicalmechanism.io` alone. crt.sh hadn't indexed it 3 hours on.
 
-Next: home's logs (Postgres's and Kupo's), then the 1.4.0 PR.
+- **home's logs** (runbook §5), that night. Postgres's settings were right, and its log held no statement since they went in: the 34 lines that quote one are from that morning's local development. **Kupo's unit had no `--log-level-http-server Warning`**, so it logged every request the API made, with the contract's hash and a wallet's cursor (about 1,500 lines an hour). A drop-in now adds the flag (`kupo_seedelf.service.d/http-log.conf`), and Kupo logs none. The lines already written leave with the journal's own retention: vacuuming it would take the other project's logs too;
+- **the tunnel drill's ghosts,** found in Postgres's log: 70 "too many connections for role" in the half hour after it. The API had closed 5 sessions while the tunnel was down, and their close never reached home. Postgres kept them, at the role's limit of 10, and would have for about 2 hours (no server keepalives), so the API ran on 5 connections and was refused the rest. The 5 were ended, and the role now has TCP keepalives (60 s idle, 6 probes 10 s apart, `tcp_user_timeout` 60 s), so a session cut off this way frees its slot within 2 minutes. `seedelf_reader.sql` has them; the limit stays 10.
+
+Next: the 1.4.0 PR.
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
@@ -139,6 +142,7 @@ A dev build pointed at the VPS ran a fresh mainnet wallet (no funds), driven ove
 **Not run:** the node, which is a stake pool's relay, and home's power. What the API sees of them is drills 1, 2 and 4.
 
 **Learned:**
+- **A cut tunnel leaves sessions Postgres can't see are dead.** They kept their slots against the role's limit until keepalives were added (above).
 - **A failed retry restarts the wallet's 5-minute hold.** So a part that comes back just after the wallet tried can keep it on Koios up to 5 minutes more. That's by design: slower, never broken.
 - **A stopped Kupo shows on `/health` only as a growing age.** It's the spare, so nothing else should change.
 
