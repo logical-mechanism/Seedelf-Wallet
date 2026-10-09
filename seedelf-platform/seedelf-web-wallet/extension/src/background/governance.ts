@@ -78,7 +78,8 @@ export async function readOwnDrep(deps: GovernanceDeps, network: NetworkName, { 
     }
     return {
       id,
-      status: row ? "retired" : "none",
+      // Koios's own word, or never registered when it has no row at all.
+      status: row?.drep_status === "deregistered" ? "deregistered" : "not_registered",
       deposit: "0",
       ...(depositNow ? { depositNow } : {}),
       active: false,

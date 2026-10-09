@@ -506,7 +506,7 @@ Monthly and rough; check prices when buying.
       - **Public:** what one request may gather is capped, so a heavy credential costs a 503, not gigabytes. `account_txs` is 4× faster, a delegators clause Koios doesn't have is gone (some pools timed out on every look), and IDs have one spelling.
       - **Left for later, measured and small:** `query_typed` for one round trip a statement; one pass for every DRep's delegators; single-flight for answers kept a while; live tests over the heaviest keys.
 4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.
-   - **Found in the review, a wallet bug today, with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passes it through (`staking.ts`) and Voting checks for `"retired"` (`Voting.tsx`), so a picked DRep that has retired shows no warning. The account's own DRep is mapped right (`governance.ts`).
+   - **Found in the review, and fixed on this branch (2026-10-09), a wallet bug with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passed it through and Voting checked for `"retired"`. So a picked DRep that had retired, or that never registered (`"not_registered"`), wasn't blocked. It got the inactive warning instead, which says delegating to it still lets you withdraw rewards. The wallet now carries Koios's three words throughout, the account's own DRep included (the owner: "follow what koios is doing"). Voting blocks both, each with its own reason; the screens still say "Retired" and "Not registered".
 5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
 6. **The drills**, then 1.4.0.
 

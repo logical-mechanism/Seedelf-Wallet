@@ -150,6 +150,16 @@ describe("DReps", () => {
     expect(decodeURIComponent(query)).toBe("select=drep_id,meta_json->body->givenName");
   });
 
+  it("keeps Koios's word for a DRep that has retired or never registered", async () => {
+    const t = await unlocked();
+    const id = "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a";
+    const row = { drep_id: id, active: false, expires_epoch_no: null, amount: "0", live_delegator_count: 0, deposit: null, meta_url: null, meta_hash: null };
+    for (const status of ["deregistered", "not_registered"] as const) {
+      t.koios.dreps.set(id, { ...row, drep_status: status });
+      expect(await t.staking.drep("preprod", id)).toMatchObject({ id, status, active: false });
+    }
+  });
+
   it("explains an ID it can't use", async () => {
     const t = await unlocked();
     await expect(t.staking.drep("preprod", LOGIC)).rejects.toThrow("DRep ID");

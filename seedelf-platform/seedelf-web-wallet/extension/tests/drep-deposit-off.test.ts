@@ -44,7 +44,7 @@ describe("a DRep deposit off the network's", () => {
     for (const off of ["five hundred", 1e21, null]) {
       row.drep_deposit = off;
       const own = await t.staking.ownDrep("preprod");
-      expect(own.status, String(off)).toBe("none");
+      expect(own.status, String(off)).toBe("not_registered");
       expect(own.depositNow, String(off)).toBeUndefined();
     }
   });

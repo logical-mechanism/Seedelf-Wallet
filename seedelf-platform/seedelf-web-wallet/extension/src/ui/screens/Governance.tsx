@@ -299,7 +299,7 @@ export function DrepCard({
         </>
       ) : (
         <>
-          {drep.status === "retired" && <p className="note">{t("drep.retired.text")}</p>}
+          {drep.status === "deregistered" && <p className="note">{t("drep.retired.text")}</p>}
           <p className="note" data-testid="drep-deposit-note">
             {drep.depositNow
               ? t("drep.none.deposit", { amount: formatAda(drep.depositNow) })

@@ -62,6 +62,14 @@ async function builtCertificates(t: ReturnType<typeof testBalances>): Promise<nu
 }
 
 describe("the account's own DRep", () => {
+  it("keeps Koios's word for where it stands: retired is deregistered, and an unused ID not_registered", async () => {
+    const t = await unlocked();
+    t.koios.dreps.set(OWN, registered({ drep_status: "deregistered", active: false, deposit: null }));
+    expect((await t.staking.ownDrep("preprod")).status).toBe("deregistered");
+    t.koios.dreps.set(OWN, registered({ drep_status: "not_registered", active: false, deposit: null }));
+    expect((await t.staking.ownDrep("preprod")).status).toBe("not_registered");
+  });
+
   it("is the key Lace derives, named as Koios names it", () => {
     expect(OWN).toMatch(/^drep1y/);
     const vector = wasm.CardanoAccount.fromPhrase("test walk nut penalty hip pave soap entry language right filter choice", 0);
@@ -72,7 +80,7 @@ describe("the account's own DRep", () => {
     const t = await unlocked();
     expect(await t.staking.ownDrep("preprod")).toEqual({
       id: OWN,
-      status: "none",
+      status: "not_registered",
       deposit: "0",
       depositNow: "500000000",
       active: false,
@@ -119,7 +127,7 @@ describe("governance actions", () => {
     const t = await unlocked();
     const view = await t.staking.governance("preprod");
     expect(view.list.actions).toHaveLength(governanceFixture.proposal_list.preprod.length);
-    expect(view.drep.status).toBe("none");
+    expect(view.drep.status).toBe("not_registered");
     expect(view.votes).toEqual({});
     // Not a DRep: no vote_list, and drep_info alone, without the deposit's epoch_params.
     expect(paths(t)).toEqual(["drep_info", "proposal_list"]);
