@@ -509,7 +509,7 @@ Monthly and rough; check prices when buying.
       - **Left for later, measured and small:** `query_typed` for one round trip a statement; one pass for every DRep's delegators; single-flight for answers kept a while; live tests over the heaviest keys.
    5. **The first-load pass** (2026-10-09, the owner's order: before the wallet's plan). Every query a wallet makes from create or restore to Home and Activity was put through `EXPLAIN ANALYZE` on the home db-sync, for a fresh wallet, two typical ones and a busy key.
       - **The queries:** db-sync's statistics on `tx_out` are 100–1,000× low, so the planner chose parallel workers and whole-table reads for small lookups. `credential_utxos` and `tx_info`'s outputs now read each address's or transaction's own outputs, with the same rows. A wallet's own UTxOs went from 4–6 ms to 0.3–0.5 ms, a credential at 95,000 addresses from 4.1 s to 160 ms, and a page of Activity's outputs from 5 ms to 0.6 ms.
-      - **The indexes:** three of Koios's, for `account_info`'s DRep (16 of its 16.3 ms) and `tx_info`'s certificates and votes (15 ms and 1.7 ms). Not yet built at home.
+      - **The indexes:** three of Koios's, built at home by the owner the same day. `account_info` went from 16–19 ms to 0.1–0.4 ms, and `tx_info`'s certificates and votes from 15 ms and 1.7 ms to 0.3–0.6 ms and 0.03 ms.
       - **Already fast:** `account_addresses` (under 0.2 ms), `account_txs` (1 ms; 16 ms for the busy key), the private index (under 2 ms warm, and read once a block).
       - **Left as it is:** a pool's first look, up to 3 s on Home's path ([The wallet's side](#the-wallets-side)).
 4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.

@@ -192,7 +192,13 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 **The SQL is the API's own.** The home Postgres has no `grest` schema and no pg_cardano, and the API reads with the read-only role, so nothing at home is installed. Its indexes beyond db-sync's own are recorded in [deploy/home/db-sync-indexes.sql](deploy/home/db-sync-indexes.sql), with the command that lists what's there.
 - It follows Koios's `grest` functions ([koios-artifacts](https://github.com/cardano-community/koios-artifacts), CC-BY-4.0) rule for rule: an account's standing, a pool's state and live stake, a DRep's activity and delegators, a token's minting metadata.
 - **Where Koios relies on an index it adds, the query goes another way.** A stake key's addresses come from `address.stake_address_id`: 2 ms, against 6.7 s through `tx_out.stake_address_id`, which db-sync doesn't index. An address is found by its bytes (`address.raw`), not its text.
-  - **The exceptions are three of Koios's own, on small tables:** `delegation_vote` by account and by transaction, and `voting_procedure` by transaction. Each is under 30 MB and builds in seconds, and nothing else reads those tables faster.
+  - **The exceptions are three of Koios's own, on small tables:** `delegation_vote` by account and by transaction, and `voting_procedure` by transaction. Together they're 25 MB, and nothing else reads those tables faster. Built at home on 2026-10-09:
+
+    | Query | Before (the table read whole) | After |
+    |---|---|---|
+    | `account_info` | 16–19 ms | 0.1–0.4 ms |
+    | `tx_info`'s certificates, a page of Activity | 15 ms | 0.3–0.6 ms |
+    | `tx_info`'s votes, a page of Activity | 1.7 ms | 0.03 ms |
 - **IDs are made in Rust:** CIP-129 DRep, committee and governance action IDs (`src/ids.rs`).
 
 **db-sync's statistics are far off, so the hot queries don't lean on them.**
@@ -230,10 +236,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 **`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
 
 **Known slow cases:**
-- **Until home has the three new indexes** in `deploy/home/db-sync-indexes.sql`:
-  - `account_info` reads `delegation_vote` whole, 16 of its 16.3 ms;
-  - `tx_info`'s certificates read it whole, 15 ms a page, and its votes read `voting_procedure` whole, 1.7 ms;
-  - `drep_info` reads `delegation_vote` whole too, for a DRep's delegators: 250–400 ms for the DReps with the most, then kept.
+- `drep_info` reads `delegation_vote` whole, for every account's latest vote delegation: 260 ms for the DRep with the most delegators, then kept.
 - **A pool's first look holds up whoever asks,** for up to the 3 s above. On a cold disk, a pool of 2,000 delegators took 1.6 s and the largest (35,000) took 7 s. Most of that is each delegator's reward history: 6.2 s cold and 1.1 s warm for the largest. The wallet asks for its own pool's details as Home first loads, for a ticker.
 - **A credential at very many addresses costs one lookup per address:** 160 ms for one at 95,000.
 - **A shared answer shows it was asked for.** A kept `drep_info` comes back in under a millisecond instead of 200–400 ms, so a prober could tell someone asked about that DRep in the last 10 minutes. Sharing answers is what keeps home's load flat, so this stands, as it does for every kept answer.

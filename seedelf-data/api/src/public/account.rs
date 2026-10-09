@@ -128,8 +128,9 @@ struct InfoRow {
 ///   since or the DRep retired since.
 /// - **the amounts:** rewards and `reward_rest` spendable by the current epoch, less every withdrawal.
 ///
-/// `delegation_vote` has no index on `addr_id` at home (Koios adds one), so its
-/// lookup scans the table: 19 of the query's 20 ms.
+/// The account's DRep is found through `delegation_vote_addr_id_idx`, one of
+/// Koios's indexes added at home (`deploy/home/db-sync-indexes.sql`). Without
+/// it, the table was read whole: 16 of the query's 16.3 ms, against 0.1–0.4 ms.
 const INFO: &str = "with sa as materialized (select id, view from stake_address where hash_raw = any($1::bytea[])), \
      cur as materialized (select max(epoch_no) as no from epoch_param) \
      select sa.view::text as stake_address, \

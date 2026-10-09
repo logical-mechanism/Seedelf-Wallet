@@ -73,18 +73,21 @@ create index concurrently if not exists idx_withdrawal_addr_id_incl_amount
   on withdrawal (addr_id) include (amount);
 
 
--- Added for a wallet's first load (2026-10-09). Koios has all three, by
--- these names. Each table is small (under 30 MB), so each takes seconds.
+-- Added for a wallet's first load, and built on the server on 2026-10-09.
+-- Koios has all three, by these names. Each table is small, so each takes seconds.
 
--- account_info read the whole table for an account's DRep: 16 of its 16.3 ms.
--- drep_info reads its delegators the same way.
+-- 14 MB. account_info read the whole table for an account's DRep: 16 of its
+-- 16.3 ms, then 0.1-0.4 ms.
+-- drep_info still reads every row, for every account's latest DRep: 260 ms.
 create index concurrently if not exists delegation_vote_addr_id_idx
   on delegation_vote (addr_id, tx_id);
 
--- tx_info's certificates read the whole table: 15 ms for a page of Activity.
+-- 10 MB. tx_info's certificates read the whole table: 15 ms for a page of
+-- Activity, then 0.3-0.6 ms.
 create index concurrently if not exists idx_delegation_vote_tx_id
   on delegation_vote (tx_id);
 
--- tx_info's votes read the whole table: 1.7 ms for a page of Activity.
+-- 720 kB. tx_info's votes read the whole table: 1.7 ms for a page of
+-- Activity, then 0.03 ms.
 create index concurrently if not exists idx_voting_procedure_tx_id
   on voting_procedure (tx_id desc);

@@ -121,9 +121,10 @@ fn selected(row: &Value, columns: &str) -> Value {
 /// - **active:** its last registration, update or vote is within the
 ///   `drep_activity` epochs, or the ledger's `active_until` is later;
 /// - **its delegators:** accounts whose latest vote delegation is to it, made
-///   since its last registration, not deregistered since. `delegation_vote`
-///   isn't indexed by account or DRep at home, so this reads it whole: 250 ms
-///   for the DRep with the most, kept 10 minutes.
+///   since its last registration, not deregistered since. That's every
+///   account's latest vote delegation, so this reads `delegation_vote` whole
+///   (`delegation_vote_addr_id_idx` only orders it): 260 ms for the DRep with
+///   the most, kept 10 minutes.
 const DREP_STATE: &str = "with cur as materialized ( \
        select ep.epoch_no::bigint as no, ep.drep_activity::bigint as activity \
        from epoch_param ep order by ep.epoch_no desc limit 1), \
