@@ -13,6 +13,9 @@ pub const DEFAULT_LISTEN: &str = "127.0.0.1:8099";
 pub struct Config {
     pub database_url: String,
     pub listen: SocketAddr,
+    /// cardano-submit-api and Ogmios: the submit part answers 503 without them.
+    pub submit_api_url: Option<String>,
+    pub ogmios_url: Option<String>,
 }
 
 impl Config {
@@ -23,9 +26,12 @@ impl Config {
             .unwrap_or_else(|_| DEFAULT_LISTEN.to_string())
             .parse()
             .context("DATA_LISTEN isn't an address and port")?;
+        let optional = |name: &str| std::env::var(name).ok().filter(|url| !url.is_empty());
         Ok(Config {
             database_url,
             listen,
+            submit_api_url: optional("MAINNET_SUBMIT_API_URL"),
+            ogmios_url: optional("MAINNET_OGMIOS_URL"),
         })
     }
 }

@@ -1,7 +1,7 @@
 //! Seedelf Wallet's data layer (web wallet chunk 26): the API in front of the
-//! home db-sync. This first part is the private index of the Seedelf contract
-//! and Lovejoin's mix box; the Koios-equivalent public routes and the submit
-//! part come next. See `seedelf-data/README.md`.
+//! home db-sync and node: the private index of the Seedelf contract and
+//! Lovejoin's mix box, and the submit part. The Koios-equivalent public
+//! routes come next. See `seedelf-data/README.md`.
 
 pub mod chain;
 pub mod config;
@@ -10,6 +10,7 @@ pub mod cursor;
 pub mod private;
 pub mod row;
 pub mod state;
+pub mod submit;
 
 use std::sync::Arc;
 
@@ -21,14 +22,16 @@ use axum::routing::get;
 use tower_http::compression::CompressionLayer;
 
 use crate::state::{AppState, MAX_AGE_SECS, age};
+use crate::submit::Submit;
 
 /// Every route, compressed. Nothing here logs a request: no address, path or body.
-pub fn app(state: Arc<AppState>) -> Router {
+pub fn app(state: Arc<AppState>, submit: Arc<Submit>) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(private::routes())
-        .layer(CompressionLayer::new())
         .with_state(state)
+        .merge(submit::routes().with_state(submit))
+        .layer(CompressionLayer::new())
 }
 
 /// db-sync's tip and how old it is: 200 while the private index can answer, 503 when not.

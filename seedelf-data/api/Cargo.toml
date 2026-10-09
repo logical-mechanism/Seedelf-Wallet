@@ -13,6 +13,8 @@ anyhow = "1.0.98"
 axum = "0.8"
 deadpool-postgres = "0.14"
 dotenvy = "0.15"
+# Plain HTTP to the home submit-api and Ogmios (LAN now, WireGuard later): no TLS.
+reqwest = { version = "0.12.9", default-features = false }
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
@@ -21,3 +23,6 @@ tokio-postgres = "0.7"
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

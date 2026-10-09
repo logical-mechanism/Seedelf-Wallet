@@ -2,7 +2,9 @@
 
 Branch `web-wallet/data-layer`, from `main`.
 
-**Status: planned (2026-10-08), no code yet.**
+**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index and the submit part are built and checked (2026-10-09). The public routes are next.
+
+**For the API as built, [seedelf-data/README.md](../../../../seedelf-data/README.md) is the reference.** This plan says why; that README says what the routes return.
 
 **1.4.0's focus** (the owner, 2026-10-08):
 
@@ -147,6 +149,15 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 **Size:** a row is about 400 bytes of JSON, against about 1 KB for a trimmed Koios row today. It compresses only to about 60%, because a register's points are random.
 
 **Routes**, under `/seedelf/v1/{network}/`. All are shared and all are cacheable.
+
+**As built (2026-10-09)**, three things differ from the table below. The [seedelf-data README](../../../../seedelf-data/README.md) has the details.
+
+- **Cursors:** every cursor sits at least 10 blocks below the tip, at a multiple of 10, with no separate day-long grid for old ones.
+  - The wallet treats everything above its cursor as provisional and recomputes it from each answer, so a fork above a cursor never needs undoing.
+  - A `created` row carries its own `spent`.
+  - `reset` comes only when the cursor's own block was rolled back.
+- **Shards and buckets are left for later:** v1 serves `contract/snapshot` instead of shards, and `names` instead of `names/{bucket}`. No client exists yet, so adding them needs no compatibility work.
+- **Rows carry `created` as `{block, slot, time}`:** db-sync has the height that Kupo lacks.
 
 | Route | Answer | Notes |
 |---|---|---|
@@ -447,8 +458,12 @@ Monthly and rough; check prices when buying.
      Kupo's snapshot, with datums resolved, takes 4 ms over the LAN, and a day's spends take 2 ms.
    - **Deferred, "if we even need it":** freshness. That means the node's tip, Kupo's checkpoint and db-sync's newest block, every 30 s across an epoch boundary. The builder reads db-sync first and switches to Kupo, so this would only tune when it switches.
 3. **`seedelf-data/`, built and run locally:**
-   1. the private index (the builder, `since`, shards, names, Lovejoin), then `submittx` and `ogmios`;
-   2. the public routes by traffic: `credential_utxos`, `account_addresses`, `account_info`, `tip`, `epoch_params`, `tx_status`, `utxo_info`, `tx_info`, `account_txs`, then the rest;
+   1. ✅ the private index, read from db-sync (`snapshot`, `since`, `names`, the Lovejoin pool with `made_by`), and ✅ `submittx` and `ogmios`.
+      - **Checked live:** the view rebuilt from the API equals Kupo's unspent set, and every cursor back to before the contract existed replays to the tip. The submit part passes answers through untouched, and the tests use only sends that can't land.
+      - **The SQL lesson:** every query gathers the credential's own outputs first, in a `MATERIALIZED` CTE. Left alone, the planner took 3.5 s instead of 9.5 ms.
+   2. **next:** the public routes by traffic: `credential_utxos`, `account_addresses`, `account_info`, `tip`, `epoch_params`, `tx_status`, `utxo_info`, `tx_info`, `account_txs`, then the rest.
+      - Start from koios-artifacts' `grest` SQL and Blockfrost's, both in `seedelf-data/_reference/` (git-ignored; the README says how to recreate it).
+      - Optimise each query against a measured plan.
    3. alongside: `deploy/home`, `deploy/edge` and a runbook. Secrets are never committed.
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
