@@ -514,8 +514,8 @@ Monthly and rough; check prices when buying.
       - **Left as it is:** a pool's first look, up to 3 s on Home's path ([The wallet's side](#the-wallets-side)).
 4. ✅ **The wallet's chunk** (built 2026-10-09), against the local API from a dev build only: [chunk 26b](chunk-26b-data-layer-wallet.md). The store build never carries a localhost origin.
    - **Found in the review, and fixed on this branch (2026-10-09), a wallet bug with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passed it through and Voting checked for `"retired"`. So a picked DRep that had retired, or that never registered (`"not_registered"`), wasn't blocked. It got the inactive warning instead, which says delegating to it still lets you withdraw rewards. The wallet now carries Koios's three words throughout, the account's own DRep included (the owner: "follow what koios is doing"). Voting blocks both, each with its own reason; the screens still say "Retired" and "Not registered".
-5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
-6. **The drills**, then 1.4.0.
+5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel. Planned in [chunk 26c](chunk-26c-data-layer-vps.md), on DigitalOcean (the owner, 2026-10-09).
+6. **The drills**, then 1.4.0 ([chunk 26c](chunk-26c-data-layer-vps.md)).
 
 ## Verification
 

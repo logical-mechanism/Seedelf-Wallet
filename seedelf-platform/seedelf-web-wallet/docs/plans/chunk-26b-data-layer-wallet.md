@@ -308,6 +308,8 @@ Three reviewers read the branch by area (the fallback and submits; the private i
 
 ## Left for the VPS chunk
 
+Planned in [chunk 26c](chunk-26c-data-layer-vps.md).
+
 - the droplet, WireGuard, nftables, Caddy, DNS and `/health`, from [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md);
 - **a manual deploy workflow:** build with the pinned toolchain, ship the binary, restart, check `/health`, roll back;
 - **CI for `seedelf-data/`,** which has none today;
