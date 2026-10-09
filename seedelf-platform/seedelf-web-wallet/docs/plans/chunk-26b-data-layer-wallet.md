@@ -2,7 +2,7 @@
 
 Step 4 of [chunk 26](chunk-26-data-layer.md#order-of-work): Seedelf Wallet reads mainnet through `seedelf-data`, falling back to Koios one part at a time. Preprod doesn't change.
 
-**Status: ✅ built (2026-10-09)** on `web-wallet/data-layer-wallet`, from `main` after #289. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The owner's verification ([Verification](#verification)) is next.
+**Status: ✅ built, reviewed and checked (2026-10-09)** on `web-wallet/data-layer-wallet`, from `main` after #289. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
 
 **Read first:**
 - the parent plan's [The wallet's side](chunk-26-data-layer.md#the-wallets-side), the contract this builds to;
@@ -251,6 +251,51 @@ All of it is free. There's no preprod for the data layer, and no real-money test
 - **Scale:** the parent plan's synthetic 1M-row contract in the WebAssembly's test harness, measuring the ownership check per row, a restore's time and peak memory, and `since`'s size after a day and a month.
 - **Spends:** in the owner's ordinary use, after merge. The e2e fakes can't complete private spends (giveme.my's signature).
 
+### What was checked (2026-10-09)
+
+A dev build against the local API, on home's mainnet db-sync and Kupo. A Playwright script drove a fresh mainnet wallet through the worker's UI port and logged every request the extension made.
+
+| Check | What the extension did |
+|---|---|
+| A restore | `contract/snapshot`, one `contract/since`, `names`; the account on `/api/v1/…`; nothing to Koios |
+| A lock, then an unlock | one `contract/since` and `names`: no snapshot, no row checked again |
+| The Koios-only switch on | nothing to the API; the contract from Koios's scan |
+| The API stopped | each part's first request failed, and that part went to Koios; held 5 minutes, then back on the API at the next reading |
+| A wrong `DATA_ORIGINS` | the browser sees a CORS failure, not a 403, and the wallet reads it as no answer: the same as stopped |
+| db-sync unreachable | the private index answered from Kupo; only the public side went to Koios, on its 503s |
+| A 429, the bucket emptied | both parts to Koios, held 5 minutes, longer than the 4 s `Retry-After` |
+| Parity, with no wallet needed | the index's contract at the tip against Koios's `credential_utxos`: the same 33 rows, field by field (decimals and times too), and the same 10 names |
+
+**Scale** (`wasm/scale.mjs`, [its numbers](../../wasm/README.md)):
+- A row is about 473 bytes in a snapshot, and its ownership check about 0.73 ms, almost all `isOwned`.
+- At 1M rows: a 473 MB answer, 1.05 GB of parsed rows, 1.29 GB peak, and 12 minutes of checking.
+- `since` on mainnet, measured against the API: 3.7 KB after a day (6 rows made), 50 KB after a week, 65 KB after a month (99 made, 7 older ones spent). Lovejoin's pool after a month: 397 KB (454 boxes).
+- **The ceiling:** the snapshot is one answer, under the 10 s read timeout. On a 25 Mbit/s line that's about 30 MB, some 60,000 rows; past it, a restore times out and reads Koios's scan instead. With 33 unspent rows today and about 100 made a month, that's years off. What it needs then is in [Left for later](#left-for-later).
+
+**Left for the owner:**
+- private parity on the owner's own wallets: owned set, names and balances, with the switch off and on;
+- spends, in ordinary use after merge.
+
+### The review (2026-10-09)
+
+Three reviewers read the branch by area (the fallback and submits; the private index, its sealed state and Lovejoin; the watches), then one more read the fixes together. Every fix but Home's has a test that fails without it.
+
+| Found | Fixed |
+|---|---|
+| Watches compared a cursor's slot time with the send time less 10 minutes: a send in the first minutes after a reading asked `tx_status`, a clock running fast could pick a cursor from after the landing, and one stale transaction sent its whole group to `tx_status` | dated by when the wallet had each cursor, against a first try stamped before the submit; the sealed cursor read straight from its record; one with none in hand asks alone |
+| A WebAssembly trap in the ownership check read as "not ours", which the sealed record then kept for good | it stops the read and locks the wallet, as everywhere else |
+| A sealed cursor the server refuses left that wallet on Koios's scan for good | a snapshot again; a refused watch cursor forgotten |
+| After a lost connection, Koios being busy or its node down read as "never sent" | maybe sent; "spent" gets the mempool check |
+| The API's plain-text 413 reached the screen as the network's refusal | the data layer's own refusal, by status |
+| The API answered 502 (maybe sent) when home never answered the connection | 503: Koios at once |
+| Home showed a pool's ID until the next reading | the kept reading asked again 3 s later, asking no one |
+| Both feeds' cursor notes could overwrite each other | one at a time |
+
+**Left as they are:**
+- a clock stepped back more than about 200 s between a send and a later reading could still pick a cursor from after the landing;
+- after a lost connection, a Koios gateway's own 4xx page (not the node's words) still reads as a refusal;
+- the smaller items in [Left for later](#left-for-later).
+
 ## What a wallet asks, before and after (mainnet)
 
 | | Today, through Koios | With the data layer |
@@ -267,16 +312,31 @@ All of it is free. There's no preprod for the data layer, and no real-money test
 - **a manual deploy workflow:** build with the pinned toolchain, ship the binary, restart, check `/health`, roll back;
 - **CI for `seedelf-data/`,** which has none today;
 - the store build's origin and the user-facing docs above;
-- home's egress through the tunnel, then the drills.
+- home's egress through the tunnel, then the drills;
+- **Caddy's own errors carry no CORS headers** (its 502 while the API is down, its 413): the wallet sees them as a lost connection. That's safe: a read goes to Koios, and a submit Koios then calls spent, or doesn't answer, is maybe sent.
+
+## Left for later
+
+Found while checking; none blocks the merge.
+
+- **A restore past about 60,000 rows** (see the ceiling above): a paged snapshot, checked as it streams in, with its own timeout and a progress bar.
+- **Every POST to the API costs a CORS preflight.** Chrome skips its preflight cache for a `cache: "no-store"` request, which every service request is (`SERVICE_FETCH`, chunk 25), and only `cache: "default"` reuses one (measured). That's one more round trip per public read, not a cost at the edge: the API answers preflights before its limiter. Fixing it means the API sending `Cache-Control: no-store` itself and the data layer's client asking with `default`; the privacy policy says how the wallet uses the cache, so that's its own decision.
+- **A sealed cursor whose `since` keeps failing** (a 503 every time, not a 400): the wallet reads Koios each time and keeps the cursor. A 400 already starts again from a snapshot.
+- **`names` and `since` can come from different blocks** for one reading. A Seedelf of this wallet's that moved in between shows as another's for that reading, and Remove can't build until the next one.
+- **Activity's "more" page** can come from the other server when a part flips between pages, and skip a transaction near the edge of a page. Koios's own backends, at different lags, can already do this.
 
 ## What changed from the plan
 
 Built 2026-10-09. Where the build departs from the steps above, and why:
 
 - **Lovejoin's pool is read at the tip** (Step 5): `lovejoin/pool`, then `lovejoin/since` its cursor, both shared answers. The snapshot alone is at the stable cursor, ten blocks back, and a chain drawing from it would take boxes spent since.
-- **A feed watch needs a cursor from before its transaction went out** (Step 6), and a cursor is only ever one the server handed out. So `feed.ts` keeps them in session storage, one every 5 minutes for 6 hours, the sealed one from before a lock included. A watch with none old enough asks `tx_status`, as one whose part is down does: a Lovejoin chain that started before a lock, say.
+- **A feed watch needs a cursor from before its transaction went out** (Step 6), and a cursor is only ever one the server handed out. So `feed.ts` keeps them in session storage, one every 5 minutes for 6 hours, each with when the wallet had it by the device's clock, and reads the sealed record's from before a lock.
+  - **A watch reads from the newest cursor the wallet had before it first tried to send.** A cursor is a stable point, at least 200 slots behind the tip it came with, so one in hand before the first try is before anything the send put on chain, and both times are the same clock's. The first build compared the cursor's slot time with the send time less 10 minutes: across clocks, and so strict that a send in the first few minutes after a reading, which is most of them, never qualified ([the review](#the-review-2026-10-09)).
+  - **So each watch keeps when it was first tried, stamped before its submit and never moved:** pending's `triedAt`, a chain's `firstTried` by transaction, a stopped public mix's `from`. The stamps they had are taken after a submit's retries, or again at each resend, which is what their own timing needs.
+  - **One with none in hand from before it** asks `tx_status` alone, as one whose part is down does, and holds up nothing else on its feed: a Lovejoin chain that started before a lock, say.
 - **Each private watch names the one feed it shows in:** the contract's for a Seedelf spend, a move-in, an account-paid mint or send to a Seedelf (read from what the transaction pays), and a session's way out and back; the pool's for Lovejoin's chains, withdraws and a session's return through it. A taken Seedelf spend's watch now keeps `contract: true` so it stays on the feed.
-- **Submits** (Step 2): a 413 and a 415 go straight to Koios too: the node never saw them. After a lost connection, which is taken as never sent, Koios calling an input spent is read as maybe sent: it may be this very transaction.
+- **Submits** (Step 2): a 413 and a 415 go straight to Koios too, by status, as the API's body limit answers in plain text: the node never saw them. After a lost connection, which is taken as never sent, Koios calling an input spent is read as maybe sent (it may be this very transaction), and so is Koios not answering at all (busy, its node down, no grant), which says nothing of the first try. The API answers a connection to home that never opened with a 503, not a 502: nothing reached the node.
+- **A sealed cursor the index refuses** (a 400, after a change on the server, say) starts again from a snapshot, as a rollback does, without marking the part down. A watch's kept cursor refused is forgotten, and that watch asks `tx_status` once.
 - **The switch** sits in Settings' *Network* section (the owner, 2026-10-09), not the Privacy section the plan named, shown only where the build has a data layer.
 - **The UTxOs screen** gets a *Made* line (`utxos.made`) for a private coin with no block height, beside *Block*, rather than changing *Block*'s key.
 - **Still on `tx_status` or `utxo_info`, rare paths, for a follow-up:**
