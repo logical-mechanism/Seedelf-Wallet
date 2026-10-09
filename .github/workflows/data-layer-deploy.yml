@@ -1,0 +1,105 @@
+name: Data layer deploy
+
+# Ships seedelf-data-api to the VPS (chunk 26c), by hand only: Actions → Data
+# layer deploy → Run workflow. Every run waits for the owner's approval in the
+# data-layer environment, which holds the deploy key and takes main alone.
+# On the VPS the key runs one script and nothing else:
+# seedelf-data/deploy/edge/seedelf-data-deploy, and the runbook's "Deploys".
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "deploy builds main and installs it; rollback puts the previous binary back; status says what's running"
+        type: choice
+        options: [deploy, rollback, status]
+        default: deploy
+
+# One change to the VPS at a time: a second run waits, never cancels the first.
+concurrency:
+  group: data-layer-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: inputs.action == 'deploy'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: seedelf-data
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain seedelf-data/rust-toolchain.toml pins: keep the two in
+      # step. ubuntu-24.04's glibc (2.39) is older than the droplet's, the
+      # safe direction. No cache: every deploy builds from scratch.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      # cargo build alone: cargo test relinks this path with the test
+      # dependencies' features mixed in, a different binary.
+      - name: Build
+        run: cargo build --release --locked -p seedelf-data-api
+
+      - name: Checksum
+        working-directory: seedelf-data/target/release
+        run: sha256sum seedelf-data-api | tee seedelf-data-api.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seedelf-data-api
+          path: |
+            seedelf-data/target/release/seedelf-data-api
+            seedelf-data/target/release/seedelf-data-api.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  vps:
+    needs: build
+    # build is skipped for rollback and status; never run after a failed one.
+    if: >-
+      !cancelled() && (needs.build.result == 'success' ||
+      (inputs.action != 'deploy' && needs.build.result == 'skipped'))
+    runs-on: ubuntu-24.04
+    environment:
+      name: data-layer
+      url: https://mainnet.seedelf.logicalmechanism.io/health
+    steps:
+      - uses: actions/download-artifact@v4
+        if: inputs.action == 'deploy'
+        with:
+          name: seedelf-data-api
+
+      - name: The deploy key, and the VPS's host key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 0600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The script installs, restarts and checks, and puts the old binary
+      # back by itself if the new one fails: its output is the record.
+      - name: ${{ inputs.action }}
+        env:
+          ACTION: ${{ inputs.action }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          vps() {
+            ssh -i ~/.ssh/deploy -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes "deploy@$HOST" "$@"
+          }
+          if [ "$ACTION" = deploy ]; then
+            vps "deploy $(cut -d' ' -f1 seedelf-data-api.sha256)" < seedelf-data-api
+          else
+            vps "$ACTION" < /dev/null
+          fi
+
+      - name: Forget the key
+        if: always()
+        run: rm -f ~/.ssh/deploy

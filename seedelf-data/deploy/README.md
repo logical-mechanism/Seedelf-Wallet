@@ -73,6 +73,15 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
    - fill in `edge/seedelf-data.env` as `/etc/seedelf-data/env`, mode `0600`;
    - install `edge/seedelf-data-api.service`, then `systemctl enable --now seedelf-data-api`;
    - `curl 127.0.0.1:8099/health` answers 200 with `"source":"db-sync"`.
+6. **The deploy user,** for `.github/workflows/data-layer-deploy.yml`:
+   - `useradd --system --create-home --home-dir /home/deploy --shell /bin/sh deploy`, with `/home/deploy/.ssh` its own, mode `0700`;
+   - `edge/seedelf-data-deploy` as `/usr/local/sbin/seedelf-data-deploy`, root's, mode `0755`;
+   - `edge/sudoers-seedelf-deploy` as `/etc/sudoers.d/seedelf-deploy`, mode `0440`, after `visudo -cf` passes it;
+   - a key made on your own machine (`ssh-keygen -t ed25519`):
+     - its public half after `edge/deploy-authorized_keys`'s prefix, as `/home/deploy/.ssh/authorized_keys` (deploy's, `0600`);
+     - its private half as the `DEPLOY_SSH_KEY` secret of the repository's `data-layer` environment, then deleted;
+   - the environment (Settings → Environments): the owner as required reviewer, `main` alone, and two variables. `DEPLOY_HOST` is the API's name. `DEPLOY_KNOWN_HOSTS` is `ssh-keyscan -t ed25519 <the name>`, checked against `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the VPS;
+   - check it: `ssh -n -i <the key> deploy@<the name> status` answers, and any other command gets the script's usage.
 
 **Nothing is public yet:** no DNS name leads here until step 4.
 
@@ -124,7 +133,10 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
 
 ## Routine
 
-- **A new API build:** copy the binary, then `systemctl restart seedelf-data-api`. Every cache refills within a block, and the month's traffic is kept.
+- **A new API build:** GitHub's Actions → *Data layer deploy* → *Run workflow*, on `main`, and approve the run when GitHub asks.
+  - `deploy` builds `main` and installs it, keeping the running binary as `.prev`. It checks `/health`, which must answer as well as before, and the store's CORS line, and puts the old binary back by itself if the new one fails.
+  - `rollback` swaps the two, and a second one undoes it. `status` says what's running.
+  - Every cache refills within a block, and the month's traffic is kept.
 - **Caddy:** apt doesn't update it (§2, step 1). Watch its releases, and install a new one's `.deb` the same way, checked.
 - **Before a node upgrade,** check Kupo's and Ogmios's compatibility with the new version: there's no preprod to try it on first.
 - **After a db-sync upgrade,** compare its insert options with `home/db-sync-insert-options.json`.

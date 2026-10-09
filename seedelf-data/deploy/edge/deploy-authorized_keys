@@ -1,0 +1,7 @@
+# /home/deploy/.ssh/authorized_keys on the VPS: the workflow's key, held to
+# the deploy script. `restrict` takes away a terminal and every forwarding;
+# the command is all the key can run, whatever the client asks. What it asks
+# ("deploy <sha256>", "rollback" or "status") becomes the script's
+# arguments, split on spaces with globbing off; the script refuses anything
+# else.
+restrict,command="set -f; exec sudo -n /usr/local/sbin/seedelf-data-deploy $SSH_ORIGINAL_COMMAND" ssh-ed25519 <the deploy key's public half> seedelf-data-deploy

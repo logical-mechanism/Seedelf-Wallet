@@ -1,0 +1,4 @@
+# /etc/sudoers.d/seedelf-deploy on the VPS: root's, mode 0440. The deploy
+# user may run the deploy script as root, and nothing else. The script checks
+# its own arguments.
+deploy ALL=(root) NOPASSWD: /usr/local/sbin/seedelf-data-deploy
