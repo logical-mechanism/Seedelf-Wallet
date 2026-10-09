@@ -223,7 +223,7 @@ Treat that as a correctness-of-privacy item, not a nicety: without it, several a
 - **The API runs on a cheap VPS**, which reaches home over a WireGuard tunnel that home dials out. The home IP stays hidden, and the VPS takes the DoS.
 - **Koios is the fallback** for when the house loses power or internet.
 - **All 22 Koios endpoints the wallet uses move**, in three parts, each with its own health and its own fallback:
-  - **a private index** of Seedelf and Lovejoin, purpose-built, with shared snapshots and deltas fed by Kupo;
+  - **a private index** of Seedelf and Lovejoin, purpose-built, with shared snapshots and deltas read from db-sync, and Kupo as the second source;
   - **a public side** of Koios-equivalent endpoints;
   - **submits** through cardano-submit-api.
 - **A Koios-only switch** in Settings.

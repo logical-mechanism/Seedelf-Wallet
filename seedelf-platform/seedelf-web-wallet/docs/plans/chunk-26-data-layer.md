@@ -52,15 +52,11 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 
 ## Choices made here (the owner can overturn any)
 
-1. **Kupo feeds the private index.** It isn't strictly required: db-sync holds every contract row. It earns its place three ways.
-   - **It makes the private side independent of db-sync.** db-sync does its heaviest work at epoch boundaries, and an upgrade sometimes means a resync of several days. Kupo needs only the node.
-   - **It's built for exactly this:**
-     - narrow patterns;
-     - rollbacks handled for us;
-     - `created_after` and `spent_after` filters;
-     - the spending transaction's ID on every spent output;
-     - inline datums resolved (`?resolve_hashes`).
-   - **It's tiny.** For two script hashes its database is MBs and it uses 256 MB–2 GB of RAM. It resyncs from the contracts' deployment in hours, not days.
+1. **The private index reads db-sync first** (the owner, 2026-10-08): "the db sync queries will be more than enough for now". Its contract queries take 1–13 ms ([Order of work](#order-of-work)).
+   - **Kupo is the second source.** It's synced, and it was checked equal to db-sync on every output of both contracts. The builder switches to it when db-sync is down or behind.
+     - db-sync does its heaviest work at epoch boundaries, and an upgrade sometimes means a resync of several days. Kupo needs only the node.
+     - It's tiny: for two script hashes its database is MBs.
+   - **The freshness log waits** until it's needed. It would sample the node's tip, Kupo's checkpoint and db-sync's newest block across an epoch boundary.
 2. **The public side copies Koios's paths and JSON.** Falling back is then a change of base URL, and the WebAssembly's `UtxoResponse` parser and the e2e fixtures stay valid.
    - Underneath sit Koios's own `grest` SQL functions ([koios-artifacts](https://github.com/cardano-community/koios-artifacts), CC-BY-4.0, credited), on a db-sync set up with Koios's own insert options.
    - "Optimised for us" means:
@@ -117,14 +113,16 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 
 **The builder** lives in `seedelf-data-api`, in memory.
 
-- **Every 2 s** it reads Kupo's `/health` checkpoint.
-  - On a new block it pulls `created_after=S&resolve_hashes` and `spent_after=S` for each pattern.
+- **Every 2 s** it reads its source's newest block.
+  - On a new block it pulls what was created and what was spent since the last point it applied.
+  - **From db-sync**, that's three queries: the snapshot, created since N, and spent since N with the spending transaction.
+  - **From Kupo**, it's `created_after=S&resolve_hashes` and `spent_after=S` for each pattern.
 - **What it keeps:**
   - rows, by outref;
   - a change log;
   - Seedelf names, each pointing at its outref.
-- **A rollback:** Kupo's `/checkpoints/{slot}` no longer holds the last header hash applied.
-  - The builder rebuilds from `?unspent` and records the rollback point.
+- **A rollback:** the last block applied is gone. db-sync deletes rolled-back blocks, and Kupo's `/checkpoints/{slot}` no longer holds the header hash.
+  - The builder rebuilds from the snapshot and records the rollback point.
 - **A restart** rebuilds the same way: one call per pattern.
 
 **The compact row** carries what the wallet uses, and nothing else:
@@ -155,7 +153,7 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 | `contract/since/{cursor}` | `{cursor, created: [rows], spent: [{ref, by}], reset?}` | The workhorse: every unlock and refresh. **Cursors are quantised**: to 10 blocks within the last day, to a day before that. Answers are shared per window, and a request shows the last unlock only roughly. `reset` comes with a rollback point if the cursor's block was rolled back. |
 | `contract/shards`, then `contract/shard/{id}` | the manifest `{point, shards: [{id, rows, version}]}`, then each shard's rows at its own point | **A restore only.** The set is sharded by the outref's transaction-hash prefix, and a shard is re-cached only when one of its rows changes. **v1 serves one shard** (mainnet's contract is 27 UTxOs, preprod's about 1,000), but the format allows 16 or 256 from the start, so growth needs no wallet change. Afterwards the wallet calls `since(oldest point)` to catch up; duplicates are harmless. |
 | `names/{bucket}` | the rows of the Seedelfs whose name hash starts with `bucket` | **Paying a Seedelf**, by its exact full name only (`5eed0e1f` and 56 hex characters), never a prefix search: tags aren't unique. Today a name resolves from the kept view with no request at all. Without a full set kept, a bucket keeps that close: the service learns a bucket, never the payee. v1 has one bucket, the whole list, which is tiny today. |
-| `lovejoin/pool` and `lovejoin/since/{cursor}` | the same row and delta shapes, and per box its creating transaction's **provenance**: `mixed`, and `inputs: [[payment_cred, stake_cred]]` | The pool is small, so one snapshot is enough. It replaces the full mixBox `credential_utxos` listing on every look. `mixed` comes from Kupo (the transaction spent a mixBox output). `inputs` come from db-sync, and are `null` while db-sync is down. A box's created point gives the time that `waitedAt`, `backOrder` and `ripeAt` use. |
+| `lovejoin/pool` and `lovejoin/since/{cursor}` | the same row and delta shapes, and per box its creating transaction's **provenance**: `mixed`, and `inputs: [[payment_cred, stake_cred]]` | The pool is small, so one snapshot is enough. It replaces the full mixBox `credential_utxos` listing on every look. Both come from db-sync. While it's down, `mixed` comes from Kupo (the transaction spent a mixBox output) and `inputs` are `null`. A box's created point gives the time that `waitedAt`, `backOrder` and `ripeAt` use. |
 
 **Provenance replaces `madeBy`'s `tx_info`** ([lovejoin.ts](../../extension/src/background/lovejoin.ts)). That `tx_info` is the one request that today tells the service which pool boxes are yours. The wallet now matches input credentials against its own account keys locally.
 
@@ -231,6 +229,11 @@ Home shows the private balance at once, marked stale until the delta lands. That
 
 - **It's reached only as the VPS route `POST /api/v1/submittx`:** Koios's path, `Content-Type: application/cbor`, and a 16 KiB body cap (the ledger's `max_tx_size`).
 - **Koios fronts the same service,** so the transaction ID and the error strings the wallet classifies match: `BadInputsUTxO`, `OutsideValidityIntervalUTxO`, `FeeTooSmallUTxO` and the rest.
+  - **Checked 2026-10-08, for free.** Two tests got byte-identical HTTP 400 answers from ours and from Koios:
+    - 3 bytes that aren't a transaction;
+    - the contract's first transaction, resubmitted. It came back as `"All inputs are spent. Transaction has probably already been included"`, a string the wallet already classifies.
+- **Its config needs the new tracing format** (`TraceOptions`, as in upstream's `cardano-submit-api/config/tx-submit-mainnet-config.yaml`). The old logging format makes it crash-loop with `key "Options" not found`, and on the server it had been doing that for about three weeks.
+  - Its severity is `Notice`. `Info` logs every submitted transaction.
 - **Limits:**
   - never cached, and never logged, not even the transaction ID;
   - a bucket per IP;
@@ -337,7 +340,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 | Part | Healthy when |
 |---|---|
-| private | Kupo's checkpoint is within 3 blocks of the node's tip, and that tip is under 2 min old |
+| private | the source in use (db-sync, or Kupo when db-sync is down) is within 3 blocks of the node's tip, and that tip is under 2 min old |
 | public | db-sync's newest block is under 3 min old |
 | submit | the node's tip is under 2 min old |
 
@@ -419,9 +422,9 @@ Monthly and rough; check prices when buying.
 1. **Make it reachable and safe from this machine:**
    - ✅ **a read-only Postgres role,** `seedelf_reader`, in place of `cexplorer`, db-sync's own writer. It has SELECT only, `default_transaction_read_only`, a 60 s timeout and 10 connections. `pg_hba` admits it from the dev machine only.
      - Still open: the `pg_hba` lines that let `cexplorer` in from the whole LAN. Narrow them once nothing else on the network needs them.
-   - ✅ **the Seedelf Kupo** on 1443, catching up from its start point;
+   - ✅ **the Seedelf Kupo** on 1443, synced to the tip;
    - ✅ **Ogmios** is already there: v6.14.0 on 1337, synced. That release is tested with node 10.5.1, so the node is likely 10.5.x.
-   - add submit-api;
+   - ✅ **submit-api** on 8090, once its config was in the new format ([Submits](#submits));
    - install `grest` and its cache jobs;
    - ✅ find both contracts' first-output points.
 2. **Measure.**
@@ -434,11 +437,15 @@ Monthly and rough; check prices when buying.
      | spent in the last ~day, with the spending tx | **8 ms** |
 
      The indexes it needs are already in place: `idx_address_payment_cred`, `idx_tx_out_address_id_unspent` and `idx_tx_out_consumed_by_tx_id`. **Speed is no reason to keep Kupo:** the builder reads once a block and answers from memory.
-   - Still to measure:
-     - Kupo's answer against db-sync's, once synced: the same 32 unspent, 117 ever, the same spends;
-     - **freshness**: the node's tip (Ogmios), Kupo's checkpoint and db-sync's newest block, sampled every 30 s for a day that includes an epoch boundary.
+   - ✅ **Kupo equals db-sync** (2026-10-08), once synced:
 
-     These settle whether Kupo stays. **Either way the builder can take both sources**, Kupo first and db-sync when it's down, since the three queries above are most of a db-sync version.
+     | | Ever | Unspent now | Same spending tx |
+     |---|---|---|---|
+     | contract | 117 | 32, the same set | 117 of 117 |
+     | mixBox | 454 | 41, the same set | 454 of 454 |
+
+     Kupo's snapshot, with datums resolved, takes 4 ms over the LAN, and a day's spends take 2 ms.
+   - **Deferred, "if we even need it":** freshness. That means the node's tip, Kupo's checkpoint and db-sync's newest block, every 30 s across an epoch boundary. The builder reads db-sync first and switches to Kupo, so this would only tune when it switches.
 3. **`seedelf-data/`, built and run locally:**
    1. the private index (the builder, `since`, shards, names, Lovejoin), then `submittx` and `ogmios`;
    2. the public routes by traffic: `credential_utxos`, `account_addresses`, `account_info`, `tip`, `epoch_params`, `tx_status`, `utxo_info`, `tx_info`, `account_txs`, then the rest;
@@ -470,10 +477,10 @@ The private index is read-only: a bug shows a wrong balance or gets a transactio
 - **Grammar.** Every off-grammar request is refused with a 400.
 - **Load,** from a third machine:
   - 429s per IP, 503s past the global caps;
-  - the private index served without touching home: Kupo's request count stays flat.
+  - the private index served without touching home: the builder's reads stay at one per block.
 - **Drills.** Each part falls back on its own:
-  - stop Kupo: private only;
-  - stop db-sync: public only, and submits still work;
+  - stop Kupo: nothing changes, since it's the spare;
+  - stop db-sync: the private index switches to Kupo, the public side goes to Koios, and submits still work;
   - stop the node: everything;
   - drop the tunnel;
   - cut home power;
