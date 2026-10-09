@@ -94,19 +94,19 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
 ## 5. Checks
 
 - **Health:** `curl https://mainnet.<domain>/health` answers 200, `private`, `public` and `egress` all `ok`.
-- **CORS:** a preflight from the wallet's origin is answered with it, and any other origin gets no CORS headers:
+- **CORS:** a preflight from the wallet's origin is answered with it, and any other origin gets no `Access-Control-Allow-Origin`, so a browser refuses it (the methods and max-age lines still come):
 
   ```bash
   curl -si -X OPTIONS https://mainnet.<domain>/api/v1/tip \
     -H 'Origin: chrome-extension://<ID>' -H 'Access-Control-Request-Method: GET' | grep -i access-control
   ```
 - **Limits,** from a third machine, never the owner's:
-  - about 75 quick `POST /api/v1/account_info` from one address end in a 429 with `Retry-After`;
+  - about 75 `POST /api/v1/account_info` sent at once from one address end in a 429 with `Retry-After`. Send them in parallel (`xargs -P 20`): one at a time, the refill keeps up. From the VPS to its own public name is a third machine;
   - a request with `Sec-Fetch-Mode: no-cors`, or from another `Origin`, gets 403: a web page can't spend the API's traffic.
 - **No address or path in any log:**
   1. stop the API and request something, so Caddy answers 502;
   2. send a request the API refuses;
-  3. `journalctl -u caddy -u seedelf-data-api --since -10min` shows neither the client's address nor the path.
+  3. `journalctl -u caddy -u seedelf-data-api --since -10min` shows neither the client's address nor the path. The only addresses there are Let's Encrypt's validators (`served key authentication`), at issuance and renewal.
 
   On home, Postgres's log holds no statement, and Kupo's no request path.
 - **DNS and certificates:** crt.sh lists `mainnet.<domain>` and nothing that leads home.

@@ -8,9 +8,17 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
 - the decisions below are settled;
 - on the droplet, runbook §2 but for the API's start: packages, Caddy (installed, off until §4), WireGuard, nftables in place of `ufw`, and the API's binary, unit and env. All of it came back by itself after a reboot;
 - home's side (runbook §1): the tunnel, its firewall (`seedelf-nftables` and a `ufw` rule), and Postgres on `10.88.0.2` with the VPS's `pg_hba` line. From the VPS, Postgres, Ogmios, the Seedelf Kupo and submit-api all answer;
-- the API, running on the droplet: `/health` 200, every part `ok`, `"source":"db-sync"`. Its logs carry no colour codes now (`main.rs`). Caddy's config is installed and valid, with Caddy still off.
+- the API, running on the droplet, its logs free of colour codes (`main.rs`);
+- **public since 2026-10-09:** `https://mainnet.seedelf.logicalmechanism.io` (an A record, TTL 300), with Caddy's own certificate (Let's Encrypt);
+- runbook §5's checks, run that day:
+  - `/health` 200 over TLS, every part `ok`, `"source":"db-sync"`;
+  - CORS answers both IDs, and another origin gets no `Access-Control-Allow-Origin`;
+  - another origin's request, and a `no-cors` one, get 403;
+  - from the VPS, 100 `account_info` at once: 81 answered, then 429 with `Retry-After`;
+  - a Caddy 502 (API stopped), a 403 and a 413 left no client address and no path in either journal;
+  - no `Server` header, HSTS on, HTTP/3 offered, HTTP redirected.
 
-Next: the DNS record (`mainnet.seedelf.logicalmechanism.io`, A, to `142.93.120.105`), then Caddy (runbook §4) and the checks (§5).
+Next: crt.sh's listing (not indexed yet that night), home's logs (Postgres's and Kupo's), the drills, then the deploy workflow and CI.
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
