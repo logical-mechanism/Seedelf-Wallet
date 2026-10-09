@@ -1,7 +1,8 @@
 -- The home server has had this role since 2026-10-08; this is how to make it again.
 --
 -- The role seedelf-data-api reads db-sync with: SELECT only, read-only
--- transactions, a 60 s cap on any statement, 10 connections (the API holds 9).
+-- transactions, a 60 s cap on any statement, 10 connections (the API holds 9),
+-- and TCP keepalives so a dead session frees its slot.
 -- Run as a superuser, connected to db-sync's database:
 --   psql -d <db-sync database> -f seedelf_reader.sql
 -- then set its password by prompt, so it never sits in a file or the history:
@@ -10,6 +11,14 @@
 create role seedelf_reader login connection limit 10;
 alter role seedelf_reader set default_transaction_read_only = on;
 alter role seedelf_reader set statement_timeout = '60s';
+-- A session whose client vanished with the tunnel (its close never arrived)
+-- still counts against the limit: without keepalives, for about 2 hours,
+-- while the API is refused new ones (chunk 26c's tunnel drill). These drop
+-- it within 2 minutes idle, or 60 s with an answer unacknowledged.
+alter role seedelf_reader set tcp_keepalives_idle = 60;
+alter role seedelf_reader set tcp_keepalives_interval = 10;
+alter role seedelf_reader set tcp_keepalives_count = 6;
+alter role seedelf_reader set tcp_user_timeout = 60000;
 
 do $$ begin
   execute format('grant connect on database %I to seedelf_reader', current_database());
