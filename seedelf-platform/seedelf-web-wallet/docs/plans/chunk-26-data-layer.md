@@ -2,14 +2,16 @@
 
 Branch `web-wallet/data-layer`, from `main`.
 
-**Status: planned (2026-10-08), no code yet.**
+**Status: 🚧 building** on `web-wallet/data-layer-api`, locally against the home server. The private index, with Kupo as its second source, the submit part, the 20 public routes, the edge and the deploy files are built, checked and reviewed (2026-10-09). Next: the wallet's side.
+
+**For the API as built, [seedelf-data/README.md](../../../../seedelf-data/README.md) is the reference.** This plan says why; that README says what the routes return.
 
 **1.4.0's focus** (the owner, 2026-10-08):
 
 - a data layer built only for Seedelf Wallet;
 - whatever UX and UI fixes users send in, as a track of their own beside it.
 
-This plan is the data layer's side. The wallet's side, the client that uses it, gets its own plan when it starts. Its contract is fixed in [The wallet's side](#the-wallets-side).
+This plan is the data layer's side. The wallet's side, the client that uses it, is [chunk 26b](chunk-26b-data-layer-wallet.md). Its contract is fixed in [The wallet's side](#the-wallets-side).
 
 **Why now.** On mainnet the Koios public tier is slow and its limits bite:
 
@@ -53,7 +55,7 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 ## Choices made here (the owner can overturn any)
 
 1. **The private index reads db-sync first** (the owner, 2026-10-08): "the db sync queries will be more than enough for now". Its contract queries take 1–13 ms ([Order of work](#order-of-work)).
-   - **Kupo is the second source.** It's synced, and it was checked equal to db-sync on every output of both contracts. The builder switches to it when db-sync is down or behind.
+   - **Kupo is the second source** (built 2026-10-09). It's synced, and it was checked equal to db-sync on every output of both contracts. The private index switches to it when db-sync is down or behind.
      - db-sync does its heaviest work at epoch boundaries, and an upgrade sometimes means a resync of several days. Kupo needs only the node.
      - It's tiny: for two script hashes its database is MBs.
    - **The freshness log waits** until it's needed. It would sample the node's tip, Kupo's checkpoint and db-sync's newest block across an epoch boundary.
@@ -111,6 +113,8 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
   - A row's time is exact from its slot (Shelley onwards).
   - The wallet orders private coins by slot; today `coin-control.ts` orders them by `block_height`.
 
+**As built (2026-10-09), there's no builder holding rows in memory.** Each answer is read from its source when first asked for at a tip, then kept until that source's tip moves. The reads take milliseconds, and one set per block serves everyone, so a copy of the rows would only add a second truth to keep right. See [the seedelf-data README](../../../../seedelf-data/README.md#the-private-index).
+
 **The builder** lives in `seedelf-data-api`, in memory.
 
 - **Every 2 s** it reads its source's newest block.
@@ -147,6 +151,17 @@ The shape recorded on 2026-10-02 in [post-release-roadmap.md's *The data layer*]
 **Size:** a row is about 400 bytes of JSON, against about 1 KB for a trimmed Koios row today. It compresses only to about 60%, because a register's points are random.
 
 **Routes**, under `/seedelf/v1/{network}/`. All are shared and all are cacheable.
+
+**As built (2026-10-09)**, three things differ from the table below. The [seedelf-data README](../../../../seedelf-data/README.md) has the details.
+
+- **Cursors are points:** `<slot>.<hash>`, a slot that's a multiple of 200, at least 200 slots (about 10 blocks) below the tip, with the hash of the newest block at or before it. There's no separate day-long grid for old ones.
+  - db-sync and Kupo both know every block by slot and hash, so either answers the other's cursor, and a switch between them needs no `reset`.
+  - The wallet treats everything above its cursor as provisional and recomputes it from each answer, so a fork above a cursor never needs undoing.
+  - A `created` row carries its own `spent`.
+  - `reset` comes only when the cursor's own block was rolled back.
+- **Shards and buckets are left for later:** v1 serves `contract/snapshot` instead of shards, and `names` instead of `names/{bucket}`. No client exists yet, so adding them needs no compatibility work.
+- **Rows carry `created` as `{slot, time}`, with no height:** Kupo has none, and both sources give the same row. A slot's time is exact from Shelley on.
+- **Kupo answers in place of db-sync** while db-sync's tip can't be read, is over 3 minutes old or is more than 60 slots behind Kupo's, and whenever a db-sync read fails. Its rows equal db-sync's field for field, but a box's `made_by.inputs` is `null`.
 
 | Route | Answer | Notes |
 |---|---|---|
@@ -245,6 +260,24 @@ Home shows the private balance at once, marked stale until the delta lands. That
 
 ## The public side: Koios-equivalent, optimised for us
 
+**As built (2026-10-09)**, it differs from what follows in these ways. The [seedelf-data README](../../../../seedelf-data/README.md#the-public-routes) has the details.
+
+- **No `grest` at home.** The API carries its own SQL, written after Koios's functions rule for rule and read with the read-only role, so nothing at home is installed or changed. Koios's caches are replaced:
+  - token decimals come from a file made from the token registry;
+  - a pool's state is worked out per request;
+  - a pool's live stake is summed per pool, with accounts' reward sums kept for the epoch;
+  - a token's supply and latest mint are read from `ma_tx_mint`.
+- **Where Koios relies on an index it adds, the query goes another way.** A stake key's addresses come from `address.stake_address_id`: 2 ms, against 6.7 s through `tx_out`.
+  - The exceptions are three of Koios's, on tables under 30 MB, for a wallet's first load. [deploy/home/db-sync-indexes.sql](../../../../seedelf-data/deploy/home/db-sync-indexes.sql) records them, with the 13 indexes beyond db-sync's own already on the server, so a resync gets them all back.
+- **Caching:**
+  - `epoch_params` and `totals` are kept for a block, not an epoch: a millisecond each, and never last epoch's fees at a boundary;
+  - `drep_metadata` is kept 10 minutes, like `drep_info`;
+  - `pool_info` waits at most 3 s for live figures, then answers with the epoch's snapshot while they're finished and kept. A large pool's first look from a cold disk took 12 s.
+- **Caps** are the wallet's own sizes: 20 addresses for `address_utxos`, 10 stake keys for `account_info`, 5 pools or DReps, one token, a page of 20 or up to 1,000 for `account_txs`.
+- **Connections:** 6 for the public routes and 3 for the private index, inside the role's 10. A public query waits at most 2 s for a connection and runs at most 10 s, then answers 503.
+- **What the wallet never reads is left out:** a datum's or script's JSON, and `tx_info`'s collateral, scripts, mints and proposals.
+- **Every connection runs with `jit = off`:** JIT took 76 of a UTxO query's 80 ms.
+
 **The 22 routes, under `/api/v1/`.**
 
 - Each accepts exactly the parameter shapes [koios.ts](../../extension/src/background/koios.ts) sends. Anything else is a 400, so no caller can compose an expensive query.
@@ -271,7 +304,7 @@ Home shows the private balance at once, marked stale until the delta lands. That
 
 - `tx_out: {value: "consumed", use_address_table: true}`, and `ledger: "enable"`;
 - shelley, multi_asset, metadata and plutus on;
-- governance, both off-chain fetchers and `pool_stat` set to `"enable"`;
+- governance, both off-chain fetchers (`offchain_pool_data` and `offchain_vote_data`, each its own option since 13.7.0.1) and `pool_stat` set to `"enable"`;
 - `json_type: "text"`;
 - `tx_cbor: "disable"`.
 
@@ -293,12 +326,14 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 ## Home
 
-- **What's there already (checked 2026-10-08).** The mainnet server runs db-sync 13.7.0.1 (schema 15.50.6), 5 s behind the chain, with **exactly Koios's options**:
+- **What's there already (checked 2026-10-08).** The mainnet server runs db-sync 13.7.0.1 (schema 15.50.6), 5 s behind the chain, with Koios's options but one:
   - `tx_out` is `consumed`: `consumed_by_tx_id` is filled, and `tx_in` is empty;
   - the address table is on;
   - the ledger is on (rewards, epoch stake and DRep distribution are filled);
-  - off-chain pool and vote data are on;
-  - `tx_cbor` is on.
+  - off-chain pool data is on;
+  - `tx_cbor` is on;
+  - **off-chain vote data is off** (corrected 2026-10-09). Since 13.7.0.1 it has its own `"offchain_vote_data"` option, which defaults to `"disable"`; before, `"governance"` covered it. The config never got the new option, so fetching stopped at the upgrade, on 2026-03-17, with no error. The owner enabled it on 2026-10-09 and fetching resumed: 49 anchors in its first minute, with the backlog since March to work through. Koios's own config sets it too.
+- **Postgres must wait for the network** (found 2026-10-09). After a reboot it started before the server had its LAN address, couldn't bind it, and listened on localhost alone, with only a warning. A restart fixes it once. `After=network-online.target` in a drop-in for its unit fixes it for good, and it applies to `wg0` later too.
 
   No `grest` schema is installed yet. The node and Kupo run there too.
 - **RAM.** Mainnet alone fits in memory on 64 GB: about 24 GB for the node and 21 GB for db-sync, plus Postgres, Kupo and Ogmios. If it's tight, `ledger_backend: "lsm"` cuts db-sync to about 2–3 GB.
@@ -317,6 +352,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 - The home IP is known only to the VPS and its provider.
 - Once synced, home's default route is `wg0`. Measure the node's P2P traffic first: the docs say about 1 GB an hour for a relay, and an outbound-only node uses less.
+- **As built (2026-10-09): only the node's and db-sync's traffic goes through the tunnel, routed by user, and it fails closed.** The mainnet box runs another project, which a moved default route would move too. The rules live apart from wg-quick, and a kill switch drops any of their packets not bound for `wg0`, loopback or the LAN, IPv6 included. With the tunnel down they reach nothing, never anyone from the home IP. Lookups go over TLS to a resolver that passes on no client subnet, since anyone can make db-sync look up a name. See [deploy/README.md](../../../../seedelf-data/deploy/README.md).
 
 **The VPS:**
 
@@ -340,7 +376,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
 
 | Part | Healthy when |
 |---|---|
-| private | the source in use (db-sync, or Kupo when db-sync is down) is within 3 blocks of the node's tip, and that tip is under 2 min old |
+| private | the source in use (db-sync, or Kupo when db-sync is down) is within 3 blocks of the node's tip, and that tip is under 2 min old. **As built:** a source's tip under 3 min old, and db-sync within 60 slots of Kupo's |
 | public | db-sync's newest block is under 3 min old |
 | submit | the node's tip is under 2 min old |
 
@@ -364,6 +400,7 @@ Postgres runs with `log_statement = none`, so no one's credentials land on disk.
   - Submits fall back to Koios's `/submittx`.
 - **What triggers it:** a transport error, a timeout (about 10 s), a 5xx, a 503 or a 429 sends that part to Koios for 5 minutes. A read restarts on Koios rather than mixing pages from two backends.
 - **Rate limiting:** `KOIOS_LIMIT` stays for Koios, and the data layer gets a limiter of its own.
+- **Home's first reading shouldn't wait on a pool's live stake** (found in the first-load pass, 2026-10-09). Staking's `poolRef` asks `pool_info` only for a ticker, and Home's reading waits for it. A pool nobody has looked at in 10 minutes makes the server work out its live stake first, for up to 3 s: 1.6 s cold for a pool of 2,000 delegators, and the full 3 s for the largest. The ticker is in `pool_list`, which every wallet shares and the server keeps for an hour.
 - **Private state:**
   - the cursor and your rows, sealed with the vault;
   - the incremental check;
@@ -425,7 +462,7 @@ Monthly and rough; check prices when buying.
    - ✅ **the Seedelf Kupo** on 1443, synced to the tip;
    - ✅ **Ogmios** is already there: v6.14.0 on 1337, synced. That release is tested with node 10.5.1, so the node is likely 10.5.x.
    - ✅ **submit-api** on 8090, once its config was in the new format ([Submits](#submits));
-   - install `grest` and its cache jobs;
+   - ~~install `grest` and its cache jobs~~: not needed. The API carries its own SQL ([The public side](#the-public-side-koios-equivalent-optimised-for-us)).
    - ✅ find both contracts' first-output points.
 2. **Measure.**
    - ✅ **db-sync's speed** (2026-10-08). On the contract, which has 2 addresses, 32 unspent outputs and 117 ever:
@@ -447,12 +484,36 @@ Monthly and rough; check prices when buying.
      Kupo's snapshot, with datums resolved, takes 4 ms over the LAN, and a day's spends take 2 ms.
    - **Deferred, "if we even need it":** freshness. That means the node's tip, Kupo's checkpoint and db-sync's newest block, every 30 s across an epoch boundary. The builder reads db-sync first and switches to Kupo, so this would only tune when it switches.
 3. **`seedelf-data/`, built and run locally:**
-   1. the private index (the builder, `since`, shards, names, Lovejoin), then `submittx` and `ogmios`;
-   2. the public routes by traffic: `credential_utxos`, `account_addresses`, `account_info`, `tip`, `epoch_params`, `tx_status`, `utxo_info`, `tx_info`, `account_txs`, then the rest;
-   3. alongside: `deploy/home`, `deploy/edge` and a runbook. Secrets are never committed.
+   1. ✅ the private index, read from db-sync (`snapshot`, `since`, `names`, the Lovejoin pool with `made_by`), and ✅ `submittx` and `ogmios`.
+      - ✅ **Kupo as its second source** (2026-10-09). Both sources give the same rows in the same order, checked live from a day, two days, a month and Kupo's first block back. With db-sync unreachable, the server's contract answers were byte-identical to db-sync's. A scripted Kupo forces the rollback `reset`.
+      - **Checked live:** the view rebuilt from the API equals Kupo's unspent set, and every cursor back to before the contract existed replays to the tip. The submit part passes answers through untouched, and the tests use only sends that can't land.
+      - **The SQL lesson:** every query gathers the credential's own outputs first, in a `MATERIALIZED` CTE. Left alone, the planner took 3.5 s instead of 9.5 ms.
+   2. ✅ **the 20 public routes** (2026-10-09), in Koios's paths and JSON, each taking only `koios.ts`'s requests.
+      - **Checked live:**
+        - UTxO rows and `epoch_params` parse with `seedelf-koios`'s own types;
+        - the contract's and mix box's listings equal the private index;
+        - every `tx_info` balances;
+        - an NFT's `asset_info` equals Koios's recorded answer, and the other routes match the recorded fixtures' shapes.
+      - **Found at home:** db-sync has fetched no off-chain vote data since 2026-03-17. Anchors since then (4,886) have no data, so newer governance actions have no title or abstract and newer DRep profiles no name, from this server.
+        - The cause is db-sync 13.7.0.1's new `offchain_vote_data` option, off by default ([Home](#home)). It's on since 2026-10-09, and the backlog is being fetched.
+   3. ✅ alongside: `deploy/home`, `deploy/edge` and a runbook, [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md) (2026-10-09). Secrets are never committed.
+      - **The edge is the API's own code** (`src/edge.rs`), so Caddy stays stock: buckets per IP, weighted 1 for a shared answer, 4 for live SQL and 10 for a submit or evaluation; the month's egress ceiling, kept across restarts; CORS for the wallet's origins only, a 429 included.
+      - **A source is down after two failed reads of its tip** (4 s). Its part answers 503 at once, rather than each request waiting on a timeout. Dropping each link mid-run checked it: the private index moved to Kupo within 5 s, and with both gone, every route answered 503 at once.
+      - **Only the node's and db-sync's traffic goes through the tunnel,** routed by user. The mainnet box runs another project, which a moved default route would move too. If the tunnel drops, the node loses its peers rather than reaching them directly. Ogmios serves that project too, so its bind stays, and nftables on `wg0` decides what reaches it.
 
    **Upstreams are config** (localhost now, `wg0` later). The API keeps to loopback or the LAN until the VPS layer exists.
-4. **The wallet's chunk**, against the local API from a dev build only. The store build never carries a localhost origin.
+   4. ✅ **The optimisation and review pass** (2026-10-09, the owner's order: once building was done). Four reviewers covered the private index, the public routes (in two halves), and the edge with the deploy files; a fifth then reviewed the fixes together. The fixes are in three commits, each checked live.
+      - **Private:** a tunnel that drops packets no longer hangs the tip read, the tip has its own connection, misses share one read, caches are bounded by bytes, and cursors never go back.
+      - **Edge:** the tunnel's routing fails closed; a web page can't spend the month's traffic or reach Ogmios; answers charge their bytes; the logs can't be turned up to show a request.
+      - **Public:** what one request may gather is capped, so a heavy credential costs a 503, not gigabytes. `account_txs` is 4× faster, a delegators clause Koios doesn't have is gone (some pools timed out on every look), and IDs have one spelling.
+      - **Left for later, measured and small:** `query_typed` for one round trip a statement; one pass for every DRep's delegators; single-flight for answers kept a while; live tests over the heaviest keys.
+   5. **The first-load pass** (2026-10-09, the owner's order: before the wallet's plan). Every query a wallet makes from create or restore to Home and Activity was put through `EXPLAIN ANALYZE` on the home db-sync, for a fresh wallet, two typical ones and a busy key.
+      - **The queries:** db-sync's statistics on `tx_out` are 100–1,000× low, so the planner chose parallel workers and whole-table reads for small lookups. `credential_utxos` and `tx_info`'s outputs now read each address's or transaction's own outputs, with the same rows. A wallet's own UTxOs went from 4–6 ms to 0.3–0.5 ms, a credential at 95,000 addresses from 4.1 s to 160 ms, and a page of Activity's outputs from 5 ms to 0.6 ms.
+      - **The indexes:** three of Koios's, built at home by the owner the same day. `account_info` went from 16–19 ms to 0.1–0.4 ms, and `tx_info`'s certificates and votes from 15 ms and 1.7 ms to 0.3–0.6 ms and 0.03 ms.
+      - **Already fast:** `account_addresses` (under 0.2 ms), `account_txs` (1 ms; 16 ms for the busy key), the private index (under 2 ms warm, and read once a block).
+      - **Left as it is:** a pool's first look, up to 3 s on Home's path ([The wallet's side](#the-wallets-side)).
+4. **The wallet's chunk**, against the local API from a dev build only: [chunk 26b](chunk-26b-data-layer-wallet.md). The store build never carries a localhost origin.
+   - **Found in the review, and fixed on this branch (2026-10-09), a wallet bug with Koios too:** `drep_info` gives a retired DRep's status as `"deregistered"`, but Staking passed it through and Voting checked for `"retired"`. So a picked DRep that had retired, or that never registered (`"not_registered"`), wasn't blocked. It got the inactive warning instead, which says delegating to it still lets you withdraw rewards. The wallet now carries Koios's three words throughout, the account's own DRep included (the owner: "follow what koios is doing"). Voting blocks both, each with its own reason; the screens still say "Retired" and "Not registered".
 5. **The VPS, at the end:** WireGuard, nftables, DNS, Caddy and `/health`. Then home's egress moves to the tunnel.
 6. **The drills**, then 1.4.0.
 
@@ -467,7 +528,7 @@ Monthly and rough; check prices when buying.
 The private index is read-only: a bug shows a wrong balance or gets a transaction refused, but it can't lose funds.
 
 - **Private parity.** On mainnet, the private index gives the same owned set and Seedelf names as today's Koios scan, for the owner's own wallets. Replaying `since` from many cursors matches a fresh snapshot.
-- **Rollbacks.** A reset is forced in a test against a scripted Kupo. Then real rollbacks are watched on mainnet for a day.
+- **Rollbacks.** A reset is forced in a test against a scripted Kupo (✅ 2026-10-09, `tests/scripted_kupo.rs`). Then real rollbacks are watched on mainnet for a day.
 - **Submits, for free.** A deliberately invalid transaction (spent inputs, a fee too small) is refused with the same error strings Koios gives. A valid submit first happens in the owner's ordinary use, with Koios as the fallback.
 - **Scale.** Build a synthetic contract of 1M rows offline, in the WebAssembly's test harness, and measure:
   - a restore's time and peak memory;

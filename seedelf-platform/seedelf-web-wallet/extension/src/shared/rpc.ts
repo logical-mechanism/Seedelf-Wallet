@@ -347,7 +347,8 @@ export interface DrepDetails {
   /** CIP-129. */
   id: string;
   name?: string;
-  status: "registered" | "retired";
+  /** Koios's `drep_status`: `deregistered` has retired, `not_registered` never registered. */
+  status: "registered" | "deregistered" | "not_registered";
   /** Voted recently enough to count: an inactive DRep's votes don't. */
   active: boolean;
   expiresEpoch: number | null;
@@ -393,8 +394,8 @@ export type StakingAction =
 export interface OwnDrep {
   /** CIP-129. */
   id: string;
-  /** `none`: never registered. */
-  status: "none" | "registered" | "retired";
+  /** Koios's `drep_status`: `not_registered` never registered (or Koios has no row), `deregistered` retired. */
+  status: "not_registered" | "registered" | "deregistered";
   /** The deposit it paid: what retiring returns. "0" when not registered. */
   deposit: string;
   /** What registering locks up now (`drep_deposit`), when it isn't registered and Koios said. */

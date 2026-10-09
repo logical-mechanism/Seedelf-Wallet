@@ -2,3 +2,9 @@
 .env
 .env.*
 !.env.example
+
+# Cargo's build output.
+/target/
+
+# Third-party code read while building (see README.md); never committed.
+/_reference/

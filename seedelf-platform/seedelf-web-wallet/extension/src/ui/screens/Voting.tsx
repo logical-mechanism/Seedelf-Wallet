@@ -126,12 +126,21 @@ export function Voting({
           ? registeredOwn?.id
           : drep?.id;
   const same = chosen !== undefined && chosen === current;
-  const retired = pick === "drep" && drep?.status === "retired";
+  // Koios's words: a DRep that has retired, or one that never registered, can't be voted to.
+  const unregistered = pick === "drep" && drep !== undefined && drep.status !== "registered";
   const drepShared = drep ? drepSharing(dreps, shared, drep) : NOT_SHARED;
   // Your own DRep before the account is one: the foot opens Become a DRep, where it was a Review that couldn't be
   // pressed, its reason below the fold (chunk 23's second review, GV-3).
   const becomeFirst = pick === "own" && own !== undefined && !ownRegistered;
-  const why = blocked ?? (same ? t("vote.alreadyThere") : retired ? t("vote.drepRetired") : undefined);
+  const why =
+    blocked ??
+    (same
+      ? t("vote.alreadyThere")
+      : unregistered
+        ? drep.status === "deregistered"
+          ? t("vote.drepRetired")
+          : t("vote.drepNotRegistered")
+        : undefined);
   const ownName = own && current === own.id ? t("drep.yourOwn") : undefined;
 
   async function lookUp(id: string) {
@@ -180,7 +189,7 @@ export function Voting({
                   chosen,
                   pick === "own" ? t("drep.yourOwn") : pick === "drep" && drep?.name ? plainName(drep.name) : undefined,
                   pick === "drep" ? drepShared : undefined,
-                  pick === "drep" && drep !== undefined && drep.status !== "retired" && !drep.active,
+                  pick === "drep" && drep !== undefined && drep.status === "registered" && !drep.active,
                 )
               }
               disabled={!chosen || !!why || busy}
@@ -458,16 +467,18 @@ export function sharedDrepName({ shared, listed }: DrepShared): string {
 export function DrepCard({ drep, shared = 0, listed = true }: { drep: DrepDetails; shared?: number; listed?: boolean }) {
   const t = useT();
   const status =
-    drep.status === "retired"
+    drep.status === "deregistered"
       ? t("vote.status.retired")
-      : drep.active
+      : drep.status === "not_registered"
+        ? t("vote.status.notRegistered")
+        : drep.active
         ? t("vote.status.active")
         : drep.expiresEpoch !== null
           ? t("vote.status.inactiveSince", { epoch: drep.expiresEpoch })
           : t("vote.status.inactive");
   return (
     <div className="stack-tight" data-testid="drep-details">
-      {drep.status !== "retired" && !drep.active && (
+      {drep.status === "registered" && !drep.active && (
         <Callout tone="warn" testId="drep-inactive">
           {t("vote.warn.inactive")}
         </Callout>

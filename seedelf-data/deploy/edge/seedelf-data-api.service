@@ -1,0 +1,45 @@
+# /etc/systemd/system/seedelf-data-api.service on the VPS.
+
+[Unit]
+Description=Seedelf Wallet's data layer (seedelf-data-api)
+Wants=network-online.target
+After=network-online.target wg-quick@wg0.service
+
+[Service]
+ExecStart=/usr/local/bin/seedelf-data-api
+EnvironmentFile=/etc/seedelf-data/env
+# A user of its own, made at start; it keeps the month's traffic in
+# /var/lib/seedelf-data (the API reads STATE_DIRECTORY).
+DynamicUser=yes
+StateDirectory=seedelf-data
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+
+# It reads its environment and the decimals file, writes its state
+# directory, and talks TCP. Nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

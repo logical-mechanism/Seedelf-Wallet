@@ -1,0 +1,17 @@
+# cardano-submit-api's tracing configuration, in the format since node 10.x
+# (upstream's cardano-submit-api/config/tx-submit-mainnet-config.yaml).
+# The old logging format makes it crash-loop with `key "Options" not found`:
+# on the home server it did, for about three weeks, unnoticed.
+#
+# Changed from upstream: the severity (Notice: Info logs every submitted
+# transaction) and an uncoloured stdout, for the journal.
+
+TraceOptionMetricsPrefix: "cardano.submit.api.metrics."
+
+TraceOptions:
+  "":
+    backends:
+      - EKGBackend
+      - Stdout HumanFormatUncoloured
+    detail: DNormal
+    severity: Notice

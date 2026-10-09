@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { i18n } from "../src/i18n/core";
 import { epochStart } from "../src/networks";
-import type { OwnDrep, StakeInfo, StakingSummary } from "../src/shared/rpc";
+import type { DrepDetails, OwnDrep, StakeInfo, StakingSummary } from "../src/shared/rpc";
 import {
   anchorUrlProblem,
   BecomeDrep,
@@ -39,7 +39,7 @@ const ID = "drep1y2jmg4g450lced7q9n34rq6d5vjwkm0ugx6h0894u6ur92s9txn3a";
 const staking: StakeInfo = { registered: true, pool: null, drep: "drep_always_abstain", rewards: "0", deposit: "2000000" };
 const none: OwnDrep = {
   id: ID,
-  status: "none",
+  status: "not_registered",
   deposit: "0",
   depositNow: "500000000",
   active: false,
@@ -444,6 +444,34 @@ describe("Voting power, for an account that may be its own DRep", () => {
     expect(shown.indexOf("This account isn't a DRep yet.")).toBeLessThan(shown.indexOf("A DRep Someone who votes for you"));
     expect(html).toMatch(/<button type="button" class="primary">Become a DRep<\/button>/);
     expect(html).not.toMatch(/>Review<\/button>/);
+  });
+
+  it("won't send a vote to a DRep that has retired or never registered, and says which (Koios's two words)", () => {
+    const picked = (status: DrepDetails["status"]) =>
+      markup(
+        createElement(Voting, {
+          current: null,
+          registered: true,
+          busy: false,
+          onBack: noop,
+          onVote: noop,
+          onBecome: noop,
+          view: {
+            pick: "drep",
+            query: ID,
+            drep: { id: ID, status, active: false, expiresEpoch: null, votingPower: "0", delegators: 0 },
+          },
+        }),
+      );
+    const retired = picked("deregistered");
+    expect(text(retired)).toContain("Retired");
+    expect(retired).toMatch(/data-testid="vote-why">That DRep has retired</);
+    const never = picked("not_registered");
+    expect(text(never)).toContain("Not registered");
+    expect(never).toMatch(/data-testid="vote-why">That DRep isn(?:'|&#x27;)t registered</);
+    // Neither gets the inactive warning, which says delegating to it still lets you withdraw rewards.
+    for (const html of [retired, never]) expect(html).not.toContain('data-testid="drep-inactive"');
+    expect(picked("registered")).toContain('data-testid="drep-inactive"');
   });
 
   it("is the choice already made when the vote is on it, and says so", () => {

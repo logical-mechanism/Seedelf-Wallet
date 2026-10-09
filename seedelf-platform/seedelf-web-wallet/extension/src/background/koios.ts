@@ -179,7 +179,12 @@ export interface KoiosPoolInfo {
 /** A DRep: `drep_info`. */
 export interface KoiosDrepInfo {
   drep_id: string;
-  drep_status: "registered" | "retired";
+  /**
+   * Koios's words, kept as it gives them: `deregistered` once the DRep has
+   * retired (its deposit returned), and `not_registered` for an ID that has
+   * never registered (something delegated to it all the same).
+   */
+  drep_status: "registered" | "deregistered" | "not_registered";
   /** Voted or updated recently enough to count. */
   active: boolean;
   expires_epoch_no: number | null;

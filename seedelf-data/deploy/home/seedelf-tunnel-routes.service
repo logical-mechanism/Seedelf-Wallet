@@ -1,0 +1,32 @@
+# /etc/systemd/system/seedelf-tunnel-routes.service on the home server:
+# deploy/README.md's step 3, once the node and db-sync are synced.
+#
+# The node's and db-sync's traffic looks up table 51820, whose only route
+# outside the tunnel is unreachable. These rules stay whatever wg-quick
+# does: with wg0 down or restarting, the node and db-sync reach nothing,
+# and never anyone from the home IP. nftables-seedelf-egress.conf drops
+# what slips past. IPv6 is unreachable for them: the tunnel carries IPv4.
+
+[Unit]
+Description=Seedelf: the node's and db-sync's traffic through the tunnel only
+DefaultDependencies=no
+After=network-pre.target
+Before=network-online.target cardano-node.service wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip route replace unreachable default metric 4294967295 table 51820
+ExecStart=/usr/sbin/ip rule add to <LAN prefix> lookup main priority 90
+ExecStart=/usr/sbin/ip rule add uidrange <node uid>-<node uid> lookup 51820 priority 100
+ExecStart=/usr/sbin/ip rule add uidrange <db-sync uid>-<db-sync uid> lookup 51820 priority 101
+ExecStart=/usr/sbin/ip -6 rule add uidrange <node uid>-<node uid> unreachable priority 100
+ExecStart=/usr/sbin/ip -6 rule add uidrange <db-sync uid>-<db-sync uid> unreachable priority 101
+ExecStop=/usr/sbin/ip rule del priority 101
+ExecStop=/usr/sbin/ip rule del priority 100
+ExecStop=/usr/sbin/ip rule del priority 90
+ExecStop=/usr/sbin/ip -6 rule del priority 101
+ExecStop=/usr/sbin/ip -6 rule del priority 100
+
+[Install]
+WantedBy=multi-user.target
