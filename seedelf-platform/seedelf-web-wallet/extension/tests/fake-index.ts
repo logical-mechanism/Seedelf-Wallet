@@ -25,6 +25,8 @@ export interface FakeIndex {
   pool: ChainRow[];
   /** Grid slots whose block was rolled back: a `since` from a cursor there answers `reset`. */
   forked: Set<number>;
+  /** Grid slots this server no longer reads from: a `since` from a cursor there answers 400. */
+  refused: Set<number>;
   /** Each request's path under /seedelf/v1/mainnet/. */
   calls: string[];
   /** While set, every request is answered with it. */
@@ -59,6 +61,7 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
     contract: [],
     pool: [],
     forked: new Set(),
+    refused: new Set(),
     calls: [],
     advance: (slots) => void (fake.tip += slots),
     fetch: async (url) => {
@@ -83,6 +86,7 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
       }
       if (route === "since" && from) {
         const slot = Number(from.split(".")[0]);
+        if (fake.refused.has(slot)) return Response.json({ error: "not a cursor this server hands out" }, { status: 400 });
         if (fake.forked.has(slot)) return Response.json({ network: "mainnet", tip: tipView, reset: true });
         const created = rows
           .filter((r) => r.row.created.slot > slot && r.row.created.slot <= fake.tip)

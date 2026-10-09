@@ -115,6 +115,7 @@ import {
   MAX_DEPOSIT_BOXES,
   MAX_MIX_BOXES,
   LovejoinSkipped,
+  firstTries,
   mayBeIn,
   mixesPerBox,
   pumpChain,
@@ -3290,7 +3291,8 @@ export class SessionService {
           // A return through Lovejoin: each of its transactions pays or spends a box, so it's on the pool's feed
           // (feed.ts).
           onChain: async (hashes) => {
-            const at = pending.sentAt?.length ? Math.min(...pending.sentAt) : undefined;
+            const tried = firstTries(pending, hashes);
+            const at = tried?.length ? Math.min(...tried) : undefined;
             const watched = hashes.map((txHash) => ({ txHash, feed: "lovejoin" as const, ...(at !== undefined ? { sentAt: at } : {}) }));
             const { statuses } = await chainStatus(this.deps, network, watched);
             const on = new Set(hashes.filter((h) => statuses.get(h) != null));

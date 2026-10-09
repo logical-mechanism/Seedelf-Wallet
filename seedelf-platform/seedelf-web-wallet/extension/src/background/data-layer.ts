@@ -31,6 +31,7 @@ import {
   type KoiosUtxo,
   RateLimit,
   SpentInputError,
+  SpentMaybeSentError,
 } from "./koios";
 import type { Area } from "./storage";
 
@@ -351,9 +352,17 @@ export class DataLayerKoios extends Koios {
     try {
       return await super.submitTx(txCbor);
     } catch (e) {
-      // A connection lost with no answer may have been lost after the transaction went out: what Koios says is
-      // spent already may be spent by this very one, so it's maybe sent, never refused (pending.ts settles it).
-      if (failure.status === undefined && e instanceof SpentInputError) throw new KoiosBusyError(e.message, true, "silent", failure);
+      // A connection lost with no answer may have been lost after the transaction went out (a proxy's own 502
+      // carries no CORS, and reads as one). What Koios then says is spent may be spent by this very one; and Koios
+      // not answering at all (busy, its node down, no grant: an error with a `trouble`) says nothing of that first
+      // try. Either is maybe sent, never refused (pending.ts settles it). The node's own refusal of the
+      // transaction stands: it's the same transaction.
+      if (failure.status === undefined) {
+        if (e instanceof SpentInputError) throw new SpentMaybeSentError(e.message, true, "silent", failure);
+        if (e instanceof KoiosBusyError || (e instanceof KoiosError && e.trouble !== undefined)) {
+          throw new KoiosBusyError(t("koios.dataNoAnswer"), true, "silent", failure);
+        }
+      }
       throw e;
     }
   }

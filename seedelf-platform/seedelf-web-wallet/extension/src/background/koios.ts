@@ -525,6 +525,14 @@ export class KoiosBusyError extends KoiosError {
 }
 
 /**
+ * A submit whose first try may have gone out (the data layer's connection
+ * lost), which Koios then refused as spent: most likely this very one, on
+ * its way. Maybe sent, and worth the mempool check a SpentInputError gets
+ * (pending.ts).
+ */
+export class SpentMaybeSentError extends KoiosBusyError {}
+
+/**
  * Whether Chrome lets the wallet reach `url`'s host. Koios's public tier sends
  * browsers no CORS headers, so the wallet reads it only through the manifest's
  * host permission. Without the grant (the user limited the wallet's site
@@ -934,8 +942,9 @@ export class Koios {
       } catch (e) {
         throw new KoiosBusyError(unreachable(e), true, "silent", { status: response.status, timeout: isTimeout(e) });
       }
-      // The data layer's own refusal (an origin it doesn't know, a body it won't take): the node never saw it.
-      if (!this.backend.retries && !response.ok && serverWords(text) !== undefined) {
+      // The data layer's own refusal (an origin it doesn't know, a body it won't take): the node never saw it. A body
+      // too large or of the wrong type is refused before anything is read, in plain text, so it's known by status.
+      if (!this.backend.retries && !response.ok && (serverWords(text) !== undefined || response.status === 413 || response.status === 415)) {
         throw new KoiosError(koiosTrouble(response.status, "submittx"), "silent", {
           status: response.status,
           error: serverWords(text),

@@ -14,14 +14,20 @@
 // before.
 //
 // The cursors the index hands out are kept here, in chrome.storage.session
-// (wiped on lock), one every few minutes for six hours: a watch reads from
-// the newest one from before its transaction went out.
+// (wiped on lock), one every few minutes for six hours, with the sealed
+// record's from before a lock (contract-scan.ts): a watch reads from the
+// newest one the wallet had before its transaction was first tried. A cursor
+// is a stable point, at least 200 slots behind the tip it was handed out at,
+// so one in hand before the first try is before anything the send put on
+// chain. Both times are this device's clock's, so its error cancels; each
+// watch keeps its first try apart from its own resend timing.
 
 import { NETWORKS, type NetworkName } from "../networks";
 import { CONTRACT_V1 } from "./balances";
 import type { Koios } from "./koios";
 import { builtOutputs } from "./minswap";
-import { IndexDown, type IndexSince, type PrivateIndex } from "./private-index";
+import { CursorRefused, IndexDown, type IndexSince, type PrivateIndex } from "./private-index";
+import type { PrivateStore, RecordName } from "./private-store";
 import type { Area } from "./storage";
 
 /** The two feeds: the Seedelf contract's, and Lovejoin's pool's. */
@@ -30,10 +36,10 @@ export type Feed = "contract" | "lovejoin";
 /** chrome.storage.session, per network: the cursors the private index handed out lately, by feed (`seedelf.feed.mainnet`). */
 export const SESSION_FEED_PREFIX = "seedelf.feed.";
 
-/** A cursor kept: as the index wrote it, and when its slot was (ms). */
-interface KeptCursor {
+/** A cursor kept: as the index wrote it, and when the wallet had it, by this device's clock (ms). */
+export interface KeptCursor {
   cursor: string;
-  at: number;
+  got: number;
 }
 
 type Kept = Partial<Record<Feed, KeptCursor[]>>;
@@ -42,47 +48,86 @@ type Kept = Partial<Record<Feed, KeptCursor[]>>;
 export const CURSOR_SPACING_MS = 5 * 60_000;
 /** And kept this long: longer than a watch waits for anything (pending.ts HELD_IN_MEMPOOL_MS). */
 export const CURSORS_FOR_MS = 6 * 60 * 60_000;
+
+/** The notes, one after another: both feeds' share one key, and a note read beside another's write would lose it. */
+let noting: Promise<unknown> = Promise.resolve();
+
 /**
- * How long before a transaction's own send time its cursor is: one maybe
- * sent went out at its first try, which the watch may date later.
+ * Keeps a cursor the private index handed out for `feed`, and when the wallet
+ * had it (`got`), in that order, one every CURSOR_SPACING_MS (the newest
+ * always), for CURSORS_FOR_MS. Call it while unlocked.
  */
-const SENT_MARGIN_MS = 10 * 60_000;
+export function noteCursor(
+  session: Area,
+  network: NetworkName,
+  feed: Feed,
+  cursor: string,
+  got: number,
+  now = got,
+): Promise<void> {
+  const note = async () => {
+    const key = SESSION_FEED_PREFIX + network;
+    const kept = (await session.get<Kept>(key)) ?? {};
+    const was = (kept[feed] ?? []).find((c) => c.cursor === cursor);
+    const all = [...(kept[feed] ?? []).filter((c) => c.cursor !== cursor), { cursor, got: Math.min(got, was?.got ?? got) }]
+      .filter((c) => typeof c.got === "number" && now - c.got < CURSORS_FOR_MS)
+      .sort((a, b) => a.got - b.got);
+    const list: KeptCursor[] = [];
+    for (const [i, c] of all.entries()) {
+      const last = list.at(-1);
+      if (!last || c.got - last.got >= CURSOR_SPACING_MS || i === all.length - 1) list.push(c);
+    }
+    await session.set(key, { ...kept, [feed]: list });
+  };
+  return inTurn(note);
+}
 
-/** Shelley on, a slot's time is the slot plus this (mainnet; seedelf-data's `slot_time`). */
-const SLOT_TIME_S: Partial<Record<NetworkName, number>> = { mainnet: 1_591_566_291, preprod: 1_655_769_600 };
+/** Forgets a kept cursor the index refuses now (CursorRefused): every watch asking from it would be refused too. */
+function forgetCursor(session: Area, network: NetworkName, feed: Feed, cursor: string): Promise<void> {
+  return inTurn(async () => {
+    const key = SESSION_FEED_PREFIX + network;
+    const kept = await session.get<Kept>(key);
+    const list = kept?.[feed];
+    if (list?.some((c) => c.cursor === cursor)) await session.set(key, { ...kept, [feed]: list.filter((c) => c.cursor !== cursor) });
+  });
+}
 
-/** When `cursor`'s slot was (ms), on `network`. */
-export function cursorTime(network: NetworkName, cursor: string): number {
-  return (Number(cursor.slice(0, cursor.indexOf("."))) + (SLOT_TIME_S[network] ?? 0)) * 1000;
+function inTurn(task: () => Promise<void>): Promise<void> {
+  const run = noting.then(task, task);
+  noting = run.catch(() => undefined);
+  return run;
 }
 
 /**
- * Keeps a cursor the private index handed out for `feed`, in slot order, one
- * every CURSOR_SPACING_MS (the newest always), for CURSORS_FOR_MS. An older
- * one is kept too: the sealed record's from before a lock (contract-scan.ts),
- * which a watch from before the lock reads from. Call it while unlocked.
+ * The cursors of `feed` in hand, oldest first: those kept this session, and
+ * for the contract's, the sealed record's (contract-scan.ts), which a lock
+ * keeps: a watch from before the lock reads from it, read before the unlock's
+ * first reading notes it again.
  */
-export async function noteCursor(session: Area, network: NetworkName, feed: Feed, cursor: string, now: number): Promise<void> {
-  const key = SESSION_FEED_PREFIX + network;
-  const kept = (await session.get<Kept>(key)) ?? {};
-  const all = [...(kept[feed] ?? []).filter((c) => c.cursor !== cursor), { cursor, at: cursorTime(network, cursor) }]
-    .filter((c) => now - c.at < CURSORS_FOR_MS)
-    .sort((a, b) => a.at - b.at);
-  const list: KeptCursor[] = [];
-  for (const [i, c] of all.entries()) {
-    const last = list.at(-1);
-    if (!last || c.at - last.at >= CURSOR_SPACING_MS || i === all.length - 1) list.push(c);
+async function cursorsOf(deps: FeedDeps, network: NetworkName, feed: Feed): Promise<KeptCursor[]> {
+  const list = [...((await deps.session.get<Kept>(SESSION_FEED_PREFIX + network))?.[feed] ?? [])];
+  if (feed === "contract" && deps.store) {
+    const sealed = await deps.store.get<Partial<KeptCursor>>(`contract.${network}` as RecordName).catch(() => undefined);
+    const { cursor, got } = sealed ?? {};
+    if (typeof cursor === "string" && typeof got === "number" && !list.some((c) => c.cursor === cursor)) list.push({ cursor, got });
   }
-  await session.set(key, { ...kept, [feed]: list });
+  return list.filter((c) => typeof c.got === "number").sort((a, b) => a.got - b.got);
 }
 
 /**
- * The newest cursor of `feed` from before `since` (ms): every transaction
- * sent after it shows in the feed since it. With no `since`, the oldest kept.
+ * Which of `txs` one read of a feed answers, and from which cursor: the
+ * newest in hand before the earliest of them went out. One sent before every
+ * cursor in hand isn't among them, and asks tx_status alone, never holding
+ * up the rest. One with no send time takes the oldest cursor, as a watch
+ * that doesn't know it always has.
  */
-async function cursorBefore(session: Area, network: NetworkName, feed: Feed, since?: number): Promise<string | undefined> {
-  const list = (await session.get<Kept>(SESSION_FEED_PREFIX + network))?.[feed] ?? [];
-  return since === undefined ? list[0]?.cursor : list.filter((c) => c.at < since).at(-1)?.cursor;
+export function cover(cursors: KeptCursor[], txs: Watching[]): { cursor?: string; covered: Watching[] } {
+  const oldest = cursors[0];
+  if (!oldest) return { covered: [] };
+  const covered = txs.filter((t) => t.sentAt === undefined || t.sentAt >= oldest.got);
+  if (!covered.length) return { covered };
+  const first = Math.min(...covered.map((t) => t.sentAt ?? oldest.got));
+  return { cursor: cursors.filter((c) => c.got <= first).at(-1)!.cursor, covered };
 }
 
 /** What a `since` answer says each transaction did: made or spent a row. */
@@ -125,7 +170,10 @@ export interface Watching {
    * Lovejoin box. None: it touches only key addresses, and tx_status is asked.
    */
   feed?: Feed;
-  /** When it went out; the oldest cursor kept stands in when it isn't known. */
+  /**
+   * When it was first tried, stamped before its submit and never moved by a
+   * retry or a resend; the oldest cursor kept stands in when it isn't known.
+   */
   sentAt?: number;
 }
 
@@ -133,6 +181,8 @@ export interface FeedDeps {
   session: Area;
   koios: (network: NetworkName) => Koios;
   index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
+  /** Where the contract's sealed record is, with its cursor from before a lock. */
+  store?: PrivateStore;
 }
 
 /** Which are on chain, as tx_status says it (a number, or null), and the chain's tip slot when a feed gave it. */
@@ -146,11 +196,12 @@ export interface ChainStatus {
 
 /**
  * Whether each of `txs` is on chain: those on a feed from that feed, since
- * the newest cursor from before the oldest of them went out, and the rest
+ * the newest cursor in hand before the oldest of them went out, and the rest
  * from tx_status. So are those on a feed while it can't answer (no index, its
- * part down, no cursor old enough kept, a rollback under the cursor). One a
- * feed shows is on chain with 1 confirmation: no watch reads more than
- * whether it's there.
+ * part down, no cursor from before it went out, a rollback under the cursor).
+ * One a feed shows is on chain with 1 confirmation: no watch reads more than
+ * whether it's there. Never call it inside `wallet.withKeys`: it reads the
+ * sealed record, which waits its turn there.
  */
 export async function chainStatus(deps: FeedDeps, network: NetworkName, txs: Watching[]): Promise<ChainStatus> {
   const statuses = new Map<string, number | null>();
@@ -161,37 +212,37 @@ export async function chainStatus(deps: FeedDeps, network: NetworkName, txs: Wat
   for (const feed of ["contract", "lovejoin"] as const) {
     const on = txs.filter((t) => t.feed === feed);
     if (!on.length) continue;
-    const read = index && (await fromFeed(deps.session, index, network, feed, on));
-    if (!read) {
-      fed = false;
-      for (const t of on) ask.add(t.txHash);
-      continue;
-    }
+    const { cursor, covered } = index ? cover(await cursorsOf(deps, network, feed), on) : { covered: [] };
+    const read = index && cursor && (await fromFeed(deps.session, network, index, feed, cursor));
+    const answered = read ? covered : [];
+    if (answered.length < on.length) fed = false;
+    for (const t of on) if (!answered.includes(t)) ask.add(t.txHash);
+    if (!read) continue;
     tip = Math.max(tip ?? 0, read.tip);
-    for (const t of on) statuses.set(t.txHash, read.seen.has(t.txHash) ? 1 : null);
+    for (const t of answered) statuses.set(t.txHash, read.seen.has(t.txHash) ? 1 : null);
   }
   if (ask.size) for (const [h, n] of await deps.koios(network).txStatus([...ask])) statuses.set(h, n);
   return { statuses, fed, ...(tip !== undefined ? { tip } : {}) };
 }
 
-/** What `feed` shows of `txs`, since a cursor from before they went out; undefined when it can't say. */
+/** What `feed` shows since `cursor`; undefined when it can't say. */
 async function fromFeed(
   session: Area,
-  index: PrivateIndex,
   network: NetworkName,
+  index: PrivateIndex,
   feed: Feed,
-  txs: Watching[],
+  cursor: string,
 ): Promise<{ seen: Set<string>; tip: number } | undefined> {
-  const sent = txs.map((t) => t.sentAt);
-  const since = sent.every((at) => at !== undefined) ? Math.min(...(sent as number[])) - SENT_MARGIN_MS : undefined;
-  const cursor = await cursorBefore(session, network, feed, since);
-  if (!cursor) return undefined;
   try {
-    const answer = await (feed === "contract" ? index.since(cursor) : index.poolSince(cursor));
+    // A kept cursor the index refuses now is IndexDown too (CursorRefused), leaving the part up.
+    const kept = { kept: true };
+    const answer = await (feed === "contract" ? index.since(cursor, kept) : index.poolSince(cursor, kept));
     // Rolled back under a kept cursor: tx_status this once; the next read keeps newer ones.
     if (answer.reset) return undefined;
     return { seen: seenIn(answer), tip: answer.tip.slot };
   } catch (e) {
+    // Refused: no watch reads from it again. The sealed record's own is replaced at the next reading (contract-scan.ts).
+    if (e instanceof CursorRefused) await forgetCursor(session, network, feed, cursor).catch(() => undefined);
     if (e instanceof IndexDown) return undefined;
     throw e;
   }

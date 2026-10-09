@@ -45,7 +45,7 @@ import type { ActivityService } from "./activity";
 import { txInputs } from "./cbor";
 import { forgetContractView } from "./contract-scan";
 import { chainStatus, feedOfTx, type Feed } from "./feed";
-import { KoiosBusyError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, SpentInputError, SpentMaybeSentError, type Koios, type KoiosUtxo } from "./koios";
 import type { PrivateIndex } from "./private-index";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetSent, keptAsSent, recentlySent } from "./sent-txs";
@@ -99,6 +99,11 @@ interface Watched extends PendingTx {
   kept?: string;
   /** When it last went again. */
   resentAt?: number;
+  /**
+   * When it was first tried, before its submit: never moved, as `submittedAt` is once Koios didn't answer. A
+   * private watch reads the feed from a cursor the wallet had before it (feed.ts).
+   */
+  triedAt?: number;
   /**
    * Put back from its sealed copy (restoreNow) within its 20 minutes, and
    * not sent again since: it isn't let go as unseen before it has been, as
@@ -373,9 +378,12 @@ function feedOf(w: Pick<Watched, "contract" | "kind" | "feed">): Feed | undefine
 }
 
 /** Whether `w` is on chain (tx_status's answer, or the feed's), and the tip when the feed gave it. */
-async function lookFor(deps: PendingDeps, w: Pick<Watched, "network" | "txHash" | "submittedAt" | "contract" | "kind" | "feed">) {
+async function lookFor(
+  deps: PendingDeps,
+  w: Pick<Watched, "network" | "txHash" | "submittedAt" | "triedAt" | "contract" | "kind" | "feed">,
+) {
   const feed = feedOf(w);
-  const status = await chainStatus(deps, w.network, [{ txHash: w.txHash, sentAt: w.submittedAt, ...(feed ? { feed } : {}) }]);
+  const status = await chainStatus(deps, w.network, [{ txHash: w.txHash, sentAt: w.triedAt ?? w.submittedAt, ...(feed ? { feed } : {}) }]);
   return { confirmations: status.statuses.get(w.txHash) ?? null, tip: status.tip, fed: status.fed && feed !== undefined };
 }
 
@@ -433,6 +441,8 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
   const watched: Watched = {
     ...(s.invalidHereafter === undefined ? { ...pending, ...toAccount(s) } : { ...pending, inputs: txInputs(bytes) }),
     ...(s.contract ? { contract: true } : paysFeed(s, bytes)),
+    // Before the submit, which may have waited on the data layer and Koios both.
+    triedAt: ahead.record.triedAt ?? ahead.record.submittedAt,
   };
   try {
     await take(deps, watched, async () => {
@@ -494,6 +504,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
     network: s.network,
     txHash: s.txHash,
     submittedAt: now(),
+    triedAt: now(),
     confirmations: null,
     maybeSent: true,
     ...slot(s),
@@ -757,8 +768,9 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
         if (summary) await deps.activity?.sent(w.network, shown(current), summary).catch(() => undefined);
       }
     } catch (e) {
-      // Refused as spent: most likely this very one, on its way. Unanswered again: keep watching.
-      if (e instanceof SpentInputError) current = await mempool(koios, current);
+      // Refused as spent: most likely this very one, on its way (so too after the data layer's connection was
+      // lost). Unanswered again: keep watching.
+      if (e instanceof SpentInputError || e instanceof SpentMaybeSentError) current = await mempool(koios, current);
     }
     return turn(async () => {
       const after = await wallet.withKeys(async () => {

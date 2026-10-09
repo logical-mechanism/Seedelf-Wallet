@@ -308,6 +308,12 @@ export interface ChainProgress {
   /** When each of `flying` was last sent (ms), in its order. */
   sentAt?: number[];
   /**
+   * When each transaction was first tried (ms), by hash, before its submit:
+   * never moved by a retry or a resend, so a private watch reads the pool's
+   * feed from a cursor the wallet had before it (feed.ts).
+   */
+  firstTried?: Record<string, number>;
+  /**
    * The transaction a send began for and hadn't finished when this was
    * saved: it may be in the mempool already, if the worker stopped partway
    * (Chrome stops an idle worker during a long back-off).
@@ -319,6 +325,16 @@ export interface ChainProgress {
    * stops.
    */
   resentFor?: number;
+}
+
+/**
+ * When `hashes` were first tried, for the pool's feed (feed.ts): the chain's
+ * own record of it, or, on progress saved before it kept one, when each was
+ * last sent.
+ */
+export function firstTries(chain: Pick<ChainProgress, "firstTried" | "sentAt">, hashes: string[]): number[] | undefined {
+  const tried = hashes.map((h) => chain.firstTried?.[h]);
+  return tried.every((at) => at !== undefined) ? (tried as number[]) : chain.sentAt;
 }
 
 /**
@@ -381,6 +397,8 @@ export async function pumpChain(
   const send = async (i: number, again: boolean) => {
     const maybeSent = again || chain.sending === i;
     chain.sending = i;
+    chain.firstTried = { ...chain.firstTried };
+    chain.firstTried[chain.txs[i]!.txHash] ??= io.now();
     await io.save();
     await io.send(i, maybeSent);
     delete chain.sending;
@@ -740,7 +758,7 @@ interface ChainRecord {
    * Once the mix ended, and until it's settled (publicUnsettled), no other
    * mix from the account is built.
    */
-  maybe?: { index: number; txHash: string; inputs: string[]; at: number; unanswered?: true };
+  maybe?: { index: number; txHash: string; inputs: string[]; at: number; from?: number; unanswered?: true };
 }
 
 /**
@@ -754,6 +772,8 @@ interface KeptMaybe {
   txHash: string;
   inputs: string[];
   at: number;
+  /** When it was first tried, if earlier than `at`: where the pool's feed is read from (feed.ts). */
+  from?: number;
 }
 
 /** The record KeptMaybe is sealed in, on `network`. */
@@ -2214,7 +2234,7 @@ export class LovejoinService {
           },
           // Every transaction of a chain spends or pays a box: on the pool's feed, from before the first in the mempool
           // went (feed.ts).
-          onChain: (hashes) => this.onChain(network, hashes, sending.sentAt),
+          onChain: (hashes) => this.onChain(network, hashes, firstTries(sending, hashes)),
           save,
           sleep,
           now: this.deps.now,
@@ -2251,6 +2271,8 @@ export class LovejoinService {
         txHash: step.txHash,
         inputs: txInputs(hexBytes(step.txCbor)),
         at: this.deps.now(),
+        // When it was first tried, for the pool's feed: `at` is the stop, after every retry (feed.ts).
+        ...(sending.firstTried?.[step.txHash] !== undefined ? { from: sending.firstTried[step.txHash] } : {}),
         ...(unsure !== undefined ? { unanswered: true as const } : {}),
       };
       sending.stopped =
@@ -2520,7 +2542,7 @@ export class LovejoinService {
    */
   private async lookFor(network: NetworkName, m: KeptMaybe): Promise<"in" | "spent" | "never" | undefined> {
     const koios = this.deps.koios(network);
-    const seen = await this.onChain(network, [m.txHash], [m.at]).then((on) => (on.has(m.txHash) ? 1 : null), () => undefined);
+    const seen = await this.onChain(network, [m.txHash], [m.from ?? m.at]).then((on) => (on.has(m.txHash) ? 1 : null), () => undefined);
     if (seen === undefined) return undefined;
     if (seen !== null) return "in";
     const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
@@ -2584,7 +2606,8 @@ export class LovejoinService {
     for (const network of networks) {
       const chains = await this.read(network).then((s) => s.chains, () => []);
       const m = chains.filter((r) => r.session === undefined && r.maybe).at(-1)?.maybe;
-      if (m) await this.deps.store.set(keptMaybeName(network), { txHash: m.txHash, inputs: m.inputs, at: m.at }).catch(() => undefined);
+      const kept: KeptMaybe | undefined = m && { txHash: m.txHash, inputs: m.inputs, at: m.at, ...(m.from !== undefined ? { from: m.from } : {}) };
+      if (kept) await this.deps.store.set(keptMaybeName(network), kept).catch(() => undefined);
     }
   }
 

@@ -10,6 +10,7 @@ import { readContractView, SESSION_CONTRACT_PREFIX } from "../src/background/con
 import { DataParts, DOWN_MS } from "../src/background/data-layer";
 import { privateIndexClient, utxoOf, type IndexRow } from "../src/background/private-index";
 import { outpoint, SESSION_SPENT } from "../src/background/spent";
+import { WalletLocked } from "../src/background/wallet";
 import { assetFingerprint } from "../src/shared/fingerprint";
 import { NETWORKS } from "../src/networks";
 import { fakeIndex, indexRowOf, stableSlot } from "./fake-index";
@@ -134,6 +135,29 @@ describe("the private index", () => {
     expect(view.owned.map(outpoint)).not.toContain(OURS[0]);
   });
 
+  it("seals nothing from a read the WebAssembly trapped in, and checks the row again next time", async () => {
+    const { t, index, deps, record } = await onIndex();
+    await readContractView(deps, "mainnet");
+    const paid = { ...indexRowOf(ownedUtxos[0]!, index.tip - 50), ref: `${"b2".repeat(32)}#0` };
+    index.contract.push({ row: paid });
+    // The next ownership check traps.
+    await t.wallet.withKeys(async (keys) => {
+      const real = keys.seedelf.isOwned.bind(keys.seedelf);
+      let trap = true;
+      keys.seedelf.isOwned = (register) => {
+        if (!trap) return real(register);
+        trap = false;
+        throw new WebAssembly.RuntimeError("unreachable");
+      };
+    });
+    // The wallet locks (wallet.ts), and the row isn't sealed as someone else's.
+    await expect(readContractView(deps, "mainnet")).rejects.toBeInstanceOf(WalletLocked);
+    await t.wallet.unlock(PASSWORD);
+    expect((await record())?.checked).toEqual({});
+    expect((await readContractView(deps, "mainnet")).owned.map(outpoint)).toContain(paid.ref);
+    expect((await record())?.checked).toEqual({ [paid.ref]: true });
+  });
+
   it("starts again from a snapshot when the cursor's block was rolled back", async () => {
     const { index, deps, record } = await onIndex();
     await readContractView(deps, "mainnet");
@@ -145,6 +169,24 @@ describe("the private index", () => {
     expect(view.owned.map(outpoint).sort()).toEqual(OURS);
     expect(index.calls).toContain("contract/snapshot");
     expect((await record())?.cursor).not.toBe(kept!.cursor);
+  });
+
+  it("starts again from a snapshot when the index refuses the sealed cursor, the part left up", async () => {
+    const { index, deps, record, contractReads } = await onIndex();
+    await readContractView(deps, "mainnet");
+    const kept = await record();
+    index.refused.add(Number(kept!.cursor.split(".")[0]));
+    index.advance(400);
+    index.calls.length = 0;
+    const view = await readContractView(deps, "mainnet");
+    expect(view.owned.map(outpoint).sort()).toEqual(OURS);
+    expect(index.calls).toContain("contract/snapshot");
+    expect((await record())?.cursor).not.toBe(kept!.cursor);
+    expect(contractReads()).toBe(0);
+    // And the next reading reads on from the new cursor.
+    index.calls.length = 0;
+    await readContractView(deps, "mainnet");
+    expect(index.calls.filter((c) => c !== "names")).toEqual([expect.stringMatching(/^contract\/since\//)]);
   });
 
   it("reads Koios's scan while the index is down, never moving the sealed cursor, and the index again after 5 minutes", async () => {

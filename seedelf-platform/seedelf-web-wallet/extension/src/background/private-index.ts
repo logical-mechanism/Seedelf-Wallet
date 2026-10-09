@@ -75,6 +75,13 @@ export interface IndexNames {
 /** The private index couldn't answer: its part is down, and the caller reads Koios. */
 export class IndexDown extends Error {}
 
+/**
+ * The index won't read from a cursor kept from before (a 400): not one it
+ * hands out now, after a change on the server, say. The part isn't down: the
+ * caller starts again from a snapshot, or a watch asks tx_status this once.
+ */
+export class CursorRefused extends IndexDown {}
+
 /** `rows`, as of a cursor, at the tip a `since` from it reached: what it made added, everything spent taken out. */
 export function atTip(rows: IndexRow[], since: Extract<IndexSince, { reset?: undefined }>): IndexRow[] {
   const gone = new Set([...since.spent.map((s) => s.ref), ...since.created.filter((r) => r.spent).map((r) => r.ref)]);
@@ -130,9 +137,12 @@ export class PrivateIndex {
     return this.snapshotAt("contract/snapshot");
   }
 
-  /** What changed in the contract after `cursor`. */
-  async since(cursor: string): Promise<IndexSince> {
-    return this.sinceAt(`contract/since/${cursor}`);
+  /**
+   * What changed in the contract after `cursor`. `kept`: a cursor kept from
+   * an earlier answer, which the index may refuse now (`CursorRefused`).
+   */
+  async since(cursor: string, { kept = false } = {}): Promise<IndexSince> {
+    return this.sinceAt(`contract/since/${cursor}`, kept);
   }
 
   /** Every Seedelf name unspent at the tip, with its row. */
@@ -148,9 +158,9 @@ export class PrivateIndex {
     return this.snapshotAt("lovejoin/pool");
   }
 
-  /** What changed in Lovejoin's pool after `cursor`. */
-  async poolSince(cursor: string): Promise<IndexSince> {
-    return this.sinceAt(`lovejoin/since/${cursor}`);
+  /** What changed in Lovejoin's pool after `cursor`; `kept` as `since`'s. */
+  async poolSince(cursor: string, { kept = false } = {}): Promise<IndexSince> {
+    return this.sinceAt(`lovejoin/since/${cursor}`, kept);
   }
 
   /**
@@ -175,8 +185,8 @@ export class PrivateIndex {
     return answer;
   }
 
-  private async sinceAt(path: string): Promise<IndexSince> {
-    const answer = await this.get<IndexSince>(path);
+  private async sinceAt(path: string, kept: boolean): Promise<IndexSince> {
+    const answer = await this.get<IndexSince>(path, kept);
     if (!isTip(answer?.tip)) throw await this.failed();
     if (answer.reset === true) return { tip: answer.tip, reset: true };
     const spent = (answer as { spent?: unknown }).spent;
@@ -192,8 +202,8 @@ export class PrivateIndex {
     return answer;
   }
 
-  /** One request: an answer, or the part marked down and `IndexDown` thrown. */
-  private async get<T>(path: string): Promise<T> {
+  /** One request: an answer, or the part marked down and `IndexDown` thrown; `CursorRefused` for a kept cursor's 400. */
+  private async get<T>(path: string, keptCursor = false): Promise<T> {
     await this.limit?.take(1);
     let response: Response;
     try {
@@ -206,6 +216,7 @@ export class PrivateIndex {
     } catch {
       throw await this.failed();
     }
+    if (keptCursor && response.status === 400) throw new CursorRefused("The private index refused a kept cursor.");
     if (!response.ok) throw await this.failed(response.status === 429 ? retryAfterMs(response) : undefined);
     try {
       return (await response.json()) as T;

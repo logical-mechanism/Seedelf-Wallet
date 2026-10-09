@@ -13,7 +13,7 @@ import {
   SESSION_DATA_DOWN,
   type DataDeps,
 } from "../src/background/data-layer";
-import { Koios, KoiosBusyError, RateLimit, SpentInputError } from "../src/background/koios";
+import { Koios, KoiosBusyError, RateLimit, SpentInputError, SpentMaybeSentError } from "../src/background/koios";
 import { memoryArea } from "./fakes";
 
 const DATA = "https://data.test";
@@ -187,6 +187,9 @@ describe("a submit through the data layer", () => {
     ["a 503 at the in-flight cap", error(503, "busy", { "retry-after": "30" })],
     ["a 403", error(403, "forbidden")],
     ["a 413", error(413, "too large")],
+    // The API's body limit answers before anything is read, in plain text.
+    ["a 413 in plain text", new Response("Failed to buffer the request body: length limit exceeded", { status: 413 })],
+    ["a 415 in plain text", new Response("Expected request with `Content-Type: application/cbor`", { status: 415 })],
     ["no connection at all", "unreachable" as const],
   ])("goes straight to Koios on %s: it can't have reached the node", async (_, answer) => {
     const s = servers();
@@ -226,6 +229,32 @@ describe("a submit through the data layer", () => {
     const e = await make("mainnet").submitTx(new Uint8Array([1])).catch((e: unknown) => e);
     expect(e).toBeInstanceOf(KoiosBusyError);
     expect((e as KoiosBusyError).maybeSent).toBe(true);
+    // Worth the mempool check a refusal as spent gets (pending.ts).
+    expect(e).toBeInstanceOf(SpentMaybeSentError);
+  });
+
+  it.each([
+    ["a 429", () => error(429, "slow down", { "retry-after": "5" })],
+    ["a 5xx", () => error(502, "bad gateway")],
+    ["its node down", () => new Response('"TxSubmitConnectionError"', { status: 500 })],
+    ["no answer either", "unreachable" as const],
+  ])("is maybe sent when Koios answers %s after a lost connection: that says nothing of the first try", async (_, answer) => {
+    const s = servers();
+    s.data.set("submittx", "unreachable");
+    s.koios.set("submittx", answer);
+    const { make } = client(s);
+    const e = await make("mainnet").submitTx(new Uint8Array([1])).catch((e: unknown) => e);
+    expect(e).toBeInstanceOf(KoiosBusyError);
+    expect((e as KoiosBusyError).maybeSent).toBe(true);
+  });
+
+  it("keeps the node's refusal of the transaction itself after a lost connection", async () => {
+    const s = servers();
+    s.data.set("submittx", "unreachable");
+    s.koios.set("submittx", new Response('"FeeTooSmallUTxO"', { status: 400 }));
+    const { make } = client(s);
+    const e = await make("mainnet").submitTx(new Uint8Array([1])).catch((e: unknown) => e);
+    expect(e).not.toBeInstanceOf(KoiosBusyError);
   });
 
   it("keeps Koios's refusal as it is after a refusal that never reached the node", async () => {

@@ -9,6 +9,7 @@ import { DataParts, DOWN_MS } from "../src/background/data-layer";
 import { chainStatus, CURSOR_SPACING_MS, CURSORS_FOR_MS, feedOfTx, noteCursor, SESSION_FEED_PREFIX } from "../src/background/feed";
 import { pendingKey, PendingService } from "../src/background/pending";
 import { privateIndexClient } from "../src/background/private-index";
+import type { RecordName } from "../src/background/private-store";
 import { fakeIndex, indexRowOf } from "./fake-index";
 import { bytes, recordedSwap } from "./fixtures/swap-tx";
 import { ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
@@ -21,7 +22,7 @@ const TX = "fe".repeat(32);
 const OTHER = "fd".repeat(32);
 const cursorAt = (slot: number) => `${slot}.${"ab".repeat(32)}`;
 
-/** The 12-word wallet, the feed's index pointed at preprod's fixtures, and a cursor from 20 minutes ago kept. */
+/** The 12-word wallet, the feed's index pointed at preprod's fixtures, and a cursor the wallet had 20 minutes ago kept. */
 async function watching() {
   const v = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!;
   const t = testBalances();
@@ -34,26 +35,30 @@ async function watching() {
     ...t.deps,
     index: privateIndexClient({ koiosOnly: async () => false, parts, fetch: index.fetch, limits: {} }, () => "https://data.test"),
   };
-  const before = NOW_SLOT - 1_200;
-  await noteCursor(t.session, "preprod", "contract", cursorAt(before), t.clock.now);
-  await noteCursor(t.session, "preprod", "lovejoin", cursorAt(before), t.clock.now);
+  const before = NOW_SLOT - 1_500;
+  await noteCursor(t.session, "preprod", "contract", cursorAt(before), t.clock.now - 20 * 60_000, t.clock.now);
+  await noteCursor(t.session, "preprod", "lovejoin", cursorAt(before), t.clock.now - 20 * 60_000, t.clock.now);
   const asked = () => t.koios.calls.filter((c) => c.path === "tx_status").length;
   return { t, index, deps, parts, asked };
 }
 
 describe("the cursors a watch reads from", () => {
-  it("keeps one every few minutes for six hours, in slot order, an older one put in its place", async () => {
+  it("keeps one every few minutes for six hours, in the order the wallet had them, an older one put in its place", async () => {
     const t = testBalances();
     const now = 1_800_000_000_000;
-    const slot = (msAgo: number) => Math.floor((now - msAgo) / 1000) - PREPROD_SLOT_TIME;
-    for (const ago of [70, 60, 58, 50, 2].map((m) => m * 60_000)) await noteCursor(t.session, "preprod", "contract", cursorAt(slot(ago)), now);
+    const slot = (msAgo: number) => Math.floor((now - msAgo) / 1000) - PREPROD_SLOT_TIME - 300;
+    const note = (msAgo: number) => noteCursor(t.session, "preprod", "contract", cursorAt(slot(msAgo)), now - msAgo, now);
+    // Two at once, as both feeds' readings note theirs: neither is lost.
+    await Promise.all([note(70 * 60_000), noteCursor(t.session, "preprod", "lovejoin", cursorAt(slot(0)), now)]);
+    for (const ago of [60, 58, 50, 2].map((m) => m * 60_000)) await note(ago);
     // One from before a lock, older than every one kept: in its place, not at the end.
-    await noteCursor(t.session, "preprod", "contract", cursorAt(slot(90 * 60_000)), now);
+    await note(90 * 60_000);
     // One from before six hours ago: not kept.
-    await noteCursor(t.session, "preprod", "contract", cursorAt(slot(CURSORS_FOR_MS + 60_000)), now);
-    const kept = (await t.session.get<{ contract: Array<{ cursor: string; at: number }> }>(SESSION_FEED_PREFIX + "preprod"))!.contract;
-    expect(kept.map((c) => Math.round((now - c.at) / 60_000))).toEqual([90, 70, 60, 50, 2]);
-    expect(kept.every((c, i) => i === 0 || c.at - kept[i - 1]!.at >= CURSOR_SPACING_MS || i === kept.length - 1)).toBe(true);
+    await note(CURSORS_FOR_MS + 60_000);
+    const kept = (await t.session.get<Record<string, Array<{ cursor: string; got: number }>>>(SESSION_FEED_PREFIX + "preprod"))!;
+    expect(kept.contract!.map((c) => Math.round((now - c.got) / 60_000))).toEqual([90, 70, 60, 50, 2]);
+    expect(kept.contract!.every((c, i, all) => i === 0 || c.got - all[i - 1]!.got >= CURSOR_SPACING_MS || i === all.length - 1)).toBe(true);
+    expect(kept.lovejoin).toHaveLength(1);
   });
 });
 
@@ -93,6 +98,59 @@ describe("a private transaction's watch", () => {
     expect([statuses.get(TX), statuses.get(OTHER)]).toEqual([null, 3]);
     expect(t.koios.calls.filter((c) => c.path === "tx_status").map((c) => c.body._tx_hashes)).toEqual([[OTHER]]);
     expect(asked()).toBe(1);
+  });
+
+  it("reads the feed for one sent a moment after the wallet had a cursor, whatever this device's clock says", async () => {
+    const { t, index, deps, asked } = await watching();
+    // This device's clock runs 20 minutes fast: the send and the cursor are both dated by it.
+    t.clock.now += 20 * 60_000;
+    // Read at the review, seconds before the send: a stable cursor, behind the tip it came with.
+    await noteCursor(t.session, "preprod", "contract", cursorAt(NOW_SLOT - 300), t.clock.now - 5_000, t.clock.now);
+    index.contract[0]!.spent = { slot: NOW_SLOT - 2, by: TX };
+    const read = await chainStatus(deps, "preprod", [{ txHash: TX, feed: "contract", sentAt: t.clock.now - 1_000 }]);
+    expect(read).toMatchObject({ fed: true });
+    expect(read.statuses.get(TX)).toBe(1);
+    expect(index.calls).toEqual([`contract/since/${cursorAt(NOW_SLOT - 300)}`]);
+    expect(asked()).toBe(0);
+  });
+
+  it("asks tx_status for one sent before every cursor kept, and reads the rest of its group from the feed", async () => {
+    const { t, index, deps } = await watching();
+    index.contract[0]!.spent = { slot: NOW_SLOT - 2, by: TX };
+    const { statuses, fed } = await chainStatus(deps, "preprod", [
+      { txHash: TX, feed: "contract", sentAt: t.clock.now - 60_000 },
+      // Turned away an hour ago and still listed: it holds up nothing.
+      { txHash: OTHER, feed: "contract", sentAt: t.clock.now - 60 * 60_000 },
+    ]);
+    expect(statuses.get(TX)).toBe(1);
+    expect(fed).toBe(false);
+    expect(t.koios.calls.filter((c) => c.path === "tx_status").map((c) => c.body._tx_hashes)).toEqual([[OTHER]]);
+    expect(index.calls).toHaveLength(1);
+  });
+
+  it("reads from the sealed cursor for one sent before a lock, before the unlock's reading keeps it again", async () => {
+    const { t, index, deps, asked } = await watching();
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    // The session's cursors went with the lock; the sealed record's didn't.
+    expect(await t.session.get(SESSION_FEED_PREFIX + "preprod")).toBeUndefined();
+    await t.deps.store.set("contract.preprod" as RecordName, { cursor: cursorAt(NOW_SLOT - 3_000), got: t.clock.now - 40 * 60_000 });
+    const read = await chainStatus(deps, "preprod", [{ txHash: TX, feed: "contract", sentAt: t.clock.now - 30 * 60_000 }]);
+    expect(read.fed).toBe(true);
+    expect(index.calls).toEqual([`contract/since/${cursorAt(NOW_SLOT - 3_000)}`]);
+    expect(asked()).toBe(0);
+  });
+
+  it("asks tx_status this once, the part left up, when the index refuses a kept cursor", async () => {
+    const { t, index, deps, parts, asked } = await watching();
+    index.fail = Response.json({ error: "not a cursor this server hands out" }, { status: 400 });
+    expect((await chainStatus(deps, "preprod", [{ txHash: TX, feed: "contract", sentAt: t.clock.now }])).fed).toBe(false);
+    expect(asked()).toBe(1);
+    expect(await parts.up("private")).toBe(true);
+    // Forgotten: the next look doesn't ask the index from it again.
+    const kept = await t.session.get<Record<string, unknown[]>>(SESSION_FEED_PREFIX + "preprod");
+    expect(kept?.contract).toEqual([]);
+    expect(kept?.lovejoin).toHaveLength(1);
   });
 
   it("asks tx_status as before while the private part is down, and with no cursor from before it went out", async () => {

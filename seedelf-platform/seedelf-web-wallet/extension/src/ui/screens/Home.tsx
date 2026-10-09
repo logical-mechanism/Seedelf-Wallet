@@ -120,6 +120,8 @@ const FEED_EVERY_MS = 5_000;
 const HOLD_MS = 10 * 60_000;
 /** How often to ask about one from the public account once it no longer holds anything back: it can land for about two hours. */
 const SETTLE_EVERY_MS = 60_000;
+/** When to look again for a pool's ticker the reading went without: one pool_info, asked behind it. */
+const POOL_TICKER_AFTER_MS = 3_000;
 
 type Tab = "seedelf" | "cardano";
 
@@ -360,6 +362,29 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     const tick = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(tick);
   }, [load, watch]);
+
+  // A pool shown by its ID: the reading never waits for its ticker, which the worker asks for behind it
+  // (staking.ts `readStake`). The kept reading a moment later has it, asking no one.
+  const shownPool = balances?.cardano.staking.pool;
+  const poolWithoutTicker = shownPool && !shownPool.ticker ? shownPool.id : undefined;
+  useEffect(() => {
+    if (!poolWithoutTicker) return;
+    const later = setTimeout(() => {
+      call("balances", { kept: true }).then(
+        (b) => {
+          const pool = b.cardano.staking.pool;
+          if (pool?.id !== poolWithoutTicker || !pool.ticker) return;
+          setBalances((was) =>
+            was?.cardano.staking.pool?.id === pool.id
+              ? { ...was, cardano: { ...was.cardano, staking: { ...was.cardano.staking, pool } } }
+              : was,
+          );
+        },
+        () => undefined,
+      );
+    }, POOL_TICKER_AFTER_MS);
+    return () => clearTimeout(later);
+  }, [poolWithoutTicker]);
 
   // While Home shows, what's running: read from the device every 20 s, as the worker's alarm moves it on.
   useEffect(() => {

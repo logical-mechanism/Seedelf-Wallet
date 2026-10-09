@@ -42,7 +42,7 @@ import { CONTRACT_V1, ownedUtxos, type ContractConfig } from "./balances";
 import { registerOf, seedelfTokenOf, type RegisterHex } from "./chain";
 import type { Koios, KoiosUtxo } from "./koios";
 import { noteCursor } from "./feed";
-import { IndexDown, type IndexRow, type IndexSince, type PrivateIndex, utxoOf } from "./private-index";
+import { CursorRefused, IndexDown, type IndexRow, type IndexSince, type PrivateIndex, utxoOf } from "./private-index";
 import { type PrivateStore, type RecordName, UnreadableRecordError } from "./private-store";
 import { outpoint, readFresh, spentSet, wait } from "./spent";
 import type { Area } from "./storage";
@@ -195,6 +195,8 @@ interface Settled {
   /** Whose: a hash of the Seedelf key's base register. A record another wallet's read wrote is never taken for this one's. */
   owner: string;
   cursor: string;
+  /** When the wallet had `cursor`, by this device's clock (ms): watches read from it (feed.ts). */
+  got: number;
   rows: IndexRow[];
   /** Rows made after `cursor`, by ref: whether each is this wallet's. They come again in the next answer, unchecked. */
   checked: Record<string, boolean>;
@@ -260,11 +262,25 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     throw e;
   });
   let settled = kept?.v === 1 && kept.owner === owner ? kept : undefined;
-  let since: IndexSince | undefined = settled && (await index.since(settled.cursor));
+  let since: IndexSince | undefined;
+  try {
+    since = settled && (await index.since(settled.cursor, { kept: true }));
+  } catch (e) {
+    // A cursor the index won't read from now: start again from a snapshot, as after a rollback under it.
+    if (!(e instanceof CursorRefused)) throw e;
+    settled = undefined;
+  }
   if (!settled || since?.reset) {
     const snapshot = await index.snapshot();
     const mine = await ours(snapshot.rows);
-    settled = { v: 1, owner, cursor: snapshot.cursor, rows: snapshot.rows.filter((r) => mine.has(r.ref)).map(settledRow), checked: {} };
+    settled = {
+      v: 1,
+      owner,
+      cursor: snapshot.cursor,
+      got: deps.now(),
+      rows: snapshot.rows.filter((r) => mine.has(r.ref)).map(settledRow),
+      checked: {},
+    };
     await store.set(record, settled);
     since = await index.since(settled.cursor);
     // Rolled back between the two: Koios this once, and a snapshot again next time.
@@ -272,6 +288,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
   }
   const changes = since!;
   if (changes.reset) throw new IndexDown("The private index's cursor was rolled back.");
+  const had = deps.now();
 
   // Only the rows not checked before.
   const unchecked = changes.created.filter((r) => !(r.ref in settled.checked));
@@ -294,6 +311,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     v: 1,
     owner,
     cursor: changes.cursor,
+    got: changes.cursor === settled.cursor ? (settled.got ?? had) : had,
     rows: [...settled.rows, ...changes.created.filter((r) => r.created.slot <= cursor && checked[r.ref]).map(settledRow)].filter(
       (r) => !goneBy.has(r.ref),
     ),
@@ -306,7 +324,9 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     same(keys);
     // The cursors it read from and was handed, for the private watches (feed.ts): the sealed one is from before a
     // lock, which a watch from before the lock reads from.
-    for (const cursor of new Set([settled.cursor, changes.cursor])) await noteCursor(session, network, "contract", cursor, deps.now());
+    const { cursor: before, got } = settled;
+    if (typeof got === "number") await noteCursor(session, network, "contract", before, got, had);
+    await noteCursor(session, network, "contract", changes.cursor, next.got);
     const spent = await spentSet(session);
     const owned = atTip.map((r) => utxoOf(r, contract.walletContractHash, network)).filter((u) => !spent.has(outpoint(u)));
     const seedelfs: Record<string, Locator> = {};

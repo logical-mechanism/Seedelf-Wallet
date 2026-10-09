@@ -493,7 +493,10 @@ export function ownedUtxos(wasm: typeof Wasm, keys: Keys, utxos: KoiosUtxo[]): K
     const register = new wasm.Register(hex.generator, hex.publicValue);
     try {
       return keys.seedelf.isOwned(register);
-    } catch {
+    } catch (e) {
+      // A trap is the WebAssembly broken, not an answer: the read stops (wasm.ts) rather than take the row for
+      // someone else's, which the private index's sealed record would keep for good (contract-scan.ts).
+      if (isTrap(e)) throw e;
       // Points that don't decode, or aren't in the prime-order subgroup, can't be ours to spend.
       return false;
     } finally {
