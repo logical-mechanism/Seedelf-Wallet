@@ -314,7 +314,7 @@ Planned in [chunk 26c](chunk-26c-data-layer-vps.md).
 - **a manual deploy workflow:** build with the pinned toolchain, ship the binary, restart, check `/health`, roll back;
 - **CI for `seedelf-data/`,** which has none today;
 - the store build's origin and the user-facing docs above;
-- home's egress through the tunnel, then the drills;
+- the drills (home's egress through the tunnel was dropped in 26c: the node is a stake pool's relay);
 - **Caddy's own errors carry no CORS headers** (its 502 while the API is down, its 413): the wallet sees them as a lost connection. That's safe: a read goes to Koios, and a submit Koios then calls spent, or doesn't answer, is maybe sent.
 
 ## Left for later

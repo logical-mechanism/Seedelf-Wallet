@@ -1,8 +1,18 @@
 # Chunk 26c · The VPS, then 1.4.0
 
-Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The data layer goes public on a DigitalOcean droplet, home's node and db-sync reach the internet only through it, and the drills run. Then the store build gets the API's address, and that's 1.4.0.
+Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The data layer goes public on a DigitalOcean droplet, home's services are reached through a tunnel, and the drills run. Then the store build gets the API's address, and that's 1.4.0.
 
-**Status: 📝 planned (2026-10-09), not started.** The API (#289) and the wallet's side ([chunk 26b](chunk-26b-data-layer-wallet.md), #290) are built, reviewed and checked against a local API. Nothing a user runs reads the data layer until this chunk's last PR.
+**Status: 🚧 started 2026-10-09.** The API (#289) and the wallet's side ([chunk 26b](chunk-26b-data-layer-wallet.md), #290) are built, reviewed and checked against a local API. Nothing a user runs reads the data layer until this chunk's last PR.
+
+**Done so far (2026-10-09):**
+- the decisions below are settled;
+- on the droplet, runbook §2 but for the API's start: packages, Caddy (installed, off until §4), WireGuard, nftables in place of `ufw`, and the API's binary, unit and env. All of it came back by itself after a reboot;
+- home's side (runbook §1): the tunnel, its firewall (`seedelf-nftables` and a `ufw` rule), and Postgres on `10.88.0.2` with the VPS's `pg_hba` line. From the VPS, Postgres, Ogmios, the Seedelf Kupo and submit-api all answer;
+- the API, running on the droplet: `/health` 200, every part `ok`, `"source":"db-sync"`. Its logs carry no colour codes now (`main.rs`). Caddy's config is installed and valid, with Caddy still off.
+
+Next: the DNS record (`mainnet.seedelf.logicalmechanism.io`, A, to `142.93.120.105`), then Caddy (runbook §4) and the checks (§5).
+
+**Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
 ## Start here
 
@@ -37,27 +47,34 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
 | What a user's network sees | a DNS lookup naming the API, and its name in the TLS handshake | only the IP |
 | Certificate transparency | the name is public | the IP is public |
 
-**The recommendation is a domain,** for the freedom to move. A subdomain of a domain the owner already has costs nothing. **Take a reserved IP either way,** so a rebuilt droplet keeps its address.
+**The recommendation is a domain,** for the freedom to move. A subdomain of a domain the owner already has costs nothing.
+
+**Settled (owner, 2026-10-09): `https://mainnet.seedelf.logicalmechanism.io`,** a subdomain of the owner's business domain, whose DNS is on DigitalOcean.
+
+**No reserved IP.** The wallet calls the name, so the droplet's IP lives only in the DNS record and home's `wg0.conf` (`Endpoint`), each a minute to change. A droplet keeps its IP when it's resized or rebuilt; only destroying it loses the IP. One can still be added at any time, with no release.
 
 ### 2. DigitalOcean's terms
 
 [The acceptable use policy](https://www.digitalocean.com/legal/acceptable-use-policy) forbids two things that come near what this is, checked 2026-10-09:
 - "Mining any cryptocurrency … without explicit written permission." There's no mining here.
-- "Operating open proxies, open mail relays, open recursive domain name servers, Tor exit nodes, or other similar network services." The tunnel carries one node's own traffic, closed to everyone else.
+- "Operating open proxies, open mail relays, open recursive domain name servers, Tor exit nodes, or other similar network services." The tunnel carries the API's calls to home, closed to everyone else, and nothing passes through the droplet.
 
-**Ask DigitalOcean's support to confirm in writing,** before home's traffic moves into the tunnel (runbook §3). Describe it as it is: a Cardano node at home, with its peer traffic leaving through a private WireGuard tunnel to the droplet, and an API on it. Keep the reply with this file's record.
+**Ask DigitalOcean's support to confirm in writing.** Describe it as it is: a Cardano node at home, with its peer traffic leaving through a private WireGuard tunnel to the droplet, and an API on it. Keep the reply with this file's record.
+
+**Settled: DigitalOcean said it's fine** (the owner, 2026-10-09). The owner holds the reply.
 
 ### 3. The droplet
 
 - **Basic, 2 vCPU, 4 GB: $24 a month,** with 4 TB of outbound transfer a month. Inbound is free, the allowance is pooled across the team's droplets, and more costs $0.01 a GiB ([pricing](https://docs.digitalocean.com/platform/billing/bandwidth/)).
-- **In the region nearest home,** on Ubuntu 24.04 LTS, x86_64.
-- **Traffic:** the runbook's estimate for the node is about 1 GB an hour each way. Through the tunnel, both directions leave the droplet: out to peers, and out to home. That's about 1.4 TB a month, plus the API, inside 4 TB. Measure with `vnstat` for a day first (runbook §3, step 1); the API's own egress ceiling (`DATA_EGRESS_GB_MONTH`) caps its share.
+- **In the region nearest home,** x86_64.
+- **What was made (2026-10-09):** `seedelf-data-layer` in nyc1, `142.93.120.105`, no IPv6, **Ubuntu 26.04 LTS** (glibc 2.43, and `sudo` is sudo-rs). SSH as `seedelf`, keys only, no root login. It came with `ufw` on; nftables replaced it.
+- **Traffic:** the API's alone, since the node keeps its own route (2026-10-09). Its ceiling, `DATA_EGRESS_GB_MONTH`, is 1,500 GB to start; `vnstat` on the droplet is the real meter. The droplet was sized for the node's traffic too (about 1.4 TB a month), so once the API's use is measured, a smaller one may do.
 - **DDoS:** DigitalOcean's [free protection](https://www.digitalocean.com/products/ddos-protection) covers layers 3 and 4 inside its network and never terminates TLS, as the runbook asks. Layer 7 is the API's own buckets (`src/edge.rs`).
 
 ## The work, in order
 
-1. **The droplet, not public yet** (runbook §2): packages, WireGuard, nftables, the API as a service, and the checks of home from the VPS. Home's side first (runbook §1): Postgres's listen address and `pg_hba`, the tunnel, Kupo and submit-api moved to the tunnel's address.
-2. **Home's traffic into the tunnel** (runbook §3), once DigitalOcean has answered: measure, DNS over TLS, the routes unit and the kill switch, then check that the node leaves through `wg0` and reaches nothing with the tunnel down.
+1. **The droplet, not public yet** (runbook §2): packages, WireGuard, nftables, the API as a service, and the checks of home from the VPS. Home's side first (runbook §1): the tunnel and its firewall, then Postgres's listen address and `pg_hba`. Kupo, Ogmios and submit-api already listen on every address, so they stay as they are.
+2. ~~Home's traffic into the tunnel~~ (runbook §3): dropped, since home's node is a stake pool's relay.
 3. **Going public** (runbook §4): the DNS record, or the IP certificate, and Caddy.
 4. **The checks** (runbook §5). The CORS check runs for both IDs `DATA_ORIGINS` holds:
    - the store's, `dkefopeefhophfkjkkdebhoklagjdmcp` (the listing's own, unchanged since 1.0.0);
@@ -65,7 +82,7 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
 
    **A wrong ID is silent:** every wallet falls back to Koios, and nothing says why. So this check is also the deploy workflow's.
 5. **The deploy workflow,** `.github/workflows/data-layer-deploy.yml`, run by hand only (`workflow_dispatch`):
-   - **build:** `cargo build --release -p seedelf-data-api` with the pinned toolchain (`seedelf-data/rust-toolchain.toml`) on `ubuntu-24.04`, the droplet's own release, so glibc matches. The token decimals are built in (`api/data/token-decimals.json`), so refreshing them is a deploy too;
+   - **build:** `cargo build --release -p seedelf-data-api` with the pinned toolchain (`seedelf-data/rust-toolchain.toml`) on `ubuntu-24.04`. Its glibc (2.39) is older than the droplet's (2.43), which is the safe direction; the binary needs 2.34. The token decimals are built in (`api/data/token-decimals.json`), so refreshing them is a deploy too;
    - **ship:** over SSH, as a `deploy` user. Its key in `authorized_keys` may only run one fixed script (`command=`), which takes the binary on stdin;
      - the key and the droplet's host key are secrets of a GitHub environment that asks the owner to approve each run;
    - **install, check, roll back:** the script keeps the running binary as `.prev`, puts the new one in place and restarts the service. It then checks `/health` and the store ID's CORS line, and puts `.prev` back and restarts if either fails;
@@ -86,6 +103,9 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
 
 ## Gotchas known now
 
+- **Root during setup is temporary.** `/etc/sudoers.d/90-seedelf-setup` gives `seedelf` `sudo` with no password while Claude sets the droplet up. Delete it once the `deploy` user and its one script exist.
+- **Ship the binary `cargo build` makes, never one left by `cargo test`.** `cargo test --release` relinks `target/release/seedelf-data-api` with the test dependencies' features mixed in: a different binary at the same path. The deploy workflow's build job runs `cargo build` alone.
+- **Caddy's apt repository (Cloudsmith) answered 402 on 2026-10-09,** from anywhere. Caddy is the GitHub release's `.deb`, checked against its checksums file, so apt never updates it (runbook, *Routine*).
 - **Caddy's own errors carry no CORS headers:** its 502 while the API restarts, and its 413. The wallet reads them as a lost connection, which 26b made safe for submits.
 - **An IP certificate lasts 6 days.** If Caddy can't renew one, the API goes dark and wallets fall back to Koios until it does: never broken, but watch renewals.
 - **Postgres's boot race:** after a reboot it bound localhost only; the runbook's drop-in fixes it. Postgres refusing connections on 5432 while Kupo and Ogmios answer means this.
