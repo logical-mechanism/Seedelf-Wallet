@@ -250,7 +250,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `POST /api/v1/ogmios` | Ogmios, `POST /` | `application/json` (415 if not: a `text/plain` POST needs no CORS preflight, so a web page could send one); a JSON-RPC 2.0 `evaluateTransaction` and no other method (400); at most 64 KiB; at most 2 in flight |
 
 - **Answers pass through untouched,** status and body. Koios fronts the same two services, so the error strings the wallet classifies stay what they are. They matched Koios's byte for byte on 2026-10-08.
-- **No answer** is a 502 (unreachable, or no connection within 3 s) or a 504 (timed out after 30 s): to the wallet, either one means "maybe sent". Each request opens a fresh connection, so one that died with the tunnel can't hold a submit for the full 30 s.
+- **No connection** to home (refused, or none within 3 s) is a 503 with `Retry-After`: nothing reached the node, so the wallet sends through Koios at once.
+- **No answer** on a connection that opened is a 502, or a 504 after 30 s: to the wallet, either one means "maybe sent". Each request opens a fresh connection, so one that died with the tunnel can't hold a submit for the full 30 s.
 - **It depends on the node alone,** so db-sync can be down.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL. reqwest's own error messages carry the URL, so errors are logged by kind only.
 
