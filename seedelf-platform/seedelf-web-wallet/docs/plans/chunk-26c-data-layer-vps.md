@@ -134,6 +134,8 @@ So the test sees a wrong ID, and the store's passes it: CORS holds for the listi
 
 ### After the merge
 
+**Done for 1.4.0:** PR #294 merged as `b5ad15a`; the API deployed from it through the workflow, and the live API then answered the store's ID with `cache-control: no-store`; the package built from it, SHA-256 `b1ba594f3d4f2705c075e51c3ca561613db12528bbd76405ff045bcf74571c0a` ([roadmap.md](../roadmap.md)'s handoff note has the rest). The steps, for the record:
+
 1. **Deploy the API from the merge commit:** Actions → *Data layer deploy*, `deploy`, approved, then `status`. Then check from anywhere: `curl -sI -H 'Origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp' https://mainnet.seedelf.logicalmechanism.io/api/v1/tip` says `cache-control: no-store`. **The package isn't uploaded before this.**
 2. **The package**, on `main` at the merge commit ([development.md](../development.md#2-on-main-after-the-merge-build-and-test-the-store-package)): `npm run package`, `npm run e2e` on it, the SHA-256.
 3. **The upload** (the owner), and the `release-1.4.0-record` PR with the commit and the hash, as #287 was.
