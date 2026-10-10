@@ -26,7 +26,7 @@ serde_json = { version = "1.0.133", features = ["raw_value"] }
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 # The home Postgres is reached over the LAN now and over WireGuard later: no TLS of its own.
 tokio-postgres = "0.7"
-tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "cors"] }
+tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "cors", "set-header"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

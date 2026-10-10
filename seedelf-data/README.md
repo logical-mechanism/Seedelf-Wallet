@@ -12,7 +12,7 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 - **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
 - **The deploy files and runbook,** [deploy/README.md](deploy/README.md): home's services through a WireGuard tunnel, and the API behind Caddy on a VPS.
 
-**Still to come:** putting it on the VPS, at the end of chunk 26.
+**Live** at `https://mainnet.seedelf.logicalmechanism.io` (web wallet chunk 26c): a DigitalOcean droplet, deployed only through `.github/workflows/data-layer-deploy.yml`.
 
 ## Run it locally
 
@@ -63,7 +63,7 @@ cargo fmt --check
 
 **What the offline tests check,** beyond each module's own:
 - the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`): a fork under a cursor answers `reset`, and with no source fresh the index answers 503;
-- the whole app behind its edge (`tests/edge.rs`): CORS for the wallet's origin alone, a 429 the wallet can read, a bucket per client Caddy names, and the month's ceiling.
+- the whole app behind its edge (`tests/edge.rs`): CORS for the wallet's origin alone, a 429 the wallet can read, a bucket per client Caddy names, the month's ceiling, and `no-store` on every answer but a preflight.
 
 **What the live tests check:**
 
@@ -101,9 +101,10 @@ What stands between the internet and the routes, in `src/edge.rs`. Caddy in fron
 | `submittx`, `ogmios` | 10 |
 
 - **Answers cost what they send:** a unit more for every 16 KB, charged after. A bucket can go below empty, to a full bucket's worth.
-- **Past it, a 429** with `Retry-After`. A wallet paces itself well under this: `koios.ts` keeps to 40 requests every 10 s.
+- **Past it, a 429** with `Retry-After`. A wallet paces itself under this: its data layer client keeps to 80 units every 10 s, by these weights (`DATA_LIMIT` in the wallet's `data-layer.ts`).
 - **A web page's requests are refused** with 403: a browser fetch that isn't CORS (an image, a `no-cors` fetch, a page load), or one from an origin that isn't the wallet's. The browser would hide the answer from the page but still download it, so any site's visitors could spend the month's traffic. A request with neither header (curl, a monitor) passes, and `/health` always does.
 - **IPs exist only in memory:** a bucket is forgotten once it's full again, and nothing logs an address.
+- **No answer is kept in a browser's cache:** every answer but a CORS preflight carries `Cache-Control: no-store`, refusals and 429s included. The wallet asks with `cache: "default"` (web wallet 1.4.0), so Chrome reuses a preflight for as long as its `Access-Control-Max-Age` allows (24 h here, which Chrome caps at 2), instead of sending one before every POST.
 - **At most 200,000 buckets.** Past that, refilled ones are dropped on the spot, at most once a second; if none are, a new client gets 503.
 
 **Logs can't be turned up to show a request.** The database driver logs every query's parameters at debug, and axum's rejections quote bodies. Those libraries are held by a filter of their own, which every line must pass as well as `RUST_LOG`'s, so no directive there can raise them, however narrow its target. Checked with `RUST_LOG=tokio_postgres::query=debug`: no query parameters were logged.
@@ -168,8 +169,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
 | `pool_list` | the registered pools, 1,000 a page | an hour, within its epoch |
 | `pool_info` | up to 5 pools' details and live stake | 10 minutes, within its epoch |
-| `drep_info` | up to 5 DReps' standing | 10 minutes, within its epoch |
-| `drep_metadata` | up to 5 DReps' profile names | 10 minutes |
+| `drep_info` | up to 5 DReps' standing | 10 minutes, within its epoch; the account's own (`deposit,meta_url,meta_hash` selected) never |
+| `drep_metadata` | up to 5 DReps' profile names | 10 minutes; the account's own profile (`is_valid` selected) never |
 | `proposal_list` | the live governance actions | 5 minutes, within its epoch |
 | `vote_list` | one DRep's votes on up to 40 actions | never |
 | `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |

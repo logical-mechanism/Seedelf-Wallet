@@ -27,8 +27,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::warn;
 
 /// A bucket holds this many units, and refills this many a second. A
-/// wallet paces its own requests well under it (koios.ts's `RateLimit`
-/// keeps to 40 every 10 s), so only a scraper or a loop ever waits.
+/// wallet paces its own requests under it (its data layer client keeps to
+/// 80 units every 10 s, weighed as `weight` does), so only a scraper, a
+/// loop or several wallets behind one address ever wait.
 pub const CAPACITY: f64 = 300.0;
 pub const REFILL: f64 = 10.0;
 

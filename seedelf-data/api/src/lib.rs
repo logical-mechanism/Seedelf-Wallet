@@ -22,10 +22,11 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower_http::compression::CompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::edge::Edge;
 use crate::state::{AppState, age, block_age};
@@ -34,6 +35,12 @@ use crate::submit::Submit;
 /// Every route, compressed, behind the edge's limits, with CORS outermost so
 /// the wallet can read a 429 too. Nothing here logs a request: no address,
 /// path or body.
+///
+/// Every answer but a preflight says `Cache-Control: no-store`. The wallet
+/// asks with `cache: "default"`, so Chrome reuses a preflight (`edge::cors`'s
+/// max-age) instead of making one before every POST; this keeps the answers
+/// themselves out of the browser's cache, which would otherwise hold some
+/// that name what's private (an ADA Handle, a DRep ID).
 pub fn app(
     state: Arc<AppState>,
     submit: Arc<Submit>,
@@ -48,6 +55,10 @@ pub fn app(
         .merge(submit::routes().with_state(submit))
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn_with_state(edge, edge::limit))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .layer(edge::cors(origins))
 }
 

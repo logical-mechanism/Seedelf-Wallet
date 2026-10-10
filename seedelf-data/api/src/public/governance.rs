@@ -1,7 +1,10 @@
 //! `drep_info`, `drep_metadata`, `proposal_list` and `vote_list`: DReps,
 //! their profiles, the live governance actions, and the account's own
 //! DRep's votes. A DRep's answers and the action list are the same for
-//! everyone and are kept; a DRep's votes name the account's own DRep, so they aren't.
+//! everyone and are kept; what the wallet asks of the account's own DRep
+//! (its standing, its profile, its votes) is one user's, so it isn't, and is
+//! read live, as Koios does: a retirement or a registration shows at the
+//! next block, not 10 minutes on (web wallet 1.4.0's release review).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +21,7 @@ use super::{array, body, distinct};
 use crate::ids::{Drep, decode, drep_id, gov_action_id, gov_action_parts};
 use crate::state::{ApiError, AppState, json as answer, to_json};
 
-/// How long a DRep's standing or profile is kept.
+/// How long a DRep's standing or name is kept, for a DRep the wallet looks at, never its own.
 const DREP_KEEP: Duration = Duration::from_secs(600);
 
 /// How long the live governance actions are kept.
@@ -269,21 +272,26 @@ pub async fn drep_info(
     if columns != INFO_COLUMNS && columns != STANDING_COLUMNS {
         return Err(NOT_ASKED);
     }
+    // The account's own DRep, with its deposit and anchor: live, never kept.
+    let own = columns == STANDING_COLUMNS;
     let dreps = dreps(&headers, &bytes)?;
     let tip = state.fresh_tip()?;
     let mut rows = Vec::new();
     for (_, drep) in dreps {
-        // By epoch: a DRep's activity and expiry turn at an epoch's start.
-        let key = format!("drep_info/{}/{}", tip.epoch, drep_key(&drep));
-        let kept = state
-            .lasting(&key, DREP_KEEP, || async {
-                let client = state.chain.public().await?;
-                match drep_hash_id(&client, &drep).await? {
-                    Some(id) => to_json(&drep_state(&client, id).await?),
-                    None => Ok(Bytes::new()),
-                }
-            })
-            .await?;
+        let read = || async {
+            let client = state.chain.public().await?;
+            match drep_hash_id(&client, &drep).await? {
+                Some(id) => to_json(&drep_state(&client, id).await?),
+                None => Ok(Bytes::new()),
+            }
+        };
+        let kept = if own {
+            read().await?
+        } else {
+            // By epoch: a DRep's activity and expiry turn at an epoch's start.
+            let key = format!("drep_info/{}/{}", tip.epoch, drep_key(&drep));
+            state.lasting(&key, DREP_KEEP, read).await?
+        };
         if !kept.is_empty() {
             let row: Value = serde_json::from_slice(&kept).map_err(anyhow::Error::from)?;
             rows.push(selected(&row, &columns));
@@ -305,26 +313,33 @@ pub async fn drep_metadata(
     if columns != PROFILE_COLUMNS && columns != NAME_COLUMNS {
         return Err(NOT_ASKED);
     }
+    // The account's own DRep's profile, whether it matched its hash: live, never kept.
+    let own = columns == PROFILE_COLUMNS;
     let dreps = dreps(&headers, &bytes)?;
     state.fresh_tip()?;
     let mut rows = Vec::new();
     for (_, drep) in dreps {
-        let kept = state
-            .lasting(
-                &format!("drep_metadata/{}", drep_key(&drep)),
-                DREP_KEEP,
-                || async {
-                    let client = state.chain.public().await?;
-                    let Some(id) = drep_hash_id(&client, &drep).await? else {
-                        return Ok(Bytes::new());
-                    };
-                    match drep_profile(&client, id, &drep).await? {
-                        Some(profile) => to_json(&profile),
-                        None => Ok(Bytes::new()),
-                    }
-                },
-            )
-            .await?;
+        let read = || async {
+            let client = state.chain.public().await?;
+            let Some(id) = drep_hash_id(&client, &drep).await? else {
+                return Ok(Bytes::new());
+            };
+            match drep_profile(&client, id, &drep).await? {
+                Some(profile) => to_json(&profile),
+                None => Ok(Bytes::new()),
+            }
+        };
+        let kept = if own {
+            read().await?
+        } else {
+            state
+                .lasting(
+                    &format!("drep_metadata/{}", drep_key(&drep)),
+                    DREP_KEEP,
+                    read,
+                )
+                .await?
+        };
         if !kept.is_empty() {
             let row: Value = serde_json::from_slice(&kept).map_err(anyhow::Error::from)?;
             rows.push(selected(&row, &columns));
