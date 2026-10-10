@@ -2,12 +2,12 @@
 
 Step 4 of [chunk 26](chunk-26-data-layer.md#order-of-work): Seedelf Wallet reads mainnet through `seedelf-data`, falling back to Koios one part at a time. Preprod doesn't change.
 
-**Status: ✅ built, reviewed and checked (2026-10-09)** on `web-wallet/data-layer-wallet`, from `main` after #289. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
+**Status: ✅ done, in 1.4.0** (#290; built, reviewed and checked 2026-10-09 on `web-wallet/data-layer-wallet`, from `main` after #289). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
 
 **Read first:**
 - the parent plan's [The wallet's side](chunk-26-data-layer.md#the-wallets-side), the contract this builds to;
 - its [What the browser keeps](chunk-26-data-layer.md#what-the-browser-keeps) and [What it takes off the per-user side](chunk-26-data-layer.md#what-it-takes-off-the-per-user-side);
-- [seedelf-data/README.md](../../../../seedelf-data/README.md), for what each route answers.
+- [seedelf-data/README.md](../../../../../seedelf-data/README.md), for what each route answers.
 
 ## The VPS comes after, and nothing here waits on it
 
@@ -266,7 +266,7 @@ A dev build against the local API, on home's mainnet db-sync and Kupo. A Playwri
 | A 429, the bucket emptied | both parts to Koios, held 5 minutes, longer than the 4 s `Retry-After` |
 | Parity, with no wallet needed | the index's contract at the tip against Koios's `credential_utxos`: the same 33 rows, field by field (decimals and times too), and the same 10 names |
 
-**Scale** (`wasm/scale.mjs`, [its numbers](../../wasm/README.md)):
+**Scale** (`wasm/scale.mjs`, [its numbers](../../../wasm/README.md)):
 - A row is about 473 bytes in a snapshot, and its ownership check about 0.73 ms, almost all `isOwned`.
 - At 1M rows: a 473 MB answer, 1.05 GB of parsed rows, 1.29 GB peak, and 12 minutes of checking.
 - `since` on mainnet, measured against the API: 3.7 KB after a day (6 rows made), 50 KB after a week, 65 KB after a month (99 made, 7 older ones spent). Lovejoin's pool after a month: 397 KB (454 boxes).
@@ -310,7 +310,7 @@ Three reviewers read the branch by area (the fallback and submits; the private i
 
 Planned in [chunk 26c](chunk-26c-data-layer-vps.md).
 
-- the droplet, WireGuard, nftables, Caddy, DNS and `/health`, from [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md);
+- the droplet, WireGuard, nftables, Caddy, DNS and `/health`, from [seedelf-data/deploy/README.md](../../../../../seedelf-data/deploy/README.md);
 - **a manual deploy workflow:** build with the pinned toolchain, ship the binary, restart, check `/health`, roll back;
 - **CI for `seedelf-data/`,** which has none today;
 - the store build's origin and the user-facing docs above;

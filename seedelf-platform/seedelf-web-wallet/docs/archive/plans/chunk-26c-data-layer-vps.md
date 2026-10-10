@@ -2,7 +2,7 @@
 
 Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The data layer goes public on a DigitalOcean droplet, home's services are reached through a tunnel, and the drills run. Then the store build gets the API's address, and that's 1.4.0.
 
-**Status: ✅ built, with the 1.4.0 PR on `web-wallet/release-1.4.0`** (2026-10-09): the VPS, the deploy workflow, CI and the drills are in (#291–#293), and [the 1.4.0 PR](#the-140-pr) gives the store build the origin. Left: its merge, the API's deploy from the merge commit, then the package and its record ([After the merge](#after-the-merge)).
+**Status: ✅ done, in 1.4.0:** the VPS, the deploy workflow, CI and the drills (#291–#293), then [the 1.4.0 PR](#the-140-pr) (#294), deployed and packaged ([After the merge](#after-the-merge)) and recorded (#295). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*.
 
 **Done so far (2026-10-09):**
 - the decisions below are settled;
@@ -36,18 +36,18 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
 
 Then [the 1.4.0 PR](#the-140-pr).
 
-**Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
+**Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
 ## The 1.4.0 PR
 
 The brief it started from, kept as written; [what was done](#what-the-pr-did-2026-10-09) follows it.
 
 
-**The branch is `web-wallet/release-1.4.0`,** from `main` at #293's merge (`56696f2`). It's the release PR, shaped like 1.3.0's (#286): a review, its fixes, the lists and the bump. After the upload comes a `release-1.4.0-record` PR with the package's commit and SHA-256, as #287 was. **No tag:** the handoff note is the record ([post-release-roadmap.md](../post-release-roadmap.md#how-this-file-works)). If the owner wants one, it needs a slash: `web-wallet/1.4.0`.
+**The branch is `web-wallet/release-1.4.0`,** from `main` at #293's merge (`56696f2`). It's the release PR, shaped like 1.3.0's (#286): a review, its fixes, the lists and the bump. After the upload comes a `release-1.4.0-record` PR with the package's commit and SHA-256, as #287 was. **No tag:** the handoff note is the record ([post-release-roadmap.md](../../post-release-roadmap.md#how-this-file-works)). If the owner wants one, it needs a slash: `web-wallet/1.4.0`.
 
 **Read first:**
-- [development.md](../development.md)'s *Web Store release: copy/paste procedure* and *The data layer, locally*;
-- [roadmap.md](../roadmap.md)'s handoff notes for 1.3.0 and 1.2.0: the release review, and the DRep refresh that lost names;
+- [development.md](../../development.md)'s *Web Store release: copy/paste procedure* and *The data layer, locally*;
+- [roadmap.md](../../roadmap.md)'s handoff notes for 1.3.0 and 1.2.0: the release review, and the DRep refresh that lost names;
 - 26b's [Docs: now, and at the VPS](chunk-26b-data-layer-wallet.md#docs-now-and-at-the-vps) and [Left for later](chunk-26b-data-layer-wallet.md#left-for-later);
 - item 8 of [The work, in order](#the-work-in-order), and [The drills](#the-drills-2026-10-09).
 
@@ -106,7 +106,7 @@ The brief it started from, kept as written; [what was done](#what-the-pr-did-202
 | A submit's 429 held the data layer's whole limit, so Home's reads and the private index waited it out instead of going to Koios | low | only Koios's own submit holds the limit; the data layer's submit part goes down alone |
 | `cache: "default"` covered the data layer's GETs too, which gain nothing, so an ADA Handle's or a DRep ID's address stayed off the disk only by the server's word (a rollback to #291's build loses it) | low | `postCache`: a POST alone asks `default` |
 | A refused write of a feed cursor (session storage full) failed the whole private reading and Lovejoin's pool read | low | `noteCursor` never fails its reading; a watch with no cursor asks `tx_status` |
-| A private row keeps the decimals the API gave it until it's spent, and the API's come from the registry as of its build | low | the registry is refreshed at each release with the lists ([development.md](../development.md#releasing-to-the-web-store)); it was unchanged for 1.4.0 (1,172 tokens, the registry's last commit 2026-10-01) |
+| A private row keeps the decimals the API gave it until it's spent, and the API's come from the registry as of its build | low | the registry is refreshed at each release with the lists ([development.md](../../development.md#releasing-to-the-web-store)); it was unchanged for 1.4.0 (1,172 tokens, the registry's last commit 2026-10-01) |
 | A Lovejoin return's last step was described as on the pool's feed | nit (latent) | the comment: it's never asked there, and `landed` watches it on the contract's feed |
 | Docs: the preflight cache is keyed by the full URL, query included; the server's name is seen on the user's network (DNS, TLS); stale lines in seedelf-data's README, `edge.rs` and CI | nit | said in the policy, privacy.md and architecture.md; the stale lines fixed |
 
@@ -123,7 +123,7 @@ So the test sees a wrong ID, and the store's passes it: CORS holds for the listi
 **Checked and sound:** every request `koios.ts` makes is one the API accepts, inside its caps, with Koios's shapes (rule for rule against Koios's grest SQL); CORS for both IDs on every answer the API makes, 429s and 503s included; the bucket's IP can't be spoofed through Caddy; ordinary use of one wallet can't trip a 429; Caddy and the API log no client address and no path; the sealed record stays consistent across lock, restart, account and network switches and the Koios-only switch; a 1.3.0 wallet updating carries nothing over that a feed watch could misread.
 
 **Left as found:**
-- **Home's node behind the chain** (restarting, say, more than 3 minutes). **Fixed for 1.4.1** ([O10](../post-release-roadmap.md#owed)): the submit part answers 503 while Ogmios says the node isn't synced. As found: the reads go to Koios on their 503s, but the submit part has no freshness check, so the node, catching up, can refuse a valid spend of a newer UTxO as "spent", and a Lovejoin chain's first step stops on it. No money is at risk; the chain is started again. A first fix, asking Koios whenever home said "spent", was taken back: a resend already in home's mempool is answered "spent" too, and a Koios timeout then read as busy and stopped chains (the last review of the fix-ups). **The fix belongs in the API:** a submit part that answers 503 while the node isn't synced (Ogmios's `/health`, `networkSynchronization` and `lastTipUpdate`), so the wallet goes to Koios at once. A candidate for 1.4.1.
+- **Home's node behind the chain** (restarting, say, more than 3 minutes). **Fixed for 1.4.1** ([O10](../../post-release-roadmap.md#owed)): the submit part answers 503 while Ogmios says the node isn't synced. As found: the reads go to Koios on their 503s, but the submit part has no freshness check, so the node, catching up, can refuse a valid spend of a newer UTxO as "spent", and a Lovejoin chain's first step stops on it. No money is at risk; the chain is started again. A first fix, asking Koios whenever home said "spent", was taken back: a resend already in home's mempool is answered "spent" too, and a Koios timeout then read as busy and stopped chains (the last review of the fix-ups). **The fix belongs in the API:** a submit part that answers 503 while the node isn't synced (Ogmios's `/health`, `networkSynchronization` and `lastTipUpdate`), so the wallet goes to Koios at once. A candidate for 1.4.1.
 - **Caddy's own error pages** (its 502 while the API restarts, its 413) carry `Server: Caddy` and no HSTS: the `header` block's deletion is deferred to a proxied response. The API's answers have neither problem, and the wallet only uses https.
 - **Many wallets behind one IPv4 address** (a CGNAT, a VPN exit) share one bucket; past it, each part goes to Koios 5 minutes at a time. Slower, never broken.
 - **The data client's window** lets 20 live-SQL requests through every 10 s (80 units), against Koios's 40 requests: a burst past it waits about 10 s.
@@ -134,10 +134,10 @@ So the test sees a wrong ID, and the store's passes it: CORS holds for the listi
 
 ### After the merge
 
-**Done for 1.4.0:** PR #294 merged as `b5ad15a`; the API deployed from it through the workflow, and the live API then answered the store's ID with `cache-control: no-store`; the package built from it, SHA-256 `b1ba594f3d4f2705c075e51c3ca561613db12528bbd76405ff045bcf74571c0a` ([roadmap.md](../roadmap.md)'s handoff note has the rest). The steps, for the record:
+**Done for 1.4.0:** PR #294 merged as `b5ad15a`; the API deployed from it through the workflow, and the live API then answered the store's ID with `cache-control: no-store`; the package built from it, SHA-256 `b1ba594f3d4f2705c075e51c3ca561613db12528bbd76405ff045bcf74571c0a` ([roadmap.md](../../roadmap.md)'s handoff note has the rest). The steps, for the record:
 
 1. **Deploy the API from the merge commit:** Actions → *Data layer deploy*, `deploy`, approved, then `status`. Then check from anywhere: `curl -sI -H 'Origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp' https://mainnet.seedelf.logicalmechanism.io/api/v1/tip` says `cache-control: no-store`. **The package isn't uploaded before this.**
-2. **The package**, on `main` at the merge commit ([development.md](../development.md#2-on-main-after-the-merge-build-and-test-the-store-package)): `npm run package`, `npm run e2e` on it, the SHA-256.
+2. **The package**, on `main` at the merge commit ([development.md](../../development.md#2-on-main-after-the-merge-build-and-test-the-store-package)): `npm run package`, `npm run e2e` on it, the SHA-256.
 3. **The upload** (the owner), and the `release-1.4.0-record` PR with the commit and the hash, as #287 was.
 4. **Rolling back the API** after 1.4.0 ships brings back #291's build, which sends no `no-store`; the wallet's GETs stay `no-store` themselves, so nothing private reaches the disk, but deploy forward rather than leave it there.
 
@@ -145,7 +145,7 @@ So the test sees a wrong ID, and the store's passes it: CORS holds for the listi
 
 1. Branch `web-wallet/data-layer-vps` from `main`, after #290 is merged.
 2. Read:
-   - **the runbook, [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md):** every step on home and the VPS, the files they install, and the checks. This plan doesn't repeat it;
+   - **the runbook, [seedelf-data/deploy/README.md](../../../../../seedelf-data/deploy/README.md):** every step on home and the VPS, the files they install, and the checks. This plan doesn't repeat it;
    - chunk 26's [Tunnel and VPS](chunk-26-data-layer.md#tunnel-and-vps), for why it's shaped this way;
    - 26b's [Left for the VPS chunk](chunk-26b-data-layer-wallet.md#left-for-the-vps-chunk) and [Docs: now, and at the VPS](chunk-26b-data-layer-wallet.md#docs-now-and-at-the-vps).
 3. **The owner runs everything on home and in the DigitalOcean account.** Claude prepares the files and the commands, and checks the results. Never SSH into home unasked: every server change so far has been the owner's.
@@ -228,7 +228,7 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
      - the root README's *De-Anonymizing Via IP Tracking* and *Data Layer Reliance*;
      - the screens' words that name Koios for answers the data layer may give now ("Koios has no details for this pool", "Koios returned no tip");
    - **before recommending any change to a store declaration,** say what it publishes on the listing;
-   - **the release itself:** `npm run tokens` and `npm run dreps`, the version to 1.4.0, the package, and the record PR with its commit and SHA-256, as [development.md](../development.md) says. There's no tag unless the owner wants one, which then needs a slash: `web-wallet/1.4.0`.
+   - **the release itself:** `npm run tokens` and `npm run dreps`, the version to 1.4.0, the package, and the record PR with its commit and SHA-256, as [development.md](../../development.md) says. There's no tag unless the owner wants one, which then needs a slash: `web-wallet/1.4.0`.
 
 ### The drills (2026-10-09)
 
@@ -258,7 +258,7 @@ A dev build pointed at the VPS ran a fresh mainnet wallet (no funds), driven ove
 - **An IP certificate lasts 6 days.** If Caddy can't renew one, the API goes dark and wallets fall back to Koios until it does: never broken, but watch renewals.
 - **Postgres's boot race:** after a reboot it bound localhost only; the runbook's drop-in fixes it. Postgres refusing connections on 5432 while Kupo and Ogmios answer means this.
 - **The real db-sync unit is `cardano-db-sync-new.service`.** Never touch the old one, or Kupo on 1442 (another project's).
-- **Every POST pays a CORS preflight** (26b's [Left for later](chunk-26b-data-layer-wallet.md#left-for-later)). Over the internet that's a round trip each; measure it against the droplet before deciding anything.
+- ~~**Every POST pays a CORS preflight** (26b's [Left for later](chunk-26b-data-layer-wallet.md#left-for-later)). Over the internet that's a round trip each; measure it against the droplet before deciding anything.~~ Done in 1.4.0: a POST asks `cache: "default"`, so Chrome reuses its preflight, and the API marks every answer `no-store`.
 
 ## Verification
 

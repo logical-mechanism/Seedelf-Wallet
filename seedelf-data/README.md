@@ -1,6 +1,6 @@
 # seedelf-data
 
-Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node. **Mainnet only.** The plan, and every decision behind it, is web wallet chunk 26, [docs/plans/chunk-26-data-layer.md](../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md).
+Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node. **Mainnet only.** The plan, and every decision behind it, is web wallet chunk 26, [docs/archive/plans/chunk-26-data-layer.md](../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md).
 
 **Its own Cargo workspace,** apart from `seedelf-platform/`, so nothing here moves the CLI's `Cargo.lock`. It pins the same Rust (`rust-toolchain.toml`).
 

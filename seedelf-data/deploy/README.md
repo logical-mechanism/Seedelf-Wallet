@@ -1,6 +1,6 @@
 # Deploying the data layer
 
-How the data layer goes live: home's services reached through a WireGuard tunnel, and the API on a VPS behind Caddy. Why it's shaped this way is chunk 26's plan ([Home](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#home), [Tunnel and VPS](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#tunnel-and-vps)). **Mainnet only:** preprod stays on Koios, and the preprod server at home is another project's.
+How the data layer goes live: home's services reached through a WireGuard tunnel, and the API on a VPS behind Caddy. Why it's shaped this way is chunk 26's plan ([Home](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#home), [Tunnel and VPS](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#tunnel-and-vps)). **Mainnet only:** preprod stays on Koios, and the preprod server at home is another project's.
 
 Every file here is a template. `<…>` marks a value to fill in on the machine. Keys, passwords, addresses and database names are never committed.
 
@@ -119,7 +119,7 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
 
   On home, Postgres's log holds no statement, and Kupo's no request path.
 - **DNS and certificates:** crt.sh lists `mainnet.<domain>` and nothing that leads home.
-- **The drills** ([Verification](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#verification)):
+- **The drills** ([Verification](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#verification)):
 
   | Stop | Expect |
   |---|---|
