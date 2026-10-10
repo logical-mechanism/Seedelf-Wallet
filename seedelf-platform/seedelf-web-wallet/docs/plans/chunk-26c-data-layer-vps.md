@@ -28,7 +28,13 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
 
 - **CI for `seedelf-data/`** (`.github/workflows/data-layer.yml`): on every PR that touches it, `fmt`, `clippy -D warnings`, the tests (the live ones stay ignored), and `shellcheck` on the deploy script.
 
-Next: crt.sh's listing (not indexed yet that night), home's logs (Postgres's and Kupo's), and the drills.
+- **the drills,** that night ([below](#the-drills-2026-10-09)): all five passed;
+- **the certificate in the public logs:** Cert Spotter lists one issuance, Let's Encrypt's, naming `mainnet.seedelf.logicalmechanism.io` alone. crt.sh hadn't indexed it 3 hours on.
+
+- **home's logs** (runbook §5), that night. Postgres's settings were right, and its log held no statement since they went in: the 34 lines that quote one are from that morning's local development. **Kupo's unit had no `--log-level-http-server Warning`**, so it logged every request the API made, with the contract's hash and a wallet's cursor (about 1,500 lines an hour). A drop-in now adds the flag (`kupo_seedelf.service.d/http-log.conf`), and Kupo logs none. The lines already written leave with the journal's own retention: vacuuming it would take the other project's logs too;
+- **the tunnel drill's ghosts,** found in Postgres's log: 70 "too many connections for role" in the half hour after it. The API had closed 5 sessions while the tunnel was down, and their close never reached home. Postgres kept them, at the role's limit of 10, and would have for about 2 hours (no server keepalives), so the API ran on 5 connections and was refused the rest. The 5 were ended, and the role now has TCP keepalives (60 s idle, 6 probes 10 s apart, `tcp_user_timeout` 60 s), so a session cut off this way frees its slot within 2 minutes. `seedelf_reader.sql` has them; the limit stays 10.
+
+Next: the 1.4.0 PR.
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
@@ -120,6 +126,25 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
      - the screens' words that name Koios for answers the data layer may give now ("Koios has no details for this pool", "Koios returned no tip");
    - **before recommending any change to a store declaration,** say what it publishes on the listing;
    - **the release itself:** `npm run tokens` and `npm run dreps`, the version to 1.4.0, the package, and a tag with a slash (`web-wallet/1.4.0`), as [development.md](../development.md) says.
+
+### The drills (2026-10-09)
+
+A dev build pointed at the VPS ran a fresh mainnet wallet (no funds), driven over the worker's UI port as in 26b. It read balances and UTxOs every 30 s, and governance every fourth time, and logged which host answered each request. A poller read `/health` every 3 s. The owner stopped each part on the home server, or the API on the VPS. Times are UTC.
+
+| Stopped | The API | The wallet | Back |
+|---|---|---|---|
+| Kupo (22:51) | nothing changed: 200, `source` db-sync, Kupo's age growing | every read on the API | caught up in 4 minutes; nothing to come back to |
+| db-sync alone (22:56:25) | private from Kupo at 22:57:28, once db-sync was 60 slots behind; public 503 at 22:59:21, its tip 183 s old | public reads to Koios at 22:59:33; private stayed on the API | API 200 2 minutes after db-sync started; wallet at its first reading after the 5-minute hold |
+| Postgres, db-sync first (23:06:15) | 503 within 4 s: private from Kupo, public down | public to Koios at the next cycle; private stayed | API 200 once db-sync caught up (2 minutes). The wallet's retry at the hold's end landed before that and failed, so the hold began again: back 4 minutes after the API |
+| the tunnel (23:18:20) | every part 503 within 5 s; a junk submit got 503 `unreachable` with `Retry-After: 5` in 3.3 s seen from home, the API's 3 s connect limit and the trip to New York (with the tunnel up: the node's 400 in 0.5 s) | everything to Koios at the next cycle (that one took 10 s, the rest 3 s); the relay ran on | API 200 within 2 s of the tunnel; Postgres answered on `10.88.0.2` with no restart; wallet after its hold |
+| the API on the VPS (23:43:33) | Caddy's 502 within a second, with no CORS headers | everything to Koios at the next cycle, the 502s and the CORS-blocked requests alike | API 200 within 2 s; wallet after its hold |
+
+**Not run:** the node, which is a stake pool's relay, and home's power. What the API sees of them is drills 1, 2 and 4.
+
+**Learned:**
+- **A cut tunnel leaves sessions Postgres can't see are dead.** They kept their slots against the role's limit until keepalives were added (above).
+- **A failed retry restarts the wallet's 5-minute hold.** So a part that comes back just after the wallet tried can keep it on Koios up to 5 minutes more. That's by design: slower, never broken.
+- **A stopped Kupo shows on `/health` only as a growing age.** It's the spare, so nothing else should change.
 
 ## Gotchas known now
 
