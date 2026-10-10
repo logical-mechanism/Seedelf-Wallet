@@ -2,7 +2,7 @@
 
 Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The data layer goes public on a DigitalOcean droplet, home's services are reached through a tunnel, and the drills run. Then the store build gets the API's address, and that's 1.4.0.
 
-**Status: 🚧 started 2026-10-09.** The API (#289) and the wallet's side ([chunk 26b](chunk-26b-data-layer-wallet.md), #290) are built, reviewed and checked against a local API. Nothing a user runs reads the data layer until this chunk's last PR.
+**Status: 🚧 done but the 1.4.0 PR** (2026-10-10): the VPS, the deploy workflow, CI and the drills are in (#291–#293). [Next: the 1.4.0 PR](#next-the-140-pr-start-here). The API (#289) and the wallet's side ([chunk 26b](chunk-26b-data-layer-wallet.md), #290) are built, reviewed and checked against a local API. Nothing a user runs reads the data layer until this chunk's last PR.
 
 **Done so far (2026-10-09):**
 - the decisions below are settled;
@@ -38,7 +38,53 @@ Next: the 1.4.0 PR.
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
-## Start here
+## Next: the 1.4.0 PR (start here)
+
+**The branch is `web-wallet/release-1.4.0`,** from `main` at #293's merge (`56696f2`). It's the release PR, shaped like 1.3.0's (#286): a review, its fixes, the lists and the bump. After the upload comes a `release-1.4.0-record` PR with the package's commit and SHA-256, as #287 was. **No tag:** the handoff note is the record ([post-release-roadmap.md](../post-release-roadmap.md#how-this-file-works)). If the owner wants one, it needs a slash: `web-wallet/1.4.0`.
+
+**Read first:**
+- [development.md](../development.md)'s *Web Store release: copy/paste procedure* and *The data layer, locally*;
+- [roadmap.md](../roadmap.md)'s handoff notes for 1.3.0 and 1.2.0: the release review, and the DRep refresh that lost names;
+- 26b's [Docs: now, and at the VPS](chunk-26b-data-layer-wallet.md#docs-now-and-at-the-vps) and [Left for later](chunk-26b-data-layer-wallet.md#left-for-later);
+- item 8 of [The work, in order](#the-work-in-order), and [The drills](#the-drills-2026-10-09).
+
+**Since 1.3.0:** #288–#293, which are the data layer's plan, the API (#289), the wallet's side (#290, reviewed on its own) and the VPS (#291–#293, no wallet code). What ships is #290's code in a store build that finally has an origin.
+
+**The work:**
+1. **The release review** of #288–#293's wallet-facing code, as for 1.2.0 and 1.3.0: by area, then where the areas meet, with every finding verified. It's new in that #290 runs with the origin set, in the store build.
+2. **The origin:**
+   - `networks.ts`'s mainnet `data` is `https://mainnet.seedelf.logicalmechanism.io`;
+   - `tests/manifest.test.ts`'s store CSP gains it in `connect-src`, still with no host permission;
+   - `scripts/package.mjs`'s checks pass.
+3. **The docs, in the same PR:** item 8's list, plus every line that says the store build has no origin yet: development.md's *The data layer, locally*, architecture.md's chain data, and CLAUDE.md's `seedelf-koios` line.
+4. **The facts the privacy docs state,** all checked in this chunk:
+   - a mainnet user's requests go to `mainnet.seedelf.logicalmechanism.io`, a DigitalOcean droplet in New York;
+   - Caddy and the API log no address and no path (runbook §5);
+   - the rate buckets per IP live in memory alone;
+   - the API reads home's node, db-sync and Kupo through WireGuard, so home never sees a user;
+   - a submitted transaction's first hop is Logical Mechanism's stake pool relay, whose registration publishes its IP;
+   - each part falls back to Koios on its own, and Settings → Network's *Read Cardano through Koios only* turns the API off;
+   - preprod reads Koios alone.
+5. **The house rules:**
+   - the privacy policy gets a dated *Changes* entry in this PR, and there are never release notes;
+   - docs don't date releases or describe the store;
+   - before recommending any change to a store declaration, say what it publishes on the listing;
+   - the screens' words that name Koios where the data layer may answer change in `en`, `es` and `ja`, through i18n: no `t()` at module level, and critical keys named `.warn.` or `.privacy.`;
+   - always *Seedelf*, which `words.test.ts` enforces.
+6. **The release:** development.md §1–§3.
+   - `npm version 1.4.0`, then `npm run tokens` and `npm run dreps`. `dreps` asks again and refuses a lossy list, and the outcome goes in the handoff note.
+   - Then the checks, and the merge.
+   - Then the package on `main`, the upload (the owner) and the record PR.
+
+**The owner's calls, still open:**
+- **POSTs with `cache: "default"`,** so Chrome reuses the preflight. That's one round trip less per POST (26b's *Left for later*); in 1.4.0, or later?
+- **The store images:** regenerate them if a screen in them changed. Settings → Network shows the Koios-only switch in the store build now.
+- **Users' UX fixes:** any sent in, which are 1.4.0's other focus.
+- **The owner's own wallets through the VPS** before shipping (26b's *Left for the owner*): private parity, and spends in ordinary use. That needs a dev build made with `VITE_DATA_ORIGIN=https://mainnet.seedelf.logicalmechanism.io npm run build`.
+
+**On the server:** the running API is #291's build (`e737c6f1…`), and nothing since has changed its code. If the review changes `seedelf-data/`, deploy through the workflow (Actions → *Data layer deploy*, approved) and check `status` after.
+
+## Where 26c started
 
 1. Branch `web-wallet/data-layer-vps` from `main`, after #290 is merged.
 2. Read:
@@ -125,7 +171,7 @@ It's compiled into every installed wallet and its CSP, so **it's picked once.** 
      - the root README's *De-Anonymizing Via IP Tracking* and *Data Layer Reliance*;
      - the screens' words that name Koios for answers the data layer may give now ("Koios has no details for this pool", "Koios returned no tip");
    - **before recommending any change to a store declaration,** say what it publishes on the listing;
-   - **the release itself:** `npm run tokens` and `npm run dreps`, the version to 1.4.0, the package, and a tag with a slash (`web-wallet/1.4.0`), as [development.md](../development.md) says.
+   - **the release itself:** `npm run tokens` and `npm run dreps`, the version to 1.4.0, the package, and the record PR with its commit and SHA-256, as [development.md](../development.md) says. There's no tag unless the owner wants one, which then needs a slash: `web-wallet/1.4.0`.
 
 ### The drills (2026-10-09)
 
