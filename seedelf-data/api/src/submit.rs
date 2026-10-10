@@ -237,6 +237,9 @@ async fn submittx(State(submit): State<Arc<Submit>>, headers: HeaderMap, body: B
     let Some(base) = submit.submit_api.as_deref() else {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "no submit-api configured");
     };
+    if submit.ogmios.is_none() {
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "no Ogmios configured");
+    }
     if !submit.synced() {
         return refuse(StatusCode::SERVICE_UNAVAILABLE, "behind");
     }
@@ -483,6 +486,9 @@ mod tests {
                 .unwrap();
             assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
             assert!(answer.headers().contains_key(header::RETRY_AFTER), "{path}");
+            // The connection's 503, not the node gate's.
+            let body = axum::body::to_bytes(answer.into_body(), 1024).await.unwrap();
+            assert_eq!(&body[..], br#"{"error":"unreachable"}"#, "{path}");
         }
     }
 

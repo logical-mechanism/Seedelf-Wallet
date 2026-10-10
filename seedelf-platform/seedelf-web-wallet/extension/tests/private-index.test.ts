@@ -241,10 +241,13 @@ describe("the private index", () => {
     index.advance(400);
     expect((await readContractView(deps, "mainnet")).owned.map(outpoint).sort()).toEqual(OURS);
     expect(contractReads()).toBe(0);
-    // A lock still stops it.
-    t.deps.store.set = set;
-    await t.wallet.lock();
+    // A lock as the record is sealed still stops it.
+    t.deps.store.set = async () => {
+      throw new WalletLocked("locked");
+    };
+    index.advance(400);
     await expect(readContractView(deps, "mainnet")).rejects.toBeInstanceOf(WalletLocked);
+    t.deps.store.set = set;
   });
 
   it("finds every Seedelf by name from the names route, this wallet's as its whole row", async () => {
