@@ -654,6 +654,11 @@ export class Koios {
     private readonly backend: Backend = KOIOS_BACKEND,
   ) {}
 
+  /** This client with the data layer left out: Koios alone (data-layer.ts). Here, itself. */
+  koiosAlone(): Koios {
+    return this;
+  }
+
   /**
    * Every UTxO whose payment credential is one of `credentials` (key or
    * script hashes, hex); with `after`, only those in blocks after it. At most

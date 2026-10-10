@@ -2893,7 +2893,10 @@ export class LovejoinService {
         return [[tx, inputs.map(([cred, stake]) => ({ ...(cred ? { cred } : {}), ...(stake ? { stake } : {}) }))] as const];
       });
     }
-    const koios = this.deps.koios(network);
+    // The data layer answers this for every box alike, from the pool's listing (above): asked about the wallet's own
+    // boxes while its private part is down, it would learn which are the wallet's. So Koios alone is asked, as the
+    // privacy policy says.
+    const koios = this.deps.koios(network).koiosAlone();
     const rows: KoiosTxSpends[] = [];
     for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
       try {

@@ -191,6 +191,8 @@ export interface DataDeps {
 export class DataLayerKoios extends Koios {
   /** The same client, at the data layer: the same requests, which the API checks are koios.ts's. */
   readonly data: Koios;
+  /** Koios alone, whatever the parts are doing (`koiosAlone`). */
+  private readonly alone: Koios;
 
   constructor(
     network: NetworkName,
@@ -200,6 +202,17 @@ export class DataLayerKoios extends Koios {
     super(NETWORKS[network].koios, deps.fetch, deps.sleep, undefined, deps.limits ? deps.limits.koios : KOIOS_LIMIT);
     const limit = deps.limits ? deps.limits.data : DATA_LIMIT;
     this.data = new Koios(`${origin}/api/v1`, deps.fetch, deps.sleep, NO_GRANT_NEEDED, limit, DATA_BACKEND);
+    this.alone = new Koios(NETWORKS[network].koios, deps.fetch, deps.sleep, undefined, deps.limits ? deps.limits.koios : KOIOS_LIMIT);
+  }
+
+  /**
+   * For a question that names the wallet's own, which the data layer answers
+   * for everyone alike from the private index while that part is up: asked
+   * of it directly, it would learn whose they are (what made one of the
+   * wallet's Lovejoin boxes, lovejoin.ts `inputsOf`; the privacy policy).
+   */
+  override koiosAlone(): Koios {
+    return this.alone;
   }
 
   /** Whether `part` goes to the data layer now: the switch is off, and the part is up. */
