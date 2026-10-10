@@ -10,13 +10,14 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { DappTxSummary, SessionAuto, SessionTxReview, SessionView } from "../src/shared/rpc";
+import type { DappTxSummary, SessionAuto, SessionTxReview, SessionView, SwapLovejoin } from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
 import {
   lateStopOf,
   nowLine,
   Session,
   SessionTxReviewScreen,
+  StopDialog,
   StoppedLate,
   stopReading,
   SwapRow,
@@ -151,6 +152,45 @@ describe("a swap approved against the DEX's pools, before it's sent (release rev
       expect(line, s.auto!.step).toContain("In the swap itself: no order to wait for");
       expect(line, s.auto!.step).not.toContain("Order placed");
       expect(line, s.auto!.step).not.toContain("By a DEX, usually within a few blocks");
+    }
+  });
+
+  it("says Minswap's quote comes before swapping, not before an order, here and in the list (C13's last words)", () => {
+    const s = approved("ordering");
+    expect(nowLine(s)).toBe("Asking Minswap for a fresh quote, then swapping.");
+    expect(page(s)).not.toContain("placing the order");
+    expect(row(s)).toContain("Swapping");
+    expect(row(s)).not.toContain("Placing the order");
+    // Stopped before it goes out, it comes back, as an order's does.
+    expect(row(approved("ordering", { stopping: true }))).not.toContain("Swapping");
+    // An order's reads as before.
+    expect(nowLine(orderSwap({ txs: [OUT] }, { step: "ordering" }))).toBe("Asking Minswap for a fresh quote, then placing the order.");
+    expect(row(orderSwap({ txs: [OUT] }, { step: "ordering" }))).toContain("Placing the order");
+  });
+
+  it("has Stop's dialog speak of the swap, never of an order, either way back (C13's last words)", () => {
+    const cost: SwapLovejoin = { boxes: 1, depth: 2, mixes: 4, mixFees: "3800000", withdrawFees: "300000", delay: "1-6", on: true };
+    const dialog = (pools: boolean, through: boolean) =>
+      text(
+        createElement(StopDialog, {
+          placed: false,
+          pools,
+          cost: through ? cost : null,
+          through,
+          onThrough: () => undefined,
+          busy: false,
+          onStop: () => undefined,
+          onClose: () => undefined,
+        }),
+      );
+    for (const through of [true, false]) {
+      const pools = dialog(true, through);
+      expect(pools, `through: ${through}`).toContain("If the swap hasn't gone out yet, it won't, and everything comes back to your private balance");
+      expect(pools).toContain("If it's going out right now, it can't be cancelled: if it lands, what comes back is swapped.");
+      expect(pools).not.toContain("order");
+      const order = dialog(false, through);
+      expect(order).toContain("If no order has gone out yet, none will");
+      expect(order).toContain("If one is being placed right now, it's cancelled unless it fills first.");
     }
   });
 

@@ -262,6 +262,8 @@ function subOf(s: SessionView, now: number): string {
   if (s.auto.againstPools && s.auto.step === "ordering") return t("swaps.step.swapping");
   // Stopped before its order: it comes back rather than place one.
   if (s.auto.stopping && s.auto.step === "ordering") return t(STEP.returning);
+  // Approved against a DEX's pools, before it goes out: no order to place either (release review C13).
+  if (s.auto.approvedPools && s.auto.step === "ordering") return t("swaps.step.swapping");
   // Its fill or refund read, or a swap against a DEX's pools landed, which fills in itself: nothing waits on a DEX,
   // and its return goes next, once an unlock's wait or Koios's listing lets it (as the timeline's third step says).
   if (s.auto.step === "filling" || s.auto.step === "cancelling") {
@@ -2128,6 +2130,7 @@ export function Session({
         {stopping && (stoppable(auto) || busy) && (
           <StopDialog
             placed={placed || placedNow}
+            pools={!!auto.againstPools || !!auto.approvedPools}
             cost={stopCost}
             through={stopThrough}
             onThrough={setStopThrough}
@@ -2322,6 +2325,7 @@ export function ForgetSwap({ busy, onKeep, onForget }: { busy: boolean; onKeep: 
 
 /** Stop's words for an order the runner may be placing as the dialog shows (independent review L22). */
 const IF_ORDERED = () => t("swaps.stop.ifOrdered");
+const IF_SWAPPING = () => t("swaps.stop.ifSwapping");
 
 /**
  * Stop's dialog (privacy review §2.8, §4.1): what stopping does, and when it
@@ -2334,6 +2338,7 @@ const IF_ORDERED = () => t("swaps.stop.ifOrdered");
  */
 export function StopDialog({
   placed,
+  pools = false,
   cost,
   through,
   onThrough,
@@ -2342,6 +2347,8 @@ export function StopDialog({
   onClose,
 }: {
   placed: boolean;
+  /** Against a DEX's pools, as approved: there's no order to cancel, and one going out lands as it is (release review C13). */
+  pools?: boolean;
   cost?: SwapLovejoin | null;
   through: boolean;
   onThrough: (through: boolean) => void;
@@ -2352,6 +2359,9 @@ export function StopDialog({
   const tr = useT();
   const mixes = !!cost && !cost.skipped && cost.boxes > 0;
   const lovejoin = mixes && through;
+  // A swap against the pools has no order to cancel: before it goes out, Stop keeps it from going.
+  const ordered = placed && !pools;
+  const ifGoing = pools ? IF_SWAPPING : IF_ORDERED;
   return (
     <Modal
       title={tr("swaps.stop.title")}
@@ -2392,19 +2402,19 @@ export function StopDialog({
       <p className="note" data-testid="session-stop-what">
         {lovejoin
           ? joinSentences([
-              tr(placed ? "swaps.stop.cancelled" : "swaps.stop.notPlaced"),
-              !placed && IF_ORDERED(),
+              tr(ordered ? "swaps.stop.cancelled" : pools ? "swaps.stop.notSwapped" : "swaps.stop.notPlaced"),
+              !ordered && ifGoing(),
               tr("swaps.stop.throughCost", {
                 boxes: boxesText(cost),
                 mixFees: formatAda(cost.mixFees),
                 backFees: formatAda(cost.withdrawFees),
                 delay: delayText(cost.delay),
               }),
-              placed && tr("swaps.stop.cancelFeeToo"),
+              ordered && tr("swaps.stop.cancelFeeToo"),
             ])
-          : placed
+          : ordered
             ? tr("swaps.stop.cancelledDirect")
-            : joinSentences([tr("swaps.stop.notPlacedDirect"), IF_ORDERED()])}
+            : joinSentences([tr(pools ? "swaps.stop.notSwappedDirect" : "swaps.stop.notPlacedDirect"), ifGoing()])}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
@@ -2703,7 +2713,8 @@ export function nowLine(s: SessionView): string {
     case "ordering":
       if (a.againstPools) return t("swaps.now.swapOnItsWay");
       if (a.stopping) return t("swaps.now.stoppingBringingBack");
-      return t(s.txs.some((x) => x.kind === "swap") ? "swaps.now.orderOnItsWay" : "swaps.now.quoting");
+      if (s.txs.some((x) => x.kind === "swap")) return t("swaps.now.orderOnItsWay");
+      return t(a.approvedPools ? "swaps.now.quotingPools" : "swaps.now.quoting");
     case "filling":
       // Filled or refunded, or landed against a DEX's pools: nothing waits on a DEX, and there's no Stop. Its return
       // goes next, once an unlock's wait or Koios's listing lets it.
