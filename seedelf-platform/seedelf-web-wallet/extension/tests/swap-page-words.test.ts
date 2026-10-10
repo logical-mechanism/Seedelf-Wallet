@@ -258,6 +258,17 @@ describe("a refused cancel, which the wallet built itself (release review C15)",
     expect(listed).not.toContain("Minswap");
   });
 
+  it("never says the order is cancelled and its funds back while it's still open at the DEX", () => {
+    const line = page(refused(true));
+    expect(line).not.toContain("Cancelled");
+    expect(line).not.toContain("The order's funds back at the account");
+    expect(line).toContain("Couldn't cancel its order An order is still open at a DEX");
+    // Once Try again's cancel is sent, it reads as cancelled.
+    const CANCEL = { kind: "cancel" as const, txHash: "ef".repeat(32), at: 0 };
+    const sent = orderSwap({ txs: [OUT, LANDED, CANCEL] }, { step: "cancelling", stopping: true });
+    expect(page(sent)).toContain("Cancelled The order's funds back at the account");
+  });
+
   it("still says a swap refused before Stop is Minswap's build, which Try again asks for afresh", () => {
     const detail = "it places no order.";
     const s = orderSwap({}, { paused: { at: 0, why: "refused", detail } });

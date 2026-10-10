@@ -2540,6 +2540,9 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   // it is, filled in itself, or not at all (chunk 24; the 1.3.0 release review, C24). One that never lands isn't
   // shown, and reads as stopped before any.
   const cancelled = !!tx("cancel") || (auto.stopping && !auto.filled && !auto.refunded && !auto.againstPools);
+  // Unless its cancel was refused: the order is still open at the DEX, its funds with it (release review C15).
+  // Stopping, the cancel is all the runner builds that can be refused (subOf).
+  const cancelRefused = cancelled && !tx("cancel") && auto.paused?.why === "refused";
   // Its words: a swap against a DEX's pools once one has gone out, or before, approved so (release review C13).
   const pools = !!auto.againstPools || !!auto.approvedPools;
   const state = (i: number): StepState => {
@@ -2575,8 +2578,10 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
           ? "swaps.step.nothingToFill"
           : open
             ? "swaps.step.waitingOnOrder"
-            : cancelled
-              ? "swaps.step.cancelled"
+            : cancelRefused
+              ? "swaps.paused.cancelRefused"
+              : cancelled
+                ? "swaps.step.cancelled"
               : auto.refunded
                 ? "swaps.tag.refunded"
                 : auto.partly
@@ -2588,8 +2593,10 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
           ? "swaps.step.nothingOrdered"
           : open
             ? "swaps.step.openAtDex"
-            : cancelled
-              ? "swaps.step.fundsBack"
+            : cancelRefused
+              ? "swaps.sub.orderOpen"
+              : cancelled
+                ? "swaps.step.fundsBack"
               : auto.refunded
                 ? "swaps.step.refundedSub"
                 : auto.partly
