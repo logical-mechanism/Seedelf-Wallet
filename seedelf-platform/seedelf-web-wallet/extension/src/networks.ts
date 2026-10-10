@@ -38,9 +38,8 @@ export interface NetworkConfig {
   /**
    * Seedelf Wallet's own data layer (seedelf-data/, chunk 26): its origin,
    * where the network has one. Only mainnet does; preprod reads everything
-   * through Koios. Empty until the server is up (the VPS chunk), so a store
-   * build reads Koios alone. A dev or e2e build names one with
-   * VITE_DATA_ORIGIN (`dataOrigin`).
+   * through Koios. A dev or e2e build can name another with
+   * VITE_DATA_ORIGIN (`dataOrigin`); a store build never does.
    */
   data?: string;
 }
@@ -73,8 +72,9 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
       // 0.822–0.828 ₳, measured against mainnet's scripts (the launch review).
       mixCost: 825_000,
     },
-    // No origin until the VPS chunk sets the API's https:// one.
-    data: "",
+    // The API on its DigitalOcean droplet (chunk 26c, seedelf-data/deploy/README.md).
+    // It answers CORS for the store's and the dev build's IDs (DATA_ORIGINS).
+    data: "https://mainnet.seedelf.logicalmechanism.io",
   },
 };
 

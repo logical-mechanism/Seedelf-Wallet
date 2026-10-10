@@ -230,7 +230,7 @@ describe("a payment refused", () => {
     const summary = await pay(t);
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : real(url, init));
-    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("Koios is limiting requests");
+    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The server is limiting requests");
     expect(t.local.data.has(SEALED)).toBe(false);
     expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     t.koios.fetch = real;

@@ -51,7 +51,7 @@ describe("an NFT's details before anything is asked", () => {
     expect(html).not.toContain("<img");
     const shown = text(html);
     expect(shown).toContain(
-      "Nothing is asked until you show its image. Then Koios and ipfs.blockfrost.dev see your IP address asking about this NFT.",
+      "Nothing is asked until you show its image. Then the server and ipfs.blockfrost.dev see your IP address asking about this NFT.",
     );
     expect(shown).toContain("The first time, Chrome asks you to let the wallet reach ipfs.blockfrost.dev.");
     expect(shown).not.toContain("private balance");
@@ -102,7 +102,7 @@ describe("an NFT's details once its image was asked for", () => {
 
   it("is forgotten when the wallet locks", () => {
     rememberImage("preprod", nft, { image: IMAGE, from: "chain" });
-    expect(text(details(nft, "cardano"))).toContain("Written on chain in its metadata, so only Koios was asked.");
+    expect(text(details(nft, "cardano"))).toContain("Written on chain in its metadata, so only the server was asked.");
     forgetImages();
     expect(details(nft, "cardano")).toContain(">Show image</button>");
   });
@@ -131,7 +131,7 @@ describe("an NFT's details once its image was asked for", () => {
 
   it("says why there's no image", () => {
     const cases = [
-      [{ none: "metadata" }, "Koios has no metadata for this NFT, so there's no image to show."],
+      [{ none: "metadata" }, "The server has no metadata for this NFT, so there's no image to show."],
       [{ none: "image" }, "This NFT's metadata names no image the wallet can show."],
       [{ tooLarge: 10 * 1024 * 1024 }, "Its image is over 10 MB, more than the wallet shows."],
       [{ notImage: true }, "What came for it isn't an image this browser can show."],

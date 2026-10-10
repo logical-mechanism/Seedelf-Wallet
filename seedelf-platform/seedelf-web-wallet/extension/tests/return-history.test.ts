@@ -184,7 +184,7 @@ describe("a session's return Koios didn't answer (independent review M7)", () =>
     t.koios.addedToAccounts.push(atSession(OUT, 0, "40000000"), atSession(OUT, 1, "5000000"));
     const review = await t.sessions.backBuild("preprod", 0, true);
     const undo = unanswered(t);
-    await expect(t.sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    await expect(t.sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("The server");
     undo();
     t.koios.missing.add(review.txHash);
     expect((await recorded(t, review.txHash))!.summary).toMatchObject({ index: 0, lovelace: review.lovelace });
@@ -241,7 +241,7 @@ describe("a session's return whose history isn't written yet, with no page open 
     const { alarm, sessions } = withAlarm(t);
     const review = await sessions.backBuild("preprod", 0, true);
     const undo = unanswered(t);
-    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("The server");
     undo();
     // Nothing else runs for a site's session: the runs start, and keep going while it may land.
     expect(alarm.starts).toBe(1);
@@ -324,7 +324,7 @@ describe("a session's return whose history isn't written yet, with no page open 
     const { sessions } = withAlarm(t);
     const review = await sessions.backBuild("preprod", 0, true);
     const undo = unanswered(t);
-    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("The server");
     undo();
     siteLanded(t);
     // Seen on chain by the list, while the history won't open.

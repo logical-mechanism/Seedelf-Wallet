@@ -216,9 +216,9 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     // Home counts them as not on their way back, so the unlock's run reads the pool again.
     expect(await t.lovejoin.held("preprod")).toMatchObject({ boxes: 0, notMixed: 2 });
     const lovejoin = witnessed(t);
-    await expect(lovejoin.withdrawNow("preprod", { txHash: M, txIndex: 0 })).rejects.toThrow("Koios hasn't said how that box went in");
-    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("Koios hasn't said how your boxes went in, so none comes back yet");
-    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("Koios hasn't said how some of your boxes went in yet");
+    await expect(lovejoin.withdrawNow("preprod", { txHash: M, txIndex: 0 })).rejects.toThrow("The server hasn't said how that box went in");
+    await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow("The server hasn't said how your boxes went in, so none comes back yet");
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("The server hasn't said how some of your boxes went in yet");
     // The unlock's run reads the pool, the boxes being open in Lovejoin, and asks again.
     const tried = koios.asked;
     expect(await runsFor(t, lovejoin, 4)).toEqual([]);
@@ -435,10 +435,10 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     // Mix my boxes again refuses while Koios hasn't said of N, so the refusal says to mix them again once it has,
     // and says X, known not to be mixed, apart from N, which may be.
     await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow(
-      "Some of your boxes weren't mixed yet, and Koios hasn't said how the others went in. Mix them again once it has, or bring one back anyway.",
+      "Some of your boxes weren't mixed yet, and the server hasn't said how the others went in. Mix them again once it has, or bring one back anyway.",
     );
-    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("Koios hasn't said how some of your boxes went in yet");
-    await expect(lovejoin.withdrawNow("preprod", { txHash: N, txIndex: 0 })).rejects.toThrow("Koios hasn't said how that box went in");
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("The server hasn't said how some of your boxes went in yet");
+    await expect(lovejoin.withdrawNow("preprod", { txHash: N, txIndex: 0 })).rejects.toThrow("The server hasn't said how that box went in");
 
     // Koios catches up: a session's deposit made N. Held, as not mixed yet, and never asked of again.
     t.koios.txSpends.set(N, sessionDeposit());
@@ -609,7 +609,7 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     expect(held.unsure).toBeUndefined();
     // Mix my boxes again asks what made the boxes no record accounts for before it takes one, and waits while Koios
     // can't say; the pool reads still hold nothing for it.
-    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("Koios hasn't said how some of your boxes went in yet");
+    await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow("The server hasn't said how some of your boxes went in yet");
     expect(await asking(t)).toBeUndefined();
     expect((await t.lovejoin.status("preprod")).unsure).toBeUndefined();
   });
@@ -761,15 +761,15 @@ describe("a restore's Lovejoin boxes (independent review M14)", CHAINS, () => {
     expect(status.notMixed).toEqual(status.deposits);
     const lovejoin = witnessed(t);
     await expect(lovejoin.withdrawNow("preprod", { txHash: S, txIndex: 0 })).rejects.toThrow(
-      "That box wasn't mixed: Koios says a deposit put it in. Brought back now, it shows where it went in. Mix again first, or bring it back anyway.",
+      "That box wasn't mixed: the server says a deposit put it in. Brought back now, it shows where it went in. Mix again first, or bring it back anyway.",
     );
     const page = text(createElement(NotMixed, { count: 1, deposits: 1, busy: false, onAnyway: () => undefined }));
     expect(page).toContain(
-      "One of your boxes isn't mixed yet: Koios says a deposit put it into the pool, and no mix has moved it since. It never comes back by itself, since each still shows where it went in.",
+      "One of your boxes isn't mixed yet: the server says a deposit put it into the pool, and no mix has moved it since. It never comes back by itself, since each still shows where it went in.",
     );
     const warning = anywayWarning(status);
     expect(warning).toBe(
-      "Koios says a deposit put it in. Brought back now, anyone can tie that deposit to your private balance. Mix my boxes again hides it first.",
+      "The server says a deposit put it in. Brought back now, anyone can tie that deposit to your private balance. Mix my boxes again hides it first.",
     );
     for (const said of [page, warning]) {
       expect(said).not.toContain("your deposit");
@@ -972,12 +972,12 @@ describe("taking a box no record accounts for (independent review M14)", CHAINS,
     expect(koios.asked).toBe(0);
     // Each place that would take B asks, and refuses while Koios can't say.
     await expect(t.lovejoin.againBoxes("preprod")).rejects.toThrow(
-      "Koios hasn't said how some of your boxes went in yet. Try again in a minute.",
+      "The server hasn't said how some of your boxes went in yet. Try again in a minute.",
     );
     await expect(lovejoin.withdrawNow("preprod")).rejects.toThrow(
-      "Koios hasn't said how some of your boxes went in, so the wallet can't tell if they were mixed. Try again in a minute.",
+      "The server hasn't said how some of your boxes went in, so the wallet can't tell if they were mixed. Try again in a minute.",
     );
-    await expect(lovejoin.withdrawNow("preprod", { txHash: B, txIndex: 0 })).rejects.toThrow("Koios hasn't said how that box went in");
+    await expect(lovejoin.withdrawNow("preprod", { txHash: B, txIndex: 0 })).rejects.toThrow("The server hasn't said how that box went in");
     expect(koios.asked).toBeGreaterThan(0);
     expect(withdrawn(t)).toEqual([]);
     // Nothing kept for the pool reads: they still ask nothing and hold nothing.
@@ -1258,21 +1258,21 @@ describe("Lovejoin's page after a restore (independent review M14)", () => {
 
   it("says plainly when Koios hasn't said what made a box, and that the wallet asks again", () => {
     expect(notMixed(1, 1)).toContain(
-      "Koios hasn't said how one of your boxes went in, so it may not be mixed. It doesn't come back on its own until Koios says. The wallet asks Koios again at the next refresh. Until it answers, Mix my boxes again can't run.",
+      "The server hasn't said how one of your boxes went in, so it may not be mixed. It doesn't come back on its own until the server says. The wallet asks the server again at the next refresh. Until it answers, Mix my boxes again can't run.",
     );
     // How many is hidden with the balances (privacy review §2.16).
     expect(notMixed(1, 1, true)).toContain(
-      "Koios hasn't said how some of your boxes went in, so they may not be mixed. None comes back on its own until Koios says.",
+      "The server hasn't said how some of your boxes went in, so they may not be mixed. None comes back on its own until the server says.",
     );
     // Those Koios hasn't said of are said apart, never as a stopped chain's.
     expect(notMixed(3, 1)).toContain(
-      "2 of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. Koios hasn't said how one more went in; it won't come back on its own until Koios says. The wallet asks Koios again at the next refresh. Until it answers, Mix my boxes again can't run.",
+      "2 of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. The server hasn't said how one more went in; it won't come back on its own until the server says. The wallet asks the server again at the next refresh. Until it answers, Mix my boxes again can't run.",
     );
     expect(notMixed(3, 2)).toContain(
-      "One of your boxes isn't mixed yet: a chain stopped before mixing it. It never comes back by itself, since each still shows where it went in. Mix my boxes again takes it first. Koios hasn't said how 2 more went in; they won't come back on their own until Koios says.",
+      "One of your boxes isn't mixed yet: a chain stopped before mixing it. It never comes back by itself, since each still shows where it went in. Mix my boxes again takes it first. The server hasn't said how 2 more went in; they won't come back on their own until the server says.",
     );
     expect(notMixed(3, 1, true)).toContain(
-      "Some of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. Koios hasn't said how some more went in; they won't come back on their own until Koios says.",
+      "Some of your boxes aren't mixed yet: a chain stopped before mixing them. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. The server hasn't said how some more went in; they won't come back on their own until the server says.",
     );
     expect(notMixed(3, 1, true)).not.toMatch(/\d/);
     // A stopped chain's boxes, as the records say.
@@ -1281,7 +1281,7 @@ describe("Lovejoin's page after a restore (independent review M14)", () => {
     );
     // The public account's are the ones known: Koios can't have said an unsure one was the account's.
     expect(text(createElement(NotMixed, { count: 2, fromPublic: 1, unsure: 1, busy: false, onAnyway: () => undefined }))).toContain(
-      "It came from your public account: Mix again from my public account takes it first, and ties nothing new. Koios hasn't said how one more went in",
+      "It came from your public account: Mix again from my public account takes it first, and ties nothing new. The server hasn't said how one more went in",
     );
   });
 
@@ -1296,22 +1296,22 @@ describe("Lovejoin's page after a restore (independent review M14)", () => {
     const said = (count: number, deposits: number, unsure = 0, hidden = false) =>
       text(createElement(NotMixed, { count, deposits, unsure, busy: false, onAnyway: () => undefined }), hidden);
     expect(said(2, 2)).toBe(
-      "2 of your boxes aren't mixed yet: Koios says a deposit put them into the pool, and no mix has moved them since. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. Bring one back anyway",
+      "2 of your boxes aren't mixed yet: the server says a deposit put them into the pool, and no mix has moved them since. They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first. Bring one back anyway",
     );
     // Some a recorded chain stopped before mixing, some a deposit made: each said as it is.
     expect(said(3, 1)).toContain(
-      "3 of your boxes aren't mixed yet: a chain stopped before mixing 2, and Koios says a deposit put the other into the pool, with no mix since.",
+      "3 of your boxes aren't mixed yet: a chain stopped before mixing 2, and the server says a deposit put the other into the pool, with no mix since.",
     );
     expect(said(3, 2)).toContain(
-      "3 of your boxes aren't mixed yet: a chain stopped before mixing one, and Koios says a deposit put the others into the pool, with no mix since.",
+      "3 of your boxes aren't mixed yet: a chain stopped before mixing one, and the server says a deposit put the others into the pool, with no mix since.",
     );
     expect(said(3, 1, 0, true)).toContain(
-      "Some of your boxes aren't mixed yet: a chain stopped before mixing some, and Koios says a deposit put the others into the pool, with no mix since.",
+      "Some of your boxes aren't mixed yet: a chain stopped before mixing some, and the server says a deposit put the others into the pool, with no mix since.",
     );
     expect(said(3, 1, 0, true)).not.toMatch(/\d/);
     // With one Koios hasn't said of: the known one is the deposit's.
     expect(said(2, 1, 1)).toContain(
-      "One of your boxes isn't mixed yet: Koios says a deposit put it into the pool, and no mix has moved it since. It never comes back by itself, since each still shows where it went in. Mix my boxes again takes it first. Koios hasn't said how one more went in",
+      "One of your boxes isn't mixed yet: the server says a deposit put it into the pool, and no mix has moved it since. It never comes back by itself, since each still shows where it went in. Mix my boxes again takes it first. The server hasn't said how one more went in",
     );
     for (const text of [said(2, 2), said(3, 1), said(2, 1, 1), said(1, 1, 0, true)]) expect(text).not.toContain("your deposit");
   });
@@ -1321,14 +1321,14 @@ describe("Lovejoin's page after a restore (independent review M14)", () => {
     const [D, P, U, C] = [box("d1"), box("e1"), box("c1"), box("a1")];
     // The public account paid the deposit that made it.
     expect(anywayWarning({ notMixed: [P], deposits: [P], fromPublic: [P] })).toBe(
-      "Koios says your public account deposited it. Brought back now, anyone can tie your public account to your private balance. Mix again from my public account hides it first.",
+      "The server says your public account deposited it. Brought back now, anyone can tie your public account to your private balance. Mix again from my public account hides it first.",
     );
     // Some other deposit.
     expect(anywayWarning({ notMixed: [D], deposits: [D], fromPublic: [] })).toBe(
-      "Koios says a deposit put it in. Brought back now, anyone can tie that deposit to your private balance. Mix my boxes again hides it first.",
+      "The server says a deposit put it in. Brought back now, anyone can tie that deposit to your private balance. Mix my boxes again hides it first.",
     );
     // One Koios hasn't said of is taken first, and warned of as such.
-    expect(anywayWarning({ notMixed: [D, U], deposits: [D], unsure: [U], fromPublic: [] })).toContain("Koios hasn't said how it went in, so it may not be mixed");
+    expect(anywayWarning({ notMixed: [D, U], deposits: [D], unsure: [U], fromPublic: [] })).toContain("The server hasn't said how it went in, so it may not be mixed");
     // A recorded chain's, as before.
     expect(anywayWarning({ notMixed: [C], fromPublic: [] })).toContain("Its chain stopped before mixing it. Brought back now, anyone can tie your deposit to your private balance.");
     expect(anywayWarning({ notMixed: [C], fromPublic: [C] })).toContain("Its mix from your public account stopped before mixing it");

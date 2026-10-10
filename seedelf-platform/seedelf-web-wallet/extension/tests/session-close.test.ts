@@ -133,7 +133,7 @@ describe("disconnecting a site's session", () => {
     const sessions = signing(t);
     const funding = await siteSession(t, sessions);
     // tx_status says the funding landed; the backend that answers for the account is behind it: it reads empty.
-    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The server hasn't caught up with this session yet");
     expect(await record(t)).toMatchObject({ index: 0, txs: [{ kind: "out" }] });
     expect(await t.store.get("sessions.preprod")).toMatchObject({ next: 1 });
 
@@ -144,7 +144,7 @@ describe("disconnecting a site's session", () => {
     // A backend that knows the funding but not what's at the account now: it doesn't list it, and doesn't say it's spent.
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.includes("/credential_utxos") ? Response.json([]) : real(url, init));
-    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The server hasn't caught up with this session yet");
     t.koios.fetch = real;
 
     // Spent (the site's own transaction took it all elsewhere), and the account is empty: disconnected, its record gone.
@@ -162,7 +162,7 @@ describe("disconnecting a site's session", () => {
     await sessions.topUpSubmit("preprod", more.txHash);
     const topUp = t.koios.submitted.at(-1)!;
     // The top-up landed; the account's read is behind it.
-    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The server hasn't caught up with this session yet");
     caughtUp(t, topUp, { spent: true });
     await sessions.disconnect("preprod", 0);
     expect(await record(t)).toBeUndefined();
@@ -187,7 +187,7 @@ describe("disconnecting a site's session", () => {
     t.koios.addedToAccounts.push(atSession(funding, 0, "15000000"), atSession(funding, 1, "5000000"));
     const real = t.koios.fetch;
     t.koios.fetch = hiding(t, outs);
-    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The server hasn't caught up with this session yet");
     expect(await record(t)).toBeDefined();
 
     // Unknown to Koios: it may still land, or a backend behind it may be the one answering, until two hours
@@ -294,7 +294,7 @@ describe("disconnecting a site's session with something left behind (independent
     // A read behind it doesn't list it: refused, never taken for gone.
     const real = t.koios.fetch;
     t.koios.fetch = hiding(t, [`${funding}#0`]);
-    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    await expect(sessions.disconnect("preprod", 0)).rejects.toThrow("The server hasn't caught up with this session yet");
     // Listed: the record stays, closed, for it.
     t.koios.fetch = real;
     await sessions.disconnect("preprod", 0);

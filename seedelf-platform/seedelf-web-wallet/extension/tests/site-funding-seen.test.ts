@@ -21,7 +21,7 @@ import { loadTestWasm, ownedUtxos, sessionSwap, testBalances, vectors, withdrawP
 const PASSWORD = "correct horse battery";
 const ORIGIN = "https://app.example.com";
 const phrase = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase as string;
-const NOT_CAUGHT_UP = "Koios hasn't caught up with this session yet";
+const NOT_CAUGHT_UP = "The server hasn't caught up with this session yet";
 const UNSEEN = "The chain hasn't shown this session's funding";
 /** A funding the chain doesn't have after this long is shown as never funded (sessions.ts). */
 const FAILED_AFTER = 20 * 60_000 + 1;

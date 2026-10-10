@@ -61,7 +61,7 @@ describe("a public mix's later transaction a try may have put in (final review F
     expect(await lovejoin.progress("preprod")).toEqual({
       total: 5,
       sent: 4,
-      stopped: "Koios didn't answer when its transaction 5 of 5 was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.",
+      stopped: "The server didn't answer when its transaction 5 of 5 was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.",
       maybeSent: true,
     });
     const last = reservationOf([chain[4]!]);
@@ -79,6 +79,6 @@ describe("a public mix's later transaction a try may have put in (final review F
     const settled = (await t.store.get<{ chains: Array<{ maybe?: unknown; sent: number; stopped?: string }> }>("lovejoin.preprod"))!.chains.find(
       (c) => c.sent === 5,
     );
-    expect(settled?.stopped).toBe("Koios didn't answer when its transaction 5 of 5 was sent. It went through, and the mix stopped there.");
+    expect(settled?.stopped).toBe("The server didn't answer when its transaction 5 of 5 was sent. It went through, and the mix stopped there.");
   });
 });

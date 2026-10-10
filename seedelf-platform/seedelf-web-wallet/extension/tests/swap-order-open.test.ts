@@ -283,8 +283,8 @@ const rowOf = (s: SessionView) => createElement(SwapRow, { session: s, onOpen: (
 const row = (s: SessionView) => text(rowOf(s));
 
 const WAITS =
-  "Stopped, but Koios can't find an order of this swap yet, so it isn't cancelled yet. " +
-  "It is once Koios finds it, then everything comes back.";
+  "Stopped, but the server can't find an order of this swap yet, so it isn't cancelled yet. " +
+  "It is once the server finds it, then everything comes back.";
 
 describe("the page of a swap whose order Koios can't find yet (independent review L16)", () => {
   it("says plainly what it waits for, never that it's cancelling or done", () => {
@@ -293,7 +293,7 @@ describe("the page of a swap whose order Koios can't find yet (independent revie
     const line = page(s);
     expect(line).toContain(WAITS);
     expect(line).toContain("Waiting on an order");
-    expect(line).toContain("One is still open at a DEX, and Koios can't find it yet");
+    expect(line).toContain("One is still open at a DEX, and the server can't find it yet");
     expect(line).not.toContain("Cancelling the order");
     expect(line).not.toContain("The order's funds back at the account");
   });
@@ -310,7 +310,7 @@ describe("the page of a swap whose order Koios can't find yet (independent revie
     expect(nowLine(cancelling())).toBe("Cancelling the order. Once that's confirmed, it all comes back.");
     expect(page(cancelling())).toContain("Cancelled");
     expect(row(cancelling())).toContain("Stopping");
-    const retrying = cancelling({ orderOpen: 1, retry: { at: Date.now() + 60_000, error: "Koios didn't answer." } });
+    const retrying = cancelling({ orderOpen: 1, retry: { at: Date.now() + 60_000, error: "The server didn't answer." } });
     expect(row(retrying)).toContain("Retrying");
   });
 });

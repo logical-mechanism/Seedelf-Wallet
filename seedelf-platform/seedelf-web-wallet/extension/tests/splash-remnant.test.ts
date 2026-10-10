@@ -236,7 +236,7 @@ describe("what a stranger puts at a Splash order's address (release review C02)"
     // A backend behind the one that listed it: tx_info doesn't know what left it yet.
     t.koios.addedToAccounts.push(atOrders(FILL_H));
     let view = await sessions.advance("mainnet", 0, true);
-    expect(view.auto!.retry).toMatchObject({ reason: "koios-silent", error: "Koios hasn't caught up with this session yet. Try again in a minute." });
+    expect(view.auto!.retry).toMatchObject({ reason: "koios-silent", error: "The server hasn't caught up with this session yet. Try again in a minute." });
     expect(view.stage).toBe("open");
     expect((await recordOf(t)).remnants).toBeUndefined();
     // Nor while it knows the transaction but doesn't say which outputs it spent.

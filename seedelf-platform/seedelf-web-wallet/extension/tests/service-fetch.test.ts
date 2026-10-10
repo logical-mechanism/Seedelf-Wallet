@@ -1,13 +1,14 @@
 // Every request to a service goes out without the browser's cookies or a
 // referrer (privacy review §2.14), and leaves nothing in Chrome's cache on the
-// disk: Koios, giveme.my, CoinGecko, Minswap and the IPFS gateway for an NFT's
-// image.
+// disk: Koios, giveme.my, CoinGecko, Minswap, the IPFS gateway for an NFT's
+// image, and the data layer, whose API marks every answer no-store.
 // The worker holds a host permission for most of them, and a fetch with it
 // would carry any cookie the browser has for that host; one of giveme.my's
 // would tie every private payment to this browser.
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
+import { chainClient, DataParts } from "../src/background/data-layer";
 import { Koios, type FetchLike } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
 import { NftImageService } from "../src/background/nft-image";
@@ -51,6 +52,52 @@ describe("a service request", () => {
     expect(inits.filter((i) => i.method === "POST").length).toBeGreaterThanOrEqual(2);
     expect(submit.inits).toHaveLength(1);
     [...inits, ...submit.inits].forEach(privately);
+  });
+
+  it("to the data layer carries none, and lets Chrome reuse a POST's preflight, a GET kept out of the cache", async () => {
+    // 1.4.0: `no-store` made Chrome send a CORS preflight before every POST, one more round trip each. The API
+    // answers every request with Cache-Control: no-store (seedelf-data's app()), so nothing it says is kept, and
+    // the preflight Chrome keeps in memory names only the route. Its fallback to Koios stays no-store.
+    const { inits, fetchFn } = recording([]);
+    const urls: string[] = [];
+    const fetch: FetchLike = (url, init) => {
+      urls.push(url);
+      return fetchFn(url, init);
+    };
+    const koios = chainClient(
+      { koiosOnly: async () => false, parts: new DataParts(memoryArea()), fetch, sleep: async () => undefined, limits: {} },
+      (n) => (n === "mainnet" ? "https://data.test" : undefined),
+    )("mainnet");
+    await koios.credentialUtxos(["94bc"]);
+    await koios.assetNftAddress(ADA_HANDLE_POLICY, "6d7968616e646c65");
+    await koios.submitTx(new Uint8Array([0x84])).catch(() => undefined);
+    expect(urls.every((u) => u.startsWith("https://data.test/"))).toBe(true);
+    expect(inits.map((i) => [i.method, i.cache])).toEqual([
+      ["POST", "default"],
+      // A GET needs no preflight, and its address names an ADA Handle: no-store, whatever the server says.
+      ["GET", "no-store"],
+      ["POST", "default"],
+    ]);
+    for (const init of inits) {
+      expect(init.credentials).toBe("omit");
+      expect(init.referrerPolicy).toBe("no-referrer");
+    }
+
+    // The data layer down: the same call on Koios, no-store.
+    inits.length = 0;
+    const down = chainClient(
+      {
+        koiosOnly: async () => false,
+        parts: new DataParts(memoryArea()),
+        fetch: async (url, init) => (url.startsWith("https://data.test/") ? Promise.reject(new TypeError("Failed to fetch")) : fetchFn(url, init)),
+        sleep: async () => undefined,
+        limits: {},
+      },
+      (n) => (n === "mainnet" ? "https://data.test" : undefined),
+    )("mainnet");
+    await down.credentialUtxos(["94bc"]);
+    expect(inits).toHaveLength(1);
+    privately(inits[0]!);
   });
 
   it("to giveme.my carries none", async () => {

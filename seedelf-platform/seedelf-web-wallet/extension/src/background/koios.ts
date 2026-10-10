@@ -612,6 +612,16 @@ export interface Backend {
   retries: boolean;
   /** What a request to `path` costs against the client's limit; 1 if left out. */
   cost?: (path: string) => number;
+  /**
+   * A POST's cache mode, `no-store` (SERVICE_FETCH's) if left out. The data
+   * layer's is `default`, so Chrome reuses a POST's CORS preflight: `no-store`
+   * makes it ask again before every one. A POST's answer is never cached, and
+   * the API marks every answer `Cache-Control: no-store` besides (1.4.0). A
+   * GET needs no preflight, so it stays `no-store` everywhere: its address can
+   * name an ADA Handle or a DRep ID, and only `no-store` keeps it off the disk
+   * whatever the server says (the release review).
+   */
+  postCache?: RequestCache;
 }
 
 export const KOIOS_BACKEND: Backend = { readTimeoutMs: TIMEOUT_MS, submitTimeoutMs: SUBMIT_TIMEOUT_MS, retries: true };
@@ -917,6 +927,7 @@ export class Koios {
       try {
         response = await this.fetchFn(`${this.base}/submittx`, {
           ...SERVICE_FETCH,
+          cache: this.backend.postCache ?? SERVICE_FETCH.cache,
           method: "POST",
           headers: { "content-type": "application/cbor" },
           body: txCbor,
@@ -926,10 +937,12 @@ export class Koios {
         if (!(await this.allowed(this.base))) throw new KoiosError(KOIOS_NOT_ALLOWED(), "silent");
         throw new KoiosBusyError(unreachable(e), true, "silent", { timeout: isTimeout(e) });
       }
-      // Koios's gateway answers a 429 before passing anything on, whatever its body.
+      // Koios's gateway answers a 429 before passing anything on, whatever its body. Koios's holds every request
+      // for the cooldown; the data layer's holds only its submit part (data-layer.ts), so its reads and the private
+      // index, which share its limit, go on, or to Koios, rather than wait out a submit's 429 (the release review).
       if (response.status === 429) {
         const wait = retryAfterMs(response, Date.now());
-        this.limit?.hold(wait);
+        if (this.backend.retries) this.limit?.hold(wait);
         throw new KoiosBusyError(koiosTrouble(429, "submittx"), false, "rate-limited", { status: 429, retryAfterMs: wait });
       }
       if (response.status >= 500) {
@@ -1075,6 +1088,7 @@ export class Koios {
       try {
         response = await this.fetchFn(url, {
           ...SERVICE_FETCH,
+          cache: method === "POST" ? (this.backend.postCache ?? SERVICE_FETCH.cache) : SERVICE_FETCH.cache,
           method,
           headers:
             method === "POST"

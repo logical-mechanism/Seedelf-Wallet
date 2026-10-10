@@ -32,7 +32,7 @@ function runner(work: Partial<Record<NetworkName, { swaps?: boolean; mixing?: bo
     wallet: { state: async () => "unlocked", unlockedAt: async () => 1_800_000_000_000 },
     sessions: {
       runAll: vi.fn(async (n: NetworkName) => {
-        if (of(n).fails) throw new Error("Koios didn't answer.");
+        if (of(n).fails) throw new Error("The server didn't answer.");
         // As the real one does: it says whether its own network has something running, and leaves the alarm alone.
         return !!of(n).swaps;
       }),

@@ -189,7 +189,7 @@ describe("a payment Koios didn't answer", () => {
     const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     const real = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : real(url, init));
-    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("Koios is limiting requests");
+    await expect(t.send.submit("preprod", summary.txHash)).rejects.toThrow("The server is limiting requests");
     expect(await t.session.get(pendingKey("preprod"))).toBeUndefined();
     expect(await spentSet(t.session)).toEqual(new Set());
     expect(await t.session.get(SESSION_SEND)).not.toHaveProperty("sentCbor");
@@ -536,7 +536,7 @@ describe("Home's banner", () => {
   it("says plainly not to pay it again, that it may have gone through, and that sending it again is safe", () => {
     // What to do first, then why (chunk 23's second review, HM-4).
     expect(text({ ...sent, maybeSent: true }, true)).toContain(
-      "Payment not confirmed yet: don't pay it again Koios didn't answer, so it may have gone through. The wallet keeps resending it, which is safe",
+      "Payment not confirmed yet: don't pay it again The server didn't answer, so it may have gone through. The wallet keeps resending it, which is safe",
     );
     // It waits until the worker settles it, whatever Home's clock says: no Dismiss for a payment that may still land.
     const later = text({ ...sent, maybeSent: true }, false);

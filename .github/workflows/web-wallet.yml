@@ -87,8 +87,9 @@ jobs:
 
       # Mainnet through the wallet's own data layer (chunk 26b): a build made
       # with VITE_DATA_ORIGIN, against e2e/data-layer.ts's fake of it, each
-      # part falling back to the Koios fake. The store build below has no
-      # data layer until the VPS chunk gives it one.
+      # part falling back to the Koios fake. Every other build carries the live
+      # server's origin (1.4.0); the harness answers only the hosts it fakes,
+      # so no test reaches it.
       - name: Data layer end-to-end
         working-directory: seedelf-platform/seedelf-web-wallet/extension
         run: npm run e2e:data

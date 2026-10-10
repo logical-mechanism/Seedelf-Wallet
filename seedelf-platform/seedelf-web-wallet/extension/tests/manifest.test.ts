@@ -72,7 +72,7 @@ describe("manifest", () => {
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "object-src 'none'",
-        "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org https://ipfs.blockfrost.dev",
+        "connect-src 'self' https://api.koios.rest https://www.giveme.my https://api.coingecko.com https://preprod.koios.rest https://agg-api.minswap.org https://aggr.monorepo-testnet-preprod.minswap.org https://mainnet.seedelf.logicalmechanism.io https://ipfs.blockfrost.dev",
         "style-src 'self'",
         "img-src 'self' data:",
         "font-src 'self'",
@@ -101,9 +101,15 @@ describe("manifest", () => {
     expect(m.description.length).toBeLessThanOrEqual(132);
   });
 
-  it("with no data layer origin, a mainnet build reaches nothing new (chunk 26b: the VPS chunk sets one)", () => {
+  it("the store's build reaches the data layer through connect-src alone, never a host permission (chunk 26c)", () => {
+    // The API answers CORS for the store's ID (seedelf-data DATA_ORIGINS), so installing asks for nothing new.
     const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: true });
+    expect(m.content_security_policy.extension_pages).toMatch(/connect-src [^;]*https:\/\/mainnet\.seedelf\.logicalmechanism\.io /);
     expect(m.content_security_policy.extension_pages).not.toMatch(/127\.0\.0\.1|http:\/\//);
+    expect(m.host_permissions.join(" ")).not.toContain("seedelf.logicalmechanism.io");
+    // Mainnet only: a preprod build reads Koios alone.
+    const preprod = buildManifest({ version: "1.0.0", mainnetEnabled: false, storeBuild: true });
+    expect(preprod.content_security_policy.extension_pages).not.toContain("seedelf.logicalmechanism.io");
   });
 
   it("reaches a dev build's data layer through connect-src alone, never a host permission", () => {

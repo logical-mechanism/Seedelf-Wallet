@@ -91,7 +91,7 @@ describe("a site's session's return sent again after Koios didn't answer (final 
     const review = await t.sessions.backBuild("preprod", 0, true);
     // Koios takes it, and doesn't answer.
     const undo = answering(t, 504, true);
-    await expect(t.sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    await expect(t.sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("The server");
     undo();
     const inputs = (await recordOf(t, review.txHash))!.inputs;
     expect(inputs).toBeTruthy();
@@ -120,7 +120,7 @@ describe("a site's session's return sent again after Koios didn't answer (final 
     const t = await siteSession();
     const review = await t.sessions.backBuild("preprod", 0, true);
     let undo = answering(t, 504, true);
-    await expect(t.sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("Koios");
+    await expect(t.sessions.backSubmit("preprod", review.txHash)).rejects.toThrow("The server");
     undo();
     t.clock.now += 60_000;
     t.koios.missing.add(review.txHash);
@@ -158,7 +158,7 @@ describe("a swap sent again by the user after Koios didn't answer (final review 
     expect((await sessions.advance("preprod", 0, true)).auto!.paused).toMatchObject({ why: "price" });
     const review = await sessions.swapBuild("preprod", 0);
     const undo = unanswered(t);
-    await expect(sessions.txSubmit("preprod", review.txHash, "swap")).rejects.toThrow("Koios");
+    await expect(sessions.txSubmit("preprod", review.txHash, "swap")).rejects.toThrow("The server");
     undo();
 
     // A minute on, Send again: it waits in a mempool, and tx_status doesn't show it yet.

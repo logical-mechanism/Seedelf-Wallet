@@ -134,7 +134,7 @@ describe("the DRep card", () => {
     expect(card(undefined)).toContain("Reading your DRep…");
     const failed = markup(
       createElement(DrepCard, {
-        error: "Koios is having trouble right now (500 for drep_info)",
+        error: "The server is having trouble right now (500 for drep_info)",
         onRetry: noop,
         staking,
         onBecome: noop,
