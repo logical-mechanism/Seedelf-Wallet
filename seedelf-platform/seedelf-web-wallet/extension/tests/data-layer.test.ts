@@ -256,6 +256,8 @@ describe("a submit through the data layer", () => {
     ["a 429", () => error(429, "slow down", { "retry-after": "5" })],
     ["a 5xx", () => error(502, "bad gateway")],
     ["its node down", () => new Response('"TxSubmitConnectionError"', { status: 500 })],
+    // A gateway's own 4xx page isn't the node refusing the transaction (the 26b review).
+    ["its gateway's own page", () => new Response("<html><body><h1>403 Forbidden</h1></body></html>", { status: 403, headers: { "content-type": "text/html" } })],
     ["no answer either", "unreachable" as const],
   ])("is maybe sent when Koios answers %s after a lost connection: that says nothing of the first try", async (_, answer) => {
     const s = servers();

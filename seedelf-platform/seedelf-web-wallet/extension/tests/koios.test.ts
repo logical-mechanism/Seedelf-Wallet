@@ -239,6 +239,13 @@ describe("Koios client: transactions", () => {
     let tries = 0;
     const rejected = new Koios(BASE, async () => (tries++, new Response("ValueNotConserved", { status: 400 })));
     await expect(rejected.submitTx(new Uint8Array([0x84]))).rejects.toThrow("The network rejected the transaction: ValueNotConserved");
+    // A gateway's own page isn't the network's refusal: Koios didn't pass it on.
+    const page = new Koios(BASE, async () => new Response("<html><body>400 Bad request</body></html>", { status: 400 }));
+    const gateway = await page.submitTx(new Uint8Array([0x84])).catch((e: unknown) => e);
+    expect(gateway).toBeInstanceOf(KoiosError);
+    expect(gateway).not.toBeInstanceOf(KoiosBusyError);
+    expect((gateway as KoiosError).trouble).toBe("silent");
+    expect((gateway as Error).message).toBe("The server refused the request (400 for submittx).");
     // Koios failing on its side, or asking the wallet to slow down, didn't reject it: sending it again later is safe.
     const busy = new Koios(BASE, async () => (tries++, new Response("", { status: 503 })));
     await expect(busy.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KoiosBusyError);

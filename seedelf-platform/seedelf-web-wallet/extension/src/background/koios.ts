@@ -638,6 +638,11 @@ function serverWords(text: string): string | undefined {
 
 const isTimeout = (e: unknown) => e instanceof DOMException && e.name === "TimeoutError";
 
+/** A web page, as a proxy's own error is: the node's words never are one. */
+function isPage(response: Response, text: string): boolean {
+  return /text\/html/i.test(response.headers.get("content-type") ?? "") || text.trimStart().startsWith("<");
+}
+
 export class Koios {
   constructor(
     private readonly base: string,
@@ -996,6 +1001,12 @@ export class Koios {
       throw new KoiosError(
         t("koios.feeTooSmall"),
       );
+    }
+    // A gateway's own page (HTML: Koios's proxy answering for itself), not the node's words: it says nothing of the
+    // transaction, and after the data layer's lost connection nothing of a first try that may have gone out
+    // (data-layer.ts reads its `trouble` as maybe sent; the 26b review).
+    if (!response.ok && isPage(response, text)) {
+      throw new KoiosError(koiosTrouble(response.status, "submittx"), "silent", { status: response.status });
     }
     if (!response.ok) throw new KoiosError(t("koios.rejected", { why: text.slice(0, 500) }));
     let id: unknown;
