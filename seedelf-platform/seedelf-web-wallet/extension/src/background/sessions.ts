@@ -3560,7 +3560,8 @@ export class SessionService {
     const koios = this.deps.koios(network);
     try {
       const submitted = await koios.submitTx(bytes);
-      if (submitted !== txHash) throw new Error(t("sess.otherTxId", { id: submitted }));
+      // Something went out, and what isn't known: maybe sent, never unsent, as pending.ts keeps a payment so answered.
+      if (submitted !== txHash) throw new KoiosBusyError(t("sess.otherTxId", { id: submitted }), true);
     } catch (e) {
       if (!(e instanceof SpentInputError)) throw e;
       await sentAlready(koios, txHash, e);
