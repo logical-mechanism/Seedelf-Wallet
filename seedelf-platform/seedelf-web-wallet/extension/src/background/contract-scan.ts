@@ -281,7 +281,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
       rows: snapshot.rows.filter((r) => mine.has(r.ref)).map(settledRow),
       checked: {},
     };
-    await store.set(record, settled);
+    await seal(store, record, settled);
     since = await index.since(settled.cursor);
     // Rolled back between the two: Koios this once, and a snapshot again next time.
     if (since.reset) throw new IndexDown("The private index's cursor was rolled back twice in a row.");
@@ -317,7 +317,7 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     ),
     checked: Object.fromEntries(above.map((r) => [r.ref, checked[r.ref]!])),
   };
-  if (next.cursor !== settled.cursor || unchecked.length) await store.set(record, next);
+  if (next.cursor !== settled.cursor || unchecked.length) await seal(store, record, next);
 
   const named = await names;
   return wallet.withKeys(async (keys) => {
@@ -345,6 +345,20 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
     await keep(session, key, view);
     return viewOf(view, contract);
   });
+}
+
+/**
+ * Seals the record. One the store refuses (local storage full) never fails
+ * the reading, as a refused write of the session's view doesn't (`keep`, the
+ * launch review's H5): it's only a cache of the chain, and the next reading
+ * asks from the cursor still sealed. A lock still stops it.
+ */
+async function seal(store: PrivateStore, record: RecordName, value: Settled): Promise<void> {
+  try {
+    await store.set(record, value);
+  } catch (e) {
+    if (e instanceof WalletLocked) throw e;
+  }
 }
 
 /** The view as the last read left it, without reading anything; undefined before the first. Call it while unlocked. */

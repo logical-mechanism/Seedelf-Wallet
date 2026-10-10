@@ -230,6 +230,23 @@ describe("the private index", () => {
     expect(view.owned.map(outpoint).sort()).toEqual(OURS);
   });
 
+  it("reads on when the sealed record can't be written (local storage full), as a refused session write does (launch review H5)", async () => {
+    const { t, index, deps, contractReads } = await onIndex();
+    const set = t.deps.store.set.bind(t.deps.store);
+    t.deps.store.set = async () => {
+      throw new Error("Resource::kQuotaBytes quota exceeded");
+    };
+    // A restore: its snapshot's record refused, then a reading after it, whose record is refused again.
+    expect((await readContractView(deps, "mainnet")).owned.map(outpoint).sort()).toEqual(OURS);
+    index.advance(400);
+    expect((await readContractView(deps, "mainnet")).owned.map(outpoint).sort()).toEqual(OURS);
+    expect(contractReads()).toBe(0);
+    // A lock still stops it.
+    t.deps.store.set = set;
+    await t.wallet.lock();
+    await expect(readContractView(deps, "mainnet")).rejects.toBeInstanceOf(WalletLocked);
+  });
+
   it("finds every Seedelf by name from the names route, this wallet's as its whole row", async () => {
     const { deps } = await onIndex();
     const view = await readContractView(deps, "mainnet");
