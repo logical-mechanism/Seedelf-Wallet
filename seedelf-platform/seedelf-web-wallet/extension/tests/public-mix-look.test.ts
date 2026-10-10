@@ -82,7 +82,7 @@ describe("looking for a public mix's transaction that may have gone through (ind
       () => undefined,
       (e: unknown) => String(e),
     );
-    expect(error).toMatch("may have gone through, and Koios didn't answer to check");
+    expect(error).toMatch("may have gone through, and the server didn't answer to check");
     expect(error).not.toMatch("if not.");
     // Koios answers again: unseen, and what it spends unspent, two hours on, it never went.
     t.koios.fetch = fetch;

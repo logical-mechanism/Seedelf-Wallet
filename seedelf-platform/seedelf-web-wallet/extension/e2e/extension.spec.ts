@@ -439,7 +439,7 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   await restore(page, vector(12).phrase);
   // Said in the screen's terms; the service's own words wait under Details (chunk 23's review, L-2).
   await expect(page.getByRole("alert")).toContainText("Couldn't read your balances");
-  await expect(page.getByTestId("home-read-failed")).toContainText("Koios refused the request (400");
+  await expect(page.getByTestId("home-read-failed")).toContainText("The server refused the request (400");
   // What's true when it keeps failing: only reading failed (blind test §4 entry 25).
   await expect(page.getByTestId("home-read-failed")).toContainText("Your money is safe on chain: only reading it failed");
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
@@ -829,7 +829,7 @@ test.describe("an NFT's image", () => {
     await page.getByTestId("token-results").getByRole("button").filter({ hasText: "HANOI001" }).click();
     const bare = page.getByRole("dialog");
     await bare.getByRole("button", { name: "Show image" }).click();
-    await expect(bare.getByTestId("nft-image-none")).toHaveText("Koios has no metadata for this NFT, so there's no image to show.");
+    await expect(bare.getByTestId("nft-image-none")).toHaveText("The server has no metadata for this NFT, so there's no image to show.");
     expect(assetInfo()).toBe(2);
     expect(gateway.asked).toHaveLength(1);
     await page.keyboard.press("Escape");
@@ -980,8 +980,8 @@ test("several accounts: find one, switch to it, and the screens follow", async (
   koios.usedStakes.add(second.preprod.stake);
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Public accounts" }).click();
-  await expect(page.getByTestId("accounts-cost-note")).toContainText("ask Koios about one account at a time");
-  await expect(page.getByTestId("accounts-cost-note")).toContainText("Koios can still guess your accounts are one wallet's");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("ask the server about one account at a time");
+  await expect(page.getByTestId("accounts-cost-note")).toContainText("it can still guess your accounts are one wallet's");
   await expect(page.getByTestId("accounts-cost-note")).toContainText("Add it");
   const asked = koios.stakesAsked.length;
   await page.getByRole("button", { name: "Look for the next account" }).click();
@@ -1782,7 +1782,7 @@ test("a payment Koios didn't answer may have gone through: Home waits for it, wi
   // What to do first, then why; how long it can still land, with its date past midnight, under Details (chunk 23's
   // second review, HM-4).
   await expect(banner).toContainText("Payment not confirmed yet: don't pay it again");
-  await expect(banner).toContainText("Koios didn't answer, so it may have gone through");
+  await expect(banner).toContainText("The server didn't answer, so it may have gone through");
   await expect(banner.getByRole("button", { name: "Check now" })).toBeVisible();
   await expect(banner).toContainText(/It can land until about (\d+ \w+, )?\d\d:\d\d/);
   await expect(banner.getByRole("button", { name: "Dismiss" })).toHaveCount(0);

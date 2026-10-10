@@ -21,7 +21,7 @@ import { loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } fro
 
 const PASSWORD = "correct horse battery";
 const phrase = vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === 12)!.phrase as string;
-const NOT_CAUGHT_UP = "Koios hasn't caught up with this session yet";
+const NOT_CAUGHT_UP = "The server hasn't caught up with this session yet";
 
 type T = Awaited<ReturnType<typeof on>>;
 

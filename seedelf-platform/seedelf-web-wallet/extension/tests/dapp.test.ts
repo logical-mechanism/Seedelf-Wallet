@@ -1442,7 +1442,7 @@ describe("private CIP-30: a site connected to a private session", () => {
     t.koios.addedToAccounts.splice(0);
     // Only once Koios shows what the funding and the top-up paid the account spent, not on an empty read
     // alone (independent review M4).
-    await expect(dapp.forget(s.origin)).rejects.toThrow("Koios hasn't caught up with this session yet");
+    await expect(dapp.forget(s.origin)).rejects.toThrow("The server hasn't caught up with this session yet");
     expect(await dapp.sites()).toHaveLength(1);
     for (const tx of t.koios.submitted) {
       const outputs = JSON.parse(t.deps.wasm.ogmiosUtxos(Buffer.from(tx).toString("hex"))) as Array<{

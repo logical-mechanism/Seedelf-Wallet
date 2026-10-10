@@ -147,10 +147,10 @@ describe("Koios client", () => {
   it("explains a connection that fails, and a rate limit", async () => {
     const offline = scripted([new TypeError("Failed to fetch"), new TypeError("Failed to fetch"), new TypeError("Failed to fetch")]);
     await expect(offline.koios.credentialUtxos(["x"])).rejects.toThrow(
-      "Couldn't reach Koios, where the wallet reads Cardano (Failed to fetch). Check your internet connection",
+      "Couldn't reach the server the wallet reads Cardano through (Failed to fetch). Check your internet connection",
     );
     const limited = scripted([429, 429, 429].map((status) => new Response("", { status })));
-    await expect(limited.koios.credentialUtxos(["x"])).rejects.toThrow("Koios is limiting requests from your connection");
+    await expect(limited.koios.credentialUtxos(["x"])).rejects.toThrow("The server is limiting requests from your connection");
   });
 
   it("says when Chrome won't let the wallet reach Koios, and doesn't retry", async () => {
@@ -169,7 +169,7 @@ describe("Koios client", () => {
     expect(asked.map((u) => new URL(u).origin)).toEqual(["https://preprod.koios.rest", "https://preprod.koios.rest"]);
 
     const granted = new Koios(BASE, blocked(), async () => undefined, async () => true);
-    await expect(granted.credentialUtxos(["x"])).rejects.toThrow("Couldn't reach Koios");
+    await expect(granted.credentialUtxos(["x"])).rejects.toThrow("Couldn't reach the server");
   });
 
   it("says a slow Koios was slow, not that the connection is broken", async () => {
@@ -210,14 +210,14 @@ describe("Koios client", () => {
       new Response("", { status: 503 }),
     ]);
     await expect(koios.credentialUtxos(["94bc"])).rejects.toThrow(
-      new KoiosError("Koios is having trouble (503 for credential_utxos). Try again in a minute.", "silent"),
+      new KoiosError("The server is having trouble (503 for credential_utxos). Try again in a minute.", "silent"),
     );
     expect(calls).toHaveLength(3);
   });
 
   it("doesn't retry a request Koios rejects", async () => {
     const { koios, calls } = scripted([new Response("bad", { status: 400 })]);
-    await expect(koios.credentialUtxos(["x"])).rejects.toThrow("Koios refused the request (400 for credential_utxos).");
+    await expect(koios.credentialUtxos(["x"])).rejects.toThrow("The server refused the request (400 for credential_utxos).");
     expect(calls).toHaveLength(1);
   });
 });
@@ -243,7 +243,7 @@ describe("Koios client: transactions", () => {
     const busy = new Koios(BASE, async () => (tries++, new Response("", { status: 503 })));
     await expect(busy.submitTx(new Uint8Array([0x84]))).rejects.toThrow(KoiosBusyError);
     const limited = new Koios(BASE, async () => new Response("", { status: 429 }));
-    await expect(limited.submitTx(new Uint8Array([0x84]))).rejects.toThrow("Koios is limiting requests");
+    await expect(limited.submitTx(new Uint8Array([0x84]))).rejects.toThrow("The server is limiting requests");
     const silent = new Koios(BASE, async () => {
       throw new DOMException("signal timed out", "TimeoutError");
     });
@@ -254,7 +254,7 @@ describe("Koios client: transactions", () => {
       tag: "TxSubmitFail",
     });
     const down = new Koios(BASE, async () => (tries++, new Response(nodeDown, { status: 400 })), async () => undefined);
-    await expect(down.submitTx(new Uint8Array([0x84]))).rejects.toThrow("Koios couldn't reach its Cardano node, so the transaction wasn't sent");
+    await expect(down.submitTx(new Uint8Array([0x84]))).rejects.toThrow("The server couldn't reach its Cardano node, so the transaction wasn't sent");
     expect(tries).toBe(5); // that answer, and only that one, is tried three times
     const answers = [new Response(nodeDown, { status: 400 }), Response.json("cd".repeat(32), { status: 202 })];
     const recovers = new Koios(BASE, async () => answers.shift()!, async () => undefined);
@@ -283,7 +283,7 @@ describe("Koios client: transactions", () => {
     expect(await koios.evaluate("84a4")).toEqual(error);
     expect(delays).toEqual([1000]);
     const refused = scripted([new Response("", { status: 404 })]);
-    await expect(refused.koios.evaluate("84a4")).rejects.toThrow("Koios refused the request (404 for ogmios)");
+    await expect(refused.koios.evaluate("84a4")).rejects.toThrow("The server refused the request (404 for ogmios)");
   });
 
   it("says whether a submit Koios didn't answer may have gone through: not when it only asked to slow down", async () => {
@@ -305,7 +305,7 @@ describe("Koios client: transactions", () => {
     const { koios, calls } = scripted([Response.json([{ hash: "ab", epoch_no: 250, abs_slot: 106_000_000, block_no: 4_000_000 }])]);
     expect(await koios.tipSlot()).toBe(106_000_000);
     expect(calls[0]!.url).toBe(`${BASE}/tip`);
-    await expect(scripted([Response.json([])]).koios.tipSlot()).rejects.toThrow("Koios returned no tip.");
+    await expect(scripted([Response.json([])]).koios.tipSlot()).rejects.toThrow("The server returned no tip.");
   });
 
   it("reads confirmations", async () => {

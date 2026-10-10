@@ -344,9 +344,9 @@ describe("a swap's retry line", () => {
     const at = Date.now();
     const words: Record<Exclude<RetryReason, "other">, string> = {
       "minswap-rate-limited": "Minswap がこの接続からのリクエストを 1 分間制限しています。",
-      "koios-rate-limited": "Koios がこの接続からのリクエストを制限しています。",
+      "koios-rate-limited": "サーバーがこの接続からのリクエストを制限しています。",
       "minswap-silent": "Minswap が応答しませんでした。",
-      "koios-silent": "Koios が応答しませんでした。",
+      "koios-silent": "サーバーが応答しませんでした。",
       "funding-unseen": "Minswap はまだ資金提供を認識していません。",
     };
     for (const [reason, said] of Object.entries(words)) {

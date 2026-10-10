@@ -246,3 +246,43 @@ function banner(pending: PendingTx): string {
     .replaceAll("&#x27;", "'")
     .replace(/\s+/g, " ");
 }
+
+describe("a maybe-sent payment from the public account that can't land", () => {
+  it("is let go 20 minutes on once something it spends shows spent on chain, not at its slot two hours on", async () => {
+    // The release review: a lost connection to the data layer, then Koios's "spent", made one maybe sent; its slot
+    // held every payment on the network back for hours though another transaction had spent what it spends.
+    const t = await unlocked();
+    const summary = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
+    const real = t.koios.fetch;
+    let first = true;
+    t.koios.fetch = async (url, init) => {
+      if (url.endsWith("/submittx") && first) {
+        first = false;
+        throw new DOMException("signal timed out", "TimeoutError");
+      }
+      return real(url, init);
+    };
+    expect(await t.send.submit("preprod", summary.txHash)).toMatchObject({ maybeSent: true });
+    const inputs = txInputs(Uint8Array.from(Buffer.from((await t.session.get<{ txCbor: string }>(pendingKey("preprod")))!.txCbor, "hex")));
+    t.koios.rejectSubmit = SPENT;
+    for (const o of inputs) t.koios.spent.add(o);
+    await busyFor(t, 2 * 60_000);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, maybeSent: true, inMempool: false });
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).rejects.toThrow(MAYBE_SENT_WAIT());
+    await busyFor(t, UNSEEN_AFTER_MS);
+    expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, dropped: "unseen" });
+    t.koios.rejectSubmit = undefined;
+    await expect(t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }])).resolves.toBeDefined();
+  });
+});
+
+describe("Home's banner for one from the public account", () => {
+  it("says it can land until its slot, but once a resend found it can't land, the 20 minutes", () => {
+    // The release review: let go after its 20 minutes now (pending.ts), its Details said the slot's horizon.
+    const sent = { ...pendingOf("ab".repeat(32)), kind: "send" as const, submittedAt: Date.now(), invalidHereafter: 200_000_000 };
+    expect(banner(sent)).toContain("It can land until about");
+    const cannot = banner({ ...sent, inMempool: false });
+    expect(cannot).toContain("If the network hasn't seen it 20 minutes after sending, the wallet lets it go.");
+    expect(cannot).not.toContain("It can land until about");
+  });
+});

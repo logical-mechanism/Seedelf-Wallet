@@ -70,12 +70,19 @@ export function dataCost(path: string): number {
  */
 export const DATA_LIMIT = new RateLimit(80, 10_000);
 
-/** The data layer's `Backend`: short waits, no retries, every failure said. */
+/**
+ * The data layer's `Backend`: short waits, no retries, every failure said,
+ * and a POST's cache mode `default`, so its preflight is reused for as long
+ * as the API's CORS allows (up to Chrome's 2 hours, in memory, keyed by its
+ * address, never its body). A POST's answer is never cached, and the API
+ * marks every answer `no-store`; a GET stays `no-store` (koios.ts).
+ */
 export const DATA_BACKEND: Backend = {
   readTimeoutMs: DATA_READ_TIMEOUT_MS,
   submitTimeoutMs: DATA_SUBMIT_TIMEOUT_MS,
   retries: false,
   cost: dataCost,
+  postCache: "default",
 };
 
 /** The data layer needs no host permission: it answers the wallet's origin with CORS headers (networks.ts). */

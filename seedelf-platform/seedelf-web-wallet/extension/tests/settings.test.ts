@@ -141,7 +141,7 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     // What a lock partway does is the wait's ⓘ, whose text is its icon's title until opened (copy-trim pass).
     expect(html.replaceAll("&#x27;", "'")).toContain("Locked partway, a swap or a mix returns the rest directly");
     // Not from the services that carry both ends (privacy review §2.4).
-    expect(shown).toContain("Lovejoin hides your boxes from people reading the chain, not from Koios or giveme.my");
+    expect(shown).toContain("Lovejoin hides your boxes from people reading the chain, not from the server or giveme.my");
     // Each depth's option is short enough for the side panel; how far it hides is the note's (chunk 23's review, SET-2).
     expect(shown).toContain("2 waves deep: 4 mixes, about 3.8 ₳");
     expect(shown).not.toContain("(up to 1 in 9)");

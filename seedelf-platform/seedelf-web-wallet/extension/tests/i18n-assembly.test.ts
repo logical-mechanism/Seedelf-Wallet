@@ -408,10 +408,10 @@ describe("a reason as it came, set before the next sentence", () => {
     const at = Date.now() + 150_000;
     expect(page({ at, error: refusal(), reason: "other" })).toContain(`${refusal()}. Trying again in 3 minutes. Try now`);
     // A reason the worker gave a code reads as it did.
-    expect(page({ at, error: "Koios", reason: "koios-silent" })).toContain("Koios didn't answer. Trying again in 3 minutes. Try now");
+    expect(page({ at, error: "Koios", reason: "koios-silent" })).toContain("The server didn't answer. Trying again in 3 minutes. Try now");
     await japanese();
     expect(page({ at, error: refusal(), reason: "other" })).toContain(`${refusal()}. 3 分後にもう一度試します。今すぐ試す`);
-    expect(page({ at, error: "Koios", reason: "koios-silent" })).toContain("Koios が応答しませんでした。3 分後にもう一度試します。今すぐ試す");
+    expect(page({ at, error: "Koios", reason: "koios-silent" })).toContain("サーバーが応答しませんでした。3 分後にもう一度試します。今すぐ試す");
   });
 
   it("ends with the language's own stop in Lock's warning, before Try again", async () => {
@@ -480,7 +480,7 @@ describe("a full stop where a clause is said as a sentence", () => {
   it("is the language's when the wallet adds one, and never a second", async () => {
     // The Rust core's reasons are lower-case English fragments.
     expect(asSentence("invalid checksum")).toBe("Invalid checksum.");
-    expect(asSentence("Koios didn't answer.")).toBe("Koios didn't answer.");
+    expect(asSentence("The server didn't answer.")).toBe("The server didn't answer.");
     expect(asSentence("Why?")).toBe("Why?");
     expect(asSentence("ウォレットが応答しませんでした。")).toBe("ウォレットが応答しませんでした。");
     expect(asSentence("本当ですか？")).toBe("本当ですか？");

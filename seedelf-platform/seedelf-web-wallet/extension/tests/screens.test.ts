@@ -97,7 +97,7 @@ describe("Home's banner for a payment Koios didn't answer (launch review #10)", 
   it("leads with not paying again, offers Check now, and keeps how long it can land for under Details (chunk 23's second review, HM-4)", () => {
     const pub = { ...sent, maybeSent: true, invalidHereafter: 123_456 };
     const line = banner(pub, true, () => undefined);
-    expect(line).toMatch(/^Payment not confirmed yet: don't pay it again Koios didn't answer, so it may have gone through\./);
+    expect(line).toMatch(/^Payment not confirmed yet: don't pay it again The server didn't answer, so it may have gone through\./);
     expect(line).toContain("Check now Details New payments wait for it");
     // Without a way to ask, no button.
     expect(banner(pub, true)).not.toContain("Check now");
@@ -1098,7 +1098,7 @@ describe("what Lovejoin's page says a box's way back hides (privacy review §2.4
   it("says nothing on a box's way back names a session or an account, and that Koios and giveme.my see both ends", () => {
     const line = text(createElement(WayBack));
     expect(line).toContain("with nothing naming a session or account");
-    expect(line).toContain("not from Koios or giveme.my, which see your device send both ends");
+    expect(line).toContain("not from the server or giveme.my, which see your device send both ends");
     expect(line).not.toContain("nothing ties it");
   });
 
@@ -1243,7 +1243,7 @@ describe("a session's funding refused at Send (chunk 23's second review, DX-1)",
   });
 
   it("isn't built again when it may have gone out: its page watches for it", () => {
-    const watch = foot({ kind: "watch", detail: "Koios didn't answer." }, () => undefined);
+    const watch = foot({ kind: "watch", detail: "The server didn't answer." }, () => undefined);
     expect(watch).toContain("It may have gone out all the same, so it isn't built again");
     expect(watch).toContain("See where it is");
     expect(watch).not.toContain("Build it again");

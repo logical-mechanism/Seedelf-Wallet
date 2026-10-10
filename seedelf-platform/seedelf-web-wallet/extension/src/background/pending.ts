@@ -20,7 +20,9 @@
 // never shows is let go, its UTxOs freed: from the public account when the
 // chain passes its slot, and a private one, which has no slot yet, after 20
 // minutes unseen, unless a resend found it waiting in a mempool: then two and
-// a half hours on at most (independent review L1). Every submit is watched as
+// a half hours on at most (independent review L1). One from the public account
+// a resend found can't land (what it spends spent by another) goes after its
+// 20 minutes too (1.4.0's release review). Every submit is watched as
 // maybe sent before it goes to Koios (`writeAhead`, independent review M1),
 // so one is maybe sent from the start until Koios answers, and a second
 // waits for it.
@@ -705,8 +707,16 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
   // Not while it waits in a mempool, up to HELD_IN_MEMPOOL_MS: it may still land (independent
   // review L1). Nor put back within its 20 minutes and not sent again since (independent review L9).
   const waiting = !!w.inMempool && age <= HELD_IN_MEMPOOL_MS;
+  // One from the public account carries a slot, and waits it out, unless a resend found what it spends spent by
+  // another (`inMempool` false): then it can't land, and its 20 minutes unseen apply as to a private one. A lost
+  // connection to the data layer, then Koios's "spent", held every payment back for hours (the release review).
   const unseen =
-    !expired && w.maybeSent && w.invalidHereafter === undefined && age > UNSEEN_AFTER_MS && !waiting && !w.restored;
+    !expired &&
+    w.maybeSent &&
+    (w.invalidHereafter === undefined || w.inMempool === false) &&
+    age > UNSEEN_AFTER_MS &&
+    !waiting &&
+    !w.restored;
   if (expired || unseen) {
     const held = await turn(async () => {
       const held = await wallet.withKeys(async () => {

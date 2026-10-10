@@ -153,6 +153,66 @@ async fn a_web_pages_requests_are_refused() {
 }
 
 #[tokio::test]
+async fn no_answer_is_kept_in_a_browsers_cache_but_the_preflight_is() {
+    // The wallet asks with `cache: "default"` so Chrome reuses the preflight
+    // (web wallet 1.4.0); every answer, a refusal or a 429 too, says not to
+    // keep it.
+    let app = app(None);
+    for path in [
+        "/health",
+        "/api/v1/tip",
+        "/seedelf/v1/mainnet/names",
+        "/nowhere",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(from("203.0.113.9", Method::GET, path))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store",
+            "{path}"
+        );
+    }
+    let mut elsewhere = from("203.0.113.9", Method::GET, "/api/v1/tip");
+    elsewhere
+        .headers_mut()
+        .insert(header::ORIGIN, "https://example.com".parse().unwrap());
+    let response = app.clone().oneshot(elsewhere).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    for _ in 0..75 {
+        let _ = app
+            .clone()
+            .oneshot(from("203.0.113.10", Method::POST, "/api/v1/account_info"))
+            .await
+            .unwrap();
+    }
+    let response = app
+        .clone()
+        .oneshot(from("203.0.113.10", Method::POST, "/api/v1/account_info"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+
+    // A preflight carries its own lifetime, for a submit's CBOR as for JSON.
+    let mut preflight = from("203.0.113.9", Method::OPTIONS, "/api/v1/submittx");
+    preflight
+        .headers_mut()
+        .insert("access-control-request-method", "POST".parse().unwrap());
+    preflight.headers_mut().insert(
+        "access-control-request-headers",
+        "content-type".parse().unwrap(),
+    );
+    let response = app.oneshot(preflight).await.unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.headers()["access-control-max-age"], "86400");
+    assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+}
+
+#[tokio::test]
 async fn past_the_months_ceiling_only_health_answers() {
     let app = app(Some(1));
     // The first answer's bytes pass the ceiling of one.

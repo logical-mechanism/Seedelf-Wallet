@@ -249,7 +249,7 @@ describe("sending a chain a window at a time", () => {
   it("sees nothing yet when Koios doesn't answer the read of what's on chain, and goes on at the next call", async () => {
     const { chain, sent, io } = pumped(6);
     io.onChain = async () => {
-      throw new KoiosError("Koios is having trouble right now (502 for tx_status). Try again in a minute.");
+      throw new KoiosError("The server is having trouble right now (502 for tx_status). Try again in a minute.");
     };
     expect(await pumpChain(chain, io, CHAIN_PUMP_MS)).toBe(false);
     expect(chain.flying).toHaveLength(CHAIN_WINDOW);

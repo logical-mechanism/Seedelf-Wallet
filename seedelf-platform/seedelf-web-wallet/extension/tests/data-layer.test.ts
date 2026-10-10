@@ -221,6 +221,25 @@ describe("a submit through the data layer", () => {
     expect(sent(s)).toEqual([DATA, KOIOS]);
   });
 
+  it("holds only the submit part on its 429, never the reads and the private index that share its limit", async () => {
+    // Koios's 429 holds every request for its cooldown; the data layer's submit part goes to Koios instead, and a
+    // hold on the shared limit made Home's reads wait it out (the release review).
+    let now = 0;
+    const waits: number[] = [];
+    const data = new RateLimit(80, 10_000, () => now, async (ms) => {
+      waits.push(ms);
+      now += ms;
+    });
+    const s = servers();
+    s.data.set("submittx", error(429, "slow down", { "retry-after": "30" }));
+    s.koios.set("submittx", Response.json(TX, { status: 202 }));
+    const { make } = client(s, { limits: { data } });
+    expect(await make("mainnet").submitTx(new Uint8Array([1]))).toBe(TX);
+    await make("mainnet").tipSlot();
+    expect(waits).toEqual([]);
+    expect(s.calls.find((c) => c.path === "tip")?.host).toBe(DATA);
+  });
+
   it("is maybe sent when Koios calls spent what a lost connection may have sent", async () => {
     const s = servers();
     s.data.set("submittx", "unreachable");

@@ -3288,8 +3288,9 @@ export class SessionService {
         pending,
         {
           send: (i, maybeSent) => this.sendStep(network, pending, i, maybeSent),
-          // A return through Lovejoin: each of its transactions pays or spends a box, so it's on the pool's feed
-          // (feed.ts).
+          // A return through Lovejoin: its deposit and mixes pay or spend boxes, so they're on the pool's feed
+          // (feed.ts). Its last transaction pays the private balance and spends no box: never asked here, since
+          // pumpChain is done once it's sent, and `landed` watches it on the contract's feed (the release review).
           onChain: async (hashes) => {
             const tried = firstTries(pending, hashes);
             const at = tried?.length ? Math.min(...tried) : undefined;

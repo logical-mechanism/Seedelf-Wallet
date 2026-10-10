@@ -55,7 +55,9 @@ let noting: Promise<unknown> = Promise.resolve();
 /**
  * Keeps a cursor the private index handed out for `feed`, and when the wallet
  * had it (`got`), in that order, one every CURSOR_SPACING_MS (the newest
- * always), for CURSORS_FOR_MS. Call it while unlocked.
+ * always), for CURSORS_FOR_MS. Call it while unlocked. A write session storage
+ * refuses (its quota full) never fails the reading that noted it: a watch with
+ * no cursor in hand asks `tx_status` instead (the release review).
  */
 export function noteCursor(
   session: Area,
@@ -79,7 +81,7 @@ export function noteCursor(
     }
     await session.set(key, { ...kept, [feed]: list });
   };
-  return inTurn(note);
+  return inTurn(note).catch(() => undefined);
 }
 
 /** Forgets a kept cursor the index refuses now (CursorRefused): every watch asking from it would be refused too. */

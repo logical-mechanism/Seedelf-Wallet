@@ -403,6 +403,40 @@ async fn a_dreps_standing_and_the_predefined_ones() {
 
 #[tokio::test]
 #[ignore = "live db-sync"]
+async fn the_accounts_own_drep_is_read_live_and_never_kept() {
+    // Its standing is what Staking builds a retirement or a registration on: kept 10 minutes,
+    // a retirement that landed would still read as registered (1.4.0's release review).
+    let chain = chain();
+    let tip = chain.tip().await.unwrap();
+    let key = format!("drep_info/{}/drep_always_abstain", tip.epoch);
+    let state = Arc::new(AppState::new(chain.clone()).with_decimals(decimals()));
+    state.set_tip(tip);
+    let app = Router::new()
+        .merge(seedelf_data_api::public::routes())
+        .with_state(state.clone());
+    let standing = "/api/v1/drep_info?select=drep_id,drep_status,active,expires_epoch_no,amount,\
+        live_delegator_count,deposit,meta_url,meta_hash";
+    let rows = post(
+        &app,
+        standing,
+        json!({ "_drep_ids": ["drep_always_abstain"] }),
+    )
+    .await;
+    assert_eq!(rows[0]["drep_id"], "drep_always_abstain");
+    assert!(
+        state.kept(&key).is_none(),
+        "the account's own DRep: never kept"
+    );
+    let info = "/api/v1/drep_info?select=drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
+    post(&app, info, json!({ "_drep_ids": ["drep_always_abstain"] })).await;
+    assert!(
+        state.kept(&key).is_some(),
+        "a DRep looked at: kept, the same for everyone"
+    );
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
 async fn the_live_actions_and_a_dreps_votes_on_them() {
     let (app, _) = app().await;
     let proposals = "/api/v1/proposal_list?ratified_epoch=is.null&enacted_epoch=is.null&dropped_epoch=is.null\

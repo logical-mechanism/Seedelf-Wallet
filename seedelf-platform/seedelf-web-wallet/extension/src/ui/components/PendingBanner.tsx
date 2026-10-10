@@ -165,7 +165,9 @@ function maybeSentUntil(pending: PendingTx, now: number): string {
       ? t("pending.maybeSent.inMempoolUntil", { until })
       : t("pending.maybeSent.inMempoolHeld", { held: clock(pending.submittedAt + HELD_IN_MEMPOOL_MS, now) });
   }
-  return until ? t("pending.maybeSent.resentUntil", { until }) : t("pending.maybeSent.resentNoSlot");
+  // One from the public account a resend found can't land (what it spends spent by another) goes after its 20
+  // minutes, as one with no slot does (pending.ts, 1.4.0's release review), not at its slot.
+  return until && pending.inMempool !== false ? t("pending.maybeSent.resentUntil", { until }) : t("pending.maybeSent.resentNoSlot");
 }
 
 /**

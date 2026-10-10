@@ -58,7 +58,7 @@ describe("a mix from the public account whose transaction may have gone through 
     expect(await t.lovejoin.progress("preprod")).toEqual({
       total: 5,
       sent: 0,
-      stopped: "Koios didn't answer when its deposit was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.",
+      stopped: "The server didn't answer when its deposit was sent, so it may have gone through. The wallet looks for it on chain before another mix from your public account is built.",
       maybeSent: true,
     });
     expect(await spent(t)).toContain(DEPOSIT_INPUT);
@@ -71,7 +71,7 @@ describe("a mix from the public account whose transaction may have gone through 
     // It lands: the mix stopped after its deposit, which went, and another may be built.
     t.koios.confirmations = 1;
     await t.lovejoin.publicBuild("preprod", 1);
-    expect(await record(t)).toMatchObject({ sent: 1, stopped: "Koios didn't answer when its deposit was sent. It went through, and the mix stopped there." });
+    expect(await record(t)).toMatchObject({ sent: 1, stopped: "The server didn't answer when its deposit was sent. It went through, and the mix stopped there." });
     expect((await record(t)).maybe).toBeUndefined();
     const progress = await t.wallet.withKeys(() => t.session.get<{ next: number; maybe?: number }>(SESSION_LOVEJOIN_SENDING + "preprod"));
     expect(progress).toMatchObject({ next: 1 });
@@ -98,7 +98,7 @@ describe("a mix from the public account whose transaction may have gone through 
     t.clock.now += SPENT_KEEP_MS;
     await t.wallet.unlock(PASSWORD);
     await t.lovejoin.publicBuild("preprod", 1);
-    expect((await record(t)).stopped).toBe("Koios didn't answer when its deposit was sent, and it never went through.");
+    expect((await record(t)).stopped).toBe("The server didn't answer when its deposit was sent, and it never went through.");
   });
 
   it("stops as before when Koios only ever asked the wallet to slow down: nothing went", async () => {
@@ -106,7 +106,7 @@ describe("a mix from the public account whose transaction may have gone through 
     const mix = await t.lovejoin.publicBuild("preprod", 1);
     const fetch = t.koios.fetch;
     t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? new Response("", { status: 429 }) : fetch(url, init));
-    await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("Koios is limiting requests");
+    await expect(t.lovejoin.publicSubmit("preprod", mix.txHash)).rejects.toThrow("The server is limiting requests");
     const progress = await t.lovejoin.progress("preprod");
     expect(progress).toMatchObject({ total: 5, sent: 0 });
     expect(progress?.maybeSent).toBeUndefined();
@@ -116,7 +116,7 @@ describe("a mix from the public account whose transaction may have gone through 
   });
 
   it("is listed as stopped with the next transaction maybe gone through", () => {
-    const chains = createElement(Chains, { chains: [{ boxes: 1, total: 5, sent: 0, at: 1, stopped: "Koios didn't answer.", maybeSent: true }] });
+    const chains = createElement(Chains, { chains: [{ boxes: 1, total: 5, sent: 0, at: 1, stopped: "The server didn't answer.", maybeSent: true }] });
     const prefs = { prefs: { ...DEFAULT_PREFERENCES, hideBalances: false }, loaded: true, set: async () => undefined };
     const html = renderToStaticMarkup(
       createElement(NetworkContext.Provider, { value: "preprod" }, createElement(PreferencesContext.Provider, { value: prefs }, chains)),

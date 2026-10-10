@@ -12,7 +12,7 @@ import { privateIndexClient } from "../src/background/private-index";
 import type { RecordName } from "../src/background/private-store";
 import { fakeIndex, indexRowOf } from "./fake-index";
 import { bytes, recordedSwap } from "./fixtures/swap-tx";
-import { ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
+import { memoryArea, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 /** Preprod's slot 0 in Unix seconds (Shelley on), so the fake's slots meet the test clock. */
@@ -194,5 +194,14 @@ describe("which feed a signed transaction shows in", () => {
     expect(feedOfTx(bytes(transferPreprod.final.txCbor), "preprod")).toBe("contract");
     expect(feedOfTx(bytes(recordedSwap.cbor), "preprod")).toBeUndefined();
     expect(feedOfTx(new Uint8Array([0x80]), "preprod")).toBeUndefined();
+  });
+});
+
+describe("a cursor noted", () => {
+  it("never fails the reading that noted it when session storage refuses the write (its quota full)", async () => {
+    // The release review: a refused note failed the whole private reading and Lovejoin's pool read, where Koios's
+    // path degrades; a watch with no cursor in hand asks tx_status instead.
+    const full = { ...memoryArea(), set: async () => Promise.reject(new Error("Session storage quota bytes exceeded")) };
+    await expect(noteCursor(full, "preprod", "contract", cursorAt(NOW_SLOT), 1_800_000_000_000)).resolves.toBeUndefined();
   });
 });
