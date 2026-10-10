@@ -2,7 +2,7 @@
 
 Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The data layer goes public on a DigitalOcean droplet, home's services are reached through a tunnel, and the drills run. Then the store build gets the API's address, and that's 1.4.0.
 
-**Status: 🚧 done but the 1.4.0 PR** (2026-10-10): the VPS, the deploy workflow, CI and the drills are in (#291–#293). [Next: the 1.4.0 PR](#next-the-140-pr-start-here). The API (#289) and the wallet's side ([chunk 26b](chunk-26b-data-layer-wallet.md), #290) are built, reviewed and checked against a local API. Nothing a user runs reads the data layer until this chunk's last PR.
+**Status: ✅ built, with the 1.4.0 PR on `web-wallet/release-1.4.0`** (2026-10-09): the VPS, the deploy workflow, CI and the drills are in (#291–#293), and [the 1.4.0 PR](#the-140-pr) gives the store build the origin. Left: its merge, the API's deploy from the merge commit, then the package and its record ([After the merge](#after-the-merge)).
 
 **Done so far (2026-10-09):**
 - the decisions below are settled;
@@ -34,11 +34,14 @@ Steps 5 and 6 of [chunk 26](chunk-26-data-layer.md#order-of-work), its last. The
 - **home's logs** (runbook §5), that night. Postgres's settings were right, and its log held no statement since they went in: the 34 lines that quote one are from that morning's local development. **Kupo's unit had no `--log-level-http-server Warning`**, so it logged every request the API made, with the contract's hash and a wallet's cursor (about 1,500 lines an hour). A drop-in now adds the flag (`kupo_seedelf.service.d/http-log.conf`), and Kupo logs none. The lines already written leave with the journal's own retention: vacuuming it would take the other project's logs too;
 - **the tunnel drill's ghosts,** found in Postgres's log: 70 "too many connections for role" in the half hour after it. The API had closed 5 sessions while the tunnel was down, and their close never reached home. Postgres kept them, at the role's limit of 10, and would have for about 2 hours (no server keepalives), so the API ran on 5 connections and was refused the rest. The 5 were ended, and the role now has TCP keepalives (60 s idle, 6 probes 10 s apart, `tcp_user_timeout` 60 s), so a session cut off this way frees its slot within 2 minutes. `seedelf_reader.sql` has them; the limit stays 10.
 
-Next: the 1.4.0 PR.
+Then [the 1.4.0 PR](#the-140-pr).
 
 **Home's traffic stays home's (owner, 2026-10-09).** The home box, `logicalmechanism-relay`, runs a stake pool's relay, which must keep its inbound peers: there's no money for a second mainnet node. So the node's and db-sync's egress through the tunnel (the old runbook §3) is dropped, and with it the VPS's forwarding and NAT, the routes unit, the kill switch and DNS over TLS. A registered relay publishes the home IP already. A user still meets only the VPS. See [runbook §3](../../../../seedelf-data/deploy/README.md#3-homes-own-traffic-stays-homes).
 
-## Next: the 1.4.0 PR (start here)
+## The 1.4.0 PR
+
+The brief it started from, kept as written; [what was done](#what-the-pr-did-2026-10-09) follows it.
+
 
 **The branch is `web-wallet/release-1.4.0`,** from `main` at #293's merge (`56696f2`). It's the release PR, shaped like 1.3.0's (#286): a review, its fixes, the lists and the bump. After the upload comes a `release-1.4.0-record` PR with the package's commit and SHA-256, as #287 was. **No tag:** the handoff note is the record ([post-release-roadmap.md](../post-release-roadmap.md#how-this-file-works)). If the owner wants one, it needs a slash: `web-wallet/1.4.0`.
 
@@ -80,9 +83,61 @@ Next: the 1.4.0 PR.
 - **POSTs with `cache: "default"`,** so Chrome reuses the preflight. That's one round trip less per POST (26b's *Left for later*); in 1.4.0, or later?
 - **The store images:** regenerate them if a screen in them changed. Settings → Network shows the Koios-only switch in the store build now.
 - **Users' UX fixes:** any sent in, which are 1.4.0's other focus.
-- **The owner's own wallets through the VPS** before shipping (26b's *Left for the owner*): private parity, and spends in ordinary use. That needs a dev build made with `VITE_DATA_ORIGIN=https://mainnet.seedelf.logicalmechanism.io npm run build`.
+- **The owner's own wallets through the VPS** before shipping (26b's *Left for the owner*): private parity, and spends in ordinary use. Since this PR a plain `npm run build` reads the live server; `VITE_DATA_ORIGIN` only points a build elsewhere (a local API).
 
 **On the server:** the running API is #291's build (`e737c6f1…`), and nothing since has changed its code. If the review changes `seedelf-data/`, deploy through the workflow (Actions → *Data layer deploy*, approved) and check `status` after.
+
+### What the PR did (2026-10-09)
+
+**The owner's calls, asked at the start:**
+- **POSTs with `cache: "default"`: in 1.4.0.** The API answers every request but a preflight with `Cache-Control: no-store`, and the data layer's client asks a POST with `default`, so Chrome reuses its preflight (in memory, up to 2 hours). A GET needs no preflight and stays `no-store`. The policy's *Changes* says so.
+- **The screens' words: "the server", neutral,** wherever Koios was named for an answer the data layer may give now (60-odd strings in each of `en`, `es` and `ja`). Koios stays named only for the Chrome grant to its host, the Koios-only switch, and a DRep profile Koios fetches itself. The changed critical values were back-translated blind (50), with no correction.
+- **No UX fixes came in from users.**
+- **The store images stay:** none of the five screens they show changed.
+
+**The origin:** `networks.ts`'s mainnet `data` is `https://mainnet.seedelf.logicalmechanism.io`, so every build without `VITE_DATA_ORIGIN` reads it, dev builds included (the dev ID is in `DATA_ORIGINS`). `tests/manifest.test.ts` pins it in the store CSP's `connect-src`, and in no host permission. The unit suite passes with no network at all (`unshare -rn`), so no test reaches the live API.
+
+**The release review** of #288–#293's wallet-facing code: five area reviewers (the fallback and submits; the private index and its sealed state; watches, Lovejoin and sessions; the public side's parity with Koios, checked against Koios's own SQL; the API's edge and privacy), and one reviewer walking a mainnet user's whole life across them. No high finding. Each fix has a test that fails without it.
+
+| Found | Severity | Fixed |
+|---|---|---|
+| The API kept the account's own DRep standing and profile 10 minutes, shared: after a retirement, Staking still offered Retire and votes, and the node refused what was built on it | medium | the own DRep's `drep_info` and `drep_metadata` (`deposit,meta_url,meta_hash` and `is_valid` selected) are read live and never kept (`public/governance.rs`, a live test) |
+| A lost connection to the data layer, then Koios's "spent", made a public-account payment maybe sent, and its slot held every payment back about 2.5 hours though another transaction had spent its input | low | one a resend finds can't land (`inMempool` false) goes after its 20 minutes unseen, as a private one does (`pending.ts`), and Home's Details say so (`PendingBanner.tsx`) |
+| A submit's 429 held the data layer's whole limit, so Home's reads and the private index waited it out instead of going to Koios | low | only Koios's own submit holds the limit; the data layer's submit part goes down alone |
+| `cache: "default"` covered the data layer's GETs too, which gain nothing, so an ADA Handle's or a DRep ID's address stayed off the disk only by the server's word (a rollback to #291's build loses it) | low | `postCache`: a POST alone asks `default` |
+| A refused write of a feed cursor (session storage full) failed the whole private reading and Lovejoin's pool read | low | `noteCursor` never fails its reading; a watch with no cursor asks `tx_status` |
+| A private row keeps the decimals the API gave it until it's spent, and the API's come from the registry as of its build | low | the registry is refreshed at each release with the lists ([development.md](../development.md#releasing-to-the-web-store)); it was unchanged for 1.4.0 (1,172 tokens, the registry's last commit 2026-10-01) |
+| A Lovejoin return's last step was described as on the pool's feed | nit (latent) | the comment: it's never asked there, and `landed` watches it on the contract's feed |
+| Docs: the preflight cache is keyed by the full URL, query included; the server's name is seen on the user's network (DNS, TLS); stale lines in seedelf-data's README, `edge.rs` and CI | nit | said in the policy, privacy.md and architecture.md; the stale lines fixed |
+
+**The store's own ID, end to end** (the owner asked for certainty that CORS holds once live, 2026-10-09). The published package (fetched from the store's update URL) carries the ID `dkefopeefhophfkjkkdebhoklagjdmcp` in its signed header, and its public key. A store build (`VITE_ENABLE_MAINNET=true VITE_STORE_BUILD=true`) given that key as its manifest's `key` loads unpacked under the store's ID. In Playwright's Chromium, it restored the public BIP39 test phrase on mainnet and read the balances against the live server:
+
+| Build | Balances | Requests | Junk submit from the worker |
+|---|---|---|---|
+| the store's ID | 1.6 s | 13, all to `mainnet.seedelf.logicalmechanism.io`, preflights included, none to Koios; a second POST to a route reused its preflight | 400, readable |
+| the store's ID, with `https://*/*` granted (the connector on) | 1.4 s | 8, all to the server (no preflights with the grant) | 400, readable |
+| control: no key, so an ID the server doesn't know | 27.8 s | 6 refused by CORS, then 5 to Koios | `Failed to fetch` |
+
+So the test sees a wrong ID, and the store's passes it: CORS holds for the listing's own ID in the browser, not only in curl. The server side, by curl with that `Origin`: a preflight for a JSON POST (200, `content-type` allowed, max-age 86400), a GET, and a CBOR submit's 400 all carry `Access-Control-Allow-Origin` for it; another ID gets a 403 with none. The deploy workflow checks the store ID's CORS line after every deploy.
+
+**Checked and sound:** every request `koios.ts` makes is one the API accepts, inside its caps, with Koios's shapes (rule for rule against Koios's grest SQL); CORS for both IDs on every answer the API makes, 429s and 503s included; the bucket's IP can't be spoofed through Caddy; ordinary use of one wallet can't trip a 429; Caddy and the API log no client address and no path; the sealed record stays consistent across lock, restart, account and network switches and the Koios-only switch; a 1.3.0 wallet updating carries nothing over that a feed watch could misread.
+
+**Left as found:**
+- **Home's node behind the chain** (restarting, say, more than 3 minutes): the reads go to Koios on their 503s, but the submit part has no freshness check, so the node, catching up, can refuse a valid spend of a newer UTxO as "spent", and a Lovejoin chain's first step stops on it. No money is at risk; the chain is started again. A first fix, asking Koios whenever home said "spent", was taken back: a resend already in home's mempool is answered "spent" too, and a Koios timeout then read as busy and stopped chains (the last review of the fix-ups). **The fix belongs in the API:** a submit part that answers 503 while the node isn't synced (Ogmios's `/health`, `networkSynchronization` and `lastTipUpdate`), so the wallet goes to Koios at once. A candidate for 1.4.1.
+- **Caddy's own error pages** (its 502 while the API restarts, its 413) carry `Server: Caddy` and no HSTS: the `header` block's deletion is deferred to a proxied response. The API's answers have neither problem, and the wallet only uses https.
+- **Many wallets behind one IPv4 address** (a CGNAT, a VPN exit) share one bucket; past it, each part goes to Koios 5 minutes at a time. Slower, never broken.
+- **The data client's window** lets 20 live-SQL requests through every 10 s (80 units), against Koios's 40 requests: a burst past it waits about 10 s.
+
+**The lists:** `npm run tokens` left both token lists as they were; `npm run dreps` named 459 mainnet DReps (454 committed, 5 new, none lost) and preprod's 62 unchanged. The API's token decimals, refreshed from the registry, were byte-identical.
+
+**The docs:** the privacy policy (a dated *Changes* entry, *In short*, the data table, *The services the extension talks to*), privacy.md's *Network*, `store/README.md` (the description, the host and remote-code text, the data-usage answers; no box changes, so the listing's privacy label stays as it is), the root README's *De-Anonymizing Via IP Tracking* and *Data Layer Reliance*, architecture.md, development.md, flows.md, CLAUDE.md, seedelf-data's README, and 26b's *Left for later*.
+
+### After the merge
+
+1. **Deploy the API from the merge commit:** Actions → *Data layer deploy*, `deploy`, approved, then `status`. Then check from anywhere: `curl -sI -H 'Origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp' https://mainnet.seedelf.logicalmechanism.io/api/v1/tip` says `cache-control: no-store`. **The package isn't uploaded before this.**
+2. **The package**, on `main` at the merge commit ([development.md](../development.md#2-on-main-after-the-merge-build-and-test-the-store-package)): `npm run package`, `npm run e2e` on it, the SHA-256.
+3. **The upload** (the owner), and the `release-1.4.0-record` PR with the commit and the hash, as #287 was.
+4. **Rolling back the API** after 1.4.0 ships brings back #291's build, which sends no `no-store`; the wallet's GETs stay `no-store` themselves, so nothing private reaches the disk, but deploy forward rather than leave it there.
 
 ## Where 26c started
 

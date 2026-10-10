@@ -20,6 +20,8 @@ flowchart LR
 
 **Names:** the wallet is one wallet on Cardano with two sides, and the screens say so (chunk 14): the **private balance** is the Seedelf balance, and the **public account** is the Cardano account. The flows are named to match: **Make private** is a move-in, **Make public** a withdrawal, and **Send** on each side a transfer (privately, to Seedelfs) or a send (publicly). The code and these docs' internals keep the older names (`move-in`, `withdraw`, `transfer`).
 
+**Koios, here,** is the server the wallet reads Cardano through and sends to. On mainnet that's Seedelf Wallet's own data layer first, and Koios for a part it can't answer or with Settings' Koios-only switch on ([architecture.md](architecture.md#chain-data)); on preprod, Koios. Since 1.4.0 the screens say "the server" wherever Koios was named for an answer either may give.
+
 The **private balance** (the Seedelf balance) means every UTxO at the wallet contract whose register this wallet owns. A **Seedelf** is a named token (`5eed0e1f…`) sitting in one of those UTxOs. Its register is what other people use to pay you.
 
 ## Opening the wallet

@@ -322,7 +322,7 @@ Planned in [chunk 26c](chunk-26c-data-layer-vps.md).
 Found while checking; none blocks the merge.
 
 - **A restore past about 60,000 rows** (see the ceiling above): a paged snapshot, checked as it streams in, with its own timeout and a progress bar.
-- **Every POST to the API costs a CORS preflight.** Chrome skips its preflight cache for a `cache: "no-store"` request, which every service request is (`SERVICE_FETCH`, chunk 25), and only `cache: "default"` reuses one (measured). That's one more round trip per public read, not a cost at the edge: the API answers preflights before its limiter. Fixing it means the API sending `Cache-Control: no-store` itself and the data layer's client asking with `default`; the privacy policy says how the wallet uses the cache, so that's its own decision.
+- ~~**Every POST to the API costs a CORS preflight.**~~ Done in 1.4.0 (the owner's call): the API sends `Cache-Control: no-store` on every answer, and the data layer's client asks a POST with `default` (a GET stays `no-store`), with the policy's *Changes* saying so. Chrome skips its preflight cache for a `cache: "no-store"` request, which every service request was (`SERVICE_FETCH`, chunk 25), and only `cache: "default"` reuses one (measured).
 - **A sealed cursor whose `since` keeps failing** (a 503 every time, not a 400): the wallet reads Koios each time and keeps the cursor. A 400 already starts again from a snapshot.
 - **`names` and `since` can come from different blocks** for one reading. A Seedelf of this wallet's that moved in between shows as another's for that reading, and Remove can't build until the next one.
 - **Activity's "more" page** can come from the other server when a part flips between pages, and skip a transaction near the edge of a page. Koios's own backends, at different lags, can already do this.
@@ -345,5 +345,5 @@ Built 2026-10-09. Where the build departs from the steps above, and why:
   - a chain's resend refused as spent (`sentAlready`);
   - a maybe-sent Seedelf spend's mempool check, whose `utxo_info` names the wallet's own contract UTxOs to the public side, as it did to Koios;
   - a site's own transactions, and a swap's copies, which touch only key addresses anyway.
-- **Words that name Koios for an answer the data layer may now give** ("Koios has no details for this pool", "Koios returned no tip") are left for the VPS chunk's user-facing pass, with the policy.
+- **Words that name Koios for an answer the data layer may now give** ("Koios has no details for this pool", "Koios returned no tip") were left for the VPS chunk's user-facing pass: in 1.4.0 they say "the server" (the owner's call), in all three languages.
 

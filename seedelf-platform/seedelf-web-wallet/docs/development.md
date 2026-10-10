@@ -61,7 +61,7 @@ After a rebuild, click the reload arrow on the extension's card. `npm run dev` r
 
 ## The data layer, locally
 
-Mainnet can read Seedelf Wallet's own data layer (chunk 26b, [architecture.md](architecture.md#chain-data)). **The store build doesn't yet:** it has no origin until the VPS chunk. A dev build reads a local API instead:
+On mainnet, every build reads Seedelf Wallet's own data layer first (chunk 26b, [architecture.md](architecture.md#chain-data)): `https://mainnet.seedelf.logicalmechanism.io`, which answers the store's ID and the dev build's. So a plain `npm run build` reads the live server, and its worker's network panel shows `mainnet.seedelf.logicalmechanism.io` where the list below says `127.0.0.1:8099`. A dev build can read a local API instead:
 
 1. **Run the API** from `seedelf-data/` ([its README](../../../seedelf-data/README.md)) with the dev build's pinned ID allowed: `DATA_ORIGINS=chrome-extension://jfekiogplaamnceifeehipmomhojngcb cargo run -p seedelf-data-api`. It listens on `127.0.0.1:8099`.
 2. **Build against it:** `VITE_DATA_ORIGIN=http://127.0.0.1:8099 npm run build`, and reload the extension. Its CSP's `connect-src` gains the origin; the manifest asks for no new host.
@@ -141,7 +141,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
 
    Read every review and every privacy note as you go.
 7. **Mistakes and failures:**
-   - Koios blocked (offline, or an ad blocker) says why, and recovers on Refresh;
+   - the server blocked (offline, or an ad blocker) says why, and recovers on Refresh;
    - amounts: more than the balance, seven decimals, letters;
    - a mistyped Seedelf name, and a `$handle` that doesn't exist.
 8. **Nothing else is contacted:** in DevTools, the worker's network panel shows only `preprod.koios.rest` and `www.giveme.my` (and Minswap's preprod aggregator, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see).
@@ -150,7 +150,8 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - Settings, Network: moving to preprod says first that its ADA has no value; then every screen, and the connector's window, shows the **PREPROD** badge and strip, and Home the preprod balances;
    - a payment reviewed on one network and sent after a switch is refused ("isn't ready to send");
    - a site connected on one network asks again on the other, and one waiting as you switch is declined;
-   - on mainnet, the worker's network panel shows only `api.koios.rest`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org`, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see), plus `preprod.koios.rest` only for something still on its way on preprod.
+   - on mainnet, the worker's network panel shows only `mainnet.seedelf.logicalmechanism.io`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org`, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see), plus `preprod.koios.rest` only for something still on its way on preprod, and `api.koios.rest` only for a part the data layer couldn't answer;
+   - Settings, Network, on mainnet: **Read Cardano through Koios only** on sends nothing more to `mainnet.seedelf.logicalmechanism.io`, and off, the next reading goes there again.
 
 ## Web Store release: copy/paste procedure
 
@@ -167,7 +168,7 @@ cd seedelf-platform
 cargo test --workspace --locked
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.3.0
+release_version=1.4.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -198,7 +199,7 @@ git pull --ff-only
 git status --porcelain
 cd seedelf-platform/seedelf-web-wallet/extension
 npm ci
-release_version=1.3.0
+release_version=1.4.0
 npm run package
 npm run e2e
 sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
@@ -207,13 +208,15 @@ git rev-parse HEAD
 
 No `npm version`, `npm run tokens` or `npm run dreps` here. On `main` the bump fails ("Version not changed"), and the lists' refresh rewrites bundled files no commit has, so the zip wouldn't be the recorded commit's.
 
+**If the release changed `seedelf-data/`, deploy it before the upload:** Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against.
+
 The package to upload is:
 
 ```text
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.3.0, that file is `extension/release/seedelf-wallet-1.3.0-mainnet.zip`.
+With `package.json` at 1.4.0, that file is `extension/release/seedelf-wallet-1.4.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 
@@ -245,6 +248,7 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 
 1. **Bump the version:** `npm version <x.y.z> --no-git-tag-version` in `extension/`. It updates `package.json` and `package-lock.json`, and the manifest takes its version from there. Every upload needs a higher version than the last.
 2. **Refresh the token list, every release** (the owner, 2026-10-08): `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker. The handoff note says what changed, or that nothing did.
+   - **And the data layer's decimals** (1.4.0's release review): the API gives a token's decimals from the registry as it was when the API was built (`seedelf-data/api/data/token-decimals.json`), and a private row keeps what it was given until it's spent. So refresh it too, by `seedelf-data/scripts/token-decimals.py`'s two lines, and if the file changed, commit it: the API's deploy after the merge carries it.
 3. **Refresh the DRep list, every release:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name. **Koios's servers disagree about DRep metadata** (1.3.0's prep had three single-pass runs name 371, 407 and 406 mainnet DReps against the committed 449, each missing a different set), so the script asks again for the DReps still unnamed, in up to three passes. A DRep the committed list names that's still registered but that no pass names keeps its committed name, and a list that would still lose more than 5% of the committed one is refused with nothing written: run it again later. Its line for each network says how many passes it took, how many names it kept as committed, and how many committed DReps are no longer registered. Skim the diff for anything odd before committing it; the handoff note says what changed.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*).
