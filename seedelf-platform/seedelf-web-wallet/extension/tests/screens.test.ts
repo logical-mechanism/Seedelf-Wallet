@@ -308,7 +308,7 @@ describe("the swap form's privacy note (privacy review §2.13)", () => {
     expect(line).toContain("Minswap sees the pair, amount and your IP address as you type, never your public account");
     expect(line).toContain("Half and Max hint at your private balance");
     expect(line).not.toContain("never your private balance");
-    expect(html).toContain("title=\"All but what&#x27;s under 1\u00a0₳, less the swap&#x27;s costs and the collateral\"");
+    expect(html).toContain("title=\"What&#x27;s left after the swap&#x27;s costs and what&#x27;s kept aside for contracts, rounded down to whole ₳\"");
   });
 });
 

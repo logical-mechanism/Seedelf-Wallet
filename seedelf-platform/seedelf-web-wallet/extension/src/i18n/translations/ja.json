@@ -1845,7 +1845,7 @@
   "swaps.lovejoin.privacy.onPoolShort": "戻る時点で Lovejoin のプールに空きがある場合だけです。",
   "swaps.lovejoin.warn.pool": "{{why}}。そのため、このままではこのスワップの ADA は直接戻り、チェーン上でこのセッションと結び付きます。",
   "swaps.max": "最大",
-  "swaps.maxAda": "スワップの費用とコントラクト用の確保分を引いた残り（1 ₳ 未満は切り捨て）",
+  "swaps.maxAda": "スワップの費用とコントラクト用の確保分を引いた残り（1 ₳ 未満は切り捨て）",
   "swaps.maxAll": "全額",
   "swaps.maxNote": "「最大」は {{max}} ₳ です。残りの {{aside}} ₳ は、スワップの費用とネットワーク手数料、コントラクト用の確保分（戻ってきます）に充てられます。",
   "swaps.maxOf": "スワップに使える最大の {{token}}",
