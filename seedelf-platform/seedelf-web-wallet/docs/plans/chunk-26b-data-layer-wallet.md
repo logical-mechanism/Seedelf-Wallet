@@ -293,7 +293,7 @@ Three reviewers read the branch by area (the fallback and submits; the private i
 
 **Left as they are:**
 - a clock stepped back more than about 200 s between a send and a later reading could still pick a cursor from after the landing;
-- after a lost connection, a Koios gateway's own 4xx page (not the node's words) still reads as a refusal;
+- ~~after a lost connection, a Koios gateway's own 4xx page (not the node's words) still reads as a refusal;~~ fixed in 1.4.1: a page (HTML) is Koios's trouble, not the node's refusal, so it's maybe sent (`koios.ts`);
 - the smaller items in [Left for later](#left-for-later).
 
 ## What a wallet asks, before and after (mainnet)
@@ -324,7 +324,7 @@ Found while checking; none blocks the merge.
 - **A restore past about 60,000 rows** (see the ceiling above): a paged snapshot, checked as it streams in, with its own timeout and a progress bar.
 - ~~**Every POST to the API costs a CORS preflight.**~~ Done in 1.4.0 (the owner's call): the API sends `Cache-Control: no-store` on every answer, and the data layer's client asks a POST with `default` (a GET stays `no-store`), with the policy's *Changes* saying so. Chrome skips its preflight cache for a `cache: "no-store"` request, which every service request was (`SERVICE_FETCH`, chunk 25), and only `cache: "default"` reuses one (measured).
 - **A sealed cursor whose `since` keeps failing** (a 503 every time, not a 400): the wallet reads Koios each time and keeps the cursor. A 400 already starts again from a snapshot.
-- **`names` and `since` can come from different blocks** for one reading. A Seedelf of this wallet's that moved in between shows as another's for that reading, and Remove can't build until the next one.
+- ~~**`names` and `since` can come from different blocks** for one reading. A Seedelf of this wallet's that moved in between shows as another's for that reading, and Remove can't build until the next one.~~ Fixed in 1.4.1: a Seedelf in a row of this wallet's, from the feed just read, wins over `names` (`contract-scan.ts`).
 - **Activity's "more" page** can come from the other server when a part flips between pages, and skip a transaction near the edge of a page. Koios's own backends, at different lags, can already do this.
 
 ## What changed from the plan

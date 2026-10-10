@@ -13,7 +13,7 @@ import { outpoint, SESSION_SPENT } from "../src/background/spent";
 import { WalletLocked } from "../src/background/wallet";
 import { assetFingerprint } from "../src/shared/fingerprint";
 import { NETWORKS } from "../src/networks";
-import { fakeIndex, indexRowOf, stableSlot } from "./fake-index";
+import { fakeIndex, indexRowOf, SLOT_TIME, stableSlot } from "./fake-index";
 import { koiosPreprod, loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
@@ -239,6 +239,33 @@ describe("the private index", () => {
     expect(Object.keys(view.seedelfs).length).toBe(new Set(named.map((u) => u.asset_list!.find((a) => a.asset_name.startsWith("5eed0e1f"))!.asset_name)).size);
     const own = Object.values(view.seedelfs).find((u) => OURS.includes(outpoint(u)))!;
     expect(BigInt(own.value)).toBeGreaterThan(0n);
+  });
+
+  it("keeps this wallet's Seedelf its own when it moved between the names and the feed (26b's review)", async () => {
+    const { t, index, deps } = await onIndex();
+    const first = await readContractView(deps, "mainnet");
+    const [name, at] = Object.entries(first.seedelfs).find(([, u]) => OURS.includes(outpoint(u)))!;
+    // `names` answers from a block before the move; the feed after it, where the Seedelf sits in a new row of ours.
+    const stale = await index.fetch("https://data.test/seedelf/v1/mainnet/names");
+    const old = index.contract.find((r) => r.row.ref === outpoint(at))!;
+    old.spent = { slot: index.tip - 10, by: "e7".repeat(32) };
+    const moved = { ...old.row, ref: `${"e7".repeat(32)}#0`, created: { slot: index.tip - 10, time: index.tip - 10 + SLOT_TIME } };
+    index.contract.push({ row: moved });
+    const fetch = async (url: string) => (url.endsWith("/names") ? stale.clone() : index.fetch(url));
+    const view = await readContractView(
+      {
+        ...deps,
+        index: privateIndexClient(
+          { koiosOnly: async () => false, parts: new DataParts(t.session, () => t.clock.now), fetch, limits: {} },
+          (n) => (n === "mainnet" ? "https://data.test" : undefined),
+        ),
+      },
+      "mainnet",
+    );
+    expect(view.owned.map(outpoint)).toContain(moved.ref);
+    // Its whole row, ours, as Remove builds from: never another's, with nothing but its register.
+    expect(outpoint(view.seedelfs[name]!)).toBe(moved.ref);
+    expect(view.seedelfs[name]!.value).toBe(old.row.lovelace);
   });
 });
 

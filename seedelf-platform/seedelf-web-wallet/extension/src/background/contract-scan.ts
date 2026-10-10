@@ -334,6 +334,12 @@ async function readIndexView(deps: ScanDeps, store: PrivateStore, index: Private
       const at = utxoOf(row, contract.walletContractHash, network);
       if (seedelfTokenOf(at, contract.seedelfPolicyId) === name && !spent.has(outpoint(at))) seedelfs[name] = locatorOf(at);
     }
+    // This wallet's own, where the feed just put them: `names` may be from another block than `since`, and one of ours
+    // that moved between the two would read as another's for this reading, and Remove couldn't build (26b's review).
+    for (const u of owned) {
+      const name = seedelfTokenOf(u, contract.seedelfPolicyId);
+      if (name) seedelfs[name] = locatorOf(u);
+    }
     // Kept for what reads the view without reading (keptContractView); a Koios read after it reads in full.
     const view: Kept = { owned, seedelfs, height: 0, fullAt: 0 };
     await keep(session, key, view);
