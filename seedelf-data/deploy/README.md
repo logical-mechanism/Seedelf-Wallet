@@ -102,7 +102,7 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
 
 ## 5. Checks
 
-- **Health:** `curl https://mainnet.<domain>/health` answers 200, `private`, `public` and `egress` all `ok`.
+- **Health:** `curl https://mainnet.<domain>/health` answers 200, `private`, `public`, `submit` and `egress` all `ok`, and `node` `connected`, its `age` a few seconds.
 - **CORS:** a preflight from the wallet's origin is answered with it, and any other origin gets no `Access-Control-Allow-Origin`, so a browser refuses it (the methods and max-age lines still come):
 
   ```bash
@@ -126,7 +126,7 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
   | Kupo | nothing changes: it's the spare |
   | Postgres | within 6 s (two failed reads of its tip), `/health` says `"source":"kupo"` and the public routes answer 503; the wallet goes to Koios for the public side |
   | db-sync alone | the private index moves to Kupo once db-sync is 60 slots behind it; the public routes answer 503 once its tip is 3 minutes old |
-  | the node | every part 503 within 3 minutes; the wallet goes to Koios for everything |
+  | the node | the submit part 503 at the next read of Ogmios's `/health` once it says `disconnected` (2 s), every part within 3 minutes; the wallet goes to Koios for everything. Started again, the submit part stays 503 until the node has caught up (`/health`'s `node` age under 3 minutes), so a spend of a newer UTxO isn't refused as spent |
   | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the relay carries on |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |

@@ -342,8 +342,8 @@ impl Kupo {
     }
 }
 
-/// What kind of failure a request to Kupo was, without its URL.
-fn kind(error: &reqwest::Error) -> &'static str {
+/// What kind of failure a request upstream was, without its URL.
+pub(crate) fn kind(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "timed out"
     } else if error.is_connect() {

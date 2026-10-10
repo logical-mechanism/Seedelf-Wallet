@@ -119,7 +119,7 @@ All routes are under `/seedelf/v1/mainnet/`.
 | `contract/since/{cursor}` | what changed after `cursor`: `created` (each with its `spent`, if it's gone since) and `spent` (older rows spent after it), plus the new stable `cursor` |
 | `names` | every Seedelf name unspent at the tip, with the row that holds it |
 | `lovejoin/pool` and `lovejoin/since/{cursor}` | the same for the mix box. Each box carries `made_by`: whether its transaction spent a box itself, and each input's payment and stake credentials |
-| `/health` | each part's state (`private`, `public`), the private index's `source`, and db-sync's and Kupo's tips and ages: 200 while both parts answer, 503 when either can't |
+| `/health` | each part's state (`private`, `public`, `submit`), the private index's `source`, db-sync's and Kupo's tips and ages, and the node's as Ogmios says (`node`, with `connected`): 200 while the private index and the public routes answer, 503 when either can't. The submit part's state is said but not counted, since the deploy compares the status with the one before |
 
 **How a wallet reads it:**
 
@@ -254,6 +254,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **No connection** to home (refused, or none within 3 s) is a 503 with `Retry-After`: nothing reached the node, so the wallet sends through Koios at once.
 - **No answer** on a connection that opened is a 502, or a 504 after 30 s: to the wallet, either one means "maybe sent". Each request opens a fresh connection, so one that died with the tunnel can't hold a submit for the full 30 s.
 - **It depends on the node alone,** so db-sync can be down.
+- **Only while the node is synced.** A node catching up after a restart refuses a valid spend of anything newer than its tip as spent, and Ogmios evaluates one as an unknown input: both answers the wallet would take as the node's own. So Ogmios's `/health` is read every 2 s, as db-sync's and Kupo's tips are, and while the node's tip is more than 3 minutes old, Ogmios can't reach the node (it replays its ledger after a restart), or `/health` has failed two reads in a row, both paths answer 503 `behind` with `Retry-After`, and the wallet goes to Koios at once. It counts the tip's own slot, not `networkSynchronization` (a step of its last decimal is about 48 minutes) or `lastTipUpdate` (a node catching up moves its tip every moment). Without an Ogmios configured, the node's sync is unknown, and the submit part answers 503.
 - **Nothing is cached or logged:** not a transaction, not its ID, not an upstream's URL. reqwest's own error messages carry the URL, so errors are logged by kind only.
 
 ## A row

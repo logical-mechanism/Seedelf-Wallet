@@ -396,7 +396,12 @@ pub fn age(tip: &Tip) -> i64 {
 
 /// Seconds since a block was made, from its slot.
 pub fn block_age(block: &Block) -> i64 {
-    now() - slot_time(block.slot)
+    slot_age(block.slot)
+}
+
+/// Seconds since `slot` began.
+pub fn slot_age(slot: i64) -> i64 {
+    now() - slot_time(slot)
 }
 
 /// Reads db-sync's tip every [`WATCH_EVERY`], for as long as the server runs.
