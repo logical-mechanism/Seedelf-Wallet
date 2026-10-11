@@ -12,6 +12,7 @@ import type { BalanceService } from "./balances";
 import type { CoinControlService } from "./coin-control";
 import type { ContactsService } from "./contacts";
 import type { DappService } from "./dapp";
+import type { DataParts } from "./data-layer";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { NftImageService } from "./nft-image";
@@ -72,6 +73,8 @@ export interface Context {
   networkChoice: NetworkChoice;
   /** The phrase's public accounts, and which one the wallet works on (accounts.ts). */
   accounts: AccountsService;
+  /** Which of the data layer's parts are on Koios for now (data-layer.ts). */
+  dataParts: DataParts;
   /**
    * Says what a build is doing, on this request's own port (ui-port.ts): the
    * screen shows it instead of only greying out its button. Undefined outside
@@ -319,6 +322,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       await ctx.dapp.networkChanged();
       return status({ ...ctx, network });
     }
+    case "data-layer":
+      return ctx.dataParts.held();
     case "price":
       return ctx.prices.get(ctx.network);
     // Only for a wallet that's open: a locked one shows no tokens to ask about.

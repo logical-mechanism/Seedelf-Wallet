@@ -9,6 +9,7 @@ import { CoinControlService } from "../src/background/coin-control";
 import { Collateral } from "../src/background/collateral";
 import { ContactsService } from "../src/background/contacts";
 import { DappService, type ApprovalWindow } from "../src/background/dapp";
+import { DataParts } from "../src/background/data-layer";
 import { Minswap, type Estimate } from "../src/background/minswap";
 import { MintService } from "../src/background/mint";
 import { MoveInService } from "../src/background/move-in";
@@ -636,6 +637,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     dappWindow,
     dappChanged: () => dappChanged,
     networkChoice,
+    dataParts: new DataParts(t.session, () => t.clock.now),
     dapp: new DappService({
       ...deps,
       store,

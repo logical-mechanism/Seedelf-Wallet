@@ -161,6 +161,13 @@ export class DataParts {
     await this.session?.set(SESSION_DATA_DOWN, this.until).catch(() => undefined);
   }
 
+  /** The parts on Koios now, each until when (ms): Settings' status line. A part not named goes to the data layer. */
+  async held(): Promise<Partial<Record<Part, number>>> {
+    await this.restore();
+    const now = this.now();
+    return Object.fromEntries(Object.entries(this.until).filter(([, at]) => at > now));
+  }
+
   private restore(): Promise<void> {
     this.restored ??= (async () => {
       const kept = await this.session?.get<Partial<Record<Part, number>>>(SESSION_DATA_DOWN).catch(() => undefined);

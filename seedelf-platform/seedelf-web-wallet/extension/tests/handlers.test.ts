@@ -3,6 +3,7 @@
 // seedelf-crypto (Lace-verified Cardano addresses, frozen Seedelf keys).
 import { describe, expect, it } from "vitest";
 
+import { DOWN_MS } from "../src/background/data-layer";
 import { handle, type Context } from "../src/background/handlers";
 import { NetworkChoice } from "../src/background/preferences";
 import { SESSION_RESTORED } from "../src/background/wallet";
@@ -14,7 +15,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Context {
-  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, accounts } =
+  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, accounts, dataParts } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -38,6 +39,7 @@ function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Con
     sessions,
     lovejoin,
     accounts,
+    dataParts,
     connector: async (on) => on,
     version: "1.0.0",
     network: "preprod",
@@ -252,6 +254,15 @@ describe("handlers", () => {
     await expect(ask({ type: "network-set", network: "mainnet" }, ctx)).rejects.toThrow("can't use Mainnet");
     await t.local.set("seedelf.network", "mainnet");
     expect(((await ask({ type: "status" }, ctx)) as Status).network).toBe("preprod");
+  });
+
+  it("tells Settings which of the data layer's parts are on Koios, locked or not, asking no server", async () => {
+    const t = testBalances();
+    const ctx = context(t);
+    expect(await ask({ type: "data-layer" }, ctx)).toEqual({});
+    await t.dataParts.down("submit");
+    expect(await ask({ type: "data-layer" }, ctx)).toEqual({ submit: t.clock.now + DOWN_MS });
+    expect(t.koios.calls).toEqual([]);
   });
 
   it("reads balances once unlocked", async () => {

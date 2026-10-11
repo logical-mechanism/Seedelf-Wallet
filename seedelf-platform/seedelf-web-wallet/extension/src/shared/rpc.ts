@@ -1914,6 +1914,12 @@ export interface SessionOrder {
   createdAt: number;
 }
 
+/** A part of the data layer (background/data-layer.ts): one user's reads, the private index, submits. */
+export type DataPart = "public" | "private" | "submit";
+
+/** The parts on Koios now, each until when (ms since 1970): a part not named goes to the data layer. */
+export type DataHolds = Partial<Record<DataPart, number>>;
+
 type None = Record<never, never>;
 
 /** Every request the service worker answers: its payload and its result. */
@@ -2045,6 +2051,11 @@ export interface Requests {
    * network is declined.
    */
   "network-set": { payload: { network: NetworkName }; result: Status };
+  /**
+   * Which of the data layer's parts are on Koios for now, after it didn't
+   * answer (Settings' status line). Asks no one: the worker's own record.
+   */
+  "data-layer": { payload: None; result: DataHolds };
   /** The public accounts the phrase has used, and which one the wallet works on. */
   accounts: { payload: None; result: AccountList };
   /**
@@ -2339,6 +2350,7 @@ const REQUEST_LIST = [
   "preferences",
   "preferences-set",
   "network-set",
+  "data-layer",
   "accounts",
   "account-use",
   "account-rename",
