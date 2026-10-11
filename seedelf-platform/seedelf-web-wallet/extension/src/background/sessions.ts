@@ -73,6 +73,7 @@ import type {
   SessionOrder,
   SessionOutSummary,
   SessionPause,
+  SessionScan,
   SessionTx,
   SessionTxReview,
   SessionView,
@@ -89,7 +90,15 @@ import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs, txWithdrawals } from "./cbor";
 import { CollateralError, CollateralRefusedError, StaleReviewError } from "./collateral";
-import { KoiosBusyError, KoiosError, measurable, SpentInputError, type KoiosTrouble, type KoiosUtxo } from "./koios";
+import {
+  KoiosBusyError,
+  KoiosError,
+  measurable,
+  SpentInputError,
+  type KoiosAccountTx,
+  type KoiosTrouble,
+  type KoiosUtxo,
+} from "./koios";
 import {
   builtOutputs,
   againstPools,
@@ -202,8 +211,14 @@ type Run = "asked" | "run" | "unlock";
  * more than five minutes. Minswap's rate limit clears within a minute, and a
  * funding Minswap hasn't seen yet shows up within a block or two.
  */
-/** How many one-time accounts a probe for a new session's index asks Koios about once the next is used (freshIndex). */
+/**
+ * How many one-time accounts a probe for a new session's index asks Koios about once the next is used (freshIndex),
+ * and the restore scan's at a time, whose run of them all unused ends it (scan).
+ */
 export const INDEX_PROBE = 20;
+
+/** The most one-time accounts the restore scan walks: a bound far past any wallet's use, 100 requests. */
+const SCAN_MOST = 2_000;
 
 export const retryAfterMs = (tries: number) => Math.min(30_000 * 2 ** (tries - 1), 5 * 60_000);
 
@@ -419,6 +434,15 @@ interface SessionRecord {
    * however its datum reads. Each is asked of Koios once.
    */
   remnants?: { from: string[]; not: string[] };
+  /**
+   * Found by the restore scan (O5, chunk 27), not started on this device:
+   * when (`at`), and what its key signed (`own`), whose outputs at the
+   * account its return takes as the session's own, as a site's (siteOuts).
+   * Its record holds its funding (its first transaction) and the swaps that
+   * placed orders the account can cancel. What it was for isn't known: it
+   * has no swap, site or mix, and comes back by hand.
+   */
+  recovered?: { at: number; own: string[] };
   closedAt?: number;
 }
 
@@ -958,6 +982,8 @@ export class SessionService {
    * what a swap's dry-run cancels read (referenceRows, release review C05).
    */
   private references = new Map<NetworkName, Map<string, KoiosUtxo>>();
+  /** The restore scan under way, by network: a restore's and Find leftovers' share one. */
+  private scanning = new Map<NetworkName, Promise<SessionScan>>();
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -1555,6 +1581,178 @@ export class SessionService {
   async indices(network: NetworkName): Promise<number[]> {
     const book = await this.book(network);
     return [...new Set([...Array.from({ length: book.next }, (_, i) => i), ...book.sessions.map((s) => s.index)])];
+  }
+
+  /**
+   * The restore scan (O5, chunk 27; keys-and-accounts.md, Accounts). The
+   * book is sealed on one device, so after a restore, or with the same
+   * phrase in another browser, it has none of its sessions, and what their
+   * one-time accounts hold doesn't show (independent review M5). This finds
+   * the accounts the phrase used that the book doesn't know, and adds each
+   * that holds something, or has an order open, as a session found
+   * (`recovered`), brought back by hand. Every used index moves the book's
+   * `next` past it. It runs at a restore and from Find leftovers, never as
+   * the wallet opens: the server sees every account it's asked about
+   * together, from one IP address. One at a time on a network.
+   */
+  scan(network: NetworkName): Promise<SessionScan> {
+    const running = this.scanning.get(network);
+    if (running) return running;
+    const run = this.scanNow(network).finally(() => this.scanning.delete(network));
+    this.scanning.set(network, run);
+    return run;
+  }
+
+  /**
+   * The scan: each one-time stake key (`2/i`), INDEX_PROBE at a time
+   * (`account_addresses`), until a run of them is all unused, as BIP44's gap
+   * (sessions take their index from one sequence, freshIndex, and only a
+   * funding never sent leaves one unused); then, for the used ones the book
+   * doesn't know, what they hold (`credential_utxos`, 75 a request) and
+   * their orders still open (recoveredRecords, liveOrders). Nothing is
+   * written until it's all read, and then into the book as it is by then:
+   * a session started meanwhile keeps its index.
+   */
+  private async scanNow(network: NetworkName): Promise<SessionScan> {
+    const { wasm, wallet, session } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const koios = this.deps.koios(network);
+    const used: number[] = [];
+    for (let first = 0; first < SCAN_MOST; first += INDEX_PROBE) {
+      const probe = await wallet.withKeys((keys) =>
+        Array.from({ length: INDEX_PROBE }, (_, i) => ({ index: first + i, reward: keys.oneTime.rewardAddress(net, first + i) })),
+      );
+      const seen = await koios.usedStakeAddresses(probe.map((p) => p.reward));
+      const hits = probe.filter((p) => seen.has(p.reward)).map((p) => p.index);
+      if (!hits.length) break;
+      used.push(...hits);
+    }
+    const known = new Set((await this.book(network)).sessions.map((s) => s.index));
+    const lost = used.filter((i) => !known.has(i));
+    const found: Array<{ record: SessionRecord; held: KoiosUtxo[] }> = [];
+    if (lost.length) {
+      // Every session since chunk 15b has its own stake key: none from before (preprod's alone) is found.
+      const accounts = await this.accounts(network, lost.map((index) => ({ index, ownStake: true })));
+      const spent = await wallet.withKeys(() => spentSet(session));
+      const held = unspent(await koios.credentialUtxos(lost.map((i) => accounts.get(i)!.keyHash)), spent);
+      for (const record of await this.recoveredRecords(network, lost, accounts)) {
+        const { address, keyHash } = accounts.get(record.index)!;
+        const rows = held.filter((u) => u.payment_cred === keyHash);
+        if (rows.length || (await this.liveOrders(network, record, address)).length) found.push({ record, held: rows });
+      }
+    }
+    const added = await this.serial(async () => {
+      const book = await this.book(network);
+      const have = new Set(book.sessions.map((s) => s.index));
+      const fresh = found.filter((f) => !have.has(f.record.index));
+      const next = Math.max(book.next, ...used.map((i) => i + 1));
+      if (fresh.length || next !== book.next) {
+        await this.save(network, { next, sessions: [...book.sessions, ...fresh.map((f) => f.record)] });
+      }
+      return fresh;
+    });
+    // What each holds, as read: the list shows it before its first refresh.
+    for (const f of added) this.seen.set(`${network}:${f.record.index}`, f.held);
+    return { used: used.length, found: added.map((f) => f.record.index) };
+  }
+
+  /**
+   * One-time accounts `lost` as sessions the restore scan found: each one's
+   * transactions (`account_txs`, one request an account, up to 1,000), what
+   * they spent and paid (`tx_info`, 20 a request), its funding (its first),
+   * and what its key signed: every one that spent from it. Its orders are
+   * found through the swap that placed them, never by address (a SundaeSwap
+   * V3 order sits under Minswap's staking part): each output the key's
+   * transactions paid to a DEX order script the wallet can cancel at, read
+   * (`utxo_info`, and `datum_info` for a datum kept by hash) as the
+   * account's own, spent or not: whether it's still open is liveOrders',
+   * whatever came after it, since a return from before chunk 24 checked only
+   * Minswap's list. An account the server shows no transaction of yet (a
+   * backend behind the one that showed it used) is left out.
+   */
+  private async recoveredRecords(
+    network: NetworkName,
+    lost: number[],
+    accounts: Map<number, { address: string; keyHash: string }>,
+  ): Promise<SessionRecord[]> {
+    const { wasm, wallet, now } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const koios = this.deps.koios(network);
+    const rewards = await wallet.withKeys((keys) => lost.map((index) => keys.oneTime.rewardAddress(net, index)));
+    const txsOf = new Map<number, KoiosAccountTx[]>();
+    for (const [i, index] of lost.entries()) txsOf.set(index, await koios.accountTxs(rewards[i]!, { after: 0 }));
+    const hashes = [...new Set([...txsOf.values()].flat().map((t) => t.tx_hash))];
+    const info = new Map((await koios.txSpends(hashes)).map((r) => [r.tx_hash, r]));
+    // How WebAssembly reads an output for the account at `address`; one it can't read isn't an order.
+    const read = (hex: string, datum: string, address: string, form?: { inline?: boolean; scriptRef?: boolean }) => {
+      try {
+        return dexOrderAt(wasm, network, hex, datum, address, form);
+      } catch (e) {
+        if (isTrap(e)) throw e;
+        return undefined;
+      }
+    };
+    const hexOf = (bech32: string) => {
+      try {
+        return wasm.cip30Address(bech32);
+      } catch (e) {
+        if (isTrap(e)) throw e;
+        return undefined;
+      }
+    };
+    // The outputs its key's transactions paid to an order script (`known`), by outpoint: whose, and which swap.
+    const candidates = new Map<string, { index: number; tx: string }>();
+    const signed = new Map<number, KoiosAccountTx[]>();
+    for (const index of lost) {
+      const { address, keyHash } = accounts.get(index)!;
+      const own = txsOf.get(index)!.filter((t) => info.get(t.tx_hash)?.inputs?.some((i) => i.payment_addr.cred === keyHash));
+      signed.set(index, own);
+      for (const t of own) {
+        for (const o of info.get(t.tx_hash)?.outputs ?? []) {
+          if (o.tx_index == null || o.payment_addr.cred === keyHash) continue;
+          const hex = hexOf(o.payment_addr.bech32);
+          if (hex && read(hex, "", address)?.known) candidates.set(`${t.tx_hash}#${o.tx_index}`, { index, tx: t.tx_hash });
+        }
+      }
+    }
+    const rows = candidates.size ? await koios.utxoInfo([...candidates.keys()]) : [];
+    const byHash = [...new Set(rows.filter((r) => !r.inline_datum && r.datum_hash).map((r) => r.datum_hash!))];
+    const datums = byHash.length ? await koios.datumInfo(byHash) : new Map<string, string>();
+    const orders = new Map<string, string[]>();
+    for (const r of rows) {
+      const c = candidates.get(outpoint(r));
+      const datum = r.inline_datum?.bytes ?? (r.datum_hash ? datums.get(r.datum_hash) : undefined);
+      const hex = r.address ? hexOf(r.address) : undefined;
+      if (!c || !datum || !hex) continue;
+      const form = { inline: !!r.inline_datum, scriptRef: !!r.reference_script };
+      if (read(hex, datum, accounts.get(c.index)!.address, form)?.ours) orders.set(c.tx, [...(orders.get(c.tx) ?? []), outpoint(r)]);
+    }
+    const at = now();
+    return lost.flatMap((index) => {
+      // Newest first: the funding is the oldest its key didn't sign (a swap can share its block, sorted by hash).
+      const own = new Set((signed.get(index) ?? []).map((t) => t.tx_hash));
+      const txs = txsOf.get(index)!;
+      const funding = txs.filter((t) => !own.has(t.tx_hash)).at(-1) ?? txs.at(-1);
+      if (!funding) return [];
+      const swaps = (signed.get(index) ?? []).filter((t) => orders.has(t.tx_hash) && t !== funding).reverse();
+      const record: SessionRecord = {
+        index,
+        ownStake: true,
+        createdAt: funding.block_time * 1000,
+        txs: [
+          { kind: "out", txHash: funding.tx_hash, at: funding.block_time * 1000, confirmed: true },
+          ...swaps.map((t) => ({
+            kind: "swap" as const,
+            txHash: t.tx_hash,
+            at: t.block_time * 1000,
+            confirmed: true,
+            orders: orders.get(t.tx_hash)!,
+          })),
+        ],
+        recovered: { at, own: (signed.get(index) ?? []).map((t) => t.tx_hash) },
+      };
+      return [record];
+    });
   }
 
   /**
@@ -2930,7 +3128,8 @@ export class SessionService {
     // pays the deposit of, as it did before H1. A stranger's is only what neither asked the key to sign: its
     // tokens come back only when they pay their own way (final review F4).
     const siteTxs = (record?.siteOuts ?? []).map((o) => o.split("#")[0]!);
-    const own = [...new Set([...(record?.txs.map((t) => t.txHash) ?? []), ...siteTxs])];
+    // A session the restore scan found: everything its key signed, as far as the scan saw.
+    const own = [...new Set([...(record?.txs.map((t) => t.txHash) ?? []), ...siteTxs, ...(record?.recovered?.own ?? [])])];
     const lovejoin = this.deps.lovejoin;
     // Why Lovejoin is left out, which the return's warning shows (lovejoinSkipped): each reason is named
     // `.skip.warn.`, as the name is what keeps it checked (tests/i18n-worker-reasons.test.ts).
@@ -3704,6 +3903,7 @@ export class SessionService {
       ...(stage === "failed" && out.unsent ? { unsent: true, ...(out.why ? { unsentWhy: out.why } : {}) } : {}),
       // What its return brought back, once it's over (DX-5).
       ...(stage === "closed" && s.received ? { received: s.received } : {}),
+      ...(s.recovered ? { recovered: true as const } : {}),
     };
   }
 
@@ -3881,9 +4081,9 @@ export class SessionService {
    * What removing the wallet would leave at this network's one-time
    * accounts, from the sealed book alone (no Koios request): each session
    * not closed, unless its funding was turned away, and each closed one with
-   * something no return takes left at its account. Nothing reads those
-   * accounts without the book, and a restore doesn't find them yet
-   * (independent review M5).
+   * something no return takes left at its account (independent review M5).
+   * A restore's scan finds their money again, but not what each was for: a
+   * swap's approval, a site's connection, a mix's chain.
    */
   async atStake(network: NetworkName): Promise<AtStake["sessions"]> {
     const book = await this.book(network);
@@ -3891,7 +4091,7 @@ export class SessionService {
       .filter((s) => (s.closedAt ? !!s.leftBehind?.length : !s.txs[0]?.unsent))
       .map((s) => ({
         index: s.index,
-        kind: s.site ? "site" : s.mix ? "mix" : "swap",
+        kind: s.site ? "site" : s.mix ? "mix" : s.recovered ? "found" : "swap",
         ...(s.site ? { origin: s.site.origin } : {}),
         ...(s.closedAt ? { leftBehind: true } : {}),
       }));

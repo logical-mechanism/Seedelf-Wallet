@@ -14,13 +14,15 @@
 // row says the same in a line (`DappsRow`). Above the tiles, when sessions hold
 // money and nothing of theirs is on its way, Bring everything back
 // (ClaimAll.tsx): each in its own transaction. What they hold is hidden with
-// the balances (launch review #56).
+// the balances (launch review #56). At the foot, After a restore (O5, chunk
+// 27): the sessions a restore's scan found, each opening its page (Swaps.tsx's
+// `Session`), and Find leftovers, which scans again.
 
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { type I18nKey, useT } from "../../i18n";
 
-import { lovejoinOn } from "../../networks";
-import type { Balances, DappSite, PendingTx, SessionView, Status } from "../../shared/rpc";
+import { lovejoinOn, NETWORKS } from "../../networks";
+import type { Balances, DappSite, PendingTx, SessionScan, SessionView, Status } from "../../shared/rpc";
 import { call, onDappChanged } from "../background";
 import { Callout } from "../components/Callout";
 import { ChevronRightIcon, GridIcon, ShieldIcon, SwapIcon } from "../components/Icons";
@@ -34,7 +36,7 @@ import { connectorBlockedText, useConnectorSwitch, useDeclined, useSiteAccount, 
 import { DeclinedSites, Disconnected, DisconnectModal, hostOf, SiteItem } from "./ConnectedSites";
 import { Lovejoin } from "./Lovejoin";
 import { attachedTo, type ConnectedSites, isSiteSession, SiteRow, SiteSession, siteConnected } from "./SiteSessions";
-import { fundingUnseen, isRunningSwap, Swaps, SwapTag } from "./Swaps";
+import { fundingUnseen, isRunningSwap, Session, SwapRow, Swaps, SwapTag } from "./Swaps";
 
 type DappId = "minswap" | "lovejoin";
 
@@ -81,6 +83,8 @@ export function Dapps({
   // The connected sites, from the device's record: which session each talks to.
   const [connected, setConnected] = useState<ConnectedSites>();
   const [site, setSite] = useState<number>();
+  // A session a restore's scan found, opened.
+  const [found, setFound] = useState<number>();
   // A site on the public account, asked about before it's disconnected; then which one went.
   const [asking, setAsking] = useState<DappSite>();
   const [gone, setGone] = useState<string>();
@@ -130,10 +134,10 @@ export function Dapps({
   }, []);
   useEffect(() => (open ? undefined : onDappChanged(() => void reread())), [open, reread]);
 
-  // A site's page reads what its account holds when it opens.
+  // A site's page reads what its account holds when it opens, and so does a session a restore's scan found.
   useEffect(() => {
-    if (site !== undefined) void load(true);
-  }, [site, load]);
+    if (site !== undefined || found !== undefined) void load(true);
+  }, [site, found, load]);
 
   /** Disconnects a site on the public account, as Settings' Connected sites does; a session's goes from its page. */
   async function forget(origin: string) {
@@ -205,6 +209,23 @@ export function Dapps({
     );
   }
 
+  const foundOpened = found === undefined ? undefined : sessions.find((s) => s.index === found);
+  if (foundOpened) {
+    return (
+      <Session
+        session={foundOpened}
+        updatedAt={updatedAt}
+        reading={reading}
+        onRefresh={() => void load(true)}
+        onBack={() => {
+          setFound(undefined);
+          void load(false);
+        }}
+        onChanged={setSessions}
+      />
+    );
+  }
+
   const running = sessions.filter(isRunningSwap);
   // Paused, or a funding the chain hasn't shown yet: either waits on the user.
   const waiting = running.filter((s) => s.auto?.paused || fundingUnseen(s)).length;
@@ -264,8 +285,84 @@ export function Dapps({
           </p>
         )}
       </section>
+      <FoundSessions
+        sessions={sessions.filter((s) => s.recovered && s.stage !== "closed")}
+        onOpen={setFound}
+        onScanned={() => void load(true)}
+      />
       {asking && <DisconnectModal site={asking} onKeep={() => setAsking(undefined)} onDisconnect={() => void forget(asking.origin)} />}
     </Screen>
+  );
+}
+
+/**
+ * After a restore (O5, chunk 27): the sessions a restore's scan found, not
+ * over yet, each opening its page; and Find leftovers, the scan again. A
+ * restore scans the network it's made on by itself; the other network, or
+ * this phrase used in another browser since, needs the button. Its privacy
+ * note says, before it's pressed, that the server is asked about the
+ * one-time accounts together.
+ */
+function FoundSessions({
+  sessions,
+  onOpen,
+  onScanned,
+}: {
+  sessions: SessionView[];
+  onOpen: (index: number) => void;
+  /** The scan added what it found: the page reads the sessions' accounts again. */
+  onScanned: () => void;
+}) {
+  const t = useT();
+  const network = useNetwork();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<SessionScan>();
+  const [error, setError] = useState<string>();
+
+  async function find() {
+    setBusy(true);
+    setError(undefined);
+    setResult(undefined);
+    try {
+      setResult(await call("session-scan", {}));
+      onScanned();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="section" aria-labelledby="dapp-found-title" data-testid="dapp-found">
+      <h2 id="dapp-found-title">{t("dapps.found.title")}</h2>
+      {sessions.length > 0 && (
+        <ul className="list" data-testid="dapp-found-sessions">
+          {sessions.map((s) => (
+            <li key={s.index}>
+              <SwapRow session={s} label={t("claim.session", { number: s.index + 1 })} onOpen={() => onOpen(s.index)} />
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="note">{t("dapps.found.note")}</p>
+      <Callout tone="privacy">{t("dapps.found.privacy.together")}</Callout>
+      <button type="button" className="secondary align-center" onClick={() => void find()} disabled={busy}>
+        {busy ? t("dapps.found.finding") : t("dapps.found.find")}
+      </button>
+      {result && (
+        <p className="note" role="status" data-testid="dapp-found-result">
+          {result.found.length
+            ? t("dapps.found.added", { count: result.found.length })
+            : t("dapps.found.none", { network: NETWORKS[network].label })}
+        </p>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

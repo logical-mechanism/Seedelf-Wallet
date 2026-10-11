@@ -1498,14 +1498,16 @@ function sessionName(s: AtStake["sessions"][number]): string {
   }
   if (s.kind === "mix") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aMix") });
   if (s.kind === "swap") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aSwap") });
+  if (s.kind === "found") return t("settings.remove.warn.sessionNamed", { name, host: t("settings.remove.warn.aFound") });
   return name;
 }
 
 /**
  * What removing the wallet would leave behind, in plain words: a line for
  * each thing on each network (independent review M2, M5). A restore finds
- * the public account, the private balance and Lovejoin's boxes; it doesn't
- * find what private sessions' one-time accounts hold yet, and nothing
+ * the public account, the private balance and Lovejoin's boxes, and its scan
+ * what private sessions' one-time accounts hold (chunk 27), but not what each
+ * was for: a swap's approval, a site's connection, a mix's chain. Nothing
  * watches a payment that may still go through, or a mix from the public
  * account that may have, until the same phrase is restored here, before any
  * other wallet is made here: that deletes its record (pending.ts and

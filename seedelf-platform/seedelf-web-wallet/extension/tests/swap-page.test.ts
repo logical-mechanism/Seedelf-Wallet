@@ -180,3 +180,32 @@ describe("a swap's page once its order is filled, and once it's over (chunk 23's
     expect(line).not.toContain("Forget it");
   });
 });
+
+describe("a session the restore scan found (chunk 27)", () => {
+  const found = (over: Partial<SessionView> = {}) =>
+    swapSession({ index: 4, swap: undefined, auto: undefined, recovered: true, holding: { lovelace: "25000000", tokens: [], utxos: 2 }, ...over });
+
+  it("is named by number and as found, warns of another browser, and only brings back what it holds", () => {
+    const line = page(found());
+    expect(line).toMatch(/^Private session 5 .*Found after a restore/);
+    expect(line).toContain(
+      "If this phrase is open in another browser, a swap or site there may still use this account. Bring it back from one browser only.",
+    );
+    expect(line).toContain("Nothing is waiting: bring everything in the account back into your private balance.");
+    expect(line).toContain("Bring it back");
+    expect(line).not.toContain("Place the order");
+    // Its button is the page's main one.
+    const markup = renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        createElement(Session, { session: found(), reading: false, onRefresh: () => undefined, onBack: () => undefined, onChanged: () => undefined }),
+      ),
+    );
+    expect(markup).toContain('class="primary"');
+  });
+
+  it("stops warning once it's over", () => {
+    expect(page(found({ stage: "closed" }))).not.toContain("another browser");
+  });
+});

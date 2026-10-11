@@ -121,9 +121,18 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       await ctx.accounts.recordFirst().catch(() => undefined);
       // A restored phrase may hold funds past account 0, so look for them —
       // in the background, since it is one Koios request per account probed
-      // and nothing waits on the answer. A new phrase has nothing anywhere.
+      // and nothing waits on the answer — then for what its private sessions'
+      // one-time accounts still hold (the restore scan, O5), on the network
+      // it's restored on: one request for every 20 accounts, and more for
+      // those used. One after the other, so the two never ask together. A
+      // new phrase has nothing anywhere.
       if (message.type === "restore-wallet") {
-        void ctx.accounts.discover(ctx.network).catch(() => undefined);
+        const network = ctx.network;
+        void ctx.accounts
+          .discover(network)
+          .catch(() => undefined)
+          .then(() => ctx.sessions.scan(network))
+          .catch(() => undefined);
       }
       return status(ctx);
     case "restored":
@@ -410,6 +419,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.claimBuild(ctx.network, message.indexes, message.direct ?? false);
     case "session-claim-submit":
       return ctx.sessions.claimSubmit(ctx.network, message.txHashes);
+    case "session-scan":
+      return ctx.sessions.scan(ctx.network);
     case "session-advance":
       return ctx.sessions.advance(ctx.network, message.index, message.now ?? false);
     case "session-stop":

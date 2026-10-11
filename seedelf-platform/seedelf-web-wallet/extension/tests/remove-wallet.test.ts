@@ -1,6 +1,7 @@
 // Remove wallet, unlocked, first says what removing it would leave behind:
 // a payment that may still go through, private sessions whose one-time
-// accounts a restore doesn't find yet, a chain through Lovejoin being sent.
+// accounts hold something (a restore's scan finds their money, chunk 27, but
+// not what each was for), a chain through Lovejoin being sent.
 // With any, it takes a second yes, and the worker refuses without one. A
 // payment that may still go through is kept, sealed, through the reset, so
 // the same phrase restored here watches it again and nothing pays beside it;
@@ -85,7 +86,7 @@ describe("Remove wallet's check", () => {
     expect(await ask({ type: "reset-wallet", force: true }, w.ctx)).toMatchObject({ state: "no-wallet" });
   });
 
-  it("lists private sessions a restore doesn't find yet: open ones, and closed ones with something left, but not one never funded", async () => {
+  it("lists private sessions: open ones, and closed ones with something left, but not one never funded", async () => {
     const w = await wallet();
     const out = (n: number, extra = {}) => [{ kind: "out", txHash: n.toString(16).padStart(64, "0"), at: 1, ...extra }];
     await w.t.store.set("sessions.mainnet", {
@@ -182,7 +183,7 @@ describe("a payment that may still go through, across Remove wallet", () => {
 });
 
 describe("Remove wallet's screen", () => {
-  it("promises back only what a restore finds, and says what's in private sessions isn't found yet", async () => {
+  it("promises back only what a restore finds, private sessions' money among it since its scan (chunk 27)", async () => {
     const { RemoveWallet } = await import("../src/ui/screens/Settings");
     const html = renderToStaticMarkup(createElement(RemoveWallet, { onBack: () => undefined, onRemoved: () => undefined }))
       .replace(/<[^>]+>/g, " ")
@@ -192,7 +193,7 @@ describe("Remove wallet's screen", () => {
     // In plain words, not "private sessions' one-time accounts" (chunk 23's second review, SE-4). Only the accounts
     // a restore looks at, in order: never one added by number past an unused one (release review C09).
     expect(html).toContain(
-      "Your recovery phrase brings back your private balance, Lovejoin boxes and accounts up to the first unused one, not yet a private session's money.",
+      "Your recovery phrase brings back your private balance, Lovejoin boxes, accounts up to the first unused one and private sessions' money.",
     );
     // Until the worker says what's open, it can't be removed.
     expect(html).toContain("Checking…");
@@ -212,6 +213,7 @@ describe("Remove wallet's screen", () => {
         sessions: [
           { index: 0, kind: "site", origin: "https://app.example" },
           { index: 2, kind: "swap" },
+          { index: 4, kind: "found" },
           { index: 3, kind: "mix", leftBehind: true },
         ],
         chainSending: true,
@@ -220,21 +222,21 @@ describe("Remove wallet's screen", () => {
     ]);
     expect(lines).toEqual([
       "Mainnet: a payment may still go through. Until the same phrase is restored here, nothing watches it, so paying again here or elsewhere could pay twice. Another wallet made or restored here first deletes its record.",
-      "Mainnet: 2 private sessions still open: private session 1 (app.example), private session 3 (a swap). Bring them back first, with Bring everything back on the dApps page or a swap's Stop.",
-      "Mainnet: something no return takes is left in private session 4 (a mix). A restore won't show it yet.",
+      "Mainnet: 3 private sessions still open: private session 1 (app.example), private session 3 (a swap), private session 5 (found after a restore). Bring them back first, with Bring everything back on the dApps page or a swap's Stop.",
+      "Mainnet: something no return takes is left in private session 4 (a mix).",
       "Mainnet: a Lovejoin chain is still sending. Removing the wallet stops it partway, its boxes less mixed.",
       "Preprod: couldn't read what's still open.",
     ]);
   });
 
-  it("Forgot password says what the phrase brings back, and what it doesn't yet", async () => {
+  it("Forgot password says what the phrase brings back", async () => {
     const { Reset } = await import("../src/ui/screens/Unlock");
     const html = renderToStaticMarkup(createElement(Reset, { onCancel: () => undefined, onReset: () => undefined }))
       .replace(/<[^>]+>/g, " ")
       .replaceAll("&#x27;", "'")
       .replace(/\s+/g, " ");
     expect(html).toContain(
-      "Your phrase brings back your private balance, Lovejoin boxes and accounts up to the first unused one, not yet a private session's money.",
+      "Your phrase brings back your private balance, Lovejoin boxes, accounts up to the first unused one and private sessions' money.",
     );
     // It runs locked, and keeps a payment that may still go through: it says so, and what brings it back.
     expect(html).toContain(
