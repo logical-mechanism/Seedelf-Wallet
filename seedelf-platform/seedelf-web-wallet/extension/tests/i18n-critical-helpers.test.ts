@@ -45,6 +45,7 @@ const SHARED_WORDS: Record<string, string> = {
   "claim.sessionLower": "a private session's name, as Bring everything back lists it",
   "format.noName": "a token's name, when it has none",
   "swaps.aSwap": "a swap's name, when its tokens can't be read",
+  "swaps.found": "the name of a session a restore's scan found, as its own page asides it",
   "format.vote.abstain": "a vote option, by the label the Voting screen offers it with",
   "format.vote.noConfidence": "a vote option, by the label the Voting screen offers it with",
   "format.vote.notDelegated": "a vote, by the label the Staking screen shows it with",

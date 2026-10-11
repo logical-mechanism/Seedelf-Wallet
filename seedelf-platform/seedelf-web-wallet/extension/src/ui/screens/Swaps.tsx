@@ -174,6 +174,8 @@ function sidesOf(network: NetworkName, s: SessionView): { pay: Pick; get: Pick }
 
 /** A session's swap in a line: "10 ₳ → MIN", "906.5941 MIN → ADA". */
 export function pairOf(s: SessionView, network: NetworkName): string {
+  // Found by the restore scan: what it was for isn't known (chunk 27).
+  if (s.recovered) return t("swaps.found");
   const sides = sidesOf(network, s);
   if (!s.swap || !sides) return t("swaps.aSwap");
   return `${amountOf(s.swap.amount, sides.pay)} → ${nameOf(sides.get)}`;
@@ -341,14 +343,17 @@ function SwapPair({ session: s }: { session: SessionView }) {
   );
 }
 
-/** A session in a list, which opens its page: the pair, what it's doing or when it ran, and its tag. Home shows the running ones. */
-export function SwapRow({ session: s, onOpen }: { session: SessionView; onOpen: () => void }) {
+/**
+ * A session in a list, which opens its page: the pair, what it's doing or when it ran, and its tag. Home shows the
+ * running ones. `label`: another name for it (the dApps page's sessions found by a restore's scan, by number).
+ */
+export function SwapRow({ session: s, label, onOpen }: { session: SessionView; label?: string; onOpen: () => void }) {
   const tag = tagOf(s);
   const network = useNetwork();
   return (
     <button type="button" className="token-row swap-row" onClick={onOpen}>
       <SwapPair session={s} />
-      <span className="token-row__label">{pairOf(s, network)}</span>
+      <span className="token-row__label">{label ?? pairOf(s, network)}</span>
       <SwapTag {...tag} />
       <span className={tag.tone === "wait" ? "token-row__sub swap-row__sub--wait" : "token-row__sub"}>
         {subOf(s, Date.now())}
@@ -401,8 +406,9 @@ export function Swaps({
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
     try {
-      // A site's private session (private CIP-30) is listed under the dApps page's Sites, not here.
-      setSessions((await call("sessions", { refresh })).filter((s) => !s.site && !s.mix));
+      // A site's private session (private CIP-30) is listed under the dApps page's Sites, not here, and a session a
+      // restore's scan found, whatever it was for, under its After a restore.
+      setSessions((await call("sessions", { refresh })).filter((s) => !s.site && !s.mix && !s.recovered));
       if (refresh) setUpdatedAt(Date.now());
       setError(undefined);
     } catch (e) {
@@ -2174,6 +2180,12 @@ export function Session({
     >
       <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={onRefresh} />
       {rows}
+      {/* Found by a restore's scan: the browser that started it may still be running it (chunk 27). */}
+      {s.recovered && s.stage !== "closed" && (
+        <Callout tone="warn" testId="session-found-warning">
+          {tr("swaps.warn.found")}
+        </Callout>
+      )}
       <LovejoinSkipped reason={s.lovejoinSkipped} />
       <LeftBehindNote leftBehind={s.leftBehind} />
       <p className="note" data-testid="session-next">
@@ -2767,7 +2779,8 @@ function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
     case "closed":
       return t("swaps.next.closed");
     case "open":
-      if (!swapped) return t("swaps.next.placeOrder");
+      // Found by a restore's scan, it has no swap to place: what it holds comes back.
+      if (!swapped && !s.recovered) return t("swaps.next.placeOrder");
       if (waiting) return t("swaps.next.waiting");
       return t("swaps.next.bringBack");
   }
@@ -2803,7 +2816,7 @@ function SessionFoot({
   if (s.stage !== "open") return null;
   return (
     <div className="stack">
-      {!swapped && (
+      {!swapped && !s.recovered && (
         <button type="button" className="primary" onClick={onSwap} disabled={busy}>
           {tr(busy ? "swaps.foot.asking" : "swaps.foot.placeOrder")}
         </button>
@@ -2814,7 +2827,7 @@ function SessionFoot({
         </button>
       )}
       {!waiting && (
-        <button type="button" className={swapped ? "primary" : "secondary"} onClick={onBack} disabled={busy}>
+        <button type="button" className={swapped || s.recovered ? "primary" : "secondary"} onClick={onBack} disabled={busy}>
           {tr("swaps.foot.bringBack")}
         </button>
       )}

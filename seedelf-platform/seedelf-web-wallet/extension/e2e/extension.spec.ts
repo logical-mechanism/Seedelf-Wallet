@@ -332,11 +332,14 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   await expect(page.getByTestId("staking-row")).toHaveText("Staking and governanceStaking with LOGICVoting power: Always abstain");
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
   // The account, the contract and the stake key; the pool's ticker the first
-  // time; and the one `account_addresses` a restore spends looking for a
-  // second public account (chunk 18), which this phrase has never used.
-  // Discovery's ask is the one about a stake address that isn't account 0's.
-  await expect.poll(() => koios.stakesAsked.filter((a) => a !== v.preprod.stake)).not.toHaveLength(0);
+  // time; the one `account_addresses` a restore spends looking for a second
+  // public account (chunk 18), which this phrase has never used; and, after
+  // it, the restore scan's one about the first 20 one-time accounts (chunk
+  // 27), which it has never used either, so nothing more.
+  await expect.poll(() => koios.calls.filter((c) => c === "account_addresses")).toHaveLength(3);
+  expect(koios.stakesAsked.filter((a) => a !== v.preprod.stake)).not.toHaveLength(0);
   expect(koios.calls.sort()).toEqual([
+    "account_addresses",
     "account_addresses",
     "account_addresses",
     "account_info",
@@ -388,11 +391,12 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   const panel = await openApp(context, "panel");
   await expect(panel.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await snap(panel, "home-balances-panel");
-  // Six, not five: the restore's one look for a second public account is among them (chunk 18).
-  expect(koios.calls).toHaveLength(6);
+  // Seven, not five: the restore's one look for a second public account (chunk 18) and its scan of the first 20
+  // one-time accounts (chunk 27) are among them.
+  expect(koios.calls).toHaveLength(7);
   // The pool's ticker is remembered for the session.
   await panel.getByRole("button", { name: "Refresh" }).click();
-  await expect.poll(() => koios.calls.length).toBe(10);
+  await expect.poll(() => koios.calls.length).toBe(11);
   await expect(panel.getByTestId("updated")).toHaveText("Updated just now");
 
   // In the narrow panel the whole name still shows, wrapped: it's the thing to share, never cut.
@@ -637,6 +641,29 @@ test("the dApps page says when sites can't see the wallet, with the switch's own
   await expect(off.getByRole("button", { name: "Let sites connect" })).toBeVisible();
   // The placeholder is a line now, not a tile that looked like a dApp.
   await expect(page.getByTestId("dapps").getByRole("button")).toHaveCount(2);
+});
+
+test("Find leftovers, on the dApps page, scans the one-time accounts once, saying first what the server learns (chunk 27)", async ({ context, koios }) => {
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  // The restore's own scan: one request, about the first 20 one-time accounts, which this phrase never used.
+  await expect.poll(() => koios.calls.filter((c) => c === "account_addresses")).toHaveLength(3);
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  const found = page.getByTestId("dapp-found");
+  await expect(found.getByRole("heading", { name: "After a restore" })).toBeVisible();
+  await expect(found).toContainText("Finds private sessions this browser has no record of");
+  await expect(found).toContainText("It asks the server about your one-time accounts 20 at a time, so the server can tell they're one wallet's.");
+  await expect(page.getByTestId("dapp-found-sessions")).toHaveCount(0);
+  const before = koios.calls.length;
+  await found.getByRole("button", { name: "Find leftovers" }).click();
+  await expect(page.getByTestId("dapp-found-result")).toHaveText(
+    "Nothing found on Preprod: no other one-time account holds anything or has an order open.",
+  );
+  // One request, and nothing more: none of the 20 was used. The page then reads the sessions' accounts, of which
+  // there are none.
+  expect(koios.calls.slice(before)).toEqual(["account_addresses"]);
+  await found.screenshot({ path: "test-results/dapps-found.png" });
 });
 
 test("the first reading shows the splash, which fades into the wallet; a kept reading doesn't", async ({ context, koios }) => {

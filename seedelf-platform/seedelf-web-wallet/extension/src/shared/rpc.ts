@@ -866,11 +866,12 @@ export interface AtStake {
   /** A payment Koios didn't answer, which may still go through. */
   maybeSent?: PendingTx;
   /**
-   * Private sessions whose one-time accounts may hold something, which a
-   * restore doesn't find yet: each one open, or closed with something no
-   * return takes left there (`leftBehind`).
+   * Private sessions whose one-time accounts may hold something: each one
+   * open, or closed with something no return takes left there
+   * (`leftBehind`). A restore's scan finds their money, but not what each
+   * was for, nor a site's connection (`found`: one a scan found itself).
    */
-  sessions: Array<{ index: number; kind: "swap" | "mix" | "site"; origin?: string; leftBehind?: boolean }>;
+  sessions: Array<{ index: number; kind: "swap" | "mix" | "site" | "found"; origin?: string; leftBehind?: boolean }>;
   /** A chain through Lovejoin is still being sent. */
   chainSending: boolean;
   /** A mix from the public account stopped at a transaction that may have gone through, unsettled yet (final review F1). */
@@ -1627,6 +1628,20 @@ export interface SessionView {
    * session from before it was kept (DX-5).
    */
   received?: { lovelace: string; tokens: TokenQuantity[] };
+  /**
+   * Found by the restore scan (O5, chunk 27): a one-time account this
+   * phrase used that the device had no record of. What it was for isn't
+   * known, so it has no swap, site or mix, and it's brought back by hand.
+   */
+  recovered?: true;
+}
+
+/** What the restore scan found on a network (`session-scan`). */
+export interface SessionScan {
+  /** The one-time accounts the chain shows this phrase used. */
+  used: number;
+  /** The sessions it added, by index: each holds something, or has an order open. */
+  found: number[];
 }
 
 /**
@@ -2191,6 +2206,12 @@ export interface Requests {
     payload: { indexes: number[]; direct?: boolean };
     result: { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
   };
+  /**
+   * The restore scan, Find leftovers: the one-time accounts this phrase used
+   * that the device has no record of, each that holds something or has an
+   * order open added as a session found. Asks the server about them together.
+   */
+  "session-scan": { payload: None; result: SessionScan };
   /** Sends the chosen returns Bring everything back built, one after another. */
   "session-claim-submit": {
     payload: { txHashes: string[] };
@@ -2388,6 +2409,7 @@ const REQUEST_LIST = [
   "session-top-up-submit",
   "session-claim-build",
   "session-claim-submit",
+  "session-scan",
   "session-advance",
   "session-stop",
   "session-stop-cost",

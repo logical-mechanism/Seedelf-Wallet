@@ -299,6 +299,8 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const [dappStart, setDappStart] = useState<DappStart>();
   // Swaps that run themselves and aren't over, from the device's own record.
   const [swaps, setSwaps] = useState<SessionView[]>([]);
+  // Sessions a restore's scan found, not over yet: the restore's note says how many (chunk 27).
+  const [found, setFound] = useState(0);
   // Lovejoin boxes on their way back, from the device's own schedule.
   const [held, setHeld] = useState<LovejoinHeld>();
   // A mix from the public account being sent: what it spends, and its change, are out of the balance meanwhile.
@@ -392,7 +394,11 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     let live = true;
     const read = () => {
       void call("sessions", {}).then(
-        (all) => live && setSwaps(all.filter(isRunningSwap)),
+        (all) => {
+          if (!live) return;
+          setSwaps(all.filter(isRunningSwap));
+          setFound(all.filter((s) => s.recovered && s.stage !== "closed").length);
+        },
         () => undefined,
       );
       void call("lovejoin-held", {}).then(
@@ -780,6 +786,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
           <RestoredNote
             balances={balances}
             failed={!!error}
+            sessions={found}
             onDismiss={() => {
               void call("restored", { seen: true }).catch(() => undefined);
               setRestored(false);
@@ -1249,17 +1256,21 @@ export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "carda
  * the eye), or that it holds nothing yet on this network, which is what a phrase never used holds. Once the look for
  * more accounts finds some it says what the account shown holds, by its name, and how many more the phrase used, which
  * the picker switches to: never "nothing… never used" from account 0 alone when the money is in another (the
- * pass-two review). Only accounts the look found used are counted. In the banners' style, at the top, with Dismiss.
- * Exported for its tests.
+ * pass-two review). Only accounts the look found used are counted. Once the restore's scan finds private sessions
+ * from before (chunk 27), it says how many, and where they come back from. In the banners' style, at the top, with
+ * Dismiss. Exported for its tests.
  */
 export function RestoredNote({
   balances,
   failed = false,
+  sessions = 0,
   onDismiss,
 }: {
   balances?: Balances;
   /** The reading failed: Home's alert says so, and this doesn't say it's reading. */
   failed?: boolean;
+  /** Private sessions the restore's scan found, not over yet. */
+  sessions?: number;
   onDismiss: () => void;
 }) {
   const t = useT();
@@ -1290,6 +1301,7 @@ export function RestoredNote({
         {joinSentences([
           what,
           others > 0 && t("home.restored.others", { count: others }),
+          sessions > 0 && t("home.restored.sessions", { count: sessions }),
         ])}
       </div>
       <button type="button" className="tx-banner__dismiss" onClick={onDismiss}>

@@ -131,11 +131,13 @@ export interface KoiosTxOut {
 
 /**
  * What a transaction spent: `tx_info`'s inputs, each where it sat (`cred`: its payment key or script hash,
- * hex), and which output it was (`tx_hash`, `tx_index`), as Koios gives every input.
+ * hex), and which output it was (`tx_hash`, `tx_index`), as Koios gives every input. `outputs`, what it paid,
+ * the same way: Koios and the data layer give them with the inputs (the restore scan reads them).
  */
 export interface KoiosTxSpends {
   tx_hash: string;
   inputs: Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_hash?: string; tx_index?: number }> | null;
+  outputs?: Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_index?: number }> | null;
 }
 
 /** A stake key's standing: `account_info`. No row at all means it was never registered. */
@@ -764,9 +766,10 @@ export class Koios {
   }
 
   /**
-   * What each transaction spent, its inputs alone (`tx_info`): nothing of
-   * their datums, scripts, tokens or metadata. At most `TXS_PER_REQUEST` go
-   * in a request. A transaction Koios doesn't know has no row.
+   * What each transaction spent, its inputs alone (`tx_info`), and where
+   * it paid: nothing of their datums, scripts, tokens or metadata. At most
+   * `TXS_PER_REQUEST` go in a request. A transaction Koios doesn't know has
+   * no row.
    */
   async txSpends(txHashes: string[]): Promise<KoiosTxSpends[]> {
     const rows: KoiosTxSpends[] = [];

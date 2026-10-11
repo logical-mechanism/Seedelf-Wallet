@@ -216,6 +216,10 @@ export interface FakeKoios {
   txExtras: Map<string, Partial<KoiosTxInfo>>;
   /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
   txSpends: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_hash?: string; tx_index?: number }>>;
+  /** Where those paid, for `tx_info` with their inputs, by hash: a one-time account's swap, its order and its change, say. */
+  txOutputs: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_index: number }>>;
+  /** More accounts' transactions for `account_txs`, newest first, by stake address: a one-time account's, say. */
+  accountTxs: Map<string, Array<{ tx_hash: string; block_height: number; block_time: number }>>;
   /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
   usedStakes: Set<string>;
   /** The slot of the newest block, as `tip` answers. */
@@ -310,6 +314,8 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     txExtras: new Map(),
     txSpends: new Map(),
+    txOutputs: new Map(),
+    accountTxs: new Map(),
     usedStakes: new Set(),
     tip: 0,
     dreps: new Map(),
@@ -361,13 +367,20 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         if (after) rows = (rows as KoiosUtxo[]).filter((u) => (u.block_height ?? 0) > Number(after[1]));
       } else if (path === "account_txs") {
         // Newest first, as the recorded answer is; after a block, or a page of it.
-        const all = body._stake_address === activityPreprod.stake ? activityPreprod.account_txs : [];
+        const all =
+          body._stake_address === activityPreprod.stake ? activityPreprod.account_txs : (fake.accountTxs.get(body._stake_address) ?? []);
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height > after);
       } else if (path === "tx_info") {
         rows = [
           ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
-          ...[...fake.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+          ...[...new Set([...fake.txSpends.keys(), ...fake.txOutputs.keys()])]
+            .filter((h) => body._tx_hashes.includes(h))
+            .map((tx_hash) => ({
+              tx_hash,
+              inputs: fake.txSpends.get(tx_hash) ?? [],
+              ...(fake.txOutputs.has(tx_hash) ? { outputs: fake.txOutputs.get(tx_hash) } : {}),
+            })),
         ];
       } else if (path === "utxo_info") {
         // Any UTxO the fixtures know, spent or not, as Koios answers; and the DEX order scripts' references.
