@@ -1778,7 +1778,7 @@
   "settings.server.part.public": "tu cuenta pública",
   "settings.server.part.submit": "los envíos",
   "settings.server.partly": "Usando Koios para {{parts}} hasta las {{time}}: el servidor propio de Seedelf Wallet no respondió. Lo demás usa el servidor.",
-  "settings.server.up": "Usando el servidor propio de Seedelf Wallet.",
+  "settings.server.up": "Usando el Data Layer de Seedelf",
   "settings.remove.anyway": "Eliminarla de todos modos, dejando eso atrás",
   "settings.remove.note": "Esto elimina la billetera de este navegador. Tu frase de recuperación recupera tu saldo privado, tus cajas de Lovejoin y tus cuentas hasta la primera sin usar, pero todavía no el dinero de una sesión privada.",
   "settings.remove.removing": "Eliminando…",

@@ -58,10 +58,10 @@ describe("Settings' server status line", () => {
     renderToStaticMarkup(createElement(Settings.ServerStatusLine, { koiosOnly, holds }));
   const at = new Date(2026, 9, 11, 17, 42).getTime();
 
-  it("is green on Seedelf Wallet's own server, with nothing held on Koios", () => {
+  it("is green on Seedelf's Data Layer, with nothing held on Koios", () => {
     const html = line(false, {});
     expect(html).toContain("server-status--up");
-    expect(text(html).trim()).toBe("Using Seedelf Wallet's own server.");
+    expect(text(html).trim()).toBe("Using Seedelf's Data Layer");
   });
 
   it("is red with every part on Koios, and says until when", () => {

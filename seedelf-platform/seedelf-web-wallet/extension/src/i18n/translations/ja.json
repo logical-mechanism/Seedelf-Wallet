@@ -1590,7 +1590,7 @@
   "settings.server.part.public": "公開アカウント",
   "settings.server.part.submit": "送信",
   "settings.server.partly": "{{time}} まで、{{parts}}には Koios を使用します。Seedelf Wallet 自身のサーバーが応答しませんでした。それ以外はこのサーバーを使います。",
-  "settings.server.up": "Seedelf Wallet 自身のサーバーを使用中です。",
+  "settings.server.up": "Seedelf の Data Layer を使用中",
   "settings.remove.anyway": "それでも削除して、それらを残す",
   "settings.remove.note": "これはこのブラウザからウォレットを削除します。リカバリーフレーズで、プライベート残高、Lovejoin のボックス、最初の未使用のものまでのアカウントを復元できますが、プライベートセッションのお金はまだ復元できません。",
   "settings.remove.removing": "削除中…",
