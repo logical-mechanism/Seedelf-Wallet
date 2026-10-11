@@ -570,6 +570,7 @@ describe("a reason the worker gives a warning", () => {
     ["sess.skip.warn.chainFailed", "skipped =", "leftOut", "background/sessions.ts"],
     ["sess.skip.warn.mixStopped", "skipped =", "-", "background/sessions.ts"],
     ["sess.skip.warn.mixCannotPay", "lovejoinSkipped:", "skipped", "background/sessions.ts"],
+    ["sess.skip.warn.noBox", "lovejoinSkipped:", "skipped", "background/sessions.ts"],
     ["sess.skip.warn.poolFloor", "skipped:", "skipped", "background/sessions.ts"],
     ["sess.skip.warn.deep", "poolShort's return", "-", "background/sessions.ts"],
   ])("%s is given as %s, through %s, in %s, and is critical", (key, sink, first, file) => {

@@ -1480,6 +1480,7 @@
   "sess.skip.warn.deep_other": "深さ {{count}} 段",
   "sess.skip.warn.mixCannotPay": "その ADA ではもうボックスとそのミックスの費用を払えません",
   "sess.skip.warn.mixStopped": "ボックスが入る前にあなたが止めました",
+  "sess.skip.warn.noBox": "余る ADA が 1 ボックス分に足りません",
   "sess.skip.warn.noCollateral": "5 ₳ のコラテラルがもうそのアカウントになく、ミックスにはそれが必要です",
   "sess.skip.warn.poolFloor_other": "現在 Lovejoin のプールにはあなたのものではないボックスが {{count}} 件あり、必要な {{floor}} 件を下回っています",
   "sess.skip.warn.poolFree_other": "現在 Lovejoin のプールにはミックスに使えるボックスが {{count}} 件あり、{{deep}}のボックスには {{needs}} 件必要です",

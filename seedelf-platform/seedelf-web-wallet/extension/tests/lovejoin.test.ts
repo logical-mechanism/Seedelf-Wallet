@@ -553,10 +553,12 @@ describe("a session's collateral (privacy review §2.15)", CHAINS, () => {
     await sessions.backSubmit("preprod", review.txHash);
     expect((await sessions.list("preprod"))[0]!.lovejoinSkipped).toBe(review.lovejoinSkipped);
 
-    // Too little to pay for a box: nothing to say.
+    // Too little to pay for a box: that's why, collateral or not, as a swap's review says (1.4.1: it said nothing).
     const small = await withSession("8000000");
     small.t.koios.addedToAccounts = small.t.koios.addedToAccounts.filter((u) => u.tx_hash !== "c2".repeat(32));
-    expect((await small.sessions.backBuild("preprod", 0)).lovejoinSkipped).toBeUndefined();
+    expect((await small.sessions.backBuild("preprod", 0)).lovejoinSkipped).toBe("its spare ADA is too little for a box");
+    const withCollateral = await withSession("8000000");
+    expect((await withCollateral.sessions.backBuild("preprod", 0)).lovejoinSkipped).toBe("its spare ADA is too little for a box");
   });
 });
 

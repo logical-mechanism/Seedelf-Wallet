@@ -1650,6 +1650,7 @@
   "sess.skip.warn.deep_other": "{{count}} oleadas de profundidad",
   "sess.skip.warn.mixCannotPay": "su ADA ya no paga una caja y sus mezclas",
   "sess.skip.warn.mixStopped": "la detuviste antes de que sus cajas entraran",
+  "sess.skip.warn.noBox": "el ADA sobrante no alcanza para una caja",
   "sess.skip.warn.noCollateral": "su colateral de 5 ₳ ya no está en su cuenta, y las mezclas lo necesitan",
   "sess.skip.warn.poolFloor_many": "Ahora mismo el pool de Lovejoin tiene {{count}} cajas que no son tuyas, por debajo de las {{floor}} que necesita",
   "sess.skip.warn.poolFloor_one": "Ahora mismo el pool de Lovejoin tiene {{count}} caja que no es tuya, por debajo de las {{floor}} que necesita",

@@ -2971,8 +2971,10 @@ export class SessionService {
           skipped = leftOut(e);
         }
       }
-      // A mix that can't pay for its boxes anymore (the fees went up) says so too.
-      if (!chain && !skipped && record?.mix) skipped = t("sess.skip.warn.mixCannotPay");
+      // A mix that can't pay for its boxes anymore (the fees went up) says so too; and anything else whose spare ADA
+      // pays for no box (a swap's, as its review said), which comes back directly with nothing said otherwise. A
+      // short pool throws, and says so above (leftOut).
+      if (!chain && !skipped) skipped = t(record?.mix ? "sess.skip.warn.mixCannotPay" : "sess.skip.warn.noBox");
       if (skipped && record?.mix) {
         await this.update(network, index, (r) => {
           r.mix!.skipped = skipped;

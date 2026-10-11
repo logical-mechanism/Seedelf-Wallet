@@ -1565,6 +1565,7 @@
   "sess.skip.warn.deep_other": "{{count}} waves deep",
   "sess.skip.warn.mixCannotPay": "its ADA doesn't pay for a box and its mixes anymore",
   "sess.skip.warn.mixStopped": "you stopped it before its boxes went in",
+  "sess.skip.warn.noBox": "its spare ADA is too little for a box",
   "sess.skip.warn.noCollateral": "its 5 ₳ collateral isn't at its account anymore, and the mixes need it",
   "sess.skip.warn.poolFloor_one": "Right now Lovejoin's pool holds {{count}} box that isn't yours, under the {{floor}} it needs",
   "sess.skip.warn.poolFloor_other": "Right now Lovejoin's pool holds {{count}} boxes that aren't yours, under the {{floor}} it needs",

@@ -271,6 +271,7 @@
   "sess.skip.warn.deep",
   "sess.skip.warn.mixCannotPay",
   "sess.skip.warn.mixStopped",
+  "sess.skip.warn.noBox",
   "sess.skip.warn.noCollateral",
   "sess.skip.warn.poolFloor",
   "sess.skip.warn.poolFree",

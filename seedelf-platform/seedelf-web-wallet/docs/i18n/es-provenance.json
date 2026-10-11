@@ -1640,6 +1640,7 @@
   "sess.skip.warn.deep_other": "mtpe",
   "sess.skip.warn.mixCannotPay": "mtpe",
   "sess.skip.warn.mixStopped": "mtpe",
+  "sess.skip.warn.noBox": "mtpe",
   "sess.skip.warn.noCollateral": "mtpe",
   "sess.skip.warn.poolFloor_many": "mtpe",
   "sess.skip.warn.poolFloor_one": "mtpe",
