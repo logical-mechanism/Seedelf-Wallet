@@ -186,6 +186,35 @@ async fn account_routes() {
 }
 
 #[tokio::test]
+async fn credential_txs_pages_as_account_txs_does() {
+    // Public activity, by the account's payment keys (web wallet chunk 28): up to 75 a request.
+    let key = |i: u8| format!("{i:056x}");
+    let keys = |n: u8| json!({ "_payment_credentials": (0..n).map(key).collect::<Vec<_>>() });
+    let page = "/api/v1/credential_txs?order=block_height.desc,tx_hash.asc&offset=0&limit=20";
+    assert_eq!(post(page, keys(75)).await.0, OK);
+    assert_eq!(post(page, keys(76)).await.0, BAD);
+    assert_eq!(post(page, keys(0)).await.0, BAD);
+    let since = "/api/v1/credential_txs?order=block_height.desc,tx_hash.asc&limit=1000";
+    let after = json!({ "_payment_credentials": [CONTRACT], "_after_block_height": 14000000 });
+    assert_eq!(post(since, after.clone()).await.0, OK);
+    // A page is 20; "since" takes no offset and gives up to 1,000.
+    assert_eq!(post(since, keys(1)).await.0, BAD);
+    assert_eq!(post(page, after).await.0, BAD);
+    for body in [
+        json!({ "_payment_credentials": [CONTRACT, CONTRACT] }),
+        json!({ "_payment_credentials": ["zz"] }),
+        json!({ "_payment_credentials": [CONTRACT.to_uppercase()] }),
+        json!({ "_payment_credentials": [CONTRACT], "_extended": true }),
+        json!({ "_payment_credentials": [CONTRACT], "_after_block_height": -1 }),
+        json!({ "_stake_address": STAKE }),
+    ] {
+        assert_eq!(post(page, body.clone()).await.0, BAD, "{body}");
+    }
+    let unordered = "/api/v1/credential_txs?offset=0&limit=20";
+    assert_eq!(post(unordered, keys(1)).await.0, BAD);
+}
+
+#[tokio::test]
 async fn tx_info_takes_the_wallets_two_shapes() {
     let activity = json!({
         "_tx_hashes": [TX], "_inputs": true, "_metadata": true, "_assets": true,

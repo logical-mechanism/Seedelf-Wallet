@@ -1,5 +1,6 @@
 //! `account_addresses`, `account_info` and `account_txs`: a stake key's
-//! addresses, standing and transactions. About one user each, so never cached.
+//! addresses, standing and transactions; and `credential_txs`, an account's
+//! transactions by its payment keys. About one user each, so never cached.
 //!
 //! **A stake key's addresses come from `address.stake_address_id`,** which
 //! db-sync indexes. Koios gathers them from `tx_out.stake_address_id`, which
@@ -13,10 +14,12 @@ use axum::extract::{RawQuery, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::types::ToSql;
 
 use super::query::{NOT_ASKED, Query, natural};
+use super::utxos::{MAX_CREDENTIALS, list};
 use super::{array, body, distinct};
-use crate::ids::{drep_shown, stake_bytes};
+use crate::ids::{drep_shown, hex_bytes, stake_bytes};
 use crate::state::{ApiError, AppState, json};
 
 /// Stake addresses in one `account_addresses`: the wallet probes 20 at a time (`INDEX_PROBE`).
@@ -26,12 +29,13 @@ const MAX_STAKE_ADDRESSES: usize = 20;
 /// Each sums its whole unspent set, so no more than the wallet sends.
 const MAX_ACCOUNTS: usize = 1;
 
-/// The most outputs `account_txs` gathers for one stake key. Any key may be
-/// asked about, and one with 507,000 outputs took 2.3 s a page; no wallet
-/// comes near this many. Past it, a 503, and the wallet reads Koios.
+/// The most outputs `account_txs` gathers for one stake key, and
+/// `credential_txs` for its credentials together. Any may be asked about,
+/// and a key with 507,000 outputs took 2.3 s a page; no wallet comes near
+/// this many. Past it, a 503, and the wallet reads Koios.
 const MAX_OUTPUTS: i64 = 200_000;
 
-/// The most of an account's transactions one `account_txs` gives.
+/// The most of an account's transactions one `account_txs` or `credential_txs` gives.
 const MAX_TXS: i64 = 1000;
 
 #[derive(Deserialize)]
@@ -256,6 +260,13 @@ struct TxsBody {
     _after_block_height: Option<i64>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialTxsBody {
+    _payment_credentials: Vec<String>,
+    _after_block_height: Option<i64>,
+}
+
 #[derive(Serialize)]
 struct TxRow {
     tx_hash: String,
@@ -264,9 +275,44 @@ struct TxRow {
     block_time: i64,
 }
 
-/// Every transaction that made or spent an output at one of the stake key's
-/// addresses, in blocks from `$2` on (Koios's `_after_block_height` takes
-/// that block too), newest first, a page of them.
+/// Whose outputs a listing of transactions gathers: `$1` names them.
+#[derive(Clone, Copy)]
+enum Whose {
+    /// A stake key's (`$1::bytea`): at every address it's part of.
+    Stake,
+    /// Payment credentials' (`$1::bytea[]`): at every address with one of
+    /// them, whatever its staking part, as the wallet's balance counts them.
+    /// Gathered address by address, never all the addresses first: a busy
+    /// script's credential sits at millions of them, and `MAX_OUTPUTS`
+    /// outputs reach at most as many addresses.
+    Credentials,
+}
+
+impl Whose {
+    /// The `outs` CTE, with any it reads: `limit` outputs at most.
+    fn outs(self, limit: i64) -> String {
+        match self {
+            Whose::Stake => format!(
+                "addrs as materialized ( \
+                   select a.id from stake_address sa join address a on a.stake_address_id = sa.id \
+                   where sa.hash_raw = $1::bytea), \
+                 outs as materialized ( \
+                   select o.tx_id, o.consumed_by_tx_id from tx_out o \
+                   where o.address_id in (select id from addrs) limit {limit})"
+            ),
+            Whose::Credentials => format!(
+                "outs as materialized ( \
+                   select o.tx_id, o.consumed_by_tx_id from address a cross join lateral ( \
+                     select o.tx_id, o.consumed_by_tx_id from tx_out o where o.address_id = a.id offset 0) o \
+                   where a.payment_cred = any($1::bytea[]) limit {limit})"
+            ),
+        }
+    }
+}
+
+/// Every transaction that made or spent an output of `whose`, in blocks
+/// from `$2` on (Koios's `_after_block_height` takes that block too), newest
+/// first, a page of them.
 ///
 /// A transaction's id rises with its block, so the query never joins the
 /// whole history (2.3 s a page for 221,000 transactions, 0.5 s this way):
@@ -276,15 +322,10 @@ struct TxRow {
 ///   newest ids, widened to the whole of the oldest block they reach, so
 ///   that block's transactions sort by hash as Koios's do.
 ///
-/// The last column says whether the key's outputs passed [`MAX_OUTPUTS`].
-fn txs() -> String {
+/// The last column says whether the outputs passed [`MAX_OUTPUTS`].
+fn txs(whose: Whose) -> String {
     format!(
-        "with addrs as materialized ( \
-           select a.id from stake_address sa join address a on a.stake_address_id = sa.id \
-           where sa.hash_raw = $1::bytea), \
-         outs as materialized ( \
-           select o.tx_id, o.consumed_by_tx_id from tx_out o \
-           where o.address_id in (select id from addrs) limit {gather}), \
+        "with {outs}, \
          first as (select min(t.id) as id from tx t where t.block_id = ( \
            select b.id from block b where b.block_no >= $2::bigint and b.tx_count > 0 \
            order by b.block_no limit 1)), \
@@ -299,23 +340,32 @@ fn txs() -> String {
            extract(epoch from b.time)::bigint, (select count(*) from outs) > {max} as over \
          from wanted join tx t on t.id = wanted.id join block b on b.id = t.block_id \
          order by b.block_no desc, t.hash offset $3::bigint limit $4::bigint",
-        gather = MAX_OUTPUTS + 1,
+        outs = whose.outs(MAX_OUTPUTS + 1),
         max = MAX_OUTPUTS,
     )
 }
 
-/// Whether a stake key's outputs pass [`MAX_OUTPUTS`], for a page that came back empty.
-fn too_many() -> String {
+/// Whether the outputs of `whose` pass [`MAX_OUTPUTS`], counted from
+/// `tx_out`'s index alone, with no row read: 40 ms for a busy script's
+/// credential (Minswap V2's pools), against 4.9 s gathering its outputs to
+/// find out.
+fn too_many(whose: Whose) -> String {
+    let at = match whose {
+        Whose::Stake => {
+            "stake_address sa join address a on a.stake_address_id = sa.id \
+             join tx_out o on o.address_id = a.id where sa.hash_raw = $1::bytea"
+        }
+        Whose::Credentials => {
+            "address a join tx_out o on o.address_id = a.id where a.payment_cred = any($1::bytea[])"
+        }
+    };
     format!(
-        "select count(*) > {MAX_OUTPUTS} from ( \
-           select 1 from stake_address sa join address a on a.stake_address_id = sa.id \
-           join tx_out o on o.address_id = a.id where sa.hash_raw = $1::bytea \
-           limit {}) gathered",
+        "select count(*) > {MAX_OUTPUTS} from (select 1 from {at} limit {}) gathered",
         MAX_OUTPUTS + 1
     )
 }
 
-/// An account's transactions, newest first: a page of them by `offset` and
+/// A stake key's transactions, newest first: a page of them by `offset` and
 /// `limit`, or, with `_after_block_height`, every one from that block on (at most 1,000).
 pub async fn account_txs(
     State(state): State<Arc<AppState>>,
@@ -325,16 +375,58 @@ pub async fn account_txs(
 ) -> Result<Response, ApiError> {
     let request: TxsBody = body(&headers, &bytes)?;
     let key = stake_bytes(&request._stake_address).ok_or(NOT_ASKED)?;
-    let mut q = Query::parse(raw.as_deref())?;
+    listing(
+        &state,
+        raw.as_deref(),
+        Whose::Stake,
+        &key,
+        request._after_block_height,
+    )
+    .await
+}
+
+/// Payment credentials' transactions, newest first, paged as `account_txs`
+/// is: Public activity, read by the account's payment keys since web wallet
+/// chunk 28, so that it lists what the balance counts.
+pub async fn credential_txs(
+    State(state): State<Arc<AppState>>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Result<Response, ApiError> {
+    let request: CredentialTxsBody = body(&headers, &bytes)?;
+    let creds = list(&request._payment_credentials, MAX_CREDENTIALS, |c| {
+        hex_bytes(c, 28)
+    })?;
+    listing(
+        &state,
+        raw.as_deref(),
+        Whose::Credentials,
+        &creds,
+        request._after_block_height,
+    )
+    .await
+}
+
+/// A page of transactions of `whose` (`key`, the query's `$1`), as the
+/// wallet asks: `offset` and `limit` 20, or `_after_block_height` and 1,000.
+async fn listing(
+    state: &AppState,
+    raw: Option<&str>,
+    whose: Whose,
+    key: &(dyn ToSql + Sync),
+    after: Option<i64>,
+) -> Result<Response, ApiError> {
+    let mut q = Query::parse(raw)?;
     q.exactly("order", "block_height.desc,tx_hash.asc")?;
-    let (from, offset) = match request._after_block_height {
+    let (from, offset) = match after {
         Some(height) if height >= 0 => (height, 0),
         Some(_) => return Err(NOT_ASKED),
         None => (0, natural(&q.value("offset")?)?),
     };
     let limit = natural(&q.value("limit")?)?;
     q.end()?;
-    let wanted = if request._after_block_height.is_some() {
+    let wanted = if after.is_some() {
         MAX_TXS
     } else {
         // Activity's pages are 20.
@@ -345,22 +437,25 @@ pub async fn account_txs(
     }
     state.fresh_tip()?;
     let client = state.chain.public().await?;
+    // Too many to gather is refused before any is: past the cap, the
+    // gathered outputs may have lost the page's rows.
+    let over: bool = client
+        .query_one(&too_many(whose), &[key])
+        .await
+        .map_err(anyhow::Error::from)?
+        .try_get(0)
+        .map_err(anyhow::Error::from)?;
+    if over {
+        return Err(ApiError::Heavy);
+    }
     let rows = client
-        .query(&txs(), &[&key, &from, &offset, &limit])
+        .query(&txs(whose), &[key, &from, &offset, &limit])
         .await
         .map_err(anyhow::Error::from)?;
-    // Past the cap, the gathered outputs may have lost the page's rows, so
-    // an empty page is only the end once the count says so.
-    let over = match rows.first() {
-        Some(row) => row.try_get::<_, bool>(4).map_err(anyhow::Error::from)?,
-        None => client
-            .query_one(&too_many(), &[&key])
-            .await
-            .map_err(anyhow::Error::from)?
-            .try_get(0)
-            .map_err(anyhow::Error::from)?,
-    };
-    if over {
+    // Outputs made since the count can still take it past.
+    if let Some(row) = rows.first()
+        && row.try_get::<_, bool>(4).map_err(anyhow::Error::from)?
+    {
         return Err(ApiError::Heavy);
     }
     let rows = rows

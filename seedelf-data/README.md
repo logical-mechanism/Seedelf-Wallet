@@ -8,7 +8,7 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
-- **The public routes:** the other 20 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
+- **The public routes:** the other 21 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 - **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
 - **The deploy files and runbook,** [deploy/README.md](deploy/README.md): home's services through a WireGuard tunnel, and the API behind Caddy on a VPS.
 
@@ -71,6 +71,7 @@ cargo fmt --check
   - the contract's and mix box's `credential_utxos` equal the private index, each row's tokens and decimals included;
   - a page after any outpoint is the rest;
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
+  - an account's payment keys' `credential_txs` lists only transactions under them, and every one of its stake key's newest that is; its next page and its answer from a block carry on from it;
   - the pool list's pages make one sorted list;
   - an NFT's `asset_info` equals Koios's recorded answer.
 
@@ -165,7 +166,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `totals` | the newest epoch's supply | a block |
 | `account_addresses` | up to 20 stake keys' addresses, empty ones too | never |
 | `account_info` | one stake key's standing | never |
-| `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on; for a key with at most 200,000 outputs | never |
+| `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on; for a key with at most 200,000 outputs. The restore scan, and Public activity up to wallet 1.4.1 | never |
+| `credential_txs` | up to 75 payment credentials' transactions, whatever their addresses' staking part, paged as `account_txs` is; for at most 200,000 outputs in all. Public activity, by the account's payment keys (web wallet chunk 28) | never |
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
 | `pool_list` | the registered pools, 1,000 a page | an hour, within its epoch |
 | `pool_info` | up to 5 pools' details and live stake | 10 minutes, within its epoch |
@@ -176,7 +178,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |
 | `asset_info` | one token's CIP-25 and CIP-68 metadata | never |
 
-**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` at most 200,000 outputs. Past either, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios. No wallet comes near either number. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
+**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` and `credential_txs` at most 200,000 outputs. Past either, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios. No wallet comes near either number. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
 
 **Answers kept for a time are kept within their epoch,** since a pool's status, a DRep's activity and the live actions turn at an epoch's start. Not-found answers aren't kept: anyone can ask about made-up IDs. When the store is full, the answer due to expire soonest makes room.
 
@@ -233,7 +235,10 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **While db-sync is down** (two failed reads of its tip), every public route answers 503 at once, kept answers included.
 - A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
 
-**`account_txs` never joins a whole history.** A transaction's id rises with its block, so a page takes the newest ids it needs, widened to the whole of the oldest block they reach, and joins only those: 0.5 s a page for a key with 221,000 transactions, against 2.3 s before, and the same rows.
+**`account_txs` and `credential_txs` never join a whole history.** A transaction's id rises with its block, so a page takes the newest ids it needs, widened to the whole of the oldest block they reach, and joins only those: 0.5 s a page for a key with 221,000 transactions, against 2.3 s before, and the same rows.
+- **Too many outputs are refused before any is gathered,** by a count from `tx_out`'s index alone: 79 ms for Minswap V2's pool script, against 4.9 s gathering its outputs to find out.
+- **A credential's outputs are gathered address by address,** never all its addresses first: a busy script's credential sits at millions of them, and the cap reaches at most as many addresses as outputs.
+- **Checked against Koios (2026-10-11):** the same pages, row for row, for a wallet's key and for the contract's and mix box's credentials together, at offsets 0 and 20.
 
 **`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
 
