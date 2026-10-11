@@ -2013,6 +2013,40 @@ html:has(.screen__head--sticky) {
   margin-top: -2px;
 }
 
+/* Which server the wallet is using, under the Koios-only switch (Settings.tsx's ServerStatusLine): a light, then the
+   words, which say it all without the colour. */
+.server-status {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+}
+
+.server-status__light {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  /* Centred on the words' first line (lh: Chrome 109, under the manifest's 116). */
+  margin-top: calc((1lh - 8px) / 2);
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.server-status--up .server-status__light {
+  background: var(--strength-good);
+  box-shadow: 0 0 6px var(--strength-good);
+}
+
+.server-status--partly .server-status__light {
+  background: var(--warn);
+}
+
+.server-status--down .server-status__light {
+  background: var(--danger-text);
+}
+
 .menu-link {
   display: inline-flex;
   align-items: center;

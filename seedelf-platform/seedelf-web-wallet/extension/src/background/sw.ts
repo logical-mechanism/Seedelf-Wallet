@@ -259,6 +259,7 @@ function getContext(): Promise<Worker> {
       version: __VERSION__,
       networks,
       networkChoice,
+      dataParts,
     };
     return worker;
   });

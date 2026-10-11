@@ -55,9 +55,14 @@ test.describe("the data layer", () => {
     const only = page.getByRole("switch", { name: "Read Cardano through Koios only" });
     await expect(only).toHaveAttribute("aria-checked", "false");
     await expect(page.locator("#koios-only-note")).toContainText("Seedelf Wallet's own server answers first");
+    // The status line under it: the public part answered 503, so it's on Koios for now; the private index isn't.
+    const line = page.getByTestId("server-status");
+    await expect(line).toContainText("Using Koios for your public account until");
+    await expect(line).toHaveClass(/server-status--partly/);
     await only.click();
     await expect(only).toHaveAttribute("aria-checked", "true");
     await expect(page.locator("#koios-only-note")).toContainText("Everything goes through Koios");
+    await expect(line).toHaveText("Using Koios only.");
 
     // Refreshed, nothing goes to the data layer: the contract is Koios's scan again.
     const before = data.calls.length;

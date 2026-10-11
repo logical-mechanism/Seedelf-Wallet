@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import {
   availableLanguages,
   currentLanguage,
+  dateLocale,
   type I18nKey,
   joinList,
   joinSentences,
@@ -36,7 +37,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { AtStake, DappSite, KnownAccount, Status } from "../../shared/rpc";
+import type { AtStake, DappSite, DataHolds, DataPart, KnownAccount, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -1084,12 +1085,90 @@ function KoiosOnly() {
           disabled={!prefs}
         />
       </div>
+      {prefs && <ServerStatus koiosOnly={prefs.koiosOnly} />}
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
     </>
+  );
+}
+
+/** How often the status line asks the worker again: its own record, so nothing leaves the device. */
+const HOLDS_EVERY_MS = 10_000;
+
+/** The data layer's parts in the order the line names them, each by what the user knows it as. */
+const PART_NAMES: ReadonlyArray<[DataPart, I18nKey]> = [
+  ["public", "settings.server.part.public"],
+  ["private", "settings.server.part.private"],
+  ["submit", "settings.server.part.submit"],
+];
+
+/**
+ * Which server the wallet is using, under the Koios-only switch: there was no
+ * telling the data layer from Koios (the owner, 2026-10-11). It reads the
+ * worker's record of the parts held on Koios (data-layer.ts `DataParts`)
+ * every 10 s and asks no server, so it says where the next request goes, not
+ * whether the server is up this moment: a part goes to Koios as soon as a
+ * request to the server fails.
+ */
+function ServerStatus({ koiosOnly }: { koiosOnly: boolean }) {
+  const [holds, setHolds] = useState<DataHolds>();
+  useEffect(() => {
+    if (koiosOnly) return;
+    let live = true;
+    const ask = () =>
+      void call("data-layer", {})
+        .then((held) => live && setHolds(held))
+        .catch(() => undefined);
+    ask();
+    const timer = setInterval(ask, HOLDS_EVERY_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [koiosOnly]);
+  return <ServerStatusLine koiosOnly={koiosOnly} holds={holds} />;
+}
+
+/**
+ * The line itself, a light and its words: green, Seedelf Wallet's server for
+ * everything; amber, Koios for some parts until a time; red, Koios for all of
+ * them; grey, Koios by the switch. Nothing until the worker has answered.
+ */
+export function ServerStatusLine({ koiosOnly, holds }: { koiosOnly: boolean; holds?: DataHolds }) {
+  let tone: "up" | "partly" | "down" | "off";
+  let words: string;
+  if (koiosOnly) {
+    tone = "off";
+    words = t("settings.server.koiosOnly");
+  } else {
+    if (!holds) return null;
+    const held = PART_NAMES.filter(([part]) => holds[part] !== undefined);
+    // The soonest a held part is tried on the server again: the line changes then.
+    const time = () =>
+      new Date(Math.min(...held.map(([part]) => holds[part]!))).toLocaleTimeString(dateLocale(), {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    if (held.length === 0) {
+      tone = "up";
+      words = t("settings.server.up");
+    } else if (held.length === PART_NAMES.length) {
+      tone = "down";
+      words = t("settings.server.down", { time: time() });
+    } else {
+      tone = "partly";
+      const parts = held.map(([, name]) => t(name)).join(t("histories.list.and"));
+      words = t("settings.server.partly", { parts, time: time() });
+    }
+  }
+  return (
+    <p className={`server-status server-status--${tone}`} role="status" data-testid="server-status">
+      <span className="server-status__light" aria-hidden="true" />
+      <span>{words}</span>
+    </p>
   );
 }
 

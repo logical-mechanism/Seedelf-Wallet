@@ -177,6 +177,20 @@ describe("the data layer's client", () => {
     s.data.delete("tip");
     expect(await again("mainnet").tipSlot()).toBe(2);
   });
+
+  it("says which parts are on Koios, and until when, for Settings' status line", async () => {
+    const s = servers();
+    s.data.set("tip", "unreachable");
+    const { make, clock, session, deps } = client(s);
+    expect(await deps.parts.held()).toEqual({});
+    await make("mainnet").tipSlot();
+    expect(await deps.parts.held()).toEqual({ public: clock.now + DOWN_MS });
+    // A worker Chrome restarted says the same.
+    expect(await new DataParts(session, () => clock.now).held()).toEqual({ public: clock.now + DOWN_MS });
+    // Once the hold is over, the next request goes to the data layer, and the line says so.
+    clock.now += DOWN_MS;
+    expect(await deps.parts.held()).toEqual({});
+  });
 });
 
 describe("a submit through the data layer", () => {

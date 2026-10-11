@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import type { DappSite, SessionView, Status } from "../src/shared/rpc";
+import type { DappSite, DataHolds, SessionView, Status } from "../src/shared/rpc";
 import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadge";
 import { PreferencesContext } from "../src/ui/preferences";
 
@@ -50,6 +50,42 @@ describe("Settings' network switch", () => {
 
   it("says before moving to preprod to test with a phrase not used on mainnet (privacy review §6)", () => {
     expect(Settings.MOVE_TO.preprod).toContain("Anyone can link one phrase's wallets on both networks, so test with another phrase.");
+  });
+});
+
+describe("Settings' server status line", () => {
+  const line = (koiosOnly: boolean, holds?: DataHolds) =>
+    renderToStaticMarkup(createElement(Settings.ServerStatusLine, { koiosOnly, holds }));
+  const at = new Date(2026, 9, 11, 17, 42).getTime();
+
+  it("is green on Seedelf's data layer, with nothing held on Koios", () => {
+    const html = line(false, {});
+    expect(html).toContain("server-status--up");
+    expect(text(html).trim()).toBe("Using Seedelf's data layer.");
+  });
+
+  it("is red with every part on Koios, and says until when", () => {
+    const html = line(false, { public: at, private: at + 60_000, submit: at });
+    expect(html).toContain("server-status--down");
+    expect(text(html).trim()).toBe("Using Koios until 17:42: Seedelf Wallet's own server didn't answer.");
+  });
+
+  it("is amber with some on Koios, and names them", () => {
+    const html = line(false, { private: at, submit: at });
+    expect(html).toContain("server-status--partly");
+    expect(text(html).trim()).toBe(
+      "Using Koios for your private balance and sending until 17:42: Seedelf Wallet's own server didn't answer. The rest uses the server.",
+    );
+  });
+
+  it("is grey with the Koios-only switch on, whatever was held", () => {
+    const html = line(true, { public: at });
+    expect(html).toContain("server-status--off");
+    expect(text(html).trim()).toBe("Using Koios only.");
+  });
+
+  it("says nothing before the worker has answered", () => {
+    expect(line(false)).toBe("");
   });
 });
 
