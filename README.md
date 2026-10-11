@@ -259,5 +259,3 @@ Users can interact with the wallet protocol via the [seedelf-platform](./seedelf
 ## Contact
 
 For questions, suggestions, or concerns, please get in touch with support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
-
-Nobody from Seedelf will message you first, and no one will ever ask for your recovery phrase.
