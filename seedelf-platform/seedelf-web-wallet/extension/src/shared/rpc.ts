@@ -79,8 +79,12 @@ export interface ActivityEntry {
   txHash: string;
   /** When: the block's time, or when this wallet sent it (ms since the epoch). */
   at: number;
-  /** "received" and "sent" are anyone's; the rest are this wallet's own flows. */
-  kind: "received" | "sent" | PendingTx["kind"];
+  /**
+   * "received" and "sent" are anyone's; the rest are this wallet's own flows. A transaction at Lovejoin's mix box
+   * that the public account paid is its deposit ("lovejoin-deposit") or one of its mixes ("lovejoin-round"), read
+   * from the transaction alone (background/activity.ts describe).
+   */
+  kind: "received" | "sent" | "lovejoin-deposit" | "lovejoin-round" | PendingTx["kind"];
   /** Into the balance, out of it, or neither (a seedelf's locked ADA). */
   direction: "in" | "out" | "none";
   /**

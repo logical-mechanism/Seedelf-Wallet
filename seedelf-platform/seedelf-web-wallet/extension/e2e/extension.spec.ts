@@ -1232,14 +1232,14 @@ test("activity: the private history from the device, the public account's from K
   await page.getByRole("button", { name: "Activity" }).click();
   await expect(page.getByRole("heading", { name: "Public activity" })).toBeVisible();
   await expect(list.getByRole("listitem")).toHaveCount(20);
-  expect(koios.calls.slice(before)).toEqual(["account_txs", "tx_info"]);
+  expect(koios.calls.slice(before)).toEqual(["credential_txs", "tx_info"]);
   await snap(page, "activity-cardano");
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(list.getByRole("listitem")).toHaveCount(40);
-  expect(koios.calls.slice(before)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info"]);
+  expect(koios.calls.slice(before)).toEqual(["credential_txs", "tx_info", "credential_txs", "tx_info"]);
   // Refresh asks only for what's newer: nothing, so no tx_info.
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect.poll(() => koios.calls.slice(before)).toEqual(["account_txs", "tx_info", "account_txs", "tx_info", "account_txs"]);
+  await expect.poll(() => koios.calls.slice(before)).toEqual(["credential_txs", "tx_info", "credential_txs", "tx_info", "credential_txs"]);
   await expect(page.getByTestId("updated")).toHaveText("Updated just now");
   await expect(list.getByRole("listitem")).toHaveCount(40);
 

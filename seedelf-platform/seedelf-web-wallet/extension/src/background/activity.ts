@@ -7,16 +7,22 @@
 // and what arrived (new UTxOs of ours the contract scan found), kept sealed on
 // the device (private-store.ts). It starts when this wallet first saw each UTxO.
 //
-// Cardano account: Koios knows the account already. `account_txs`, newest
-// first, and one batched `tx_info` per page of 20, only while Activity is
-// open. The pages are kept for the session, so opening it again asks only
-// for what's newer: one request. The account's payment keys come from the
-// last balance reading, and what's the account's is matched by them, as the
-// balance counts it: `account_txs` also lists what anyone pays to their own
-// key paired with our stake key, which isn't ours and is left out.
+// Cardano account: Koios knows the account already. `credential_txs` by the
+// account's payment keys, newest first, and one batched `tx_info` per page of
+// 20, only while Activity is open. The keys are the ones the last balance
+// reading asked about (`credential_utxos`), so what's listed is what the
+// balance counts, whatever an address's staking part: an enterprise address
+// of the account, or its key under someone else's stake key, too, which
+// `account_txs` by the stake key never listed (O7). No server learns anything
+// new: it had the same keys from the balance. More than 75 keys go in groups,
+// one request a group (pages). The pages are kept for the session, so opening
+// it again asks only for what's newer: one request a group. What's the
+// account's in a transaction is matched by its keys, as the balance counts it.
 // `tx_info` also says what each transaction did with the stake key (its
 // certificates and withdrawals) and carries its note (CIP-20's message), at
-// no extra request; a pool's ticker comes only from what's on the device.
+// no extra request; a pool's ticker comes only from what's on the device. A
+// transaction at Lovejoin's mix box is named for what it did there, read from
+// the transaction alone (describe).
 //
 // Each entry keeps the tokens that moved, with signed quantities, for its
 // details and the CSV export (older Seedelf entries have only a count).
@@ -27,7 +33,7 @@
 // keeps different ones apart. It's read from the device alone.
 
 import { t } from "../i18n";
-import type { NetworkName } from "../networks";
+import { NETWORKS, type NetworkName } from "../networks";
 import {
   boxFrom,
   isHistoryClass,
@@ -49,7 +55,7 @@ import { seedelfTokenOf } from "./chain";
 import { SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
 import { ownDrepId } from "./governance";
 import { pendingEntries, rewardAccountHex } from "./incoming";
-import type { Koios, KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "./koios";
+import { CREDENTIALS_PER_REQUEST, type Koios, type KoiosAccountTx, type KoiosTxInfo, type KoiosTxOut, type KoiosUtxo } from "./koios";
 import { pendingKey } from "./pending";
 import type { PrivateStore } from "./private-store";
 import { heldSent } from "./sent-txs";
@@ -126,9 +132,39 @@ interface AccountPages {
   entries: ActivityEntry[];
   /** The newest block read. */
   top: number;
-  /** How many of the account's transactions, newest first, have been read. */
-  offset: number;
+  /** The payment keys they were read by: a reading that finds others starts the pages again. */
+  keys: string[];
+  /** How many of each group of keys' transactions (`groups`), newest first, have been read. */
+  offsets: number[];
   more: boolean;
+}
+
+/** The account's keys in groups, one `credential_txs` each: Koios takes no more in a request. */
+const groups = (keys: string[]) => {
+  const out: string[][] = [];
+  for (let i = 0; i < keys.length; i += CREDENTIALS_PER_REQUEST) out.push(keys.slice(i, i + CREDENTIALS_PER_REQUEST));
+  return out;
+};
+
+/** Koios's order for an account's transactions: newest block first, then by hash. */
+const koiosOrder = (a: KoiosAccountTx, b: KoiosAccountTx) =>
+  b.block_height - a.block_height || (a.tx_hash < b.tx_hash ? -1 : a.tx_hash > b.tx_hash ? 1 : 0);
+
+/**
+ * A page from each group's page at its offset (`lists`, each in Koios's order): the newest PAGE of them not listed
+ * yet, a transaction under keys in two groups once, and how many of each group's rows that reads (`read`), so the
+ * group's next page starts after them and none is skipped. Rows past the page's last stay unread, to be asked for
+ * again. `more` while a group gave a whole page or has rows left. With one group, its page as it came.
+ */
+export function takePage(
+  lists: KoiosAccountTx[][],
+  listed: ReadonlySet<string>,
+): { rows: KoiosAccountTx[]; read: number[]; more: boolean } {
+  const fresh = [...new Map(lists.flat().filter((r) => !listed.has(r.tx_hash)).map((r) => [r.tx_hash, r])).values()].sort(koiosOrder);
+  const rows = fresh.slice(0, PAGE);
+  const last = rows.length === PAGE ? rows[PAGE - 1] : undefined;
+  const read = lists.map((list) => (last ? list.filter((r) => koiosOrder(r, last) <= 0).length : list.length));
+  return { rows, read, more: lists.some((list, i) => list.length === PAGE || read[i]! < list.length) };
 }
 
 /** What the Seedelf history notes when it's sent: flows that touch the Seedelf balance or a seedelf. */
@@ -399,8 +435,8 @@ export class ActivityService {
           await session.get<AccountPages>(key),
         ] as const,
     );
-    if (!account) throw new Error(t("worker.activity.readFirst"));
-    const { stake } = account;
+    if (!account?.keys?.length) throw new Error(t("worker.activity.readFirst"));
+    const { stake, keys } = account;
     const koios = this.deps.koios(network);
     const ours = accountMatcher(account);
     // What the private side noted as received says nothing of what the account did in it: after a restore,
@@ -408,27 +444,41 @@ export class ActivityService {
     const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
     // The account's DRep, from its key: its certificates and votes are named for what they did.
     const drep = await ownDrepId(this.deps).catch(() => undefined);
-    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake, drep));
+    const mixBox = NETWORKS[network].lovejoin?.mixBox;
+    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake, drep, mixBox));
+    const sets = groups(keys);
+    // Read by these keys, or begun again: a group's offset says nothing of another set's.
+    const from = kept && kept.offsets?.length === sets.length && kept.keys?.join() === keys.join() ? kept : undefined;
 
     let pages: AccountPages;
-    if (!kept) {
-      const rows = await koios.accountTxs(stake, { offset: 0, limit: PAGE });
+    if (!from || more) {
+      // The first page, or the next: each group's page at its offset, the newest of them taken.
+      const offsets = from?.offsets ?? sets.map(() => 0);
+      const lists: KoiosAccountTx[][] = [];
+      for (const [i, set] of sets.entries()) lists.push(await koios.credentialTxs(set, { offset: offsets[i], limit: PAGE }));
+      const listed = new Set(from?.entries.map((e) => e.txHash));
+      const page = takePage(lists, listed);
       // tx_info doesn't answer in the order asked: every page is sorted newest first.
-      const entries = merge([], await read(await koios.txInfo(rows.map((r) => r.tx_hash))));
-      pages = { entries, top: Math.max(0, ...rows.map((r) => r.block_height)), offset: rows.length, more: rows.length === PAGE };
-    } else if (more) {
-      const rows = await koios.accountTxs(stake, { offset: kept.offset, limit: PAGE });
-      const entries = await read(await koios.txInfo(rows.map((r) => r.tx_hash)));
-      pages = { ...kept, entries: merge(kept.entries, entries), offset: kept.offset + rows.length, more: rows.length === PAGE };
+      const entries = await read(await koios.txInfo(page.rows.map((r) => r.tx_hash)));
+      pages = {
+        entries: merge(from?.entries ?? [], entries),
+        top: Math.max(from?.top ?? 0, ...page.rows.map((r) => r.block_height)),
+        keys,
+        offsets: offsets.map((o, i) => o + page.read[i]!),
+        more: page.more,
+      };
     } else {
-      const rows = await koios.accountTxs(stake, { after: kept.top });
-      const fresh = rows.filter((r) => !kept.entries.some((e) => e.txHash === r.tx_hash));
+      // What's newer: each group's from the newest block read, which shifts each group's rows read down by its own.
+      const lists: KoiosAccountTx[][] = [];
+      for (const set of sets) lists.push(await koios.credentialTxs(set, { after: from.top }));
+      const listed = new Set(from.entries.map((e) => e.txHash));
+      const fresh = [...new Map(lists.flat().filter((r) => !listed.has(r.tx_hash)).map((r) => [r.tx_hash, r])).values()];
       const entries = await read(await txInfoPaged(koios, fresh.map((r) => r.tx_hash)));
       pages = {
-        ...kept,
-        entries: merge(kept.entries, entries),
-        top: Math.max(kept.top, ...rows.map((r) => r.block_height)),
-        offset: kept.offset + fresh.length,
+        ...from,
+        entries: merge(from.entries, entries),
+        top: Math.max(from.top, ...fresh.map((r) => r.block_height)),
+        offsets: from.offsets.map((o, i) => o + lists[i]!.filter((r) => !listed.has(r.tx_hash)).length),
       };
     }
     // Not kept once the user has switched account while Koios answered: they'd be listed as the new account's.
@@ -647,6 +697,13 @@ const DREP_KIND = {
  * "Sent", with the rewards in its `staking`. A transaction with nothing of
  * the account's in it (someone paying their own key under our stake key) is
  * left out: it isn't the account's activity, and its note isn't to us.
+ *
+ * One at Lovejoin's mix box (`mixBox`, its script hash) is named for what it
+ * did there, from the transaction alone, since a chain's record goes about
+ * an hour after its mix ends and a restore has none (O7): paid by the account,
+ * boxes made and none spent is its deposit (or a seed), and boxes spent and
+ * made one of its mixes, which pays the account its change back, so it's the
+ * fee alone; a box spent into the account and none made is a box back.
  */
 export function describe(
   txs: KoiosTxInfo[],
@@ -654,7 +711,9 @@ export function describe(
   own: ReadonlyMap<string, ActivityEntry>,
   stake?: string,
   drep?: string,
+  mixBox?: string,
 ): ActivityEntry[] {
+  const atBox = (o: KoiosTxOut) => !!mixBox && (o as TxOut).payment_addr.cred === mixBox;
   return txs.flatMap((tx): ActivityEntry[] => {
     let net = 0n;
     const assets = new Map<string, bigint>();
@@ -676,8 +735,13 @@ export function describe(
     const direction = change > 0n ? "in" : change < 0n ? "out" : "none";
     if (!spent && !tx.outputs.some(ours) && !staking && !mine) return [];
     const paysOthers = tx.outputs.some((o) => !ours(o));
+    const [boxIn, boxOut] = [tx.inputs.some(atBox), tx.outputs.some(atBox)];
+    const lovejoin: ActivityEntry["kind"] | undefined =
+      spent && boxOut ? (boxIn ? "lovejoin-round" : "lovejoin-deposit") : boxIn && !boxOut && direction === "in" ? "lovejoin-withdraw" : undefined;
     const kind: ActivityEntry["kind"] = mine
       ? mine.kind
+      : lovejoin
+        ? lovejoin
       : staking?.drepAction
         ? DREP_KIND[staking.drepAction]
         : staking?.stopped

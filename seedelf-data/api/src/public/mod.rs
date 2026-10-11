@@ -55,6 +55,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/account_info", post(account::account_info))
         .route("/api/v1/account_txs", post(account::account_txs))
+        .route("/api/v1/credential_txs", post(account::credential_txs))
         .route("/api/v1/tx_info", post(tx::tx_info))
         .route("/api/v1/pool_list", get(pools::pool_list))
         .route("/api/v1/pool_info", post(pools::pool_info))

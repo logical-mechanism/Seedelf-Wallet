@@ -12,6 +12,7 @@ use axum::http::{Request, StatusCode, header};
 use seedelf_data_api::chain::Chain;
 use seedelf_data_api::constants::{CONTRACT_HASH, MIXBOX_HASH, bytes};
 use seedelf_data_api::decimals::Decimals;
+use seedelf_data_api::ids::address_bytes;
 use seedelf_data_api::state::AppState;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -307,6 +308,135 @@ async fn an_accounts_addresses_hold_its_outputs() {
             "{} touches none of the account's addresses",
             tx["tx_hash"]
         );
+    }
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn an_accounts_payment_keys_list_every_transaction_under_them() {
+    let (app, _) = app().await;
+    let stake = "stake1uxkjkwuygxqf24wacumm8ph2nlhp9e0ahv37fshdr060cyc36wvr9";
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    // Its payment keys, from its addresses: a Shelley header whose type is even has a key's payment part.
+    let rows = post(
+        &app,
+        "/api/v1/account_addresses",
+        json!({ "_stake_addresses": [stake], "_empty": true }),
+    )
+    .await;
+    let keys: BTreeSet<String> = rows[0]["addresses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| address_bytes(a.as_str().unwrap()))
+        .filter(|b| (b[0] >> 4) % 2 == 0)
+        .map(|b| hex(&b[1..29]))
+        .take(75)
+        .collect();
+    assert!(!keys.is_empty());
+    let creds = json!({ "_payment_credentials": keys.iter().collect::<Vec<_>>() });
+    let order = "order=block_height.desc,tx_hash.asc";
+    let page = |offset: u32| format!("/api/v1/credential_txs?{order}&offset={offset}&limit=20");
+    let first = post(&app, &page(0), creds.clone()).await;
+    let first = first.as_array().unwrap();
+    assert_eq!(first.len(), 20);
+    let at = |t: &Value| {
+        (
+            -t["block_height"].as_i64().unwrap(),
+            t["tx_hash"].as_str().unwrap().to_string(),
+        )
+    };
+    let hashes = |rows: &[Value]| {
+        rows.iter()
+            .map(|t| t["tx_hash"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        first.windows(2).all(|w| at(&w[0]) < at(&w[1])),
+        "in Koios's order"
+    );
+
+    // What each spent and paid, by payment credential.
+    let spends = |hashes: Vec<String>| {
+        json!({
+            "_tx_hashes": hashes, "_inputs": true, "_metadata": false, "_assets": false,
+            "_withdrawals": false, "_certs": false, "_scripts": false, "_bytecode": false,
+        })
+    };
+    let touches = |tx: &Value| {
+        tx["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(tx["outputs"].as_array().unwrap())
+            .any(|o| {
+                o["payment_addr"]["cred"]
+                    .as_str()
+                    .is_some_and(|c| keys.contains(c))
+            })
+    };
+    // Every one listed is under one of the keys.
+    let infos = post(&app, "/api/v1/tx_info", spends(hashes(first))).await;
+    for tx in infos.as_array().unwrap() {
+        assert!(touches(tx), "{} is under none of the keys", tx["tx_hash"]);
+    }
+    // And every one of the stake key's newest that's under one of them, as new as the page's last, is on it.
+    let by_stake = post(
+        &app,
+        &format!("/api/v1/account_txs?{order}&offset=0&limit=20"),
+        json!({ "_stake_address": stake }),
+    )
+    .await;
+    let last = at(first.last().unwrap());
+    let newer: Vec<String> = by_stake
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| at(t) <= last)
+        .map(|t| t["tx_hash"].as_str().unwrap().to_string())
+        .collect();
+    let listed: HashSet<String> = hashes(first).into_iter().collect();
+    if !newer.is_empty() {
+        for tx in post(&app, "/api/v1/tx_info", spends(newer))
+            .await
+            .as_array()
+            .unwrap()
+        {
+            if touches(tx) {
+                assert!(
+                    listed.contains(tx["tx_hash"].as_str().unwrap()),
+                    "{} is missing",
+                    tx["tx_hash"]
+                );
+            }
+        }
+    }
+    // The next page carries on after the first, and "since" a block gives that block on.
+    let second = post(&app, &page(20), creds.clone()).await;
+    let second = second.as_array().unwrap();
+    assert!(
+        second
+            .iter()
+            .all(|t| at(t) > last && !listed.contains(t["tx_hash"].as_str().unwrap()))
+    );
+    let from = first[5]["block_height"].as_i64().unwrap();
+    let mut after = creds.clone();
+    after["_after_block_height"] = json!(from);
+    let since = post(
+        &app,
+        &format!("/api/v1/credential_txs?{order}&limit=1000"),
+        after,
+    )
+    .await;
+    let since = since.as_array().unwrap();
+    assert!(
+        since
+            .iter()
+            .all(|t| t["block_height"].as_i64().unwrap() >= from)
+    );
+    let since: HashSet<String> = hashes(since).into_iter().collect();
+    for t in &first[..=5] {
+        assert!(since.contains(t["tx_hash"].as_str().unwrap()));
     }
 }
 

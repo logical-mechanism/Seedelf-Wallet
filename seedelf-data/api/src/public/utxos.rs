@@ -24,8 +24,8 @@ use crate::state::{ApiError, AppState, json};
 /// Rows in a page, as the wallet asks for them.
 const PAGE: i64 = 1000;
 
-/// Payment credentials in one `credential_utxos` (`koios.ts`'s `CREDENTIALS_PER_REQUEST`).
-const MAX_CREDENTIALS: usize = 75;
+/// Payment credentials in one `credential_utxos` or `credential_txs` (`koios.ts`'s `CREDENTIALS_PER_REQUEST`).
+pub(super) const MAX_CREDENTIALS: usize = 75;
 
 /// Addresses in one `address_utxos`: the order addresses a swap's fills left something at.
 const MAX_ADDRESSES: usize = 20;
@@ -302,7 +302,7 @@ struct DatumsBody {
 }
 
 /// A list of 1 to `max`, each read by `read`, none twice.
-fn list<T>(
+pub(super) fn list<T>(
     items: &[String],
     max: usize,
     read: impl Fn(&str) -> Option<T>,
