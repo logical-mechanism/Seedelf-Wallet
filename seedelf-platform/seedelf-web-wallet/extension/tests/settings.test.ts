@@ -58,10 +58,10 @@ describe("Settings' server status line", () => {
     renderToStaticMarkup(createElement(Settings.ServerStatusLine, { koiosOnly, holds }));
   const at = new Date(2026, 9, 11, 17, 42).getTime();
 
-  it("is green on Seedelf's Data Layer, with nothing held on Koios", () => {
+  it("is green on Seedelf's data layer, with nothing held on Koios", () => {
     const html = line(false, {});
     expect(html).toContain("server-status--up");
-    expect(text(html).trim()).toBe("Using Seedelf's Data Layer");
+    expect(text(html).trim()).toBe("Using Seedelf's data layer.");
   });
 
   it("is red with every part on Koios, and says until when", () => {

@@ -1684,7 +1684,7 @@
   "settings.server.part.public": "your public account",
   "settings.server.part.submit": "sending",
   "settings.server.partly": "Using Koios for {{parts}} until {{time}}: Seedelf Wallet's own server didn't answer. The rest uses the server.",
-  "settings.server.up": "Using Seedelf's Data Layer",
+  "settings.server.up": "Using Seedelf's data layer.",
   "settings.remove.anyway": "Remove it anyway, leaving that behind",
   "settings.remove.note": "This deletes the wallet from this browser. Your recovery phrase brings back your private balance, Lovejoin boxes and accounts up to the first unused one, not yet a private session's money.",
   "settings.remove.removing": "Removing…",
