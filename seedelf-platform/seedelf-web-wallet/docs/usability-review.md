@@ -1055,7 +1055,7 @@ What was done with each finding, on `web-wallet/style-flow-3` after the review. 
 | SE-3 | Fixed | The Sites and Lovejoin rows say what their On means; the rewards setting says why to turn it off. |
 | SE-4 | Partly | "Show recovery phrase" is a link, and "one-time accounts" is plain words. No link to the dApps page from there. |
 | PA-1 | Fixed | **Add Account N** once the next is found unused; your own account number is behind a toggle, with no placeholder. |
-| PA-2, PA-3 | Left | Where the picker sits is a layout call (HM-7); Public accounts' paragraphs are privacy notes. |
+| PA-2, PA-3 | Left | Where the picker sits is a layout call (HM-7); Public accounts' paragraphs are privacy notes. *Since: the picker is Home's Public heading (chunk 23).* |
 | SE-1 | Left | Settings as an index *(open call)*. |
 | CW-8 | Fixed | Sites' copy drops "CIP-30"; Collateral leads with its status and purpose. A session's 5 ₳ is "Kept aside for contracts" in every review. |
 
@@ -1065,7 +1065,7 @@ What was done with each finding, on `web-wallet/style-flow-3` after the review. 
 |---|---|---|
 | GS-1 | Fixed | Create has its own reason, in Get started's order. |
 | GS-2 | Fixed | With neither side able to pay, Create's Review is disabled with "Fund your public account first", and the public account is chosen unless only the private balance can pay. |
-| GS-3 | Left | Opening on Public *(open call)*. |
+| GS-3 | Left | Opening on Public *(open call)*. *Since: the owner kept Home opening on Private (5 October 2026, the blind test's Left for the owner).* |
 | GS-4 | Partly | Get started's second step says what a Seedelf is and who can pay one, and the ⓘ no longer says "Anyone can pay it". The onboarding intro needs the closing screen. |
 | GS-5 | Fixed | Back from the public address returns to the screen that offered it (private Receive, Create, Staking). |
 | RX-1 | Fixed | Private Receive's first line: "Only someone using Seedelf Wallet can pay this. Anyone else needs your public address." |
@@ -1094,7 +1094,7 @@ What was done with each finding, on `web-wallet/style-flow-3` after the review. 
 |---|---|---|
 | PY-1 | Fixed | A refusal's foot stays until the new review is in, saying "Building a new review…", and the new review says it was updated. |
 | PY-2 | Left | Renaming Make public *(open call)*. |
-| PY-3 | Left | Max on private Send needs a core builder that pays one Seedelf everything (like `sweep_from`), then WebAssembly and the form's Max. |
+| PY-3 | Left | Max on private Send needs a core builder that pays one Seedelf everything (like `sweep_from`), then WebAssembly and the form's Max. *Since: built (`transfer_most`).* |
 | PY-4 | Partly | The Amount row says "raised from 0.5 ₳". Saying the minimum on the form needs a worker request. |
 | PY-5 | Fixed | Totals and Make private's button count the tokens; an own-address warning names its recipient. |
 | PY-6 | Fixed | "Staking rewards moved into your balance", with a line on the setting. |
@@ -1140,7 +1140,7 @@ What was done with each finding, on `web-wallet/style-flow-3` after the review. 
 | DX-3 | Partly | Slippage on the review, the swap's cost in rows that add up, and the Lovejoin switch says when it can't apply. Not the three-row summary. |
 | DX-4 | Fixed | "Slippage: 1%" on the form, amber from 5%, no placeholder that looks set, and Max says what stays aside. |
 | DX-5 | Fixed | Stop goes once the order is filled or refunded; a finished swap says what was received; a turned-away funding says why. |
-| DX-6, DX-7, DX-8 | Left | Swap on Home *(open call)*; a session's number is its account's index, which never repeats. |
+| DX-6, DX-7, DX-8 | Left | Swap on Home *(open call)*; a session's number is its account's index, which never repeats. *Since: Swap stays behind dApps (the owner, 5 October 2026); DX-8's unchecked quote is an open question in post-release-roadmap.md.* |
 | LJ-1 | Partly | The pool's state shows before Review, which is disabled with the reason. A one-tap shallower mix needs a depth per mix (LJ-4). |
 | LJ-2 | Fixed | "Back … while Seedelf Wallet is unlocked", on the page and every review. |
 | LJ-3 | Fixed | One cost figure everywhere (the 0.95 ₳ estimate; Settings showed the measured 0.877 ₳), and the stepper stops at what the balance pays for. |
@@ -1166,7 +1166,7 @@ A cross-area review of the merged changes found, and the round fixed:
 
 ### Left for the owner
 
-- The open calls this review marks, unchanged: renaming Make public, opening a new wallet on Public, Swap on Home, UTxOs behind Advanced, two decimals, a password on the wallet's own sends, and L-1 with C2.
+- The open calls this review marks, unchanged: renaming Make public, opening a new wallet on Public, Swap on Home, UTxOs behind Advanced, two decimals, a password on the wallet's own sends, and L-1 with C2. *Since: the owner kept Home opening on Private and Swap behind dApps (5 October 2026).*
 - **Stop staking and Retire are red now** (ST-3), against round one's plain row.
 - **The governance text link** reaches Blockfrost's gateway from a tab (GV-2), a new use of a host the wallet already names; the privacy policy says so, dated as its *Changes* need.
 - **Settings' Lovejoin cost** is the estimate the page uses now (LJ-3), not the measured figure.
