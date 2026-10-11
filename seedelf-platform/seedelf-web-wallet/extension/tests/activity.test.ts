@@ -1,20 +1,24 @@
 // Activity: the Seedelf history (no requests, sealed on the device) and the
-// Cardano account's pages from Koios (two requests a page, one to catch up).
+// Cardano account's pages from Koios, by its payment keys (two requests a page,
+// one to catch up).
 import { describe, expect, it } from "vitest";
 
 import {
   accountMatcher,
   describe as describeTxs,
   noteOf,
+  PAGE,
   SESSION_ACCOUNT_ADDRESSES_PREFIX,
+  takePage,
   type AccountAddresses,
 } from "../src/background/activity";
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
+import { NETWORKS } from "../src/networks";
 import type { ActivityEntry, PendingTx } from "../src/shared/rpc";
 import { txInputs } from "../src/background/cbor";
 import { forgetSpent } from "../src/background/spent";
-import { activityAmount, activityCsv, activityDetail, csvCell, signedQuantity, tokenMoved } from "../src/ui/activity";
+import { activityAmount, activityCsv, activityDetail, activityTitle, csvCell, signedQuantity, tokenMoved } from "../src/ui/activity";
 import { assetFingerprint } from "../src/ui/tokens";
 import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
 
@@ -173,7 +177,7 @@ describe("Cardano account activity", () => {
     const first = await t.activity.cardano("preprod");
     expect(first.entries).toHaveLength(20);
     expect(first.more).toBe(true);
-    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info"]);
     expect(t.koios.calls.at(-2)!.query).toContain("order=block_height.desc");
     // Notes and staking come in the same request.
     expect(t.koios.calls.at(-1)!.body).toMatchObject({
@@ -187,7 +191,7 @@ describe("Cardano account activity", () => {
     // Opening it again asks only for what's newer than the newest read.
     const again = await t.activity.cardano("preprod");
     expect(again.entries).toEqual(first.entries);
-    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info", "account_txs"]);
+    expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info", "credential_txs"]);
     expect(t.koios.calls.at(-1)!.body).toMatchObject({ _after_block_height: activityPreprod.account_txs[0]!.block_height });
 
     // Load more: the next page, then the last, short one.
@@ -233,7 +237,7 @@ describe("Cardano account activity", () => {
     await t.balances.get("preprod");
     const before = t.koios.calls.length;
     const { entries } = await t.activity.cardano("preprod");
-    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info"]);
     const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.addresses);
     const named = entries.filter((e) => e.kind === "sent" || e.kind === "received");
     expect(named.length).toBeGreaterThan(0);
@@ -346,7 +350,7 @@ describe("the Cardano account's staking and notes", () => {
       kind: "stake",
       staking: { pool: "pool1logic", ticker: "LOGIC" },
     });
-    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info"]);
   });
 });
 
@@ -404,6 +408,220 @@ describe("what's the Cardano account's in its activity", () => {
     const { entries } = await t.activity.cardano("preprod");
     expect(entries.map((e) => e.txHash)).not.toContain(first!.tx_hash);
     expect(entries).toHaveLength(19);
+  });
+});
+
+// O7: Public activity listed by the stake key while the balance counts by payment key, so a payment to an
+// enterprise address of the account, or to its key under someone else's stake key, was spent but never listed.
+describe("what Public activity lists is what the balance counts (O7)", () => {
+  const ADDRESSES = `${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`;
+  const RECORDED = new Set(koiosPreprod.accounts[activityPreprod.stake]!.account_utxos.flatMap((u) => u.payment_cred ?? []));
+  const THEIRS = "addr_test1_them";
+  const THEIR_KEY = "22".repeat(28);
+  const out = (bech32: string, cred: string, value: string) => ({ payment_addr: { bech32, cred }, value, asset_list: [] });
+  type Row = { tx_hash: string; block_height: number; block_time: number };
+  /** `value` paid to `key` at `address` by someone else, in `row`'s block, as Koios lists it under the key and reads it. */
+  function paid(t: Awaited<ReturnType<typeof unlocked>>, key: string, row: Row, address: string, value: string) {
+    t.koios.credentialTxs.set(key, [...(t.koios.credentialTxs.get(key) ?? []), row]);
+    t.koios.txRows.set(row.tx_hash, {
+      tx_hash: row.tx_hash,
+      block_height: row.block_height,
+      tx_timestamp: row.block_time,
+      fee: "170000",
+      inputs: [out(THEIRS, THEIR_KEY, "50000000")],
+      outputs: [out(address, key, value), out(THEIRS, THEIR_KEY, (50_000_000n - 170_000n - BigInt(value)).toString())],
+    });
+  }
+  const read = async (t: Awaited<ReturnType<typeof unlocked>>) => {
+    await t.balances.get("preprod");
+    return (await t.session.get<AccountAddresses>(ADDRESSES))!;
+  };
+
+  it("asks by the payment keys the balance reading asked about", async () => {
+    const t = await unlocked();
+    const { keys } = await read(t);
+    const reading = t.koios.calls.find((c) => c.path === "credential_utxos" && c.body._payment_credentials.includes(keys[0]));
+    expect(reading!.body._payment_credentials).toEqual(keys);
+    const before = t.koios.calls.length;
+    await t.activity.cardano("preprod");
+    expect(t.koios.calls[before]).toMatchObject({ path: "credential_txs", body: { _payment_credentials: keys } });
+    expect(t.koios.calls[before]!.query).toContain("offset=0&limit=20");
+  });
+
+  it("lists a payment to an enterprise address of the account, and to its key under someone else's stake key", async () => {
+    const t = await unlocked();
+    const { keys } = await read(t);
+    // Keys in range that hold nothing in the recordings: what account_txs, by the stake key, never listed.
+    const [a, b] = keys.filter((k) => !RECORDED.has(k));
+    const top = activityPreprod.account_txs[0]!;
+    paid(t, a!, { tx_hash: "e1".repeat(32), block_height: top.block_height + 2, block_time: top.block_time + 60 }, "addr_test1v_enterprise", "5000000");
+    paid(t, b!, { tx_hash: "e2".repeat(32), block_height: top.block_height + 1, block_time: top.block_time + 30 }, "addr_test1q_their_stake", "7000000");
+
+    const { entries } = await t.activity.cardano("preprod");
+    expect(entries).toHaveLength(20);
+    expect(entries.slice(0, 2)).toMatchObject([
+      { txHash: "e1".repeat(32), kind: "received", direction: "in", lovelace: "5000000", detail: THEIRS },
+      { txHash: "e2".repeat(32), kind: "received", direction: "in", lovelace: "7000000", detail: THEIRS },
+    ]);
+    // And in the CSV.
+    expect(activityCsv("preprod", entries)).toContain(`,Received,in,5,,,${THEIRS},`);
+  });
+
+  it("asks in groups of 75 past that, paged as one list: none skipped, none listed twice", async () => {
+    const t = await unlocked();
+    const account = await read(t);
+    // 60 keys more, as an account with many addresses used has: two groups, the second of the last 27.
+    const more = Array.from({ length: 60 }, (_, i) => `${"ab".repeat(26)}${i.toString(16).padStart(4, "0")}`);
+    const keys = [...account.keys, ...more];
+    expect(keys.length).toBeGreaterThan(75);
+    await t.wallet.withKeys(() => t.session.set(ADDRESSES, { ...account, keys }));
+    const late = keys.slice(75);
+    // Ten payments under the second group's keys, each in the block of a recorded transaction, and one recorded
+    // transaction under a key of each group.
+    const added: Row[] = [3, 8, 13, 18, 23, 28, 33, 38, 41, 44].map((j, n) => {
+      const r = activityPreprod.account_txs[j]!;
+      return { tx_hash: `f${n}`.padEnd(64, "f"), block_height: r.block_height, block_time: r.block_time };
+    });
+    added.forEach((row, n) => paid(t, late[n % late.length]!, row, "addr_test1v_enterprise", "1000000"));
+    t.koios.credentialTxs.set(late[0]!, [...t.koios.credentialTxs.get(late[0]!)!, activityPreprod.account_txs[10]!]);
+
+    const order = (x: Row, y: Row) => y.block_height - x.block_height || (x.tx_hash < y.tx_hash ? -1 : 1);
+    const all = [...activityPreprod.account_txs, ...added].sort(order).map((r) => r.tx_hash);
+    const before = t.koios.calls.length;
+    const pages = [await t.activity.cardano("preprod")];
+    while (pages.at(-1)!.more) pages.push(await t.activity.cardano("preprod", true));
+    const asked = t.koios.calls.slice(before).filter((c) => c.path === "credential_txs");
+    // Two requests a page, the groups in order: the first 75 keys, then the rest.
+    expect(asked).toHaveLength(pages.length * 2);
+    expect(asked.map((c) => c.body._payment_credentials.length).slice(0, 2)).toEqual([75, keys.length - 75]);
+    // Each page the newest 20 not listed yet, across both groups.
+    for (const [i, page] of pages.entries()) {
+      expect(new Set(page.entries.map((e) => e.txHash)), `page ${i + 1}`).toEqual(new Set(all.slice(0, Math.min(all.length, 20 * (i + 1)))));
+    }
+    expect(pages.at(-1)!.entries.map((e) => e.txHash).sort()).toEqual([...all].sort());
+    expect(all).toHaveLength(55);
+  });
+
+  it("starts the pages again when a reading finds other keys", async () => {
+    const t = await unlocked();
+    const account = await read(t);
+    await t.activity.cardano("preprod");
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(40);
+    // An address used past the range: the next reading asks about a key more, and the offsets read by the old
+    // keys say nothing of the new.
+    const keys = [...account.keys, "ab".repeat(28)];
+    await t.wallet.withKeys(() => t.session.set(ADDRESSES, { ...account, keys }));
+    const before = t.koios.calls.length;
+    const again = await t.activity.cardano("preprod");
+    expect(again.entries).toHaveLength(20);
+    expect(t.koios.calls[before]).toMatchObject({ path: "credential_txs", body: { _payment_credentials: keys } });
+    expect(t.koios.calls[before]!.query).toContain("offset=0&limit=20");
+  });
+});
+
+describe("pages from several groups of keys (takePage)", () => {
+  const row = (n: number, height: number) => ({ tx_hash: n.toString(16).padStart(64, "0"), block_height: height, block_time: height * 20 });
+
+  it("are the newest 20 of all, none skipped or taken twice, however the groups overlap", () => {
+    // 130 transactions, three to a block, newest first; each under one group's keys, or two.
+    let seed = 7;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    const txs = Array.from({ length: 130 }, (_, n) => row(n, 1000 - Math.floor(n / 3)));
+    const of = txs.map(() => {
+      const g = Math.floor(random() * 3);
+      return new Set([g, random() < 0.3 ? (g + 1) % 3 : g]);
+    });
+    const full = [0, 1, 2].map((g) => txs.filter((_, i) => of[i]!.has(g)));
+    expect(of.some((g) => g.size === 2)).toBe(true);
+
+    let offsets = [0, 0, 0];
+    const listed = new Set<string>();
+    const pages: string[][] = [];
+    for (let guard = 0; guard < 50; guard++) {
+      const lists = full.map((g, i) => g.slice(offsets[i], offsets[i]! + PAGE));
+      const { rows, read, more } = takePage(lists, listed);
+      for (const r of rows) listed.add(r.tx_hash);
+      pages.push(rows.map((r) => r.tx_hash));
+      offsets = offsets.map((o, i) => o + read[i]!);
+      if (!more) break;
+    }
+    expect(pages.flat()).toEqual(txs.map((t) => t.tx_hash));
+    expect(pages.every((p) => p.length <= PAGE)).toBe(true);
+  });
+
+  it("with one group, is its page as it came", () => {
+    const list = Array.from({ length: PAGE }, (_, n) => row(n, 50 - n));
+    expect(takePage([list], new Set())).toEqual({ rows: list, read: [PAGE], more: true });
+    expect(takePage([list.slice(0, 7)], new Set())).toEqual({ rows: list.slice(0, 7), read: [7], more: false });
+  });
+});
+
+// Chunk 16's Not done: a mix from the public account listed its deposit and every mix as plain Sent, since an
+// account transaction's kind came only from the private history. They're named from the mix box now.
+describe("a public mix's transactions (O7)", () => {
+  const STAKE = activityPreprod.stake;
+  const MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
+  const ME = "addr_test1_me";
+  const MY_KEY = "11".repeat(28);
+  const ours = accountMatcher({ addresses: [ME], keys: [MY_KEY] });
+  const out = (bech32: string, cred: string, value: string) => ({ payment_addr: { bech32, cred }, value, asset_list: [] });
+  const me = (value: string) => out(ME, MY_KEY, value);
+  const box = () => out("addr_test1w_mix_box", MIX_BOX, "10000000");
+  const tx = (n: number, inputs: KoiosTxInfo["inputs"], outputs: KoiosTxInfo["outputs"]): KoiosTxInfo => ({
+    tx_hash: `${n}`.repeat(64),
+    block_height: 10 - n,
+    tx_timestamp: 1_800_000_000 - n,
+    fee: "200000",
+    inputs,
+    outputs,
+  });
+  const deposit = tx(1, [me("50000000")], [box(), box(), box(), me("19800000")]);
+  const mix = tx(2, [me("19800000"), box(), box()], [box(), box(), me("19600000")]);
+  const back = tx(3, [box()], [me("9800000")]);
+
+  it("names a deposit, each mix and a box back from the mix box alone", () => {
+    const [d, m, b] = describeTxs([deposit, mix, back], ours, new Map(), STAKE, undefined, MIX_BOX);
+    // The deposit is what went into the boxes; a mix pays the account its change back, so it's the fee alone.
+    expect(d).toMatchObject({ kind: "lovejoin-deposit", direction: "out", lovelace: "30000000", fee: "200000" });
+    expect(d!.detail).toBeUndefined();
+    expect(m).toMatchObject({ kind: "lovejoin-round", direction: "none", lovelace: "0", fee: "200000" });
+    expect(b).toMatchObject({ kind: "lovejoin-withdraw", direction: "in", lovelace: "9800000" });
+    expect(b!.fee).toBeUndefined();
+    expect([d!, m!, b!].map(activityTitle)).toEqual(["Into Lovejoin", "Lovejoin mix", "Back from Lovejoin"]);
+    expect(activityAmount(m!)).toBe("−0.2 ₳");
+    const csv = activityCsv("preprod", [d!, m!, b!]);
+    expect(csv).toContain(",Into Lovejoin,out,-30,0.2,");
+    expect(csv).toContain(",Lovejoin mix,none,0,0.2,");
+    expect(csv).toContain(",Back from Lovejoin,in,9.8,,");
+  });
+
+  it("leaves the private history's own entry first, and a seed is a deposit too", () => {
+    const own = new Map([[deposit.tx_hash, { txHash: deposit.tx_hash, at: 0, kind: "move-in", direction: "in", lovelace: "0", tokens: 0 } as ActivityEntry]]);
+    expect(describeTxs([deposit], ours, own, STAKE, undefined, MIX_BOX)).toMatchObject([{ kind: "move-in" }]);
+    // A seed: boxes in, no mixes after.
+    const seed = tx(4, [me("30500000")], [box(), box(), box(), me("300000")]);
+    expect(describeTxs([seed], ours, new Map(), STAKE, undefined, MIX_BOX)).toMatchObject([{ kind: "lovejoin-deposit", lovelace: "30000000" }]);
+    // Someone else's mix that moves boxes alone isn't the account's.
+    expect(describeTxs([tx(5, [box(), box()], [box(), box()])], ours, new Map(), STAKE, undefined, MIX_BOX)).toEqual([]);
+  });
+
+  it("is named in Public activity on the network it's read on", async () => {
+    const t = await unlocked();
+    await t.balances.get("preprod");
+    const { keys } = (await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!;
+    const top = activityPreprod.account_txs[0]!;
+    const row = { tx_hash: "d1".repeat(32), block_height: top.block_height + 1, block_time: top.block_time + 60 };
+    t.koios.credentialTxs.set(keys[0]!, [row]);
+    t.koios.txRows.set(row.tx_hash, {
+      ...deposit,
+      tx_hash: row.tx_hash,
+      block_height: row.block_height,
+      tx_timestamp: row.block_time,
+      inputs: [out("addr_test1_mine", keys[0]!, "50000000")],
+      outputs: [box(), box(), box(), out("addr_test1_mine", keys[0]!, "19800000")],
+    });
+    const { entries } = await t.activity.cardano("preprod");
+    expect(entries[0]).toMatchObject({ txHash: row.tx_hash, kind: "lovejoin-deposit", direction: "out", lovelace: "30000000" });
   });
 });
 
@@ -578,7 +796,7 @@ describe("Public activity's payment on its way (blind test §9.3, T08)", () => {
     const before = t.koios.calls.length;
     const { entries } = await t.activity.cardano("preprod");
     // Koios is asked what it always is, and nothing more.
-    expect(paths(t).slice(before)).toEqual(["account_txs", "tx_info"]);
+    expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info"]);
     expect(entries[0]).toMatchObject({
       txHash: summary.txHash,
       pending: true,

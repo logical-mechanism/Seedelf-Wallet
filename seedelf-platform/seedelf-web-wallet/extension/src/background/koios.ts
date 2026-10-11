@@ -96,7 +96,7 @@ export function measurable(u: KoiosUtxo): boolean {
   return typeof bytes === "string" && /^([0-9a-fA-F]{2})+$/.test(bytes) && (size == null || size === bytes.length / 2);
 }
 
-/** One of an account's transactions: `account_txs`. */
+/** One of an account's transactions: `account_txs`, or `credential_txs` by its payment keys. */
 export interface KoiosAccountTx {
   tx_hash: string;
   block_height: number;
@@ -745,6 +745,17 @@ export class Koios {
     const body = { _stake_address: stakeAddress, ...(after === undefined ? {} : { _after_block_height: after }) };
     const page = after === undefined ? `&offset=${offset}&limit=${limit}` : "&limit=1000";
     return this.post<KoiosAccountTx>("account_txs", body, `order=block_height.desc,tx_hash.asc${page}`);
+  }
+
+  /**
+   * Every transaction that made or spent an output under one of `credentials` (payment key or script hashes, hex),
+   * whatever the address's staking part, newest first: `limit` of them from `offset`, or with `after`, only those in
+   * blocks from it on (one request, up to 1,000). At most `CREDENTIALS_PER_REQUEST`: the caller asks in groups.
+   */
+  credentialTxs(credentials: string[], { after, offset = 0, limit = 20 }: { after?: number; offset?: number; limit?: number }) {
+    const body = { _payment_credentials: credentials, ...(after === undefined ? {} : { _after_block_height: after }) };
+    const page = after === undefined ? `&offset=${offset}&limit=${limit}` : "&limit=1000";
+    return this.post<KoiosAccountTx>("credential_txs", body, `order=block_height.desc,tx_hash.asc${page}`);
   }
 
   /** Inputs, outputs and fee of up to 20 transactions, in one request; nothing else. */

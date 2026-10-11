@@ -102,6 +102,10 @@ export const transferPreprod = fixture("transfer-preprod.json");
 export const nftImagesPreprod: Array<{ policy_id: string; asset_name: string; answer: unknown[] }> = fixture("nft-images.json").preprod;
 export const withdrawPreprod = fixture("withdraw-preprod.json");
 export const activityPreprod = fixture("activity-preprod.json");
+/** The recorded account's payment keys holding something: `credential_txs` lists its transactions when asked about one. */
+const RECORDED_KEYS = new Set<string>(
+  koiosPreprod.accounts[activityPreprod.stake].account_utxos.flatMap((u: { payment_cred: string | null }) => u.payment_cred ?? []),
+);
 export const stakingPreprod = fixture("staking-preprod.json");
 export const governancePreprod = fixture("governance.json").proposal_list.preprod;
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
@@ -326,15 +330,20 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
     }
     const body = mainnet ? (onNetwork(request.postDataJSON(), "preprod") as any) : request.postDataJSON();
-    if (path === "account_txs" || path === "tx_info") {
+    if (path === "account_txs" || path === "credential_txs" || path === "tx_info") {
       const query = new URL(request.url()).searchParams;
+      // Activity asks by the account's payment keys: the recorded account's when one of them holds something.
+      const recorded =
+        path === "credential_txs"
+          ? (body._payment_credentials as string[]).some((c) => RECORDED_KEYS.has(c))
+          : body._stake_address === activityPreprod.stake;
       const all: Array<{ tx_hash: string; block_height?: number }> =
         path === "tx_info"
           ? [
               ...activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash)),
               ...[...koios.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
             ]
-          : body._stake_address === activityPreprod.stake
+          : recorded
             ? activityPreprod.account_txs.filter(
                 (t: { block_height: number }) =>
                   body._after_block_height === undefined || t.block_height > body._after_block_height,

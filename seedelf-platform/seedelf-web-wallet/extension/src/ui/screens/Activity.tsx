@@ -85,6 +85,10 @@ function icon(e: ActivityEntry): ReactNode {
     case "drep-retire":
     case "drep-vote":
       return <LandmarkIcon size={16} />;
+    // Lovejoin's own mark, as its tile has: what the account paid into it.
+    case "lovejoin-deposit":
+    case "lovejoin-round":
+      return <ShieldIcon size={16} />;
     default:
       return e.direction === "in" ? <ReceiveIcon size={16} /> : <ArrowUpRightIcon size={16} />;
   }

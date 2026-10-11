@@ -185,7 +185,7 @@ describe("a switch while a reading is still running", () => {
   it("never keeps Public activity read for the account left as the new account's", async () => {
     const t = await twoAccounts();
     await t.balances.get("preprod");
-    const hold = holdKoios(t, "account_txs");
+    const hold = holdKoios(t, "credential_txs");
     const left = t.activity.cardano("preprod");
     await hold.hit;
     await t.accounts.use(1, ["preprod"]);

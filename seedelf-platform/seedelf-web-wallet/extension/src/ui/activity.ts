@@ -60,7 +60,10 @@ export function activityTitle(e: ActivityEntry): string {
     case "lovejoin-withdraw":
       return t("activity.title.lovejoinWithdraw");
     case "lovejoin-mix":
+    case "lovejoin-deposit":
       return t("activity.title.lovejoinMix");
+    case "lovejoin-round":
+      return t("activity.title.lovejoinRound");
   }
 }
 

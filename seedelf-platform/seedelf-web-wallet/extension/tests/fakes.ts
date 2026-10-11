@@ -136,6 +136,8 @@ export const activityPreprod = fixture("activity-preprod.json") as {
   account_txs: Array<{ tx_hash: string; block_height: number; block_time: number }>;
   tx_info: Array<{ tx_hash: string; block_height: number }>;
 };
+/** That account's payment keys holding something: `credential_txs` answers with its transactions when asked about one. */
+const RECORDED_KEYS = new Set(koiosPreprod.accounts[activityPreprod.stake]!.account_utxos.flatMap((u) => u.payment_cred ?? []));
 
 export const transferPreprod = fixture("transfer-preprod.json") as {
   to: string;
@@ -220,6 +222,10 @@ export interface FakeKoios {
   txOutputs: Map<string, Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_index: number }>>;
   /** More accounts' transactions for `account_txs`, newest first, by stake address: a one-time account's, say. */
   accountTxs: Map<string, Array<{ tx_hash: string; block_height: number; block_time: number }>>;
+  /** More transactions for `credential_txs`, by payment key: one at an enterprise address of the account, say. */
+  credentialTxs: Map<string, Array<{ tx_hash: string; block_height: number; block_time: number }>>;
+  /** Whole `tx_info` rows the recordings don't hold, by hash: such a transaction's, say. */
+  txRows: Map<string, KoiosTxInfo>;
   /** Stake addresses some address has used, as far as `account_addresses` goes: one-time accounts used before, say. */
   usedStakes: Set<string>;
   /** The slot of the newest block, as `tip` answers. */
@@ -316,6 +322,8 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     txSpends: new Map(),
     txOutputs: new Map(),
     accountTxs: new Map(),
+    credentialTxs: new Map(),
+    txRows: new Map(),
     usedStakes: new Set(),
     tip: 0,
     dreps: new Map(),
@@ -371,9 +379,19 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
           body._stake_address === activityPreprod.stake ? activityPreprod.account_txs : (fake.accountTxs.get(body._stake_address) ?? []);
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height > after);
+      } else if (path === "credential_txs") {
+        // The recorded account's, asked by its payment keys, and any added by key: newest first, each once.
+        const credentials: string[] = body._payment_credentials;
+        const recorded = credentials.some((c) => RECORDED_KEYS.has(c)) ? activityPreprod.account_txs : [];
+        const all = [...new Map([...recorded, ...credentials.flatMap((c) => fake.credentialTxs.get(c) ?? [])].map((t) => [t.tx_hash, t])).values()].sort(
+          (a, b) => b.block_height - a.block_height || (a.tx_hash < b.tx_hash ? -1 : 1),
+        );
+        const after = body._after_block_height;
+        rows = after === undefined ? all : all.filter((t) => t.block_height > after);
       } else if (path === "tx_info") {
         rows = [
           ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
+          ...[...fake.txRows.values()].filter((t) => body._tx_hashes.includes(t.tx_hash)),
           ...[...new Set([...fake.txSpends.keys(), ...fake.txOutputs.keys()])]
             .filter((h) => body._tx_hashes.includes(h))
             .map((tx_hash) => ({

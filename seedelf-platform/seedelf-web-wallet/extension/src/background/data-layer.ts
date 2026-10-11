@@ -270,6 +270,10 @@ export class DataLayerKoios extends Koios {
     return this.read((k) => k.accountTxs(stakeAddress, page), () => super.accountTxs(stakeAddress, page));
   }
 
+  override credentialTxs(credentials: string[], page: { after?: number; offset?: number; limit?: number }) {
+    return this.read((k) => k.credentialTxs(credentials, page), () => super.credentialTxs(credentials, page));
+  }
+
   override txInfo(txHashes: string[]) {
     return this.read((k) => k.txInfo(txHashes), () => super.txInfo(txHashes));
   }
