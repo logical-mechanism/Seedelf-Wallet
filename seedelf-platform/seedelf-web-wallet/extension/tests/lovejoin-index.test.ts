@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
-import { DataParts } from "../src/background/data-layer";
+import { DataLayerKoios, DataParts } from "../src/background/data-layer";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService } from "../src/background/lovejoin";
 import { privateIndexClient, type IndexRow } from "../src/background/private-index";
@@ -86,6 +86,37 @@ describe("Lovejoin on the private index", CHAINS, () => {
     expect(second.unsure).toBeUndefined();
     expect(second.due).toHaveLength(1);
     expect(asked(t, "tx_info")).toBe(0);
+  });
+
+  it("asks Koios alone, never the data layer, what made a box of the wallet's while only the index is down (the privacy policy)", async () => {
+    const { t } = await withSession("40000000");
+    const M = hash("b6");
+    const box = await ownedBox(t, M);
+    t.koios.addedToAccounts.push(box);
+    t.koios.txSpends.set(M, [{ payment_addr: { bech32: POOL[0]!.address, cred: MIX_BOX } }]);
+    const index = fakeIndex();
+    index.fail = Response.json({ error: "behind" }, { status: 503 });
+    const parts = new DataParts(t.session, () => t.clock.now);
+    // The data layer's public part answers, as Koios's fake does, and every request is told by the host it went to.
+    const hosts: Array<[string, string]> = [];
+    const fetch = async (url: string, init: RequestInit) => {
+      hosts.push([new URL(url).host, url.split("/").pop()!.split("?")[0]!]);
+      return t.koios.fetch(url, init as never);
+    };
+    const deps = { koiosOnly: async () => false, parts, fetch, limits: {} };
+    const lovejoin = new LovejoinService({
+      ...t.deps,
+      koios: (n) => new DataLayerKoios(n, "https://data.test", deps),
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      preferences: t.preferences,
+      index: privateIndexClient({ ...deps, fetch: index.fetch }, () => "https://data.test"),
+    });
+    const status = await lovejoin.status("preprod");
+    expect(status.due).toHaveLength(1);
+    // The pool's listing is everyone's, from the data layer; what made the wallet's box, from Koios alone.
+    expect(hosts.filter(([, path]) => path === "tx_info")).toEqual([["preprod.koios.rest", "tx_info"]]);
+    expect(hosts).toContainEqual(["data.test", "credential_utxos"]);
   });
 
   it("reads Koios's listing and tx_info while the index is down", async () => {

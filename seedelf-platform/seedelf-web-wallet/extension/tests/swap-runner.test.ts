@@ -588,6 +588,20 @@ describe("a cancel built again after it went unseen (release review C32)", () =>
     await waitsThenLands(t, sessions, cancel);
   });
 
+  it("is maybe sent, never unsent, when the server answers it with another transaction's id (as pending.ts keeps a payment)", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await orderWaits(t, sessions);
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (url.endsWith("/submittx") ? Response.json("ff".repeat(32), { status: 202 }) : real(url, init));
+    await sessions.stop("preprod", 0);
+    t.koios.fetch = real;
+    const [first] = await recordedCancels(t);
+    expect(first).toBeDefined();
+    expect(first).not.toHaveProperty("unsent");
+    expect(first).toHaveProperty("inputs");
+  });
+
   it("is that very cancel sent again by a worker started after one stopped mid-send, and no second one goes beside it", async () => {
     const t = await unlocked();
     const sessions = signing(t);

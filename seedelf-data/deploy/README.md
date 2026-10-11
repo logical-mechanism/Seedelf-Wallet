@@ -1,6 +1,6 @@
 # Deploying the data layer
 
-How the data layer goes live: home's services reached through a WireGuard tunnel, and the API on a VPS behind Caddy. Why it's shaped this way is chunk 26's plan ([Home](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#home), [Tunnel and VPS](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#tunnel-and-vps)). **Mainnet only:** preprod stays on Koios, and the preprod server at home is another project's.
+How the data layer goes live: home's services reached through a WireGuard tunnel, and the API on a VPS behind Caddy. Why it's shaped this way is chunk 26's plan ([Home](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#home), [Tunnel and VPS](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#tunnel-and-vps)). **Mainnet only:** preprod stays on Koios, and the preprod server at home is another project's.
 
 Every file here is a template. `<…>` marks a value to fill in on the machine. Keys, passwords, addresses and database names are never committed.
 
@@ -102,7 +102,7 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
 
 ## 5. Checks
 
-- **Health:** `curl https://mainnet.<domain>/health` answers 200, `private`, `public` and `egress` all `ok`.
+- **Health:** `curl https://mainnet.<domain>/health` answers 200, `private`, `public`, `submit` and `egress` all `ok`, and `node` `connected`, its `age` under 3 minutes (the time since the last block, usually under one).
 - **CORS:** a preflight from the wallet's origin is answered with it, and any other origin gets no `Access-Control-Allow-Origin`, so a browser refuses it (the methods and max-age lines still come):
 
   ```bash
@@ -119,14 +119,15 @@ Until 2026-10-09 this step moved the node's and db-sync's traffic into the tunne
 
   On home, Postgres's log holds no statement, and Kupo's no request path.
 - **DNS and certificates:** crt.sh lists `mainnet.<domain>` and nothing that leads home.
-- **The drills** ([Verification](../../seedelf-platform/seedelf-web-wallet/docs/plans/chunk-26-data-layer.md#verification)):
+- **The drills** ([Verification](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26-data-layer.md#verification)):
 
   | Stop | Expect |
   |---|---|
   | Kupo | nothing changes: it's the spare |
   | Postgres | within 6 s (two failed reads of its tip), `/health` says `"source":"kupo"` and the public routes answer 503; the wallet goes to Koios for the public side |
   | db-sync alone | the private index moves to Kupo once db-sync is 60 slots behind it; the public routes answer 503 once its tip is 3 minutes old |
-  | the node | every part 503 within 3 minutes; the wallet goes to Koios for everything |
+  | Ogmios | the submit part 503 within 4 s (two failed reads of its `/health`); the wallet sends and evaluates through Koios. The reads don't change |
+  | the node | the submit part 503 at the next read of Ogmios's `/health` once it says `disconnected` (2 s), every part within 3 minutes; the wallet goes to Koios for everything. Started again, the submit part stays 503 until the node has caught up (`/health`'s `node` age under 3 minutes), so a spend of a newer UTxO isn't refused as spent |
   | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the relay carries on |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |

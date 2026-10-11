@@ -29,7 +29,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::edge::Edge;
-use crate::state::{AppState, age, block_age};
+use crate::state::{AppState, age, block_age, slot_age};
 use crate::submit::Submit;
 
 /// Every route, compressed, behind the edge's limits, with CORS outermost so
@@ -49,7 +49,7 @@ pub fn app(
 ) -> Router {
     Router::new()
         .route("/health", get(health))
-        .with_state((state.clone(), edge.clone()))
+        .with_state((state.clone(), edge.clone(), submit.clone()))
         .merge(private::routes().with_state(state.clone()))
         .merge(public::routes().with_state(state))
         .merge(submit::routes().with_state(submit))
@@ -65,25 +65,33 @@ pub fn app(
 /// Each part's state, and each source's tip and age. 200 while the private
 /// index and the public routes both answer; 503 when either can't (though
 /// the private index may still answer from Kupo while db-sync is down), or
-/// when the month's traffic is over its ceiling.
-async fn health(State((state, edge)): State<(Arc<AppState>, Arc<Edge>)>) -> Response {
+/// when the month's traffic is over its ceiling. The submit part's state is
+/// said, not counted: the deploy compares this status with the one before.
+async fn health(
+    State((state, edge, submit)): State<(Arc<AppState>, Arc<Edge>, Arc<Submit>)>,
+) -> Response {
     let db_sync = state.tip();
     let public = state.fresh_tip().is_ok();
     let private = state.private_sources().into_iter().next();
     let kupo = state.kupo_tip();
     let egress_over = edge.egress.over();
+    let node = submit.node();
     let ok = public && private.is_some() && !egress_over;
     let body = serde_json::json!({
         "network": "mainnet",
         "private": if private.is_some() { "ok" } else { "down" },
         "source": private.map(|(source, _)| source.upstream().name()),
         "public": if public { "ok" } else { "down" },
+        "submit": if submit.synced() { "ok" } else { "down" },
         "egress": if egress_over { "over" } else { "ok" },
         "db_sync": db_sync.map(|tip| serde_json::json!({
             "block": tip.height, "slot": tip.slot, "hash": tip.hash, "age": age(&tip),
         })),
         "kupo": kupo.map(|tip| serde_json::json!({
             "slot": tip.slot, "hash": tip.hash, "age": block_age(&tip),
+        })),
+        "node": node.map(|node| serde_json::json!({
+            "slot": node.slot, "age": node.slot.map(slot_age), "connected": node.connected,
         })),
     });
     let status = if ok {

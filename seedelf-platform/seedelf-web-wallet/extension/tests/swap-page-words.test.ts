@@ -10,13 +10,14 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { DappTxSummary, SessionAuto, SessionTxReview, SessionView } from "../src/shared/rpc";
+import type { DappTxSummary, SessionAuto, SessionTxReview, SessionView, SwapLovejoin } from "../src/shared/rpc";
 import { NetworkContext } from "../src/ui/network";
 import {
   lateStopOf,
   nowLine,
   Session,
   SessionTxReviewScreen,
+  StopDialog,
   StoppedLate,
   stopReading,
   SwapRow,
@@ -154,6 +155,45 @@ describe("a swap approved against the DEX's pools, before it's sent (release rev
     }
   });
 
+  it("says Minswap's quote comes before swapping, not before an order, here and in the list (C13's last words)", () => {
+    const s = approved("ordering");
+    expect(nowLine(s)).toBe("Asking Minswap for a fresh quote, then swapping.");
+    expect(page(s)).not.toContain("placing the order");
+    expect(row(s)).toContain("Swapping");
+    expect(row(s)).not.toContain("Placing the order");
+    // Stopped before it goes out, it comes back, as an order's does.
+    expect(row(approved("ordering", { stopping: true }))).not.toContain("Swapping");
+    // An order's reads as before.
+    expect(nowLine(orderSwap({ txs: [OUT] }, { step: "ordering" }))).toBe("Asking Minswap for a fresh quote, then placing the order.");
+    expect(row(orderSwap({ txs: [OUT] }, { step: "ordering" }))).toContain("Placing the order");
+  });
+
+  it("has Stop's dialog speak of the swap, never of an order, either way back (C13's last words)", () => {
+    const cost: SwapLovejoin = { boxes: 1, depth: 2, mixes: 4, mixFees: "3800000", withdrawFees: "300000", delay: "1-6", on: true };
+    const dialog = (pools: boolean, through: boolean) =>
+      text(
+        createElement(StopDialog, {
+          placed: false,
+          pools,
+          cost: through ? cost : null,
+          through,
+          onThrough: () => undefined,
+          busy: false,
+          onStop: () => undefined,
+          onClose: () => undefined,
+        }),
+      );
+    for (const through of [true, false]) {
+      const pools = dialog(true, through);
+      expect(pools, `through: ${through}`).toContain("If the swap hasn't gone out yet, it won't, and everything comes back to your private balance");
+      expect(pools).toContain("If it's going out right now, it can't be cancelled: if it lands, what comes back is swapped.");
+      expect(pools).not.toContain("order");
+      const order = dialog(false, through);
+      expect(order).toContain("If no order has gone out yet, none will");
+      expect(order).toContain("If one is being placed right now, it's cancelled unless it fills first.");
+    }
+  });
+
   it("keeps Stop until the swap goes out: the approval's flag is words alone", () => {
     expect(stopButton(approved("ordering"))).not.toBeNull();
     expect(stopReading(approved("ordering"))).toEqual({ over: false, placed: false });
@@ -256,6 +296,17 @@ describe("a refused cancel, which the wallet built itself (release review C15)",
     const listed = row(refused(true));
     expect(listed).toContain("Couldn't cancel its order");
     expect(listed).not.toContain("Minswap");
+  });
+
+  it("never says the order is cancelled and its funds back while it's still open at the DEX", () => {
+    const line = page(refused(true));
+    expect(line).not.toContain("Cancelled");
+    expect(line).not.toContain("The order's funds back at the account");
+    expect(line).toContain("Couldn't cancel its order An order is still open at a DEX");
+    // Once Try again's cancel is sent, it reads as cancelled.
+    const CANCEL = { kind: "cancel" as const, txHash: "ef".repeat(32), at: 0 };
+    const sent = orderSwap({ txs: [OUT, LANDED, CANCEL] }, { step: "cancelling", stopping: true });
+    expect(page(sent)).toContain("Cancelled The order's funds back at the account");
   });
 
   it("still says a swap refused before Stop is Minswap's build, which Try again asks for afresh", () => {

@@ -19,13 +19,15 @@ fn env() {
     let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../.env"));
 }
 
-fn app() -> Router {
+/// The submit part with what Ogmios says of the node now, as the server's watch reads it.
+async fn app() -> Router {
     env();
     let submit = Submit::new(
         std::env::var("MAINNET_SUBMIT_API_URL").ok(),
         std::env::var("MAINNET_OGMIOS_URL").ok(),
     )
     .unwrap();
+    submit.read_node().await.unwrap();
     routes().with_state(Arc::new(submit))
 }
 
@@ -63,10 +65,20 @@ async fn send(app: Router, path: &str, kind: &str, body: Vec<u8>) -> (StatusCode
 }
 
 #[tokio::test]
+#[ignore = "live Ogmios"]
+async fn ogmios_says_the_node_is_synced() {
+    env();
+    let submit = Submit::new(None, std::env::var("MAINNET_OGMIOS_URL").ok()).unwrap();
+    let node = submit.read_node().await.unwrap();
+    assert!(node.connected && node.synced(), "{node:?}");
+    assert!(submit.synced());
+}
+
+#[tokio::test]
 #[ignore = "live submit-api"]
 async fn bytes_that_arent_a_transaction_are_refused_as_koios_refuses_them() {
     let (status, body) = send(
-        app(),
+        app().await,
         "/api/v1/submittx",
         "application/cbor",
         vec![0x82, 1, 2],
@@ -83,7 +95,7 @@ async fn bytes_that_arent_a_transaction_are_refused_as_koios_refuses_them() {
 #[ignore = "live submit-api"]
 async fn a_transaction_already_on_chain_is_refused_as_spent() {
     let cbor = on_chain_cbor().await;
-    let (status, body) = send(app(), "/api/v1/submittx", "application/cbor", cbor).await;
+    let (status, body) = send(app().await, "/api/v1/submittx", "application/cbor", cbor).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("All inputs are spent"), "{body}");
 }
@@ -98,7 +110,7 @@ async fn ogmios_evaluates_and_answers_as_it_does() {
         "params": { "transaction": { "cbor": hex } }
     });
     let (_, body) = send(
-        app(),
+        app().await,
         "/api/v1/ogmios",
         "application/json",
         serde_json::to_vec(&call).unwrap(),
@@ -113,10 +125,16 @@ async fn ogmios_evaluates_and_answers_as_it_does() {
 #[tokio::test]
 #[ignore = "live submit-api"]
 async fn what_the_server_refuses_itself() {
-    let (status, _) = send(app(), "/api/v1/submittx", "application/json", vec![0x84]).await;
+    let (status, _) = send(
+        app().await,
+        "/api/v1/submittx",
+        "application/json",
+        vec![0x84],
+    )
+    .await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     let (status, _) = send(
-        app(),
+        app().await,
         "/api/v1/submittx",
         "application/cbor",
         vec![0; MAX_TX_BYTES + 1],
@@ -126,7 +144,7 @@ async fn what_the_server_refuses_itself() {
     let submit =
         serde_json::json!({ "jsonrpc": "2.0", "method": "submitTransaction", "params": {} });
     let (status, body) = send(
-        app(),
+        app().await,
         "/api/v1/ogmios",
         "application/json",
         serde_json::to_vec(&submit).unwrap(),
@@ -136,7 +154,7 @@ async fn what_the_server_refuses_itself() {
     assert!(body.contains("only evaluateTransaction"), "{body}");
     // text/plain would be a POST a web page can send with no CORS preflight.
     let (status, _) = send(
-        app(),
+        app().await,
         "/api/v1/ogmios",
         "text/plain",
         serde_json::to_vec(&submit).unwrap(),

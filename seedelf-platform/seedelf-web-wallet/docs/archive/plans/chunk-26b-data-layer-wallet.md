@@ -2,12 +2,12 @@
 
 Step 4 of [chunk 26](chunk-26-data-layer.md#order-of-work): Seedelf Wallet reads mainnet through `seedelf-data`, falling back to Koios one part at a time. Preprod doesn't change.
 
-**Status: ✅ built, reviewed and checked (2026-10-09)** on `web-wallet/data-layer-wallet`, from `main` after #289. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
+**Status: ✅ done, in 1.4.0** (#290; built, reviewed and checked 2026-10-09 on `web-wallet/data-layer-wallet`, from `main` after #289). Archived at 1.4.1, its open items carried into [post-release-roadmap.md](../../post-release-roadmap.md#kept-in-mind)'s *Kept in mind*. Steps 1 to 7 and the developer docs are done; [what changed from the plan](#what-changed-from-the-plan) is at the end. The free checks and the review are in [Verification](#verification); the owner's own-wallet parity and everyday spends are what's left.
 
 **Read first:**
 - the parent plan's [The wallet's side](chunk-26-data-layer.md#the-wallets-side), the contract this builds to;
 - its [What the browser keeps](chunk-26-data-layer.md#what-the-browser-keeps) and [What it takes off the per-user side](chunk-26-data-layer.md#what-it-takes-off-the-per-user-side);
-- [seedelf-data/README.md](../../../../seedelf-data/README.md), for what each route answers.
+- [seedelf-data/README.md](../../../../../seedelf-data/README.md), for what each route answers.
 
 ## The VPS comes after, and nothing here waits on it
 
@@ -266,7 +266,7 @@ A dev build against the local API, on home's mainnet db-sync and Kupo. A Playwri
 | A 429, the bucket emptied | both parts to Koios, held 5 minutes, longer than the 4 s `Retry-After` |
 | Parity, with no wallet needed | the index's contract at the tip against Koios's `credential_utxos`: the same 33 rows, field by field (decimals and times too), and the same 10 names |
 
-**Scale** (`wasm/scale.mjs`, [its numbers](../../wasm/README.md)):
+**Scale** (`wasm/scale.mjs`, [its numbers](../../../wasm/README.md)):
 - A row is about 473 bytes in a snapshot, and its ownership check about 0.73 ms, almost all `isOwned`.
 - At 1M rows: a 473 MB answer, 1.05 GB of parsed rows, 1.29 GB peak, and 12 minutes of checking.
 - `since` on mainnet, measured against the API: 3.7 KB after a day (6 rows made), 50 KB after a week, 65 KB after a month (99 made, 7 older ones spent). Lovejoin's pool after a month: 397 KB (454 boxes).
@@ -293,7 +293,7 @@ Three reviewers read the branch by area (the fallback and submits; the private i
 
 **Left as they are:**
 - a clock stepped back more than about 200 s between a send and a later reading could still pick a cursor from after the landing;
-- after a lost connection, a Koios gateway's own 4xx page (not the node's words) still reads as a refusal;
+- ~~after a lost connection, a Koios gateway's own 4xx page (not the node's words) still reads as a refusal;~~ fixed in 1.4.1: a page (HTML) is Koios's trouble, not the node's refusal, so it's maybe sent (`koios.ts`);
 - the smaller items in [Left for later](#left-for-later).
 
 ## What a wallet asks, before and after (mainnet)
@@ -310,7 +310,7 @@ Three reviewers read the branch by area (the fallback and submits; the private i
 
 Planned in [chunk 26c](chunk-26c-data-layer-vps.md).
 
-- the droplet, WireGuard, nftables, Caddy, DNS and `/health`, from [seedelf-data/deploy/README.md](../../../../seedelf-data/deploy/README.md);
+- the droplet, WireGuard, nftables, Caddy, DNS and `/health`, from [seedelf-data/deploy/README.md](../../../../../seedelf-data/deploy/README.md);
 - **a manual deploy workflow:** build with the pinned toolchain, ship the binary, restart, check `/health`, roll back;
 - **CI for `seedelf-data/`,** which has none today;
 - the store build's origin and the user-facing docs above;
@@ -324,7 +324,7 @@ Found while checking; none blocks the merge.
 - **A restore past about 60,000 rows** (see the ceiling above): a paged snapshot, checked as it streams in, with its own timeout and a progress bar.
 - ~~**Every POST to the API costs a CORS preflight.**~~ Done in 1.4.0 (the owner's call): the API sends `Cache-Control: no-store` on every answer, and the data layer's client asks a POST with `default` (a GET stays `no-store`), with the policy's *Changes* saying so. Chrome skips its preflight cache for a `cache: "no-store"` request, which every service request was (`SERVICE_FETCH`, chunk 25), and only `cache: "default"` reuses one (measured).
 - **A sealed cursor whose `since` keeps failing** (a 503 every time, not a 400): the wallet reads Koios each time and keeps the cursor. A 400 already starts again from a snapshot.
-- **`names` and `since` can come from different blocks** for one reading. A Seedelf of this wallet's that moved in between shows as another's for that reading, and Remove can't build until the next one.
+- ~~**`names` and `since` can come from different blocks** for one reading. A Seedelf of this wallet's that moved in between shows as another's for that reading, and Remove can't build until the next one.~~ Fixed in 1.4.1: a Seedelf in a row of this wallet's, from the feed just read, wins over `names` (`contract-scan.ts`).
 - **Activity's "more" page** can come from the other server when a part flips between pages, and skip a transaction near the edge of a page. Koios's own backends, at different lags, can already do this.
 
 ## What changed from the plan

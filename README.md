@@ -4,6 +4,8 @@
 
 The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and macOS. The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in.
 
+**Install the Seedelf Wallet from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).**
+
 ## What is a Seedelf?
 
 The wallet name, **Seedelf**, comes from the prefix of the identifier token used to locate the datum of a UTxO inside the wallet contract. The root datum becomes readily available by searching for a specific seedelf token, providing a personalized touch while maintaining privacy.
