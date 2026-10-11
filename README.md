@@ -2,7 +2,7 @@
 
 **Seedelf** is a stealth wallet that hides the receiver and spender using a non-interactive variant of Schnorr's Σ-protocol for the Discrete Logarithm Relation. It should be computationally infeasible to deduce the intended receiver or spender of UTxOs inside this wallet.
 
-The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and macOS. The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in.
+The [seedelf-cli](./seedelf-platform/README.md) is available on Linux, Windows, and macOS. The [Seedelf Wallet](./seedelf-platform/seedelf-web-wallet/README.md) is a Cardano wallet for Chrome with Seedelf built in, on the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).
 
 ## What is a Seedelf?
 
@@ -259,3 +259,5 @@ Users can interact with the wallet protocol via the [seedelf-platform](./seedelf
 ## Contact
 
 For questions, suggestions, or concerns, please get in touch with support@logicalmechanism.io or join the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
+
+Nobody from Seedelf will message you first, and no one will ever ask for your recovery phrase.

@@ -2,6 +2,8 @@
 
 A Cardano wallet for Chrome, with private payments built in: Seedelf, the Cardano stealth wallet.
 
+**Install it** from the [Chrome Web Store](https://chromewebstore.google.com/detail/seedelf-wallet/dkefopeefhophfkjkkdebhoklagjdmcp).
+
 > **Status:** version 1.x, the web wallet's own version line, kept apart from the Rust workspace's 0.x (see the root [CLAUDE.md](../../CLAUDE.md#release--versioning)). Every build, the dev build included, runs on Cardano mainnet by default, with preprod on the welcome screen and in Settings for testing. The design lives in [docs/](docs/), what was built is in [docs/roadmap.md](docs/roadmap.md), and what comes next is in [docs/post-release-roadmap.md](docs/post-release-roadmap.md). To try it in Chrome, see [extension/README.md](extension/README.md).
 
 ## What it is
@@ -111,3 +113,11 @@ Every Lace path in these docs is relative to that checkout. `e431933` is where L
 - **One-time accounts:** a reserved account index that real wallets never reach. Each session's base address has its own payment and stake keys, shared with no other session. See [privacy.md](docs/privacy.md#known-links).
 - **Transaction building:** the CLI's Rust (Pallas) builders, separated from network calls and compiled to WebAssembly. See [architecture.md](docs/architecture.md#transaction-building).
 - **UI stack:** React + TypeScript + Vite, with plain CSS.
+
+## Community
+
+- **Questions and discussion:** the [Seedelf Discord](https://discord.gg/r8VwV2jGBy).
+- **Bugs:** [GitHub issues](https://github.com/logical-mechanism/Seedelf-Wallet/issues).
+- **Anything else:** support@logicalmechanism.io.
+
+Nobody from Seedelf will message you first, and no one will ever ask for your recovery phrase.
