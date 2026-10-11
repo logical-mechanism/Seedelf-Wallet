@@ -236,7 +236,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
 
 **`account_txs` and `credential_txs` never join a whole history.** A transaction's id rises with its block, so a page takes the newest ids it needs, widened to the whole of the oldest block they reach, and joins only those: 0.5 s a page for a key with 221,000 transactions, against 2.3 s before, and the same rows.
-- **Too many outputs are refused before any is gathered,** by a count from `tx_out`'s index alone: 79 ms for Minswap V2's pool script, against 4.9 s gathering its outputs to find out.
+- **`credential_txs` gathers nothing past the cap:** a count from `tx_out`'s index alone gates the gathering, in the same query, so Minswap V2's pool script is refused in 0.1 s, against 4.9 s gathering its outputs to find out. `account_txs` is as it was.
 - **A credential's outputs are gathered address by address,** never all its addresses first: a busy script's credential sits at millions of them, and the cap reaches at most as many addresses as outputs.
 - **Checked against Koios (2026-10-11):** the same pages, row for row, for a wallet's key and for the contract's and mix box's credentials together, at offsets 0 and 20.
 

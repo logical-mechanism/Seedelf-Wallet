@@ -289,7 +289,27 @@ enum Whose {
 }
 
 impl Whose {
+    /// Where its outputs are, for a count of them from `tx_out`'s index
+    /// alone, with no row read ([`too_many`]).
+    fn at(self) -> &'static str {
+        match self {
+            Whose::Stake => {
+                "stake_address sa join address a on a.stake_address_id = sa.id \
+                 join tx_out o on o.address_id = a.id where sa.hash_raw = $1::bytea"
+            }
+            Whose::Credentials => {
+                "address a join tx_out o on o.address_id = a.id where a.payment_cred = any($1::bytea[])"
+            }
+        }
+    }
+
     /// The `outs` CTE, with any it reads: `limit` outputs at most.
+    ///
+    /// Credentials' outputs are gathered only once a count from the index
+    /// says they're within the cap (`gate`), in the same query: a busy
+    /// script's credential is refused in 0.1 s rather than 4.9 s gathering
+    /// its outputs to find out, at no round trip more. A stake key's are
+    /// gathered as before credentials were, so `account_txs` is unchanged.
     fn outs(self, limit: i64) -> String {
         match self {
             Whose::Stake => format!(
@@ -301,10 +321,12 @@ impl Whose {
                    where o.address_id in (select id from addrs) limit {limit})"
             ),
             Whose::Credentials => format!(
-                "outs as materialized ( \
+                "gate as materialized (select ({count}) as over), \
+                 outs as materialized ( \
                    select o.tx_id, o.consumed_by_tx_id from address a cross join lateral ( \
                      select o.tx_id, o.consumed_by_tx_id from tx_out o where o.address_id = a.id offset 0) o \
-                   where a.payment_cred = any($1::bytea[]) limit {limit})"
+                   where a.payment_cred = any($1::bytea[]) and not (select over from gate) limit {limit})",
+                count = too_many(self),
             ),
         }
     }
@@ -346,21 +368,13 @@ fn txs(whose: Whose) -> String {
 }
 
 /// Whether the outputs of `whose` pass [`MAX_OUTPUTS`], counted from
-/// `tx_out`'s index alone, with no row read: 40 ms for a busy script's
-/// credential (Minswap V2's pools), against 4.9 s gathering its outputs to
-/// find out.
+/// `tx_out`'s index alone, with no row read: asked when a page came back
+/// empty, which past the cap may have lost its rows, or, for credentials,
+/// was never gathered (`gate`).
 fn too_many(whose: Whose) -> String {
-    let at = match whose {
-        Whose::Stake => {
-            "stake_address sa join address a on a.stake_address_id = sa.id \
-             join tx_out o on o.address_id = a.id where sa.hash_raw = $1::bytea"
-        }
-        Whose::Credentials => {
-            "address a join tx_out o on o.address_id = a.id where a.payment_cred = any($1::bytea[])"
-        }
-    };
     format!(
-        "select count(*) > {MAX_OUTPUTS} from (select 1 from {at} limit {}) gathered",
+        "select count(*) > {MAX_OUTPUTS} from (select 1 from {} limit {}) gathered",
+        whose.at(),
         MAX_OUTPUTS + 1
     )
 }
@@ -437,25 +451,22 @@ async fn listing(
     }
     state.fresh_tip()?;
     let client = state.chain.public().await?;
-    // Too many to gather is refused before any is: past the cap, the
-    // gathered outputs may have lost the page's rows.
-    let over: bool = client
-        .query_one(&too_many(whose), &[key])
-        .await
-        .map_err(anyhow::Error::from)?
-        .try_get(0)
-        .map_err(anyhow::Error::from)?;
-    if over {
-        return Err(ApiError::Heavy);
-    }
     let rows = client
         .query(&txs(whose), &[key, &from, &offset, &limit])
         .await
         .map_err(anyhow::Error::from)?;
-    // Outputs made since the count can still take it past.
-    if let Some(row) = rows.first()
-        && row.try_get::<_, bool>(4).map_err(anyhow::Error::from)?
-    {
+    // Past the cap, the gathered outputs may have lost the page's rows, so
+    // an empty page is only the end once the count says so.
+    let over = match rows.first() {
+        Some(row) => row.try_get::<_, bool>(4).map_err(anyhow::Error::from)?,
+        None => client
+            .query_one(&too_many(whose), &[key])
+            .await
+            .map_err(anyhow::Error::from)?
+            .try_get(0)
+            .map_err(anyhow::Error::from)?,
+    };
+    if over {
         return Err(ApiError::Heavy);
     }
     let rows = rows
