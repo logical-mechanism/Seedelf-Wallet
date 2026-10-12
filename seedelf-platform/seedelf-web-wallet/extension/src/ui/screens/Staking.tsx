@@ -2,7 +2,8 @@
 // pool the Cardano account stakes with (and why it may earn less), the
 // rewards with Withdraw, where the voting power goes, Change pool and Stop
 // staking, and the account as its own DRep (Governance.tsx). Choosing a pool
-// opens the browser (Pools.tsx); the vote, Voting.tsx. Every change is built
+// opens the browser (Pools.tsx); the vote, Voting.tsx; the rewards paid,
+// Rewards.tsx (chunk 30), which reads them only then. Every change is built
 // and signed by the worker and reviewed here: nothing is sent until the user
 // presses the review's button, which names the act. Opening the page reads
 // the pool's details and the account's DRep, fresh: two requests, or three
@@ -52,6 +53,7 @@ import {
   votesOut,
 } from "./Governance";
 import { NEW_POOLS_VIEW, Pools, SharedTicker, type PoolsView } from "./Pools";
+import { Rewards } from "./Rewards";
 import { sharedDrepName, Voting, type VoteView } from "./Voting";
 
 /** What a review shows besides the summary: the pool's or DRep's name, and how many others share it. */
@@ -80,7 +82,7 @@ interface Chosen {
  */
 export type Building = "withdraw" | "stop" | "retire" | "delegate-own" | "review" | "remove-profile" | GovVote;
 
-type Page = "overview" | "pools" | "vote" | "drep-register" | "drep-profile" | "governance";
+type Page = "overview" | "pools" | "vote" | "drep-register" | "drep-profile" | "governance" | "rewards";
 
 /** What the stake key's first registration locks up: `key_deposit`, 2 ₳ on both networks. */
 export const KEY_DEPOSIT = 2_000_000n;
@@ -406,6 +408,7 @@ export function Staking({
       />
     );
   }
+  if (page === "rewards") return <Rewards onBack={back("overview")} />;
   if (page === "vote") {
     return (
       <Voting
@@ -492,6 +495,8 @@ export function Staking({
           <button type="button" className="primary" onClick={() => setPage("pools")} disabled={!!why || busy} title={why}>
             {t("staking.choosePool")}
           </button>
+          {/* A stake key that stopped keeps what it was paid (chunk 30). */}
+          {staking.rewarded && <RewardsButton onOpen={() => setPage("rewards")} disabled={busy} />}
         </section>
       )}
 
@@ -545,6 +550,7 @@ export function Staking({
           >
             {building === "withdraw" ? t("staking.building.withdraw") : t("staking.withdraw")}
           </button>
+          <RewardsButton onOpen={() => setPage("rewards")} disabled={busy} />
         </section>
       )}
 
@@ -608,6 +614,16 @@ export function Staking({
           the same beside it (ST-7). */}
       <Callout tone="privacy">{t("staking.privacy.public")}</Callout>
     </Screen>
+  );
+}
+
+/** Rewards history, a page of its own: it builds nothing, so only a build in progress holds it back, never a transaction on its way. */
+function RewardsButton({ onOpen, disabled }: { onOpen: () => void; disabled: boolean }) {
+  const t = useT();
+  return (
+    <button type="button" className="secondary" onClick={onOpen} disabled={disabled}>
+      {t("rewards.title")}
+    </button>
   );
 }
 

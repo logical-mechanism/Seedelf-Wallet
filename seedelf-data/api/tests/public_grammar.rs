@@ -186,6 +186,49 @@ async fn account_routes() {
 }
 
 #[tokio::test]
+async fn a_rewards_history_is_read_a_thousand_at_a_time() {
+    // Staking's Rewards history (web wallet chunk 30): one stake key, every column but it, in one total order.
+    let history = |rest: &str| {
+        format!(
+            "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
+             &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc{rest}"
+        )
+    };
+    let one = json!({ "_stake_addresses": [STAKE] });
+    for page in ["&offset=0&limit=1000", "&offset=1000&limit=1000"] {
+        assert_eq!(post(&history(page), one.clone()).await.0, OK, "{page}");
+    }
+    for page in [
+        "&offset=0&limit=20",
+        "&offset=500&limit=1000",
+        "&offset=101000&limit=1000",
+        "&limit=1000",
+        "&offset=0",
+        "&offset=0&limit=1000&epoch_no=eq.300",
+    ] {
+        assert_eq!(post(&history(page), one.clone()).await.0, BAD, "{page}");
+    }
+    let page = history("&offset=0&limit=1000");
+    let key =
+        |i: u8| seedelf_data_api::ids::encode("stake", &[[0xe1].as_slice(), &[i; 28]].concat());
+    for body in [
+        json!({ "_stake_addresses": [key(1), key(2)] }),
+        json!({ "_stake_addresses": [] }),
+        json!({ "_stake_addresses": ["stake1"] }),
+        json!({ "_stake_addresses": [STAKE], "_epoch_no": 300 }),
+    ] {
+        assert_eq!(post(&page, body.clone()).await.0, BAD, "{body}");
+    }
+    // Another select or order is another request.
+    let partial = "/api/v1/account_reward_history?select=amount\
+        &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc&offset=0&limit=1000";
+    assert_eq!(post(partial, one.clone()).await.0, BAD);
+    let loose = "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
+        &order=earned_epoch.desc&offset=0&limit=1000";
+    assert_eq!(post(loose, one).await.0, BAD);
+}
+
+#[tokio::test]
 async fn credential_txs_pages_as_account_txs_does() {
     // Public activity, by the account's payment keys (web wallet chunk 28): up to 75 a request.
     let key = |i: u8| format!("{i:056x}");

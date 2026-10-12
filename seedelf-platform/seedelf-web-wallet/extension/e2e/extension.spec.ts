@@ -5,6 +5,8 @@ import { crc32, deflateSync } from "node:zlib";
 
 import type { BrowserContext, Page } from "@playwright/test";
 
+import { epochAt } from "../src/networks";
+
 import {
   accountMintPreprod,
   accountVector,
@@ -3263,6 +3265,72 @@ test("governance: Your own DRep, before the account is one, says what it costs a
   await expect(page.getByRole("heading", { name: "Become a DRep" })).toBeVisible();
   await expect(page.getByRole("switch", { name: "Delegate this account's voting power to it" })).toHaveAttribute("aria-checked", "true");
   expect(koios.submitted).toHaveLength(0);
+});
+
+/** The 12-word phrase's preprod rewards, newest first (tests/fixtures/record-rewards.mjs). */
+const rewardsPreprod = JSON.parse(readFileSync(new URL("../tests/fixtures/rewards-preprod.json", import.meta.url), "utf8")) as {
+  stake: string;
+  account_reward_history: Array<{ earned_epoch: number; spendable_epoch: number; amount: string; type: string; pool_id_bech32: string | null }>;
+};
+
+test("staking: the rewards history, read only once it's opened (chunk 30)", async ({ context, koios }) => {
+  // The recorded rewards, moved so the newest is next epoch's whatever today is: Koios lists it before it's paid.
+  const recorded = rewardsPreprod.account_reward_history;
+  const next = epochAt("preprod", Date.now()) + 1;
+  const shift = next - recorded[0]!.spendable_epoch;
+  const rows = recorded.map((r) => ({ ...r, earned_epoch: r.earned_epoch + shift, spendable_epoch: r.spendable_epoch + shift }));
+  // Answered here, after the fixture's routes, so this one wins.
+  const asked: Array<{ query: URLSearchParams; body: unknown }> = [];
+  await context.route(
+    (url) => url.pathname.endsWith("/account_reward_history"),
+    (route) => {
+      const url = new URL(route.request().url());
+      asked.push({ query: url.searchParams, body: route.request().postDataJSON() });
+      const offset = Number(url.searchParams.get("offset"));
+      return route.fulfill({ json: rows.slice(offset, offset + Number(url.searchParams.get("limit"))) });
+    },
+  );
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+
+  // Opening Staking asks nothing about them: the page reads its pool's details, which names LOGIC below.
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByTestId("your-pool")).toContainText("LOGIC · Logical Mechanism");
+  expect(asked).toHaveLength(0);
+
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Rewards history" }).click();
+  await expect(page.getByRole("heading", { name: "Rewards history", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("rewards-total")).toContainText("Paid in all656.746865 ₳");
+  await expect(page.getByTestId("rewards-coming")).toContainText(`Epoch ${next} · LOGIC6.906754 ₳`);
+  // One request, all of it, for the account's own stake key; nothing else, not a pool's details for a ticker.
+  expect(asked).toHaveLength(1);
+  expect(asked[0]!.body).toEqual({ _stake_addresses: [rewardsPreprod.stake] });
+  expect(Object.fromEntries(asked[0]!.query)).toEqual({
+    select: "earned_epoch,spendable_epoch,amount,type,pool_id_bech32",
+    order: "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc",
+    offset: "0",
+    limit: "1000",
+  });
+  expect(koios.calls.slice(reads)).toEqual([]);
+  // 50 paid rows at first; Show more shows the rest, asking no one. The oldest pool the device doesn't know is its
+  // ID cut short.
+  const paid = page.getByTestId("rewards-year").locator(".list__row");
+  await expect(paid).toHaveCount(50);
+  await snap(page, "rewards-history");
+  await page.getByRole("button", { name: "Show more" }).click();
+  await expect(paid).toHaveCount(86);
+  await expect(paid.last()).toContainText(`Epoch ${recorded.at(-1)!.spendable_epoch + shift} · pool1nmfr5j5rnqn…f3e5eh8.053609 ₳`);
+  await expect(page.getByRole("button", { name: "Show more" })).toHaveCount(0);
+  expect(asked).toHaveLength(1);
+
+  // Back is the Staking page, and opening the history again reads it again: it's kept nowhere.
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("heading", { name: "Staking and governance", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "Rewards history" }).click();
+  await expect(page.getByTestId("rewards-total")).toBeVisible();
+  expect(asked).toHaveLength(2);
 });
 
 test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {
