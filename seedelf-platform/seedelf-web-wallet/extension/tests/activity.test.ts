@@ -8,17 +8,20 @@ import {
   describe as describeTxs,
   noteOf,
   PAGE,
+  SESSION_ACCOUNT_ACTIVITY_PREFIX,
   SESSION_ACCOUNT_ADDRESSES_PREFIX,
   takePage,
   type AccountAddresses,
 } from "../src/background/activity";
 import type { KoiosTxInfo, KoiosUtxo } from "../src/background/koios";
+import { pendingKey } from "../src/background/pending";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import { NETWORKS } from "../src/networks";
 import type { ActivityEntry, PendingTx } from "../src/shared/rpc";
 import { txInputs } from "../src/background/cbor";
 import { forgetSpent } from "../src/background/spent";
 import { activityAmount, activityCsv, activityDetail, activityTitle, csvCell, signedQuantity, tokenMoved } from "../src/ui/activity";
+import { formatAda } from "../src/ui/format";
 import { assetFingerprint } from "../src/ui/tokens";
 import { activityPreprod, koiosPreprod, ownedUtxos, testBalances, vectors } from "./fakes";
 
@@ -858,5 +861,59 @@ describe("Public activity's payment on its way (blind test §9.3, T08)", () => {
     await t.moveIn.submit("preprod", summary.txHash);
     const { entries } = await t.activity.cardano("preprod");
     expect(entries[0]).toMatchObject({ txHash: summary.txHash, pending: true, kind: "move-in", direction: "out", lovelace: "20000000", fee: "178349" });
+  });
+
+  // To the chain it's a payment to itself, which read "Sent" once Koios listed it (post-release-roadmap.md's Kept in mind).
+  it("names a collateral payment Set collateral, on its way and in a block, from its record, after a reclaim too", async () => {
+    const t = await onPreprod();
+    await t.balances.get("preprod");
+    const summary = await t.send.buildCollateral("preprod");
+    await t.send.submitCollateral("preprod", summary.txHash);
+    // Not from the watch, which follows only the network's newest.
+    await t.session.remove(pendingKey("preprod"));
+    const pending = (await t.activity.cardano("preprod")).entries[0]!;
+    expect(pending).toMatchObject({ txHash: summary.txHash, pending: true, kind: "collateral", direction: "none", lovelace: "0", fee: summary.fee });
+    expect(activityTitle(pending)).toBe("Set collateral");
+
+    // In a block: its 5 ₳ and its change back to the account, the rewards collected as in every account payment.
+    const account = (await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!;
+    const inputs = txInputs(t.koios.submitted[0]!);
+    const spent = koiosPreprod.accounts[activityPreprod.stake]!.account_utxos.filter((u) => inputs.includes(`${u.tx_hash}#${u.tx_index}`));
+    expect(spent).toHaveLength(inputs.length);
+    const top = activityPreprod.account_txs[0]!;
+    const row = { tx_hash: summary.txHash, block_height: top.block_height + 1, block_time: top.block_time + 60 };
+    const home = { bech32: summary.payments[0]!.address, cred: account.keys[0] };
+    const info = {
+      tx_hash: summary.txHash,
+      block_height: row.block_height,
+      tx_timestamp: row.block_time,
+      fee: summary.fee,
+      inputs: spent.map((u) => ({ payment_addr: { bech32: u.address, cred: u.payment_cred }, value: u.value, asset_list: [] })),
+      outputs: [
+        { payment_addr: home, value: "5000000", asset_list: [] },
+        { payment_addr: home, value: summary.changeLovelace, asset_list: [] },
+      ],
+      withdrawals: summary.withdrawal ? [{ amount: summary.withdrawal, stake_addr: activityPreprod.stake }] : [],
+    };
+    activityPreprod.account_txs.unshift(row);
+    (activityPreprod.tx_info as unknown[]).push(info);
+    try {
+      const listed = (await t.activity.cardano("preprod")).entries.filter((e) => e.txHash === summary.txHash);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ kind: "collateral", direction: "none", lovelace: "0", fee: summary.fee });
+      expect(listed[0]!.pending).toBeUndefined();
+      expect(listed[0]!.detail).toBeUndefined();
+      expect(activityAmount(listed[0]!)).toBe(`−${formatAda(summary.fee)} ₳`);
+      expect(activityCsv("preprod", listed)).toContain(`,Set collateral,none,0,${formatAda(summary.fee)},`);
+
+      // Reclaimed, then read afresh (a new session's pages): still the collateral payment it was.
+      await t.coins.reclaim("preprod");
+      await t.session.remove(`${SESSION_ACCOUNT_ACTIVITY_PREFIX}preprod`);
+      const again = (await t.activity.cardano("preprod")).entries.find((e) => e.txHash === summary.txHash);
+      expect(again).toMatchObject({ kind: "collateral" });
+    } finally {
+      activityPreprod.account_txs.shift();
+      (activityPreprod.tx_info as unknown[]).pop();
+    }
   });
 });

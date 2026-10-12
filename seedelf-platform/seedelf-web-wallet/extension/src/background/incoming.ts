@@ -307,6 +307,8 @@ export interface PendingFrom {
   listed: ReadonlySet<string>;
   /** The private history's own entries, by transaction: a Make private, a mint the account paid for, and what it names. */
   own: ReadonlyMap<string, ActivityEntry>;
+  /** The account's collateral payments, by transaction (coin-control.ts `collateralPayments`). */
+  collateral?: ReadonlySet<string>;
   /** The transaction the wallet watches on this network and what it is (pending.ts), when there's one. */
   watched?: { txHash: string; kind: ActivityEntry["kind"] };
 }
@@ -390,7 +392,10 @@ export function pendingEntries(wasm: typeof Wasm, network: NetworkName, sent: Se
     };
     // Named as the confirmed entry will be, as far as the transaction says: a public Send is "sent" there.
     // Never "Sent" with a plus: one that leaves the account better off is received.
-    const kind: ActivityEntry["kind"] = mine?.kind ?? (watched && watched !== "send" ? watched : paid && moved <= 0n ? "sent" : "received");
+    // A collateral payment by its record too: the watch names only the newest of the network's.
+    const kind: ActivityEntry["kind"] =
+      mine?.kind ??
+      (from.collateral?.has(s.txHash) ? "collateral" : watched && watched !== "send" ? watched : paid && moved <= 0n ? "sent" : "received");
     const counterparts = [...new Set(others.map((o) => o.address.bech32))];
     const who = mine?.detail
       ? { detail: mine.detail, ...(mine.more ? { more: mine.more } : {}) }
