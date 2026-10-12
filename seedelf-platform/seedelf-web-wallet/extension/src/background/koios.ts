@@ -150,8 +150,24 @@ export interface KoiosAccountInfo {
   delegated_drep: string | null;
   /** Lovelace that can be withdrawn now. */
   rewards_available: string;
+  /** Every withdrawal of its rewards, summed (lovelace): with `rewards_available`, all it was ever paid. */
+  withdrawals?: string;
   /** The deposit paid when it was registered (lovelace). */
   deposit: string;
+}
+
+/** One reward paid to a stake key: `account_reward_history`, with its stake address left out. */
+export interface KoiosReward {
+  /** The epoch it was earned in. */
+  earned_epoch: number;
+  /** The epoch it's paid at the start of: the next epoch's are listed before they're paid. */
+  spendable_epoch: number;
+  /** Lovelace, as a decimal string. */
+  amount: string;
+  /** `member`, `leader`, `refund` (a pool's deposit back), `reserves`, `treasury` or `proposal_refund`. */
+  type: string;
+  /** The pool that paid it; null for the reserves', the treasury's and a proposal's deposit back. */
+  pool_id_bech32: string | null;
 }
 
 /** A live pool, with only what the pool browser reads: `pool_list`. */
@@ -294,6 +310,13 @@ const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,li
 const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
 const DREP_STANDING_COLUMNS = `${DREP_INFO_COLUMNS},deposit,meta_url,meta_hash`;
 const DREP_PROFILE_COLUMNS = "drep_id,is_valid,meta_json->body->givenName";
+/** A rewards history: every column but the stake address, which the wallet asked about. */
+const REWARD_COLUMNS = "earned_epoch,spendable_epoch,amount,type,pool_id_bech32";
+/**
+ * Newest first, in an order with no ties, so no row is on two pages: an
+ * operator's reward account can take several pools' rewards in one epoch.
+ */
+const REWARD_ORDER = "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc";
 /**
  * A live governance action is one not yet ratified, enacted, dropped or
  * expired. Its metadata's text is most of a row (70 KB for mainnet's three on
@@ -805,6 +828,23 @@ export class Koios {
   async accountInfo(stakeAddress: string): Promise<KoiosAccountInfo | undefined> {
     const [row] = await this.post<KoiosAccountInfo>("account_info", { _stake_addresses: [stakeAddress] });
     return row;
+  }
+
+  /**
+   * Every reward paid to a stake key, newest first, 1,000 a request: a
+   * member's come once an epoch, so one request for nearly every account.
+   */
+  async rewardHistory(stakeAddress: string): Promise<KoiosReward[]> {
+    const rows: KoiosReward[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await this.post<KoiosReward>(
+        "account_reward_history",
+        { _stake_addresses: [stakeAddress] },
+        `select=${REWARD_COLUMNS}&order=${REWARD_ORDER}&offset=${offset}&limit=${PAGE_SIZE}`,
+      );
+      rows.push(...page);
+      if (page.length < PAGE_SIZE) return rows;
+    }
   }
 
   /** Every live pool (not retiring or retired), 1,000 a request. */

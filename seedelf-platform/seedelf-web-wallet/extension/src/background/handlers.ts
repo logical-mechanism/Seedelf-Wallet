@@ -266,6 +266,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.staking.drep(ctx.network, message.id);
     case "drep-own":
       return ctx.staking.ownDrep(ctx.network);
+    case "reward-history":
+      return ctx.staking.rewardHistory(ctx.network);
     case "governance":
       return ctx.staking.governance(ctx.network, message.refresh ?? false);
     case "drep-profile":

@@ -266,6 +266,30 @@ export interface StakeInfo {
   deposit: string;
   /** Its vote goes to the account's own DRep (chunk 21): worked out from the key, asking no one. */
   ownDrep?: boolean;
+  /**
+   * It was ever paid a reward, so it has a rewards history, registered or not: from what `account_info` gives
+   * (rewards available and withdrawn), asking no more (chunk 30).
+   */
+  rewarded?: boolean;
+}
+
+/**
+ * What paid a reward: a pool's delegators (`member`), its operator (`leader`), a pool's deposit back (`refund`),
+ * the reserves or the treasury, a governance proposal's deposit back, or something Koios names that the wallet
+ * doesn't know.
+ */
+export type RewardKind = "member" | "leader" | "refund" | "reserves" | "treasury" | "proposal_refund" | "other";
+
+/** One reward paid to the public account's stake key (chunk 30). Lovelace as a decimal string. */
+export interface RewardRow {
+  /** The epoch it's paid at the start of: in the rewards from then. A later one than now is on its way. */
+  epoch: number;
+  /** The epoch it was earned in: two before for a pool's rewards. */
+  earned: number;
+  amount: string;
+  kind: RewardKind;
+  /** The pool that paid it, with its ticker when the device knows it (none is asked for). */
+  pool?: PoolRef;
 }
 
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
@@ -2056,6 +2080,8 @@ export interface Requests {
   drep: { payload: { id: string }; result: DrepDetails };
   /** The account's own DRep, read fresh. */
   "drep-own": { payload: None; result: OwnDrep };
+  /** Every reward paid to the public account's stake key, newest first, read fresh (chunk 30). */
+  "reward-history": { payload: None; result: RewardRow[] };
   /** The live governance actions (kept on the device for an hour, or read again with `refresh`), with the account's DRep and its votes. */
   governance: { payload: { refresh?: boolean }; result: GovernanceView };
   /** Writes a DRep's profile as CIP-119 metadata and hashes it, asking no one. */
@@ -2370,6 +2396,7 @@ const REQUEST_LIST = [
   "pool",
   "drep",
   "drep-own",
+  "reward-history",
   "governance",
   "drep-profile",
   "stake-build",

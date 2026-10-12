@@ -163,6 +163,32 @@ describe("the data layer's client", () => {
     expect(asked[2]!.query).not.toContain("or=");
   });
 
+  it("reads a rewards history's every page on the data layer, or all of it again on Koios (chunk 30)", async () => {
+    const reward = (epoch: number) => ({ earned_epoch: epoch - 2, spendable_epoch: epoch, amount: "1000000", type: "member", pool_id_bech32: "pool1x" });
+    const page = (from: number, length: number) => Response.json(Array.from({ length }, (_, i) => reward(from - i)));
+    const STAKE = "stake1u9c0yhlklkdd7vcwkvv2cjrgnw48y82jmm2ulk3vxe2qupsv2va8g";
+
+    const s = servers();
+    let pages = 0;
+    s.data.set("account_reward_history", () => (pages++ === 0 ? page(5000, 1000) : page(4000, 3)));
+    const { make } = client(s);
+    expect(await make("mainnet").rewardHistory(STAKE)).toHaveLength(1003);
+    const asked = s.calls.filter((c) => c.path === "account_reward_history");
+    expect(asked.map((c) => [c.host, new URLSearchParams(c.query).get("offset")])).toEqual([
+      [DATA, "0"],
+      [DATA, "1000"],
+    ]);
+
+    // A page that fails sends the whole read to Koios, from its first page.
+    const later = servers();
+    let tries = 0;
+    later.data.set("account_reward_history", () => (tries++ === 0 ? page(5000, 1000) : new Response("", { status: 504 })));
+    later.koios.set("account_reward_history", page(7, 2));
+    const { make: again } = client(later);
+    expect((await again("mainnet").rewardHistory(STAKE)).map((r) => r.spendable_epoch)).toEqual([7, 6]);
+    expect(later.calls.filter((c) => c.path === "account_reward_history").map((c) => c.host)).toEqual([DATA, DATA, KOIOS]);
+  });
+
   it("keeps each part apart, and a part's hold across a worker's restart", async () => {
     const s = servers();
     s.data.set("tip", "unreachable");
@@ -333,7 +359,7 @@ describe("the data layer's limits", () => {
 
   it("weighs each route as the edge does", () => {
     expect(["tip", "epoch_params", "totals", "pool_list", "proposal_list", "contract/snapshot"].map(dataCost)).toEqual([1, 1, 1, 1, 1, 1]);
-    expect(["credential_utxos", "tx_info", "pool_info", "tx_status"].map(dataCost)).toEqual([4, 4, 4, 4]);
+    expect(["credential_utxos", "tx_info", "pool_info", "tx_status", "account_reward_history"].map(dataCost)).toEqual([4, 4, 4, 4, 4]);
     expect(["submittx", "ogmios"].map(dataCost)).toEqual([10, 10]);
   });
 

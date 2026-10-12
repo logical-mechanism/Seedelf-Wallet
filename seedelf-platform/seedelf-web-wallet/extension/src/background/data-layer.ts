@@ -7,7 +7,8 @@
 // The fallback is per part, and each part goes on its own:
 //
 //   public   Koios's own routes, which the data layer answers in Koios's JSON
-//            (one user's UTxOs, transactions, staking, pools, DReps, actions).
+//            (one user's UTxOs, transactions, staking and rewards, pools,
+//            DReps, actions).
 //   private  The private index (private-index.ts): the contract and
 //            Lovejoin's pool, the same for whoever asks.
 //   submit   `submittx` and `ogmios`.
@@ -284,6 +285,10 @@ export class DataLayerKoios extends Koios {
 
   override accountInfo(stakeAddress: string) {
     return this.read((k) => k.accountInfo(stakeAddress), () => super.accountInfo(stakeAddress));
+  }
+
+  override rewardHistory(stakeAddress: string) {
+    return this.read((k) => k.rewardHistory(stakeAddress), () => super.rewardHistory(stakeAddress));
   }
 
   override poolList() {

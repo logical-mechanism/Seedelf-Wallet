@@ -9,7 +9,7 @@ import { Koios, type FetchLike } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
 import { LOCAL_POOLS_PREFIX, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation, takesDeposit } from "../src/background/staking";
 import { txIdOf } from "./fixtures/cbor";
-import { stakingPreprod, testBalances, vectors } from "./fakes";
+import { rewardsPreprod, stakingPreprod, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -40,6 +40,8 @@ describe("the stake key in the balances", () => {
       drep: "drep_always_abstain",
       rewards: REWARDS,
       deposit: "2000000",
+      // Paid rewards, so it has a history (chunk 30).
+      rewarded: true,
     });
     // `lovelace` is the UTxOs' only; the rewards are apart.
     const utxos = stakingPreprod.account_info[0]!;
@@ -85,6 +87,30 @@ describe("the stake key in the balances", () => {
     expect(paths(t)).not.toContain("pool_info");
   });
 
+  it("says a key that stopped staking was paid rewards, so its history stays on the page (chunk 30)", async () => {
+    const t = await unlocked(15);
+    const stake = account(15).preprod.stake as string;
+    const stopped = { stake_address: stake, status: "not registered", delegated_pool: null, delegated_drep: null, deposit: "0" } as const;
+    t.koios.stakes.set(stake, { ...stopped, rewards_available: "0", withdrawals: "12345678" });
+    expect((await t.balances.get("preprod", true)).cardano.staking).toEqual({
+      registered: false,
+      pool: null,
+      drep: null,
+      rewards: "0",
+      deposit: "0",
+      rewarded: true,
+    });
+    // Never paid, or Koios's sums aren't numbers: nothing to show.
+    for (const sums of [
+      { rewards_available: "0", withdrawals: "0" },
+      { rewards_available: "0" },
+      { rewards_available: "lots", withdrawals: "-1" },
+    ]) {
+      t.koios.stakes.set(stake, { ...stopped, ...sums });
+      expect((await t.balances.get("preprod", true)).cardano.staking.rewarded).toBeUndefined();
+    }
+  });
+
   it("never lets a failed ticker lookup break a reading", async () => {
     const t = await unlocked();
     const failing: FetchLike = async (url, init) =>
@@ -93,6 +119,90 @@ describe("the stake key in the balances", () => {
     const { BalanceService } = await import("../src/background/balances");
     const b = await new BalanceService(deps).get("preprod", true);
     expect(b.cardano.staking.pool).toEqual({ id: LOGIC });
+  });
+});
+
+describe("rewards history (chunk 30)", () => {
+  const GRADA = "pool1nmfr5j5rnqndprtazre802glpc3h865sy50mxdny65kfgf3e5eh";
+
+  it("reads every reward, newest first, in one request, naming pools from the device alone", async () => {
+    const t = await unlocked();
+    const rows = await t.staking.rewardHistory("preprod");
+    expect(paths(t)).toEqual(["account_reward_history"]);
+    const [asked] = t.koios.calls;
+    expect(asked!.body).toEqual({ _stake_addresses: [rewardsPreprod.stake] });
+    expect(Object.fromEntries(new URLSearchParams(asked!.query))).toEqual({
+      select: "earned_epoch,spendable_epoch,amount,type,pool_id_bech32",
+      order: "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc",
+      offset: "0",
+      limit: "1000",
+    });
+    expect(rows).toHaveLength(87);
+    expect(rows[0]).toEqual({ epoch: 319, earned: 317, amount: "6906754", kind: "member", pool: { id: LOGIC } });
+    expect(rows.at(-1)).toEqual({ epoch: 223, earned: 221, amount: "8053609", kind: "member", pool: { id: GRADA } });
+    expect(rows.reduce((sum, r) => sum + BigInt(r.amount), 0n)).toBe(663_653_619n);
+
+    // Once the device knows them, each pool by its ticker: LOGIC from the session, GRADA from the pool list. Still
+    // the one request, and no pool_info.
+    await t.staking.pool("preprod", LOGIC);
+    await t.staking.pools("preprod");
+    t.koios.calls.length = 0;
+    const named = await t.staking.rewardHistory("preprod");
+    expect(paths(t)).toEqual(["account_reward_history"]);
+    expect(named[0]!.pool).toEqual({ id: LOGIC, ticker: "LOGIC", name: "Logical Mechanism" });
+    expect(named.at(-1)!.pool).toEqual({ id: GRADA, ticker: "GRADA" });
+  });
+
+  it("reads past 1,000 a page, and leaves out a row that isn't a reward", async () => {
+    const t = await unlocked();
+    const row = (epoch: number, type = "leader", pool: string | null = LOGIC, amount = "1000000") => ({
+      earned_epoch: epoch - 2,
+      spendable_epoch: epoch,
+      amount,
+      type,
+      pool_id_bech32: pool,
+    });
+    t.koios.rewards.set(rewardsPreprod.stake, [
+      ...Array.from({ length: 1000 }, (_, i) => row(5000 - i)),
+      row(300, "reserves", null),
+      row(299, "treasury", null),
+      row(298, "proposal_refund", null),
+      row(297, "refund"),
+      row(296, "something new", null),
+      // Not rewards: an amount that isn't lovelace, an epoch that isn't whole, a pool ID that isn't one.
+      row(295, "member", LOGIC, "-5"),
+      row(294, "member", LOGIC, "1.5"),
+      { ...row(293), spendable_epoch: 293.5 },
+      row(292, "member", "addr1x"),
+    ]);
+    const rows = await t.staking.rewardHistory("preprod");
+    const asked = t.koios.calls.filter((c) => c.path === "account_reward_history");
+    expect(asked.map((c) => new URLSearchParams(c.query).get("offset"))).toEqual(["0", "1000"]);
+    expect(rows).toHaveLength(1006);
+    expect(rows[0]).toMatchObject({ epoch: 5000, kind: "leader", pool: { id: LOGIC } });
+    expect(rows.slice(1000).map((r) => [r.epoch, r.kind, r.pool?.id])).toEqual([
+      [300, "reserves", undefined],
+      [299, "treasury", undefined],
+      [298, "proposal_refund", undefined],
+      [297, "refund", LOGIC],
+      [296, "other", undefined],
+      [292, "member", undefined],
+    ]);
+  });
+
+  it("is the public account the wallet is on's", async () => {
+    // The 24-word phrase has accounts 0 and 1 recorded, as accounts.test.ts uses it.
+    const both = (index: 0 | 1) =>
+      vectors("cardano_account.json").find((v) => v.account === index && v.phrase.split(" ").length === 24)!;
+    const t = testBalances();
+    await t.wallet.create(both(0).phrase, PASSWORD);
+    await t.accounts.recordFirst();
+    t.koios.usedStakes.add(both(1).preprod.stake as string);
+    await t.accounts.discover("preprod");
+    await t.accounts.use(1, ["preprod"]);
+    t.koios.calls.length = 0;
+    expect(await t.staking.rewardHistory("preprod")).toEqual([]);
+    expect(t.koios.calls.map((c) => c.body)).toEqual([{ _stake_addresses: [both(1).preprod.stake] }]);
   });
 });
 

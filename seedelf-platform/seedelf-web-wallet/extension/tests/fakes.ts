@@ -25,6 +25,7 @@ import {
   type KoiosVote,
   type KoiosPool,
   type KoiosPoolInfo,
+  type KoiosReward,
   type KoiosTxInfo,
   type KoiosUtxo,
 } from "../src/background/koios";
@@ -165,6 +166,9 @@ export const stakingPreprod = fixture("staking-preprod.json") as {
   drep_metadata: KoiosDrepName[];
 };
 
+/** The 12-word phrase's rewards history on preprod, newest first: 87, all from pools (tests/fixtures/record-rewards.mjs). */
+export const rewardsPreprod = fixture("rewards-preprod.json") as { stake: string; account_reward_history: KoiosReward[] };
+
 /** Live governance actions on both networks, and a mainnet DRep with a profile and votes (tests/fixtures/record-governance.mjs). */
 export const governanceFixture = fixture("governance.json") as {
   drep: string;
@@ -215,6 +219,8 @@ export interface FakeKoios {
   addedToAccounts: KoiosUtxo[];
   /** Each stake key's `account_info`, by stake address: the recorded 12-word account's to begin with. */
   stakes: Map<string, KoiosAccountInfo>;
+  /** Each stake key's rewards history, newest first, by stake address: the recorded 12-word account's to begin with. */
+  rewards: Map<string, KoiosReward[]>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
   /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
@@ -319,6 +325,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     added: [],
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
+    rewards: new Map([[rewardsPreprod.stake, rewardsPreprod.account_reward_history]]),
     txExtras: new Map(),
     txSpends: new Map(),
     txOutputs: new Map(),
@@ -435,6 +442,8 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_utxos ?? [];
       } else if (path === "account_info") {
         rows = body._stake_addresses.flatMap((s: string) => fake.stakes.get(s) ?? []);
+      } else if (path === "account_reward_history") {
+        rows = body._stake_addresses.flatMap((s: string) => fake.rewards.get(s) ?? []);
       } else if (path === "pool_list") {
         rows = stakingPreprod.pool_list;
       } else if (path === "totals") {

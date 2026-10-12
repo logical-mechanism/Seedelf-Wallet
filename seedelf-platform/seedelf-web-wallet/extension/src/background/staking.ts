@@ -17,6 +17,9 @@
 //           everyone, so it's kept in chrome.storage.local for a day.
 //   pool    one pool's details, fresh (`pool_info`).
 //   drep    a DRep's standing and name (`drep_info`, `drep_metadata`).
+//   rewards every reward the stake key was paid (`account_reward_history`,
+//           1,000 a request), fresh, when Rewards history opens (chunk 30).
+//           Its pools' tickers come from the device, never asked for.
 // Building  like a send (send.ts): the account and its `account_info` read
 //           fresh, then built and signed in WebAssembly with the payment keys
 //           and the stake key, and kept until Send, which only submits it.
@@ -38,13 +41,15 @@ import {
   type PoolList,
   type PoolRef,
   type PoolRow,
+  type RewardKind,
+  type RewardRow,
   type StakeInfo,
   type StakingAction,
   type StakingSummary,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { governance, ownDrepId, profileFile, readOwnDrep } from "./governance";
-import type { Koios, KoiosAccountInfo, KoiosPoolInfo } from "./koios";
+import type { Koios, KoiosAccountInfo, KoiosPoolInfo, KoiosReward } from "./koios";
 import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import type { Area } from "./storage";
@@ -91,33 +96,72 @@ export async function readStake(deps: StakeDeps, network: NetworkName, stake: st
   return own !== undefined && read.drep === own ? { ...read, ownDrep: true } : read;
 }
 
+/** Lovelace Koios gave as text, or none: a sum it left out, or one that isn't a number, counts nothing. */
+const lovelaceOf = (text: string | undefined) => (/^\d+$/.test(text ?? "") ? BigInt(text!) : 0n);
+
 function stakeInfoOf(info: KoiosAccountInfo | undefined, pool: PoolRef | null): StakeInfo {
   if (!info) return NOT_STAKING;
   const registered = info.status === "registered";
+  // What's available and what was withdrawn are all it was ever paid: a key that stopped staking keeps its history.
+  const rewarded = lovelaceOf(info.rewards_available) + lovelaceOf(info.withdrawals) > 0n;
   return {
     registered,
     pool: registered ? pool : null,
     drep: registered ? info.delegated_drep : null,
     rewards: info.rewards_available ?? "0",
     deposit: info.deposit ?? "0",
+    ...(rewarded ? { rewarded } : {}),
   };
 }
 
 /**
- * A pool's ticker and name from what's on the device, asking no one: what
- * this session has read, then the pool list.
+ * The pools' tickers and names on the device, asking no one: what this
+ * session has read, then the pool list.
  */
+async function poolsKnown(
+  deps: Pick<StakeDeps, "wallet" | "session" | "local">,
+  network: NetworkName,
+): Promise<(id: string) => PoolRef | undefined> {
+  const known =
+    (await deps.wallet.withKeys(() => deps.session.get<Record<string, PoolRef>>(SESSION_POOL_REFS_PREFIX + network))) ??
+    {};
+  const listed = (await deps.local?.get<PoolList>(LOCAL_POOLS_PREFIX + network))?.pools ?? [];
+  const tickers = new Map(listed.flatMap((p) => (p.ticker ? [[p.id, p.ticker] as const] : [])));
+  return (id) => {
+    if (known[id]) return known[id];
+    const ticker = tickers.get(id);
+    return ticker ? { id, ticker } : undefined;
+  };
+}
+
+/** A pool's ticker and name from what's on the device, asking no one (`poolsKnown`). */
 export async function knownPool(
   deps: Pick<StakeDeps, "wallet" | "session" | "local">,
   network: NetworkName,
   id: string,
 ): Promise<PoolRef | undefined> {
-  const known = await deps.wallet.withKeys(() =>
-    deps.session.get<Record<string, PoolRef>>(SESSION_POOL_REFS_PREFIX + network),
-  );
-  if (known?.[id]) return known[id];
-  const listed = (await deps.local?.get<PoolList>(LOCAL_POOLS_PREFIX + network))?.pools.find((p) => p.id === id);
-  return listed?.ticker ? { id, ticker: listed.ticker } : undefined;
+  return (await poolsKnown(deps, network))(id);
+}
+
+const REWARD_KINDS: ReadonlySet<string> = new Set<RewardKind>(["member", "leader", "refund", "reserves", "treasury", "proposal_refund"]);
+
+const isEpoch = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
+
+/**
+ * A reward as the page shows it, or undefined for a row that isn't one: an
+ * epoch that isn't a whole number, an amount that isn't lovelace. The page
+ * adds them up, and one bad figure would have it throw while it draws.
+ */
+function rewardOf(row: KoiosReward, pool: (id: string) => PoolRef | undefined): RewardRow | undefined {
+  if (!isEpoch(row.spendable_epoch) || !isEpoch(row.earned_epoch) || !/^\d+$/.test(row.amount ?? "")) return undefined;
+  const id = typeof row.pool_id_bech32 === "string" && row.pool_id_bech32.startsWith("pool1") ? row.pool_id_bech32 : undefined;
+  return {
+    epoch: row.spendable_epoch,
+    earned: row.earned_epoch,
+    amount: row.amount,
+    kind: REWARD_KINDS.has(row.type) ? (row.type as RewardKind) : "other",
+    ...(id ? { pool: pool(id) ?? { id } } : {}),
+  };
 }
 
 /**
@@ -269,6 +313,19 @@ export class StakingService {
   /** The account's own DRep, read fresh, for Staking. */
   ownDrep(network: NetworkName): Promise<OwnDrep> {
     return readOwnDrep(this.deps, network);
+  }
+
+  /**
+   * Every reward the public account's stake key was paid, newest first, read
+   * fresh and kept nowhere: one request for nearly every account. Its pools
+   * are named from the device alone.
+   */
+  async rewardHistory(network: NetworkName): Promise<RewardRow[]> {
+    const { wasm, wallet } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const stake = await wallet.withKeys(({ cardano }) => cardano.stakeAddress(net));
+    const [rows, pool] = await Promise.all([this.deps.koios(network).rewardHistory(stake), poolsKnown(this.deps, network)]);
+    return rows.flatMap((row) => rewardOf(row, pool) ?? []);
   }
 
   /** The live governance actions, the account's DRep and its votes. */
