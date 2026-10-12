@@ -6,11 +6,11 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { SessionView, SwapLovejoin } from "../src/shared/rpc";
+import type { SessionOutSummary, SessionView, SwapLovejoin } from "../src/shared/rpc";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
-import { Session, StopDialog, SwapRow } from "../src/ui/screens/Swaps";
+import { CancelCollateralReview, nextStep, Session, SessionFoot, StopDialog, SwapRow } from "../src/ui/screens/Swaps";
 
 /** A page's text, as a person reads it. */
 function text(element: ReactElement): string {
@@ -207,5 +207,78 @@ describe("a session the restore scan found (chunk 27)", () => {
 
   it("stops warning once it's over", () => {
     expect(page(found({ stage: "closed" }))).not.toContain("another browser");
+  });
+  // Its order waits, and the account holds no ADA alone for the cancel's collateral (a return from before chunk 24).
+  const foot = (s: SessionView) =>
+    renderToStaticMarkup(
+      createElement(SessionFoot, {
+        s,
+        swapped: true,
+        waiting: true,
+        busy: false,
+        onSwap: () => undefined,
+        onCancel: () => undefined,
+        onCollateral: () => undefined,
+        onBack: () => undefined,
+        onForget: () => undefined,
+      }),
+    );
+  const emptied = (cancelCollateral?: SessionView["cancelCollateral"]) =>
+    found({ txs: [...found().txs, swapTx], holding: { lovelace: "0", tokens: [], utxos: 0 }, ...(cancelCollateral ? { cancelCollateral } : {}) });
+
+  it("offers 5 ₳ for its order's cancel where the account holds no ADA alone, rather than a cancel that's refused", () => {
+    const missing = foot(emptied("missing"));
+    expect(missing).toContain("Put in 5 ₳ to cancel");
+    expect(missing).not.toContain("Cancel the order");
+    expect(nextStep(emptied("missing"), true, true)).toBe(
+      "The order is waiting for a DEX's batcher to fill it. To cancel it, the account needs 5 ₳ of ADA alone as collateral, and holds none: put it in from your private balance. It comes back with everything else.",
+    );
+    // On its way: the cancel waits for it.
+    const coming = foot(emptied("coming"));
+    expect(coming).not.toContain("Put in 5 ₳");
+    expect(coming).toMatch(/<button[^>]*disabled=""[^>]*>Cancel the order</);
+    expect(nextStep(emptied("coming"), true, true)).toBe("The 5 ₳ for the cancel is on its way. Once it's at the account, cancel the order.");
+    // There: the cancel, as before.
+    const there = foot(emptied());
+    expect(there).toMatch(/<button[^>]*>Cancel the order</);
+    expect(there).not.toMatch(/disabled=""[^>]*>Cancel the order/);
+    expect(nextStep(emptied(), true, true)).toBe("The order is waiting for a DEX's batcher to fill it. If it doesn't, cancel it.");
+    // With no order waiting, nothing is offered: what it holds comes back.
+    expect(nextStep(emptied("missing"), true, false)).toBe("Nothing is waiting: bring everything in the account back into your private balance.");
+  });
+
+  it("reviews the 5 ₳ as a top-up: where it goes, that it comes back, its fee, and what it links", () => {
+    const address = "addr_test1" + "q".repeat(50);
+    const review: SessionOutSummary = {
+      network: "preprod",
+      txHash: "ab".repeat(32),
+      index: 4,
+      address,
+      payments: [{ address, own: false, lovelace: "5000000", minimum: null, tokens: [] }],
+      max: false,
+      fee: { size: "0", compute: "0", scriptReference: "0", total: "400000" },
+      changeLovelace: "3600000",
+      changeTokens: 0,
+      changeOutputs: 1,
+      changeMinimum: "0",
+      inputs: 1,
+      left: 0,
+    };
+    const stale = { detail: undefined, by: undefined, renewed: false, refused: () => undefined, built: () => undefined, clear: () => undefined };
+    const line = text(
+      createElement(CancelCollateralReview, {
+        review,
+        busy: false,
+        stale,
+        onBack: () => undefined,
+        onAgain: () => undefined,
+        onSend: () => undefined,
+      }),
+    );
+    expect(line).toContain("To Private session 5");
+    expect(line).toContain("Collateral for the cancel 5 ₳, comes back");
+    expect(line).toContain("Total leaving your private balance 5.4 ₳");
+    expect(line).toContain("The cancel puts this up as its collateral. It comes back with everything else when you bring the session back.");
+    expect(line).toContain("This payment links the private UTxOs it spends to the session's account, as its funding did.");
   });
 });

@@ -417,6 +417,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.sessions.topUpBuild(ctx.network, message.index, message.lovelace, message.tokens);
     case "session-top-up-submit":
       return ctx.sessions.topUpSubmit(ctx.network, message.txHash);
+    case "session-cancel-collateral-build":
+      return ctx.sessions.cancelCollateralBuild(ctx.network, message.index);
     case "session-claim-build":
       return ctx.sessions.claimBuild(ctx.network, message.indexes, message.direct ?? false);
     case "session-claim-submit":

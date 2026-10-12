@@ -214,6 +214,7 @@ export function Dapps({
     return (
       <Session
         session={foundOpened}
+        seedelf={seedelf}
         updatedAt={updatedAt}
         reading={reading}
         onRefresh={() => void load(true)}
@@ -222,6 +223,7 @@ export function Dapps({
           void load(false);
         }}
         onChanged={setSessions}
+        onPending={onPending}
       />
     );
   }
