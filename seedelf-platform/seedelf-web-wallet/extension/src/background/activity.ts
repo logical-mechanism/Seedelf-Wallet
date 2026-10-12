@@ -22,7 +22,9 @@
 // certificates and withdrawals) and carries its note (CIP-20's message), at
 // no extra request; a pool's ticker comes only from what's on the device. A
 // transaction at Lovejoin's mix box is named for what it did there, read from
-// the transaction alone (describe).
+// the transaction alone (describe). A collateral payment is named from the
+// account's sealed choices (coin-control.ts `collateralPayments`): to the
+// chain it's only a payment to itself.
 //
 // Each entry keeps the tokens that moved, with signed quantities, for its
 // details and the CSV export (older Seedelf entries have only a count).
@@ -52,7 +54,7 @@ import type * as Wasm from "@seedelf/wasm";
 import type { PathedUtxo } from "./account";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { seedelfTokenOf } from "./chain";
-import { SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
+import { collateralPayments, SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
 import { ownDrepId } from "./governance";
 import { pendingEntries, rewardAccountHex } from "./incoming";
 import { CREDENTIALS_PER_REQUEST, type Koios, type KoiosAccountTx, type KoiosTxInfo, type KoiosTxOut, type KoiosUtxo } from "./koios";
@@ -445,7 +447,9 @@ export class ActivityService {
     // The account's DRep, from its key: its certificates and votes are named for what they did.
     const drep = await ownDrepId(this.deps).catch(() => undefined);
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
-    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake, drep, mixBox));
+    // This account's collateral payments, which only the device knows are: a name, never worth failing the list for.
+    const collateral = await collateralPayments(this.deps.store, network, index).catch(() => new Set<string>());
+    const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake, drep, mixBox, collateral));
     const sets = groups(keys);
     // Read by these keys, or begun again: a group's offset says nothing of another set's.
     const from = kept && kept.offsets?.length === sets.length && kept.keys?.join() === keys.join() ? kept : undefined;
@@ -484,7 +488,7 @@ export class ActivityService {
     // Not kept once the user has switched account while Koios answered: they'd be listed as the new account's.
     await wallet.withKeys(async (keys) => (keys.account === index ? session.set(key, pages) : undefined));
     // Ahead of them, what the wallet sent that Koios doesn't list yet, as Private activity lists its own at once.
-    const pending = await this.pendingOf(network, account, own, new Set(pages.entries.map((e) => e.txHash)));
+    const pending = await this.pendingOf(network, account, own, collateral, new Set(pages.entries.map((e) => e.txHash)));
     const entries = pending.length ? [...pending, ...pages.entries].sort(newestFirst) : pages.entries;
     return { entries: await this.withDecimals(network, entries), more: pages.more };
   }
@@ -499,6 +503,7 @@ export class ActivityService {
     network: NetworkName,
     account: AccountAddresses,
     own: ReadonlyMap<string, ActivityEntry>,
+    collateral: ReadonlySet<string>,
     listed: ReadonlySet<string>,
   ): Promise<ActivityEntry[]> {
     const { wasm, wallet, session } = this.deps;
@@ -519,6 +524,7 @@ export class ActivityService {
           reserved: (await reservedSet(session, network)).inputs,
           listed,
           own,
+          collateral,
           ...(watched ? { watched: { txHash: watched.txHash, kind: watched.kind } } : {}),
         });
       });
@@ -689,7 +695,9 @@ const DREP_KIND = {
  * collected in its details, as the launch review's H1 counted the rewards in
  * a site's signing prompt. A deposit is money out, and one back money in.
  * One of this wallet's own flows (a move-in, an account-paid mint, a
- * withdrawal to the account) is named as such; otherwise a transaction that
+ * withdrawal to the account) is named as such, and so is one of the account's
+ * collateral payments (`collateral`, by transaction), which the chain shows as
+ * a payment to itself, costing the fee; otherwise a transaction that
  * staked, delegated the vote, stopped staking, or only withdrew the rewards
  * is named for that, from its certificates and withdrawals (`stake`: the
  * account's stake address), and one of its own DRep's (`drep`: its ID) for
@@ -712,6 +720,7 @@ export function describe(
   stake?: string,
   drep?: string,
   mixBox?: string,
+  collateral: ReadonlySet<string> = new Set(),
 ): ActivityEntry[] {
   const atBox = (o: KoiosTxOut) => !!mixBox && (o as TxOut).payment_addr.cred === mixBox;
   return txs.flatMap((tx): ActivityEntry[] => {
@@ -740,6 +749,8 @@ export function describe(
       spent && boxOut ? (boxIn ? "lovejoin-round" : "lovejoin-deposit") : boxIn && !boxOut && direction === "in" ? "lovejoin-withdraw" : undefined;
     const kind: ActivityEntry["kind"] = mine
       ? mine.kind
+      : collateral.has(tx.tx_hash)
+        ? "collateral"
       : lovejoin
         ? lovejoin
       : staking?.drepAction

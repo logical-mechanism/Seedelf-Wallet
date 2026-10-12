@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { bodyOutpoints } from "../src/background/cbor";
+import { COLLATERAL_PAID_KEPT, collateralPayments } from "../src/background/coin-control";
 import { forgetContractView } from "../src/background/contract-scan";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SESSION_MINT } from "../src/background/mint";
@@ -100,6 +101,31 @@ describe("the collateral", () => {
     const mint = (await t.session.get<{ txCbor: string }>(SESSION_MINT))!;
     expect(bodyOutpoints(hexBytes(mint.txCbor), 13)).toEqual([at(made)]);
     expect(bodyOutpoints(hexBytes(mint.txCbor), 0)).not.toContain(at(made));
+  });
+
+  it("records the payments that set it, for Activity, never a UTxO already held", async () => {
+    const t = await unlocked(24);
+    const { fives } = account24();
+    await t.balances.get("preprod");
+    const hash = (n: number) => n.toString(16).padStart(64, "0");
+    for (let n = 1; n <= COLLATERAL_PAID_KEPT + 2; n++) await t.coins.sent("preprod", `${hash(n)}#0`);
+    const paid = await collateralPayments(t.store, "preprod", 0);
+    expect(paid.size).toBe(COLLATERAL_PAID_KEPT); // the newest
+    expect(paid.has(hash(COLLATERAL_PAID_KEPT + 2))).toBe(true);
+    expect(paid.has(hash(2))).toBe(false);
+    // Another account's are its own.
+    expect((await collateralPayments(t.store, "preprod", 1)).size).toBe(0);
+
+    // Reclaimed and chosen from a 5 ₳ UTxO already held: no transaction set it, and the record stays.
+    await t.coins.reclaim("preprod");
+    await t.coins.use("preprod", at(fives[1]!));
+    const after = await collateralPayments(t.store, "preprod", 0);
+    expect(after.size).toBe(COLLATERAL_PAID_KEPT);
+    expect(after.has(fives[1]!.tx_hash)).toBe(false);
+
+    // A wallet from before the record: its collateral, made by a payment, is named by that payment.
+    await t.store.set("coins.preprod", { seedelf: [], accounts: { "0": { cardano: [], collateral: `${hash(99)}#0`, collateralSentAt: 1 } } });
+    expect([...(await collateralPayments(t.store, "preprod", 0))]).toEqual([hash(99)]);
   });
 
   it("stops being waited for after 10 minutes", async () => {

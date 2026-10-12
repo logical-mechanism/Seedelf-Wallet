@@ -68,6 +68,9 @@ export const COLLATERAL_LOVELACE = 5_000_000n;
 /** A collateral payment is waited for this long before the wallet stops expecting it. */
 const WAIT_MS = 10 * 60_000;
 
+/** The most collateral payments an account's record keeps, the newest: Activity names those (activity.ts). */
+export const COLLATERAL_PAID_KEPT = 20;
+
 /**
  * What the user chose on one network, for one public account (the one the
  * wallet is working on, unless named): the shape every caller sees,
@@ -84,10 +87,15 @@ export interface Choices {
   collateral?: string | null;
   /** When the payment making `collateral` was sent (ms since the epoch), while it's on its way. */
   collateralSentAt?: number;
+  /**
+   * The transactions this account sent to set its collateral, oldest first, kept after a reclaim: Public activity
+   * names them, where the chain alone reads a payment to itself as Sent (`collateralPayments`).
+   */
+  collateralPaid?: string[];
 }
 
 /** One public account's own choices: what it has locked, and its collateral. */
-type Own = Pick<Choices, "cardano" | "collateral" | "collateralSentAt">;
+type Own = Pick<Choices, "cardano" | "collateral" | "collateralSentAt" | "collateralPaid">;
 
 /**
  * What is sealed as `coins.<network>` since chunk 18: the private side's
@@ -134,6 +142,7 @@ export function choicesOf(stored: Stored | undefined, account: number): Choices 
     cardano: own?.cardano ?? [],
     ...(own?.collateral !== undefined ? { collateral: own.collateral } : {}),
     ...(own?.collateralSentAt !== undefined ? { collateralSentAt: own.collateralSentAt } : {}),
+    ...(own?.collateralPaid?.length ? { collateralPaid: own.collateralPaid } : {}),
   };
 }
 
@@ -149,8 +158,21 @@ export function withChoices(stored: Stored | undefined, account: number, choices
     cardano: choices.cardano,
     ...(choices.collateral !== undefined ? { collateral: choices.collateral } : {}),
     ...(choices.collateralSentAt !== undefined ? { collateralSentAt: choices.collateralSentAt } : {}),
+    ...(choices.collateralPaid?.length ? { collateralPaid: choices.collateralPaid } : {}),
   };
   return { seedelf: choices.seedelf, accounts };
+}
+
+/**
+ * The transactions that set public account `account`'s collateral on `network` by paying it, from the sealed choices:
+ * those recorded as they were sent, and the collateral chosen now when a payment made it (`collateralSentAt`, which
+ * choosing a UTxO already held clears), as a wallet from before the record keeps it. Asks no one.
+ */
+export async function collateralPayments(store: PrivateStore, network: NetworkName, account: number): Promise<ReadonlySet<string>> {
+  const choices = choicesOf(await store.get<Stored>(`coins.${network}`), account);
+  const paid = new Set(choices.collateralPaid);
+  if (choices.collateral && choices.collateralSentAt !== undefined) paid.add(choices.collateral.slice(0, choices.collateral.indexOf("#")));
+  return paid;
 }
 
 /** A pure-ADA UTxO of exactly 5 ₳: what can be the collateral. */
@@ -359,11 +381,16 @@ export class CoinControlService {
     });
   }
 
-  /** The payment making a new collateral was sent: its 5 ₳ output is the collateral from now on. */
+  /**
+   * The payment making a new collateral was sent: its 5 ₳ output is the collateral from now on, and its transaction
+   * is recorded, for Public activity to name.
+   */
   sent(network: NetworkName, utxo: string): Promise<void> {
     return this.serial(async () => {
       const choices = await this.choices(network);
-      await this.save(network, { ...choices, collateral: utxo, collateralSentAt: this.deps.now() });
+      const txHash = utxo.slice(0, utxo.indexOf("#"));
+      const collateralPaid = [...(choices.collateralPaid ?? []).filter((h) => h !== txHash), txHash].slice(-COLLATERAL_PAID_KEPT);
+      await this.save(network, { ...choices, collateral: utxo, collateralSentAt: this.deps.now(), collateralPaid });
     });
   }
 
