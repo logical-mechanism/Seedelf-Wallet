@@ -1140,7 +1140,7 @@ What was done with each finding, on `web-wallet/style-flow-3` after the review. 
 | DX-3 | Partly | Slippage on the review, the swap's cost in rows that add up, and the Lovejoin switch says when it can't apply. Not the three-row summary. |
 | DX-4 | Fixed | "Slippage: 1%" on the form, amber from 5%, no placeholder that looks set, and Max says what stays aside. |
 | DX-5 | Fixed | Stop goes once the order is filled or refunded; a finished swap says what was received; a turned-away funding says why. |
-| DX-6, DX-7, DX-8 | Left | Swap on Home *(open call)*; a session's number is its account's index, which never repeats. *Since: Swap stays behind dApps (the owner, 5 October 2026); DX-8's unchecked quote is an open question in post-release-roadmap.md.* |
+| DX-6, DX-7, DX-8 | Left | Swap on Home *(open call)*; a session's number is its account's index, which never repeats. *Since: Swap stays behind dApps (the owner, 5 October 2026); DX-8's unchecked quote was an open question in post-release-roadmap.md, and chunk 29 checks it: a quote for another amount or pair is refused.* |
 | LJ-1 | Partly | The pool's state shows before Review, which is disabled with the reason. A one-tap shallower mix needs a depth per mix (LJ-4). |
 | LJ-2 | Fixed | "Back … while Seedelf Wallet is unlocked", on the page and every review. |
 | LJ-3 | Fixed | One cost figure everywhere (the 0.95 ₳ estimate; Settings showed the measured 0.877 ₳), and the stepper stops at what the balance pays for. |
