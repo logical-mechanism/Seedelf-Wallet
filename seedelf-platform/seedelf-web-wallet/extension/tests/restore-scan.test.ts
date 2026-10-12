@@ -7,7 +7,9 @@
 // 12-word phrase, the real WebAssembly, and fakes of Koios.
 import { describe, expect, it } from "vitest";
 
+import { builtOutputs } from "../src/background/minswap";
 import { bech32 } from "./fixtures/bech32";
+import { txIdOf } from "./fixtures/cbor";
 import { bytes, ORDER_ADDRESS, ORDER_SCRIPT } from "./fixtures/swap-tx";
 import { loadTestWasm, sessionSwap } from "./fakes";
 import { atSession, orderRow, signing, SWAP_TX, unlocked, type T } from "./swap-session";
@@ -159,6 +161,62 @@ describe("the restore scan", () => {
     expect(review).toMatchObject({ kind: "cancel", index: 0, orders: 1 });
     await sessions.txSubmit("preprod", review.txHash, "cancel");
     expect((await bookOf(t))!.sessions[0]!.txs.at(-1)).toMatchObject({ kind: "cancel", txHash: review.txHash });
+  });
+
+  it("puts 5 ₳ in for a found order's cancel when the account holds no ADA alone, then cancels with it", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await usedWith(t, 0, [
+      [SWAP_TX, 5_000_100],
+      [FUNDING_TX, 5_000_000],
+    ]);
+    swapped(t);
+    // A return from before chunk 24 took everything while the order waited: the account is empty.
+    t.koios.addedToAccounts.push(orderRow(SWAP_TX));
+    expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
+    await expect(sessions.cancelBuild("preprod", 0)).rejects.toThrow(
+      "The wallet couldn't cancel the order: this session's account holds no UTxO of ADA alone to put up as collateral for cancelling the order.",
+    );
+    expect((await sessions.list("preprod"))[0]!.cancelCollateral).toBe("missing");
+
+    // 5 ₳ from the private balance, to the session's account alone, recorded as a top-up and sent.
+    const put = await sessions.cancelCollateralBuild("preprod", 0);
+    expect(put.payments.map((p) => [p.address, p.lovelace, p.tokens.length])).toEqual([[sessionSwap.address, "5000000", 0]]);
+    await sessions.topUpSubmit("preprod", put.txHash);
+    const sent = t.koios.submitted.at(-1)!;
+    expect(txIdOf(sent)).toBe(put.txHash);
+    const outs = builtOutputs(sent).flatMap((o, i) => (o.address.slice(2, 58) === sessionSwap.keyHash ? [{ i, o }] : []));
+    expect(outs.map(({ o }) => o.lovelace)).toEqual([5_000_000n]);
+    expect((await bookOf(t))!.sessions[0]!.txs.at(-1)).toMatchObject({ kind: "out", txHash: put.txHash, outs: [`${put.txHash}#${outs[0]!.i}`] });
+
+    // On its way: the page says so, and no second one is built.
+    expect((await sessions.list("preprod"))[0]!.cancelCollateral).toBe("coming");
+    await expect(sessions.cancelCollateralBuild("preprod", 0)).rejects.toThrow("The 5 ₳ for the cancel is on its way to the account.");
+
+    // There: nothing more to put in, and the cancel puts it up, the account's only UTxO.
+    t.koios.addedToAccounts.push(atSession(put.txHash, outs[0]!.i, "5000000"));
+    const [view] = await sessions.list("preprod", true);
+    expect(view!.cancelCollateral).toBeUndefined();
+    expect(view!.txs.at(-1)).toMatchObject({ kind: "out", txHash: put.txHash, confirmed: true });
+    await expect(sessions.cancelCollateralBuild("preprod", 0)).rejects.toThrow("The account already holds a UTxO of ADA alone");
+    const review = await sessions.cancelBuild("preprod", 0);
+    expect(review).toMatchObject({ kind: "cancel", index: 0, orders: 1 });
+    await sessions.txSubmit("preprod", review.txHash, "cancel");
+    expect((await bookOf(t))!.sessions[0]!.txs.at(-1)).toMatchObject({ kind: "cancel", txHash: review.txHash });
+  });
+
+  it("puts none in where no order of it is open, or for a session that isn't brought back by hand", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await usedWith(t, 0, [[FUNDING_TX, 5_000_000]]);
+    t.koios.addedToAccounts.push(atSession(FUNDING_TX, 1, "20000000"));
+    expect(await sessions.scan("preprod")).toEqual({ used: 1, found: [0] });
+    await expect(sessions.cancelCollateralBuild("preprod", 0)).rejects.toThrow("No order of this session is waiting");
+    // A site's session takes a top-up of its own instead.
+    const book = (await bookOf(t))!;
+    await t.store.set("sessions.preprod", { ...book, sessions: [{ ...book.sessions[0]!, recovered: undefined, site: { origin: "https://a.example" } }] });
+    await expect(sessions.cancelCollateralBuild("preprod", 0)).rejects.toThrow("Only a session you bring back by hand takes 5 ₳ for its cancel.");
+    expect(t.koios.submitted).toEqual([]);
   });
 
   it("leaves out an account that holds nothing and has no order open, but never uses its index again", async () => {

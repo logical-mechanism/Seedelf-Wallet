@@ -1664,6 +1664,14 @@ export interface SessionView {
    * known, so it has no swap, site or mix, and it's brought back by hand.
    */
   recovered?: true;
+  /**
+   * A session brought back by hand whose account, as last read, holds no
+   * UTxO of ADA alone of 5 ₳ or more for a cancel's collateral: `missing`,
+   * or `coming` while a top-up is on its way. While an order of it is open,
+   * its page offers 5 ₳ from the private balance for the cancel
+   * (`session-cancel-collateral-build`, sent as a top-up is).
+   */
+  cancelCollateral?: "missing" | "coming";
 }
 
 /** What the restore scan found on a network (`session-scan`). */
@@ -2230,6 +2238,8 @@ export interface Requests {
   "session-top-up-build": { payload: { index: number; lovelace: string; tokens: TokenQuantity[] }; result: SessionOutSummary };
   /** Sends the top-up built last. */
   "session-top-up-submit": { payload: { txHash: string }; result: PendingTx };
+  /** 5 ₳ into a session brought back by hand, for its open order's cancel; sent by `session-top-up-submit`. */
+  "session-cancel-collateral-build": { payload: { index: number }; result: SessionOutSummary };
   /**
    * Bring everything back: a return for each of these sessions that holds
    * something, each its own transaction; `skipped` says why a session wasn't.
@@ -2440,6 +2450,7 @@ const REQUEST_LIST = [
   "session-forget",
   "session-top-up-build",
   "session-top-up-submit",
+  "session-cancel-collateral-build",
   "session-claim-build",
   "session-claim-submit",
   "session-scan",

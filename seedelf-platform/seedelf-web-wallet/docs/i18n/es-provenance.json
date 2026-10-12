@@ -2864,5 +2864,13 @@
   "lovejoin.chains.txs": "mtpe",
   "txBanner.onCardanoscanFirst": "mtpe",
   "dapp.accountMoved": "mtpe",
-  "lock.warn.chainSending": "mtpe"
+  "lock.warn.chainSending": "mtpe",
+  "sess.cancelCollateral.byHand": "machine",
+  "sess.cancelCollateral.there": "machine",
+  "sess.cancelCollateral.coming": "machine",
+  "swaps.foot.putCollateral": "machine",
+  "swaps.next.noCollateral": "machine",
+  "swaps.next.collateralComing": "machine",
+  "swaps.collateral.row": "machine",
+  "swaps.collateral.note": "machine"
 }

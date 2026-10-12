@@ -805,6 +805,40 @@ function collateralFits(u: KoiosUtxo): boolean {
   return BigInt(u.value) === SESSION_COLLATERAL && !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash;
 }
 
+/** A UTxO of ADA alone: no tokens, no datum, no script. A cancel's fee and collateral come from these (cancelOf). */
+function plainAda(u: KoiosUtxo): boolean {
+  return !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash;
+}
+
+/**
+ * Whether a cancel's collateral is among `rows` (cancelOf): its own 5 ₳, or
+ * a UTxO of ADA alone of 5 ₳ or more. A smaller one may not cover the fee
+ * and come back, so it doesn't count: 5 ₳ put in for the cancel
+ * (cancelCollateralBuild) is what the cancel takes then.
+ */
+function holdsCancelCollateral(rows: KoiosUtxo[]): boolean {
+  return rows.some((u) => plainAda(u) && BigInt(u.value) >= SESSION_COLLATERAL);
+}
+
+/**
+ * Whether a top-up of session `s` (anything it was paid after its funding)
+ * may still reach its account: sent, not turned away, less than
+ * REPLACED_WATCH_MS ago, and what it pays the account not among `rows` yet.
+ * One that never lands lets another go after that, as a site's Disconnect
+ * waits for one (final review F13).
+ */
+function topUpComing(s: SessionRecord, rows: KoiosUtxo[], now: number): boolean {
+  const there = new Set(rows.map(outpoint));
+  return s.txs
+    .slice(1)
+    .some((t) => t.kind === "out" && !t.unsent && now - t.at < REPLACED_WATCH_MS && !(t.outs ?? []).some((o) => there.has(o)));
+}
+
+/** A session brought back by hand: no swap that runs itself, no site's, no mix. A session the restore scan found is one. */
+function byHand(s: SessionRecord): boolean {
+  return !s.auto && !s.site && !s.mix;
+}
+
 /** A swap that runs itself and has something left to do without the user. */
 function running(s: SessionRecord): boolean {
   return !!s.auto && !s.closedAt && !s.auto.paused && !s.auto.failed;
@@ -1428,6 +1462,30 @@ export class SessionService {
         throw e;
       }
     });
+  }
+
+  /**
+   * Builds 5 ₳ into a session brought back by hand, from the private
+   * balance, for the cancel of its open order: the cancel puts up a UTxO of
+   * ADA alone at the account as collateral (cancelOf), and a session the
+   * restore scan found may hold none, its return from before chunk 24 having
+   * taken everything while the order waited. Only while an order of it is
+   * open, the account holds no collateral the cancel can put up, and none is
+   * on its way. Kept as a top-up is, and sent by topUpSubmit.
+   */
+  async cancelCollateralBuild(network: NetworkName, index: number): Promise<SessionOutSummary> {
+    const s = await this.live(network, index);
+    if (!byHand(s)) throw new Error(t("sess.cancelCollateral.byHand"));
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+    if (!(await this.liveOrders(network, s, address)).length) throw new Error(t("sess.noOrderWaiting"));
+    const rows = await this.utxosOf(network, keyHash);
+    if (holdsCancelCollateral(rows)) throw new Error(t("sess.cancelCollateral.there"));
+    if (topUpComing(s, rows, this.deps.now())) throw new Error(t("sess.cancelCollateral.coming"));
+    const payments = [{ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] }];
+    const { summary, txCbor, seed } = await this.buildFunding(network, index, address, payments, t("sess.emptyTopUp"));
+    const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
+    await keep(this.deps, SESSION_TOP_UP, kept);
+    return summary;
   }
 
   /**
@@ -2822,9 +2880,7 @@ export class SessionService {
     // Its 5 ₳ collateral, as its funding paid one; or, if a cancel before spent it, its largest UTxO of ADA alone
     // (WebAssembly checks it covers the cancel). Its other UTxOs of ADA alone help pay the fee with the orders' own
     // ADA; one holding tokens or a datum (a stranger's) waits for the return.
-    const plain = rows
-      .filter((u) => !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash)
-      .sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : -1));
+    const plain = rows.filter(plainAda).sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : -1));
     const collateral = rows.find(collateralFits) ?? plain[0];
     if (!collateral) throw new Refused(t("sess.refuse.warn.noCollateral"), "cancel");
     const byHash = orders.filter((o) => !o.inline_datum && o.datum_hash).map((o) => o.datum_hash!);
@@ -3930,6 +3986,10 @@ export class SessionService {
       // What its return brought back, once it's over (DX-5).
       ...(stage === "closed" && s.received ? { received: s.received } : {}),
       ...(s.recovered ? { recovered: true as const } : {}),
+      // Its page offers 5 ₳ for its cancel's collateral while an order of it is open (cancelCollateralBuild).
+      ...(stage === "open" && byHand(s) && utxos && !holdsCancelCollateral(utxos)
+        ? { cancelCollateral: topUpComing(s, utxos, this.deps.now()) ? ("coming" as const) : ("missing" as const) }
+        : {}),
     };
   }
 

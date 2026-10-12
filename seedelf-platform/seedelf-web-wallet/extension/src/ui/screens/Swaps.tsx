@@ -42,7 +42,7 @@ import type {
   SwapTokenInfo,
   TokenQuantity,
 } from "../../shared/rpc";
-import { call } from "../background";
+import { call, isStale } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
 import { GivemeNote } from "../components/GivemeNote";
@@ -83,6 +83,7 @@ import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
 import { refusalOf, SessionRefusedFoot, unsentWhyText, type Refusal } from "../components/SessionRefused";
+import { RenewedNote, StaleFoot, useStale } from "../components/StaleReview";
 import { TxDetailButton, entryLabel } from "../components/TxDetail";
 import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import {
@@ -446,6 +447,7 @@ export function Swaps({
     return (
       <Session
         session={session}
+        seedelf={seedelf}
         updatedAt={updatedAt}
         reading={reading}
         onRefresh={() => void load(true)}
@@ -454,6 +456,7 @@ export function Swaps({
           void load(false);
         }}
         onChanged={setSessions}
+        onPending={onPending}
       />
     );
   }
@@ -1790,18 +1793,24 @@ const ADVANCE_EVERY_MS = 20_000;
 
 export function Session({
   session,
+  seedelf,
   updatedAt,
   reading,
   onRefresh,
   onBack,
   onChanged,
+  onPending,
 }: {
   session: SessionView;
+  /** The private balance, which 5 ₳ for a cancel's collateral comes from: its review's "after". */
+  seedelf?: Balances["seedelf"];
   updatedAt?: number;
   reading: boolean;
   onRefresh: () => void;
   onBack: () => void;
   onChanged: (sessions: SessionView[]) => void;
+  /** 5 ₳ for a cancel's collateral was sent: Home's banner watches it. */
+  onPending?: (pending: PendingTx) => void;
 }) {
   const tr = useT();
   const network = useNetwork();
@@ -1823,6 +1832,10 @@ export function Session({
   const [placedNow, setPlacedNow] = useState(false);
   const [stoppedLate, setStoppedLate] = useState<LateStop>();
   const [forgetting, setForgetting] = useState(false);
+  // 5 ₳ from the private balance for its order's cancel, built for its review: a session the restore scan found
+  // whose account holds no ADA alone to put up as collateral (cancelCollateral). A refusal waits until it's built again.
+  const [collateral, setCollateral] = useState<SessionOutSummary>();
+  const stale = useStale();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -1895,6 +1908,27 @@ export function Session({
     void act(async () => {
       setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }) }));
       setBackThrough(through);
+    });
+  /** Builds the 5 ₳ for the cancel's collateral, for its review, or again after a refusal. */
+  const buildCollateral = () =>
+    void act(async () => {
+      setCollateral(await call("session-cancel-collateral-build", { index: s.index }));
+      stale.built();
+    });
+  /** Sends it as a site's top-up is: the page reads the account again, and says it's on its way until it's there. */
+  const sendCollateral = (txHash: string) =>
+    void act(async () => {
+      try {
+        const pending = await call("session-top-up-submit", { txHash });
+        onPending?.(pending);
+      } catch (err) {
+        if (!isStale(err)) throw err;
+        stale.refused(err);
+        return;
+      }
+      setCollateral(undefined);
+      stale.clear();
+      onRefresh();
     });
   /** After a step sent by hand: a swap that runs itself goes on from there; one from before is read again. */
   const sent = async () => {
@@ -1979,6 +2013,25 @@ export function Session({
         <LovejoinNote back={back} />
         <ReturnLinks back={back} after={back.leftOut?.length ? undefined : tr("swaps.back.privacy.neverAgain")} />
       </Screen>
+    );
+  }
+
+  if (collateral) {
+    return (
+      <CancelCollateralReview
+        review={collateral}
+        seedelf={seedelf}
+        busy={busy}
+        error={error}
+        stale={stale}
+        onBack={() => {
+          setCollateral(undefined);
+          setError(undefined);
+          stale.clear();
+        }}
+        onAgain={buildCollateral}
+        onSend={() => sendCollateral(collateral.txHash)}
+      />
     );
   }
 
@@ -2173,6 +2226,7 @@ export function Session({
           busy={busy}
           onSwap={() => void act(async () => setReview(await call("session-swap-build", { index: s.index })))}
           onCancel={() => void act(async () => setReview(await call("session-cancel-build", { index: s.index })))}
+          onCollateral={buildCollateral}
           onBack={() => buildBack(true)}
           onForget={forget}
         />
@@ -2290,6 +2344,76 @@ export function SessionTxReviewScreen({
         <p className="note">{tr("swaps.tx.minswapNote", { note: review.summary.note.join("") })}</p>
       )}
       <p className="note">{after}</p>
+    </Screen>
+  );
+}
+
+/**
+ * 5 ₳ into a session brought back by hand, from the private balance, for
+ * its order's cancel to put up as collateral (a session the restore scan
+ * found, whose return from before chunk 24 took everything while the order
+ * waited): to read before its Send, as a site's top-up is.
+ */
+export function CancelCollateralReview({
+  review,
+  seedelf,
+  busy,
+  error,
+  stale,
+  onBack,
+  onAgain,
+  onSend,
+}: {
+  review: SessionOutSummary;
+  seedelf?: Balances["seedelf"];
+  busy: boolean;
+  error?: string;
+  stale: ReturnType<typeof useStale>;
+  onBack: () => void;
+  onAgain: () => void;
+  onSend: () => void;
+}) {
+  const tr = useT();
+  const [collateral] = review.payments;
+  return (
+    <Screen
+      title={tr("sites.topUp.reviewTitle")}
+      titleId="cancel-collateral-review"
+      review
+      onBack={onBack}
+      backDisabled={busy}
+      aside={tr("review.nothingSent")}
+      error={error}
+      foot={
+        stale.detail !== undefined ? (
+          <StaleFoot detail={stale.detail} by={stale.by} busy={busy} onAgain={onAgain} />
+        ) : (
+          <>
+            <RenewedNote renewed={stale.renewed} />
+            <button type="button" className="primary" onClick={onSend} disabled={busy}>
+              {busy ? tr("common.sending") : tr("common.send")}
+            </button>
+          </>
+        )
+      }
+    >
+      <ReviewRows testId="cancel-collateral-review">
+        <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
+        {collateral && (
+          <Row label={tr("swaps.collateral.row")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })} />
+        )}
+        <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
+        <TotalRows
+          side="private"
+          leaving={review.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(review.fee.total))}
+          before={seedelf && homeBalance(seedelf)}
+        />
+      </ReviewRows>
+      <TxDetailButton txHash={review.txHash} testId="cancel-collateral-tx" />
+      <p className="note">{tr("swaps.collateral.note")}</p>
+      <Callout tone="privacy">{tr("sites.topUp.privacy.links")}</Callout>
+      <HistoriesNote histories={review.histories} session={review.index} testId="cancel-collateral-histories" />
+      <GivemeNote funding />
     </Screen>
   );
 }
@@ -2767,8 +2891,8 @@ function neverSent(s: SessionView): string {
   return joinSentences([t("swaps.now.neverSent"), unsentWhyText(s.unsentWhy), t("swaps.now.removeIt")]);
 }
 
-/** A session from before swaps ran themselves: what to do next, by hand. */
-function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
+/** A session from before swaps ran themselves, or one the restore scan found: what to do next, by hand. */
+export function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
   switch (s.stage) {
     case "funding":
       return t("swaps.next.funding");
@@ -2781,18 +2905,22 @@ function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
     case "open":
       // Found by a restore's scan, it has no swap to place: what it holds comes back.
       if (!swapped && !s.recovered) return t("swaps.next.placeOrder");
+      // Its cancel needs ADA alone at the account as collateral: 5 ₳ goes in first (cancelCollateral).
+      if (waiting && s.cancelCollateral === "missing") return t("swaps.next.noCollateral");
+      if (waiting && s.cancelCollateral === "coming") return t("swaps.next.collateralComing");
       if (waiting) return t("swaps.next.waiting");
       return t("swaps.next.bringBack");
   }
 }
 
-function SessionFoot({
+export function SessionFoot({
   s,
   swapped,
   waiting,
   busy,
   onSwap,
   onCancel,
+  onCollateral,
   onBack,
   onForget,
 }: {
@@ -2802,6 +2930,8 @@ function SessionFoot({
   busy: boolean;
   onSwap: () => void;
   onCancel: () => void;
+  /** 5 ₳ for the cancel's collateral, where the account holds none: built for its review. */
+  onCollateral: () => void;
   onBack: () => void;
   onForget: () => void;
 }) {
@@ -2821,8 +2951,15 @@ function SessionFoot({
           {tr(busy ? "swaps.foot.asking" : "swaps.foot.placeOrder")}
         </button>
       )}
-      {waiting && (
-        <button type="button" className="secondary" onClick={onCancel} disabled={busy}>
+      {/* A cancel the account can't put up a collateral for would only be refused: its 5 ₳ goes in first, and
+          until it's there, the cancel waits (cancelCollateral). */}
+      {waiting && s.cancelCollateral === "missing" && (
+        <button type="button" className="secondary" onClick={onCollateral} disabled={busy}>
+          {tr(busy ? "common.building" : "swaps.foot.putCollateral")}
+        </button>
+      )}
+      {waiting && s.cancelCollateral !== "missing" && (
+        <button type="button" className="secondary" onClick={onCancel} disabled={busy || s.cancelCollateral === "coming"}>
           {tr("swaps.foot.cancelOrder")}
         </button>
       )}
