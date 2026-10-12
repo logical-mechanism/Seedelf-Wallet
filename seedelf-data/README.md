@@ -8,7 +8,7 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
-- **The public routes:** the other 21 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
+- **The public routes:** the other 22 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 - **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
 - **The deploy files and runbook,** [deploy/README.md](deploy/README.md): home's services through a WireGuard tunnel, and the API behind Caddy on a VPS.
 
@@ -73,7 +73,8 @@ cargo fmt --check
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
   - an account's payment keys' `credential_txs` lists only transactions under them, and every one of its stake key's newest that is; its next page and its answer from a block carry on from it;
   - the pool list's pages make one sorted list;
-  - an NFT's `asset_info` equals Koios's recorded answer.
+  - an NFT's `asset_info` equals Koios's recorded answer;
+  - a rewards history's pages make one list in its order, for reward accounts many pools pay (six pages) and one the reserves and the treasury paid too, and what's been paid by now is `account_info`'s rewards available plus withdrawals.
 
 - **The private index, from each source** (`tests/live_private.rs`):
   - from cursors a day, two days and a month back, and from Kupo's first block, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials (db-sync also from before the contract existed);
@@ -166,6 +167,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `totals` | the newest epoch's supply | a block |
 | `account_addresses` | up to 20 stake keys' addresses, empty ones too | never |
 | `account_info` | one stake key's standing | never |
+| `account_reward_history` | one stake key's rewards, newest first, 1,000 a page: Staking's *Rewards history* (web wallet chunk 30), read only when it's opened | never |
 | `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on; for a key with at most 200,000 outputs. The restore scan, and Public activity up to wallet 1.4.1 | never |
 | `credential_txs` | up to 75 payment credentials' transactions, whatever their addresses' staking part, paged as `account_txs` is; for at most 200,000 outputs in all. Public activity, by the account's payment keys (web wallet chunk 28) | never |
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
@@ -239,6 +241,9 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **`credential_txs` gathers nothing past the cap:** a count from `tx_out`'s index alone gates the gathering, in the same query, so Minswap V2's pool script is refused in 0.1 s, against 4.9 s gathering its outputs to find out. `account_txs` is as it was.
 - **A credential's outputs are gathered address by address,** never all its addresses first: a busy script's credential sits at millions of them, and the cap reaches at most as many addresses as outputs.
 - **Checked against Koios (2026-10-11):** the same pages, row for row, for a wallet's key and for the contract's and mix box's credentials together, at offsets 0 and 20.
+
+**`account_reward_history` is Koios's, from `reward` and `reward_rest`,** the pool's bech32 from `pool_hash.view`, sorted in SQL by the order the wallet asks for (`spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc`), which is total, so no row is on two pages. The next epoch's rewards are listed before they're paid, as Koios's are.
+- **Checked against Koios (2026-10-12):** every page the same, row for row, for the reward account 13 pools pay (5,766 rows), one 34 pools pay (2,513, pools' deposits back among them), a member the reserves and the treasury paid too (457), and a key never paid (none). All four, every page: 0.5 s from home.
 
 **`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
 

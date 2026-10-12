@@ -1,6 +1,7 @@
-//! `account_addresses`, `account_info` and `account_txs`: a stake key's
-//! addresses, standing and transactions; and `credential_txs`, an account's
-//! transactions by its payment keys. About one user each, so never cached.
+//! `account_addresses`, `account_info`, `account_reward_history` and
+//! `account_txs`: a stake key's addresses, standing, rewards and
+//! transactions; and `credential_txs`, an account's transactions by its
+//! payment keys. About one user each, so never cached.
 //!
 //! **A stake key's addresses come from `address.stake_address_id`,** which
 //! db-sync indexes. Koios gathers them from `tx_out.stake_address_id`, which
@@ -247,6 +248,92 @@ pub async fn account_info(
                 reserves: reserves.to_string(),
                 treasury: treasury.to_string(),
                 proposal_refund: refund.to_string(),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(json(array(&rows)?))
+}
+
+/// The columns a rewards history asks for, in its order: every row's, but its stake address.
+const REWARD_COLUMNS: &str = "earned_epoch,spendable_epoch,amount,type,pool_id_bech32";
+
+/// A total order, so no row is on two pages: an operator's reward account
+/// can take several pools' rewards in one epoch, and two treasury
+/// withdrawals could pay it in one.
+const REWARD_ORDER: &str =
+    "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc";
+
+/// A page of a rewards history: Koios's most. A member's reward comes once
+/// an epoch, so an account staked since Shelley has about 400.
+const REWARD_PAGE: i64 = 1000;
+
+/// The furthest page: the reward account of a hundred pools, every epoch since Shelley.
+const MAX_REWARD_OFFSET: i64 = 100_000;
+
+#[derive(Serialize)]
+struct RewardRow {
+    earned_epoch: i64,
+    spendable_epoch: i64,
+    amount: String,
+    r#type: String,
+    pool_id_bech32: Option<String>,
+}
+
+/// Koios's `account_reward_history`: every reward paid to the stake key,
+/// from `reward` (a pool's: `member`, `leader`, `refund`), whose pool's
+/// bech32 is `pool_hash.view`, and `reward_rest` (no pool's: `reserves`,
+/// `treasury`, `proposal_refund`). The next epoch's are there before they're
+/// paid. Both are read by `addr_id`: db-sync's `idx_reward_addr_id` and
+/// home's `idx_reward_rest_addr_id` (`deploy/home/db-sync-indexes.sql`).
+///
+/// Sorted as [`REWARD_ORDER`] says, in SQL, as PostgREST sorts Koios's: by
+/// the text of `type` and `amount`, and a row with no pool after those with
+/// one (ascending puts nulls last, in both).
+const REWARDS: &str = "with sa as materialized (select id from stake_address where hash_raw = $1::bytea) \
+     select earned_epoch, spendable_epoch, amount, type, pool from ( \
+       select r.earned_epoch::bigint as earned_epoch, r.spendable_epoch::bigint as spendable_epoch, \
+         r.amount::text as amount, r.type::text as type, ph.view::text as pool \
+       from sa join reward r on r.addr_id = sa.id join pool_hash ph on ph.id = r.pool_id \
+       union all \
+       select rr.earned_epoch::bigint, rr.spendable_epoch::bigint, rr.amount::text, rr.type::text, null::text \
+       from sa join reward_rest rr on rr.addr_id = sa.id) rewards \
+     order by spendable_epoch desc, earned_epoch desc, type, pool, amount \
+     offset $2::bigint limit $3::bigint";
+
+/// A stake key's rewards history, newest first, a page of 1,000: Staking's
+/// *Rewards history* (web wallet chunk 30), read only when it's opened.
+pub async fn account_reward_history(
+    State(state): State<Arc<AppState>>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Result<Response, ApiError> {
+    let mut q = Query::parse(raw.as_deref())?;
+    q.exactly("select", REWARD_COLUMNS)?;
+    q.exactly("order", REWARD_ORDER)?;
+    let offset = natural(&q.value("offset")?)?;
+    let limit = natural(&q.value("limit")?)?;
+    q.end()?;
+    if limit != REWARD_PAGE || offset % REWARD_PAGE != 0 || offset > MAX_REWARD_OFFSET {
+        return Err(NOT_ASKED);
+    }
+    let request: InfoBody = body(&headers, &bytes)?;
+    let keys = stake_list(&request._stake_addresses, MAX_ACCOUNTS)?;
+    state.fresh_tip()?;
+    let client = state.chain.public().await?;
+    let rows = client
+        .query(REWARDS, &[&keys[0], &offset, &limit])
+        .await
+        .map_err(anyhow::Error::from)?;
+    let rows = rows
+        .iter()
+        .map(|row| {
+            Ok(RewardRow {
+                earned_epoch: row.try_get(0)?,
+                spendable_epoch: row.try_get(1)?,
+                amount: row.try_get(2)?,
+                r#type: row.try_get(3)?,
+                pool_id_bech32: row.try_get(4)?,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;

@@ -565,6 +565,115 @@ async fn the_accounts_own_drep_is_read_live_and_never_kept() {
     );
 }
 
+/// A rewards history's pages, read as the wallet reads them (web wallet chunk 30): until one comes back short.
+async fn reward_history(app: &Router, stake: &str) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for offset in (0..).step_by(1000) {
+        let path = format!(
+            "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
+             &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc\
+             &offset={offset}&limit=1000"
+        );
+        let page = post(app, &path, json!({ "_stake_addresses": [stake] })).await;
+        let page = page.as_array().unwrap().clone();
+        let short = page.len() < 1000;
+        rows.extend(page);
+        if short {
+            return rows;
+        }
+    }
+    unreachable!()
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn a_rewards_history_is_every_reward_in_one_order() {
+    let (app, _) = app().await;
+    let params = get(&app, "/api/v1/epoch_params?limit=1").await;
+    let epoch = params[0]["epoch_no"].as_i64().unwrap();
+    for (stake, at_least) in [
+        // The reward account most pools pay (13 of them): leaders' and a member's, six pages (2026-10-12).
+        (
+            "stake1uxcmc9r2t7cxs0zw8qm8ztg3twvxryzghsc8eszek6kuwms23gya4",
+            5000,
+        ),
+        // 34 pools': leaders', a member's and pools' deposits back.
+        (
+            "stake1uy6yzwsxxc28lfms0qmpxvyz9a7y770rtcqx9y96m42cttqwvp4m5",
+            2000,
+        ),
+        // A member's, and from the reserves and the treasury, with no pool.
+        (
+            "stake1uxhtncpmfvcmg97p99erjrjc8umsmjzkq4n6dasrphrr9gshu387d",
+            450,
+        ),
+        // Never paid a reward: no rows.
+        (
+            "stake1uxkjkwuygxqf24wacumm8ph2nlhp9e0ahv37fshdr060cyc36wvr9",
+            0,
+        ),
+    ] {
+        let rows = reward_history(&app, stake).await;
+        assert!(rows.len() >= at_least, "{stake}: {} rows", rows.len());
+        // Sorted as asked, every page after the one before, and no row twice: (spendable, earned) newest first,
+        // then type, pool (none last) and amount, as text.
+        let key = |r: &Value| {
+            (
+                -r["spendable_epoch"].as_i64().unwrap(),
+                -r["earned_epoch"].as_i64().unwrap(),
+                r["type"].as_str().unwrap().to_string(),
+                r["pool_id_bech32"]
+                    .as_str()
+                    .map_or((1, String::new()), |p| (0, p.to_string())),
+                r["amount"].as_str().unwrap().to_string(),
+            )
+        };
+        assert!(
+            rows.windows(2).all(|w| key(&w[0]) <= key(&w[1])),
+            "{stake}: out of order"
+        );
+        for r in &rows {
+            assert_eq!(
+                r.as_object().unwrap().len(),
+                5,
+                "{stake}: Koios's five columns, no more"
+            );
+            let pooled = ["member", "leader", "refund"].contains(&r["type"].as_str().unwrap());
+            assert_eq!(
+                r["pool_id_bech32"]
+                    .as_str()
+                    .is_some_and(|p| p.starts_with("pool1")),
+                pooled,
+                "{stake}: {r}"
+            );
+            assert!(r["amount"].as_str().unwrap().parse::<u64>().is_ok());
+        }
+        // What's been paid by now is what account_info counts: every reward spendable by this epoch, which it
+        // gives as rewards_available plus what was withdrawn.
+        let info = post(
+            &app,
+            "/api/v1/account_info",
+            json!({ "_stake_addresses": [stake] }),
+        )
+        .await;
+        let paid: i128 = rows
+            .iter()
+            .filter(|r| r["spendable_epoch"].as_i64().unwrap() <= epoch)
+            .map(|r| r["amount"].as_str().unwrap().parse::<i128>().unwrap())
+            .sum();
+        let counted = |field: &str| -> i128 { info[0][field].as_str().unwrap().parse().unwrap() };
+        if at_least > 0 {
+            assert_eq!(
+                paid,
+                counted("rewards_available") + counted("withdrawals"),
+                "{stake}"
+            );
+        } else {
+            assert!(rows.is_empty());
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "live db-sync"]
 async fn the_live_actions_and_a_dreps_votes_on_them() {
