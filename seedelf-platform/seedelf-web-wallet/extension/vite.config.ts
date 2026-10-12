@@ -5,11 +5,11 @@ import react from "@vitejs/plugin-react";
 import { build, defineConfig, loadEnv, type Plugin } from "vite";
 
 import pkg from "./package.json" with { type: "json" };
-import { buildManifest, type ManifestOptions } from "./src/manifest.ts";
+import { buildLocales, buildManifest, type ManifestOptions } from "./src/manifest.ts";
 
 const wasmPkg = fileURLToPath(new URL("../wasm/pkg/", import.meta.url));
 
-/** Emits manifest.json into the build. */
+/** Emits manifest.json into the build, and the _locales its description reads. */
 function manifest(options: ManifestOptions): Plugin {
   return {
     name: "seedelf-manifest",
@@ -19,6 +19,13 @@ function manifest(options: ManifestOptions): Plugin {
         fileName: "manifest.json",
         source: `${JSON.stringify(buildManifest(options), null, 2)}\n`,
       });
+      for (const [language, messages] of Object.entries(buildLocales())) {
+        this.emitFile({
+          type: "asset",
+          fileName: `_locales/${language}/messages.json`,
+          source: `${JSON.stringify(messages, null, 2)}\n`,
+        });
+      }
     },
   };
 }

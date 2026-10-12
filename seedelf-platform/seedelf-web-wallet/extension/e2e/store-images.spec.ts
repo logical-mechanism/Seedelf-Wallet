@@ -2,9 +2,14 @@
 // fixtures and the public 12-word test phrase, so no real wallet is on screen
 // and the same build always gives the same images:
 //
-// - five 1280×800 screenshots: the side panel at 2×, framed, with a caption;
+// - five 1280×800 screenshots: the side panel at 2×, framed, with a caption,
+//   in each language the wallet speaks (English's in images/, Spanish's and
+//   Japanese's in images/es/ and images/ja/, the listing's own in each);
 // - the 440×280 small promo tile;
 // - the 128×128 store icon: 96×96 of artwork in 16 px of transparent padding.
+//
+// The flow is driven in English, and each screen is shot in every language
+// by switching the wallet's language on it, as Settings does.
 //
 // The listing is for mainnet, so the wallet is on mainnet, as the store's
 // build opens: the fake Koios gives the recordings with mainnet's addresses
@@ -19,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { chromium, type Page } from "@playwright/test";
 
+import { LOCAL_LANGUAGE } from "../src/shared/preferences";
 import { bech32 } from "../tests/fixtures/bech32";
 import { cardanoTab, expect, openApp, restore, test, vector } from "./support";
 
@@ -49,7 +55,53 @@ const MAINNET_TOKENS: Array<[string, ReturnType<typeof standIn>]> = [
 /** A Seedelf in the recordings (koios-preprod.json) to pay, named "Ancient Kraken". */
 const PAY_TO = "5eed0e1f416e6369656e74204b72616b656e0250963e8b37a282536e8e0d6369";
 
+type Language = "en" | "es" | "ja";
+
+/** The listing's languages, the wallet's own: English's images at the top of images/, the others' in a folder each. */
+const LANGUAGES: Language[] = ["en", "es", "ja"];
+
+/** Each screenshot's caption, a title and a line, in each language (docs/store/README.md lists them). */
+const CAPTIONS: Record<Language, Array<[string, string]>> = {
+  en: [
+    ["Private money on Cardano", "Your private balance sits in UTxOs that don't say who owns them."],
+    ["Pay any Seedelf by name", "Paste the name and the wallet finds it. The payment can't be linked to the Seedelf it pays."],
+    ["Get paid privately", "Create a Seedelf and share its name. Anyone can pay it, and no payment points back to it."],
+    [
+      "It says what links",
+      "Make money public to any address or $handle. The wallet warns you before a payment ties your accounts together.",
+    ],
+    ["A full Cardano wallet", "Send, stake with a pool and delegate your vote. Restore a Lace or Eternl phrase, or make a new one."],
+  ],
+  es: [
+    ["Dinero privado en Cardano", "Tu saldo privado está en UTxOs que no dicen de quién son."],
+    ["Paga a un Seedelf por nombre", "Pega el nombre y la billetera lo encuentra. El pago no se puede vincular con el Seedelf al que paga."],
+    ["Recibe en privado", "Crea un Seedelf y comparte su nombre. Cualquiera puede pagarle, y ningún pago lleva hasta él."],
+    [
+      "Te dice qué vincula",
+      "Haz público tu dinero pagando a cualquier dirección o $handle. La billetera te avisa antes de que un pago vincule tus cuentas entre sí.",
+    ],
+    ["Billetera completa de Cardano", "Envía, haz staking con un pool y delega tu voto. Restaura una frase de Lace o Eternl, o crea una nueva."],
+  ],
+  ja: [
+    ["Cardano 上のプライベートなお金", "プライベート残高は、誰のものかを示さない UTxO の中にあります。"],
+    [
+      "どの Seedelf にも名前で支払う",
+      "名前を貼り付ければ、ウォレットがその Seedelf を見つけます。その支払いを支払先の Seedelf と結び付けることは、誰にもできません。",
+    ],
+    [
+      "プライベートに受け取る",
+      "Seedelf を作成して、その名前を伝えましょう。誰でもそこに支払うことができ、どの支払いからもその Seedelf にはたどり着けません。",
+    ],
+    ["結び付くものを示す", "任意のアドレスや $handle に支払って、お金を公開できます。支払いでアカウント同士が結び付く前に、ウォレットが警告します。"],
+    [
+      "フル機能の Cardano ウォレット",
+      "送金、プールへのステーキング、投票権の委任ができます。Lace や Eternl のフレーズから復元することも、新しいフレーズを作ることもできます。",
+    ],
+  ],
+};
+
 const out = fileURLToPath(new URL("../../docs/store/images/", import.meta.url));
+const folder = (language: Language) => (language === "en" ? out : `${out}${language}/`);
 const dataUri = (type: string, bytes: Buffer) => `data:${type};base64,${bytes.toString("base64")}`;
 const asset = (path: string) => readFileSync(new URL(path, import.meta.url));
 
@@ -62,8 +114,8 @@ const BACKDROP = `
   radial-gradient(ellipse 60% 70% at 76% 50%, rgb(0 196 188 / 0.16), transparent 70%),
   linear-gradient(160deg, #011833 0%, #000c2c 100%)`;
 
-const page = (body: string, css: string) => `<!doctype html>
-<html><head><style>
+const page = (body: string, css: string, language: Language = "en") => `<!doctype html>
+<html lang="${language}"><head><style>
   @font-face { font-family: Inter; font-weight: 100 900; src: url(${inter}) format("woff2"); }
   * { margin: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; }
@@ -72,7 +124,7 @@ const page = (body: string, css: string) => `<!doctype html>
 </style></head><body>${body}</body></html>`;
 
 /** A 1280×800 screenshot: the caption on the left, the wallet on the right. */
-const screenshot = (popup: Buffer, title: string, text: string) =>
+const screenshot = (popup: Buffer, [title, text]: [string, string], language: Language) =>
   page(
     `<main>
       <div class="words">
@@ -87,9 +139,13 @@ const screenshot = (popup: Buffer, title: string, text: string) =>
               display: flex; flex-direction: column; justify-content: center; }
      .wordmark { position: absolute; top: 72px; left: 0; height: 56px; }
      h1 { font-size: 54px; line-height: 1.08; font-weight: 700; letter-spacing: -0.025em; text-wrap: balance; }
+     :lang(ja) h1 { letter-spacing: 0; line-height: 1.2; }
+     /* Japanese has no spaces: break its lines between phrases, not inside a word. */
+     :lang(ja) h1, :lang(ja) p { word-break: auto-phrase; }
      p { margin-top: 24px; font-size: 23px; line-height: 1.45; color: #b9c6d8; text-wrap: pretty; }
      .popup { position: absolute; right: 120px; top: 60px; width: 408px; height: 680px; border-radius: 16px;
               box-shadow: 0 0 0 1px rgb(255 255 255 / 0.10), 0 28px 80px rgb(0 0 0 / 0.55); }`,
+    language,
   );
 
 const promoTile = page(
@@ -111,21 +167,24 @@ const storeIcon = page(
               top: ${(-21 * 96) / 1200}px; }`,
 );
 
-/** Renders `html` at exactly `width`×`height` pixels into docs/store/images/`name`. */
-async function render(compose: Page, html: string, width: number, height: number, name: string, transparent = false) {
+/** Renders `html` at exactly `width`×`height` pixels into the file at `path`. */
+async function render(compose: Page, html: string, width: number, height: number, path: string, transparent = false) {
   await compose.setViewportSize({ width, height });
   await compose.setContent(html);
   await compose.evaluate(async () => {
     await document.fonts.ready;
     await Promise.all([...document.images].map((img) => img.decode()));
   });
-  await compose.screenshot({ path: `${out}${name}`, omitBackground: transparent });
+  await compose.screenshot({ path, omitBackground: transparent });
 }
 
 test.use({ scale: 2, network: "mainnet" });
 
 test("the Web Store listing's images", async ({ context, koios }) => {
-  mkdirSync(out, { recursive: true });
+  for (const language of LANGUAGES) {
+    expect(CAPTIONS[language], language).toHaveLength(CAPTIONS.en.length);
+    mkdirSync(folder(language), { recursive: true });
+  }
   for (const [unit, token] of MAINNET_TOKENS) koios.mainnetTokens.set(unit, token);
   const tab = await openApp(context);
   await restore(tab, vector(12).phrase);
@@ -136,69 +195,68 @@ test("the Web Store listing's images", async ({ context, koios }) => {
   // The side panel at its default width, cut to what the listing's frame fits.
   const popup = await openApp(context, "panel");
   await popup.setViewportSize({ width: 360, height: 600 });
-  const shoot = () => popup.screenshot({ animations: "disabled" });
+  /** The wallet's language, switched as Settings does: it follows the stored choice on every open page. */
+  const speak = async (language: Language) => {
+    await popup.evaluate(({ key, code }) => chrome.storage.local.set({ [key]: code }), { key: LOCAL_LANGUAGE, code: language });
+    await expect(popup.locator("html")).toHaveAttribute("lang", language);
+    // The screens redraw on i18next's change, which comes before the attribute: two frames and they're painted.
+    await popup.evaluate(() => new Promise((painted) => requestAnimationFrame(() => requestAnimationFrame(painted))));
+  };
+  /** The screen as it is, in each language, and back in English to go on. */
+  const shoot = async () => {
+    const images = {} as Record<Language, Buffer>;
+    for (const language of LANGUAGES) {
+      await speak(language);
+      images[language] = await popup.screenshot({ animations: "disabled" });
+    }
+    await speak("en");
+    return images;
+  };
   const back = () => popup.getByRole("button", { name: "Back", exact: true }).click();
-  const shots: Array<[Buffer, string, string]> = [];
+  const shots: Array<Record<Language, Buffer>> = [];
 
   await expect(popup.getByTestId("seedelf-tokens")).toContainText("USDM");
   await expect(popup.getByTestId("test-network")).toHaveCount(0);
   await expect(popup.getByTestId("updated")).toHaveText("Updated just now");
-  shots.push([
-    await shoot(),
-    "Private money on Cardano",
-    "Your private balance sits in UTxOs that don't say who owns them.",
-  ]);
+  shots.push(await shoot());
 
   await popup.getByRole("button", { name: "Send privately" }).click();
   await popup.getByLabel("Seedelf name").fill(PAY_TO);
   await expect(popup.getByTestId("transfer-to-note")).toContainText("Found: Ancient Kraken");
   await popup.getByLabel("Amount", { exact: true }).fill("5");
-  shots.push([
-    await shoot(),
-    "Pay any Seedelf by name",
-    "Paste the name and the wallet finds it. The payment can't be linked to the Seedelf it pays.",
-  ]);
+  shots.push(await shoot());
   await back();
 
   await popup.getByRole("button", { name: "Create a Seedelf" }).click();
   await expect(popup.getByTestId("mint-from-note")).toBeVisible();
   await popup.getByLabel("Tag (optional, anyone can read it)").fill("alice");
-  shots.push([
-    await shoot(),
-    "Get paid privately",
-    "Create a Seedelf and share its name. Anyone can pay it, and no payment points back to it.",
-  ]);
+  shots.push(await shoot());
   await back();
 
   await popup.getByRole("button", { name: "Make public" }).click();
   await popup.getByLabel("To", { exact: true }).fill(vector(12).mainnet.receive_0);
   await expect(popup.getByTestId("withdraw-own")).toContainText("This is your own public account");
   await popup.getByLabel("Amount", { exact: true }).fill("10");
-  shots.push([
-    await shoot(),
-    "It says what links",
-    "Make money public to any address or $handle. The wallet warns you before a payment ties your accounts together.",
-  ]);
+  shots.push(await shoot());
   await back();
 
   await cardanoTab(popup);
   await expect(popup.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
   await expect(popup.getByTestId("staking-row-pool")).toHaveText("Staking with LOGIC");
   await expect(popup.getByTestId("cardano-tokens")).toContainText("DJED");
-  shots.push([
-    await shoot(),
-    "A full Cardano wallet",
-    "Send, stake with a pool and delegate your vote. Restore a Lace or Eternl phrase, or make a new one.",
-  ]);
+  shots.push(await shoot());
 
   const browser = await chromium.launch();
   try {
     const compose = await browser.newPage({ deviceScaleFactor: 1 });
-    for (const [i, [image, title, text]] of shots.entries()) {
-      await render(compose, screenshot(image, title, text), 1280, 800, `screenshot-${i + 1}.png`);
+    for (const [i, images] of shots.entries()) {
+      for (const language of LANGUAGES) {
+        const html = screenshot(images[language], CAPTIONS[language][i]!, language);
+        await render(compose, html, 1280, 800, `${folder(language)}screenshot-${i + 1}.png`);
+      }
     }
-    await render(compose, promoTile, 440, 280, "promo-small-440x280.png");
-    await render(compose, storeIcon, 128, 128, "icon-128.png", true);
+    await render(compose, promoTile, 440, 280, `${out}promo-small-440x280.png`);
+    await render(compose, storeIcon, 128, 128, `${out}icon-128.png`, true);
   } finally {
     await browser.close();
   }
