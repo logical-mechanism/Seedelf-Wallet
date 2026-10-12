@@ -1,10 +1,12 @@
-// A private session's signing prompt matches what the transaction pays, or
-// spends, against every public account the wallet knows, not only the one on
-// screen (the release review). It knew the active account alone: a session's
-// transaction paying another, the dApp account included, read "Your public
-// account and your private balance aren't in it.", and signing tied the
-// session, and the private balance that funded it, to that account on chain.
-// With the accounts unread, the prompt promises nothing.
+// A site's signing prompt matches what the transaction pays, or spends,
+// against every public account the wallet knows, not only the one on screen
+// (the release review), and names which. A private session's knew the active
+// account alone: a session's transaction paying another, the dApp account
+// included, read "Your public account and your private balance aren't in
+// it.", and signing tied the session, and the private balance that funded
+// it, to that account on chain. The public account's knew none: another of
+// the wallet's public accounts read "An address" (C05's public half). With
+// the accounts unread, the prompt promises nothing.
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
@@ -135,10 +137,15 @@ describe("a private session's signing prompt, with several public accounts", () 
     // The picker on Account 2; the dApp account stays Account 1 (index 0).
     await t.accounts.use(1, ["preprod"]);
     const [first, third] = [await addressesOf(t, 0), await addressesOf(t, 2)];
-    for (const address of [first.receive, first.stakedTo, third.receive, third.stakedTo]) {
+    for (const [address, account] of [
+      [first.receive, 0],
+      [first.stakedTo, 0],
+      [third.receive, 2],
+      [third.stakedTo, 2],
+    ] as const) {
       const approval = await prompt(dapp, s, paying([SESSION_INPUT], [address]));
-      expect(approval.ties).toEqual(["account"]);
-      expect(approval.summary.paid.map((p) => p.yours)).toEqual(["account"]);
+      expect(approval.ties).toEqual([{ account }]);
+      expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account }]);
     }
     // Someone else's: checked, and none of the wallet's is in it.
     const plain = await prompt(dapp, s, paying([SESSION_INPUT], [t.deps.wasm.cip30Address(THEIRS)]));
@@ -153,6 +160,53 @@ describe("a private session's signing prompt, with several public accounts", () 
     const s = await connectedPrivately(t, dapp);
     const approval = await prompt(dapp, s, paying([SESSION_INPUT], [t.deps.wasm.cip30Address(THEIRS)]));
     expect(approval).not.toHaveProperty("ties");
+  });
+});
+
+describe("the public account's signing prompt, with several public accounts (C05's public half)", () => {
+  /** A site connected to the dApp account (account 1, index 0), and one of its UTxOs to spend. */
+  async function connectedPublicly(t: T, dapp: DappService) {
+    const s = site("https://public.example");
+    const enabling = dapp.call(s, "enable", []);
+    await until(() => dapp.approvals().length === 1);
+    await dapp.answer(dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    return { s, spend: `${own!.txHash}#${own!.index}` };
+  }
+
+  it("names another public account it pays, by any address of its keys, and never the site's own", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const [first, second, third] = [await addressesOf(t, 0), await addressesOf(t, 1), await addressesOf(t, 2)];
+    for (const [address, account] of [
+      [second.receive, 1],
+      [third.receive, 2],
+      [third.stakedTo, 2],
+    ] as const) {
+      const approval = await prompt(dapp, s, paying([spend], [address]));
+      expect(approval.ties).toEqual([{ account }]);
+      expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account }]);
+    }
+    // Two at once, in order, each output named.
+    const both = await prompt(dapp, s, paying([spend], [third.receive, second.receive]));
+    expect(both.ties).toEqual([{ account: 1 }, { account: 2 }]);
+    expect(both.summary.paid.map((p) => p.yours)).toEqual([{ account: 2 }, { account: 1 }]);
+    // Someone's key staked to the site's own account: not another account (it has a warning of its own).
+    const own = await prompt(dapp, s, paying([spend], [first.stakedTo, t.deps.wasm.cip30Address(THEIRS)]));
+    expect(own.ties).toEqual([]);
+    expect(own.summary.paid.map((p) => p.yours)).toEqual([undefined, undefined]);
+  });
+
+  it("names the account on screen when sites use another", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    await t.accounts.use(2, ["preprod"]);
+    const approval = await prompt(dapp, s, paying([spend], [(await addressesOf(t, 2)).receive]));
+    expect(approval.ties).toEqual([{ account: 2 }]);
   });
 });
 

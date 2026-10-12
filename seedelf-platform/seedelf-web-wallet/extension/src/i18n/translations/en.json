@@ -420,6 +420,7 @@
   "dappUi.nothingWaiting": "Nothing's waiting.",
   "dappUi.ordinaryWallet": "The site sees this account as an ordinary wallet. Top it up or bring it back, the 5 ₳ kept aside too, from the dApps page.",
   "dappUi.paid.account": "Your public account",
+  "dappUi.paid.accountNamed": "Your public account, {{account}}",
   "dappUi.paid.address": "An address",
   "dappUi.paid.contract": "A contract",
   "dappUi.paid.ownPaymentKey": "Your payment key, with a stake part that isn't yours",

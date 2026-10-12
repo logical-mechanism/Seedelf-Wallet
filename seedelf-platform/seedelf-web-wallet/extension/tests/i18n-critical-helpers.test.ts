@@ -41,6 +41,7 @@ const REACHED = keysThroughHelpers({ keys: Object.keys(en) });
  */
 const SHARED_WORDS: Record<string, string> = {
   "accountPicker.numbered": "an account's name, as Make public and Remove a Seedelf name it",
+  "accounts.numbered": "an account's number, as the connector's windows name the site's account",
   "claim.aSession": "a private session's name, when its own can't be read",
   "claim.sessionLower": "a private session's name, as Bring everything back lists it",
   "format.noName": "a token's name, when it has none",
@@ -140,12 +141,12 @@ describe("what the back-translation of these warnings corrected, through the hel
   });
 
   it("ties the accounts together in Spanish with the pronoun their feminine names take", async () => {
-    expect(tiesLine(["account"], true)).toBe(
+    expect(tiesLine([{ account: 0 }], true)).toBe(
       "It moves money between this private session and your public account. Signing ties them together on chain, where anyone can see it.",
     );
     await i18n.changeLanguage("es");
     // Una cuenta, una sesión: "los" pointed at nothing in the sentence.
-    expect(tiesLine(["account"], true)).toBe(
+    expect(tiesLine([{ account: 0 }], true)).toBe(
       "Mueve dinero entre esta sesión privada y tu cuenta pública. Firmar las vincula entre sí en la cadena, donde cualquiera puede verlo.",
     );
   });

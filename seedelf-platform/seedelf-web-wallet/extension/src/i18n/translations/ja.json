@@ -399,6 +399,7 @@
   "dappUi.nothingWaiting": "待機中のものはありません。",
   "dappUi.ordinaryWallet": "サイトはこのアカウントを通常のウォレットとして扱います。dApps ページから追加入金したり、確保分の 5 ₳ ごと取り戻したりできます。",
   "dappUi.paid.account": "あなたの公開アカウント",
+  "dappUi.paid.accountNamed": "あなたの公開アカウント（{{account}}）",
   "dappUi.paid.address": "アドレス",
   "dappUi.paid.contract": "コントラクト",
   "dappUi.paid.ownPaymentKey": "あなたの支払鍵（ステーク部分はあなたのものではありません）",

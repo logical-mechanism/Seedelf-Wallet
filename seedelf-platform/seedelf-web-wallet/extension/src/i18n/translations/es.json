@@ -441,6 +441,7 @@
   "dappUi.nothingWaiting": "No hay nada esperando.",
   "dappUi.ordinaryWallet": "El sitio ve esta cuenta como una billetera corriente. Recárgala o tráela de vuelta, con los 5 ₳ apartados, desde la página de dApps.",
   "dappUi.paid.account": "Tu cuenta pública",
+  "dappUi.paid.accountNamed": "Tu cuenta pública, {{account}}",
   "dappUi.paid.address": "Una dirección",
   "dappUi.paid.contract": "Un contrato",
   "dappUi.paid.ownPaymentKey": "Tu clave de pago, con una parte de staking que no es tuya",
