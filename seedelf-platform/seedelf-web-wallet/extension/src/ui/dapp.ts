@@ -5,12 +5,15 @@
 // whether they come back to it.
 
 import { joinSentences, t } from "../i18n";
-import type { DappTxSummary } from "../shared/rpc";
+import type { DappTie, DappTxSummary } from "../shared/rpc";
 import { formatAda, voteLabel } from "./format";
 
 type Paid = DappTxSummary["paid"][number];
 type Certificate = DappTxSummary["certificates"][number];
 type Withdrawal = DappTxSummary["withdrawals"][number];
+
+/** A public account's number and name, where the wallet has more than one; undefined with one, "your public account" says it. */
+export type AccountNamer = (index: number) => string | undefined;
 
 /**
  * Whether the account's staking money comes back to it: its own outputs get
@@ -22,10 +25,13 @@ export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "st
 }
 
 /** What an output pays, under its address: another of the wallet's own accounts by its name (independent review M12). */
-export function paidTo(p: Paid): string {
+export function paidTo(p: Paid, named?: AccountNamer): string {
+  const account = typeof p.yours === "object" ? named?.(p.yours.account) : undefined;
   const what =
-    p.yours === "account"
-      ? t("dappUi.paid.account")
+    typeof p.yours === "object"
+      ? account
+        ? t("dappUi.paid.accountNamed", { account })
+        : t("dappUi.paid.account")
       : p.yours !== undefined
         ? t("dappUi.paid.session", { number: p.yours + 1 })
         : p.ownPaymentKey
@@ -42,23 +48,26 @@ export function paidTo(p: Paid): string {
  * What of the wallet's other accounts a site's transaction moves money with,
  * which signing ties together on chain for anyone to see (independent review
  * M12): `ties` as the worker found them; `session`, the site is on a private
- * session, not the public account.
+ * session, not the public account; `named`, public accounts by number and
+ * name, and `site`, the site's own so, where the wallet has several.
  *
  * Its keys, and those of the staking lines below, are named `.privacy.` and
  * `.warn.` because they show in a warning the critical-set deriver can't see
  * into: it reads only the JSX, and these are built here, so a key's own name
  * is what keeps it checked (tests/i18n-critical-helpers.test.ts holds them to it).
  */
-export function tiesLine(ties: Array<"account" | number>, session: boolean): string {
+export function tiesLine(ties: DappTie[], session: boolean, named?: AccountNamer, site?: string): string {
   const names = ties.map((x) =>
-    x === "account" ? t("dappUi.ties.privacy.account") : t("dappUi.ties.privacy.session", { number: x + 1 }),
+    typeof x === "number"
+      ? t("dappUi.ties.privacy.session", { number: x + 1 })
+      : (named?.(x.account) ?? t("dappUi.ties.privacy.account")),
   );
   const list =
     names.length > 1
       ? t("dappUi.ties.privacy.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
       : names[0];
   return t("dappUi.ties.privacy.moves", {
-    from: t(session ? "dappUi.ties.privacy.thisSession" : "dappUi.ties.privacy.yourAccount"),
+    from: session ? t("dappUi.ties.privacy.thisSession") : (site ?? t("dappUi.ties.privacy.yourAccount")),
     list,
   });
 }
@@ -71,7 +80,7 @@ export function tiesLine(ties: Array<"account" | number>, session: boolean): str
  * it when it pays a Seedelf (`seedelf`): nothing says whose, so it may be
  * the user's own.
  */
-export function signingTies(ties: Array<"account" | number> | undefined, session: boolean, seedelf = false): string {
+export function signingTies(ties: DappTie[] | undefined, session: boolean, seedelf = false): string {
   const checked = ties !== undefined && ties.length === 0;
   if (session) {
     return joinSentences([

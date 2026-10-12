@@ -28,7 +28,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { joinSentences, t, useT } from "../../i18n";
 
 import { lovejoinOn } from "../../networks";
-import type { Balances, DappApproval, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
+import type { Balances, DappApproval, DappTie, DappToken, DappTxSummary, SessionOutSummary } from "../../shared/rpc";
+import { accountNumberAndName, useAccounts } from "../accounts";
 import { call, onDappChanged, RpcError } from "../background";
 import { AdaInput, lovelaceToSend, MinimumHint } from "../components/AdaInput";
 import { Callout } from "../components/Callout";
@@ -926,13 +927,18 @@ export function SignTx({
   session: boolean;
   collateralSpent: boolean;
   /** The wallet's other accounts it moves money with (independent review M12); undefined when unchecked. */
-  ties?: Array<"account" | number>;
+  ties?: DappTie[];
   /** The public account it's for, by number and name, when the wallet has more than one (`useSiteAccount`). */
   account?: string;
 }) {
   const tr = useT();
   const network = useNetwork();
   const net = BigInt(s.netLovelace);
+  // Another public account it pays by number and name, as the windows name the site's (chunk 23), where there are several.
+  const { accounts, several } = useAccounts();
+  const named = several
+    ? (index: number) => accountNumberAndName(accounts.find((a) => a.index === index) ?? { index })
+    : undefined;
   // A token's amount without its sign, in its units: the rows say which way it goes.
   const amount = (t: DappToken) => {
     const q = BigInt(t.quantity);
@@ -1012,7 +1018,7 @@ export function SignTx({
                 <span className="dapp-address" data-value={p.address}>
                   {p.address}
                 </span>
-                <span className="note">{paidTo(p)}</span>
+                <span className="note">{paidTo(p, named)}</span>
                 <span className="dapp-amount">
                   {formatAda(p.lovelace)}{"\u00a0₳"}
                   {p.tokens.map((t) => (
@@ -1053,7 +1059,7 @@ export function SignTx({
       )}
       {ties && ties.length > 0 && (
         <Callout tone="warn" testId="dapp-ties">
-          {tiesLine(ties, session)}
+          {tiesLine(ties, session, named, account)}
         </Callout>
       )}
 

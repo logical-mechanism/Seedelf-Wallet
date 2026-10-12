@@ -138,8 +138,8 @@ describe("a private session's signing prompt", () => {
       `00${"ab".repeat(28)}${stakeHash}`,
     ]) {
       const approval = await prompt(dapp, s, paying([SESSION_INPUT], [address]));
-      expect(approval.ties).toEqual(["account"]);
-      expect(approval.summary.paid.map((p) => p.yours)).toEqual(["account"]);
+      expect(approval.ties).toEqual([{ account: 0 }]);
+      expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account: 0 }]);
     }
   });
 
@@ -150,7 +150,7 @@ describe("a private session's signing prompt", () => {
     await t.balances.get("preprod");
     const [own] = (await t.coins.lists("preprod")).cardano;
     const approval = await prompt(dapp, s, paying([SESSION_INPUT, `${own!.txHash}#${own!.index}`], [t.deps.wasm.cip30Address(THEIRS)]), true);
-    expect(approval.ties).toEqual(["account"]);
+    expect(approval.ties).toEqual([{ account: 0 }]);
     expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
   });
 
@@ -185,7 +185,7 @@ describe("a private session's signing prompt", () => {
     const s = await connectedPrivately(t, dapp);
     const signing = dapp.call(s, "signTx", [paying([SESSION_INPUT], [t.deps.wasm.cip30Address(OWN)]), false]);
     await until(() => dapp.approvals().length === 1);
-    expect(dapp.approvals()[0]).toMatchObject({ ties: ["account"] });
+    expect(dapp.approvals()[0]).toMatchObject({ ties: [{ account: 0 }] });
     expect(await dapp.answer(dapp.approvals()[0]!.id, true, PASSWORD)).toEqual({});
     expect(((await signing) as string).slice(0, 2)).toBe("a1");
   });
@@ -261,7 +261,7 @@ describe("the prompt's words", () => {
       .replace(/\s+/g, " ");
 
   it("warn when a session's transaction pays the public account, and never say it isn't in it", () => {
-    const page = text({ summary: summary([{ ...out, yours: "account" }]), partial: false, session: true, collateralSpent: false, ties: ["account"] });
+    const page = text({ summary: summary([{ ...out, yours: { account: 0 } }]), partial: false, session: true, collateralSpent: false, ties: [{ account: 0 }] });
     expect(page).toContain("Your public account");
     expect(page).toContain(
       "It moves money between this private session and your public account. Signing ties them together on chain, where anyone can see it.",
@@ -281,7 +281,7 @@ describe("the prompt's words", () => {
   });
 
   it("name several, and say a Seedelf paid from a session comes from its one-time account", () => {
-    expect(tiesLine(["account", 1, 4], true)).toBe(
+    expect(tiesLine([{ account: 0 }, 1, 4], true)).toBe(
       "It moves money between this private session and your public account, your private session 2 and your private session 5. Signing ties them together on chain, where anyone can see it.",
     );
     expect(tiesLine([0], false)).toBe(
@@ -295,5 +295,17 @@ describe("the prompt's words", () => {
     expect(page).toContain("Signing ties this transaction to the session's one-time account. Your public account isn't in it.");
     expect(page).not.toContain("private balance aren't");
     expect(signingTies([], false, true)).toBe("Signing ties this transaction to your public account.");
+  });
+
+  it("name another public account by its number and name where the wallet has several", () => {
+    const named = (index: number) => `Account ${index + 1}${index === 2 ? " · Savings" : ""}`;
+    expect(paidTo({ ...out, yours: { account: 2 } }, named)).toBe("Your public account, Account 3 · Savings");
+    expect(paidTo({ ...out, yours: { account: 0 } })).toBe("Your public account");
+    expect(tiesLine([{ account: 2 }], false, named, "Account 1")).toBe(
+      "It moves money between Account 1 and Account 3 · Savings. Signing ties them together on chain, where anyone can see it.",
+    );
+    expect(tiesLine([{ account: 0 }, 1], true, named)).toBe(
+      "It moves money between this private session and Account 1 and your private session 2. Signing ties them together on chain, where anyone can see it.",
+    );
   });
 });

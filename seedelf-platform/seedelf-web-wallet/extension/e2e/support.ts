@@ -16,6 +16,7 @@ import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
 import { bech32, bech32Bytes } from "../tests/fixtures/bech32";
 import { txIdOf } from "../tests/fixtures/cbor";
+import { asAsked } from "../tests/fixtures/minswap-echo";
 import { swapTx } from "../tests/fixtures/swap-tx";
 
 export { expect };
@@ -443,7 +444,7 @@ async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
     if (swaps.limited && (path === "estimate" || path === "build-tx")) {
       return route.fulfill({ status: 429, body: "Rate limit exceeded, retry in 50 seconds" });
     }
-    if (path === "estimate") return answer(swaps.estimate);
+    if (path === "estimate") return answer(asAsked(swaps.estimate, body));
     if (path === "build-tx") return answer({ cbor: swaps.swapCbor });
     if (path === "pending-orders") return answer({ orders: swaps.orders, amount_in_decimal: false });
     return route.fulfill({ status: 404, body: "" });

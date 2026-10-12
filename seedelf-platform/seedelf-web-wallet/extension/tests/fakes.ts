@@ -44,6 +44,7 @@ import type { Area } from "../src/background/storage";
 import type { SwapAsk } from "../src/shared/rpc";
 import { NETWORKS } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
+import { asAsked } from "./fixtures/minswap-echo";
 import { ORDER_DATUM, ORDER_DATUM_HASH } from "./fixtures/swap-tx";
 import { Wallet, type WalletDeps } from "../src/background/wallet";
 
@@ -525,8 +526,10 @@ export function fakeCollateral(): FakeCollateral {
 export interface FakeMinswap {
   fetch: FetchLike;
   calls: Array<{ path: string; body: any }>;
-  /** `estimate`'s answer. */
+  /** `estimate`'s answer, for the amount and tokens asked unless `echo` is off (fixtures/minswap-echo.ts). */
   estimate: Estimate;
+  /** On: the estimate is for what was asked, as Minswap's is. Off: `estimate` as it is, whatever was asked. */
+  echo: boolean;
   /** `build-tx`'s transaction. */
   swapCbor: string;
   /** `pending-orders`' answer. */
@@ -540,6 +543,7 @@ export function fakeMinswap(): FakeMinswap {
   const fake: FakeMinswap = {
     calls: [],
     estimate: minswapEstimate.estimate,
+    echo: true,
     swapCbor: sessionSwap.swapCbor,
     orders: [],
     cancelCbor: "",
@@ -547,7 +551,7 @@ export function fakeMinswap(): FakeMinswap {
       const path = new URL(url).pathname.split("/").pop()!;
       const body = init.body ? JSON.parse(String(init.body)) : null;
       fake.calls.push({ path, body });
-      if (path === "estimate") return Response.json(fake.estimate);
+      if (path === "estimate") return Response.json(fake.echo ? asAsked(fake.estimate, body) : fake.estimate);
       if (path === "build-tx") {
         // Minswap quotes again, at the slippage asked, and won't build under the minimum it's given (as it does live).
         const own = BigInt(Math.floor(Number(fake.estimate.amount_out) / (1 + body.estimate.slippage / 100)));

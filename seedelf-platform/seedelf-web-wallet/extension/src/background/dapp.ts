@@ -143,6 +143,7 @@ import type {
   DappAsk,
   DappDeclined,
   DappSite,
+  DappTie,
   DappTxSummary,
   RefusedBy,
   ReplyCode,
@@ -315,9 +316,6 @@ interface SessionAccount {
 
 /** Who a connected site talks to: the public account (none), or its private session. */
 type Holder = SessionAccount | undefined;
-
-/** Another of the wallet's accounts a site's transaction touches: the public account, or a private session by index. */
-type Tie = "account" | number;
 
 /** A connected site, as the sealed record keeps it. */
 type Connected = DappSite & { network: NetworkName };
@@ -2047,7 +2045,7 @@ export class DappService {
     const { wasm } = this.deps;
     // For the prompt alone: never refused for it, which would tell the site.
     // Unchecked, the prompt promises nothing (independent review M12).
-    const ties = await this.ties(network, holder, summary, rows).catch((e: unknown) => {
+    const ties = await this.ties(network, holder, view, summary, rows).catch((e: unknown) => {
       if (isTrap(e)) throw e;
       return undefined;
     });
@@ -2110,26 +2108,29 @@ export class DappService {
   /**
    * Which of the wallet's other accounts a site's transaction pays, or
    * spends from (the inputs the wallet found), which signing ties on chain
-   * to the account the site sees: for a site on a private session, every
-   * public account the wallet knows, not only the one on screen (their stake
-   * keys, and their payment keys in range, as Make public counts them:
-   * destination.ts), and the other sessions; for a site on the public
-   * account, the sessions. By each paid output, and all together, the public
-   * account first. Nothing is asked of anyone for it (independent review
+   * to the account the site sees: every public account the wallet knows,
+   * not only the one on screen (their stake keys, and their payment keys in
+   * range, as Make public counts them: destination.ts), less the site's own
+   * when it's on the public account (`view.account`); and the other private
+   * sessions. An address can tie two (one account's payment key under
+   * another's stake key). By each paid output, and all together, public
+   * accounts first. Nothing is asked of anyone for it (independent review
    * M12). Checking the account on screen alone, a payment to another said
-   * that no public account was in it (the release review); with the accounts
-   * unread, this throws, and the prompt promises nothing.
+   * that no public account was in it (the release review), and a site on
+   * the public account read another public account as "An address"; with
+   * the accounts unread, this throws, and the prompt promises nothing.
    */
   private async ties(
     network: NetworkName,
     holder: Holder,
+    view: View,
     summary: DappTxSummary,
     rows: KoiosUtxo[],
-  ): Promise<{ paid: Array<Tie | undefined>; all: Tie[] }> {
+  ): Promise<{ paid: Array<DappTie | undefined>; all: DappTie[] }> {
     const { wasm, wallet, sessions } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const indices = (await sessions.indices(network)).filter((i) => i !== holder?.index);
-    const account = holder ? await this.publicKeys(network) : undefined;
+    const accounts = await this.publicKeys(network);
     const others = await wallet.withKeys(({ oneTime }) =>
       indices.map((index) => ({
         index,
@@ -2137,45 +2138,53 @@ export class DappService {
         stake: keysOf(wasm, oneTime.rewardAddress(net, index)).stake,
       })),
     );
-    const whose = (address: string): Tie | undefined => {
+    const whose = (address: string): DappTie[] => {
       const { payment, stake } = keysOf(wasm, address);
-      if (account && ((payment !== undefined && account.payment.has(payment)) || (stake !== undefined && account.stake.has(stake)))) {
-        return "account";
+      const ties: DappTie[] = [];
+      // Its payment key's account and its stake key's, once each.
+      for (const index of new Set([payment && accounts.payment.get(payment), stake && accounts.stake.get(stake)])) {
+        if (typeof index === "number" && (holder || index !== view.account)) ties.push({ account: index });
       }
-      return others.find((s) => (payment !== undefined && payment === s.payment) || (stake !== undefined && stake === s.stake))?.index;
+      const session = others.find((s) => (payment !== undefined && payment === s.payment) || (stake !== undefined && stake === s.stake));
+      if (session) ties.push(session.index);
+      return ties;
     };
-    const paid = summary.paid.map((p) => whose(p.address));
-    const all = [...new Set([...paid, ...rows.map((r) => whose(r.address))].filter((t): t is Tie => t !== undefined))];
-    return { paid, all: all.sort((a, b) => (a === "account" ? -1 : b === "account" ? 1 : a - b)) };
+    const rank = (t: DappTie): [number, number] => (typeof t === "number" ? [1, t] : [0, t.account]);
+    const all = new Map([...summary.paid, ...rows].flatMap((o) => whose(o.address)).map((t) => [rank(t).join(), t]));
+    return {
+      paid: summary.paid.map((p) => whose(p.address)[0]),
+      all: [...all.values()].sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1] - rank(b)[1]),
+    };
   }
 
   /**
    * The payment keys in range (both chains, as balances count them) and the
-   * stake keys of every public account the wallet knows: the one on screen,
-   * with those its last balance reading found past the first 20
-   * (destination.ts), the dApp account and every other recorded. Derived on
-   * the device, asking nobody, as tx-view.ts does. Throws when the accounts
-   * can't be read: a check of some of them can't say none is in it.
+   * stake keys of every public account the wallet knows, each to its index:
+   * the one on screen, with those its last balance reading found past the
+   * first 20 (destination.ts), the dApp account and every other recorded.
+   * Derived on the device, asking nobody, as tx-view.ts does. Throws when
+   * the accounts can't be read: a check of some of them can't say none is
+   * in it.
    */
-  private async publicKeys(network: NetworkName): Promise<{ payment: Set<string>; stake: Set<string> }> {
+  private async publicKeys(network: NetworkName): Promise<{ payment: Map<string, number>; stake: Map<string, number> }> {
     const { wasm, wallet, session } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const known = (await this.deps.knownAccounts?.()) ?? [];
-    const payment = new Set<string>();
-    const stake = new Set<string>();
-    const add = (cardano: Keys["cardano"]) => {
-      for (let i = 0; i < GAP_LIMIT; i++) payment.add(cardano.paymentKeyHash(0, i)).add(cardano.paymentKeyHash(1, i));
+    const payment = new Map<string, number>();
+    const stake = new Map<string, number>();
+    const add = (cardano: Keys["cardano"], index: number) => {
+      for (let i = 0; i < GAP_LIMIT; i++) payment.set(cardano.paymentKeyHash(0, i), index).set(cardano.paymentKeyHash(1, i), index);
       const key = keysOf(wasm, cardano.stakeAddress(net)).stake;
-      if (key) stake.add(key);
+      if (key) stake.set(key, index);
     };
     const active = await wallet.withKeys(async ({ cardano, account }) => {
-      add(cardano);
+      add(cardano, account);
       const found = await session.get<AccountAddresses>(SESSION_ACCOUNT_ADDRESSES_PREFIX + network);
-      for (const k of found?.keys ?? []) payment.add(k);
+      for (const k of found?.keys ?? []) payment.set(k, account);
       return account;
     });
     for (const index of new Set([await this.dappAccount(), ...known])) {
-      if (index !== active) await wallet.withAccount(index, ({ cardano }) => add(cardano));
+      if (index !== active) await wallet.withAccount(index, ({ cardano }) => add(cardano, index));
     }
     return { payment, stake };
   }
