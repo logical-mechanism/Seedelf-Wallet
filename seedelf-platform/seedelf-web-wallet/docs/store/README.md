@@ -20,7 +20,7 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 
 Upload `extension/release/seedelf-wallet-<version>-mainnet.zip`, the zip `npm run package` wrote.
 
-- The store reads the name, version, summary and permissions from its manifest.
+- The store reads the name, version, summary and permissions from its manifest, and the summary in Spanish and Japanese from its `_locales` ([In Spanish and Japanese](#in-spanish-and-japanese)).
 - Every later upload needs a higher `version` in `extension/package.json`.
 - Never upload a `-preprod.zip` (`npm run package:preprod`): it's a preprod-only build, for tests.
 
@@ -28,7 +28,7 @@ Upload `extension/release/seedelf-wallet-<version>-mainnet.zip`, the zip `npm ru
 
 **Title** (from the manifest): `Seedelf Wallet`
 
-**Summary** (from the manifest's `description`; the store allows 132 characters):
+**Summary** (the manifest's `description`, from `SUMMARY` in `extension/src/manifest.ts` through Chrome's `_locales`; the store allows 132 characters):
 
 ```text
 A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone privately through Seedelf.
@@ -71,7 +71,7 @@ Private money earns no staking rewards: it has no staking part, which is what ke
 How it works:
 • Everything is built and signed inside the extension. The cryptography and the transaction building are Rust, compiled to WebAssembly and shipped in the package.
 • Your recovery phrase never leaves your device. It's encrypted with your password (Argon2id and ChaCha20-Poly1305).
-• The wallet talks to a few services, and each sees your IP address. On mainnet, our own server reads the chain and submits your transactions, and logs neither your IP address nor what you ask; Koios, a public Cardano API, does it on preprod, and on mainnet for anything ours can't answer, or for everything if you turn ours off in Settings. giveme.my, which we run, adds shared collateral to private payments, so your own address stays out of them, and sees each one. CoinGecko gives ADA's price on mainnet, unless you choose no currency. Minswap quotes and builds your swaps, only when you swap. Blockfrost's IPFS gateway gives an NFT's image, only when you press Show image on it. Lovejoin is a contract on the chain, reached through those servers.
+• The wallet talks to a few services, and each sees your IP address. On mainnet, our own server reads the chain and submits your transactions, and logs neither your IP address nor what you ask; Koios, a public Cardano API, reads and submits on preprod, and on mainnet for anything ours can't answer, or for everything if you turn ours off in Settings. giveme.my, which we run, adds shared collateral to private payments, so your own address stays out of them, and sees each one. CoinGecko gives ADA's price on mainnet, unless you choose no currency. Minswap quotes and builds your swaps, only when you swap. Blockfrost's IPFS gateway gives an NFT's image, only when you press Show image on it. Lovejoin is a contract on the chain, reached through those servers.
 • It adds nothing to web pages unless you turn on connecting sites. Then it adds only the standard Cardano wallet entry (window.cardano) to https pages, so any https site can see you use Seedelf Wallet, as with any Cardano wallet, and it asks you before anything is signed.
 • There's no sign-up, and no analytics or tracking.
 
@@ -80,15 +80,15 @@ Open source (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
 
 **Category:** Tools. Lace is listed there too.
 
-**Language:** English
+**Language:** English. It's the item's own language, which the store's search goes by. The listing in Spanish and Japanese is [below](#in-spanish-and-japanese).
 
 **Graphic assets** ([images/](images/)):
 
 | Field | File |
 |---|---|
 | Store icon (128×128) | `icon-128.png`: the guardian artwork in 96×96, with 16 px transparent padding |
-| Screenshots (1280×800) | `screenshot-1.png` to `screenshot-5.png`, in that order |
-| Small promo tile (440×280) | `promo-small-440x280.png` |
+| Screenshots (1280×800) | `screenshot-1.png` to `screenshot-5.png`, in that order. Spanish's and Japanese's are in `es/` and `ja/` ([below](#in-spanish-and-japanese)) |
+| Small promo tile (440×280) | `promo-small-440x280.png`: the wordmark alone, with no words to translate. The store can't localize it anyway |
 | Marquee promo tile | None. It's optional, and the store doesn't feature crypto extensions. |
 | Video | None |
 
@@ -99,6 +99,146 @@ The screenshots show the wallet on **mainnet**, as the listing's build opens, wi
 - **Homepage URL:** `https://github.com/logical-mechanism/Seedelf-Wallet/tree/main/seedelf-platform/seedelf-web-wallet`
 - **Support URL:** `https://github.com/logical-mechanism/Seedelf-Wallet/issues`
 - **Mature content:** no
+
+## In Spanish and Japanese
+
+The wallet speaks English, Spanish and Japanese, and so does its listing. The store shows a visitor the listing in their language, and the English one where it has none of theirs. Adding `?hl=es` or `?hl=ja` to the listing's URL shows the others.
+
+- **The title** is `Seedelf Wallet` in every language: it's a name.
+- **The summary comes with the package.** The manifest's `description` is `__MSG_appDesc__`, and each language's text is in `SUMMARY` in `extension/src/manifest.ts`, which the build writes into Chrome's `_locales/<language>/messages.json`. `tests/manifest.test.ts` holds each to the store's 132 characters.
+- **The description and the screenshots are entered on the dashboard.** Once the package carries `_locales`, the Store listing tab has a language list at its top, one entry for each `_locales` folder. Choose Español, paste the Spanish description below, and drop the five screenshots from `images/es/` into *Localized screenshots*. Then the same for 日本語, with `images/ja/`. English stays as it is above.
+- **The store shows a language's own screenshots before the global ones,** and Google's page reads as if the English ones may follow them.
+- **The small promo tile** can't be localized, and has no words to translate.
+- **How the text was made:** Claude drafted each language from the [glossary](../i18n/glossary.md) and the wallet's own words in that language, so the listing names things as the screens do: where the wallet says *devolución* or *返却*, so does the listing. Each was then translated back into English blind, by an agent that saw only that language, and compared with the English. Where the meaning had drifted, or a sentence could be read two ways, it was rewritten, and the rewritten sentences were back-translated blind again. No native speaker has read them, as with the wallet's own Spanish and Japanese.
+- **When the English changes,** change both languages in the same PR, and back-translate what changed. The captions are `CAPTIONS` in `e2e/store-images.spec.ts`; `npm run store:images` makes each screen in all three languages, switching the wallet's language on it as Settings does.
+
+### Spanish
+
+On the dashboard: **Español** in the Store listing tab's language list.
+
+**Summary** (from the package, `SUMMARY.es`):
+
+```text
+Una billetera de Cardano con saldo privado integrado. Haz staking y envía en público, o paga a cualquiera en privado con Seedelf.
+```
+
+**Description:**
+
+```text
+Seedelf Wallet es una billetera de Cardano con un saldo privado integrado: Seedelf, la billetera sigilosa en Cardano. Es una sola billetera con dos lados: una cuenta pública para el día a día en Cardano, y un saldo privado donde ningún UTxO dice de quién es el dinero.
+
+Funciona en la mainnet de Cardano, con ADA real. Para probarla sin dinero real, cámbiala a preprod, la red de pruebas de Cardano, en la pantalla de bienvenida o en Configuración. Usa allí una frase de recuperación que no uses en mainnet: la misma frase tiene las mismas claves en ambas redes, así que cualquiera que compare las dos redes puede saber que se trata de una misma billetera. Allí el ADA es ADA de prueba, del faucet de la red de pruebas de Cardano, y no tiene valor. Mientras está en preprod, la billetera muestra un aviso en cada pantalla.
+
+Seedelf oculta de quién es el dinero. Cada pago a un Seedelf llega a su dueño bajo una copia nueva de su clave, así que ningún UTxO dice de quién es, y los pagos al mismo Seedelf no se pueden vincular entre sí. El gasto se demuestra con una prueba de conocimiento cero y una clave de un solo uso, así que tampoco revela quién gasta.
+
+Lo que puedes hacer:
+• Crear una billetera, o restaurar una con una frase de recuperación de 12, 15 o 24 palabras, y bloquearla con una contraseña.
+• Usar tus cuentas públicas: cuentas de Cardano normales a las que cualquier billetera puede pagar, y que pagan a cualquier dirección, ADA Handle o Seedelf, a varios a la vez. Una frase de Lace o Eternl abre las cuentas de esa billetera, y la billetera encuentra las que esa frase ha usado.
+• Hacer staking con la cuenta pública en un pool, elegido de una lista con todos los pools activos, y gastar o retirar las recompensas.
+• Delegar el poder de voto de la cuenta pública: “Siempre abstenerse”, “Siempre sin confianza” o un DRep que encuentres por su nombre.
+• Ser tu propio DRep: registrar la cuenta pública, votar las acciones de gobernanza abiertas y retirar tu DRep para recuperar el depósito. Los sitios de gobernanza, como GovTool, también pueden conectarse, cuando lo permitas.
+• Crear un Seedelf: un nombre que compartes para que cualquiera pueda pagarte en privado.
+• Hacer privados ADA y tokens: moverlos de la cuenta pública a tu saldo privado.
+• Enviar en privado a cualquier Seedelf por su nombre, a varios a la vez.
+• Hacer público el dinero: pagar a cualquier dirección de Cardano o ADA Handle desde el saldo privado. O eliminar un Seedelf.
+• Conectar sitios de Cardano (dApps) a la cuenta pública, como con cualquier billetera de Cardano, o a una sesión privada: una cuenta de un solo uso financiada desde tu saldo privado, así que la billetera solo le da al sitio esa cuenta, no tu cuenta pública. Aun así, su financiación es pública, y el dinero que tú mismo hiciste privado lleva de vuelta a tu cuenta pública. La conexión de sitios está desactivada hasta que la actives en Configuración, y a los sitios nunca se les da el saldo privado.
+• Intercambiar en privado a través de Minswap: cada intercambio arranca desde una nueva cuenta de un solo uso, financiada desde tu saldo privado, y después todo vuelve a tu saldo privado. Tu cuenta pública no aparece en las transacciones del intercambio, aunque cualquiera puede seguir el dinero hacia atrás a través de su financiación. La billetera le pide a Minswap una orden con el mínimo que aceptas, comprueba a dónde paga la transacción que construye Minswap y muestra lo que costará el intercambio antes de que lo apruebes.
+• Mezclar con Lovejoin: el ADA sobrante que una sesión privada trae de vuelta pasa por Lovejoin, un mezclador de cajas de 10 ADA en Cardano, así que lo que vuelve es más difícil de vincular con la sesión en la cadena. Puedes desactivarlo en Configuración, o traer de vuelta cualquier sesión directamente, sin Lovejoin. También puedes mezclar desde el panel de Lovejoin. Lovejoin no ha tenido ninguna auditoría de terceros, solo la revisión de sus propios creadores, y la billetera lo indica donde lo eliges. En mainnet, la billetera solo mezcla cuando el pool de Lovejoin tiene 30 cajas que no son tuyas, para que haya suficientes cajas ajenas con las que mezclar; hasta entonces, la devolución llega directamente, sin Lovejoin, y la billetera dice por qué.
+• Leer cualquier transacción antes de que se firme, en cada revisión y cuando un sitio pide una firma: a dónde va el dinero, qué contratos se ejecutan y con qué datos, los certificados, la nota y los metadatos, y los bytes en bruto si quieres llevarlos a otra parte. No se consulta nada para mostrarla, así que leer una transacción no le dice a nadie que la leíste.
+• Usarla en inglés, español o japonés: sigue el idioma de Chrome, y se cambia en Configuración.
+
+Lo que no oculta:
+• Las cantidades, los tokens, el momento de cada transacción y qué transacciones gastan qué salidas son públicos, como con cualquier billetera de Cardano.
+• Hacer privado el dinero y volver a hacerlo público vinculan tu cuenta pública con lo que mueves. Cada pantalla dice qué vincula, y la billetera te avisa antes de que un paso vincule tus cuentas entre sí.
+• El servidor a través del cual la billetera lee Cardano envía cada transacción, y giveme.my, el servicio de colateral que gestionamos nosotros, ve cada transacción privada. Ambos las reciben desde tu dirección IP, así que pueden vincular tus pagos privados y tus cajas de Lovejoin con tu cuenta pública: Seedelf y Lovejoin los ocultan de quienes leen la cadena, no de los servicios que los transmiten.
+• Una caja de Lovejoin solo se oculta entre las cajas ajenas que vuelven a un Seedelf más o menos al mismo tiempo: es una de hasta 9 con la profundidad predeterminada, y una de menos mientras poca gente use Lovejoin.
+• La privacidad crece con el número de personas que usan Seedelf y Lovejoin, y hoy son pocas.
+
+El dinero privado no gana recompensas de staking: no tiene parte de staking, y eso es lo que impide que tus Seedelfs se vinculen entre sí. El dinero que no se mueve puede seguir en staking en la cuenta pública, y hacerse privado cuando deba moverse en privado.
+
+Cómo funciona:
+• Todo se construye y se firma dentro de la extensión. La criptografía y la construcción de transacciones están escritas en Rust, compiladas a WebAssembly e incluidas en el paquete.
+• Tu frase de recuperación nunca sale de tu dispositivo. Se cifra con tu contraseña (Argon2id y ChaCha20-Poly1305).
+• La billetera se comunica con unos pocos servicios, y cada uno ve tu dirección IP. En mainnet, nuestro propio servidor lee la cadena y envía tus transacciones, y no registra ni tu dirección IP ni lo que consultas; Koios, una API pública de Cardano, lee la cadena y envía las transacciones en preprod, y en mainnet lo hace para lo que el nuestro no pueda responder, o para todo si desactivas el nuestro en Configuración. giveme.my, que gestionamos nosotros, añade colateral compartido a los pagos privados, para que tu propia dirección quede fuera de ellos, y ve cada uno. CoinGecko da el precio de ADA en mainnet, salvo que elijas no mostrar ninguna moneda. Minswap cotiza y construye tus intercambios, solo cuando intercambias. La pasarela IPFS de Blockfrost entrega la imagen de un NFT, solo cuando pulsas Mostrar imagen en él. Lovejoin es un contrato en la cadena, al que se accede a través de esos servidores.
+• No añade nada a las páginas web salvo que actives la conexión de sitios. Entonces solo añade la entrada estándar de billetera de Cardano (window.cardano) a las páginas https, así que cualquier sitio https puede ver que usas Seedelf Wallet, como con cualquier billetera de Cardano, y la billetera te pregunta antes de que se firme nada.
+• No hay que registrarse, y no hay analíticas ni rastreo.
+
+Código abierto (MIT): https://github.com/logical-mechanism/Seedelf-Wallet
+```
+
+**Screenshots:** `images/es/screenshot-1.png` to `screenshot-5.png`, in that order, into *Localized screenshots*. Their captions, which are in the images already:
+
+| # | Title | Line |
+|---|---|---|
+| 1 | Dinero privado en Cardano | Tu saldo privado está en UTxOs que no dicen de quién son. |
+| 2 | Paga a un Seedelf por nombre | Pega el nombre y la billetera lo encuentra. El pago no se puede vincular con el Seedelf al que paga. |
+| 3 | Recibe en privado | Crea un Seedelf y comparte su nombre. Cualquiera puede pagarle, y ningún pago lleva hasta él. |
+| 4 | Te dice qué vincula | Haz público tu dinero pagando a cualquier dirección o $handle. La billetera te avisa antes de que un pago vincule tus cuentas entre sí. |
+| 5 | Billetera completa de Cardano | Envía, haz staking con un pool y delega tu voto. Restaura una frase de Lace o Eternl, o crea una nueva. |
+
+### Japanese
+
+On the dashboard: **日本語** in the Store listing tab's language list.
+
+**Summary** (from the package, `SUMMARY.ja`):
+
+```text
+プライベート残高を内蔵した Cardano ウォレット。公開アカウントでステーキングや送金を行うことも、Seedelf を通じて誰にでもプライベートに支払うこともできます。
+```
+
+**Description:**
+
+```text
+Seedelf Wallet は、プライベート残高（Cardano のステルスウォレット Seedelf）を内蔵した Cardano ウォレットです。1 つのウォレットに 2 つの面があります。日常的な Cardano の利用に使う公開アカウントと、どの UTxO にもお金の持ち主が示されないプライベート残高です。
+
+Cardano の mainnet 上で、本物の ADA を使って動作します。本物のお金を使わずに試すには、ようこそ画面または設定で、Cardano のテストネットワークである preprod に切り替えてください。その際は、mainnet では使っていないリカバリーフレーズを使ってください。同じフレーズは両方のネットワークで同じ鍵になるため、2 つのネットワークを見比べれば、誰でも同じウォレットだと分かります。preprod の ADA は Cardano のテストネット用フォーセットから受け取るテスト用の ADA で、価値はありません。preprod を使っている間は、ウォレットのすべての画面にそのことが表示されます。
+
+Seedelf は、お金の持ち主を隠します。Seedelf への支払いは 1 件ごとに、持ち主の鍵の新しいコピー宛てに届きます。そのため、どの UTxO にも持ち主は示されず、同じ Seedelf への支払い同士を結び付けることもできません。お金を使うときはゼロ知識証明と使い捨ての鍵を用いるため、使う人も明かされません。
+
+できること:
+• ウォレットを作成するか、12 語、15 語、24 語のいずれかのリカバリーフレーズから復元し、パスワードでロックできます。
+• 公開アカウントを使えます。通常の Cardano アカウントで、どのウォレットからでも支払いを受けられ、任意のアドレス、ADA Handle、Seedelf に支払えます。複数の宛先へまとめて支払うこともできます。Lace や Eternl のフレーズからは、そのウォレットのアカウントを開けます。そのフレーズで使われたことのあるアカウントは、Seedelf Wallet が見つけます。
+• 稼働中のすべてのプールの一覧から選んで、公開アカウントをプールにステーキングし、報酬を使ったり引き出したりできます。
+• 公開アカウントの投票権を委任できます。委任先は「常に棄権」、「常に不信任」、または名前で探した DRep です。
+• 自分自身の DRep になれます。公開アカウントを DRep として登録し、投票受付中のガバナンスアクションに投票し、退任すればデポジットが戻ります。GovTool などのガバナンスサイトも、あなたが許可すればこのウォレットに接続できます。
+• Seedelf を作成できます。Seedelf は、誰でもあなたにプライベートに支払えるように、人に教える名前です。
+• ADA とトークンをプライベートにできます。公開アカウントからプライベート残高へ移します。
+• どの Seedelf にも、名前を指定してプライベートに送金できます。複数の宛先へまとめて送ることもできます。
+• プライベート残高から任意の Cardano アドレスや ADA Handle に支払って、お金を公開できます。Seedelf を削除することもできます。
+• Cardano のサイト（dApps）を、ほかの Cardano ウォレットと同じように公開アカウントに接続することも、プライベートセッションに接続することもできます。プライベートセッションは、プライベート残高から資金を入れた使い捨てアカウントです。そのため、ウォレットがサイトに渡すのはそのアカウントだけで、公開アカウントは渡しません。ただし、その資金提供は公開されており、自分でプライベートにしたお金は、公開アカウントにつながります。サイトの接続は設定でオンにするまでオフで、サイトにプライベート残高が渡されることはありません。
+• Minswap を通じてプライベートにスワップできます。スワップはそれぞれ、プライベート残高から資金提供される新しい使い捨てアカウントから行われ、終わるとすべてプライベート残高に戻ります。公開アカウントはスワップのトランザクションに現れませんが、資金提供をたどれば、誰でもお金の流れを遡れます。ウォレットは最低受取額を指定した注文の作成を Minswap に依頼し、Minswap が作成するトランザクションの支払先を確認し、承認の前にスワップの費用を表示します。
+• Lovejoin でミックスできます。プライベートセッションが戻す余った ADA は、Lovejoin（10 ADA のボックスでミックスする Cardano 上のミキサー）を通るため、戻ってくるものをチェーン上でセッションと結び付けにくくなります。これは設定でオフにできます。また、返却ごとに Lovejoin を通さず直接戻すことも選べます。Lovejoin のタイルからミックスすることもできます。Lovejoin は第三者による監査を受けていません。受けたのは Lovejoin の開発者自身によるレビューだけです。ウォレットは、Lovejoin を選ぶ場面でそのことを伝えます。mainnet では、ウォレットがミックスするのは、Lovejoin のプールにあなたのものではないボックスが 30 件たまってからです。一緒にミックスするほかのボックスが十分にあるようにするためです。それまでは、返却分は Lovejoin を通さずに直接戻り、その理由が表示されます。
+• 署名の前に、どのトランザクションも読めます。すべての確認画面でも、サイトから署名を求められたときも同じです。お金の行き先、どのコントラクトがどんなデータで実行されるか、証明書、メモ、メタデータ、そしてほかのツールで使いたい場合は生のバイト列まで表示されます。表示のために何も問い合わせないため、トランザクションを読んでも、読んだことは誰にも伝わりません。
+• 英語、スペイン語、日本語で使えます。Chrome の言語に従い、設定で変更できます。
+
+隠さないもの:
+• 金額、トークン、タイミング、どのトランザクションがどの出力を使うかは、ほかの Cardano ウォレットと同じく公開されています。
+• お金をプライベートにするときも、再び公開するときも、移すお金と公開アカウントが結び付きます。各画面に何が結び付くかが表示され、ある操作でアカウント同士が結び付く前には、ウォレットが警告します。
+• ウォレットが Cardano のデータの読み取りに使うサーバーはあなたのトランザクションをすべて送信し、私たちが運営するコラテラルサービスの giveme.my はプライベートなトランザクションをすべて見ます。どちらのサービスも、それらをあなたの IP アドレスから受け取ります。そのため、これらのサービスは、プライベートな支払いや Lovejoin のボックスを公開アカウントと結び付けられます。Seedelf と Lovejoin がそれらを隠すのはチェーンを読む人からであって、それらを運ぶサービスからではありません。
+• Lovejoin のボックスが紛れ込めるのは、同じころに Seedelf へ戻ってくるほかの人のボックスの中だけです。既定の深さでは最大 9 件のうちの 1 件で、Lovejoin を使う人が少ないうちは、9 件よりさらに少なくなります。
+• プライバシーは、Seedelf と Lovejoin を使う人が増えるほど高まります。現在、使っている人はわずかです。
+
+プライベートなお金には、ステーキング報酬がつきません。ステーク部分を持たないためで、それによってあなたの Seedelf 同士が結び付かずに済んでいます。動かさないお金は公開アカウントでステーキングしたままにしておき、プライベートに動かす必要が出たときにプライベートにできます。
+
+仕組み:
+• すべては拡張機能の中で作成され、署名されます。暗号処理とトランザクションの作成は Rust で書かれ、WebAssembly にコンパイルされてパッケージに同梱されています。
+• リカバリーフレーズが端末の外に出ることはありません。パスワードで暗号化されています（Argon2id と ChaCha20-Poly1305）。
+• ウォレットはいくつかのサービスと通信し、それぞれにあなたの IP アドレスが見えます。mainnet では、私たち自身のサーバーがチェーンを読み取り、トランザクションを送信します。このサーバーは、あなたの IP アドレスも問い合わせの内容も記録しません。preprod では、公開の Cardano API である Koios がチェーンの読み取りとトランザクションの送信を行います。mainnet でも、私たちのサーバーが応答できないものは Koios が担い、設定で私たちのサーバーを使わないようにすれば、すべてを Koios が担います。私たちが運営する giveme.my は、プライベートな支払いに共有のコラテラルを加えるため、あなた自身のアドレスは支払いに含まれません。また、giveme.my はその支払いをすべて見ます。CoinGecko は、設定の「通貨」で「表示しない」を選ばない限り、mainnet で ADA の価格を提供します。Minswap はスワップの見積もりと作成を行いますが、それはスワップするときだけです。Blockfrost の IPFS ゲートウェイは、NFT の「画像を表示」を押したときだけ、その画像を提供します。Lovejoin はチェーン上のコントラクトで、これらのサーバーを通じて利用します。
+• サイトの接続をオンにしない限り、ウェブページには何も追加しません。オンにすると、https のページに標準の Cardano ウォレットのエントリ（window.cardano）だけを追加します。そのため、ほかの Cardano ウォレットと同じく、どの https サイトも、あなたが Seedelf Wallet を使っていることを認識できます。何かが署名される前には、ウォレットがあなたに確認します。
+• ユーザー登録はなく、アクセス解析やトラッキングもありません。
+
+オープンソース（MIT）: https://github.com/logical-mechanism/Seedelf-Wallet
+```
+
+**Screenshots:** `images/ja/screenshot-1.png` to `screenshot-5.png`, in that order, into *Localized screenshots*. Their captions, which are in the images already:
+
+| # | Title | Line |
+|---|---|---|
+| 1 | Cardano 上のプライベートなお金 | プライベート残高は、誰のものかを示さない UTxO の中にあります。 |
+| 2 | どの Seedelf にも名前で支払う | 名前を貼り付ければ、ウォレットがその Seedelf を見つけます。その支払いを支払先の Seedelf と結び付けることは、誰にもできません。 |
+| 3 | プライベートに受け取る | Seedelf を作成して、その名前を伝えましょう。誰でもそこに支払うことができ、どの支払いからもその Seedelf にはたどり着けません。 |
+| 4 | 結び付くものを示す | 任意のアドレスや $handle に支払って、お金を公開できます。支払いでアカウント同士が結び付く前に、ウォレットが警告します。 |
+| 5 | フル機能の Cardano ウォレット | 送金、プールへのステーキング、投票権の委任ができます。Lace や Eternl のフレーズから復元することも、新しいフレーズを作ることもできます。 |
 
 ## Privacy practices
 
@@ -197,6 +337,7 @@ The wallet contacts only its developer's Cardano server (mainnet.seedelf.logical
 
 - **Each upload needs a version strictly higher than the last.** Bump it at submission time, in `extension/package.json`; the manifest takes its version from there.
 - **Uploading:** run the release checklist, then upload the zip on the Package tab.
-- **When the UI changes,** regenerate the images: `npm run build && npm run store:images` in `extension/`.
+- **When the listing's words change,** change them in all three languages ([In Spanish and Japanese](#in-spanish-and-japanese)).
+- **When the UI changes,** regenerate the images: `npm run build && npm run store:images` in `extension/`. It makes the screenshots in all three languages.
   - `e2e/store-images.spec.ts` makes them from the test fixtures and the public test phrase, so no real wallet appears.
   - Upload the new ones.

@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { buildManifest, DEV_KEY } from "../src/manifest";
+import { bundles } from "../src/i18n/translations";
+import { buildLocales, buildManifest, DEV_KEY, SUMMARY } from "../src/manifest";
 
 describe("manifest", () => {
   it("defaults to a preprod-only build", () => {
@@ -97,8 +98,21 @@ describe("manifest", () => {
         "font-src 'self'",
       ].join("; "),
     );
-    // The description is the store's summary line.
-    expect(m.description.length).toBeLessThanOrEqual(132);
+  });
+
+  it("gives the store's summary in each language the wallet speaks, through Chrome's _locales", () => {
+    const m = buildManifest({ version: "1.0.0", mainnetEnabled: true, storeBuild: true });
+    expect(m.default_locale).toBe("en");
+    expect(m.description).toBe("__MSG_appDesc__");
+    const locales = buildLocales();
+    expect(Object.keys(locales).sort()).toEqual(Object.keys(bundles).sort());
+    for (const [language, { appDesc }] of Object.entries(locales)) {
+      // The description is the store's summary line, which allows 132 characters.
+      expect(appDesc.message.length, language).toBeGreaterThan(0);
+      expect(appDesc.message.length, language).toBeLessThanOrEqual(132);
+      expect(appDesc.message, language).toContain("Seedelf");
+    }
+    expect(locales.en?.appDesc.message).toBe(SUMMARY.en);
   });
 
   it("the store's build reaches the data layer through connect-src alone, never a host permission (chunk 26c)", () => {

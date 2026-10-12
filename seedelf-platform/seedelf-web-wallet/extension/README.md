@@ -88,7 +88,7 @@ After a rebuild, press the reload arrow on the extension's card.
 
 ```text
 src/
-  manifest.ts           manifest.json, generated at build time (network flag, CSP, dev key, icons)
+  manifest.ts           manifest.json, generated at build time (network flag, CSP, dev key, icons), and _locales (the store's summary)
   networks.ts           what each network reaches (Koios, giveme.my, CoinGecko, Minswap, Lovejoin), the IPFS gateway, epochs
   shared/rpc.ts         typed request/response messages between the UI and the worker
   shared/password.ts    the password rule and strength hint (UI and worker)

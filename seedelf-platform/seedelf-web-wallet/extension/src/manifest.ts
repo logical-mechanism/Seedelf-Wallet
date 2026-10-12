@@ -15,6 +15,32 @@ export const DEV_KEY =
 /** The emblem at Chrome's icon sizes (public/icons, from ../brand). */
 const ICONS = Object.fromEntries([16, 32, 48, 128].map((n) => [String(n), `icons/icon-${n}.png`]));
 
+/**
+ * The manifest's description in each language the wallet speaks, which is
+ * also the Web Store's summary line: at most 132 characters each. The store
+ * shows a visitor the one in their language, English otherwise. Built into
+ * Chrome's _locales (`buildLocales`); the description, the screenshots and
+ * the rest of each language's listing are in docs/store/README.md. Its
+ * languages are written out, not imported: what vite.config.ts loads reaches
+ * no i18n module (tests/import-boundaries.test.ts), and tests/manifest.test.ts
+ * holds them to the bundled ones.
+ */
+export const SUMMARY: Record<"en" | "es" | "ja", string> = {
+  en: "A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone privately through Seedelf.",
+  es: "Una billetera de Cardano con saldo privado integrado. Haz staking y envía en público, o paga a cualquiera en privado con Seedelf.",
+  ja: "プライベート残高を内蔵した Cardano ウォレット。公開アカウントでステーキングや送金を行うことも、Seedelf を通じて誰にでもプライベートに支払うこともできます。",
+};
+
+/** Chrome's _locales/<language>/messages.json, by language: what the manifest's `__MSG_appDesc__` reads. */
+export function buildLocales() {
+  return Object.fromEntries(
+    Object.entries(SUMMARY).map(([language, message]) => [
+      language,
+      { appDesc: { message, description: "The extension's description, and the Web Store's summary line." } },
+    ]),
+  );
+}
+
 export interface ManifestOptions {
   version: string;
   mainnetEnabled: boolean;
@@ -32,8 +58,9 @@ export function buildManifest({ version, mainnetEnabled, storeBuild, dataOrigin 
     manifest_version: 3,
     name: mainnetEnabled ? "Seedelf Wallet" : "Seedelf Wallet",
     short_name: "Seedelf",
-    // Also the Web Store's summary line: at most 132 characters.
-    description: "A Cardano wallet with a private balance built in. Stake and send in public, or pay anyone privately through Seedelf.",
+    // SUMMARY, in Chrome's language where the wallet speaks it.
+    default_locale: "en",
+    description: "__MSG_appDesc__",
     version,
     icons: ICONS,
     // No popup: the button opens the wallet in a full tab (the worker's
