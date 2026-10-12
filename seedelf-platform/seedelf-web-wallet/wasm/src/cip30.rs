@@ -1043,6 +1043,8 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         .collect();
     let mut signers = BTreeSet::new();
     let mut unknown = Vec::new();
+    // Whether an input or collateral was found, and so is this network's (`owner`).
+    let mut found_here = false;
     let mut others_sign = 0usize;
     let mut foreign_keys: BTreeSet<Hash<28>> = BTreeSet::new();
 
@@ -1093,6 +1095,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
         let key = (hex::encode(input.transaction_id), input.index);
         match found.get(&key) {
             Some(row) => {
+                found_here = true;
                 if let Some(signer) = owner(row)? {
                     signers.insert(signer);
                     spent.add(&Amount::of_row(row)?)?;
@@ -1111,6 +1114,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             let key = (hex::encode(input.transaction_id), input.index);
             match found.get(&key) {
                 Some(row) => {
+                    found_here = true;
                     if let Some(signer) = owner(row)? {
                         signers.insert(signer);
                         put_up.add(&Amount::of_row(row)?)?;
@@ -1548,6 +1552,24 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 n - 1
             ),
         });
+    }
+
+    // A signature says nothing of the network, and nor does a certificate or
+    // a required signer: the rest of the transaction must. An output, a
+    // withdrawal and a network ID each name one, checked above, and the
+    // ledger refuses them on any other; an input found was this network's.
+    // With none of them, it could be the other network's, its inputs and fee
+    // someone's there, and the stake key, the same on both (only it signs
+    // over inputs the wallet can't find), would delegate, vote or deregister
+    // the account's stake there (launch review, Still open #5).
+    let tied = body.network_id.is_some()
+        || !body.outputs.is_empty()
+        || body.withdrawals.is_some()
+        || found_here;
+    if !tied && !signers.is_empty() {
+        bail!(
+            "Nothing in this transaction ties it to {network_name}: it pays no one, withdraws nothing, names no network and spends nothing the wallet can find. Your stake key is the same on every network, so its signature could change your staking on {other_name}. The wallet won't sign it."
+        );
     }
 
     let put_in = Amount {

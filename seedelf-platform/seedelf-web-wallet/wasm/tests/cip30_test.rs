@@ -941,6 +941,81 @@ fn a_utxo_on_the_other_network_is_never_spent() {
     assert_eq!(summary.own_inputs, 1);
 }
 
+#[test]
+fn the_stake_key_never_signs_what_could_be_the_other_networks() {
+    // A certificate names no network, and the stake key is the same on both.
+    // Spending only what preprod's Koios can't find, paying no one, a
+    // delegation, a vote or a deregistration of the account's stake signed
+    // "on preprod" would count on mainnet, its inputs and fee a site's there.
+    let (_, mut rows) = swap();
+    rows.push(row(TX_B, 8, &theirs(), 5_000_000, &[]));
+    let stake = account().key_hash(Role::Staking, 0).unwrap();
+    let certified = |cert: conway::Certificate| {
+        let mut b = body(vec![input(TX_B, 7)], vec![]);
+        b.certificates = NonEmptySet::try_from(vec![cert]).ok();
+        b
+    };
+    let named = |mut b: conway::TransactionBody| {
+        b.required_signers = NonEmptySet::try_from(vec![stake]).ok();
+        b
+    };
+    let untied = [
+        certified(conway::Certificate::StakeDelegation(
+            stake_credential(),
+            Hash::new([7; 28]),
+        )),
+        certified(conway::Certificate::VoteDeleg(
+            stake_credential(),
+            conway::DRep::Key(Hash::new([5; 28])),
+        )),
+        certified(conway::Certificate::UnReg(stake_credential(), 2_000_000)),
+        named(body(vec![input(TX_B, 7)], vec![])),
+    ];
+    for b in untied {
+        for partial_sign in [true, false] {
+            let request = request(tx_hex(b.clone()), rows.clone(), partial_sign);
+            let refused = cip30::inspect_tx(&account(), &request)
+                .unwrap_err()
+                .to_string();
+            assert!(refused.contains("ties it to preprod"), "{refused}");
+            assert!(refused.contains("staking on mainnet"), "{refused}");
+            assert!(cip30::sign_tx(&account(), &request).is_err());
+        }
+        // On mainnet, the same transaction could be a test network's.
+        let refused = cip30::inspect_tx(
+            &account(),
+            &on_mainnet(request(tx_hex(b.clone()), vec![], true)),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("staking on a test network"), "{refused}");
+
+        // Anything that names preprod ties it there: the ledger holds it to it.
+        let mut pays = b.clone();
+        pays.outputs = vec![out(&theirs(), 1_000_000, None)];
+        let mut says = b.clone();
+        says.network_id = Some(pallas_primitives::NetworkId::Testnet);
+        let mut withdraws = b.clone();
+        withdraws.withdrawals =
+            NonEmptyKeyValuePairs::try_from(vec![(Bytes::from(stake_account_bytes()), 0)]).ok();
+        let mut found = b.clone();
+        found.inputs = Set::from(vec![input(TX_B, 8)]);
+        for tied in [pays, says, withdraws, found] {
+            let signed =
+                cip30::sign_tx(&account(), &request(tx_hex(tied), rows.clone(), true)).unwrap();
+            assert_eq!(signed.summary.signs, vec!["stake"]);
+        }
+    }
+
+    // Someone else's certificate has the account sign nothing, and isn't refused.
+    let theirs_only = certified(conway::Certificate::StakeDelegation(
+        StakeCredential::AddrKeyhash(Hash::new([9; 28])),
+        Hash::new([7; 28]),
+    ));
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(theirs_only), rows, true)).unwrap();
+    assert!(summary.signs.is_empty());
+}
+
 /// A Byron address: mainnet's with no network magic, a test network's with
 /// preprod's (1).
 fn byron(magic: Option<u32>) -> Address {
