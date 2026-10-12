@@ -1535,6 +1535,7 @@
   "sess.onlySiteTopUp": "Only a site's private session takes a top-up.",
   "sess.orderWaiting": "An order of this session is still waiting.",
   "sess.orderWaitingBack": "An order of this session is still waiting. Cancel it, or wait for it to fill, then bring the session back.",
+  "sess.otherQuote": "Minswap's quote was for a different amount or pair from the one asked, so the wallet won't swap on it. Try again in a moment.",
   "sess.otherTxId": "The server answered with another transaction id ({{id}}).",
   "sess.outNotReady": "That payment isn't ready to send. Review it again.",
   "sess.outTooOld": "That payment was built more than 10 minutes ago. Review it again.",

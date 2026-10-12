@@ -112,6 +112,7 @@ import {
   type Estimate,
   type Minswap,
   type MinswapTrouble,
+  type RouteLeg,
 } from "./minswap";
 import {
   CHAIN_CUT,
@@ -638,16 +639,41 @@ export function slippageKeeping(amountOut: bigint, least: bigint): number {
 }
 
 /**
+ * Whether Minswap's estimate is for `ask`: the amount typed, whole, from and
+ * to the tokens chosen, each path starting and ending on them, and their
+ * amounts adding up to it. One for another amount (the usability review's
+ * DX-8) would have the user approve the minimum that amount gets, then pay
+ * the amount typed. Minswap gives `amount_in` back as asked, its paths
+ * summing to it to the unit, split or not (nine mainnet quotes on
+ * 2026-10-11, from 7 lovelace to 250,000 ₳ over two DEXes and 98,765 ₳ over
+ * seven), so holding it to that refuses nothing Minswap answers right.
+ */
+export function quotesTheAsk(ask: SwapAsk, est: Estimate): boolean {
+  if (est.token_in !== ask.tokenIn || est.token_out !== ask.tokenOut || est.amount_in !== ask.amount) return false;
+  const ends = (path: RouteLeg[]) => path[0]?.token_in === ask.tokenIn && path.at(-1)?.token_out === ask.tokenOut;
+  if (!est.paths.length || !est.paths.every(ends)) return false;
+  try {
+    return est.paths.reduce((sum, path) => sum + BigInt(path[0]!.amount_in), 0n) === BigInt(ask.amount);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Minswap's route for `ask`, and what it was asked to leave out besides the
  * usual, for the build that follows (`avoid`): a route that puts a DEX
  * where the session's check can't follow it (`outOfPlace`: any DEX in a
  * path of more than one leg, Danogo beside anything else) is asked for
- * again without that DEX, rather than refused (chunk 24).
+ * again without that DEX, rather than refused (chunk 24). An estimate for
+ * anything but `ask` is refused (`quotesTheAsk`), wherever it's asked for:
+ * a quote, Review it myself, and the runner's order, which tries again later.
  */
 export async function routeOf(minswap: Minswap, ask: SwapAsk): Promise<{ est: Estimate; avoid: string[] }> {
-  const est = await minswap.estimate(ask);
-  const avoid = outOfPlace(est);
-  return avoid.length ? { est: await minswap.estimate(ask, avoid), avoid } : { est, avoid };
+  const first = await minswap.estimate(ask);
+  const avoid = outOfPlace(first);
+  const est = avoid.length ? await minswap.estimate(ask, avoid) : first;
+  if (!quotesTheAsk(ask, est)) throw new Error(t("sess.otherQuote"));
+  return { est, avoid };
 }
 
 /** A quote from Minswap's estimate, with what a session for it is funded with. */

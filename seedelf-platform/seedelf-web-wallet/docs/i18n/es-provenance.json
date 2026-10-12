@@ -1611,6 +1611,7 @@
   "sess.onlySiteTopUp": "machine",
   "sess.orderWaiting": "machine",
   "sess.orderWaitingBack": "machine",
+  "sess.otherQuote": "machine",
   "sess.otherTxId": "machine",
   "sess.outNotReady": "machine",
   "sess.outTooOld": "machine",

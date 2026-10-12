@@ -1621,6 +1621,7 @@
   "sess.onlySiteTopUp": "Solo la sesión privada de un sitio admite una recarga.",
   "sess.orderWaiting": "Una orden de esta sesión todavía está esperando.",
   "sess.orderWaitingBack": "Una orden de esta sesión todavía está esperando. Cancélala, o espera a que se ejecute, y luego trae la sesión de vuelta.",
+  "sess.otherQuote": "Minswap cotizó otra cantidad u otro par distintos de los pedidos, así que la billetera no intercambiará con esa cotización. Inténtalo de nuevo en un momento.",
   "sess.otherTxId": "El servidor respondió con otro ID de transacción ({{id}}).",
   "sess.outNotReady": "Ese pago no está listo para enviarse. Revísalo otra vez.",
   "sess.outTooOld": "Ese pago se construyó hace más de 10 minutos. Revísalo otra vez.",
