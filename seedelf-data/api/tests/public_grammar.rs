@@ -187,11 +187,12 @@ async fn account_routes() {
 
 #[tokio::test]
 async fn a_rewards_history_is_read_a_thousand_at_a_time() {
-    // Staking's Rewards history (web wallet chunk 30): one stake key, every column but it, in one total order.
+    // Staking's Rewards history (web wallet chunk 30): one stake key, every column but it, oldest first in one total
+    // order.
     let history = |rest: &str| {
         format!(
             "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
-             &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc{rest}"
+             &order=spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc{rest}"
         )
     };
     let one = json!({ "_stake_addresses": [STAKE] });
@@ -219,13 +220,17 @@ async fn a_rewards_history_is_read_a_thousand_at_a_time() {
     ] {
         assert_eq!(post(&page, body.clone()).await.0, BAD, "{body}");
     }
-    // Another select or order is another request.
+    // Another select or order is another request, newest first included: the route's order until 1.5.0's release
+    // review, which no released wallet asks.
     let partial = "/api/v1/account_reward_history?select=amount\
-        &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc&offset=0&limit=1000";
+        &order=spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc&offset=0&limit=1000";
     assert_eq!(post(partial, one.clone()).await.0, BAD);
     let loose = "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
         &order=earned_epoch.desc&offset=0&limit=1000";
-    assert_eq!(post(loose, one).await.0, BAD);
+    assert_eq!(post(loose, one.clone()).await.0, BAD);
+    let newest = "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
+        &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc&offset=0&limit=1000";
+    assert_eq!(post(newest, one).await.0, BAD);
 }
 
 #[tokio::test]
@@ -255,6 +260,33 @@ async fn credential_txs_pages_as_account_txs_does() {
     }
     let unordered = "/api/v1/credential_txs?offset=0&limit=20";
     assert_eq!(post(unordered, keys(1)).await.0, BAD);
+}
+
+#[tokio::test]
+async fn a_deep_page_of_transactions_is_koioss() {
+    // A page joins every newer transaction too, so one past offset 10,000 (Activity's 500th Load more) is a 503, too
+    // large: the wallet reads that page alone from Koios, where a 400 would hold every public read there 5 minutes.
+    let behind = (OK, r#"{"error":"behind"}"#.to_string());
+    let deep = (OK, r#"{"error":"too large for this server"}"#.to_string());
+    for (route, body) in [
+        ("account_txs", json!({ "_stake_address": STAKE })),
+        (
+            "credential_txs",
+            json!({ "_payment_credentials": [CONTRACT] }),
+        ),
+    ] {
+        let page = |offset: u32| {
+            format!("/api/v1/{route}?order=block_height.desc,tx_hash.asc&offset={offset}&limit=20")
+        };
+        assert_eq!(post(&page(10_000), body.clone()).await, behind, "{route}");
+        for offset in [10_001, 1_000_001] {
+            assert_eq!(
+                post(&page(offset), body.clone()).await,
+                deep,
+                "{route} {offset}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

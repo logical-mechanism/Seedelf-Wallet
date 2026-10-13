@@ -167,8 +167,8 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `totals` | the newest epoch's supply | a block |
 | `account_addresses` | up to 20 stake keys' addresses, empty ones too | never |
 | `account_info` | one stake key's standing | never |
-| `account_reward_history` | one stake key's rewards, newest first, 1,000 a page: Staking's *Rewards history* (web wallet chunk 30), read only when it's opened | never |
-| `account_txs` | one stake key's transactions: a page of 20, or up to 1,000 from a block on; for a key with at most 200,000 outputs. The restore scan, and Public activity up to wallet 1.4.1 | never |
+| `account_reward_history` | one stake key's rewards, oldest first, 1,000 a page: Staking's *Rewards history* (web wallet chunk 30), read only when it's opened | never |
+| `account_txs` | one stake key's transactions: a page of 20, at most 10,000 in, or up to 1,000 from a block on; for a key with at most 200,000 outputs. The restore scan, and Public activity up to wallet 1.4.1 | never |
 | `credential_txs` | up to 75 payment credentials' transactions, whatever their addresses' staking part, paged as `account_txs` is; for at most 200,000 outputs in all. Public activity, by the account's payment keys (web wallet chunk 28) | never |
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
 | `pool_list` | the registered pools, 1,000 a page | an hour, within its epoch |
@@ -180,7 +180,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |
 | `asset_info` | one token's CIP-25 and CIP-68 metadata | never |
 
-**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` and `credential_txs` at most 200,000 outputs. Past either, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios. No wallet comes near either number. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
+**What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` and `credential_txs` at most 200,000 outputs, with a page starting at most 10,000 transactions in. Past any of these, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios, for that request alone. No wallet comes near any of them. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
 
 **Answers kept for a time are kept within their epoch,** since a pool's status, a DRep's activity and the live actions turn at an epoch's start. Not-found answers aren't kept: anyone can ask about made-up IDs. When the store is full, the answer due to expire soonest makes room.
 
@@ -237,13 +237,14 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **While db-sync is down** (two failed reads of its tip), every public route answers 503 at once, kept answers included.
 - A failed query logs only its SQLSTATE: a Postgres message can quote a value the request sent.
 
-**`account_txs` and `credential_txs` never join a whole history.** A transaction's id rises with its block, so a page takes the newest ids it needs, widened to the whole of the oldest block they reach, and joins only those: 0.5 s a page for a key with 221,000 transactions, against 2.3 s before, and the same rows.
+**`account_txs` and `credential_txs` never join a whole history.** A transaction's id rises with its block, so a page takes the newest ids it needs, its own and every newer one, widened to the whole of the oldest block they reach, and joins only those: 0.5 s a first page for a key with 221,000 transactions, against 2.3 s before, and the same rows. A deeper page needs more of them, and one past the end of a long list would need them all, so no page starts more than 10,000 in (Activity's 500th *Load more*): deeper, the answer is a 503, too large, and the wallet reads that page from Koios.
 - **`credential_txs` gathers nothing past the cap:** a count from `tx_out`'s index alone gates the gathering, in the same query, so Minswap V2's pool script is refused in 0.1 s, against 4.9 s gathering its outputs to find out. `account_txs` is as it was.
 - **A credential's outputs are gathered address by address,** never all its addresses first: a busy script's credential sits at millions of them, and the cap reaches at most as many addresses as outputs.
 - **Checked against Koios (2026-10-11):** the same pages, row for row, for a wallet's key and for the contract's and mix box's credentials together, at offsets 0 and 20.
 
-**`account_reward_history` is Koios's, from `reward` and `reward_rest`,** the pool's bech32 from `pool_hash.view`, sorted in SQL by the order the wallet asks for (`spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc`), which is total, so no row is on two pages. The next epoch's rewards are listed before they're paid, as Koios's are.
-- **Checked against Koios (2026-10-12):** every page the same, row for row, for the reward account 13 pools pay (5,766 rows), one 34 pools pay (2,513, pools' deposits back among them), a member the reserves and the treasury paid too (457), and a key never paid (none). All four, every page: 0.5 s from home.
+**`account_reward_history` is Koios's, from `reward` and `reward_rest`,** the pool's bech32 from `pool_hash.view`, sorted in SQL by the order the wallet asks for (`spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc`), oldest first by every column. The next epoch's rewards are listed before they're paid, as Koios's are.
+- **Oldest first is what keeps the pages still while db-sync adds rows.** It adds an account's next rewards as an epoch goes on, and refunds at an epoch's start, and takes back those of a key deregistered before it was paid: all among the newest, at the end. Newest first, a row added between two pages pushed one already read onto the next page too, and the wallet counted it twice. The wallet shows the list newest first.
+- **Checked against Koios (2026-10-12), oldest first:** every page the same, row for row, for the reward account 13 pools pay (5,766 rows), one 34 pools pay (2,513, pools' deposits back among them), a member the reserves and the treasury paid too (457), and a key never paid (none). All four, every page: 0.5 s from home.
 
 **`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
 
@@ -251,6 +252,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - `drep_info` reads `delegation_vote` whole, for every account's latest vote delegation: 260 ms for the DRep with the most delegators, then kept.
 - **A pool's first look holds up whoever asks,** for up to the 3 s above. On a cold disk, a pool of 2,000 delegators took 1.6 s and the largest (35,000) took 7 s. Most of that is each delegator's reward history: 6.2 s cold and 1.1 s warm for the largest. The wallet asks for its own pool's details as Home first loads, for a ticker.
 - **A credential at very many addresses costs one lookup per address:** 160 ms for one at 95,000.
+- **A deep page of `account_txs` or `credential_txs` joins every newer transaction too,** so the deeper it starts, the more it costs, which is why none starts more than 10,000 in: for a busy key, 60 ms for that deepest page against 30 ms for its first (warm, at home, 2026-10-12).
 - **A shared answer shows it was asked for.** A kept `drep_info` comes back in under a millisecond instead of 200–400 ms, so a prober could tell someone asked about that DRep in the last 10 minutes. Sharing answers is what keeps home's load flat, so this stands, as it does for every kept answer.
 
 ## The submit part

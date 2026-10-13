@@ -571,7 +571,7 @@ async fn reward_history(app: &Router, stake: &str) -> Vec<Value> {
     for offset in (0..).step_by(1000) {
         let path = format!(
             "/api/v1/account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32\
-             &order=spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc\
+             &order=spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc\
              &offset={offset}&limit=1000"
         );
         let page = post(app, &path, json!({ "_stake_addresses": [stake] })).await;
@@ -615,12 +615,12 @@ async fn a_rewards_history_is_every_reward_in_one_order() {
     ] {
         let rows = reward_history(&app, stake).await;
         assert!(rows.len() >= at_least, "{stake}: {} rows", rows.len());
-        // Sorted as asked, every page after the one before, and no row twice: (spendable, earned) newest first,
+        // Sorted as asked, every page after the one before, and no row twice: (spendable, earned) oldest first,
         // then type, pool (none last) and amount, as text.
         let key = |r: &Value| {
             (
-                -r["spendable_epoch"].as_i64().unwrap(),
-                -r["earned_epoch"].as_i64().unwrap(),
+                r["spendable_epoch"].as_i64().unwrap(),
+                r["earned_epoch"].as_i64().unwrap(),
                 r["type"].as_str().unwrap().to_string(),
                 r["pool_id_bech32"]
                     .as_str()
