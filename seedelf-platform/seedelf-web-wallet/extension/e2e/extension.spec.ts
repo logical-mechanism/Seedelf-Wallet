@@ -994,6 +994,9 @@ test("a session the restore scan found leaves After a restore once another brows
   const list = page.getByTestId("dapp-found-sessions");
   await expect(list.getByRole("listitem")).toHaveCount(1);
   await expect(page.getByTestId("claim-card")).toBeVisible();
+  // The page's own reading as it opens is over first: a chain that changed under it would end the session there,
+  // and Refresh, shown only while a session is open, would go with it.
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
   // The browser it was found from brought it back: its account is empty, and Koios shows what the scan read there
   // spent. This device sent nothing for it, so the page's next reading ends it.
   koios.addedToAccounts.splice(0);
