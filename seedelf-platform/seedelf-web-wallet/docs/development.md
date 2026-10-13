@@ -130,12 +130,15 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - send to a Seedelf, pasting a name someone else gave you;
    - withdraw to an address and to a `$handle`;
    - remove a Seedelf;
-   - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, and stop staking;
+   - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, open **Rewards history**, and stop staking;
    - become a DRep with the account's own vote, vote on a live governance action, change the profile, and retire as a DRep;
    - send with *Use staking rewards when spending* on, then off;
+   - set the collateral of a public account holding no 5 ₳ UTxO of ADA alone (Settings → Collateral), which pays itself 5 ₳: Public activity names that payment *Set collateral*;
    - turn the connector on (Settings → Sites), connect one site to the public account and one to a private session, sign for each, and give a governance site such as GovTool CIP-95;
+   - a session found after a restore: leave that private session funded, then restore the phrase in a fresh profile. dApps → *After a restore* lists it, its page says the phrase may be open in another browser, and **Bring it back** returns it. **Find leftovers** then finds nothing more on that network. On the other network, *After a restore* says the restore didn't look there, until Find leftovers has;
+   - a session found after a restore whose account holds ADA but no UTxO of exactly 5 ₳ of ADA alone: bring a session back, pay its address 20 ₳ from another wallet, then restore the phrase in a fresh profile, with *Bring private sessions back through Lovejoin* on, as by default. Its page offers **Put in 5 ₳ for Lovejoin** beside Bring it back: review it and Send. Once it's there, **Bring it back** goes through Lovejoin;
    - a private swap from the Minswap tile through to everything back, and one stopped partway;
-   - a Lovejoin mix from each side, and **Bring one back now**;
+   - a Lovejoin mix from each side, and **Bring one back now**; Public activity names the public account's deposit *Into Lovejoin* and its mixes *Lovejoin mix*;
    - **Show image** on an NFT, in each balance;
    - switch the language to Español and to 日本語, read Home and a review in each, and back to English.
 
@@ -151,7 +154,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - a payment reviewed on one network and sent after a switch is refused ("isn't ready to send");
    - a site connected on one network asks again on the other, and one waiting as you switch is declined;
    - on mainnet, the worker's network panel shows only `mainnet.seedelf.logicalmechanism.io`, `www.giveme.my` and `api.coingecko.com` (and `agg-api.minswap.org`, for a swap, and `ipfs.blockfrost.dev` for an NFT image you asked to see), plus `preprod.koios.rest` only for something still on its way on preprod, and `api.koios.rest` only for a part the data layer couldn't answer;
-   - Settings, Network, on mainnet: **Read Cardano through Koios only** on sends nothing more to `mainnet.seedelf.logicalmechanism.io`, and off, the next reading goes there again.
+   - Settings, Network, on mainnet: **Read Cardano through Koios only** on sends nothing more to `mainnet.seedelf.logicalmechanism.io`, and off, the next reading goes there again. The line under it says *Using Seedelf's data layer.* with a green light while it's off, and *Using Koios only.* in grey once it's on.
 
 ## Web Store release: copy/paste procedure
 
@@ -168,7 +171,7 @@ cd seedelf-platform
 cargo test --workspace --locked
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.4.0
+release_version=1.5.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
@@ -199,7 +202,7 @@ git pull --ff-only
 git status --porcelain
 cd seedelf-platform/seedelf-web-wallet/extension
 npm ci
-release_version=1.4.0
+release_version=1.5.0
 npm run package
 npm run e2e
 sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
@@ -216,7 +219,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.4.0, that file is `extension/release/seedelf-wallet-1.4.0-mainnet.zip`.
+With `package.json` at 1.5.0, that file is `extension/release/seedelf-wallet-1.5.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 
@@ -248,22 +251,23 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 
 1. **Bump the version:** `npm version <x.y.z> --no-git-tag-version` in `extension/`. It updates `package.json` and `package-lock.json`, and the manifest takes its version from there. Every upload needs a higher version than the last.
 2. **Refresh the token list, every release** (the owner, 2026-10-08): `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker. The handoff note says what changed, or that nothing did.
-   - **And the data layer's decimals** (1.4.0's release review): the API gives a token's decimals from the registry as it was when the API was built (`seedelf-data/api/data/token-decimals.json`), and a private row keeps what it was given until it's spent. So refresh it too, by `seedelf-data/scripts/token-decimals.py`'s two lines, and if the file changed, commit it: the API's deploy after the merge carries it.
+   - **And the data layer's decimals** (1.4.0's release review): the API gives a token's decimals from the registry as it was when the API was built (`seedelf-data/api/data/token-decimals.json`), and a private row keeps what it was given until it's spent. So refresh it too, by `seedelf-data/scripts/token-decimals.py`'s two lines, and if the file changed, commit it: step 7's deploy carries it.
 3. **Refresh the DRep list, every release:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name. **Koios's servers disagree about DRep metadata** (1.3.0's prep had three single-pass runs name 371, 407 and 406 mainnet DReps against the committed 449, each missing a different set), so the script asks again for the DReps still unnamed, in up to three passes. A DRep the committed list names that's still registered but that no pass names keeps its committed name, and a list that would still lose more than 5% of the committed one is refused with nothing written: run it again later. Its line for each network says how many passes it took, how many names it kept as committed, and how many committed DReps are no longer registered. Skim the diff for anything odd before committing it; the handoff note says what changed.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`, and at its `es/` and `ja/`: each screen is shot in all three languages. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*). The Japanese ones need a Japanese font on the machine (Noto Sans CJK JP here), or Chromium draws boxes.
 6. **Commit and merge:** the bump, both lists, the images and any change to the listing's text, in the release branch's PR into `main`.
-7. **Build the package**, on `main` at the merge commit, with `git status --porcelain` printing nothing: `npm run package` in `extension/`.
+7. **Deploy the data layer, if the release changed `seedelf-data/`** (step 2's decimals included): Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run and `curl -s https://mainnet.seedelf.logicalmechanism.io/health` ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against: a route the API lacks answers 404, and a request it takes in another shape 400; either holds the wallet's whole public part on Koios for 5 minutes. It goes before the package, so the store build's check on mainnet (step 9) reads it.
+8. **Build the package**, on `main` at the merge commit, with `git status --porcelain` printing nothing: `npm run package` in `extension/`.
    - It builds with `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`: mainnet by default, preprod in Settings, and no dev key.
    - It refuses a `dist/` with a key, one whose version doesn't match `package.json`, and one whose manifest lacks `https://api.koios.rest/*` (a preprod-only build).
    - The WebAssembly is built from the tracked `Cargo.lock` (`--locked`) with the pinned Rust (`rust-toolchain.toml`), and carries no local path.
    - It adds `licenses/THIRD-PARTY.txt`: every Rust crate compiled into the WebAssembly, every bundled npm package, and SecretBox, each with its licence text. It fails if one of them ships no licence and has no known fallback (`scripts/third-party.mjs`).
    - It writes `release/seedelf-wallet-<version>-mainnet.zip` and prints `sha256 <hex>`, then `Zipped with Node <version>, zlib <version>`. `wasm/build.sh` ends its part with `C compiler: <first line of clang --version>`, or `C compiler: unknown`.
    - The zip is reproducible: the same commit and toolchain (Rust, wasm-bindgen, clang, an official Node build) give the same bytes. Official Node builds 20 to 24 zip alike, and one linked to the system's zlib may not. blst's C goes through the unpinned clang on `PATH`.
-8. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
-9. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
-10. **Upload** the zip on the dashboard's Package tab. If the listing's text or images changed, copy them from [store/README.md](store/README.md), in each of its three languages ([In Spanish and Japanese](store/README.md#in-spanish-and-japanese)). Then submit for review.
-11. **Record it** in the roadmap's handoff notes: the version, the commit it was built from (`git rev-parse HEAD`), the zip's SHA-256, and the C compiler, Node and zlib lines.
+9. **Test the store build:** `npm run e2e` runs every end-to-end test on it, with preprod chosen (`e2e/support.ts`). Load `dist/` unpacked in a fresh Chrome profile once, and do [checklist item 9](#preprod-checklist-before-a-release): it opens on mainnet, and the switch works both ways.
+10. **Mainnet by hand, with small amounts,** before the first mainnet release: the launch review's step 5 ([archive/plans/launch-review.md](archive/plans/launch-review.md#launch-prep-order)): Minswap's CORS on `agg-api.minswap.org`, one swap each way and Stop; one Lovejoin box at depth 1 once the pool holds enough others' boxes; every Seedelf flow.
+11. **Upload** the zip on the dashboard's Package tab. If the listing's text or images changed, copy them from [store/README.md](store/README.md), in each of its three languages ([In Spanish and Japanese](store/README.md#in-spanish-and-japanese)). Then submit for review.
+12. **Record it** in the roadmap's handoff notes: the version, the commit it was built from (`git rev-parse HEAD`), the zip's SHA-256, and the C compiler, Node and zlib lines.
 
 ## Sharing with testers before launch (history)
 

@@ -15,6 +15,7 @@ Everything the mainnet listing needs, laid out by the developer dashboard's tabs
 0. **Turn on 2-Step Verification for the developer account.** The Web Store refuses every upload without it, and says only "There was a problem uploading your file", which reads as a problem with the zip.
 1. **Run the release checklist** in [development.md](../development.md#releasing-to-the-web-store). It builds the zip with `npm run package`, which writes `extension/release/seedelf-wallet-<version>-mainnet.zip`, and refuses a build without mainnet's hosts.
 2. **Make sure the privacy policy's URL resolves.** It points at `main`, so the release's `web-wallet/<topic>` branch must be merged into `main` before the listing is submitted — open the URL and check it renders. The wallet's own Settings link points at `main` too, and is built into the package, so the merge comes before `npm run package`, not after.
+3. **Deploy the data layer before the package, if the release changed `seedelf-data/`** ([development.md](../development.md#releasing-to-the-web-store), step 7): a wallet the store ships must never meet an API older than the one it was reviewed against.
 
 ## Package
 
@@ -335,7 +336,7 @@ The wallet contacts only its developer's Cardano server (mainnet.seedelf.logical
 
 ## Submitting again
 
-- **Each upload needs a version strictly higher than the last.** Bump it at submission time, in `extension/package.json`; the manifest takes its version from there.
+- **Each upload needs a version strictly higher than the last.** It's set on the release branch, in `extension/package.json` ([development.md](../development.md#releasing-to-the-web-store), step 1), and the manifest takes it from there. Never bump it on `main` at upload: the zip is built from the merge commit in a clean tree.
 - **Uploading:** run the release checklist, then upload the zip on the Package tab.
 - **When the listing's words change,** change them in all three languages ([In Spanish and Japanese](#in-spanish-and-japanese)).
 - **When the UI changes,** regenerate the images: `npm run build && npm run store:images` in `extension/`. It makes the screenshots in all three languages.
