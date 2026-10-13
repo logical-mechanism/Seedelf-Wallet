@@ -4638,7 +4638,8 @@ test.describe("the dApp connector", () => {
 
   test("a site session's return through Lovejoin counts its chain as it's sent, four at a time", async ({ context, koios }) => {
     const page = await siteSessionHolding40(context, koios);
-    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳");
+    // The review builds the chain's transactions in WebAssembly first: a busy machine takes a while.
+    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳", { timeout: 15_000 });
     // Each Koios answer waits a while, so the count shows as they go in.
     koios.delayMs = 1500;
     const send = page.getByRole("button", { name: /^(Send|Sending)/ });
@@ -4659,7 +4660,8 @@ test.describe("the dApp connector", () => {
     koios,
   }) => {
     const page = await siteSessionHolding40(context, koios);
-    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳");
+    // The review builds the chain's transactions in WebAssembly first: a busy machine takes a while.
+    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳", { timeout: 15_000 });
     // Send sends the first four of the ten; the rest wait for blocks to take those, which never happens here.
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect.poll(() => koios.submitted.length, { timeout: 15_000 }).toBe(4);
