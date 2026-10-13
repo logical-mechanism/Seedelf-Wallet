@@ -3666,6 +3666,10 @@ test("staking: the rewards history, read only once it's opened (chunk 30)", asyn
   await page.getByTestId("staking-row").click();
   await expect(page.getByTestId("your-pool")).toContainText("LOGIC · Logical Mechanism");
   expect(asked).toHaveLength(0);
+  // The page's own reads are over first: its DRep card asks `epoch_params` for what registering costs, and an answer
+  // landing after the count below was taken for the history's (CI, the 1.5.0 PR).
+  await expect(page.getByTestId("drep-card")).toBeVisible();
+  await expect(page.getByTestId("drep-card")).not.toContainText("Reading your DRep…");
 
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Rewards history" }).click();
