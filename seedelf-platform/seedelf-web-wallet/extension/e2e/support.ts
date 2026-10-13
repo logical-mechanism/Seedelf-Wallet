@@ -117,23 +117,62 @@ export const lovejoinPool = fixture("lovejoin-pool-preprod.json").pool;
 
 /**
  * A Lovejoin box of `phrase`'s Seedelf key in the pool, as Koios lists it: a
- * fresh copy of its register. The WebAssembly module makes it in a Node of
- * its own, since Playwright's loader can't load the module's ES code.
+ * fresh copy of its register, made by the WebAssembly module (inWasm).
  */
 export function ownedLovejoinBox(phrase: string, tx: string): { payment_cred: string } & Record<string, unknown> {
+  const datum = inWasm(
+    `const key = wasm.SeedelfKey.fromEntropy(wasm.phraseToEntropy(process.argv[1]), 0);
+     process.stdout.write(Buffer.from(wasm.registerToDatum(wasm.rerandomize(key.baseRegister()))).toString("hex"));`,
+    phrase,
+  );
+  return { ...lovejoinPool[0], tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: datum, value: {} } };
+}
+
+/** Public account `account` of `phrase`: its stake address on preprod, as discovery asks Koios about it (chunk 18). */
+export function accountStake(phrase: string, account: number): string {
+  return inWasm(
+    `process.stdout.write(wasm.CardanoAccount.fromPhrase(process.argv[1], Number(process.argv[2])).stakeAddress(wasm.Network.Preprod));`,
+    phrase,
+    String(account),
+  );
+}
+
+/**
+ * One-time account `index` of `phrase` (CIP-1852 account `24301'`, private
+ * session `index`'s) on preprod: its address and payment key hash, which
+ * credential_utxos finds what it holds by, and its own stake address, which
+ * the restore's scan asks `account_addresses` about (chunk 27).
+ */
+export function oneTimeAccount(phrase: string, index: number): { address: string; keyHash: string; stake: string } {
+  return JSON.parse(
+    inWasm(
+      `const keys = wasm.OneTimeAccounts.fromPhrase(process.argv[1]);
+       const i = Number(process.argv[2]);
+       const net = wasm.Network.Preprod;
+       process.stdout.write(JSON.stringify({ address: keys.address(net, i), keyHash: keys.keyHash(i), stake: keys.rewardAddress(net, i) }));`,
+      phrase,
+      String(index),
+    ),
+  );
+}
+
+/**
+ * What `code` writes to stdout, run with the WebAssembly module as `wasm` and
+ * `args` in `process.argv` from 1, in a Node of its own, since Playwright's
+ * loader can't load the module's ES code.
+ */
+function inWasm(code: string, ...args: string[]): string {
   const pkg = new URL("../../wasm/pkg/", import.meta.url);
   const script = `
     import { readFileSync } from "node:fs";
     const wasm = await import(${JSON.stringify(new URL("seedelf_wasm.js", pkg).href)});
     wasm.initSync({ module: readFileSync(new URL(${JSON.stringify(new URL("seedelf_wasm_bg.wasm", pkg).href)})) });
-    const key = wasm.SeedelfKey.fromEntropy(wasm.phraseToEntropy(process.argv[1]), 0);
-    process.stdout.write(Buffer.from(wasm.registerToDatum(wasm.rerandomize(key.baseRegister()))).toString("hex"));
+    ${code}
   `;
-  const datum = execFileSync(process.execPath, ["--input-type=module", "-e", script, phrase], {
+  return execFileSync(process.execPath, ["--input-type=module", "-e", script, ...args], {
     env: { ...process.env, NODE_OPTIONS: "" },
     encoding: "utf8",
   });
-  return { ...lovejoinPool[0], tx_hash: tx.repeat(32), tx_index: 0, inline_datum: { bytes: datum, value: {} } };
 }
 /**
  * Koios says a mix made each of `txs` (tx_info: one of its inputs sat at
@@ -177,12 +216,23 @@ export interface KoiosFake {
   stakes: Map<string, Record<string, unknown>>;
   /**
    * Which stake addresses `account_addresses` answers as used, past the
-   * recorded accounts: how a second public account is put on the chain for
-   * discovery to find (chunk 18).
+   * recorded accounts, each one asked about in a request of several too, as
+   * Koios answers: how a second public account is put on the chain for
+   * discovery to find (chunk 18), or a private session's one-time account
+   * for a restore's scan (chunk 27).
    */
   usedStakes: Set<string>;
-  /** Every stake address `account_addresses` was asked about, in order: discovery asks one at a time. */
+  /**
+   * The first stake address of every `account_addresses` request, in order: discovery asks one at a time, a
+   * restore's scan 20 at a time, one-time account 0's first.
+   */
   stakesAsked: string[];
+  /**
+   * Each stake key's transactions for `account_txs`, newest first, by stake address: a one-time account's, which
+   * only a restore's scan asks for. `tx_info` has a row for each, as Koios always has, spending nothing the
+   * fixtures know of unless `txSpends` says.
+   */
+  accountTxs: Map<string, Array<{ tx_hash: string; block_height: number; block_time: number }>>;
   /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
   /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
@@ -333,23 +383,26 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const body = mainnet ? (onNetwork(request.postDataJSON(), "preprod") as any) : request.postDataJSON();
     if (path === "account_txs" || path === "credential_txs" || path === "tx_info") {
       const query = new URL(request.url()).searchParams;
-      // Activity asks by the account's payment keys: the recorded account's when one of them holds something.
-      const recorded =
+      // Activity asks by the account's payment keys: the recorded account's when one of them holds something. Only a
+      // restore's scan asks by a stake key, about one-time accounts: theirs are what the tests add.
+      const listed: Array<{ tx_hash: string; block_height: number }> =
         path === "credential_txs"
           ? (body._payment_credentials as string[]).some((c) => RECORDED_KEYS.has(c))
-          : body._stake_address === activityPreprod.stake;
+            ? activityPreprod.account_txs
+            : []
+          : (koios.accountTxs.get(body._stake_address) ?? []);
       const all: Array<{ tx_hash: string; block_height?: number }> =
         path === "tx_info"
           ? [
               ...activityPreprod.tx_info.filter((t: { tx_hash: string }) => body._tx_hashes.includes(t.tx_hash)),
-              ...[...koios.txSpends].filter(([h]) => body._tx_hashes.includes(h)).map(([tx_hash, inputs]) => ({ tx_hash, inputs })),
+              // And a row for every transaction a one-time account's `account_txs` lists, as Koios has: a restore's scan
+              // fails without it (1.5.0's release review, C14).
+              ...[...new Set([...koios.txSpends.keys(), ...[...koios.accountTxs.values()].flat().map((t) => t.tx_hash)])]
+                .filter((h) => body._tx_hashes.includes(h))
+                .map((tx_hash) => ({ tx_hash, inputs: koios.txSpends.get(tx_hash) ?? [] })),
             ]
-          : recorded
-            ? activityPreprod.account_txs.filter(
-                (t: { block_height: number }) =>
-                  body._after_block_height === undefined || t.block_height > body._after_block_height,
-              )
-            : [];
+          : // From `_after_block_height`'s own block on, as Koios and the data layer answer (1.5.0's release review, C03).
+            listed.filter((t) => body._after_block_height === undefined || t.block_height >= body._after_block_height);
       const offset = Number(query.get("offset") ?? 0);
       const rows = path === "tx_info" ? all : all.slice(offset, offset + Number(query.get("limit") ?? 1000));
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
@@ -389,11 +442,14 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
         .map((r) => ({ tx_hash: r.split("#")[0], tx_index: Number(r.split("#")[1]), is_spent: true }));
       return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([...found, ...gone]) });
     }
-    const account = koiosPreprod.accounts[body._stake_addresses?.[0]];
+    // One a request, whatever its size: the tests count requests by it.
     if (path === "account_addresses" && body._stake_addresses?.[0]) koios.stakesAsked.push(body._stake_addresses[0]);
     // PostgREST's filter, as the contract scan uses it: `block_height=gt.N`.
     const after = Number(/gt\.(\d+)/.exec(new URL(request.url()).searchParams.get("block_height") ?? "")?.[1] ?? -1);
-    // credential_utxos: the wallet contract's, or the accounts' by payment key.
+    // credential_utxos: the wallet contract's, or the accounts' by payment key. The recorded account's are
+    // koios-preprod.json's `account_utxos`, read by its stake key on 2026-09-24 at 01:04Z: they lack its outputs under
+    // no stake key or another's (38ccfdf0#0, 0e8d3924#1, 84d3e93a#0), and activity-preprod.json, recorded to a later
+    // block, goes on to transactions that spend all six (tests/fixtures/record-activity.mjs UNTIL).
     const credentials: string[] = body?._payment_credentials ?? [];
     const byKey = [
       ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: Array<{ payment_cred: string }> }>).flatMap(
@@ -407,10 +463,12 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
           ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
           : byKey
         : path === "account_addresses"
-          ? (account?.account_addresses ??
-            (koios.usedStakes.has(body._stake_addresses?.[0])
-              ? [{ stake_address: body._stake_addresses[0], addresses: [`addr_of_${body._stake_addresses[0]}`] }]
-              : []))
+          ? // A row for every stake address asked about that some address used, as Koios answers a batch of them.
+            (body._stake_addresses as string[]).flatMap(
+              (stake_address) =>
+                koiosPreprod.accounts[stake_address]?.account_addresses ??
+                (koios.usedStakes.has(stake_address) ? [{ stake_address, addresses: [`addr_of_${stake_address}`] }] : []),
+            )
           : null;
     if (!rows) return fulfill({ status: 404, body: "" });
     return fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
@@ -502,6 +560,7 @@ export const test = base.extend<{
       stakes: new Map(stakingPreprod.account_info.map((a: { stake_address: string }) => [a.stake_address, a])),
       usedStakes: new Set<string>(),
       stakesAsked: [],
+      accountTxs: new Map(),
       addedToAccounts: [],
       spent: new Set(),
       unlistedSpent: false,
@@ -597,6 +656,18 @@ export async function restore(page: Page, phrase: string) {
   }, phrase);
   await page.getByRole("button", { name: "Continue" }).click();
   await setPassword(page, "Restore wallet");
+}
+
+/**
+ * Waits until the restore of a phrase that used nothing past account 0 has
+ * asked Koios all it asks unprompted: three `account_addresses`, the balance
+ * reading's for account 0, then in the background the look for a second
+ * public account's (chunk 18), and after its answer the scan's of the first
+ * 20 one-time accounts (chunk 27). A test that counts requests from here
+ * can't count one of those (1.5.0's release review, C44).
+ */
+export async function lookedAfterRestore(koios: KoiosFake): Promise<void> {
+  await expect.poll(() => koios.calls.filter((c) => c === "account_addresses")).toHaveLength(3);
 }
 
 /**

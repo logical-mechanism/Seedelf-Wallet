@@ -153,7 +153,7 @@ import type {
 import { readAccountUtxos, type AccountDeps, type KeyPath, type PathedUtxo } from "./account";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { bodyOutpoints, certificateKinds, nestsWithin, txId } from "./cbor";
-import { GAP_LIMIT } from "./chain";
+import { fartherKeys, GAP_LIMIT } from "./chain";
 import type { CoinControlService } from "./coin-control";
 import { CollateralRefusedError, refusedBy, StaleReviewError } from "./collateral";
 import { KoiosBusyError, KoiosError, SpentInputError, type Koios, type KoiosUtxo } from "./koios";
@@ -1947,7 +1947,10 @@ export class DappService {
     }
     const { view, rows } = await this.resolve(network, holder, origin, [...new Set([...inputs, ...collateral])]);
     const collateralSpent = await this.keptApart(network, holder, view, inputs, collateral);
-    // A session's stake key is never registered: nothing comes back to it.
+    // The wallet never registers a session's stake key, so no deposit is read for it, and an old-style stop of it,
+    // which doesn't say what it returns, is refused. A site on another account can register it all the same (an
+    // old-style registration needs no signature of that key's): that deposit has no way back through the wallet
+    // (1.5.0's cross-area review, X05; the last review, L2).
     const stakeDeposit = holder ? undefined : await this.stakeDeposit(origin, network, view.stake, bytes);
     const request = JSON.stringify({
       network,
@@ -2054,11 +2057,11 @@ export class DappService {
     const ask: DappAsk = {
       kind: "sign-tx",
       partial: partialSign,
-      summary: ties ? { ...summary, paid: summary.paid.map((p, i) => (ties.paid[i] === undefined ? p : { ...p, yours: ties.paid[i] })) } : summary,
+      summary: ties?.summary ?? summary,
       password,
       ...sessionOf(holder),
       ...(collateralSpent ? { collateralSpent } : {}),
-      ...(ties ? { ties: ties.all } : {}),
+      ...(ties ? { ties: ties.all, staked: ties.staked, certified: ties.certified } : {}),
     };
     return this.ask(
       session,
@@ -2119,6 +2122,26 @@ export class DappService {
    * that no public account was in it (the release review), and a site on
    * the public account read another public account as "An address"; with
    * the accounts unread, this throws, and the prompt promises nothing.
+   *
+   * An output is named by who can spend it, its payment key, never by its
+   * stake key alone, which anyone can pair with their own payment key (M14):
+   * someone else's key under another account's stake key read "Your public
+   * account, Account 3" and "It moves money between Account 1 and Account
+   * 3", and only that someone could spend it (1.5.0's release review, C01).
+   * An address none of the wallet's keys spends, someone else's or a
+   * contract's, still ties the account whose stake key it carries:
+   * `staked`, which the prompt says apart, as money that isn't the user's.
+   * An account's own key past those in range is looked for further first,
+   * by the stake key it carries (X06): it read "Someone else's address …
+   * that money isn't yours".
+   *
+   * A certificate or a withdrawal that names another of the wallet's stake
+   * keys ties it too (`certified`), which WebAssembly can't tell: it knows
+   * the signing account's keys alone. An old-style registration of one needs
+   * no signature of that key's, and the prompt said "a stake key that isn't
+   * yours" and that the other side wasn't in it (1.5.0's release review,
+   * X05). Each output, certificate and withdrawal is named in the summary
+   * this returns (`yours`), where it's another of the wallet's.
    */
   private async ties(
     network: NetworkName,
@@ -2126,7 +2149,7 @@ export class DappService {
     view: View,
     summary: DappTxSummary,
     rows: KoiosUtxo[],
-  ): Promise<{ paid: Array<DappTie | undefined>; all: DappTie[] }> {
+  ): Promise<{ summary: DappTxSummary; all: DappTie[]; staked: DappTie[]; certified: DappTie[] }> {
     const { wasm, wallet, sessions } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const indices = (await sessions.indices(network)).filter((i) => i !== holder?.index);
@@ -2138,22 +2161,79 @@ export class DappService {
         stake: keysOf(wasm, oneTime.rewardAddress(net, index)).stake,
       })),
     );
-    const whose = (address: string): DappTie[] => {
-      const { payment, stake } = keysOf(wasm, address);
+    /** Whose a payment key and a stake key are: public accounts first, then sessions, each once. */
+    const byKeys = (payment: string | undefined, stake: string | undefined): DappTie[] => {
       const ties: DappTie[] = [];
-      // Its payment key's account and its stake key's, once each.
       for (const index of new Set([payment && accounts.payment.get(payment), stake && accounts.stake.get(stake)])) {
         if (typeof index === "number" && (holder || index !== view.account)) ties.push({ account: index });
       }
-      const session = others.find((s) => (payment !== undefined && payment === s.payment) || (stake !== undefined && stake === s.stake));
-      if (session) ties.push(session.index);
+      // A session's by each key apart, as a public account's: one session's key under another's stake key ties both,
+      // and the payment key's comes first, which an output is named by (X07).
+      const matched = [
+        payment !== undefined && others.find((s) => s.payment === payment),
+        stake !== undefined && others.find((s) => s.stake === stake),
+      ];
+      for (const s of new Set(matched)) if (s) ties.push(s.index);
       return ties;
     };
+    /** `spends`: only who can spend what it holds, by its payment key. */
+    const whose = (address: string, spends = false): DappTie[] => {
+      const { payment, stake } = keysOf(wasm, address);
+      return byKeys(payment, spends ? undefined : stake);
+    };
+    // Whether one of the wallet's keys spends it, the site's own included (WebAssembly's `ownPaymentKey`): what it
+    // holds is the user's, whatever stake key it carries. Anyone else's ties only by its stake key.
+    const ours = (address: string, own: boolean) => {
+      if (own) return true;
+      const { payment } = keysOf(wasm, address);
+      if (payment === undefined) return false;
+      return accounts.payment.has(payment) || payment === holder?.keyHash || others.some((s) => s.payment === payment);
+    };
+    const read = [...summary.paid.map((p) => [p.address, p.ownPaymentKey] as const), ...rows.map((r) => [r.address, false] as const)];
+    // Under an account's stake key, a payment key none of those in range: the account's own past them, before a
+    // balance reading found it, or someone's who paired theirs with it. Looked for further along the account's chains,
+    // as Lovejoin's madeBy does, before it's called someone else's. Never the site's own: it ties nothing (X06).
+    const unknown = new Map<number, Set<string>>();
+    for (const [address, own] of read) {
+      const { payment, stake } = keysOf(wasm, address);
+      const index = stake === undefined ? undefined : accounts.stake.get(stake);
+      if (payment === undefined || index === undefined || (!holder && index === view.account) || ours(address, own)) continue;
+      unknown.set(index, (unknown.get(index) ?? new Set<string>()).add(payment));
+    }
+    for (const [index, keys] of unknown) {
+      const found = await wallet.withAccount(index, ({ cardano }) =>
+        fartherKeys((role, i) => cardano.paymentKeyHash(role, i), keys),
+      );
+      for (const key of found) accounts.payment.set(key, index);
+    }
+    const all: DappTie[] = [];
+    const staked: DappTie[] = [];
+    for (const [address, own] of read) (ours(address, own) ? all : staked).push(...whose(address));
+    // The stake key a certificate or a withdrawal names, when it isn't the signing account's: another of the
+    // wallet's, or anyone's. A script's, as a contract's "withdraw zero", names no key, and is nobody's (X05).
+    const byStake = (stake: string | null | undefined) => (stake ? byKeys(undefined, stake)[0] : undefined);
+    const certificates = summary.certificates.map((c) => (c.own ? undefined : byStake(c.credential)));
+    const withdrawals = summary.withdrawals.map((w) => (w.own ? undefined : byStake(keysOf(wasm, w.address).stake)));
     const rank = (t: DappTie): [number, number] => (typeof t === "number" ? [1, t] : [0, t.account]);
-    const all = new Map([...summary.paid, ...rows].flatMap((o) => whose(o.address)).map((t) => [rank(t).join(), t]));
+    // Each once, public accounts first.
+    const listed = (ties: DappTie[]) =>
+      [...new Map(ties.map((t) => [rank(t).join(), t])).values()].sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1] - rank(b)[1]);
+    /** Each of `items` with the account or session of the wallet's it is (`yours`), where it is one. */
+    const named = <T extends { yours?: DappTie }>(items: T[], yours: Array<DappTie | undefined>) =>
+      items.map((item, i) => {
+        const tie = yours[i];
+        return tie === undefined ? item : { ...item, yours: tie };
+      });
     return {
-      paid: summary.paid.map((p) => whose(p.address)[0]),
-      all: [...all.values()].sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1] - rank(b)[1]),
+      summary: {
+        ...summary,
+        paid: named(summary.paid, summary.paid.map((p) => whose(p.address, true)[0])),
+        certificates: named(summary.certificates, certificates),
+        withdrawals: named(summary.withdrawals, withdrawals),
+      },
+      all: listed(all),
+      staked: listed(staked),
+      certified: listed([...certificates, ...withdrawals].filter((t) => t !== undefined)),
     };
   }
 

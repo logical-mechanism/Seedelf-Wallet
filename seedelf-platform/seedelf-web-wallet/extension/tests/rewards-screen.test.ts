@@ -1,7 +1,7 @@
 // Rewards history (chunk 30), as the page renders it from the recorded preprod
-// account's 87 rewards: what's been paid in all, next epoch's apart, each
-// year's total, 50 rows at first, every amount hidden with the balances, and
-// where Staking offers it.
+// account's 87 rewards: what's been paid in all, next epoch's apart (none
+// for a key that stopped), each year's total, 50 rows at first, every amount
+// hidden with the balances, and where Staking offers it.
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -68,6 +68,14 @@ describe("what the history adds up to", () => {
     expect(later.paid).toBe(ALL);
   });
 
+  it("leaves out next epoch's for a key that isn't registered: the ledger never pays it", () => {
+    // db-sync lists a stopped key's next rewards until the epoch starts, then the treasury takes them and the row goes.
+    const stopped = rewardsView(recorded, "preprod", IN_318, false);
+    expect(stopped.coming).toEqual([]);
+    expect(stopped.paid).toBe(ALL - NEXT);
+    expect(stopped.years).toEqual(rewardsView(recorded, "preprod", IN_318).years);
+  });
+
   it("shows the first rows across the years, a year past the cut not at all", () => {
     const years = [
       { year: 2026, total: 3n, rows: recorded.slice(1, 4) },
@@ -99,6 +107,13 @@ describe("the page", () => {
     expect(shown).toContain("Show more");
     // Each pool's whole ID on hover: a ticker is anyone's to choose.
     expect(html).toContain(`title="${LOGIC}"`);
+  });
+
+  it("shows no Next epoch for a key that stopped staking, and still what it was paid", () => {
+    const shown = text(markup(createElement(RewardList, { rows: recorded, now: IN_318, registered: false })));
+    expect(shown).toContain("Paid in all 656.746865 ₳");
+    expect(shown).not.toContain("Next epoch");
+    expect(shown).not.toContain("6.906754");
   });
 
   it("shows every row with nothing more to show, and Show more only past 50", () => {
@@ -169,5 +184,12 @@ describe("where Staking offers it", () => {
 
   it("not for a key never paid", () => {
     expect(page(stopped)).not.toContain("Rewards history");
+  });
+
+  it("once for a key that's registered with no pool, under its rewards", () => {
+    // Its pool retired, or it only delegates its vote: Not staking, and the rewards section below it.
+    const noPool = page({ ...staking, pool: null });
+    expect(noPool.match(/Rewards history/g)).toHaveLength(1);
+    expect(noPool).toMatch(/Withdraw rewards Rewards history/);
   });
 });

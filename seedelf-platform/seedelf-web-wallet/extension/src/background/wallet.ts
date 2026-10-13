@@ -459,12 +459,14 @@ export class Wallet {
   }
 
   /**
-   * Deletes the vault, the sealed records and the caches. Where the wallet
-   * opens and which network it's on stay (the privacy policy says so), and
-   * so does a payment that may still go through (`KEPT_ON_RESET`): the same
-   * phrase restored watches it again, so it's never paid twice (independent
-   * review M2). The UI asks for a typed confirmation first, and Remove wallet
-   * says what's still open (handlers.ts).
+   * Deletes the vault, the sealed records, the settings and the caches. Where
+   * the wallet opens and which network it's on stay (the privacy policy says
+   * so), and so does a payment that may still go through (`KEPT_ON_RESET`):
+   * the same phrase restored watches it again, so it's never paid twice
+   * (independent review M2). Remove wallet and Forgot password put the
+   * Koios-only switch back after it, as they keep the network (handlers.ts
+   * reset-wallet, 1.5.0's release review, C08). The UI asks for a typed
+   * confirmation first, and Remove wallet says what's still open.
    */
   reset(): Promise<void> {
     return this.serial(async () => {

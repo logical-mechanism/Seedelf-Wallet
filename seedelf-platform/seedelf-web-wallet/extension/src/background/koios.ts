@@ -313,10 +313,30 @@ const DREP_PROFILE_COLUMNS = "drep_id,is_valid,meta_json->body->givenName";
 /** A rewards history: every column but the stake address, which the wallet asked about. */
 const REWARD_COLUMNS = "earned_epoch,spendable_epoch,amount,type,pool_id_bech32";
 /**
- * Newest first, in an order with no ties, so no row is on two pages: an
- * operator's reward account can take several pools' rewards in one epoch.
+ * Oldest first, in an order that ties only rows alike in every column (an
+ * operator's reward account takes several pools' rewards in one epoch).
+ * db-sync changes an account's newest rows while it's read: next epoch's
+ * rewards as they're worked out, an epoch's deposits back at its start, a
+ * stopped key's unpaid deleted then. Newest first, each moved every later
+ * page, so a row came twice or not at all; oldest first, they're on the last
+ * page (unless the newest epoch's straddle two). Rows alike in every column
+ * were each paid (two governance deposits back in one epoch): none is dropped
+ * as a repeat (1.5.0's release review, C24).
  */
-const REWARD_ORDER = "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc";
+const REWARD_ORDER = "spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc";
+/** Text as PostgreSQL sorts it ascending: a null after every value. */
+const byText = (a: string | null, b: string | null) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a < b ? -1 : 1);
+/**
+ * The order the page reads, newest first: the latest paid, then the latest
+ * earned, then by kind, pool (none last) and amount, as the server sorted
+ * them when the wallet asked for newest first.
+ */
+const newestFirst = (a: KoiosReward, b: KoiosReward) =>
+  b.spendable_epoch - a.spendable_epoch ||
+  b.earned_epoch - a.earned_epoch ||
+  byText(a.type, b.type) ||
+  byText(a.pool_id_bech32, b.pool_id_bech32) ||
+  byText(a.amount, b.amount);
 /**
  * A live governance action is one not yet ratified, enacted, dropped or
  * expired. Its metadata's text is most of a row (70 KB for mainnet's three on
@@ -762,7 +782,7 @@ export class Koios {
 
   /**
    * An account's transactions, newest first: `limit` of them from `offset`,
-   * or with `after`, only those in blocks after it (one request, up to 1,000).
+   * or with `after`, only those in blocks from it on (one request, up to 1,000).
    */
   accountTxs(stakeAddress: string, { after, offset = 0, limit = 20 }: { after?: number; offset?: number; limit?: number }) {
     const body = { _stake_address: stakeAddress, ...(after === undefined ? {} : { _after_block_height: after }) };
@@ -831,8 +851,9 @@ export class Koios {
   }
 
   /**
-   * Every reward paid to a stake key, newest first, 1,000 a request: a
-   * member's come once an epoch, so one request for nearly every account.
+   * Every reward paid to a stake key, asked oldest first (`REWARD_ORDER`),
+   * 1,000 a request, and given newest first: a member's come once an epoch,
+   * so one request for nearly every account.
    */
   async rewardHistory(stakeAddress: string): Promise<KoiosReward[]> {
     const rows: KoiosReward[] = [];
@@ -843,7 +864,7 @@ export class Koios {
         `select=${REWARD_COLUMNS}&order=${REWARD_ORDER}&offset=${offset}&limit=${PAGE_SIZE}`,
       );
       rows.push(...page);
-      if (page.length < PAGE_SIZE) return rows;
+      if (page.length < PAGE_SIZE) return rows.sort(newestFirst);
     }
   }
 

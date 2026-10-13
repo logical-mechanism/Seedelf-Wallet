@@ -16,15 +16,16 @@
 // `account_txs` by the stake key never listed (O7). No server learns anything
 // new: it had the same keys from the balance. More than 75 keys go in groups,
 // one request a group (pages). The pages are kept for the session, so opening
-// it again asks only for what's newer: one request a group. What's the
-// account's in a transaction is matched by its keys, as the balance counts it.
-// `tx_info` also says what each transaction did with the stake key (its
-// certificates and withdrawals) and carries its note (CIP-20's message), at
-// no extra request; a pool's ticker comes only from what's on the device. A
-// transaction at Lovejoin's mix box is named for what it did there, read from
-// the transaction alone (describe). A collateral payment is named from the
-// account's sealed choices (coin-control.ts `collateralPayments`): to the
-// chain it's only a payment to itself.
+// it again asks only for what's newer, from a margin under the newest block
+// read (CATCH_UP_MARGIN): one request a group. What's the account's in a
+// transaction is matched by its keys, as the balance counts it. `tx_info` also
+// says what each transaction did with the stake key (its certificates and
+// withdrawals) and carries its note (CIP-20's message), at no extra request;
+// a pool's ticker comes only from what's on the device. A transaction at
+// Lovejoin's mix box with no one else's key in it is named for what it did
+// there, read from the transaction alone (describe). A collateral payment is
+// named from the account's sealed choices (coin-control.ts
+// `collateralPayments`): to the chain it's only a payment to itself.
 //
 // Each entry keeps the tokens that moved, with signed quantities, for its
 // details and the CSV export (older Seedelf entries have only a count).
@@ -132,14 +133,39 @@ export function accountMatcher(account: Pick<AccountAddresses, "addresses" | "ke
 
 interface AccountPages {
   entries: ActivityEntry[];
-  /** The newest block read. */
+  /** The newest block the first page or a catch-up read: the next catch-up asks from a margin under it. */
   top: number;
   /** The payment keys they were read by: a reading that finds others starts the pages again. */
   keys: string[];
-  /** How many of each group of keys' transactions (`groups`), newest first, have been read. */
+  /**
+   * How many of each group of keys' transactions (`groups`), newest first, its pages have read: a position in its list
+   * as it is now. One that lands since pushes the group's rows down, so its next page reads one again, which it leaves
+   * out as listed: a short page, none skipped. A catch-up moves no offset: what it lists past the rows read comes back
+   * on a page the same way (release review C03), and a page with nothing new reads on (`READ_ON`). Counting the hashes
+   * each group had read instead went wrong for good once a server behind answered a Load more: every later page short
+   * by what it skipped, and at 20, Load more never ended (cross-area review X08).
+   */
   offsets: number[];
   more: boolean;
 }
+
+/**
+ * How many blocks under the newest read a catch-up asks from. Each group's request goes to the data layer or Koios
+ * on its own (data-layer.ts), and Koios's backends lag behind one another, so one read's groups can come from servers
+ * at different tips: a transaction one group's answer lacked, under another group's newer one, is read again once its
+ * server has caught up (release review C33). About half an hour of blocks, at no extra request; what's listed already
+ * asks nothing more.
+ */
+export const CATCH_UP_MARGIN = 100;
+
+/**
+ * The most pages one press of Load more reads: a page that finds only rows listed already reads on to the next. What a
+ * catch-up listed past the pages read comes back on them as listed, and a press that listed nothing, its button still
+ * there, looked like the end of the list: five or six in a row after a public mix (the last review, L7). A page read on
+ * asks a `credential_txs` only of the groups the one before moved on, no more than the press it saves would, and only
+ * the one that finds something asks `tx_info`.
+ */
+const READ_ON = 10;
 
 /** The account's keys in groups, one `credential_txs` each: Koios takes no more in a request. */
 const groups = (keys: string[]) => {
@@ -157,14 +183,21 @@ const koiosOrder = (a: KoiosAccountTx, b: KoiosAccountTx) =>
  * yet, a transaction under keys in two groups once, and how many of each group's rows that reads (`read`), so the
  * group's next page starts after them and none is skipped. Rows past the page's last stay unread, to be asked for
  * again. `more` while a group gave a whole page or has rows left. With one group, its page as it came.
+ *
+ * None older than the last row of a group's whole page is taken (`cut`): that group's rows past its page, unread yet,
+ * may be newer. It binds only once a group's whole page holds rows listed already, as what a catch-up listed past the
+ * pages read makes it, and then the group that set it reads its whole page, so the next page goes on. Without it,
+ * another group's older rows were listed ahead of that group's newer ones: a hole in the list (the last review, L8).
  */
 export function takePage(
   lists: KoiosAccountTx[][],
   listed: ReadonlySet<string>,
 ): { rows: KoiosAccountTx[]; read: number[]; more: boolean } {
-  const fresh = [...new Map(lists.flat().filter((r) => !listed.has(r.tx_hash)).map((r) => [r.tx_hash, r])).values()].sort(koiosOrder);
+  const cut = lists.filter((list) => list.length === PAGE).map((list) => list[PAGE - 1]!).sort(koiosOrder)[0];
+  const takes = (r: KoiosAccountTx) => !listed.has(r.tx_hash) && (!cut || koiosOrder(r, cut) <= 0);
+  const fresh = [...new Map(lists.flat().filter(takes).map((r) => [r.tx_hash, r])).values()].sort(koiosOrder);
   const rows = fresh.slice(0, PAGE);
-  const last = rows.length === PAGE ? rows[PAGE - 1] : undefined;
+  const last = rows.length === PAGE ? rows[PAGE - 1] : cut;
   const read = lists.map((list) => (last ? list.filter((r) => koiosOrder(r, last) <= 0).length : list.length));
   return { rows, read, more: lists.some((list, i) => list.length === PAGE || read[i]! < list.length) };
 }
@@ -457,32 +490,51 @@ export class ActivityService {
     let pages: AccountPages;
     if (!from || more) {
       // The first page, or the next: each group's page at its offset, the newest of them taken.
-      const offsets = from?.offsets ?? sets.map(() => 0);
-      const lists: KoiosAccountTx[][] = [];
-      for (const [i, set] of sets.entries()) lists.push(await koios.credentialTxs(set, { offset: offsets[i], limit: PAGE }));
       const listed = new Set(from?.entries.map((e) => e.txHash));
-      const page = takePage(lists, listed);
+      // Each group's page as asked at its offset: a page that reads on asks again only the groups it moved on.
+      const asked: Array<{ offset: number; list: KoiosAccountTx[] }> = [];
+      const pageAt = async (at: number[]) => {
+        for (const [i, set] of sets.entries()) {
+          const offset = at[i]!;
+          if (asked[i]?.offset !== offset) asked[i] = { offset, list: await koios.credentialTxs(set, { offset, limit: PAGE }) };
+        }
+        return takePage(asked.map((a) => a.list), listed);
+      };
+      let offsets = from?.offsets ?? sets.map(() => 0);
+      let page = await pageAt(offsets);
+      // Rows a catch-up listed past the pages read come back on them, listed already: a page with nothing new reads on,
+      // in the same press, from where it ended (READ_ON).
+      for (let passed = 1; !page.rows.length && page.more && passed < READ_ON; passed++) {
+        offsets = offsets.map((o, i) => o + page.read[i]!);
+        page = await pageAt(offsets);
+      }
       // tx_info doesn't answer in the order asked: every page is sorted newest first.
       const entries = await read(await koios.txInfo(page.rows.map((r) => r.tx_hash)));
       pages = {
         entries: merge(from?.entries ?? [], entries),
-        top: Math.max(from?.top ?? 0, ...page.rows.map((r) => r.block_height)),
+        // Kept by Load more: a group's newer transaction a page took isn't all that's newer, and a catch-up asks every
+        // group from under it (release review C03).
+        top: from ? from.top : Math.max(0, ...page.rows.map((r) => r.block_height)),
         keys,
+        // Every row up to the page's last, one listed already too: positions in each group's list as it is now.
         offsets: offsets.map((o, i) => o + page.read[i]!),
         more: page.more,
       };
     } else {
-      // What's newer: each group's from the newest block read, which shifts each group's rows read down by its own.
+      // What's newer: each group's from a margin under the newest block read. Koios and the data layer take that block
+      // too, and what's listed already is asked about no more. The offsets stay: what's newer pushed each group's rows
+      // down by as many as its next page reads again, and what this lists that the pages hadn't reached comes back on
+      // one, listed (cross-area review X08).
       const lists: KoiosAccountTx[][] = [];
-      for (const set of sets) lists.push(await koios.credentialTxs(set, { after: from.top }));
+      const after = Math.max(0, from.top - CATCH_UP_MARGIN);
+      for (const set of sets) lists.push(await koios.credentialTxs(set, { after }));
       const listed = new Set(from.entries.map((e) => e.txHash));
       const fresh = [...new Map(lists.flat().filter((r) => !listed.has(r.tx_hash)).map((r) => [r.tx_hash, r])).values()];
       const entries = await read(await txInfoPaged(koios, fresh.map((r) => r.tx_hash)));
       pages = {
         ...from,
         entries: merge(from.entries, entries),
-        top: Math.max(from.top, ...fresh.map((r) => r.block_height)),
-        offsets: from.offsets.map((o, i) => o + lists[i]!.filter((r) => !listed.has(r.tx_hash)).length),
+        top: Math.max(from.top, ...lists.flat().map((r) => r.block_height)),
       };
     }
     // Not kept once the user has switched account while Koios answered: they'd be listed as the new account's.
@@ -706,12 +758,16 @@ const DREP_KIND = {
  * the account's in it (someone paying their own key under our stake key) is
  * left out: it isn't the account's activity, and its note isn't to us.
  *
- * One at Lovejoin's mix box (`mixBox`, its script hash) is named for what it
- * did there, from the transaction alone, since a chain's record goes about
- * an hour after its mix ends and a restore has none (O7): paid by the account,
- * boxes made and none spent is its deposit (or a seed), and boxes spent and
- * made one of its mixes, which pays the account its change back, so it's the
- * fee alone; a box spent into the account and none made is a box back.
+ * One at Lovejoin's mix box (`mixBox`, its script hash) with no one else's
+ * key in it is named for what it did there, from the transaction alone, since
+ * a chain's record goes about an hour after its mix ends and a restore has
+ * none (O7): paid by the account, boxes made and none spent is its deposit (or
+ * a seed), and boxes spent and made one of its mixes, which pays the account
+ * its change back, so it's the fee alone; a box spent into the account and
+ * none made is a box back (the account's own, through another app with its
+ * phrase, or one someone paid from their own box: the chain can't tell them
+ * apart). With someone else's key beside the box, it's a payment, named with
+ * who it paid or who paid it, never the box (release review C22).
  */
 export function describe(
   txs: KoiosTxInfo[],
@@ -723,6 +779,9 @@ export function describe(
   collateral: ReadonlySet<string> = new Set(),
 ): ActivityEntry[] {
   const atBox = (o: KoiosTxOut) => !!mixBox && (o as TxOut).payment_addr.cred === mixBox;
+  // Someone else's key: not the account's, not the box, and not a script (Lovejoin's fee shard is one), which the
+  // address's header says: a payment script's addresses go on from addr1 (addr_test1) with z, x, 2 or w.
+  const someoneElse = (o: KoiosTxOut) => !ours(o) && !atBox(o) && !/^addr(_test)?1[zx2w]/.test(o.payment_addr.bech32);
   return txs.flatMap((tx): ActivityEntry[] => {
     let net = 0n;
     const assets = new Map<string, bigint>();
@@ -745,8 +804,11 @@ export function describe(
     if (!spent && !tx.outputs.some(ours) && !staking && !mine) return [];
     const paysOthers = tx.outputs.some((o) => !ours(o));
     const [boxIn, boxOut] = [tx.inputs.some(atBox), tx.outputs.some(atBox)];
-    const lovejoin: ActivityEntry["kind"] | undefined =
-      spent && boxOut ? (boxIn ? "lovejoin-round" : "lovejoin-deposit") : boxIn && !boxOut && direction === "in" ? "lovejoin-withdraw" : undefined;
+    // Beside the box, a payment to someone, or someone paying for their own box's withdrawal: a payment, saying who.
+    const besideBox = (boxIn || boxOut) && [...tx.inputs, ...tx.outputs].some(someoneElse);
+    const lovejoin: ActivityEntry["kind"] | undefined = besideBox
+      ? undefined
+      : spent && boxOut ? (boxIn ? "lovejoin-round" : "lovejoin-deposit") : boxIn && !boxOut && direction === "in" ? "lovejoin-withdraw" : undefined;
     const kind: ActivityEntry["kind"] = mine
       ? mine.kind
       : collateral.has(tx.tx_hash)
@@ -770,11 +832,16 @@ export function describe(
     const moved = [...assets].filter(([, q]) => q !== 0n);
     const note = noteOf(tx.metadata);
     // Who, for a payment this device didn't make: the addresses it paid, or that paid it, read from the transaction
-    // already in hand, no request (chunk 23's review, A-1: "where did my 100 ₳ go?" had no answer).
+    // already in hand, no request (chunk 23's review, A-1: "where did my 100 ₳ go?" had no answer). Never the mix
+    // box: who's beside it is.
     const counterparts =
       mine || (kind !== "sent" && kind !== "received")
         ? []
-        : [...new Set((kind === "sent" ? tx.outputs : tx.inputs).filter((o) => !ours(o)).map((o) => o.payment_addr.bech32))];
+        : [
+            ...new Set(
+              (kind === "sent" ? tx.outputs : tx.inputs).filter((o) => !ours(o) && !atBox(o)).map((o) => o.payment_addr.bech32),
+            ),
+          ];
     const who = mine?.detail ? { detail: mine.detail, ...(mine.more ? { more: mine.more } : {}) } : counterparts.length ? several(counterparts) : {};
     const entry: ActivityEntry = {
       txHash: tx.tx_hash,

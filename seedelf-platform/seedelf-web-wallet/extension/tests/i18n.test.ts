@@ -136,12 +136,12 @@ describe("a translation that quietly says the opposite", () => {
   // recast a sentence so the negation moves or goes, so this is a warning for
   // most keys — and a hard failure for an accuracy-critical one.
   const NEGATED: Record<string, RegExp> = {
-    en: /\b(not|never|no|none|nothing|nobody|cannot|can't|isn't|aren't|won't|don't|doesn't|didn't|wouldn't|couldn't|shouldn't|hasn't|haven't|without)\b/i,
+    en: /\b(not|never|no|none|nothing|nobody|cannot|can't|isn't|aren't|wasn't|weren't|won't|don't|doesn't|didn't|wouldn't|couldn't|shouldn't|hasn't|haven't|without)\b/i,
     es: /\b(no|ni|nunca|nada|nadie|ningún|ninguna|ninguno|sin|tampoco)\b/i,
     // Japanese negates in more than one shape: the plain ない/ません, the
     // classical ず, and なし for English's "without". Each one here was added
     // because a real sentence used it and this check flagged it wrongly.
-    ja: /(ない|ません|ありませ|せず|ずに|なく|なし|不可|決して)/,
+    ja: /(ない|ません|ありませ|せず|ずに|おらず|なく|なし|不可|決して)/,
   };
   // "No" is a vote's name there, not a negation: Japanese says 反対 ("against"),
   // which negates nothing (the sign window's ballots, release review C14).

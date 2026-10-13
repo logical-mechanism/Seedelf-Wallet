@@ -48,7 +48,7 @@ import { refusalOf, SessionRefusedFoot, type Refusal } from "../components/Sessi
 import { TxDetailButton } from "../components/TxDetail";
 import { TokenAmounts, tokenChoices } from "../components/TokenAmounts";
 import { TokenAmountRow, TokenAmountText } from "../components/TokenList";
-import { certificateLine, paidTo, signingTies, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
+import { certificateLine, certifiedLine, paidTo, signingTies, stakedLine, stakingComesBack, tiesLine, withdrawalLine } from "../dapp";
 import { adaText, formatAda, formatQuantity, shortHex, unlocked } from "../format";
 import { useNetwork } from "../network";
 import { useAmounts, usePreferences } from "../preferences";
@@ -319,6 +319,8 @@ export function DappApprovals() {
             session={current.session !== undefined}
             collateralSpent={!!current.collateralSpent}
             ties={current.ties}
+            staked={current.staked}
+            certified={current.certified}
             account={current.session === undefined ? siteAccount : undefined}
           />
         )}
@@ -920,6 +922,8 @@ export function SignTx({
   session,
   collateralSpent,
   ties,
+  staked,
+  certified,
   account,
 }: {
   summary: DappTxSummary;
@@ -928,6 +932,10 @@ export function SignTx({
   collateralSpent: boolean;
   /** The wallet's other accounts it moves money with (independent review M12); undefined when unchecked. */
   ties?: DappTie[];
+  /** Those whose stake key alone is in it, at an address none of the wallet's keys spends (C01). */
+  staked?: DappTie[];
+  /** Those whose stake key a certificate or a withdrawal in it names (X05). */
+  certified?: DappTie[];
   /** The public account it's for, by number and name, when the wallet has more than one (`useSiteAccount`). */
   account?: string;
 }) {
@@ -1062,6 +1070,16 @@ export function SignTx({
           {tiesLine(ties, session, named, account)}
         </Callout>
       )}
+      {staked && staked.length > 0 && (
+        <Callout tone="warn" testId="dapp-staked">
+          {stakedLine(staked, session, named, account)}
+        </Callout>
+      )}
+      {certified && certified.length > 0 && (
+        <Callout tone="warn" testId="dapp-certified">
+          {certifiedLine(certified, session, named, account)}
+        </Callout>
+      )}
 
       {s.mint.length > 0 && (
         <ReviewRows testId="dapp-mint">
@@ -1083,10 +1101,10 @@ export function SignTx({
         >
           <ul className="dapp-points">
             {s.certificates.map((c, i) => (
-              <li key={i}>{certificateLine(c, back, whose)}</li>
+              <li key={i}>{certificateLine(c, back, whose, named)}</li>
             ))}
             {s.withdrawals.map((w, i) => (
-              <li key={`w${i}`}>{withdrawalLine(w, back, whose)}</li>
+              <li key={`w${i}`}>{withdrawalLine(w, back, whose, named)}</li>
             ))}
           </ul>
         </Callout>
@@ -1150,8 +1168,10 @@ export function SignTx({
       )}
 
       <Callout tone="privacy" testId="dapp-tx-privacy">
+        {/* A stake key alone ties as much as a payment does, in an address, a certificate or a withdrawal: neither side
+            is said to be out of it then. */}
         {signingTies(
-          ties,
+          ties && [...ties, ...(staked ?? []), ...(certified ?? [])],
           session,
           s.paid.some((p) => p.seedelf === "register"),
         )}

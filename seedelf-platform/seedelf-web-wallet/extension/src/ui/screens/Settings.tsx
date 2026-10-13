@@ -1146,9 +1146,10 @@ export function ServerStatusLine({ koiosOnly, holds }: { koiosOnly: boolean; hol
   } else {
     if (!holds) return null;
     const held = PART_NAMES.filter(([part]) => holds[part] !== undefined);
-    // The soonest a held part is tried on the server again: the line changes then.
+    // The latest any part it names is held to: each is held from its own failure, and the soonest would tell a part
+    // held longer that it's back on the server before it is. The line drops a part as its hold ends, read every 10 s.
     const time = () =>
-      new Date(Math.min(...held.map(([part]) => holds[part]!))).toLocaleTimeString(dateLocale(), {
+      new Date(Math.max(...held.map(([part]) => holds[part]!))).toLocaleTimeString(dateLocale(), {
         hour: "2-digit",
         minute: "2-digit",
       });

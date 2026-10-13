@@ -1,5 +1,6 @@
 // Pure helpers over Koios UTxOs: reading registers from datums, discovering
-// the Cardano account's addresses, and adding up value. No network, no keys.
+// the Cardano account's addresses, looking further along its chains for a
+// key, and adding up value. No network, no keys: a derivation is handed in.
 
 import type { TokenAmount } from "../shared/rpc";
 import { SEEDELF_PREFIX } from "../shared/seedelf-name";
@@ -134,6 +135,36 @@ export function discoverChain(
     }
   }
   return { addresses, used: count };
+}
+
+/**
+ * How far along each of a public account's chains its payment keys are
+ * looked for (`fartherKeys`): a thousand key hashes at most, about a fifth of
+ * a second, each time an address carries the account's stake key under a
+ * payment key the wallet doesn't know.
+ */
+export const FARTHER_KEYS = 500;
+
+/**
+ * Which of `keys` (payment key hashes, hex) are an account's past the first
+ * GAP_LIMIT of each chain, as `paymentKeyHash` derives them: looked for along
+ * both up to FARTHER_KEYS, stopping once each is found. An address of the
+ * account's past those, before a balance reading found it, carries the
+ * account's stake key, and so does anyone's who pairs their own key with it:
+ * only its payment key says which. Lovejoin's madeBy looks here for what
+ * made a box, and a site's signing prompt (dapp.ts `ties`) before it calls
+ * an address someone else's.
+ */
+export function fartherKeys(paymentKeyHash: (role: number, index: number) => string, keys: Iterable<string>): string[] {
+  const left = new Set(keys);
+  const found: string[] = [];
+  for (let i = GAP_LIMIT; i < FARTHER_KEYS && left.size; i++) {
+    for (const role of [0, 1]) {
+      const key = paymentKeyHash(role, i);
+      if (left.delete(key)) found.push(key);
+    }
+  }
+  return found;
 }
 
 /** Lovelace and native tokens across UTxOs. Quantities are exact (bigint). */

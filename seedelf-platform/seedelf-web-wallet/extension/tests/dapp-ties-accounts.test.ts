@@ -7,6 +7,17 @@
 // it, to that account on chain. The public account's knew none: another of
 // the wallet's public accounts read "An address" (C05's public half). With
 // the accounts unread, the prompt promises nothing.
+//
+// An output is named by who can spend it, its payment key: someone else's key
+// under another account's stake key read "Your public account, Account 3 ·
+// Savings", and "It moves money between Account 1 and Account 3", while only
+// that someone could spend it (1.5.0's release review, C01). Its stake key
+// still ties the two on chain, and the prompt says so apart (`staked`). An
+// account's own key past the first 20 the check derives is looked for
+// further along its chains, by the stake key it carries, and named the
+// account's: it read "Someone else's address … that money isn't yours" (X06).
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { Collateral } from "../src/background/collateral";
@@ -15,6 +26,9 @@ import type { KoiosUtxo } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import type { DappApproval } from "../src/shared/rpc";
+import { AccountsContext } from "../src/ui/accounts";
+import { paidTo } from "../src/ui/dapp";
+import { SignTx } from "../src/ui/screens/DappApprovals";
 import { loadTestWasm, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 import { txIdOf } from "./fixtures/cbor";
 
@@ -40,6 +54,12 @@ const bytesOf = (hex: string) => `58${(hex.length / 2).toString(16).padStart(2, 
 function paying(inputs: string[], to: string[]) {
   const outputs = `8${to.length}${to.map((a) => `82${bytesOf(a)}1a003d0900`).join("")}`;
   return `84a300${outpoints(inputs)}01${outputs}021a00029810a0f5f6`;
+}
+
+/** As `paying`, with `certificates` (CBOR, hex) after its fee. */
+function certifying(inputs: string[], to: string[], certificates: string[]) {
+  const outputs = `8${to.length}${to.map((a) => `82${bytesOf(a)}1a003d0900`).join("")}`;
+  return `84a400${outpoints(inputs)}01${outputs}021a00029810048${certificates.length}${certificates.join("")}a0f5f6`;
 }
 
 /** The 12-word wallet with three public accounts, the connector on. */
@@ -129,6 +149,18 @@ async function addressesOf(t: T, index: number) {
   return { receive: wasm.cip30Address(receive), stakedTo: `00${"ab".repeat(28)}${wasm.cip30Address(stake).slice(2)}` };
 }
 
+/**
+ * Two of public account `index`'s own base addresses no balance reading has found, in CIP-30's hex: a key past the
+ * first 20 the check derives on each chain (receive 25, change 40).
+ */
+async function farKeysOf(t: T, index: number) {
+  const { wasm } = t.deps;
+  return t.wallet.withAccount(index, ({ cardano }) => {
+    const stake = wasm.cip30Address(cardano.stakeAddress(wasm.Network.Preprod)).slice(2);
+    return [cardano.paymentKeyHash(0, 25), cardano.paymentKeyHash(1, 40)].map((key) => `00${key}${stake}`);
+  });
+}
+
 describe("a private session's signing prompt, with several public accounts", () => {
   it("names a public account it pays whichever is on screen, the dApp account among them", async () => {
     const t = await on();
@@ -139,17 +171,38 @@ describe("a private session's signing prompt, with several public accounts", () 
     const [first, third] = [await addressesOf(t, 0), await addressesOf(t, 2)];
     for (const [address, account] of [
       [first.receive, 0],
-      [first.stakedTo, 0],
       [third.receive, 2],
-      [third.stakedTo, 2],
     ] as const) {
       const approval = await prompt(dapp, s, paying([SESSION_INPUT], [address]));
       expect(approval.ties).toEqual([{ account }]);
+      expect(approval.staked).toEqual([]);
       expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account }]);
+    }
+    // Someone else's key under an account's stake key: theirs to spend, never named the account's, and tied apart (C01).
+    for (const [address, account] of [
+      [first.stakedTo, 0],
+      [third.stakedTo, 2],
+    ] as const) {
+      const approval = await prompt(dapp, s, paying([SESSION_INPUT], [address]));
+      expect(approval.ties).toEqual([]);
+      expect(approval.staked).toEqual([{ account }]);
+      expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined]);
     }
     // Someone else's: checked, and none of the wallet's is in it.
     const plain = await prompt(dapp, s, paying([SESSION_INPUT], [t.deps.wasm.cip30Address(THEIRS)]));
     expect(plain.ties).toEqual([]);
+    expect(plain.staked).toEqual([]);
+  });
+
+  it("names another account's own key past the first 20 as that account's, never someone else's (X06)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const s = await connectedPrivately(t, dapp);
+    const far = await farKeysOf(t, 2);
+    const approval = await prompt(dapp, s, paying([SESSION_INPUT], far));
+    expect(approval.ties).toEqual([{ account: 2 }]);
+    expect(approval.staked).toEqual([]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account: 2 }, { account: 2 }]);
   });
 
   it("promises nothing when the wallet can't read which accounts it has", async () => {
@@ -184,10 +237,10 @@ describe("the public account's signing prompt, with several public accounts (C05
     for (const [address, account] of [
       [second.receive, 1],
       [third.receive, 2],
-      [third.stakedTo, 2],
     ] as const) {
       const approval = await prompt(dapp, s, paying([spend], [address]));
       expect(approval.ties).toEqual([{ account }]);
+      expect(approval.staked).toEqual([]);
       expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account }]);
     }
     // Two at once, in order, each output named.
@@ -197,7 +250,130 @@ describe("the public account's signing prompt, with several public accounts (C05
     // Someone's key staked to the site's own account: not another account (it has a warning of its own).
     const own = await prompt(dapp, s, paying([spend], [first.stakedTo, t.deps.wasm.cip30Address(THEIRS)]));
     expect(own.ties).toEqual([]);
+    expect(own.staked).toEqual([]);
     expect(own.summary.paid.map((p) => p.yours)).toEqual([undefined, undefined]);
+  });
+
+  it("never names another account by its stake key alone: its payment key's holder spends it (C01)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const [first, second, third] = [await addressesOf(t, 0), await addressesOf(t, 1), await addressesOf(t, 2)];
+    const named = (index: number) => `Account ${index + 1}${index === 2 ? " · Savings" : ""}`;
+    const stake3 = third.stakedTo.slice(58);
+    // Someone's key, and a contract, under Account 3's stake key: what WebAssembly read them as, and tied apart.
+    const approval = await prompt(dapp, s, paying([spend], [third.stakedTo, `10${"cd".repeat(28)}${stake3}`]));
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([undefined, undefined]);
+    expect(approval.summary.paid.map((p) => paidTo(p, named))).toEqual(["An address", "A contract"]);
+    expect(approval.ties).toEqual([]);
+    expect(approval.staked).toEqual([{ account: 2 }]);
+    // Account 2's key under Account 3's stake key is Account 2's to spend: named by it, the two tied as before (M12).
+    const crossed = await prompt(dapp, s, paying([spend], [`00${second.receive.slice(2, 58)}${stake3}`]));
+    expect(crossed.summary.paid.map((p) => p.yours)).toEqual([{ account: 1 }]);
+    expect(crossed.ties).toEqual([{ account: 1 }, { account: 2 }]);
+    expect(crossed.staked).toEqual([]);
+    // The site's own key under Account 3's stake key is the account's to spend: WebAssembly's own line, not Account 3.
+    const ownKey = await prompt(dapp, s, paying([spend], [`00${first.receive.slice(2, 58)}${stake3}`]));
+    expect(ownKey.summary.paid.map((p) => [p.ownPaymentKey, p.yours])).toEqual([[true, undefined]]);
+    expect(paidTo(ownKey.summary.paid[0]!, named)).toBe("Your payment key, with a stake part that isn't yours");
+    expect(ownKey.ties).toEqual([{ account: 2 }]);
+    expect(ownKey.staked).toEqual([]);
+  });
+
+  it("names another account's own key past the first 20 as that account's, never someone else's (X06)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const named = (index: number) => `Account ${index + 1}${index === 2 ? " · Savings" : ""}`;
+    // Looked for further along both of Account 3's chains, by the stake key each carries: the user's own money.
+    const approval = await prompt(dapp, s, paying([spend], await farKeysOf(t, 2)));
+    expect(approval.ties).toEqual([{ account: 2 }]);
+    expect(approval.staked).toEqual([]);
+    expect(approval.summary.paid.map((p) => p.yours)).toEqual([{ account: 2 }, { account: 2 }]);
+    expect(paidTo(approval.summary.paid[0]!, named)).toBe("Your public account, Account 3 · Savings");
+  });
+
+  it("names another public account whose stake key a certificate registers (X05)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const stake3 = (await addressesOf(t, 2)).stakedTo.slice(58);
+    // An old-style registration (kind 0) of Account 3's stake key, which needs no signature of Account 3's.
+    const approval = await prompt(dapp, s, certifying([spend], [t.deps.wasm.cip30Address(THEIRS)], [`82008200581c${stake3}`]));
+    expect(approval.summary.complete).toBe(true);
+    expect([approval.ties, approval.staked, approval.certified]).toEqual([[], [], [{ account: 2 }]]);
+    expect(approval.summary.certificates.map((c) => c.yours)).toEqual([{ account: 2 }]);
+    // The window as it shows it, the accounts named as Settings names them.
+    const accounts = [{ index: 0, name: "Main" }, { index: 1 }, { index: 2, name: "Savings" }];
+    const value = { accounts, active: 0, loaded: true, name: "Account 1 · Main", several: true, reload: async () => undefined };
+    const { summary, ties, staked, certified } = approval;
+    const props = { summary, partial: false, session: false, collateralSpent: false, ties, staked, certified, account: "Account 1 · Main" };
+    const page = renderToStaticMarkup(createElement(AccountsContext.Provider, { value }, createElement(SignTx, props)))
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, " ");
+    expect(page).toContain("A certificate for the stake key of Account 3 · Savings.");
+    expect(page).toContain(
+      "A certificate or withdrawal in it names the stake key of Account 3 · Savings: signing ties Account 1 · Main to Account 3 · Savings on chain, where anyone can see it.",
+    );
+    expect(page).not.toContain("isn't yours");
+  });
+
+  it("takes WebAssembly's word that the site's own key is its own, past the keys derived for the check (C01)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    const { s, spend } = await connectedPublicly(t, dapp);
+    const [first, third] = [await addressesOf(t, 0), await addressesOf(t, 2)];
+    // As for a key of the dApp account past the first 20 of a chain, which only its own reading finds: none of the
+    // payment keys derived, the stake keys all there.
+    const derived = dapp as unknown as { publicKeys: (n: string) => Promise<{ payment: Map<string, number>; stake: Map<string, number> }> };
+    const { stake } = await derived.publicKeys("preprod");
+    derived.publicKeys = async () => ({ payment: new Map(), stake });
+    const approval = await prompt(dapp, s, paying([spend], [`00${first.receive.slice(2, 58)}${third.stakedTo.slice(58)}`]));
+    expect(approval.summary.paid.map((p) => p.ownPaymentKey)).toEqual([true]);
+    // The user's own money, under Account 3's stake key: never said to be someone else's.
+    expect(approval.ties).toEqual([{ account: 2 }]);
+    expect(approval.staked).toEqual([]);
+  });
+
+  it("names nothing Account 3's for a site that read Account 3's stake key before Settings moved sites off it (C01)", async () => {
+    const t = await on();
+    const dapp = privately(t);
+    // Settings → Sites on Account 3 (index 2) as the site connects: it reads Account 3's reward address.
+    await t.preferences.set({ dappAccount: 2 });
+    const s = site("https://public.example");
+    const enabling = dapp.call(s, "enable", []);
+    await until(() => dapp.approvals().length === 1);
+    await dapp.answer(dapp.approvals()[0]!.id, true);
+    expect(await enabling).toBe(true);
+    const [reward] = (await dapp.call(s, "getRewardAddresses", [])) as string[];
+    // Sites moved to Account 1, the site still connected: it asks Account 1 to pay its own key and a contract, each
+    // under Account 3's stake key, 4 ₳ apiece.
+    await t.preferences.set({ dappAccount: 0 });
+    await dapp.dappAccountChanged();
+    await t.balances.get("preprod");
+    const [own] = (await t.coins.lists("preprod")).cardano;
+    const stake3 = reward!.slice(2);
+    const to = [`00${"ab".repeat(28)}${stake3}`, `10${"cd".repeat(28)}${stake3}`];
+    const approval = await prompt(dapp, s, paying([`${own!.txHash}#${own!.index}`], to));
+    expect(approval.ties).toEqual([]);
+    expect(approval.staked).toEqual([{ account: 2 }]);
+    // The window as it shows it, the accounts named as Settings names them.
+    const accounts = [{ index: 0, name: "Main" }, { index: 1 }, { index: 2, name: "Savings" }];
+    const value = { accounts, active: 0, loaded: true, name: "Account 1 · Main", several: true, reload: async () => undefined };
+    const { summary, ties, staked } = approval;
+    const props = { summary, partial: false, session: false, collateralSpent: false, ties, staked, account: "Account 1 · Main" };
+    const page = renderToStaticMarkup(createElement(AccountsContext.Provider, { value }, createElement(SignTx, props)))
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&#x27;/g, "'")
+      .replace(/\s+/g, " ");
+    expect(page).not.toContain("Your public account");
+    expect(page).not.toContain("It moves money");
+    expect(page).toContain("An address");
+    expect(page).toContain("A contract");
+    expect(page).toContain(
+      "Someone else's address in it carries the stake key of Account 3 · Savings: that money isn't yours. Signing still ties Account 1 · Main to Account 3 · Savings on chain, where anyone can see it.",
+    );
   });
 
   it("names the account on screen when sites use another", async () => {

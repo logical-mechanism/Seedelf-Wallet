@@ -27,7 +27,7 @@ import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, PublicMixHolding } from "../src/ui/screens/Home";
 import { ClaimReview } from "../src/ui/screens/ClaimAll";
-import { ClaimCard, Dapps } from "../src/ui/screens/Dapps";
+import { ClaimCard, Dapps, FoundSessions } from "../src/ui/screens/Dapps";
 import {
   boxesAffordable,
   Chains,
@@ -768,6 +768,14 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
     expect(disconnectWait(siteSession({ chain }))).toBe("Its return is on its way: wait for it to land");
     expect(disconnectWait(siteSession({ chain: { ...chain, confirmed: 5 } }))).toBeUndefined();
     expect(disconnectWait(siteSession({ holding: { lovelace: "3000000", tokens: [], utxos: 1 } }))).toBe("Bring everything back first");
+    // Stopped partway (a lock, say): nothing sends the rest, which waits at the account for Bring it back, as soon as
+    // the stop and hours later alike (cross-area review X10).
+    const stopped = { total: 10, sent: 4, confirmed: 0, cut: false, stopped: "The wallet locked, or the browser closed, while its chain was being sent." };
+    for (const confirmed of [0, 4]) {
+      expect(disconnectWait(siteSession({ chain: { ...stopped, confirmed }, holding: { lovelace: "45000000", tokens: [], utxos: 2 } }))).toBe(
+        "Bring everything back first",
+      );
+    }
     const html = markup(siteSession({ stage: "funding", holding: null }), true);
     expect(disconnect(html)).toContain("disabled");
     expect(html).toContain('data-testid="site-session-wait"');
@@ -843,6 +851,23 @@ describe("a site's private session (launch review H7, #43, H6, #23, #56)", () =>
     const line = text(createElement(ClaimCard, { sessions: [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 1 } })], onOpen: () => undefined }));
     expect(line).toContain("•••• ₳");
     expect(line).not.toContain("25 ₳");
+  });
+});
+
+describe("the dApps page's After a restore (1.5.0's release review, C19)", () => {
+  const after = (due?: boolean, network: "preprod" | "mainnet" = "preprod") =>
+    text(createElement(FoundSessions, { sessions: [], due, onOpen: () => undefined, onScanned: () => undefined }), network);
+
+  it("says when the restore didn't look on this network, or didn't finish, and to press Find leftovers", () => {
+    expect(after(true)).toContain(
+      "The restore didn't look for private sessions' money on Preprod, or didn't finish looking: press Find leftovers.",
+    );
+    expect(after(true, "mainnet")).toContain("on Mainnet, or didn't finish looking");
+    // Looked, or not known yet: it says only what the button finds.
+    for (const said of [after(false), after()]) {
+      expect(said).not.toContain("didn't look");
+      expect(said).toContain("Find leftovers");
+    }
   });
 });
 
@@ -957,6 +982,60 @@ describe("Bring everything back's review (launch review #57, H6, #23)", () => {
     expect(line).toContain("#2 comes back with the next return");
     expect(line).toContain("#0 holds a reference script the wallet can't spend, so it stays there");
     expect(line).toContain("Once this return lands, bring the session back again for the rest.");
+  });
+
+  /** A session the restore scan found (chunk 27): no site, swap or mix. */
+  const found = (index: number) => siteSession({ index, site: undefined, recovered: true, holding: { lovelace: "25000000", tokens: [], utxos: 2 } });
+  const claim = (
+    returns: SessionBackSummary[],
+    sessions: SessionView[],
+    chosen = returns.map((r) => r.index),
+    skipped: Array<{ index: number; reason: string }> = [],
+  ) =>
+    text(
+      createElement(ClaimReview, {
+        built: { returns, skipped },
+        chosen: new Set(chosen),
+        sessions,
+        direct: false,
+        busy: false,
+        onToggle: () => undefined,
+        onDirect: () => undefined,
+      }),
+    );
+
+  it("warns, as a found session's own page does, that another browser may still use what the restore scan found (1.5.0's release review, C18)", () => {
+    const one = claim([back(), back({ index: 7 })], [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 2 } }), found(7)]);
+    expect(one).toContain(
+      "If this phrase is open in another browser, a swap or site there may still use the account of the session found after a restore. Bring it back from one browser only.",
+    );
+    expect(claim([back({ index: 7 }), back({ index: 9 })], [found(7), found(9)])).toContain(
+      "may still use the accounts of the sessions found after a restore. Bring them back from one browser only.",
+    );
+    // Left out with a tap, or none found among them: nothing to warn of.
+    expect(claim([back(), back({ index: 7 })], [siteSession(), found(7)], [4])).not.toContain("another browser");
+    expect(claim([back()], [siteSession()])).not.toContain("another browser");
+  });
+
+  it("names each session the restore scan found by its number, its warnings' lines too, and says it was found (1.5.0's release review, C37)", () => {
+    const line = claim(
+      [
+        back({ lovejoinSkipped: "its spare ADA is too little for a box." }),
+        back({ index: 7, lovejoinSkipped: "its 5 ₳ collateral isn't at its account anymore, and the mixes need it." }),
+      ],
+      [found(4), found(7), found(9)],
+      [4, 7],
+      [{ index: 9, reason: "An order of this session is still waiting." }],
+    );
+    expect(line).toContain("Private session 5 5.2 ₳ Found after a restore · Lovejoin left out");
+    expect(line).toContain("Private session 8 5.2 ₳ Found after a restore · Lovejoin left out");
+    expect(line).toContain("Left out Private session 10 An order of this session is still waiting.");
+    expect(line).toContain(
+      "Private session 5: its spare ADA is too little for a box. Private session 8: its 5 ₳ collateral isn't at its account anymore, and the mixes need it.",
+    );
+    expect(line).not.toContain("Found after a restore:");
+    // A site's session is named by its site, and numbered beside it, as before.
+    expect(claim([back()], [siteSession({ holding: { lovelace: "25000000", tokens: [], utxos: 2 } })])).toContain("app.example 5.2 ₳ Private session 5");
   });
 });
 

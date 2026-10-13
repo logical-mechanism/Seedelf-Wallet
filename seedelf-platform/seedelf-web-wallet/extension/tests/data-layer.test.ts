@@ -165,25 +165,34 @@ describe("the data layer's client", () => {
 
   it("reads a rewards history's every page on the data layer, or all of it again on Koios (chunk 30)", async () => {
     const reward = (epoch: number) => ({ earned_epoch: epoch - 2, spendable_epoch: epoch, amount: "1000000", type: "member", pool_id_bech32: "pool1x" });
-    const page = (from: number, length: number) => Response.json(Array.from({ length }, (_, i) => reward(from - i)));
+    // Oldest first, as the wallet asks: what db-sync adds while it's read lands on the last page (1.5.0's release
+    // review, C24).
+    const page = (from: number, length: number) => Response.json(Array.from({ length }, (_, i) => reward(from + i)));
     const STAKE = "stake1u9c0yhlklkdd7vcwkvv2cjrgnw48y82jmm2ulk3vxe2qupsv2va8g";
 
     const s = servers();
     let pages = 0;
-    s.data.set("account_reward_history", () => (pages++ === 0 ? page(5000, 1000) : page(4000, 3)));
+    s.data.set("account_reward_history", () => (pages++ === 0 ? page(1001, 1000) : page(2001, 3)));
     const { make } = client(s);
-    expect(await make("mainnet").rewardHistory(STAKE)).toHaveLength(1003);
+    // Every page's, newest first.
+    expect((await make("mainnet").rewardHistory(STAKE)).map((r) => r.spendable_epoch)).toEqual(
+      Array.from({ length: 1003 }, (_, i) => 2003 - i),
+    );
     const asked = s.calls.filter((c) => c.path === "account_reward_history");
     expect(asked.map((c) => [c.host, new URLSearchParams(c.query).get("offset")])).toEqual([
       [DATA, "0"],
       [DATA, "1000"],
     ]);
+    // The one order the data layer takes.
+    expect(new URLSearchParams(asked[0]!.query).get("order")).toBe(
+      "spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc",
+    );
 
     // A page that fails sends the whole read to Koios, from its first page.
     const later = servers();
     let tries = 0;
-    later.data.set("account_reward_history", () => (tries++ === 0 ? page(5000, 1000) : new Response("", { status: 504 })));
-    later.koios.set("account_reward_history", page(7, 2));
+    later.data.set("account_reward_history", () => (tries++ === 0 ? page(1001, 1000) : new Response("", { status: 504 })));
+    later.koios.set("account_reward_history", page(6, 2));
     const { make: again } = client(later);
     expect((await again("mainnet").rewardHistory(STAKE)).map((r) => r.spendable_epoch)).toEqual([7, 6]);
     expect(later.calls.filter((c) => c.path === "account_reward_history").map((c) => c.host)).toEqual([DATA, DATA, KOIOS]);

@@ -43,6 +43,7 @@ const SHARED_WORDS: Record<string, string> = {
   "accountPicker.numbered": "an account's name, as Make public and Remove a Seedelf name it",
   "accounts.numbered": "an account's number, as the connector's windows name the site's account",
   "claim.aSession": "a private session's name, when its own can't be read",
+  "claim.session": "a private session's name, by its number, as the dApps page and Bring everything back name one a restore's scan found",
   "claim.sessionLower": "a private session's name, as Bring everything back lists it",
   "format.noName": "a token's name, when it has none",
   "swaps.aSwap": "a swap's name, when its tokens can't be read",

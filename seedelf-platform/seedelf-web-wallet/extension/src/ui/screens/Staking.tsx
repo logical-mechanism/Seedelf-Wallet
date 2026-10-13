@@ -408,7 +408,7 @@ export function Staking({
       />
     );
   }
-  if (page === "rewards") return <Rewards onBack={back("overview")} />;
+  if (page === "rewards") return <Rewards onBack={back("overview")} registered={staking.registered} />;
   if (page === "vote") {
     return (
       <Voting
@@ -495,8 +495,9 @@ export function Staking({
           <button type="button" className="primary" onClick={() => setPage("pools")} disabled={!!why || busy} title={why}>
             {t("staking.choosePool")}
           </button>
-          {/* A stake key that stopped keeps what it was paid (chunk 30). */}
-          {staking.rewarded && <RewardsButton onOpen={() => setPage("rewards")} disabled={busy} />}
+          {/* A stake key that stopped keeps what it was paid (chunk 30). A registered one with no pool (its pool
+              retired, or it only delegates its vote) has it under its rewards below: one button, not two. */}
+          {staking.rewarded && !staking.registered && <RewardsButton onOpen={() => setPage("rewards")} disabled={busy} />}
         </section>
       )}
 

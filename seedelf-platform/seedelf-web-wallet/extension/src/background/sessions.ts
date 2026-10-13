@@ -151,11 +151,12 @@ import {
   send,
   spendable,
   spentHistories,
+  type Classes,
   type OutRef,
   type ScriptSpendDeps,
 } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
-import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN } from "./wallet";
+import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN, type Keys } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** chrome.storage.session: a session's funding payment, built and waiting for Send. */
@@ -296,9 +297,19 @@ type RecordedTx = SessionTx & {
   /**
    * What a funding or a top-up pays the session's account (`txhash#index`),
    * recorded before it's sent: the session ends only once Koios shows each
-   * spent (ownGone, independent review M4). None on one from before.
+   * spent (ownGone, independent review M4). None on one from before. A
+   * session the restore scan found has on its funding what the scan read at
+   * its account, whatever paid it there (1.5.0's release review, C02).
    */
   outs?: string[];
+  /**
+   * A top-up's: a listing of its account has shown what it pays there
+   * (listNow), so it reached the account, whatever spent it since. tx_status
+   * confirming it doesn't say so: that can come before any listing does,
+   * and a top-up taken for gone then would let a second 5 ₳ go (1.5.0's
+   * release review, C04).
+   */
+  listed?: boolean;
   /** A swap's: the least its order asks for, recorded before it's sent (independent review L24). */
   minAmountOut?: string;
 };
@@ -439,11 +450,17 @@ interface SessionRecord {
    * Found by the restore scan (O5, chunk 27), not started on this device:
    * when (`at`), and what its key signed (`own`), whose outputs at the
    * account its return takes as the session's own, as a site's (siteOuts).
-   * Its record holds its funding (its first transaction) and the swaps that
-   * placed orders the account can cancel. What it was for isn't known: it
-   * has no swap, site or mix, and comes back by hand.
+   * Its record holds its funding (its first transaction, with what the scan
+   * read at the account as its `outs`) and the swaps that placed orders the
+   * account can cancel. What it was for isn't known: it has no swap, site or
+   * mix, and comes back by hand. Until this device sends something for it, it
+   * also ends once nothing at its account would come back (listNow): when
+   * its record holds a swap, only once that has held since a refresh at
+   * least LOST_AFTER_MS before, the first refresh to find it so (`quietAt`),
+   * since its order's end pays the account in the transaction that spends it
+   * (cross-area review X01).
    */
-  recovered?: { at: number; own: string[] };
+  recovered?: { at: number; own: string[]; quietAt?: number };
   closedAt?: number;
 }
 
@@ -451,6 +468,17 @@ interface SessionRecord {
 interface Book {
   next: number;
   sessions: SessionRecord[];
+  /**
+   * A restore's scan hasn't finished on this network (1.5.0's release review,
+   * C19): a restore marks every network before its scan starts, and the first
+   * scan that finishes here clears it, the restore's own or Find leftovers'.
+   * A read that fails, a lock or a worker stop leaves it, and so does the
+   * other network, whose one-time accounts a restore doesn't look at. Sealed
+   * with the book, so the lock that cuts a scan off keeps it, and every other
+   * write of the book keeps it too: a new session's funding as much as any
+   * (cross-area review X02).
+   */
+  unscanned?: true;
 }
 
 interface KeptOut {
@@ -573,6 +601,9 @@ const PENDING_KIND = {
 
 /** Why a return leaves Lovejoin out when its account's collateral is gone (privacy review §2.15). */
 const NO_COLLATERAL = () => t("sess.skip.warn.noCollateral");
+
+/** Why it does while 5 ₳ put in for that collateral is on its way, not there yet (cross-area review X20). */
+const COLLATERAL_COMING = () => t("sess.skip.warn.collateralComing");
 
 /** Why a return leaves Lovejoin out while its last chain's rest, sent back directly, isn't on chain (independent review L17). */
 const REST_NOT_BACK = () => t("sess.skip.warn.restNotBack");
@@ -821,22 +852,110 @@ function holdsCancelCollateral(rows: KoiosUtxo[]): boolean {
 }
 
 /**
- * Whether a top-up of session `s` (anything it was paid after its funding)
+ * Whether top-up `t` of a session (anything it was paid after its funding)
  * may still reach its account: sent, not turned away, less than
- * REPLACED_WATCH_MS ago, and what it pays the account not among `rows` yet.
- * One that never lands lets another go after that, as a site's Disconnect
- * waits for one (final review F13).
+ * REPLACED_WATCH_MS ago, and no listing of the account has shown it there
+ * yet (`listed`). One that never lands lets another go after that, as a
+ * site's Disconnect waits for one (final review F13); one that landed isn't
+ * coming again, whatever spent it since (1.5.0's release review, C04). The
+ * builds of 5 ₳ for a session brought back by hand ask it (topUpComing), and
+ * their Send asks it again, in the queue (topUpSubmit, C29).
  */
+function topUpOnItsWay(t: RecordedTx, now: number): boolean {
+  return t.kind === "out" && !t.unsent && !t.listed && now - t.at < REPLACED_WATCH_MS;
+}
+
+/** Whether a top-up of session `s` is on its way (topUpOnItsWay), what it pays the account not among `rows` yet. */
 function topUpComing(s: SessionRecord, rows: KoiosUtxo[], now: number): boolean {
   const there = new Set(rows.map(outpoint));
-  return s.txs
-    .slice(1)
-    .some((t) => t.kind === "out" && !t.unsent && now - t.at < REPLACED_WATCH_MS && !(t.outs ?? []).some((o) => there.has(o)));
+  return s.txs.slice(1).some((t) => topUpOnItsWay(t, now) && !(t.outs ?? []).some((o) => there.has(o)));
+}
+
+/**
+ * Marks session `s`'s top-ups of which Koios lists an output at its account
+ * (`listed`, what this wallet spent included) as there: they reached it
+ * (topUpOnItsWay). Returns whether it marked any.
+ */
+function markListed(s: SessionRecord, listed: KoiosUtxo[]): boolean {
+  const there = new Set(listed.map((u) => u.tx_hash));
+  const reached = s.txs.slice(1).filter((t) => t.kind === "out" && !t.listed && there.has(t.txHash));
+  for (const t of reached) t.listed = true;
+  return reached.length > 0;
+}
+
+/**
+ * A cancel of session `s` sent and not on chain yet. It may land, and what it
+ * spends counts as spent that long (SPENT_KEEP_MS): 5 ₳ put in for it too,
+ * when it took its fee from them (a Splash order's cancel, whose refund is
+ * the whole order), while the order reads open until it lands. No 5 ₳ goes
+ * in for the session meanwhile, and its page says the cancel is on its way
+ * (1.5.0's release review, C04).
+ */
+function cancelling(s: SessionRecord, now: number): boolean {
+  return s.txs.some((t) => t.kind === "cancel" && !t.confirmed && !t.unsent && !t.replaced && now - t.at < REPLACED_WATCH_MS);
+}
+
+/**
+ * A UTxO of 5 ₳ of ADA alone at a session's account (`address`, payment key
+ * `keyHash`), at an outpoint no transaction has: the 5 ₳ a session would put
+ * in for its cancel, which that cancel is run on before they're built
+ * (cancelCollateralBuild), as core's stand-ins are for a swap's own cancels
+ * (orders.rs `stand_in`).
+ */
+function collateralStandIn(address: string, keyHash: string): KoiosUtxo {
+  const row = {
+    tx_hash: "00".repeat(32),
+    tx_index: 0,
+    address,
+    value: SESSION_COLLATERAL.toString(),
+    stake_address: null,
+    payment_cred: keyHash,
+    block_height: 0,
+    inline_datum: null,
+    datum_hash: null,
+    asset_list: [],
+    reference_script: null,
+    // WebAssembly's row has these too; nothing reads them.
+    epoch_no: 0,
+    block_time: 0,
+    is_spent: false,
+  };
+  return row;
+}
+
+/**
+ * `classes` with what session `index`'s own transactions (`own`, by hash)
+ * made among `utxos` classed as its money: its class added to what's known
+ * of each, as the history of the device that made them says. A top-up then
+ * takes them first (core's `Purpose::Fund`), and spending them ties nothing
+ * new (1.5.0's release review, C36).
+ */
+function ownClassed(classes: Classes, utxos: KoiosUtxo[], own: ReadonlySet<string>, index: number): Classes {
+  const session = sessionClass(index);
+  const mine = utxos
+    .filter((u) => own.has(u.tx_hash))
+    .map((u) => {
+      const known = classes[outpoint(u)];
+      return [outpoint(u), known && known.origin !== "unknown" ? merged([known, session]) : session] as const;
+    });
+  return { ...classes, ...Object.fromEntries(mine) };
 }
 
 /** A session brought back by hand: no swap that runs itself, no site's, no mix. A session the restore scan found is one. */
 function byHand(s: SessionRecord): boolean {
   return !s.auto && !s.site && !s.mix;
+}
+
+/**
+ * A session the restore scan found that this device has sent nothing for:
+ * its record holds the funding and the swaps the scan found, and nothing but
+ * what Koios turned away, which never went out. Once a cancel, a top-up or a
+ * return goes from here, only its own return ends it, as any session's: a
+ * cancel's refund records no `outs` that would hold an end back (1.5.0's
+ * release review, C02).
+ */
+function foundUntouched(s: SessionRecord): boolean {
+  return !!s.recovered && byHand(s) && s.txs.slice(1).every((t) => t.unsent || s.recovered!.own.includes(t.txHash));
 }
 
 /** A swap that runs itself and has something left to do without the user. */
@@ -859,6 +978,25 @@ function mixingAgain(s: SessionRecord): boolean {
     !s.txs[0]?.unsent &&
     !s.txs.some((t) => t.kind === "back" && !t.unsent)
   );
+}
+
+/**
+ * Session `record`'s latest chain through Lovejoin, as its return reads it
+ * (buildBack): the transactions of it that may have gone (`sent`), and
+ * whether it went in partly (`started`), so that what's left comes back
+ * directly. One whose return was sent finished, and so did a session's whose
+ * rest came back directly, that return on chain; not a mix's, though:
+ * another chain would mix the wallet's boxes again, which nothing holds for
+ * it anymore (mixingAgain), so what reaches its account after comes back
+ * directly too.
+ */
+function chainSoFar(record: SessionRecord | undefined): { sent: RecordedTx[]; started: boolean } {
+  const chain = record?.chain;
+  const sent = (record?.txs ?? []).filter((t) => !t.unsent && (!chain || t.at >= chain.at));
+  const finished =
+    !!chain &&
+    sent.some((t) => t.txHash === chain.last || (!record?.mix && t.kind === "back" && t.confirmed && !t.replaced));
+  return { sent, started: !finished && sent.some((t) => t.kind === "deposit" || t.kind === "mix") };
 }
 
 /** Whether a session's record holds `txHash`, not turned away: it went out, or may have. */
@@ -1046,6 +1184,19 @@ export class SessionService {
   private scanning = new Map<NetworkName, Promise<SessionScan>>();
 
   constructor(private readonly deps: SessionDeps) {}
+
+  /**
+   * The wallet is removed: what this service holds in memory of its sessions
+   * goes with it (1.5.0's release review, C16). A scan under way is let go:
+   * the next phrase's restore starts one of its own rather than share it, and
+   * it writes nothing into that phrase's book (scanNow). So are what the
+   * accounts held at the last reading, and when the runner read them.
+   */
+  reset(): void {
+    this.scanning.clear();
+    this.seen.clear();
+    this.readAt.clear();
+  }
 
   /**
    * This network's sessions, newest first. `refresh` reads their accounts and
@@ -1287,7 +1438,7 @@ export class SessionService {
         txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
         site: { origin },
       };
-      await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
+      await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       // The runs look for it until it lands, whether or not a page is open (runAll, final review F13).
       await this.deps.alarm?.start().catch(() => undefined);
       try {
@@ -1387,7 +1538,7 @@ export class SessionService {
         },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
-      await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
+      await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       let pending: PendingTx;
       try {
         pending = await send(this.deps, network, txHash, SESSION_MIX_OUT, "session-out", "mix");
@@ -1444,7 +1595,15 @@ export class SessionService {
       if (!again && now() - built.builtAt > BUILT_TTL_MS) {
         throw new StaleReviewError(t("sess.topUpTooOld"));
       }
-      await this.live(network, built.index);
+      const s = await this.live(network, built.index);
+      // A session brought back by hand takes one 5 ₳ at a time, and none while a cancel of it is on its way. Its
+      // builds check outside the queue, on the record as they read it before Koios answered, so another window's
+      // may have missed this one's top-up: asked again here, by the same rules, before anything is recorded
+      // (1.5.0's release review, C29).
+      if (!again && byHand(s)) {
+        if (cancelling(s, now())) throw new Error(t("sess.cancelCollateral.cancelling"));
+        if (s.txs.slice(1).some((x) => x.txHash !== txHash && topUpOnItsWay(x, now()))) throw new Error(t("sess.topUpOnItsWay"));
+      }
       const out = await this.outRecord(network, built.index, txHash, built.txCbor);
       await this.update(network, built.index, (s) => {
         // Once in the record: a try turned away gives way to this one, and one that may have gone stays as it was.
@@ -1470,19 +1629,66 @@ export class SessionService {
    * ADA alone at the account as collateral (cancelOf), and a session the
    * restore scan found may hold none, its return from before chunk 24 having
    * taken everything while the order waited. Only while an order of it is
-   * open, the account holds no collateral the cancel can put up, and none is
-   * on its way. Kept as a top-up is, and sent by topUpSubmit.
+   * open and no cancel of it is on its way (cancelling), the account holds no
+   * collateral the cancel can put up, and none is on its way. Kept as a
+   * top-up is, and sent by topUpSubmit.
    */
   async cancelCollateralBuild(network: NetworkName, index: number): Promise<SessionOutSummary> {
     const s = await this.live(network, index);
     if (!byHand(s)) throw new Error(t("sess.cancelCollateral.byHand"));
+    if (cancelling(s, this.deps.now())) throw new Error(t("sess.cancelCollateral.cancelling"));
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
-    if (!(await this.liveOrders(network, s, address)).length) throw new Error(t("sess.noOrderWaiting"));
+    const orders = await this.liveOrders(network, s, address);
+    if (!orders.length) throw new Error(t("sess.noOrderWaiting"));
     const rows = await this.utxosOf(network, keyHash);
     if (holdsCancelCollateral(rows)) throw new Error(t("sess.cancelCollateral.there"));
     if (topUpComing(s, rows, this.deps.now())) throw new Error(t("sess.cancelCollateral.coming"));
+    // The cancel it's for, run first on a stand-in for it, as a swap's own cancels are before it's signed (release
+    // review C05): 5 ₳ put in for a cancel the order's script refuses would wait at the account with the order, which
+    // no return takes while it's open. Refused in the cancel's own words (1.5.0's release review, C30).
+    await this.cancelOf(network, address, [...rows, collateralStandIn(address, keyHash)], orders);
+    return this.collateralTopUp(network, s, address);
+  }
+
+  /**
+   * Builds 5 ₳ into a session brought back by hand, from the private
+   * balance, for its return through Lovejoin: the mixes put up a UTxO of
+   * exactly 5 ₳ of ADA alone at the account as collateral (buildBack), and a
+   * session the restore scan found may hold none, a return having taken it
+   * before money reached the account again. Only while no order of it waits
+   * and no cancel of it is on its way, and while its return would go through
+   * Lovejoin but for that collateral alone, as the return itself decides
+   * (lovejoinWantsCollateral), none of it at the account or on its way. Kept
+   * as a top-up is, and sent by topUpSubmit (1.5.0's release review, C53).
+   */
+  async backCollateralBuild(network: NetworkName, index: number): Promise<SessionOutSummary> {
+    const s = await this.live(network, index);
+    if (!byHand(s)) throw new Error(t("sess.backCollateral.byHand"));
+    if (cancelling(s, this.deps.now())) throw new Error(t("sess.cancelCollateral.cancelling"));
+    const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
+    if (s.txs.some((x) => x.kind === "swap") && (await this.liveOrders(network, s, address)).length) {
+      throw new Error(t("sess.orderWaitingBack"));
+    }
+    const rows = await this.utxosOf(network, keyHash);
+    if (rows.some(collateralFits)) throw new Error(t("sess.backCollateral.there"));
+    if (!(await this.lovejoinWantsCollateral(network, s, rows))) throw new Error(t("sess.backCollateral.notNeeded"));
+    if (topUpComing(s, rows, this.deps.now())) throw new Error(t("sess.backCollateral.coming"));
+    return this.collateralTopUp(network, s, address);
+  }
+
+  /**
+   * 5 ₳ from the private balance to session `s`'s account alone, for a
+   * session brought back by hand (cancelCollateralBuild,
+   * backCollateralBuild): built with a top-up's rules and kept as one, for
+   * topUpSubmit. The session's own private money goes first: what its
+   * fundings and top-ups left, and what a transaction its key signed paid
+   * there (`recovered.own`). It's tied to the session on chain already,
+   * though after a restore no history says so (1.5.0's release review, C36).
+   */
+  private async collateralTopUp(network: NetworkName, s: SessionRecord, address: string): Promise<SessionOutSummary> {
     const payments = [{ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] }];
-    const { summary, txCbor, seed } = await this.buildFunding(network, index, address, payments, t("sess.emptyTopUp"));
+    const own = new Set([...s.txs.filter((x) => x.kind === "out" && !x.unsent).map((x) => x.txHash), ...(s.recovered?.own ?? [])]);
+    const { summary, txCbor, seed } = await this.buildFunding(network, s.index, address, payments, t("sess.emptyTopUp"), own);
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
     await keep(this.deps, SESSION_TOP_UP, kept);
     return summary;
@@ -1677,14 +1883,47 @@ export class SessionService {
    * (`recovered`), brought back by hand. Every used index moves the book's
    * `next` past it. It runs at a restore and from Find leftovers, never as
    * the wallet opens: the server sees every account it's asked about
-   * together, from one IP address. One at a time on a network.
+   * together, from one IP address. One at a time on a network. A restore's
+   * waits for its look for public accounts first (`after`), under way all
+   * the same: Find leftovers meanwhile shares it, and the two never ask
+   * together.
    */
-  scan(network: NetworkName): Promise<SessionScan> {
+  scan(network: NetworkName, after?: Promise<unknown>): Promise<SessionScan> {
+    // However the look ends, the scan goes on: it found what it found.
+    const looked = (after ?? Promise.resolve()).catch(() => undefined);
     const running = this.scanning.get(network);
     if (running) return running;
-    const run = this.scanNow(network).finally(() => this.scanning.delete(network));
+    const run: Promise<SessionScan> = looked
+      .then(() => this.scanNow(network))
+      .finally(() => {
+        // Its own only: Remove wallet lets it go, and the next phrase's may have started since (reset).
+        if (this.scanning.get(network) === run) this.scanning.delete(network);
+      });
     this.scanning.set(network, run);
     return run;
+  }
+
+  /**
+   * A restore made this wallet: `network`'s book is marked as not scanned
+   * since (Book `unscanned`), before its scan starts, so a scan that doesn't
+   * finish, and the network a restore doesn't look at, say so.
+   */
+  markUnscanned(network: NetworkName): Promise<void> {
+    return this.serial(async () => {
+      const book = await this.book(network);
+      if (!book.unscanned) await this.save(network, { ...book, unscanned: true });
+    });
+  }
+
+  /**
+   * Whether a restore's scan hasn't finished on `network` since the restore
+   * (`due`: Book `unscanned`), and whether a scan runs there now, the
+   * restore's from its look for public accounts on (`scanning`): the dApps
+   * page points to Find leftovers while one is due and none runs. The
+   * device's record alone, no Koios request.
+   */
+  async scanDue(network: NetworkName): Promise<{ due: boolean; scanning: boolean }> {
+    return { due: !!(await this.book(network)).unscanned, scanning: this.scanning.has(network) };
   }
 
   /**
@@ -1695,17 +1934,32 @@ export class SessionService {
    * doesn't know, what they hold (`credential_utxos`, 75 a request) and
    * their orders still open (recoveredRecords, liveOrders). Nothing is
    * written until it's all read, and then into the book as it is by then:
-   * a session started meanwhile keeps its index.
+   * a session started meanwhile keeps its index. A server behind the one
+   * that showed an account used fails it, rather than say nothing's there.
+   * Only the phrase it started on is read for, and written for: the wallet
+   * removed and another phrase restored meanwhile ends it, as a lock does.
    */
   private async scanNow(network: NetworkName): Promise<SessionScan> {
     const { wasm, wallet, session } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const koios = this.deps.koios(network);
+    // The phrase the run reads for, by its first one-time key, from the first read on: a key read or the merge under
+    // another, the wallet removed and another phrase restored meanwhile, throws as a lock does, so nothing of this run
+    // goes into that phrase's book (1.5.0's release review, C16).
+    let phrase: string | undefined;
+    const pin = (keys: Keys) => {
+      const id = keys.oneTime.keyHash(0);
+      if ((phrase ??= id) !== id) throw new WalletLocked(t("worker.wallet.locked"));
+    };
     const used: number[] = [];
     for (let first = 0; first < SCAN_MOST; first += INDEX_PROBE) {
-      const probe = await wallet.withKeys((keys) =>
-        Array.from({ length: INDEX_PROBE }, (_, i) => ({ index: first + i, reward: keys.oneTime.rewardAddress(net, first + i) })),
-      );
+      const probe = await wallet.withKeys((keys) => {
+        pin(keys);
+        return Array.from({ length: INDEX_PROBE }, (_, i) => ({
+          index: first + i,
+          reward: keys.oneTime.rewardAddress(net, first + i),
+        }));
+      });
       const seen = await koios.usedStakeAddresses(probe.map((p) => p.reward));
       const hits = probe.filter((p) => seen.has(p.reward)).map((p) => p.index);
       if (!hits.length) break;
@@ -1717,20 +1971,37 @@ export class SessionService {
     if (lost.length) {
       // Every session since chunk 15b has its own stake key: none from before (preprod's alone) is found.
       const accounts = await this.accounts(network, lost.map((index) => ({ index, ownStake: true })));
-      const spent = await wallet.withKeys(() => spentSet(session));
+      const spent = await wallet.withKeys((keys) => {
+        pin(keys);
+        return spentSet(session);
+      });
       const held = unspent(await koios.credentialUtxos(lost.map((i) => accounts.get(i)!.keyHash)), spent);
-      for (const record of await this.recoveredRecords(network, lost, accounts)) {
+      const { records, read } = await this.recoveredRecords(network, lost, accounts, pin);
+      // Money at an account the server shows no transaction of yet: a backend behind the one that listed it. Said so,
+      // with nothing written, never "nothing found"; Find leftovers asks again (1.5.0's release review, C14).
+      const listed = new Set(records.map((r) => accounts.get(r.index)!.keyHash));
+      if (held.some((u) => !listed.has(u.payment_cred ?? ""))) throw new KoiosError(NOT_CAUGHT_UP(), "silent");
+      for (const record of records) {
         const { address, keyHash } = accounts.get(record.index)!;
         const rows = held.filter((u) => u.payment_cred === keyHash);
-        if (rows.length || (await this.liveOrders(network, record, address)).length) found.push({ record, held: rows });
+        // What the scan read there, kept with its funding: nothing ends the session before Koios shows each spent, or
+        // still there and left behind, never an empty read alone (ownGone, independent review M4; 1.5.0's release
+        // review, C02).
+        if (rows.length) record.txs[0]!.outs = rows.map(outpoint);
+        // Its orders as recoveredRecords read them, spent or not: never asked again (1.5.0's release review, C15).
+        const open = rows.length ? [] : await this.liveOrders(network, record, address, false, read);
+        if (rows.length || open.length) found.push({ record, held: rows });
       }
     }
     const added = await this.serial(async () => {
+      // Never into another phrase's book (above).
+      await wallet.withKeys(pin);
       const book = await this.book(network);
       const have = new Set(book.sessions.map((s) => s.index));
       const fresh = found.filter((f) => !have.has(f.record.index));
       const next = Math.max(book.next, ...used.map((i) => i + 1));
-      if (fresh.length || next !== book.next) {
+      // Written anew, the restore's mark that no scan has finished here goes with it (Book `unscanned`).
+      if (fresh.length || next !== book.next || book.unscanned) {
         await this.save(network, { next, sessions: [...book.sessions, ...fresh.map((f) => f.record)] });
       }
       return fresh;
@@ -1748,25 +2019,36 @@ export class SessionService {
    * found through the swap that placed them, never by address (a SundaeSwap
    * V3 order sits under Minswap's staking part): each output the key's
    * transactions paid to a DEX order script the wallet can cancel at, read
-   * (`utxo_info`, and `datum_info` for a datum kept by hash) as the
-   * account's own, spent or not: whether it's still open is liveOrders',
-   * whatever came after it, since a return from before chunk 24 checked only
-   * Minswap's list. An account the server shows no transaction of yet (a
-   * backend behind the one that showed it used) is left out.
+   * (`utxo_info`, and `datum_info` for a datum kept by hash, 60 a request)
+   * as the account's own, spent or not: whether it's still open is
+   * liveOrders', off those same rows (`read`), whatever came after it, since
+   * a return from before chunk 24 checked only Minswap's list. An account the
+   * server shows no transaction of yet (a backend behind the one that showed
+   * it used) is left out: scanNow fails the scan when it holds something. A
+   * transaction listed that `tx_info` has no row of fails it here: what it
+   * spent and placed isn't known yet, an order among it. `pin`: keys of the
+   * phrase the scan started on, as scanNow's.
    */
   private async recoveredRecords(
     network: NetworkName,
     lost: number[],
     accounts: Map<number, { address: string; keyHash: string }>,
-  ): Promise<SessionRecord[]> {
+    pin: (keys: Keys) => void,
+  ): Promise<{ records: SessionRecord[]; read: Map<string, KoiosUtxo & { is_spent?: boolean }> }> {
     const { wasm, wallet, now } = this.deps;
     const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
     const koios = this.deps.koios(network);
-    const rewards = await wallet.withKeys((keys) => lost.map((index) => keys.oneTime.rewardAddress(net, index)));
+    const rewards = await wallet.withKeys((keys) => {
+      pin(keys);
+      return lost.map((index) => keys.oneTime.rewardAddress(net, index));
+    });
     const txsOf = new Map<number, KoiosAccountTx[]>();
     for (const [i, index] of lost.entries()) txsOf.set(index, await koios.accountTxs(rewards[i]!, { after: 0 }));
     const hashes = [...new Set([...txsOf.values()].flat().map((t) => t.tx_hash))];
     const info = new Map((await koios.txSpends(hashes)).map((r) => [r.tx_hash, r]));
+    // Koios has a row for every transaction it lists: one missing is from a backend behind the one that listed it
+    // (1.5.0's release review, C14).
+    if (hashes.some((h) => !info.has(h))) throw new KoiosError(NOT_CAUGHT_UP(), "silent");
     // How WebAssembly reads an output for the account at `address`; one it can't read isn't an order.
     const read = (hex: string, datum: string, address: string, form?: { inline?: boolean; scriptRef?: boolean }) => {
       try {
@@ -1799,7 +2081,8 @@ export class SessionService {
         }
       }
     }
-    const rows = candidates.size ? await koios.utxoInfo([...candidates.keys()]) : [];
+    type Read = KoiosUtxo & { is_spent?: boolean };
+    const rows = (candidates.size ? await koios.utxoInfo([...candidates.keys()]) : []) as Read[];
     const byHash = [...new Set(rows.filter((r) => !r.inline_datum && r.datum_hash).map((r) => r.datum_hash!))];
     const datums = byHash.length ? await koios.datumInfo(byHash) : new Map<string, string>();
     const orders = new Map<string, string[]>();
@@ -1812,7 +2095,7 @@ export class SessionService {
       if (read(hex, datum, accounts.get(c.index)!.address, form)?.ours) orders.set(c.tx, [...(orders.get(c.tx) ?? []), outpoint(r)]);
     }
     const at = now();
-    return lost.flatMap((index) => {
+    const records = lost.flatMap((index) => {
       // Newest first: the funding is the oldest its key didn't sign (a swap can share its block, sorted by hash).
       const own = new Set((signed.get(index) ?? []).map((t) => t.tx_hash));
       const txs = txsOf.get(index)!;
@@ -1837,6 +2120,7 @@ export class SessionService {
       };
       return [record];
     });
+    return { records, read: new Map(rows.map((r) => [outpoint(r), r])) };
   }
 
   /**
@@ -1879,7 +2163,9 @@ export class SessionService {
    * builder), measured and ready for Send. It takes received money, or a box
    * back from Lovejoin that pays alone, first, and money another session
    * left last; session `index`'s own (a top-up's) first of all (privacy
-   * review §2.3).
+   * review §2.3). `own`: the transactions whose outputs in the private
+   * balance are the session's whatever their history says, which a restore
+   * doesn't know (collateralTopUp, 1.5.0's release review, C36).
    */
   private async buildFunding(
     network: NetworkName,
@@ -1887,10 +2173,12 @@ export class SessionService {
     address: string,
     payments: Array<{ to: string; lovelace: string; tokens: TokenQuantity[] }>,
     empty: string,
+    own?: ReadonlySet<string>,
   ): Promise<{ summary: SessionOutSummary & { origin: HistoryClass }; txCbor: string; seed: string }> {
     const { wasm } = this.deps;
-    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
+    const { view, utxos, params, returning, classes: read } = await readContract(this.deps, network);
     if (!utxos.length) throw nothingToSpend(this.deps, view, empty, returning);
+    const classes = own ? ownClassed(read, utxos, own, index) : read;
     type Finished = Omit<SessionOutSummary, "network" | "payments" | "inputs" | "index" | "address" | "histories"> & {
       txCbor: string;
       seed: string;
@@ -1962,7 +2250,7 @@ export class SessionService {
         swap: built.swap,
         auto: { approved: built.approved, ...back },
       };
-      await this.save(network, { next: built.index + 1, sessions: [...book.sessions, record] });
+      await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       let pending: PendingTx;
       try {
         pending = await send(this.deps, network, txHash, SESSION_OUT, "session-out", "payment");
@@ -2317,16 +2605,24 @@ export class SessionService {
   }
 
   /**
-   * Marks each open session's chain that went in partly, and that nothing is
-   * sending anymore (its progress was wiped), as stopped (CHAIN_CUT).
+   * Marks each open session's chain that nothing is sending anymore (its
+   * progress was wiped), whose return wasn't sent, as stopped (CHAIN_CUT):
+   * one that went in partly, and one none of which went, cut between its
+   * record and its first send by a lock or a closed browser, which kept
+   * sendChain from saying so. Unmarked, that one would read as on its way for
+   * good, and a session brought back by hand would offer no return
+   * (cross-area review X03). Its record stays: only the latest chain's
+   * transactions count (chainSoFar), and with it gone an earlier chain's
+   * would read as one that went in partly. It runs in the queue, as every
+   * send of a chain does, so never between a chain's record and its progress
+   * saved.
    */
   private async markCut(network: NetworkName): Promise<void> {
     for (const s of (await this.book(network)).sessions) {
       const chain = s.chain;
       if (s.closedAt || !chain || chain.stopped) continue;
       const sent = new Set(s.txs.filter((t) => !t.unsent).map((t) => t.txHash));
-      const started = s.txs.some((t) => t.at >= chain.at && (t.kind === "deposit" || t.kind === "mix") && sent.has(t.txHash));
-      if (!started || sent.has(chain.last) || (await this.pendingChain(network, s.index))) continue;
+      if (sent.has(chain.last) || (await this.pendingChain(network, s.index))) continue;
       await this.update(network, s.index, (r) => {
         r.chain!.stopped = CHAIN_CUT();
       });
@@ -2701,9 +2997,17 @@ export class SessionService {
    * spend would hold Stop, the return and the close for good (release
    * review C02). Each as Koios lists it, with its datum. `keep`: where what's
    * there came from is kept with the session, for a caller in the queue (a
-   * write from outside it could undo another's).
+   * write from outside it could undo another's). `given`: the orders as the
+   * restore scan read them just before, spent or not, so they aren't asked
+   * again (recoveredRecords, 1.5.0's release review, C15).
    */
-  private async liveOrders(network: NetworkName, s: SessionRecord, address: string, keep = false): Promise<KoiosUtxo[]> {
+  private async liveOrders(
+    network: NetworkName,
+    s: SessionRecord,
+    address: string,
+    keep = false,
+    given?: ReadonlyMap<string, KoiosUtxo & { is_spent?: boolean }>,
+  ): Promise<KoiosUtxo[]> {
     const recorded = [
       ...new Set(
         s.txs
@@ -2713,7 +3017,10 @@ export class SessionService {
     ];
     if (!recorded.length) return [];
     const koios = this.deps.koios(network);
-    const rows = (await koios.utxoInfo(recorded)) as Array<KoiosUtxo & { is_spent?: boolean }>;
+    const rows =
+      given && recorded.every((o) => given.has(o))
+        ? recorded.map((o) => given.get(o)!)
+        : ((await koios.utxoInfo(recorded)) as Array<KoiosUtxo & { is_spent?: boolean }>);
     const live: KoiosUtxo[] = rows.filter((r) => !r.is_spent);
     // How WebAssembly reads it, as an order: one whose datum it can't read isn't one.
     const read = (r: KoiosUtxo) => {
@@ -3190,15 +3497,12 @@ export class SessionService {
     // One that finished (its return sent), or whose rest came back directly (that return on chain), doesn't
     // hold a later return back (a site's session is paid again). Only the latest chain's own transactions
     // count, never an earlier one's (independent review L17); a session from before chains were recorded
-    // counts them all, as it did.
-    const chain = record?.chain;
-    const sent = (record?.txs ?? []).filter((t) => !t.unsent && (!chain || t.at >= chain.at));
-    // Not a mix's whose rest came back directly: another chain would mix the wallet's boxes again, which nothing
-    // holds for it anymore (mixingAgain), so what reaches its account after comes back directly too.
-    const finished =
-      !!chain &&
-      sent.some((t) => t.txHash === chain.last || (!record?.mix && t.kind === "back" && t.confirmed && !t.replaced));
-    const started = !finished && sent.some((t) => t.kind === "deposit" || t.kind === "mix");
+    // counts them all, as it did. A session the restore scan found records none of its key's deposits or
+    // mixes (they're in `recovered.own` alone), so what another browser's chain left at its account goes
+    // through Lovejoin as any other session's would, in a chain of its own that never draws the wallet's
+    // boxes; its review's switch brings it back directly (1.5.0's release review, C51). The offer of 5 ₳ for a
+    // return's collateral reads it the same way (chainSoFar, lovejoinWantsCollateral).
+    const { sent, started } = chainSoFar(record);
     if (started && record?.chain && !record.chain.stopped) {
       // Nothing is sending the rest: the wallet locked, or the browser closed, partway.
       await this.update(network, index, (r) => {
@@ -3228,9 +3532,13 @@ export class SessionService {
       let chain: LovejoinChain | undefined;
       if (!collateral) {
         // Something the account signed spent it (a site's transaction, or a return before this one, which takes
-        // it; a top-up puts one back): no mix can go, so it comes back directly, and says so when its spare ADA
-        // would have paid for a box.
-        if (record?.mix || spareOf(rows) >= BigInt((await lovejoin.funding(network, 1)).lovelace)) skipped = NO_COLLATERAL();
+        // it; a top-up puts one back, and a session brought back by hand is offered 5 ₳ for it): no mix can go, so
+        // it comes back directly, and says so when its spare ADA would have paid for a box. A session brought back
+        // by hand whose 5 ₳ is on its way says that instead: every top-up of one is 5 ₳ the mixes can put up, and
+        // it isn't gone, only not there yet (cross-area review X20).
+        if (await this.collateralWanted(network, record, rows)) {
+          skipped = record && byHand(record) && topUpComing(record, rows, now()) ? COLLATERAL_COMING() : NO_COLLATERAL();
+        }
       } else {
         try {
           chain = await lovejoin.chain(
@@ -3337,6 +3645,34 @@ export class SessionService {
     if (s?.mix) return true;
     if (s?.auto?.direct !== undefined) return !s.auto.direct;
     return (await this.deps.preferences?.get())?.lovejoinReturns ?? DEFAULT_PREFERENCES.lovejoinReturns;
+  }
+
+  /**
+   * With none of `rows` at a session's account one its chain can put up as
+   * collateral (collateralFits), whether its return through Lovejoin leaves
+   * Lovejoin out for that (NO_COLLATERAL) rather than for want of a box
+   * (noBox): a mix's always does, and anything else's whose spare ADA pays
+   * for a box.
+   */
+  private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[]): Promise<boolean> {
+    if (rows.some(collateralFits)) return false;
+    return !!s?.mix || spareOf(rows) >= BigInt((await this.deps.lovejoin!.funding(network, 1)).lovelace);
+  }
+
+  /**
+   * Whether session `s`'s return of `rows`, its account as read, would go
+   * through Lovejoin but for the collateral its mixes put up, as buildBack
+   * decides it: Lovejoin is here, the return goes through it
+   * (throughLovejoin: Settings', for a session brought back by hand), no
+   * chain of it went in partly (chainSoFar), and it wants that collateral
+   * alone (collateralWanted). The offer of 5 ₳ for it asks the same, so the
+   * two agree (1.5.0's release review, C53).
+   */
+  private async lovejoinWantsCollateral(network: NetworkName, s: SessionRecord, rows: KoiosUtxo[]): Promise<boolean> {
+    if (!this.deps.lovejoin?.available(network) || chainSoFar(s).started || !(await this.throughLovejoin(s))) return false;
+    // buildBack's own rows, so the two read the same. It changes nothing here: every UTxO WebAssembly can't measure
+    // carries a reference script, which neither collateralFits nor spareOf counts (cross-area review X15).
+    return this.collateralWanted(network, s, rows.filter(measurable));
   }
 
   /**
@@ -3853,6 +4189,9 @@ export class SessionService {
 
   private async listNow(network: NetworkName, refresh = false): Promise<SessionView[]> {
     const { wallet, session, now } = this.deps;
+    // A chain a lock or a closed browser cut says so at a refresh too, not only at the runs' (cross-area review X03).
+    // In the queue, as a refresh is, and before the book is read: it writes the book.
+    if (refresh) await this.markCut(network).catch(() => undefined);
     const book = await this.book(network);
     const live = book.sessions.filter((s) => !s.closedAt);
     const keys = await this.accounts(network, book.sessions);
@@ -3879,40 +4218,84 @@ export class SessionService {
           changed = settle(s, on) || changed;
         }
       }
+      // Sessions the restore scan found that end with nothing left: their records go (below).
+      const gone = new Set<SessionRecord>();
       for (const s of live) {
         const out = s.txs[0]!;
         // What the funding, or a top-up, paid is at the account, whatever tx_status knows: it landed. As Koios
         // lists it, what this wallet has spent since included (final review F13).
         const seen = fundingsListed(s, of(listed, s.index));
         if (seen.size) changed = settle(s, seen) || changed;
+        // So is a top-up's, and it's never on its way again, whatever spends it next; tx_status's word alone isn't
+        // that (1.5.0's release review, C04).
+        changed = markListed(s, of(listed, s.index)) || changed;
         // A swap or a mix that was found never funded, whose funding is here after all, runs again.
         if (s.auto?.failed && out.confirmed) {
           delete s.auto.failed;
           changed = resumed = true;
         }
         const last = s.txs.filter((t) => !t.replaced).at(-1)!;
-        // Brought back, and nothing has arrived since: the session is over. A
-        // site's goes on until it's disconnected: the site may pay it later.
-        // As act closes it: the account as Koios lists it, no copy of a step
-        // that may still land (final review sessions-1), Koios showing its
-        // funding spent (independent review M4), and no order of its swap
+        // Nothing of it to come back: the account as Koios lists it, no copy of
+        // a step that may still land (final review sessions-1), Koios showing
+        // its funding spent (independent review M4), and no order of its swap
         // that may still pay it, as far as it can tell (independent review
         // L15, D2). A reading that fails leaves it to the next.
-        if (
-          !s.site &&
-          last.kind === "back" &&
-          last.confirmed &&
+        const over = async () =>
           !returnable(s, of(listed, s.index)).length &&
           !mayStillLand(s, now()) &&
           (await this.spentStates(network, ownOuts(s)).then(
             (known) => ownGone(s, known, new Set(of(listed, s.index).map(outpoint)), now()),
             () => false,
           )) &&
-          !(await this.ordersOpen(network, s, keys.get(s.index)!.address, true).catch(() => true))
-        ) {
+          !(await this.ordersOpen(network, s, keys.get(s.index)!.address, true).catch(() => true));
+        // Asked once a refresh, whichever end asks: a found session's wait (below) reads the answer it ends on.
+        let ends: Promise<boolean> | undefined;
+        const isOver = () => (ends ??= over());
+        // Brought back, and nothing has arrived since: the session is over, as
+        // act closes it. A site's goes on until it's disconnected: the site may
+        // pay it later.
+        if (!s.site && last.kind === "back" && last.confirmed && (await isOver())) {
           s.closedAt = now();
           changed = true;
+        } else if (foundUntouched(s)) {
+          // Found by the restore scan, with nothing sent for it from here: emptied elsewhere (the same phrase in
+          // another browser), or holding only what a return found no return takes, it's over as its own return would
+          // end it. What the scan read there is its funding's `outs`, so Koios must show each spent, or still there
+          // and left behind. With nothing left its record goes, as a site's does at Disconnect, and Find leftovers
+          // finds the account again if anything reaches it; with something left behind it stays, closed, to point to
+          // it (1.5.0's release review, C02).
+          // An order of its swap pays the account in the very transaction that spends it (a fill, a refund, another
+          // browser's cancel), and a refresh reads the account before the order: a block landing in between, or a
+          // Koios backend behind another, reads the account empty and the order spent, and the scan read nothing there
+          // to hold the end back. So one whose record holds a swap ends only once its end has held since a refresh
+          // LOST_AFTER_MS or more before (`quietAt`, the first to find it so, sealed with it), and any refresh where it
+          // doesn't hold starts that again (cross-area review X01). One with no swap waits for nothing that pays it.
+          const quiet = s.recovered!.quietAt;
+          const ordered = s.txs.some((t) => t.kind === "swap" && !t.unsent);
+          if (!(await isOver())) {
+            if (quiet !== undefined) {
+              delete s.recovered!.quietAt;
+              changed = true;
+            }
+          } else if (ordered && (quiet === undefined || now() - quiet < LOST_AFTER_MS)) {
+            if (quiet === undefined) {
+              s.recovered!.quietAt = now();
+              changed = true;
+            }
+          } else {
+            const there = new Set(of(listed, s.index).map(outpoint));
+            const left = (s.leftBehind ?? []).filter((b) => there.has(`${b.txHash}#${b.txIndex}`));
+            if (left.length) {
+              s.leftBehind = left;
+              s.closedAt = now();
+            } else gone.add(s);
+            changed = true;
+          }
         }
+      }
+      if (gone.size) {
+        book.sessions = book.sessions.filter((s) => !gone.has(s));
+        for (const s of gone) this.seen.delete(`${network}:${s.index}`);
       }
       if (changed) await this.save(network, book);
       for (const s of live) if (s.txs.some((t) => t.confirmed && t.summary)) await this.noteLanded(network, s);
@@ -3920,11 +4303,22 @@ export class SessionService {
       if (returned) await wallet.withKeys(() => session.set(SESSION_PRIVATE_STALE_PREFIX + network, true));
       if (resumed) await this.deps.alarm?.start();
     }
-    return [...book.sessions]
-      .reverse()
-      .map((s) =>
-        this.view(network, s, keys.get(s.index)!.address, holdings?.get(s.index) ?? this.seen.get(`${network}:${s.index}`)),
-      );
+    const views: SessionView[] = [];
+    for (const s of [...book.sessions].reverse()) {
+      const utxos = holdings?.get(s.index) ?? this.seen.get(`${network}:${s.index}`);
+      views.push(this.view(network, s, keys.get(s.index)!.address, utxos, await this.backWantsCollateral(network, s, utxos)));
+    }
+    return views;
+  }
+
+  /**
+   * Whether session `s`, brought back by hand and not over, is offered 5 ₳
+   * for its return's collateral (backCollateralBuild), by what its account
+   * held when last read (`utxos`): its return would go through Lovejoin but
+   * for it (1.5.0's release review, C53). Read from the device alone.
+   */
+  private async backWantsCollateral(network: NetworkName, s: SessionRecord, utxos?: KoiosUtxo[]): Promise<boolean> {
+    return !s.closedAt && byHand(s) && !!utxos && (await this.lovejoinWantsCollateral(network, s, utxos));
   }
 
   /** One session as it is now, with what its account held at the last reading. */
@@ -3935,13 +4329,16 @@ export class SessionService {
     return this.view(network, s, address, this.seen.get(`${network}:${index}`));
   }
 
-  private view(network: NetworkName, s: SessionRecord, address: string, utxos?: KoiosUtxo[]): SessionView {
+  /** `backCollateral`: its return would go through Lovejoin but for 5 ₳ at its account (backWantsCollateral). */
+  private view(network: NetworkName, s: SessionRecord, address: string, utxos?: KoiosUtxo[], backCollateral = false): SessionView {
+    const now = this.deps.now();
     // A step's transaction Koios never took isn't shown, nor one that went unseen: it's built again.
     const txs = s.txs.filter((t) => (t.kind === "out" || !t.unsent) && !t.replaced);
     const out = txs[0]!;
     const last = txs.at(-1)!;
     const funded = out.confirmed || !!utxos?.length;
-    const neverFunded = s.auto ? !!out.unsent || !!s.auto.failed : !!out.unsent || this.deps.now() - out.at > FAILED_AFTER_MS;
+    const neverFunded = s.auto ? !!out.unsent || !!s.auto.failed : !!out.unsent || now - out.at > FAILED_AFTER_MS;
+    const cancel = byHand(s) && cancelling(s, now);
     const stage: SessionView["stage"] = s.closedAt
       ? "closed"
       : !funded
@@ -3968,6 +4365,7 @@ export class SessionService {
           orders: _orders,
           summary: _summary,
           outs: _outs,
+          listed: _listed,
           minAmountOut: _min,
           ...t
         }) => t,
@@ -3986,9 +4384,21 @@ export class SessionService {
       // What its return brought back, once it's over (DX-5).
       ...(stage === "closed" && s.received ? { received: s.received } : {}),
       ...(s.recovered ? { recovered: true as const } : {}),
-      // Its page offers 5 ₳ for its cancel's collateral while an order of it is open (cancelCollateralBuild).
-      ...(stage === "open" && byHand(s) && utxos && !holdsCancelCollateral(utxos)
-        ? { cancelCollateral: topUpComing(s, utxos, this.deps.now()) ? ("coming" as const) : ("missing" as const) }
+      // Found, with nothing sent for it from here, and waiting to end by itself (`quietAt`, cross-area review X01): its
+      // page says so, rather than to bring back what a refresh didn't find (the last review, L4). A mark kept from
+      // before this device sent something for it is no wait: only its own return ends it, and no refresh clears it.
+      ...(stage === "open" && foundUntouched(s) && s.recovered!.quietAt !== undefined
+        ? { settling: true as const }
+        : {}),
+      // Its page offers 5 ₳ for its cancel's collateral while an order of it is open (cancelCollateralBuild), and
+      // none while a cancel of it is on its way, which it says instead (1.5.0's release review, C04); and 5 ₳ for its
+      // return's while none waits (backCollateralBuild, C53).
+      ...(stage === "open" && cancel ? { cancelling: true as const } : {}),
+      ...(stage === "open" && byHand(s) && !cancel && utxos && !holdsCancelCollateral(utxos)
+        ? { cancelCollateral: topUpComing(s, utxos, now) ? ("coming" as const) : ("missing" as const) }
+        : {}),
+      ...(stage === "open" && byHand(s) && !cancel && utxos && backCollateral
+        ? { backCollateral: topUpComing(s, utxos, now) ? ("coming" as const) : ("missing" as const) }
         : {}),
     };
   }

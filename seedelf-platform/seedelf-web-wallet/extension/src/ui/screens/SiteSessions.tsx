@@ -91,10 +91,13 @@ export function siteConnected(s: SessionView, sites: ConnectedSites): boolean | 
 /**
  * Something on its way to the session's account or from it: its funding,
  * its return, or the return's chain through Lovejoin, sent but not all on
- * chain, and not cut short.
+ * chain, and not cut short or stopped. Nothing sends a stopped chain's rest:
+ * it waits at the account for Bring it back, as Swaps' `chainGoing` reads
+ * it (cross-area review X10), and the worker's own Disconnect check still
+ * waits for what the chain sent before it stopped.
  */
 const moving = (s: SessionView) =>
-  s.stage === "funding" || s.stage === "returning" || (!!s.chain && !s.chain.cut && s.chain.confirmed < s.chain.total);
+  s.stage === "funding" || s.stage === "returning" || (!!s.chain && !s.chain.cut && !s.chain.stopped && s.chain.confirmed < s.chain.total);
 
 /**
  * Why Disconnect waits, if it does: anything on its way to the account or

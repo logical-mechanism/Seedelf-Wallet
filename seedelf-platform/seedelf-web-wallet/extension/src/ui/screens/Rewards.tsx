@@ -1,8 +1,8 @@
 // Rewards history, from the Staking page (chunk 30): every reward the public
 // account's stake key was paid, newest first, read fresh each time it opens
 // (one `account_reward_history`, kept nowhere), with what's been paid in all,
-// next epoch's if it's listed yet, and each year's. Its pools are named from
-// what the device knows: none is asked for.
+// next epoch's if it's listed yet and the key is still registered, and each
+// year's. Its pools are named from what the device knows: none is asked for.
 
 import { useEffect, useState } from "react";
 
@@ -30,19 +30,21 @@ export interface RewardYear {
 export interface RewardsView {
   /** What's been paid by now, every year's. */
   paid: bigint;
-  /** Listed, but paid at a later epoch's start: next epoch's. */
+  /** Listed, but paid at a later epoch's start: next epoch's, for a key that's registered. */
   coming: RewardRow[];
   /** The rest, by the year each was paid in, on this device's calendar. */
   years: RewardYear[];
 }
 
 /** The history as the page shows it, at `now` (ms): what's paid by year, and what's still to come. */
-export function rewardsView(rows: RewardRow[], network: NetworkName, now: number): RewardsView {
+export function rewardsView(rows: RewardRow[], network: NetworkName, now: number, registered = true): RewardsView {
   const epoch = epochAt(network, now);
   const view: RewardsView = { paid: 0n, coming: [], years: [] };
   for (const row of rows) {
     if (row.epoch > epoch) {
-      view.coming.push(row);
+      // Listed before it's paid, and paid only to a key still registered when that epoch starts: a stopped key's
+      // goes to the treasury, and db-sync deletes the row. Shown, it would be money coming that never comes.
+      if (registered) view.coming.push(row);
       continue;
     }
     const amount = BigInt(row.amount);
@@ -71,7 +73,8 @@ export function firstRows(years: RewardYear[], shown: number): RewardYear[] {
   return cut;
 }
 
-export function Rewards({ onBack }: { onBack: () => void }) {
+/** `registered`: whether the stake key is registered now. Next epoch's rewards are paid only if it is. */
+export function Rewards({ onBack, registered }: { onBack: () => void; registered: boolean }) {
   const t = useT();
   const [rows, setRows] = useState<RewardRow[]>();
   const [error, setError] = useState<string>();
@@ -86,7 +89,7 @@ export function Rewards({ onBack }: { onBack: () => void }) {
     <Screen title={t("rewards.title")} titleId="rewards-title" hint={t("rewards.hint")} hintTestId="rewards-hint" onBack={onBack}>
       <p className="note">{t("rewards.fromServer")}</p>
       {rows ? (
-        <RewardList rows={rows} now={Date.now()} />
+        <RewardList rows={rows} now={Date.now()} registered={registered} />
       ) : error ? (
         <ReadFailed what={t("rewards.readFailed")} detail={error} onRetry={read} testId="rewards-failed" />
       ) : (
@@ -97,7 +100,7 @@ export function Rewards({ onBack }: { onBack: () => void }) {
 }
 
 /** The rewards read, at `now` (ms): what's been paid in all, next epoch's, then each year's, 50 rows at a time. */
-export function RewardList({ rows, now }: { rows: RewardRow[]; now: number }) {
+export function RewardList({ rows, now, registered = true }: { rows: RewardRow[]; now: number; registered?: boolean }) {
   const t = useT();
   const network = useNetwork();
   const amounts = useAmounts();
@@ -132,7 +135,7 @@ export function RewardList({ rows, now }: { rows: RewardRow[]; now: number }) {
     </ul>
   );
 
-  const view = rewardsView(rows, network, now);
+  const view = rewardsView(rows, network, now, registered);
   if (view.years.length === 0 && view.coming.length === 0) {
     return (
       <p className="note center empty" data-testid="rewards-none">

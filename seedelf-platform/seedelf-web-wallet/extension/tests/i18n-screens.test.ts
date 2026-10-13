@@ -308,6 +308,29 @@ describe("a modal's Keep it", () => {
   });
 });
 
+// Release review C39: the rewards' hint said "por la época dos antes" for "the epoch two before it", and the
+// wallet's Spanish names an epoch that way ("la época {{epoch}}"), so it read as "epoch two, before". That hint is
+// the only place the page says a row's epoch isn't the one its reward was earned in. An epoch's name is always its
+// digits, so a number written out after época is a count gone wrong, in any value.
+describe("a count of epochs, in Spanish", () => {
+  // Accented letters aren't word characters to \b, even under /u: /\bépoca/ never matches after a space, so a
+  // guard written with it passes on anything. A letter-free edge instead.
+  const NAMED = /(?<!\p{L})épocas?\s+(uno|una|dos|tres|cuatro|cinco)(?!\p{L})/iu;
+
+  it("is never said as an epoch's name: “dos épocas antes”, not “la época dos”", () => {
+    // Tried first on the sentence it was written for, and on its fix, so it can't pass on nothing.
+    expect(NAMED.test("por la época dos antes")).toBe(true);
+    expect(NAMED.test("por la de dos épocas antes")).toBe(false);
+    const es: Record<string, string> = JSON.parse(
+      readFileSync(new URL("../src/i18n/translations/es.json", import.meta.url), "utf8"),
+    );
+    const named = Object.entries(es)
+      .filter(([, value]) => NAMED.test(value))
+      .map(([key, value]) => `${key}: ${value}`);
+    expect(named).toEqual([]);
+  });
+});
+
 describe("the account's name with no provider around it", () => {
   function Name() {
     return useAccounts().name;

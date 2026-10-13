@@ -132,7 +132,11 @@ export const ownedUtxos = fixture("owned-utxos.json").owned_utxos as KoiosUtxo[]
 /** A real account-paid mint evaluated on preprod (tests/fixtures/record-account-mint.mjs). */
 export const accountMintPreprod = fixture("account-mint-preprod.json") as { evaluation: unknown };
 /** A real transfer on preprod: its request and Ogmios's evaluation (tests/fixtures/record-transfer.mjs). */
-/** The 12-word phrase's real preprod account: its newest transactions and their tx_info. */
+/**
+ * The 12-word phrase's real preprod account: its transactions by the payment keys the balance reading asks about,
+ * newest first (`credential_txs`'s answer, kept under `account_txs`), and their tx_info, each input and output with
+ * its payment key (tests/fixtures/record-activity.mjs).
+ */
 export const activityPreprod = fixture("activity-preprod.json") as {
   stake: string;
   account_txs: Array<{ tx_hash: string; block_height: number; block_time: number }>;
@@ -219,7 +223,7 @@ export interface FakeKoios {
   addedToAccounts: KoiosUtxo[];
   /** Each stake key's `account_info`, by stake address: the recorded 12-word account's to begin with. */
   stakes: Map<string, KoiosAccountInfo>;
-  /** Each stake key's rewards history, newest first, by stake address: the recorded 12-word account's to begin with. */
+  /** Each stake key's rewards history, by stake address, served in the order asked: the recorded 12-word account's to begin with. */
   rewards: Map<string, KoiosReward[]>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
@@ -312,6 +316,31 @@ export function madeByMix(koios: Pick<FakeKoios, "txSpends">, ...txs: string[]):
   for (const tx of txs) koios.txSpends.set(tx, [input]);
 }
 
+/**
+ * PostgREST's `order` (`column.asc,column.desc,…`) over rewards: a null after
+ * every value, as PostgreSQL sorts (last ascending, first descending). A fake
+ * that served its own order would hide a wrong one asked (1.5.0's release
+ * review, C24).
+ */
+function rewardsOrderedAs(order: string | null): (a: KoiosReward, b: KoiosReward) => number {
+  const keys = (order ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((key) => {
+      const [column, direction] = key.split(".");
+      return { column: column as keyof KoiosReward, desc: direction === "desc" };
+    });
+  return (a, b) => {
+    for (const { column, desc } of keys) {
+      const [x, y] = [a[column], b[column]];
+      if (x === y) continue;
+      const before = x === null ? 1 : y === null ? -1 : x < y ? -1 : 1;
+      return desc ? -before : before;
+    }
+    return 0;
+  };
+}
+
 /** A fetch that answers from the fixtures, paging like Koios does. */
 export function fakeKoios({ owned = true } = {}): FakeKoios {
   const fake: FakeKoios = {
@@ -371,7 +400,10 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
           num_confirmations: fake.missing.has(tx_hash) ? null : fake.confirmations,
         }));
       } else if (path === "credential_utxos") {
-        // The wallet contract's, or the accounts' by payment key, whatever their staking part.
+        // The wallet contract's, or the accounts' by payment key, whatever their staking part. The recorded account's
+        // are koios-preprod.json's `account_utxos`, read by its stake key on 2026-09-24 at 01:04Z: they lack its
+        // outputs under no stake key or another's (38ccfdf0#0, 0e8d3924#1, 84d3e93a#0), and activity-preprod.json,
+        // recorded to a later block, goes on to transactions that spend all six (record-activity.mjs UNTIL).
         const credentials: string[] = body._payment_credentials;
         const contract = [...koiosPreprod.contract_utxos, ...(owned ? ownedUtxos : []), ...fake.added];
         const accounts = [...Object.values(koiosPreprod.accounts).flatMap((a) => a.account_utxos), ...fake.addedToAccounts];
@@ -382,25 +414,28 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const after = /^gt\.(\d+)$/.exec(searchParams.get("block_height") ?? "");
         if (after) rows = (rows as KoiosUtxo[]).filter((u) => (u.block_height ?? 0) > Number(after[1]));
       } else if (path === "account_txs") {
-        // Newest first, as the recorded answer is; after a block, or a page of it.
-        const all =
-          body._stake_address === activityPreprod.stake ? activityPreprod.account_txs : (fake.accountTxs.get(body._stake_address) ?? []);
+        // What the tests add, newest first; from a block on, or a page of it. Koios and the data layer take
+        // `_after_block_height`'s own block too (release review C03). The recorded account's are by its keys.
+        const all = fake.accountTxs.get(body._stake_address) ?? [];
         const after = body._after_block_height;
-        rows = after === undefined ? all : all.filter((t) => t.block_height > after);
+        rows = after === undefined ? all : all.filter((t) => t.block_height >= after);
       } else if (path === "credential_txs") {
-        // The recorded account's, asked by its payment keys, and any added by key: newest first, each once.
+        // The recorded account's, asked by its payment keys, and any added by key: newest first, each once; from a
+        // block on, that block too, as Koios and the data layer answer.
         const credentials: string[] = body._payment_credentials;
         const recorded = credentials.some((c) => RECORDED_KEYS.has(c)) ? activityPreprod.account_txs : [];
         const all = [...new Map([...recorded, ...credentials.flatMap((c) => fake.credentialTxs.get(c) ?? [])].map((t) => [t.tx_hash, t])).values()].sort(
           (a, b) => b.block_height - a.block_height || (a.tx_hash < b.tx_hash ? -1 : 1),
         );
         const after = body._after_block_height;
-        rows = after === undefined ? all : all.filter((t) => t.block_height > after);
+        rows = after === undefined ? all : all.filter((t) => t.block_height >= after);
       } else if (path === "tx_info") {
         rows = [
           ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
           ...[...fake.txRows.values()].filter((t) => body._tx_hashes.includes(t.tx_hash)),
-          ...[...new Set([...fake.txSpends.keys(), ...fake.txOutputs.keys()])]
+          // And a row for every transaction an account's `account_txs` lists, as Koios always has one: nothing spent at a
+          // key the tests know, unless they say (1.5.0's release review, C14).
+          ...[...new Set([...fake.txSpends.keys(), ...fake.txOutputs.keys(), ...[...fake.accountTxs.values()].flat().map((t) => t.tx_hash)])]
             .filter((h) => body._tx_hashes.includes(h))
             .map((tx_hash) => ({
               tx_hash,
@@ -443,7 +478,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
       } else if (path === "account_info") {
         rows = body._stake_addresses.flatMap((s: string) => fake.stakes.get(s) ?? []);
       } else if (path === "account_reward_history") {
-        rows = body._stake_addresses.flatMap((s: string) => fake.rewards.get(s) ?? []);
+        rows = body._stake_addresses.flatMap((s: string) => fake.rewards.get(s) ?? []).sort(rewardsOrderedAs(searchParams.get("order")));
       } else if (path === "pool_list") {
         rows = stakingPreprod.pool_list;
       } else if (path === "totals") {

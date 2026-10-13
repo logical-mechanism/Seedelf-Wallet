@@ -16,9 +16,10 @@
 // (ClaimAll.tsx): each in its own transaction. What they hold is hidden with
 // the balances (launch review #56). At the foot, After a restore (O5, chunk
 // 27): the sessions a restore's scan found, each opening its page (Swaps.tsx's
-// `Session`), and Find leftovers, which scans again.
+// `Session`), and Find leftovers, which scans again, and which it points to
+// while a restore's look hasn't finished on this network (C19).
 
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { type I18nKey, useT } from "../../i18n";
 
 import { lovejoinOn, NETWORKS } from "../../networks";
@@ -52,6 +53,9 @@ const DAPPS: Dapp[] = [
   { id: "minswap", name: "Minswap", what: "dapps.minswap.what", icon: <SwapIcon size={20} /> },
   { id: "lovejoin", name: "Lovejoin", what: "dapps.lovejoin.what", icon: <ShieldIcon size={20} /> },
 ];
+
+/** How often a page asks, while a scan runs, whether it has finished: the device's record alone, no Koios. */
+export const SCAN_DUE_EVERY_MS = 3_000;
 
 /** Where the browser opens: a dApp, and one of its sessions. */
 export interface DappStart {
@@ -138,6 +142,28 @@ export function Dapps({
   useEffect(() => {
     if (site !== undefined || found !== undefined) void load(true);
   }, [site, found, load]);
+
+  // Whether a restore's look for private sessions' money hasn't finished on this network (`session-scan-due`, the
+  // device's record alone): After a restore says so, and to press Find leftovers (1.5.0's release review, C19). Asked
+  // as the page shows, every few seconds while a scan runs (a restore's own may end either way), and once Find
+  // leftovers has looked.
+  const [scan, setScan] = useState<{ due: boolean; scanning: boolean }>();
+  const askScan = useCallback(() => call("session-scan-due", {}).then(setScan, () => undefined), []);
+  useEffect(() => {
+    if (!open) void askScan();
+  }, [open, askScan]);
+  useEffect(() => {
+    if (open || !scan?.scanning) return;
+    const timer = setInterval(() => void askScan(), SCAN_DUE_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [open, scan?.scanning, askScan]);
+  // A scan that ends while the page shows: what it found joins After a restore and Bring everything back at once,
+  // from the device's record, which the scan wrote with what each account held (the 1.5.0 fixes' e2e).
+  const scanned = useRef(false);
+  useEffect(() => {
+    if (scanned.current && scan && !scan.scanning) void reread();
+    scanned.current = !!scan?.scanning;
+  }, [scan, reread]);
 
   /** Disconnects a site on the public account, as Settings' Connected sites does; a session's goes from its page. */
   async function forget(origin: string) {
@@ -289,8 +315,12 @@ export function Dapps({
       </section>
       <FoundSessions
         sessions={sessions.filter((s) => s.recovered && s.stage !== "closed")}
+        due={!!scan?.due && !scan.scanning}
         onOpen={setFound}
-        onScanned={() => void load(true)}
+        onScanned={() => {
+          void askScan();
+          void load(true);
+        }}
       />
       {asking && <DisconnectModal site={asking} onKeep={() => setAsking(undefined)} onDisconnect={() => void forget(asking.origin)} />}
     </Screen>
@@ -301,16 +331,25 @@ export function Dapps({
  * After a restore (O5, chunk 27): the sessions a restore's scan found, not
  * over yet, each opening its page; and Find leftovers, the scan again. A
  * restore scans the network it's made on by itself; the other network, or
- * this phrase used in another browser since, needs the button. Its privacy
- * note says, before it's pressed, that the server is asked about the
- * one-time accounts together.
+ * this phrase used in another browser since, needs the button. While a
+ * restore's look hasn't finished on this network, it says so, and to press it
+ * (1.5.0's release review, C19). Its privacy note says, before it's pressed,
+ * that the server is asked about the one-time accounts together. Exported
+ * for its test.
  */
-function FoundSessions({
+export function FoundSessions({
   sessions,
+  due = false,
   onOpen,
   onScanned,
 }: {
   sessions: SessionView[];
+  /**
+   * A restore's look for private sessions' money hasn't finished on this network, and none runs now
+   * (`session-scan-due`): the restore was made on the other network, or a read that failed, a lock or the worker's
+   * stop cut its look off.
+   */
+  due?: boolean;
   onOpen: (index: number) => void;
   /** The scan added what it found: the page reads the sessions' accounts again. */
   onScanned: () => void;
@@ -346,6 +385,12 @@ function FoundSessions({
             </li>
           ))}
         </ul>
+      )}
+      {/* Not while the button looks: once it has, the page asks again. */}
+      {due && !busy && (
+        <p className="note" data-testid="dapp-found-due">
+          {t("dapps.found.unscanned", { network: NETWORKS[network].label })}
+        </p>
       )}
       <p className="note">{t("dapps.found.note")}</p>
       <Callout tone="privacy">{t("dapps.found.privacy.together")}</Callout>

@@ -105,7 +105,7 @@ import { nothingInAccount, readAccount } from "./account";
 import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { txInputs } from "./cbor";
-import { GAP_LIMIT } from "./chain";
+import { fartherKeys, GAP_LIMIT } from "./chain";
 import { KoiosBusyError, KoiosError, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
 import { chainStatus, noteCursor, type Watching } from "./feed";
 import { IndexDown, type IndexRow, utxoOf } from "./private-index";
@@ -624,15 +624,6 @@ interface Origin {
 
 /** What Koios said made a box (madeBy), before it's kept. */
 type Told = Pick<Origin, "mixed" | "public" | "account">;
-
-/**
- * How far along each of a public account's chains its payment keys are
- * looked for, when an input of a transaction that made a box carries the
- * account's stake key under a payment key the wallet doesn't know (madeBy):
- * a thousand key hashes at most, about a fifth of a second, once for each
- * such transaction.
- */
-const FARTHER_KEYS = 500;
 
 /** Why a due time was drawn again. */
 interface DueMark {
@@ -2859,7 +2850,12 @@ export class LovejoinService {
           keys.flatMap(({ cred, stake }) => (cred !== undefined && cred !== mixBox && stake === a.stake && !a.payment.has(cred) ? [cred] : [])),
         ),
       );
-      if (unknown.size) for (const key of await this.fartherKeys(a.account, unknown)) a.payment.add(key);
+      if (!unknown.size) continue;
+      // Once for each transaction Koios says the making of: what it says is kept (lookUp).
+      const found = await this.deps.wallet.withAccount(a.account, ({ cardano }) =>
+        fartherKeys((role, i) => cardano.paymentKeyHash(role, i), unknown),
+      );
+      for (const key of found) a.payment.add(key);
     }
     const whose = (cred?: string) => (cred === undefined ? undefined : accounts.find((a) => a.payment.has(cred))?.account);
     for (const [tx_hash, keys] of spent) {
@@ -2909,27 +2905,6 @@ export class LovejoinService {
     const asked = new Set(txHashes);
     const read = rows.filter((r) => asked.has(r.tx_hash) && Array.isArray(r.inputs) && r.inputs.length > 0);
     return read.map(({ tx_hash, inputs }) => [tx_hash, inputs!.map((i) => this.keysOf(i.payment_addr))] as const);
-  }
-
-  /**
-   * Which of `creds` are public account `account`'s payment keys past the
-   * first GAP_LIMIT of each chain: looked for along both up to FARTHER_KEYS,
-   * stopping once each is found. Each is an input's that carried the
-   * account's stake key (madeBy), looked for once for each transaction Koios
-   * says the making of, whose answer is kept (found).
-   */
-  private fartherKeys(account: number, creds: Set<string>): Promise<string[]> {
-    return this.deps.wallet.withAccount(account, ({ cardano }) => {
-      const left = new Set(creds);
-      const found: string[] = [];
-      for (let i = GAP_LIMIT; i < FARTHER_KEYS && left.size; i++) {
-        for (const role of [0, 1]) {
-          const key = cardano.paymentKeyHash(role, i);
-          if (left.delete(key)) found.push(key);
-        }
-      }
-      return found;
-    });
   }
 
   /**

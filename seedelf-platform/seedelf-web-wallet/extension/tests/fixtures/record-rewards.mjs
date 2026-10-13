@@ -1,6 +1,7 @@
 // Records the 12-word test-vector phrase's rewards history from preprod, as
 // the wallet asks for it (src/background/koios.ts `rewardHistory`): every
-// reward its stake key was paid, newest first, 1,000 a request. Read-only.
+// reward its stake key was paid, oldest first, 1,000 a request, written
+// newest first, as the wallet gives them. Read-only.
 //   node tests/fixtures/record-rewards.mjs
 //
 // The stake key is the one staking-preprod.json was recorded for. Writes
@@ -10,7 +11,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const KOIOS = "https://preprod.koios.rest/api/v1";
 /** What the wallet asks for. */
 const COLUMNS = "earned_epoch,spendable_epoch,amount,type,pool_id_bech32";
-const ORDER = "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc";
+const ORDER = "spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc";
 
 const { stake } = JSON.parse(readFileSync(new URL("staking-preprod.json", import.meta.url)));
 
@@ -26,6 +27,18 @@ for (let offset = 0; ; offset += 1000) {
   rows.push(...page);
   if (page.length < 1000) break;
 }
+
+// Newest first, as the wallet gives them (koios.ts `newestFirst`): the latest paid, then the latest earned, then by
+// kind, pool (none last) and amount, as text.
+const byText = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a < b ? -1 : 1);
+rows.sort(
+  (a, b) =>
+    b.spendable_epoch - a.spendable_epoch ||
+    b.earned_epoch - a.earned_epoch ||
+    byText(a.type, b.type) ||
+    byText(a.pool_id_bech32, b.pool_id_bech32) ||
+    byText(a.amount, b.amount),
+);
 
 // One reward a line keeps the list readable in a diff.
 const list = `[\n${rows.map((row) => `    ${JSON.stringify(row)}`).join(",\n")}\n  ]`;

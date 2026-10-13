@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   accountMatcher,
+  CATCH_UP_MARGIN,
   describe as describeTxs,
   noteOf,
   PAGE,
@@ -191,39 +192,42 @@ describe("Cardano account activity", () => {
       _scripts: false,
     });
 
-    // Opening it again asks only for what's newer than the newest read.
+    // Opening it again asks only for what's newer, from a margin under the newest block read: Koios gives back the
+    // ones listed already, which ask nothing more.
     const again = await t.activity.cardano("preprod");
     expect(again.entries).toEqual(first.entries);
     expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info", "credential_txs"]);
-    expect(t.koios.calls.at(-1)!.body).toMatchObject({ _after_block_height: activityPreprod.account_txs[0]!.block_height });
+    const top = activityPreprod.account_txs[0]!.block_height;
+    expect(t.koios.calls.at(-1)!.body).toMatchObject({ _after_block_height: top - CATCH_UP_MARGIN });
 
     // Load more: the next page, then the last, short one.
     const second = await t.activity.cardano("preprod", true);
     expect(second.entries).toHaveLength(40);
     const third = await t.activity.cardano("preprod", true);
-    expect(third.entries).toHaveLength(45);
+    expect(third.entries).toHaveLength(46);
     expect(third.more).toBe(false);
-    expect(new Set(third.entries.map((e) => e.txHash)).size).toBe(45);
+    expect(new Set(third.entries.map((e) => e.txHash)).size).toBe(46);
   });
 
   it("works out what each transaction did to the account's own addresses", async () => {
     const t = await unlocked();
     await t.balances.get("preprod");
     const { entries } = await t.activity.cardano("preprod");
-    const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.addresses);
+    // The account's by its payment keys, whatever the address's staking part, as the balance counts it.
+    const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.keys);
 
     for (const e of entries) {
       const tx = activityPreprod.tx_info.find((x) => x.tx_hash === e.txHash) as unknown as {
         fee: string;
-        inputs: Array<{ payment_addr: { bech32: string }; value: string }>;
-        outputs: Array<{ payment_addr: { bech32: string }; value: string }>;
+        inputs: Array<{ payment_addr: { bech32: string; cred: string }; value: string }>;
+        outputs: Array<{ payment_addr: { bech32: string; cred: string }; value: string }>;
         withdrawals?: Array<{ amount: string; stake_addr: string }> | null;
       };
       const sum = (rows: typeof tx.inputs) =>
-        rows.filter((r) => ours.has(r.payment_addr.bech32)).reduce((n, r) => n + BigInt(r.value), 0n);
+        rows.filter((r) => ours.has(r.payment_addr.cred)).reduce((n, r) => n + BigInt(r.value), 0n);
       // Less the rewards withdrawn, which the balance counted already, and with the fee it paid said apart.
       const rewards = (tx.withdrawals ?? []).filter((w) => w.stake_addr === activityPreprod.stake).reduce((n, w) => n + BigInt(w.amount), 0n);
-      const paid = tx.inputs.some((r) => ours.has(r.payment_addr.bech32));
+      const paid = tx.inputs.some((r) => ours.has(r.payment_addr.cred));
       const net = sum(tx.outputs) - sum(tx.inputs) - rewards + (paid ? BigInt(tx.fee) : 0n);
       expect(e.direction, e.txHash).toBe(net > 0n ? "in" : net < 0n ? "out" : "none");
       expect(e.lovelace, e.txHash).toBe((net < 0n ? -net : net).toString());
@@ -241,17 +245,16 @@ describe("Cardano account activity", () => {
     const before = t.koios.calls.length;
     const { entries } = await t.activity.cardano("preprod");
     expect(paths(t).slice(before)).toEqual(["credential_txs", "tx_info"]);
-    const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.addresses);
+    const ours = new Set((await t.session.get<AccountAddresses>(`${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`))!.keys);
     const named = entries.filter((e) => e.kind === "sent" || e.kind === "received");
     expect(named.length).toBeGreaterThan(0);
     for (const e of named) {
       const tx = activityPreprod.tx_info.find((x) => x.tx_hash === e.txHash) as unknown as {
-        inputs: Array<{ payment_addr: { bech32: string } }>;
-        outputs: Array<{ payment_addr: { bech32: string } }>;
+        inputs: Array<{ payment_addr: { bech32: string; cred: string } }>;
+        outputs: Array<{ payment_addr: { bech32: string; cred: string } }>;
       };
-      const others = [...new Set((e.kind === "sent" ? tx.outputs : tx.inputs).map((r) => r.payment_addr.bech32))].filter(
-        (a) => !ours.has(a),
-      );
+      const theirs = (e.kind === "sent" ? tx.outputs : tx.inputs).filter((r) => !ours.has(r.payment_addr.cred));
+      const others = [...new Set(theirs.map((r) => r.payment_addr.bech32))];
       expect(e.detail, e.txHash).toBe(others[0]);
       expect(e.more ?? 0, e.txHash).toBe(Math.max(0, others.length - 1));
     }
@@ -451,6 +454,20 @@ describe("what Public activity lists is what the balance counts (O7)", () => {
     expect(t.koios.calls[before]!.query).toContain("offset=0&limit=20");
   });
 
+  // Recorded as Koios answers by the account's keys, with each input's and output's key (release review C43).
+  it("lists the recorded account's own: 100 ₳ paid to its enterprise address, matched by its key", async () => {
+    const t = await unlocked();
+    await read(t);
+    const { entries } = await t.activity.cardano("preprod");
+    expect(entries.find((e) => e.txHash === "38ccfdf0ce948ad5ad71c1cd5b1fdd4df963a670b92a79402ee177baa30f450c")).toMatchObject({
+      kind: "received",
+      direction: "in",
+      lovelace: "100000000",
+    });
+    const rows = (activityPreprod.tx_info as unknown as KoiosTxInfo[]).flatMap((x) => [...x.inputs, ...x.outputs]);
+    expect(rows.filter((o) => !("cred" in o.payment_addr))).toEqual([]);
+  });
+
   it("lists a payment to an enterprise address of the account, and to its key under someone else's stake key", async () => {
     const t = await unlocked();
     const { keys } = await read(t);
@@ -502,7 +519,7 @@ describe("what Public activity lists is what the balance counts (O7)", () => {
       expect(new Set(page.entries.map((e) => e.txHash)), `page ${i + 1}`).toEqual(new Set(all.slice(0, Math.min(all.length, 20 * (i + 1)))));
     }
     expect(pages.at(-1)!.entries.map((e) => e.txHash).sort()).toEqual([...all].sort());
-    expect(all).toHaveLength(55);
+    expect(all).toHaveLength(56);
   });
 
   it("starts the pages again when a reading finds other keys", async () => {
@@ -519,6 +536,259 @@ describe("what Public activity lists is what the balance counts (O7)", () => {
     expect(again.entries).toHaveLength(20);
     expect(t.koios.calls[before]).toMatchObject({ path: "credential_txs", body: { _payment_credentials: keys } });
     expect(t.koios.calls[before]!.query).toContain("offset=0&limit=20");
+  });
+});
+
+// Transactions landing while the pages are kept, and reads answered by servers at different tips: each transaction is
+// listed once, none is skipped but by the recorded Load more a server behind answered, and Load more ends (release
+// review C03, C33; cross-area review X08). A press reads on past what a catch-up listed, and lists no group's older
+// transactions ahead of another's newer (the last review, L7, L8).
+describe("Public activity's pages as transactions land", () => {
+  type T = Awaited<ReturnType<typeof unlocked>>;
+  const ADDRESSES = `${SESSION_ACCOUNT_ADDRESSES_PREFIX}preprod`;
+  const RECORDED = new Set(koiosPreprod.accounts[activityPreprod.stake]!.account_utxos.flatMap((u) => u.payment_cred ?? []));
+  const TOP = activityPreprod.account_txs[0]!;
+  const OLDEST = activityPreprod.account_txs.at(-1)!;
+  const out = (bech32: string, cred: string, value: string) => ({ payment_addr: { bech32, cred }, value, asset_list: [] });
+  /** 5 ₳ someone paid to `key`, `blocks` from the newest recorded, as Koios lists it under the key and reads it. */
+  function lands(t: T, hex: string, key: string, blocks: number) {
+    const row = { tx_hash: hex.repeat(32), block_height: TOP.block_height + blocks, block_time: TOP.block_time + 20 * blocks };
+    t.koios.credentialTxs.set(key, [...(t.koios.credentialTxs.get(key) ?? []), row]);
+    t.koios.txRows.set(row.tx_hash, {
+      tx_hash: row.tx_hash,
+      block_height: row.block_height,
+      tx_timestamp: row.block_time,
+      fee: "170000",
+      inputs: [out("addr_test1_them", "22".repeat(28), "50000000")],
+      outputs: [out("addr_test1v_mine", key, "5000000"), out("addr_test1_them", "22".repeat(28), "44830000")],
+    });
+    return row.tx_hash;
+  }
+  /** 40 more under `key`, each a block older than the last and all older than the recorded: a longer history. */
+  const deeper = (t: T, key: string) =>
+    Array.from({ length: 40 }, (_, i) =>
+      lands(t, (0x40 + i).toString(16), key, OLDEST.block_height - TOP.block_height - 1 - i),
+    );
+  /** The keys the balance reading asks about, and `more` past them: two groups past 75. */
+  async function keysOf(t: T, more = 0) {
+    await t.balances.get("preprod");
+    const account = (await t.session.get<AccountAddresses>(ADDRESSES))!;
+    const keys = [...account.keys, ...Array.from({ length: more }, (_, i) => `${"ab".repeat(26)}${i.toString(16).padStart(4, "0")}`)];
+    if (more) await t.wallet.withKeys(() => t.session.set(ADDRESSES, { ...account, keys }));
+    return keys;
+  }
+  /** The `n`th credential_txs request (from 0) answered by a server whose newest block is `tip`. */
+  function behind(t: T, n: number, tip: number) {
+    const real = t.koios.fetch;
+    let asked = 0;
+    t.koios.fetch = async (url, init) => {
+      if (!url.includes("/credential_txs") || asked++ !== n) return real(url, init);
+      // What's newer than its tip isn't there yet, before it pages.
+      const u = new URL(url);
+      const [offset, limit] = [Number(u.searchParams.get("offset") ?? 0), Number(u.searchParams.get("limit") ?? 1000)];
+      u.searchParams.set("offset", "0");
+      u.searchParams.set("limit", "1000");
+      const rows = (await (await real(u.toString(), init)).json()) as Array<{ block_height: number }>;
+      return Response.json(rows.filter((r) => r.block_height <= tip).slice(offset, offset + limit));
+    };
+  }
+  /** Load more until there's no more: what's listed then. */
+  async function toTheEnd(t: T) {
+    let page = await t.activity.cardano("preprod", true);
+    for (let presses = 1; page.more && presses < 10; presses++) page = await t.activity.cardano("preprod", true);
+    expect(page.more).toBe(false);
+    return page.entries.map((e) => e.txHash).sort();
+  }
+  const every = (...added: string[]) => [...activityPreprod.account_txs.map((r) => r.tx_hash), ...added].sort();
+  const hashes = (page: { entries: ActivityEntry[] }) => page.entries.map((e) => e.txHash);
+  /** Every transaction of the account's, recorded and added, in Koios's order: newest block first, then by hash. */
+  const inOrder = (t: T) =>
+    [...new Map([...activityPreprod.account_txs, ...[...t.koios.credentialTxs.values()].flat()].map((r) => [r.tx_hash, r])).values()]
+      .sort((a, b) => b.block_height - a.block_height || (a.tx_hash < b.tx_hash ? -1 : 1))
+      .map((r) => r.tx_hash);
+
+  it("lists each once when a payment lands before Load more and the list is opened again", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t);
+    await t.activity.cardano("preprod");
+    // It lands while the list is open: the next page starts at a row listed already, one lower.
+    const paid = lands(t, "c0", keys[0]!, 1);
+    await t.activity.cardano("preprod", true);
+    // Opening it again lists the payment, and the next page goes on from where the last ended.
+    expect(hashes(await t.activity.cardano("preprod"))[0]).toBe(paid);
+    expect(await toTheEnd(t)).toEqual(every(paid));
+  });
+
+  it("lists the newest a tx_info server behind didn't know on the next read, and skips none", async () => {
+    const t = await unlocked();
+    await keysOf(t);
+    const real = t.koios.fetch;
+    let lagging = true;
+    // tx_info from a server a block behind the one that listed the page.
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      if (!lagging || !url.includes("/tx_info")) return answer;
+      return Response.json(((await answer.json()) as KoiosTxInfo[]).filter((x) => x.tx_hash !== TOP.tx_hash));
+    };
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(19);
+    lagging = false;
+    expect(hashes(await t.activity.cardano("preprod"))[0]).toBe(TOP.tx_hash);
+    expect(await toTheEnd(t)).toEqual(every());
+  });
+
+  it("lists what one group's server, behind another's, missed the next time it's opened", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t, 60);
+    const [early, late] = [keys.slice(0, 75).find((k) => !RECORDED.has(k))!, keys[75]!];
+    const older = lands(t, "a1", late, -1);
+    const newer = lands(t, "b2", early, 2);
+    const missed = lands(t, "c3", late, 1);
+    // The second group's first page comes from a server two blocks behind the first group's.
+    behind(t, 1, TOP.block_height);
+    const first = hashes(await t.activity.cardano("preprod"));
+    expect(first).toEqual(expect.arrayContaining([newer, older]));
+    expect(first).not.toContain(missed);
+    expect(hashes(await t.activity.cardano("preprod"))).toContain(missed);
+    expect(await toTheEnd(t)).toEqual(every(older, newer, missed));
+  });
+
+  it("lists one a server a block behind missed in the newest block read, as it did before", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t, 60);
+    const [early, late] = [keys.slice(0, 75).find((k) => !RECORDED.has(k))!, keys[75]!];
+    lands(t, "b2", early, 2);
+    const missed = lands(t, "c3", late, 2);
+    behind(t, 1, TOP.block_height + 1);
+    expect(hashes(await t.activity.cardano("preprod"))).not.toContain(missed);
+    expect(hashes(await t.activity.cardano("preprod"))).toContain(missed);
+  });
+
+  it("lists each once when Load more takes one group's newcomer, newer than another's", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t, 60);
+    await t.activity.cardano("preprod");
+    const a = lands(t, "a1", keys[0]!, 1);
+    const b = lands(t, "b1", keys[90]!, 2);
+    // The second group's first: Load more takes it, and the block opening it again asks from stays where it was.
+    expect(hashes(await t.activity.cardano("preprod", true))).toContain(b);
+    expect(hashes(await t.activity.cardano("preprod"))).toContain(a);
+    const asked = t.koios.calls.filter((c) => c.path === "credential_txs").at(-1)!;
+    expect(asked.body._after_block_height).toBe(TOP.block_height - CATCH_UP_MARGIN);
+    expect(await toTheEnd(t)).toEqual(every(a, b));
+  });
+
+  it("goes on past what opening it again listed beyond the pages read", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t);
+    // 30 in the blocks just under the newest, where opening it again asks from: more than the first page reads.
+    const added = Array.from({ length: 30 }, (_, i) => lands(t, (0xd0 + i).toString(16), keys[i % 3]!, -1 - i));
+    await t.activity.cardano("preprod");
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(31);
+    // A page reads on from the positions the pages read: the 11 that opening it listed past the first page come back
+    // on the next, listed already, so it's 9 short, and none is skipped (cross-area review X08).
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(40);
+    expect(await toTheEnd(t)).toEqual(every(...added));
+  });
+
+  // A Load more a server behind answered skips what it lacks near the page's edge (post-release-roadmap.md, the data
+  // layer's leftovers). The next page reads as many again, and then they're whole (cross-area review X08).
+  it("has one short page, then whole ones, after a Load more a server behind answered", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t);
+    deeper(t, keys[0]!);
+    // Two in a block the server behind hasn't seen.
+    lands(t, "e1", keys[0]!, 1);
+    lands(t, "e2", keys[0]!, 1);
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(20);
+    behind(t, 0, TOP.block_height);
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(40);
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(58);
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(78);
+  });
+
+  it("comes to an end when a server 21 transactions behind answered a Load more", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t);
+    deeper(t, keys[0]!);
+    // 21 in the 7 blocks the server behind hasn't seen, 3 a block, as a public mix's chain pays the account.
+    for (let i = 0; i < 21; i++) lands(t, (0x80 + i).toString(16), keys[0]!, 1 + Math.floor(i / 3));
+    await t.activity.cardano("preprod");
+    behind(t, 0, TOP.block_height);
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(40);
+    // Each Load more after it moves on, whatever it finds listed already.
+    await toTheEnd(t);
+  });
+
+  // A public mix's chain pays the account up to 131 times, 3 a block. Opening Activity again lists it all, past the
+  // pages read, and the next page reads those rows again, listed: a page with nothing new reads on in the same press,
+  // where it was five or six presses that listed nothing (the last review, L7).
+  it("reads on in the same press past what opening it again listed after a public mix", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t);
+    const deep = deeper(t, keys[0]!);
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(20);
+    const mix = Array.from({ length: 131 }, (_, i) => lands(t, (0x68 + i).toString(16), keys[0]!, 1 + Math.floor(i / 3)));
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(151);
+    const before = t.koios.calls.length;
+    let page = await t.activity.cardano("preprod", true);
+    // Six pages of rows listed already, passed, and the seventh's 9 new: one tx_info, for those alone.
+    expect(page.entries).toHaveLength(160);
+    expect(paths(t).slice(before)).toEqual([...Array<string>(7).fill("credential_txs"), "tx_info"]);
+    // Every press after lists something new, to the end, each transaction once.
+    for (let presses = 1; page.more && presses < 10; presses++) {
+      const was = page.entries.length;
+      page = await t.activity.cardano("preprod", true);
+      expect(page.entries.length).toBeGreaterThan(was);
+    }
+    expect(page.more).toBe(false);
+    expect(hashes(page).sort()).toEqual(every(...deep, ...mix));
+  });
+
+  // Reading on is bounded: past ten pages of rows listed already, a press lists nothing and the next goes on. A press
+  // costs at most ten credential_txs a group, as the presses it saves did (the last review, L7).
+  it("reads at most ten pages in a press, and comes to an end", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t);
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(20);
+    // 210 land, as two public mixes might while Activity was closed, and opening it again lists them all.
+    const many = Array.from({ length: 210 }, (_, i) => lands(t, i.toString(16).padStart(2, "0"), keys[0]!, 1 + Math.floor(i / 3)));
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(230);
+    const before = t.koios.calls.length;
+    const passed = await t.activity.cardano("preprod", true);
+    expect(passed.entries).toHaveLength(230);
+    expect(passed.more).toBe(true);
+    expect(paths(t).slice(before)).toEqual(Array<string>(10).fill("credential_txs"));
+    expect((await t.activity.cardano("preprod", true)).entries).toHaveLength(240);
+    expect(await toTheEnd(t)).toEqual(every(...many));
+  });
+
+  // With two groups, a page whose one group gave only rows listed already filled with the other's older ones, ahead of
+  // that group's newer ones past its page: a hole in the list, and in a CSV saved then (the last review, L8).
+  it("lists the newest of both groups after opening it again, never one group's older ahead of the other's newer", async () => {
+    const t = await unlocked();
+    const keys = await keysOf(t, 60);
+    // The second group's 20, older than every recorded one.
+    const older = Array.from({ length: 20 }, (_, i) =>
+      lands(t, (0x10 + i).toString(16), keys[75]!, OLDEST.block_height - TOP.block_height - 100 - i),
+    );
+    await t.activity.cardano("preprod");
+    // A public mix lands under the first group's keys, and opening it again lists it.
+    const mix = Array.from({ length: 66 }, (_, i) => lands(t, (0x68 + i).toString(16), keys[0]!, 1 + Math.floor(i / 3)));
+    expect((await t.activity.cardano("preprod")).entries).toHaveLength(86);
+    const all = inOrder(t);
+    const before = t.koios.calls.length;
+    let page = await t.activity.cardano("preprod", true);
+    const asked = paths(t).slice(before);
+    for (let presses = 1; ; presses++) {
+      // What's listed is the newest of all, whichever group they're under: nothing newer is left out.
+      expect(new Set(hashes(page)), `press ${presses}`).toEqual(new Set(all.slice(0, page.entries.length)));
+      if (!page.more || presses === 10) break;
+      page = await t.activity.cardano("preprod", true);
+    }
+    expect(page.more).toBe(false);
+    expect(hashes(page).sort()).toEqual(every(...older, ...mix));
+    // The first press read four pages, and asked the second group once: the pages it waited behind didn't move it.
+    expect(asked).toEqual([...Array<string>(5).fill("credential_txs"), "tx_info"]);
   });
 });
 
@@ -556,6 +826,37 @@ describe("pages from several groups of keys (takePage)", () => {
     const list = Array.from({ length: PAGE }, (_, n) => row(n, 50 - n));
     expect(takePage([list], new Set())).toEqual({ rows: list, read: [PAGE], more: true });
     expect(takePage([list.slice(0, 7)], new Set())).toEqual({ rows: list.slice(0, 7), read: [7], more: false });
+  });
+
+  // A catch-up lists every transaction in its blocks, past what the pages read, and moves no offset, so a group's page
+  // can come back all listed. Another group's rows older than that page's last are then left for later: the first
+  // group's rows past its page, unread yet, may be newer (the last review, L8).
+  it("leave no newer one out, however far a catch-up listed past the pages read", () => {
+    let seed = 11;
+    const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    // 130 transactions, three to a block, newest first; each under one group's keys, or two.
+    const txs = Array.from({ length: 130 }, (_, n) => row(n, 1000 - Math.floor(n / 3)));
+    for (let run = 0; run < 40; run++) {
+      const of = txs.map(() => {
+        const g = Math.floor(random() * 3);
+        return new Set([g, random() < 0.3 ? (g + 1) % 3 : g]);
+      });
+      const full = [0, 1, 2].map((g) => txs.filter((_, i) => of[i]!.has(g)));
+      const windows = (offsets: number[]) => full.map((g, i) => g.slice(offsets[i], offsets[i]! + PAGE));
+      // The first page, then a catch-up that listed the newest 20 to 109.
+      let { read: offsets, more } = takePage(windows([0, 0, 0]), new Set());
+      const listed = new Set(txs.slice(0, 20 + Math.floor(random() * 90)).map((r) => r.tx_hash));
+      for (let guard = 0; more && guard < 100; guard++) {
+        const page = takePage(windows(offsets), listed);
+        for (const r of page.rows) listed.add(r.tx_hash);
+        // What's listed is the newest of all: nothing newer is left out.
+        expect(txs.slice(0, listed.size).every((r) => listed.has(r.tx_hash)), `run ${run}`).toBe(true);
+        offsets = offsets.map((o, i) => o + page.read[i]!);
+        more = page.more;
+      }
+      expect(more, `run ${run}`).toBe(false);
+      expect(listed.size, `run ${run}`).toBe(txs.length);
+    }
   });
 });
 
@@ -596,6 +897,29 @@ describe("a public mix's transactions (O7)", () => {
     expect(csv).toContain(",Into Lovejoin,out,-30,0.2,");
     expect(csv).toContain(",Lovejoin mix,none,0,0.2,");
     expect(csv).toContain(",Back from Lovejoin,in,9.8,,");
+  });
+
+  // Someone else's key beside the box: it's a payment, and who it paid or who paid it is said (release review C22).
+  it("names one with someone else's key beside the box Sent or Received, with them and never the box", () => {
+    const stranger = (value: string) => out("addr_test1_stranger", "22".repeat(28), value);
+    const payer = (value: string) => out("addr_test1_payer", "33".repeat(28), value);
+    // Paid from the account to a stranger, with an output at the box; someone's own box paid to the account, with
+    // their fee and change.
+    const paid = tx(6, [me("1000000000")], [stranger("800000000"), box(), me("189800000")]);
+    const theirs = tx(7, [box(), payer("50000000")], [me("10000000"), payer("49800000")]);
+    const [s, r] = describeTxs([paid, theirs], ours, new Map(), STAKE, undefined, MIX_BOX);
+    expect(s).toMatchObject({ kind: "sent", direction: "out", lovelace: "810000000", detail: "addr_test1_stranger" });
+    expect(r).toMatchObject({ kind: "received", direction: "in", lovelace: "10000000", detail: "addr_test1_payer" });
+    expect([s!.more, r!.more]).toEqual([undefined, undefined]);
+    expect(activityCsv("preprod", [s!])).toContain(",Sent,out,-810,0.2,,addr_test1_stranger,");
+    // Still Lovejoin's: the account's own box back, its fee and change the account's, and a deposit through
+    // Lovejoin's site, whose fee shard is a script.
+    const own = tx(8, [box(), me("50000000")], [me("10000000"), me("49800000")]);
+    const site = tx(9, [me("50000000")], [box(), out("addr_test1wfee_shard", "44".repeat(28), "5100000"), me("34700000")]);
+    expect(describeTxs([own, site], ours, new Map(), STAKE, undefined, MIX_BOX)).toMatchObject([
+      { kind: "lovejoin-withdraw", direction: "in", lovelace: "10000000" },
+      { kind: "lovejoin-deposit", direction: "out", lovelace: "15100000" },
+    ]);
   });
 
   it("leaves the private history's own entry first, and a seed is a deposit too", () => {
@@ -863,7 +1187,8 @@ describe("Public activity's payment on its way (blind test §9.3, T08)", () => {
     expect(entries[0]).toMatchObject({ txHash: summary.txHash, pending: true, kind: "move-in", direction: "out", lovelace: "20000000", fee: "178349" });
   });
 
-  // To the chain it's a payment to itself, which read "Sent" once Koios listed it (post-release-roadmap.md's Kept in mind).
+  // To the chain it's a payment to itself, which read "Sent" once Koios listed it, or "Withdrew rewards" when it
+  // collected the rewards, as this one does (post-release-roadmap.md's Kept in mind).
   it("names a collateral payment Set collateral, on its way and in a block, from its record, after a reclaim too", async () => {
     const t = await onPreprod();
     await t.balances.get("preprod");

@@ -24,7 +24,10 @@ export function stakingComesBack(s: Pick<DappTxSummary, "returnedLovelace" | "st
   return BigInt(s.returnedLovelace) + BigInt(s.fee) >= BigInt(s.stakingLovelace);
 }
 
-/** What an output pays, under its address: another of the wallet's own accounts by its name (independent review M12). */
+/**
+ * What an output pays, under its address: another of the wallet's own accounts by its name (independent review M12),
+ * when its payment key is theirs (`yours`; never its stake key alone, C01).
+ */
 export function paidTo(p: Paid, named?: AccountNamer): string {
   const account = typeof p.yours === "object" ? named?.(p.yours.account) : undefined;
   const what =
@@ -57,19 +60,49 @@ export function paidTo(p: Paid, named?: AccountNamer): string {
  * is what keeps it checked (tests/i18n-critical-helpers.test.ts holds them to it).
  */
 export function tiesLine(ties: DappTie[], session: boolean, named?: AccountNamer, site?: string): string {
-  const names = ties.map((x) =>
-    typeof x === "number"
-      ? t("dappUi.ties.privacy.session", { number: x + 1 })
-      : (named?.(x.account) ?? t("dappUi.ties.privacy.account")),
-  );
-  const list =
-    names.length > 1
-      ? t("dappUi.ties.privacy.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
-      : names[0];
-  return t("dappUi.ties.privacy.moves", {
-    from: session ? t("dappUi.ties.privacy.thisSession") : (site ?? t("dappUi.ties.privacy.yourAccount")),
-    list,
-  });
+  return t("dappUi.ties.privacy.moves", { from: tiedFrom(session, site), list: tiedList(ties, named) });
+}
+
+/**
+ * The wallet's other accounts whose stake key alone is in it (`staked`), as
+ * `tiesLine`'s: someone else's address that carries it, or a contract's,
+ * which none of the wallet's keys spends. Signing ties them all the same,
+ * but never as money moving to them: that is how someone else's key under
+ * another account's stake key passed for a payment to it (1.5.0's release
+ * review, C01).
+ */
+export function stakedLine(staked: DappTie[], session: boolean, named?: AccountNamer, site?: string): string {
+  return t("dappUi.ties.privacy.staked", { from: tiedFrom(session, site), list: tiedList(staked, named) });
+}
+
+/**
+ * The wallet's other accounts whose stake key a certificate or a withdrawal
+ * in it names (`certified`), as `tiesLine`'s. An old-style registration of
+ * one needs no signature of that key's, so a site's transaction ties the two
+ * with the one signature; WebAssembly knows the signing account's keys alone,
+ * and the prompt said "a stake key that isn't yours" and that the other side
+ * wasn't in it (1.5.0's release review, X05).
+ */
+export function certifiedLine(certified: DappTie[], session: boolean, named?: AccountNamer, site?: string): string {
+  return t("dappUi.ties.privacy.certified", { from: tiedFrom(session, site), list: tiedList(certified, named) });
+}
+
+/** The account a site sees, for a ties line. */
+const tiedFrom = (session: boolean, site?: string) =>
+  session ? t("dappUi.ties.privacy.thisSession") : (site ?? t("dappUi.ties.privacy.yourAccount"));
+
+/** One of the wallet's other accounts, as a ties line names it. */
+const tiedName = (x: DappTie, named?: AccountNamer) =>
+  typeof x === "number"
+    ? t("dappUi.ties.privacy.session", { number: x + 1 })
+    : (named?.(x.account) ?? t("dappUi.ties.privacy.account"));
+
+/** The other accounts of a ties line, as a list. */
+function tiedList(ties: DappTie[], named?: AccountNamer) {
+  const names = ties.map((x) => tiedName(x, named));
+  return names.length > 1
+    ? t("dappUi.ties.privacy.list", { first: names.slice(0, -1).join(t("histories.list.comma")), last: names.at(-1) })
+    : names[0];
 }
 
 /**
@@ -94,10 +127,15 @@ export function signingTies(ties: DappTie[] | undefined, session: boolean, seede
 /**
  * A withdrawal in a sentence. `back`: the account's staking money comes back
  * to it (`stakingComesBack`); `whose`: "your public account" or "your
- * private session". All three are `.warn.`: they share the staking callout,
+ * private session". All four are `.warn.`: they share the staking callout,
  * which is a warning whenever the account's own staking or money is in it.
+ * One from another of the wallet's reward addresses is named by it
+ * (`yours`, `named` as for a ties line), never as one that isn't yours (X05).
  */
-export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): string {
+export function withdrawalLine(w: Withdrawal, back: boolean, whose: string, named?: AccountNamer): string {
+  if (!w.own && w.yours !== undefined) {
+    return t("dappUi.withdrawal.warn.walletRewards", { amount: formatAda(w.lovelace), name: tiedName(w.yours, named) });
+  }
   if (!w.own) return t("dappUi.withdrawal.warn.notYours", { amount: formatAda(w.lovelace) });
   return t(back ? "dappUi.withdrawal.warn.into" : "dappUi.withdrawal.warn.notAllBack", {
     amount: formatAda(w.lovelace),
@@ -107,7 +145,7 @@ export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): str
 
 /**
  * A certificate in a sentence: the account's own staking, or someone else's.
- * `back` and `whose` as for a withdrawal.
+ * `back`, `whose` and `named` as for a withdrawal.
  *
  * The account's own is a whole sentence for each thing a certificate does, or
  * does together (WebAssembly's kinds: register, delegate, vote and their
@@ -120,7 +158,7 @@ export function withdrawalLine(w: Withdrawal, back: boolean, whose: string): str
 const withProfile = (c: Certificate, line: string) =>
   c.anchor ? joinSentences([line, t("dappUi.cert.warn.drepProfile", { url: c.anchor })]) : line;
 
-export function certificateLine(c: Certificate, back: boolean, whose: string): string {
+export function certificateLine(c: Certificate, back: boolean, whose: string, named?: AccountNamer): string {
   // Someone else's are `.warn.` too: they sit in the same callout as the
   // account's own, and "a stake key that isn't yours" read as "your stake key"
   // is the error a check is there to catch.
@@ -132,6 +170,8 @@ export function certificateLine(c: Certificate, back: boolean, whose: string): s
     }
     if (c.kind === "drep") return t("dappUi.cert.warn.drep");
     if (c.kind === "committee") return t("dappUi.cert.warn.committee");
+    // Another of the wallet's stake keys, by name (`yours`, X05): "isn't yours" was untrue of it.
+    if (c.yours !== undefined) return t("dappUi.cert.warn.walletStakeKey", { name: tiedName(c.yours, named) });
     return t("dappUi.cert.warn.otherStakeKey");
   }
   // The account's own DRep (CIP-95): its registration, update or retirement.

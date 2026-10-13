@@ -474,6 +474,126 @@ fn a_legacy_registration_needs_no_signature() {
     assert_eq!(summary.certificates[0].kind, "register");
 }
 
+#[test]
+fn a_stake_certificate_says_whose_stake_key_it_names() {
+    // The extension matches it against the wallet's other accounts and private
+    // sessions: an old-style registration of one of their stake keys needs no
+    // signature of that key's, and signing ties the two (1.5.0's release
+    // review, X05). Every kind that names a stake key says which, the
+    // account's own or anyone's; a script's, a pool's, a DRep's and the
+    // committee's say none.
+    let (_, rows) = swap();
+    let other = CardanoAccount::from_phrase(PHRASE, 1)
+        .unwrap()
+        .key_hash(Role::Staking, 0)
+        .unwrap();
+    let key = || StakeCredential::AddrKeyhash(other);
+    let (pool, drep) = (Hash::new([7; 28]), conway::DRep::Abstain);
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 1_800_000, None)],
+    );
+    b.certificates = NonEmptySet::try_from(vec![
+        conway::Certificate::StakeRegistration(key()),
+        conway::Certificate::StakeDeregistration(key()),
+        conway::Certificate::StakeDelegation(key(), pool),
+        conway::Certificate::Reg(key(), 2_000_000),
+        conway::Certificate::UnReg(key(), 2_000_000),
+        conway::Certificate::VoteDeleg(key(), drep.clone()),
+        conway::Certificate::StakeVoteDeleg(key(), pool, drep.clone()),
+        conway::Certificate::StakeRegDeleg(key(), pool, 2_000_000),
+        conway::Certificate::VoteRegDeleg(key(), drep.clone(), 2_000_000),
+        conway::Certificate::StakeVoteRegDeleg(key(), pool, drep, 2_000_000),
+        conway::Certificate::StakeRegistration(stake_credential()),
+        conway::Certificate::StakeDelegation(StakeCredential::ScriptHash(Hash::new([6; 28])), pool),
+        conway::Certificate::PoolRetirement(pool, 300),
+        conway::Certificate::UnRegDRepCert(
+            StakeCredential::AddrKeyhash(Hash::new([5; 28])),
+            500_000_000,
+        ),
+    ])
+    .ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    let theirs = Some(hex::encode(other));
+    let named: Vec<(&str, bool, Option<String>)> = summary
+        .certificates
+        .iter()
+        .map(|c| (c.kind.as_str(), c.own, c.credential.clone()))
+        .collect();
+    assert_eq!(
+        named,
+        vec![
+            ("register", false, theirs.clone()),
+            ("unregister", false, theirs.clone()),
+            ("delegate", false, theirs.clone()),
+            ("register", false, theirs.clone()),
+            ("unregister", false, theirs.clone()),
+            ("vote", false, theirs.clone()),
+            ("delegate-vote", false, theirs.clone()),
+            ("register-delegate", false, theirs.clone()),
+            ("register-vote", false, theirs.clone()),
+            ("register-delegate-vote", false, theirs),
+            (
+                "register",
+                true,
+                Some(hex::encode(account().key_hash(Role::Staking, 0).unwrap()))
+            ),
+            ("delegate", false, None),
+            ("pool", false, None),
+            ("drep", false, None),
+        ]
+    );
+    // In the JSON the extension reads, by that name.
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(
+        json["certificates"][0]["credential"],
+        serde_json::json!(hex::encode(other))
+    );
+    assert!(json["certificates"][12]["credential"].is_null());
+}
+
+#[test]
+fn a_pool_registration_names_its_reward_accounts_stake_key() {
+    // A pool's reward account takes no signature of its key's, so it can be
+    // another of the wallet's stake keys, which signing ties to the account:
+    // the extension is told it, as the stake key the certificate names, and
+    // nothing more is asked to sign (1.5.0's last review, L1).
+    let (_, rows) = swap();
+    let other = CardanoAccount::from_phrase(PHRASE, 1)
+        .unwrap()
+        .key_hash(Role::Staking, 0)
+        .unwrap();
+    let mut b = body(
+        vec![input(TX_A, 1)],
+        vec![out(&ours(Role::Receive, 0), 1_800_000, None)],
+    );
+    b.certificates = NonEmptySet::try_from(vec![pool_registration(vec![])]).ok();
+    let summary =
+        cip30::inspect_tx(&account(), &request(tx_hex(b.clone()), rows.clone(), true)).unwrap();
+    let pool = &summary.certificates[0];
+    assert_eq!(
+        (pool.kind.as_str(), pool.own, pool.credential.clone()),
+        ("pool", false, Some(hex::encode(other)))
+    );
+    // The operator still signs it, never the account's stake key.
+    assert!(!summary.complete);
+    assert_eq!(summary.signs, vec!["0/2"]);
+
+    // A script's reward account names no key.
+    let script = {
+        let mut bytes = stake_account_bytes();
+        bytes[0] = 0xf0 | (bytes[0] & 0x0f);
+        bytes
+    };
+    let mut c = pool_registration(vec![]);
+    if let conway::Certificate::PoolRegistration { reward_account, .. } = &mut c {
+        *reward_account = Bytes::from(script);
+    }
+    b.certificates = NonEmptySet::try_from(vec![c]).ok();
+    let summary = cip30::inspect_tx(&account(), &request(tx_hex(b), rows, true)).unwrap();
+    assert_eq!(summary.certificates[0].credential, None);
+}
+
 /// 4 ₳ in from `0/2` and 1,000 ₳ of the account's rewards withdrawn, with
 /// `back` coming back to `0/0` and the rest paid to someone else.
 fn rewards_out(back: u64) -> String {
