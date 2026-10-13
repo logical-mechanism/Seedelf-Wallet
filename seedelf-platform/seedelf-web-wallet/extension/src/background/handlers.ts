@@ -102,38 +102,47 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       // wallet, as the network does, so a new phrase starts on account 0
       // rather than wherever the last one was left (accounts.ts `useFirst`).
       await ctx.accounts.useFirst();
-      // A restore is confirmed by the Home that opens next, in whichever page that is (`restored`, blind test T20a,
-      // T20b): marked before the wallet exists, since its state change opens Home in every open page at once. The
-      // fact alone. A create is never marked: Get started is its welcome.
-      if (message.type === "restore-wallet") await ctx.session.set(SESSION_RESTORED, true);
-      else await ctx.session.remove(SESSION_RESTORED);
+      // Its scan counts as under way from here, before the wallet exists: the wallet's creation opens Home in every
+      // open page at once, and a Home that asks before the scan below starts must hear it coming, not over
+      // (restoringOn; the release PR's e2e). Released once it has started, or the restore failed.
+      const restoring = message.type === "restore-wallet" ? ctx.sessions.restoringOn(ctx.network) : undefined;
       try {
-        await wallet.create(message.phrase, message.password);
-      } catch (e) {
-        await ctx.session.remove(SESSION_RESTORED).catch(() => undefined);
-        throw e;
+        // A restore is confirmed by the Home that opens next, in whichever page that is (`restored`, blind test T20a,
+        // T20b): marked before the wallet exists, since its state change opens Home in every open page at once. The
+        // fact alone. A create is never marked: Get started is its welcome.
+        if (message.type === "restore-wallet") await ctx.session.set(SESSION_RESTORED, true);
+        else await ctx.session.remove(SESSION_RESTORED);
+        try {
+          await wallet.create(message.phrase, message.password);
+        } catch (e) {
+          await ctx.session.remove(SESSION_RESTORED).catch(() => undefined);
+          throw e;
+        }
+        // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's
+        // goes.
+        await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
+        // So does a mix from the public account that may have gone through (final review F1).
+        await ctx.lovejoin.adoptKept(ctx.networks).catch(() => undefined);
+        // Account 0 is the one account known from here.
+        await ctx.accounts.recordFirst().catch(() => undefined);
+        // A restored phrase may hold funds past account 0, so look for them —
+        // in the background, since it is one Koios request per account probed
+        // and nothing waits on the answer — then for what its private sessions'
+        // one-time accounts still hold (the restore scan, O5), on the network
+        // it's restored on: one request for every 20 accounts, and more for
+        // those used. One after the other, so the two never ask together; the
+        // scan counts as under way from here. A new phrase has nothing anywhere.
+        if (message.type === "restore-wallet") {
+          const network = ctx.network;
+          // Every network marked first, sealed: a scan that doesn't finish (a read that fails, a lock, a worker stop),
+          // and the network a restore doesn't look at, say so until one finishes there (1.5.0's release review, C19).
+          for (const n of ctx.networks) await ctx.sessions.markUnscanned(n).catch(() => undefined);
+          void ctx.sessions.scan(network, ctx.accounts.discover(network)).catch(() => undefined);
+        }
+        return status(ctx);
+      } finally {
+        restoring?.();
       }
-      // What Remove wallet kept of a payment that may still go through: this phrase's is watched again, another's goes.
-      await ctx.pending.adoptKept(ctx.networks).catch(() => undefined);
-      // So does a mix from the public account that may have gone through (final review F1).
-      await ctx.lovejoin.adoptKept(ctx.networks).catch(() => undefined);
-      // Account 0 is the one account known from here.
-      await ctx.accounts.recordFirst().catch(() => undefined);
-      // A restored phrase may hold funds past account 0, so look for them —
-      // in the background, since it is one Koios request per account probed
-      // and nothing waits on the answer — then for what its private sessions'
-      // one-time accounts still hold (the restore scan, O5), on the network
-      // it's restored on: one request for every 20 accounts, and more for
-      // those used. One after the other, so the two never ask together; the
-      // scan counts as under way from here. A new phrase has nothing anywhere.
-      if (message.type === "restore-wallet") {
-        const network = ctx.network;
-        // Every network marked first, sealed: a scan that doesn't finish (a read that fails, a lock, a worker stop),
-        // and the network a restore doesn't look at, say so until one finishes there (1.5.0's release review, C19).
-        for (const n of ctx.networks) await ctx.sessions.markUnscanned(n).catch(() => undefined);
-        void ctx.sessions.scan(network, ctx.accounts.discover(network)).catch(() => undefined);
-      }
-      return status(ctx);
     case "restored":
       // Whether Home is still to say a restore made this wallet; `seen` once it has, with a reading, or was dismissed.
       if (message.seen) {

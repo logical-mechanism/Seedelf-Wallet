@@ -1182,6 +1182,13 @@ export class SessionService {
   private references = new Map<NetworkName, Map<string, KoiosUtxo>>();
   /** The restore scan under way, by network: a restore's and Find leftovers' share one. */
   private scanning = new Map<NetworkName, Promise<SessionScan>>();
+  /**
+   * Networks a restore is making the wallet on, until its scan is under way
+   * there (restoringOn): the wallet's creation opens Home in every page at
+   * once, before the restore marks the networks and starts the scan, and a
+   * Home that asked then must hear a scan coming, not one over.
+   */
+  private restoring = new Set<NetworkName>();
 
   constructor(private readonly deps: SessionDeps) {}
 
@@ -1194,8 +1201,23 @@ export class SessionService {
    */
   reset(): void {
     this.scanning.clear();
+    this.restoring.clear();
     this.seen.clear();
     this.readAt.clear();
+  }
+
+  /**
+   * A restore is making the wallet on `network`: its scan counts as under
+   * way from now, before the wallet exists, until the restore has started it
+   * (scan), or failed. Returns the release, for the restore to call then
+   * (the release PR's e2e: a Home its state change opened asked first, heard
+   * "none due, none running" and never asked again).
+   */
+  restoringOn(network: NetworkName): () => void {
+    this.restoring.add(network);
+    return () => {
+      this.restoring.delete(network);
+    };
   }
 
   /**
@@ -1923,6 +1945,8 @@ export class SessionService {
    * device's record alone, no Koios request.
    */
   async scanDue(network: NetworkName): Promise<{ due: boolean; scanning: boolean }> {
+    // A restore still making the wallet: its scan is coming, and there's no wallet yet to read the record with.
+    if (this.restoring.has(network)) return { due: true, scanning: true };
     return { due: !!(await this.book(network)).unscanned, scanning: this.scanning.has(network) };
   }
 

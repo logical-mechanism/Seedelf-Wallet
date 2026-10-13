@@ -449,7 +449,10 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
           setUnscanned(d.due && !d.scanning);
           if (d.scanning) later = setTimeout(read, SCAN_DUE_EVERY_MS);
         },
-        () => undefined,
+        // A worker that didn't answer is asked again: one ask lost mustn't leave the note silent for good.
+        () => {
+          if (live) later = setTimeout(read, SCAN_DUE_EVERY_MS);
+        },
       );
     read();
     return () => {

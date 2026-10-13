@@ -752,6 +752,23 @@ describe("a restore's scan that doesn't finish", () => {
     return { t, sessions, ctx: context(t, sessions) };
   }
 
+  it("counts as under way from before the wallet exists, so a Home its state change opens never takes it for over", async () => {
+    // The wallet's creation opens Home in every page at once, while the restore goes on to mark the networks and
+    // start the scan: a Home that asked then heard "not due, none running" and never asked again (the release PR's
+    // e2e, under load). Asked right after the wallet exists, it must hear that a scan is under way.
+    const { ctx } = await removedWithLeftovers();
+    const heard: unknown[] = [];
+    const adoptKept = ctx.pending.adoptKept.bind(ctx.pending);
+    ctx.pending.adoptKept = async (networks) => {
+      heard.push(await ask({ type: "session-scan-due" }, ctx));
+      return adoptKept(networks);
+    };
+    await ask({ type: "restore-wallet", phrase: PHRASE, password: PASSWORD }, ctx);
+    expect(heard).toEqual([{ due: true, scanning: true }]);
+    // And once the restore has answered, the scan it started is what's under way, then what's done.
+    await vi.waitFor(async () => expect(await ask({ type: "session-scan-due" }, ctx)).toEqual({ due: false, scanning: false }));
+  });
+
   it("leaves its network marked when a read fails, and the other network, until a scan finishes there", async () => {
     const { t, ctx } = await removedWithLeftovers();
     const real = t.koios.fetch;
