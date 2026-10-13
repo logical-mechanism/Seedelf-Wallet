@@ -5,10 +5,12 @@ import { crc32, deflateSync } from "node:zlib";
 
 import type { BrowserContext, Page } from "@playwright/test";
 
-import { epochAt } from "../src/networks";
+import { epochAt, NETWORKS } from "../src/networks";
+import { bech32Bytes, preprodAddress } from "../tests/fixtures/bech32";
 
 import {
   accountMintPreprod,
+  accountStake,
   accountVector,
   addTokens,
   appUrl,
@@ -21,9 +23,11 @@ import {
   koiosPreprod,
   type KoiosFake,
   launch,
+  lookedAfterRestore,
   lovejoinPool,
   chooseNetwork,
   madeByMix,
+  oneTimeAccount,
   ownedLovejoinBox,
   openApp,
   openDapp,
@@ -338,8 +342,12 @@ test("home shows the private balance, Seedelfs and the public account", async ({
   // public account (chunk 18), which this phrase has never used; and, after
   // it, the restore scan's one about the first 20 one-time accounts (chunk
   // 27), which it has never used either, so nothing more.
-  await expect.poll(() => koios.calls.filter((c) => c === "account_addresses")).toHaveLength(3);
-  expect(koios.stakesAsked.filter((a) => a !== v.preprod.stake)).not.toHaveLength(0);
+  await lookedAfterRestore(koios);
+  // Account 0's, account 1's and the scan's, led by one-time account 0's, in whichever order the first two went: the
+  // look asked about account 1, never account 0 again (1.5.0's release review, C44).
+  expect([...koios.stakesAsked].sort()).toEqual(
+    [v.preprod.stake, accountStake(v.phrase, 1), oneTimeAccount(v.phrase, 0).stake].sort(),
+  );
   expect(koios.calls.sort()).toEqual([
     "account_addresses",
     "account_addresses",
@@ -449,8 +457,13 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   // What's true when it keeps failing: only reading failed (blind test §4 entry 25).
   await expect(page.getByTestId("home-read-failed")).toContainText("Your money is safe on chain: only reading it failed");
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
-  // The restore's note doesn't say it's reading, under an alert that says reading failed (blind test T20a).
-  await expect(page.getByTestId("home-restored-detail")).toHaveText("A phrase you've used shows its balances once they're read.");
+  // The restore's note doesn't say it's reading, under an alert that says reading failed (blind test T20a). Its scan
+  // of the one-time accounts failed too, so it says where to look again, once the scan has ended (1.5.0's release
+  // review, C19). Home asks every 3 s while the scan runs, so allow a slow machine a poll or two.
+  await expect(page.getByTestId("home-restored-detail")).toHaveText(
+    "A phrase you've used shows its balances once they're read. The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page.",
+    { timeout: 15_000 },
+  );
 
   koios.failWith = undefined;
   await page.getByRole("button", { name: "Refresh" }).click();
@@ -650,13 +663,18 @@ test("Find leftovers, on the dApps page, scans the one-time accounts once, sayin
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   // The restore's own scan: one request, about the first 20 one-time accounts, which this phrase never used.
-  await expect.poll(() => koios.calls.filter((c) => c === "account_addresses")).toHaveLength(3);
+  await lookedAfterRestore(koios);
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   const found = page.getByTestId("dapp-found");
   await expect(found.getByRole("heading", { name: "After a restore" })).toBeVisible();
   await expect(found).toContainText("Finds private sessions this browser has no record of");
-  await expect(found).toContainText("It asks the server about your one-time accounts 20 at a time, so the server can tell they're one wallet's.");
+  // The batches take in the accounts the next sessions will use (1.5.0's release review, C06).
+  await expect(found).toContainText(
+    "It asks the server about your one-time accounts 20 at a time, including those your next private sessions will use, so the server can tell they're one wallet's, and tie those sessions to this wallet once they're funded.",
+  );
   await expect(page.getByTestId("dapp-found-sessions")).toHaveCount(0);
+  // The restore's scan finished: nothing points to Find leftovers.
+  await expect(page.getByTestId("dapp-found-due")).toHaveCount(0);
   const before = koios.calls.length;
   await found.getByRole("button", { name: "Find leftovers" }).click();
   await expect(page.getByTestId("dapp-found-result")).toHaveText(
@@ -666,6 +684,327 @@ test("Find leftovers, on the dApps page, scans the one-time accounts once, sayin
   // there are none.
   expect(koios.calls.slice(before)).toEqual(["account_addresses"]);
   await found.screenshot({ path: "test-results/dapps-found.png" });
+});
+
+/** A UTxO of ADA alone at one-time account `account`'s address, as credential_utxos lists it: output `index` of `tx`. */
+const heldAt = (account: { address: string; keyHash: string; stake: string }, tx: string, index: number, value: string) => ({
+  tx_hash: tx,
+  tx_index: index,
+  address: account.address,
+  value,
+  payment_cred: account.keyHash,
+  stake_address: account.stake,
+  epoch_no: 315,
+  block_height: 5_000_000,
+  block_time: 1_760_000_000,
+  datum_hash: null,
+  inline_datum: null,
+  reference_script: null,
+  asset_list: [],
+  is_spent: false,
+});
+
+/**
+ * The 12-word phrase restored after its private session 0 was funded in
+ * another browser: one-time account 0's stake key on chain, its funding its
+ * one transaction, and what that paid still at its key (session-swap.json's
+ * UTxO). The restore's scan finds it, a session brought back by hand
+ * (chunk 27). Home shows, and the scan has finished.
+ */
+async function restoredWithFoundSession(context: BrowserContext, koios: KoiosFake): Promise<Page> {
+  const v = vector(12);
+  const session = oneTimeAccount(v.phrase, 0);
+  koios.usedStakes.add(session.stake);
+  koios.accountTxs.set(session.stake, [{ tx_hash: sessionSwap.utxo.tx_hash, block_height: 5_000_000, block_time: 1_760_000_000 }]);
+  koios.addedToAccounts.push(heldAt(session, sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  // Nothing due on this network, and none running: the restore's scan wrote what it found (`session-scan-due`, the
+  // device's record alone).
+  await expect
+    .poll(async () => (await askWorker(page, { type: "session-scan-due" })).reply.value)
+    .toEqual({ due: false, scanning: false });
+  return page;
+}
+
+test("a session the restore scan found: Home counts it, After a restore lists it, and its page and Bring everything back bring it back (chunk 27; 1.5.0's release review, C21, C18, C37)", async ({
+  context,
+  koios,
+}) => {
+  const page = await restoredWithFoundSession(context, koios);
+  // Home's account, the look for a second, and the scan's 20 one-time accounts with one used, then the next 20 with
+  // none; that one's transactions, and what they spent and paid.
+  expect(koios.calls.filter((c) => c === "account_addresses")).toHaveLength(4);
+  expect(koios.calls.filter((c) => c === "account_txs" || c === "tx_info")).toEqual(["account_txs", "tx_info"]);
+
+  // After a restore lists it, by its number; nothing is left to look for.
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  const list = page.getByTestId("dapp-found-sessions");
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await expect(list.locator(".token-row__label")).toHaveText("Private session 1");
+  await expect(page.getByTestId("dapp-found-due")).toHaveCount(0);
+  // Back on Home, read again, the restore's note counts it and says where it is.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("home-restored-detail")).toContainText(
+    "The restore also found 1 private session from before: bring it back on the dApps page.",
+  );
+
+  // Its page, from the dApps page: what it holds, that another browser may still be using it, and both ways back.
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await list.getByRole("button").click();
+  await expect(page.getByRole("heading", { name: "Private session 1", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("session-found-warning")).toHaveText(
+    "If this phrase is open in another browser, a swap or site there may still use this account. Bring it back from one browser only.",
+  );
+  await expect(page.getByTestId("session-rows")).toContainText("It holds145.790603 ₳");
+  // Its account holds no 5 ₳ for Lovejoin's mixes: put in, or it comes back directly (1.5.0's release review, C53).
+  await expect(page.getByTestId("session-next")).toContainText("the mixes need a UTxO of exactly 5 ₳ of ADA alone");
+  await snap(page, "found-session");
+
+  // Put in 5 ₳ for Lovejoin: its review says what the private balance holds after, which the dApps page hands the
+  // session's page (#304).
+  await page.getByRole("button", { name: "Put in 5 ₳ for Lovejoin" }).click();
+  await expect(page.getByRole("heading", { name: "Review the top-up" })).toBeVisible();
+  const topUp = page.getByTestId("cancel-collateral-review");
+  await expect(topUp).toContainText("ToPrivate session 1");
+  await expect(topUp).toContainText("Collateral for Lovejoin's mixes5 ₳, comes back");
+  await expect(topUp).toContainText(/Private balance after22\.\d+\s₳/);
+  // Its Send asks giveme.my to witness the payment, as every one from the private balance does. It refuses (its
+  // recorded answer): nothing is sent, Send gives way to building it again, and the page still offers it (1.5.0's
+  // cross-area review, X21).
+  expect(koios.collateralAsked).toBe(0);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const refused = page.getByTestId("review-stale");
+  await expect(refused.getByRole("alert")).toContainText(
+    "Nothing was sent, so none of your money moved: giveme.my, which lends the collateral, turned it down",
+  );
+  await expect(refused).toContainText("refused this transaction: Transaction Fails Validation");
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toHaveCount(0);
+  expect(koios.collateralAsked).toBe(1);
+  expect(koios.submitted).toHaveLength(0);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Put in 5 ₳ for Lovejoin" })).toBeVisible();
+
+  // Bring it back: all of it, directly, Lovejoin left out for want of those 5 ₳.
+  await page.getByRole("button", { name: "Bring it back" }).click();
+  await expect(page.getByRole("heading", { name: "Review the return" })).toBeVisible();
+  const review = page.getByTestId("session-back-review");
+  await expect(review).toContainText(/Into your private balance145\.\d+\s₳/);
+  await expect(review).toContainText("From1 UTxO at session 1");
+  await expect(page.getByTestId("lovejoin-skipped")).toContainText("Lovejoin is left out of this return");
+  await snap(page, "found-session-back");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Bring everything back names it by its number, and says it was found, its warnings' lines too; and warns as its
+  // page does, until it's left out with a tap (C37, C18).
+  await page.getByTestId("claim-card").getByRole("button", { name: "Bring everything back" }).click();
+  const returns = page.getByTestId("claim-returns");
+  await expect(returns.getByRole("button")).toHaveCount(1);
+  await expect(returns.locator(".token-row__label")).toHaveText("Private session 1");
+  await expect(returns.locator(".token-row__sub")).toContainText("Found after a restore");
+  await expect(page.getByTestId("claim-lovejoin-skipped")).toContainText("Private session 1: its 5 ₳ collateral");
+  const warning = page.getByTestId("claim-found-warning");
+  await expect(warning).toHaveText(
+    "If this phrase is open in another browser, a swap or site there may still use the account of the session found after a restore. Bring it back from one browser only.",
+  );
+  await returns.getByRole("button").click();
+  await expect(returns.getByRole("button")).toHaveAttribute("aria-pressed", "false");
+  await expect(warning).toHaveCount(0);
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("Home's restore note stops saying to bring back a found session once its return is on its way (1.5.0's cross-area review, X11)", async ({
+  context,
+  koios,
+}) => {
+  const page = await restoredWithFoundSession(context, koios);
+  // Home reads the device's record again on its way back from the dApps page: the note counts the session.
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  const note = page.getByTestId("home-restored-detail");
+  await expect(note).toContainText(
+    "The restore also found 1 private session from before: bring it back on the dApps page.",
+  );
+
+  // Its page brings it back, directly for want of 5 ₳ for Lovejoin, and the return is sent.
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapp-found-sessions").getByRole("button").click();
+  await page.getByRole("button", { name: "Bring it back" }).click();
+  await expect(page.getByTestId("lovejoin-skipped")).toContainText("Lovejoin is left out of this return");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Review the return" })).toHaveCount(0);
+  expect(koios.submitted).toHaveLength(1);
+
+  // On its way back, it's no longer one to bring back, as the dApps page reads it: Home's note stops saying so.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(note).toHaveText(/in its private balance\.$/);
+  await expect(note).not.toContainText("bring it back on the dApps page");
+});
+
+test("a restore's scan that ends while the dApps page is open lists what it found there, without leaving the page (the 1.5.0 fixes' e2e)", async ({
+  context,
+  koios,
+}) => {
+  const v = vector(12);
+  const session = oneTimeAccount(v.phrase, 0);
+  koios.usedStakes.add(session.stake);
+  koios.accountTxs.set(session.stake, [{ tx_hash: sessionSwap.utxo.tx_hash, block_height: 5_000_000, block_time: 1_760_000_000 }]);
+  koios.addedToAccounts.push(heldAt(session, sessionSwap.utxo.tx_hash, sessionSwap.utxo.tx_index, sessionSwap.utxo.value));
+  // The scan's account_txs answers late, so the page opens while the scan runs.
+  await context.route(
+    (url) => url.pathname.endsWith("/account_txs"),
+    async (route) => {
+      await new Promise((done) => setTimeout(done, 4_000));
+      await route.fallback();
+    },
+  );
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  expect((await askWorker(page, { type: "session-scan-due" })).reply.value).toEqual({ due: true, scanning: true });
+  await expect(page.getByTestId("dapp-found-sessions")).toHaveCount(0);
+  // Once the scan has written it, the page lists it, and Bring everything back offers it, with no Back and no Refresh.
+  const list = page.getByTestId("dapp-found-sessions");
+  await expect(list.getByRole("listitem")).toHaveCount(1, { timeout: 15_000 });
+  await expect(list.locator(".token-row__label")).toHaveText("Private session 1");
+  await expect(page.getByTestId("claim-card")).toHaveCount(1);
+  await expect(page.getByTestId("dapp-found-due")).toHaveCount(0);
+});
+
+test("Find leftovers finds what another browser started since the restore, past the first of the 20 it asks about (1.5.0's release review, C21)", async ({
+  context,
+  koios,
+}) => {
+  const v = vector(12);
+  const page = await openApp(context);
+  await restore(page, v.phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await lookedAfterRestore(koios);
+  // Since then the phrase, open in another browser, funded its private session 2: one-time account 1, the second
+  // stake key of the request that asks about the first 20.
+  const other = oneTimeAccount(v.phrase, 1);
+  const funding = "e1".repeat(32);
+  koios.usedStakes.add(other.stake);
+  koios.accountTxs.set(other.stake, [{ tx_hash: funding, block_height: 5_000_000, block_time: 1_760_000_000 }]);
+  koios.addedToAccounts.push(heldAt(other, funding, 0, "20000000"));
+
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  const found = page.getByTestId("dapp-found");
+  await expect(page.getByTestId("dapp-found-sessions")).toHaveCount(0);
+  const before = koios.calls.length;
+  await found.getByRole("button", { name: "Find leftovers" }).click();
+  await expect(page.getByTestId("dapp-found-result")).toHaveText("Found 1 session, listed above.");
+  const list = page.getByTestId("dapp-found-sessions");
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await expect(list.locator(".token-row__label")).toHaveText("Private session 2");
+  // The first 20, one used; the next 20, none; what it holds, and its transactions. Then the page reads it again.
+  expect(koios.calls.slice(before, before + 5)).toEqual([
+    "account_addresses",
+    "account_addresses",
+    "credential_utxos",
+    "account_txs",
+    "tx_info",
+  ]);
+});
+
+test("After a restore says to press Find leftovers when the restore's scan didn't finish, until it has looked (1.5.0's release review, C19)", async ({
+  context,
+  koios,
+}) => {
+  // Koios refuses everything as the wallet is restored: the scan of the one-time accounts fails with the rest.
+  koios.failWith = 400;
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  // Once the scan has ended, Home's note says where to look again. Home asks every 3 s while it runs
+  // (SCAN_DUE_EVERY_MS), so on a slow machine that's a poll or two after the scan fails: more than the default 5 s.
+  const note = page.getByTestId("home-restored-detail");
+  await expect(note).toContainText("The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page.", {
+    timeout: 15_000,
+  });
+  // Koios answers again: Refresh reads the balances, and the scan isn't run again by it.
+  koios.failWith = undefined;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await expect(note).toHaveText(
+    /in its private balance\. The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page\.$/,
+  );
+
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  const due = page.getByTestId("dapp-found-due");
+  await expect(due).toHaveText(
+    "The restore didn't look for private sessions' money on Preprod, or didn't finish looking: press Find leftovers.",
+  );
+  await snap(page, "dapps-found-due");
+  // Find leftovers looks, now that Koios answers: nothing, and nothing more to point to.
+  await page.getByTestId("dapp-found").getByRole("button", { name: "Find leftovers" }).click();
+  await expect(page.getByTestId("dapp-found-result")).toHaveText(
+    "Nothing found on Preprod: no other one-time account holds anything or has an order open.",
+  );
+  await expect(due).toHaveCount(0);
+  // Nor does Home's note.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(note).toHaveText(/in its private balance\.$/);
+});
+
+test("Minswap's list keeps to its swaps when a swap's page hands it every session, a found one among them (1.5.0's release review, C20)", async ({
+  context,
+  koios,
+}) => {
+  // One spend: the funding takes the 25 ₳ UTxO alone.
+  koios.evaluation = { ...withdrawPreprod.amount.evaluation, result: withdrawPreprod.amount.evaluation.result.slice(0, 1) };
+  const page = await restoredWithFoundSession(context, koios);
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Minswap/ }).click();
+  // The session the restore found is After a restore's, never Minswap's.
+  await expect(page.getByTestId("swaps-empty")).toBeVisible();
+
+  // A swap whose funding giveme.my refuses, as recorded: it never went out.
+  await page.getByRole("button", { name: "New swap" }).click();
+  await page.getByLabel("You pay", { exact: true }).fill("10");
+  await page.getByTestId("swap-to").click();
+  const picker = page.getByRole("dialog", { name: "You receive" });
+  await picker.getByLabel("Search tokens").fill("MIN");
+  await picker.getByTestId("swap-listed-tokens").getByRole("button", { name: /MIN/ }).click();
+  await page.getByRole("button", { name: "Review swap" }).click();
+  await expect(page.getByTestId("swap-fund-review")).toContainText("ToPrivate session 2");
+  await page.getByRole("button", { name: "Start swap", exact: true }).click();
+  await expect(page.getByTestId("review-stale")).toContainText("refused this transaction");
+  for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Back", exact: true }).click();
+
+  // Removed from the list from its page: Forget answers with every session, and Minswap's list takes its swaps alone.
+  const swaps = page.getByTestId("swaps");
+  await expect(swaps.getByRole("button")).toHaveCount(1);
+  await swaps.getByRole("button").click();
+  await page.getByRole("button", { name: "Remove from list" }).click();
+  await expect(page.getByTestId("swaps-empty")).toBeVisible();
+  await expect(page.getByText("Found after a restore")).toHaveCount(0);
+  expect(koios.submitted).toHaveLength(0);
+});
+
+test("a session the restore scan found leaves After a restore once another browser has brought it all back (1.5.0's release review, C02)", async ({
+  context,
+  koios,
+}) => {
+  const page = await restoredWithFoundSession(context, koios);
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  const list = page.getByTestId("dapp-found-sessions");
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await expect(page.getByTestId("claim-card")).toBeVisible();
+  // The page's own reading as it opens is over first: a chain that changed under it would end the session there,
+  // and Refresh, shown only while a session is open, would go with it.
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+  // The browser it was found from brought it back: its account is empty, and Koios shows what the scan read there
+  // spent. This device sent nothing for it, so the page's next reading ends it.
+  koios.addedToAccounts.splice(0);
+  koios.unlistedSpent = true;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(list).toHaveCount(0);
+  await expect(page.getByTestId("claim-card")).toHaveCount(0);
+  expect(koios.submitted).toHaveLength(0);
 });
 
 test("the first reading shows the splash, which fades into the wallet; a kept reading doesn't", async ({ context, koios }) => {
@@ -892,11 +1231,12 @@ test("settings: the phrase behind the password, a new password, and removing the
   await restore(page, v.phrase);
   await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
   // A restore looks for a second public account in the background (chunk 18):
-  // one request, for the next account, which this phrase has never used. It
-  // has to have landed before anything is counted, or "Settings asks Koios
-  // nothing" would be racing it.
-  const second = accountVector(24, 1).preprod.stake;
-  await expect.poll(() => koios.stakesAsked).toContain(second);
+  // one request, for the next account, which this phrase has never used; then
+  // its scan of the one-time accounts, one more (chunk 27). Both have to have
+  // landed before anything is counted, or "Settings asks Koios nothing" would
+  // be racing them.
+  await lookedAfterRestore(koios);
+  expect(koios.stakesAsked).toContain(accountVector(24, 1).preprod.stake);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
@@ -1193,6 +1533,7 @@ test("activity: the private history from the device, the public account's from K
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await lookedAfterRestore(koios);
 
   // Seedelf: what arrived, noted from the balance reading; Koios isn't asked.
   const reads = koios.calls.length;
@@ -1440,6 +1781,7 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await lookedAfterRestore(koios);
   const reads = koios.calls.length;
 
   // Seedelf: the two UTxOs the balance counts, and the seedelf's.
@@ -1558,6 +1900,7 @@ test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it
   await restore(page, vector(24).phrase);
   await cardanoTab(page);
   await expect(page.getByTestId("cardano-meta")).toHaveText("5 ₳ locked");
+  await lookedAfterRestore(koios);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Collateral" }).click();
@@ -1607,6 +1950,7 @@ test("send from the public account: a token with only the ADA it needs, review, 
   await restore(page, vector(12).phrase);
   await cardanoTab(page);
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await lookedAfterRestore(koios);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Send publicly" }).click();
 
@@ -1849,6 +2193,7 @@ test("send from the public account to a Seedelf: paste its name, see it found, r
   await restore(page, vector(12).phrase);
   await cardanoTab(page);
   await expect(page.getByTestId("cardano-lovelace")).not.toHaveText("— ₳");
+  await lookedAfterRestore(koios);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Send publicly" }).click();
 
@@ -3027,6 +3372,7 @@ test("staking: the page, the pool browser, a change of pool reviewed and sent, t
   await restore(page, vector(12).phrase);
   await cardanoTab(page);
   await expect(page.getByTestId("staking-row-pool")).toHaveText("Staking with LOGIC");
+  await lookedAfterRestore(koios);
 
   // The page reads the pool's details and the account's DRep, fresh: never registered, so what registering costs too.
   let reads = koios.calls.length;
@@ -3273,6 +3619,27 @@ const rewardsPreprod = JSON.parse(readFileSync(new URL("../tests/fixtures/reward
   account_reward_history: Array<{ earned_epoch: number; spendable_epoch: number; amount: string; type: string; pool_id_bech32: string | null }>;
 };
 
+/**
+ * `rows` in the `order` asked, as PostgREST sorts them: by each `column.asc` or `.desc` in turn, a row with none
+ * last ascending and first descending. Served in the order asked, a fake can't hide a wrong one (1.5.0's release
+ * review, C24).
+ */
+function orderedAs<T extends Record<string, string | number | null>>(rows: T[], order: string | null): T[] {
+  const keys = (order ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((key) => ({ column: key.split(".")[0]!, desc: key.split(".")[1] === "desc" }));
+  return [...rows].sort((a, b) => {
+    for (const { column, desc } of keys) {
+      const [x, y] = [a[column] ?? null, b[column] ?? null];
+      if (x === y) continue;
+      const before = x === null ? 1 : y === null ? -1 : x < y ? -1 : 1;
+      return desc ? -before : before;
+    }
+    return 0;
+  });
+}
+
 test("staking: the rewards history, read only once it's opened (chunk 30)", async ({ context, koios }) => {
   // The recorded rewards, moved so the newest is next epoch's whatever today is: Koios lists it before it's paid.
   const recorded = rewardsPreprod.account_reward_history;
@@ -3287,7 +3654,8 @@ test("staking: the rewards history, read only once it's opened (chunk 30)", asyn
       const url = new URL(route.request().url());
       asked.push({ query: url.searchParams, body: route.request().postDataJSON() });
       const offset = Number(url.searchParams.get("offset"));
-      return route.fulfill({ json: rows.slice(offset, offset + Number(url.searchParams.get("limit"))) });
+      const sorted = orderedAs(rows, url.searchParams.get("order"));
+      return route.fulfill({ json: sorted.slice(offset, offset + Number(url.searchParams.get("limit"))) });
     },
   );
   const page = await openApp(context);
@@ -3298,18 +3666,23 @@ test("staking: the rewards history, read only once it's opened (chunk 30)", asyn
   await page.getByTestId("staking-row").click();
   await expect(page.getByTestId("your-pool")).toContainText("LOGIC · Logical Mechanism");
   expect(asked).toHaveLength(0);
+  // The page's own reads are over first: its DRep card asks `epoch_params` for what registering costs, and an answer
+  // landing after the count below was taken for the history's (CI, the 1.5.0 PR).
+  await expect(page.getByTestId("drep-card")).toBeVisible();
+  await expect(page.getByTestId("drep-card")).not.toContainText("Reading your DRep…");
 
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Rewards history" }).click();
   await expect(page.getByRole("heading", { name: "Rewards history", level: 1 })).toBeVisible();
   await expect(page.getByTestId("rewards-total")).toContainText("Paid in all656.746865 ₳");
   await expect(page.getByTestId("rewards-coming")).toContainText(`Epoch ${next} · LOGIC6.906754 ₳`);
-  // One request, all of it, for the account's own stake key; nothing else, not a pool's details for a ticker.
+  // One request, all of it, for the account's own stake key; nothing else, not a pool's details for a ticker. Oldest
+  // first, so a row added while it's read lands on the last page (1.5.0's release review, C24); listed newest first.
   expect(asked).toHaveLength(1);
   expect(asked[0]!.body).toEqual({ _stake_addresses: [rewardsPreprod.stake] });
   expect(Object.fromEntries(asked[0]!.query)).toEqual({
     select: "earned_epoch,spendable_epoch,amount,type,pool_id_bech32",
-    order: "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc",
+    order: "spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc",
     offset: "0",
     limit: "1000",
   });
@@ -3331,6 +3704,57 @@ test("staking: the rewards history, read only once it's opened (chunk 30)", asyn
   await page.getByRole("button", { name: "Rewards history" }).click();
   await expect(page.getByTestId("rewards-total")).toBeVisible();
   expect(asked).toHaveLength(2);
+});
+
+test("staking: a key with no pool has one way to its rewards history, and one that stopped has nothing still to come (1.5.0's release review, C26, C05)", async ({
+  context,
+  koios,
+}) => {
+  // The recorded rewards, the newest next epoch's whatever today is, served in the order asked.
+  const recorded = rewardsPreprod.account_reward_history;
+  const next = epochAt("preprod", Date.now()) + 1;
+  const shift = next - recorded[0]!.spendable_epoch;
+  const rows = recorded.map((r) => ({ ...r, earned_epoch: r.earned_epoch + shift, spendable_epoch: r.spendable_epoch + shift }));
+  await context.route(
+    (url) => url.pathname.endsWith("/account_reward_history"),
+    (route) => {
+      const url = new URL(route.request().url());
+      const offset = Number(url.searchParams.get("offset"));
+      const sorted = orderedAs(rows, url.searchParams.get("order"));
+      return route.fulfill({ json: sorted.slice(offset, offset + Number(url.searchParams.get("limit"))) });
+    },
+  );
+  // Registered, with rewards, and no pool: its pool retired, say.
+  const info = stakingPreprod.account_info[0];
+  koios.stakes.set(info.stake_address, { ...info, delegated_pool: null });
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByRole("heading", { name: "Not staking" })).toBeVisible();
+  await expect(page.getByTestId("staking-rewards")).toBeVisible();
+  // Its history once, under its rewards: not under Not staking as well.
+  await expect(page.getByRole("button", { name: "Rewards history" })).toHaveCount(1);
+
+  // Then it stopped: its rewards withdrawn, its deposit back. What it was paid stays, under Not staking now; next
+  // epoch's, which Koios lists until that epoch starts, goes to the treasury, never to it.
+  koios.stakes.set(info.stake_address, {
+    ...info,
+    status: "not registered",
+    delegated_pool: null,
+    delegated_drep: null,
+    rewards_available: "0",
+    withdrawals: info.rewards,
+  });
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByTestId("staking-rewards")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Rewards history" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Rewards history" }).click();
+  await expect(page.getByTestId("rewards-total")).toContainText("Paid in all656.746865 ₳");
+  await expect(page.getByTestId("rewards-year").locator(".list__row")).toHaveCount(50);
+  await expect(page.getByTestId("rewards-coming")).toHaveCount(0);
 });
 
 test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {
@@ -3507,6 +3931,7 @@ test("hide balances: the eye masks what the wallet holds, but not what a form se
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await lookedAfterRestore(koios);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Hide balances" }).click();
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("•••• ₳");
@@ -3551,6 +3976,7 @@ test("settings: how long it stays unlocked, and a check of the written phrase", 
   const page = await openApp(context);
   await restore(page, v.phrase);
   await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+  await lookedAfterRestore(koios);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
 
@@ -4216,7 +4642,8 @@ test.describe("the dApp connector", () => {
 
   test("a site session's return through Lovejoin counts its chain as it's sent, four at a time", async ({ context, koios }) => {
     const page = await siteSessionHolding40(context, koios);
-    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳");
+    // The review builds the chain's transactions in WebAssembly first: a busy machine takes a while.
+    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳", { timeout: 15_000 });
     // Each Koios answer waits a while, so the count shows as they go in.
     koios.delayMs = 1500;
     const send = page.getByRole("button", { name: /^(Send|Sending)/ });
@@ -4229,6 +4656,41 @@ test.describe("the dApp connector", () => {
     // page's reading waits out the wallet's stale-read tries first.)
     const rows = page.getByTestId("site-session-rows");
     await expect(rows).toContainText("Through LovejoinSending 4 of 10 transactions", { timeout: 20_000 });
+    expect(koios.submitted).toHaveLength(4);
+  });
+
+  test("a site session's return through Lovejoin that a lock stopped waits at the account for Bring it back, and Disconnect says so (1.5.0's cross-area review, X10)", async ({
+    context,
+    koios,
+  }) => {
+    const page = await siteSessionHolding40(context, koios);
+    // The review builds the chain's transactions in WebAssembly first: a busy machine takes a while.
+    await expect(page.getByTestId("site-back-review")).toContainText("Through Lovejoin2 boxes of 10 ₳", { timeout: 15_000 });
+    // Send sends the first four of the ten; the rest wait for blocks to take those, which never happens here.
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => koios.submitted.length, { timeout: 15_000 }).toBe(4);
+    await expect(page.getByTestId("site-back-review")).toHaveCount(0);
+
+    // A lock stops the chain there. Unlocked, nothing sends the rest: it stays at the account until Bring it back.
+    await page.getByRole("button", { name: "Lock", exact: true }).click();
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Unlock" }).click();
+    await page.getByRole("button", { name: "dApps", exact: true }).click();
+    await page.getByTestId("dapp-sites").getByRole("button").click();
+    // (The fake Koios still lists what the chain spent, so the reading Send started waits out the wallet's stale-read
+    // tries first, and the unlock's run, which marks the chain stopped, waits its turn behind it.)
+    await expect(page.getByTestId("site-session-rows")).toContainText(
+      "Through LovejoinStopped after 4 of 10 transactions; the rest stays at the account until you bring it back",
+      { timeout: 20_000 },
+    );
+    // So nothing says its return is on its way, and Disconnect waits for everything to be brought back first.
+    const disconnect = page.getByTestId("site-disconnect");
+    await expect(disconnect).toHaveAttribute("title", "Bring everything back first");
+    await expect(disconnect).toBeDisabled();
+    await expect(page.getByTestId("site-session-why")).toContainText(
+      "Disconnect waits until everything in it is brought back.",
+    );
+    await expect(page.getByTestId("site-session-wait")).toHaveCount(0);
     expect(koios.submitted).toHaveLength(4);
   });
 
@@ -4279,6 +4741,112 @@ test.describe("the dApp connector", () => {
     expect(await sign.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(sign.getByTestId("dapp-own-key")).toContainText("your payment key with a stake part that isn't yours");
     await snap(sign, "dapp-sign-tx-long-token");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect((await signing).error?.code).toBe(2);
+  });
+
+  /**
+   * The 24-word phrase restored with two public accounts, and a site connected to Account 1, as Sites has it: the
+   * site's page, one of Account 1's UTxOs as the input of a transaction by hand, and Account 2's stake key hash.
+   */
+  async function siteOnAccount1(
+    context: BrowserContext,
+    koios: KoiosFake,
+  ): Promise<{ dapp: Page; input: string; stake: string }> {
+    const second = accountVector(24, 1);
+    // Account 2 has used an address: the restore's look finds it, so the wallet has two public accounts.
+    koios.usedStakes.add(second.preprod.stake);
+    const page = await openApp(context);
+    await restore(page, vector(24).phrase);
+    await expect(page.getByTestId("seedelf-lovelace")).not.toHaveText("— ₳");
+    // Account 1's reading, the look's two (Account 2, used, then Account 3), and only then the scan's: the look has
+    // found Account 2.
+    await expect.poll(() => koios.calls.filter((c) => c === "account_addresses")).toHaveLength(4);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: /^Sites/ }).click();
+    const toggle = page.getByRole("switch", { name: "Let sites connect to Seedelf Wallet" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    // The site gets Account 1, as Sites has it.
+    await expect(page.getByLabel("The account sites use")).toHaveValue("0");
+    const dapp = await openDapp(context);
+    const opened = connectorWindow(context);
+    const enabling = dapp.evaluate(() => (window as any).cardano.seedelf.enable().then(() => true));
+    const connect = await opened;
+    const closed = connect.waitForEvent("close");
+    await connect.getByRole("radio", { name: "Your public account" }).click();
+    await connect.getByRole("button", { name: "Connect", exact: true }).click();
+    expect(await enabling).toBe(true);
+    await closed;
+    const [utxo] = (await cip30(dapp, "getUtxos")).value as string[];
+    const index = Number.parseInt(utxo!.slice(72, 74), 16) < 24 ? utxo!.slice(72, 74) : utxo!.slice(72, 76);
+    return {
+      dapp,
+      input: `825820${utxo!.slice(8, 72)}${index}`,
+      stake: Buffer.from(bech32Bytes(second.preprod.stake).slice(1)).toString("hex"),
+    };
+  }
+
+  test("a site's prompt never calls someone else's address under another account's stake key that account's (1.5.0's release review, C01)", async ({
+    context,
+    koios,
+  }) => {
+    const { dapp, input, stake } = await siteOnAccount1(context, koios);
+    // A site's transaction, by hand: one of Account 1's UTxOs, and 2 ₳ to someone else's key under Account 2's stake
+    // key, which none of the wallet's keys spends.
+    const to = `00${"ab".repeat(28)}${stake}`;
+    const tx = `84a30081${input}0181825839${to}1a001e8480021a00029810a0f5f6`;
+
+    const opened = connectorWindow(context);
+    const signing = cip30(dapp, "signTx", tx, false);
+    const sign = await opened;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    // Named by its payment key, whoever's stake key it carries: never "Your public account, Account 2", and no
+    // "It moves money between" line. The stake key's tie is said apart, with whose money it is.
+    const paid = sign.getByTestId("dapp-paid");
+    await expect(paid.locator("[data-value]")).toHaveAttribute("data-value", preprodAddress("ab".repeat(28), stake));
+    await expect(paid).toContainText("An address");
+    await expect(paid).not.toContainText("Your public account");
+    await expect(sign.getByTestId("dapp-ties")).toHaveCount(0);
+    await expect(sign.getByTestId("dapp-staked")).toHaveText(
+      "Someone else's address in it carries the stake key of Account 2: that money isn't yours. Signing still ties Account 1 to Account 2 on chain, where anyone can see it.",
+    );
+    await snap(sign, "dapp-sign-tx-staked");
+    await sign.getByRole("button", { name: "Decline" }).click();
+    expect((await signing).error?.code).toBe(2);
+  });
+
+  test("a site's prompt names the account whose stake key a certificate in it registers, and never says it isn't in it (1.5.0's cross-area review, X05)", async ({
+    context,
+    koios,
+  }) => {
+    const { dapp, input, stake } = await siteOnAccount1(context, koios);
+    // A site's transaction, by hand: one of Account 1's UTxOs, 2 ₳ to someone else's key under nobody's stake key,
+    // and an old-style registration of Account 2's stake key. That needs no signature of Account 2's, so Account 1's
+    // alone completes it, and ties the two on chain.
+    const to = `00${"ab".repeat(28)}${"cd".repeat(28)}`;
+    const tx = `84a40081${input}0181825839${to}1a001e8480021a00029810048182008200581c${stake}a0f5f6`;
+
+    const opened = connectorWindow(context);
+    const signing = cip30(dapp, "signTx", tx, false);
+    const sign = await opened;
+    await expect(sign.getByRole("heading", { name: "Sign a transaction" })).toBeVisible();
+    // The certificate is named as Account 2's, never as a stake key that isn't yours, and a warning says what signing
+    // ties. Nothing it pays is Account 2's or carries its stake key: no tie of money, and no one else's address.
+    const staking = sign.getByTestId("dapp-staking");
+    await expect(staking).toContainText("A certificate for the stake key of Account 2.");
+    await expect(staking).not.toContainText("isn't yours");
+    await expect(sign.getByTestId("dapp-certified")).toHaveText(
+      "A certificate or withdrawal in it names the stake key of Account 2: signing ties Account 1 to Account 2 on chain, where anyone can see it.",
+    );
+    await expect(sign.getByTestId("dapp-ties")).toHaveCount(0);
+    await expect(sign.getByTestId("dapp-staked")).toHaveCount(0);
+    // The privacy note says what it ties, and nowhere does the prompt say a side of the wallet isn't in it.
+    await expect(sign.getByTestId("dapp-tx-privacy")).toHaveText(
+      "Signing ties this transaction to your public account.",
+    );
+    await expect(sign.getByText(/(isn't|aren't) in it/)).toHaveCount(0);
+    await snap(sign, "dapp-sign-tx-certified");
     await sign.getByRole("button", { name: "Decline" }).click();
     expect((await signing).error?.code).toBe(2);
   });
@@ -4560,6 +5128,38 @@ test("a mainnet build switches networks in Settings, and marks preprod on every 
   expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toBe(vector(12).preprod.receive_0);
 });
 
+test("a restore on preprod leaves mainnet's private sessions to Find leftovers, and After a restore says so there (1.5.0's release review, C19)", async ({
+  context,
+}) => {
+  const { host_permissions: hosts } = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as { host_permissions: string[] };
+  test.skip(!hosts.includes("https://api.koios.rest/*"), "a preprod-only build has one network");
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  // The restore's scan looked on preprod, and finished there.
+  await expect
+    .poll(async () => (await askWorker(page, { type: "session-scan-due" })).reply.value)
+    .toEqual({ due: false, scanning: false });
+
+  // Never on mainnet, which the restore marked as not looked at: After a restore says so there.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("group", { name: "Cardano network" }).getByRole("button", { name: "Mainnet" }).click();
+  await page.getByRole("button", { name: "Switch to Mainnet" }).click();
+  await expect(page.getByTestId("network")).toHaveText("MAINNET");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  const due = page.getByTestId("dapp-found-due");
+  await expect(due).toHaveText(
+    "The restore didn't look for private sessions' money on Mainnet, or didn't finish looking: press Find leftovers.",
+  );
+  await page.getByTestId("dapp-found").getByRole("button", { name: "Find leftovers" }).click();
+  await expect(page.getByTestId("dapp-found-result")).toHaveText(
+    "Nothing found on Mainnet: no other one-time account holds anything or has an order open.",
+  );
+  await expect(due).toHaveCount(0);
+});
+
 test.describe("a mainnet build's welcome", () => {
   // A fresh install of the store's build starts on mainnet.
   test.use({ network: "mainnet" });
@@ -4588,5 +5188,67 @@ test.describe("a mainnet build's welcome", () => {
     await expect(page.getByTestId("network")).toHaveText("PREPROD");
     expect((await askWorker(page, { type: "status" })).reply.value).toMatchObject({ state: "unlocked", network: "preprod" });
     expect((await askWorker(page, { type: "account" })).reply.value.receiveAddress).toBe(vector(12).preprod.receive_0);
+  });
+});
+
+test.describe("a mainnet build on mainnet", () => {
+  test.use({ network: "mainnet" });
+
+  test("Read Cardano through Koios only outlives Remove wallet: the restore after it asks Seedelf Wallet's server nothing (1.5.0's release review, C08)", async ({
+    context,
+    koios,
+  }) => {
+    const { host_permissions: hosts } = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as { host_permissions: string[] };
+    test.skip(!hosts.includes("https://api.koios.rest/*"), "a preprod-only build has no data layer");
+    // Seedelf Wallet's own server, which this build reads first on mainnet: every request kept, and each read
+    // answered as too large for it, so that read alone goes to Koios and the server is asked again the next time
+    // (data-layer.ts `readFallback`). Nothing holds a part on Koios for the restore after Remove wallet.
+    const data: string[] = [];
+    const cors = {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, POST",
+      "access-control-allow-headers": "accept, content-type",
+    };
+    await context.route(`${NETWORKS.mainnet.data}/**`, (route) => {
+      const request = route.request();
+      if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+      data.push(new URL(request.url()).pathname);
+      return route.fulfill({
+        status: 503,
+        headers: { ...cors, "content-type": "application/json" },
+        body: JSON.stringify({ error: "too large for this server" }),
+      });
+    });
+    const page = await openApp(context);
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("network")).toHaveText("MAINNET");
+    await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+    expect(data).toContain("/api/v1/account_addresses");
+
+    await page.getByRole("button", { name: "Settings" }).click();
+    const only = page.getByRole("switch", { name: "Read Cardano through Koios only" });
+    await only.click();
+    await expect(only).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("button", { name: "Remove wallet" }).click();
+    await page.getByLabel("Type delete wallet to confirm").fill("delete wallet");
+    await page.getByRole("button", { name: "Remove wallet" }).click();
+    await expect(page.getByTestId("wallet-removed")).toHaveText("Wallet removed from this browser.");
+
+    // Restored again, on mainnet as it was: its reading, its look for accounts and its scan of the one-time accounts
+    // all go to Koios, before Settings could be opened to turn the switch back on.
+    const asked = data.length;
+    const reads = koios.calls.length;
+    await restore(page, vector(12).phrase);
+    await expect(page.getByTestId("network")).toHaveText("MAINNET");
+    await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+    await expect
+      .poll(async () => (await askWorker(page, { type: "session-scan-due" })).reply.value)
+      .toEqual({ due: false, scanning: false });
+    expect(koios.calls.slice(reads).filter((c) => c === "account_addresses")).toHaveLength(3);
+    expect(data).toHaveLength(asked);
+    // And Settings says so.
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("switch", { name: "Read Cardano through Koios only" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("server-status")).toHaveText("Using Koios only.");
   });
 });

@@ -99,7 +99,7 @@ import { assetFingerprint } from "../tokens";
 import { Activity } from "./Activity";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
-import { Dapps, DappsRow, type DappStart } from "./Dapps";
+import { Dapps, DappsRow, type DappStart, SCAN_DUE_EVERY_MS } from "./Dapps";
 import { MoveIn } from "./MoveIn";
 import { Receive, ReceiveSeedelf } from "./Receive";
 import { RemoveSeedelf } from "./RemoveSeedelf";
@@ -107,7 +107,7 @@ import { Staking } from "./Staking";
 import { Tokens } from "./Tokens";
 import { Transfer } from "./Transfer";
 import { Utxos } from "./Utxos";
-import { isRunningSwap, SwapRow } from "./Swaps";
+import { chainGoing, isRunningSwap, SwapRow } from "./Swaps";
 import { Withdraw } from "./Withdraw";
 
 /** Read again on open when the last reading is older than this. */
@@ -299,7 +299,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   const [dappStart, setDappStart] = useState<DappStart>();
   // Swaps that run themselves and aren't over, from the device's own record.
   const [swaps, setSwaps] = useState<SessionView[]>([]);
-  // Sessions a restore's scan found, not over yet: the restore's note says how many (chunk 27).
+  // Sessions a restore's scan found, still to bring back (toBringBack): the restore's note says how many (chunk 27).
   const [found, setFound] = useState(0);
   // Lovejoin boxes on their way back, from the device's own schedule.
   const [held, setHeld] = useState<LovejoinHeld>();
@@ -397,7 +397,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         (all) => {
           if (!live) return;
           setSwaps(all.filter(isRunningSwap));
-          setFound(all.filter((s) => s.recovered && s.stage !== "closed").length);
+          setFound(all.filter(toBringBack).length);
         },
         () => undefined,
       );
@@ -433,6 +433,33 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
   useEffect(() => {
     if (restored && balances) void call("restored", { seen: true }).catch(() => undefined);
   }, [restored, balances !== undefined]);
+  // The restore's look for private sessions' money, if it didn't finish on this network: once none runs, its note
+  // points to Find leftovers (1.5.0's release review, C19). The device's record alone, while the note shows: asked
+  // again while the look runs, which may end either way; once it has ended, only another scan, Find leftovers on the
+  // dApps page, changes the answer.
+  const [unscanned, setUnscanned] = useState(false);
+  useEffect(() => {
+    if (!restored || screen !== "home") return;
+    let live = true;
+    let later: ReturnType<typeof setTimeout> | undefined;
+    const read = () =>
+      void call("session-scan-due", {}).then(
+        (d) => {
+          if (!live) return;
+          setUnscanned(d.due && !d.scanning);
+          if (d.scanning) later = setTimeout(read, SCAN_DUE_EVERY_MS);
+        },
+        // A worker that didn't answer is asked again: one ask lost mustn't leave the note silent for good.
+        () => {
+          if (live) later = setTimeout(read, SCAN_DUE_EVERY_MS);
+        },
+      );
+    read();
+    return () => {
+      live = false;
+      clearTimeout(later);
+    };
+  }, [restored, screen]);
 
   // Waiting on the sent transaction holds new payments back: for 10 minutes,
   // or, when Koios didn't answer it, until the worker settles it.
@@ -787,6 +814,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
             balances={balances}
             failed={!!error}
             sessions={found}
+            unscanned={unscanned}
             onDismiss={() => {
               void call("restored", { seen: true }).catch(() => undefined);
               setRestored(false);
@@ -1249,6 +1277,14 @@ export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "carda
 }
 
 /**
+ * A session the restore's scan found that's still to bring back: open, its return not on its way, through Lovejoin's
+ * chain either (C09), as the dApps page reads it, and not waiting to end by itself, its order over and its account
+ * read empty (`settling`, the last review L4). The restore's note counts them (chunk 27; cross-area review X11).
+ * Exported for its test.
+ */
+export const toBringBack = (s: SessionView) => !!s.recovered && s.stage === "open" && !chainGoing(s) && !s.settling;
+
+/**
  * "Wallet restored", on the Home a restore opens, once (blind test T20a, T20b): restore and create led to the same
  * Home, so an empty restored wallet looked new, and both testers wondered whether the phrase had found their wallet.
  * While the first reading runs, it says so (once it has failed, only that a used phrase's balances show once read: the
@@ -1257,20 +1293,26 @@ export function OtherSide({ side, lovelace, onOpen }: { side: "seedelf" | "carda
  * more accounts finds some it says what the account shown holds, by its name, and how many more the phrase used, which
  * the picker switches to: never "nothing… never used" from account 0 alone when the money is in another (the
  * pass-two review). Only accounts the look found used are counted. Once the restore's scan finds private sessions
- * from before (chunk 27), it says how many, and where they come back from. In the banners' style, at the top, with
- * Dismiss. Exported for its tests.
+ * from before (chunk 27), it says how many, and where they come back from; if it ends without finishing, where to
+ * look again (1.5.0's release review, C19). In the banners' style, at the top, with Dismiss. Exported for its tests.
  */
 export function RestoredNote({
   balances,
   failed = false,
   sessions = 0,
+  unscanned = false,
   onDismiss,
 }: {
   balances?: Balances;
   /** The reading failed: Home's alert says so, and this doesn't say it's reading. */
   failed?: boolean;
-  /** Private sessions the restore's scan found, not over yet. */
+  /** Private sessions the restore's scan found, still to bring back (toBringBack). */
   sessions?: number;
+  /**
+   * The restore's scan ended without finishing on this network: a read failed, or the worker stopped. Never a lock: it
+   * wipes the note itself, and the dApps page's After a restore says it then (cross-area review X25).
+   */
+  unscanned?: boolean;
   onDismiss: () => void;
 }) {
   const t = useT();
@@ -1302,6 +1344,7 @@ export function RestoredNote({
           what,
           others > 0 && t("home.restored.others", { count: others }),
           sessions > 0 && t("home.restored.sessions", { count: sessions }),
+          unscanned && t("home.restored.unscanned"),
         ])}
       </div>
       <button type="button" className="tx-banner__dismiss" onClick={onDismiss}>

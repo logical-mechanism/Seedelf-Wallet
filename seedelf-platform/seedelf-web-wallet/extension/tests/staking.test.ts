@@ -5,7 +5,7 @@
 // payment, or not.
 import { describe, expect, it, vi } from "vitest";
 
-import { Koios, type FetchLike } from "../src/background/koios";
+import { Koios, type FetchLike, type KoiosReward } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
 import { LOCAL_POOLS_PREFIX, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation, takesDeposit } from "../src/background/staking";
 import { txIdOf } from "./fixtures/cbor";
@@ -131,9 +131,10 @@ describe("rewards history (chunk 30)", () => {
     expect(paths(t)).toEqual(["account_reward_history"]);
     const [asked] = t.koios.calls;
     expect(asked!.body).toEqual({ _stake_addresses: [rewardsPreprod.stake] });
+    // Asked oldest first, so what db-sync adds while it's read lands on the last page; shown newest first.
     expect(Object.fromEntries(new URLSearchParams(asked!.query))).toEqual({
       select: "earned_epoch,spendable_epoch,amount,type,pool_id_bech32",
-      order: "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc",
+      order: "spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc",
       offset: "0",
       limit: "1000",
     });
@@ -169,10 +170,11 @@ describe("rewards history (chunk 30)", () => {
       row(298, "proposal_refund", null),
       row(297, "refund"),
       row(296, "something new", null),
-      // Not rewards: an amount that isn't lovelace, an epoch that isn't whole, a pool ID that isn't one.
+      // Not rewards: an amount that isn't lovelace, an epoch that isn't whole.
       row(295, "member", LOGIC, "-5"),
       row(294, "member", LOGIC, "1.5"),
       { ...row(293), spendable_epoch: 293.5 },
+      // A pool ID that isn't one: the reward is kept, with no pool (the page says Other).
       row(292, "member", "addr1x"),
     ]);
     const rows = await t.staking.rewardHistory("preprod");
@@ -188,6 +190,54 @@ describe("rewards history (chunk 30)", () => {
       [296, "other", undefined],
       [292, "member", undefined],
     ]);
+  });
+
+  // A reward account several pools pay: 15 pools' rewards for 100 epochs, two pages. db-sync changes an account's
+  // newest rows while it's read: next epoch's as they're worked out, a stopped key's deleted at an epoch's start.
+  const leader = (epoch: number, pool: number, amount = "1000000"): KoiosReward => ({
+    earned_epoch: epoch - 2,
+    spendable_epoch: epoch,
+    amount,
+    type: "leader",
+    pool_id_bech32: `pool1p${pool}`,
+  });
+  const fifteenPools = () => Array.from({ length: 1500 }, (_, i) => leader(600 - Math.floor(i / 15), i % 15));
+  /** The history read while db-sync changes `table` once the first page has been served. */
+  async function readWhile(table: KoiosReward[], change: () => void) {
+    const t = await unlocked();
+    t.koios.rewards.set(rewardsPreprod.stake, table);
+    const real = t.koios.fetch;
+    let served = 0;
+    t.koios.fetch = async (url, init) => {
+      const answer = await real(url, init);
+      if (url.includes("/account_reward_history") && served++ === 0) change();
+      return answer;
+    };
+    return (await t.staking.rewardHistory("preprod")).map((r) => `${r.epoch}.${r.pool?.id}`);
+  }
+
+  it("reads oldest first, so next epoch's worked out between pages is on top, and no row twice (1.5.0's release review, C24)", async () => {
+    const table = fifteenPools();
+    const rows = await readWhile(table, () => table.push(...Array.from({ length: 13 }, (_, p) => leader(601, p, "340000000"))));
+    expect(rows).toHaveLength(1513);
+    expect(new Set(rows).size).toBe(1513);
+    expect(rows.slice(0, 13).every((r) => r.startsWith("601."))).toBe(true);
+    // Newest first, each epoch's in the order the page always read: by kind, then pool, then amount.
+    expect(rows.slice(13, 16)).toEqual(["600.pool1p0", "600.pool1p1", "600.pool1p10"]);
+  });
+
+  it("skips no row when a stopped key's newest are deleted between pages", async () => {
+    const table = fifteenPools();
+    const rows = await readWhile(table, () => table.splice(0, 15));
+    expect(rows.sort()).toEqual(table.map((r) => `${r.spendable_epoch}.${r.pool_id_bech32}`).sort());
+  });
+
+  it("keeps rewards alike in every column: each was paid, as two governance deposits back in one epoch were", async () => {
+    const t = await unlocked();
+    const refund = { earned_epoch: 580, spendable_epoch: 581, amount: "100000000000", type: "proposal_refund", pool_id_bech32: null };
+    t.koios.rewards.set(rewardsPreprod.stake, [refund, { ...refund }]);
+    const back = { epoch: 581, earned: 580, amount: "100000000000", kind: "proposal_refund" };
+    expect(await t.staking.rewardHistory("preprod")).toEqual([back, back]);
   });
 
   it("is the public account the wallet is on's", async () => {

@@ -1,7 +1,8 @@
 // Remove wallet, unlocked, first says what removing it would leave behind:
 // a payment that may still go through, private sessions whose one-time
-// accounts hold something (a restore's scan finds their money, chunk 27, but
-// not what each was for), a chain through Lovejoin being sent.
+// accounts hold something (a restore's scan finds what the accounts hold,
+// chunk 27, but not what each was for, nor what a site's session left open at
+// the site), a chain through Lovejoin being sent.
 // With any, it takes a second yes, and the worker refuses without one. A
 // payment that may still go through is kept, sealed, through the reset, so
 // the same phrase restored here watches it again and nothing pays beside it;
@@ -183,7 +184,7 @@ describe("a payment that may still go through, across Remove wallet", () => {
 });
 
 describe("Remove wallet's screen", () => {
-  it("promises back only what a restore finds, private sessions' money among it since its scan (chunk 27)", async () => {
+  it("promises back only what a restore finds, never what a site's session left open at the site (chunk 27)", async () => {
     const { RemoveWallet } = await import("../src/ui/screens/Settings");
     const html = renderToStaticMarkup(createElement(RemoveWallet, { onBack: () => undefined, onRemoved: () => undefined }))
       .replace(/<[^>]+>/g, " ")
@@ -191,10 +192,13 @@ describe("Remove wallet's screen", () => {
       .replace(/\s+/g, " ");
     expect(html).not.toContain("your recovery phrase brings them back");
     // In plain words, not "private sessions' one-time accounts" (chunk 23's second review, SE-4). Only the accounts
-    // a restore looks at, in order: never one added by number past an unused one (release review C09).
+    // a restore looks at, in order: never one added by number past an unused one (release review C09). Of a private
+    // session, only what its account holds: the scan can't see a listing, or an order at a contract the wallet
+    // doesn't pin, and after a restore no site connects to that session again to close it (1.5.0's release review, C17).
     expect(html).toContain(
-      "Your recovery phrase brings back your private balance, Lovejoin boxes, accounts up to the first unused one and private sessions' money.",
+      "Your recovery phrase brings back your private balance, Lovejoin boxes, accounts up to the first unused one and what private sessions' accounts hold, not what a site's session left open at the site, like a listing or an order the wallet can't cancel: close it there first.",
     );
+    expect(html).not.toContain("private sessions' money");
     // Until the worker says what's open, it can't be removed.
     expect(html).toContain("Checking…");
     // The screen its warning names is a link to it, inside the sentence (chunk 23's second review, SE-4).
@@ -229,15 +233,18 @@ describe("Remove wallet's screen", () => {
     ]);
   });
 
-  it("Forgot password says what the phrase brings back", async () => {
+  it("Forgot password says what the phrase brings back, and what a site's session left at the site it doesn't", async () => {
     const { Reset } = await import("../src/ui/screens/Unlock");
     const html = renderToStaticMarkup(createElement(Reset, { onCancel: () => undefined, onReset: () => undefined }))
       .replace(/<[^>]+>/g, " ")
       .replaceAll("&#x27;", "'")
       .replace(/\s+/g, " ");
+    // As Remove wallet's note, less "close it there first": with the password forgotten, nothing can sign at the site
+    // (1.5.0's release review, C17).
     expect(html).toContain(
-      "Your phrase brings back your private balance, Lovejoin boxes, accounts up to the first unused one and private sessions' money.",
+      "Your phrase brings back your private balance, Lovejoin boxes, accounts up to the first unused one and what private sessions' accounts hold, not what a site's session left open at the site, like a listing or an order the wallet can't cancel.",
     );
+    expect(html).not.toContain("close it there first");
     // It runs locked, and keeps a payment that may still go through: it says so, and what brings it back.
     expect(html).toContain(
       "Restoring the same phrase here keeps watching a payment that may still go through, unless another wallet is made or restored here first.",

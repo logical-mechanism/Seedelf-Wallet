@@ -72,6 +72,10 @@ describe("a chain through Lovejoin stopped partway (independent review L23)", ()
     expect(page).toContain(BY_HAND);
     expect(page).not.toContain(BY_ITSELF);
     expect(page).toContain("Bring it back");
+    // Nothing is sending the rest: its return isn't on its way, and Disconnect waits for Bring it back, as the worker's
+    // own check says (cross-area review X10).
+    expect(page).not.toContain("Its return is on its way");
+    expect(page).toContain("Disconnect waits until everything in it is brought back.");
   });
 
   it("on a mix, which runs by itself, says it comes back directly", () => {

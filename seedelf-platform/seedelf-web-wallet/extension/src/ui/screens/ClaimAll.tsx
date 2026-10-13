@@ -9,10 +9,11 @@
 // comes with the next return, a UTxO no return takes: launch review H6),
 // why a return leaves Lovejoin out (another's chain may have taken the
 // pool's boxes: #23), and warns before an ADA Handle comes into the private
-// balance (#57). Returns that go through Lovejoin can all be built again to
-// come back directly instead, by a switch first on the review, as a single
-// return's review has (privacy review §4.1; blind test §9.8: it was a link
-// under the costs).
+// balance (#57), and that another browser may still use a session a
+// restore's scan found (C18). Returns that go through Lovejoin can all be
+// built again to come back directly instead, by a switch first on the
+// review, as a single return's review has (privacy review §4.1; blind test
+// §9.8: it was a link under the costs).
 
 import { useEffect, useState } from "react";
 import { joinSentences, t, useT } from "../../i18n";
@@ -31,13 +32,29 @@ import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda } from "../format";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
-import { pairOf } from "./Swaps";
+import { chainGoing, pairOf } from "./Swaps";
 
-/** A session Bring everything back can take: it holds something, and nothing of it is on its way or runs by itself. */
-export const isClaimable = (s: SessionView) => s.stage === "open" && !s.auto && (s.holding?.utxos ?? 0) > 0;
+/**
+ * A session Bring everything back can take: it holds something, and nothing of it is on its way (its return's chain
+ * through Lovejoin, which the worker would refuse to follow with another, included: C09) or runs by itself.
+ */
+export const isClaimable = (s: SessionView) => s.stage === "open" && !s.auto && !chainGoing(s) && (s.holding?.utxos ?? 0) > 0;
 
-/** A session by name: its site, or its swap. */
-const nameOf = (network: NetworkName, s?: SessionView) => (s?.site ? new URL(s.site.origin).host : s ? pairOf(s, network) : t("claim.aSession"));
+/**
+ * A session by name: its site, its number when the restore scan found it (what it was for isn't known, and its swap's
+ * name would be every found session's: 1.5.0's release review, C37), or its swap.
+ */
+const nameOf = (network: NetworkName, s?: SessionView) =>
+  s?.site
+    ? new URL(s.site.origin).host
+    : s?.recovered
+      ? t("claim.session", { number: s.index + 1 })
+      : s
+        ? pairOf(s, network)
+        : t("claim.aSession");
+
+/** What's said beside a session's name: its number, or that the restore scan found it, for one its number names. */
+const asideOf = (index: number, s?: SessionView) => (s?.recovered ? t("swaps.found") : t("claim.session", { number: index + 1 }));
 
 type Built = { returns: SessionBackSummary[]; skipped: Array<{ index: number; reason: string }> };
 type Result = { sent: Array<{ index: number; txHash: string }>; failed: Array<{ index: number; error: string }> };
@@ -132,7 +149,7 @@ export function ClaimAll({
               {result.sent.map((x) => (
                 <li key={x.index} className="list__row">
                   <span className="list__name">{nameOf(network, byIndex.get(x.index))}</span>
-                  <span className="list__value note">{t("claim.session", { number: x.index + 1 })}</span>
+                  <span className="list__value note">{asideOf(x.index, byIndex.get(x.index))}</span>
                 </li>
               ))}
             </ul>
@@ -241,6 +258,7 @@ export function ClaimReview({
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
   const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
+  const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
 
   return (
     <>
@@ -287,7 +305,7 @@ export function ClaimReview({
                     <span className="token-row__label">{nameOf(network, byIndex.get(r.index))}</span>
                     <span className="token-row__amount">{formatAda(r.lovelace)}{"\u00a0₳"}</span>
                     <span className="token-row__sub">
-                      {t("claim.session", { number: r.index + 1 })}
+                      {asideOf(r.index, byIndex.get(r.index))}
                       {r.tokens.length ? ` · ${t("claim.andTokens", { count: r.tokens.length })}` : ""}
                       {r.lovejoin ? ` · ${t("claim.andBoxes", { count: r.lovejoin.boxes })}` : ""}
                       {r.lovejoinSkipped ? ` · ${t("claim.lovejoinLeftOut")}` : ""}
@@ -327,6 +345,13 @@ export function ClaimReview({
                 </li>
               ))}
           </ul>
+        </Callout>
+      )}
+      {/* Found by a restore's scan: the browser that started it may still be running it, as its own page warns
+          (1.5.0's release review, C18). */}
+      {found > 0 && (
+        <Callout tone="warn" testId="claim-found-warning">
+          {t("claim.warn.found", { count: found })}
         </Callout>
       )}
       {picked.map((r) => (

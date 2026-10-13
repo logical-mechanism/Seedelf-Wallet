@@ -7,12 +7,12 @@ The owner picked it on 2026-10-12, from [post-release-roadmap.md](../../post-rel
 ## What Koios has
 
 - **`account_rewards` is deprecated,** and preprod's refuses an `order` (`column record.earned_epoch does not exist`: its rows are nested, one per stake key). **`account_reward_history` replaces it,** on both networks: flat rows, `earned_epoch`, `spendable_epoch`, `amount` (text), `type`, `pool_id_bech32` (null for a reward no pool paid).
-- **Rows come from db-sync's `reward` (`member`, `leader`, `refund`) and `reward_rest` (`reserves`, `treasury`, `proposal_refund`).** The next epoch's are listed before they're paid: db-sync inserts them during the epoch before (preprod at epoch 318 listed epoch 319's), and its docs say some may be missing until then. What `account_info` counts as paid is `spendable_epoch` at or before the current epoch.
+- **Rows come from db-sync's `reward` (`member`, `leader`, `refund`) and `reward_rest` (`reserves`, `treasury`, `proposal_refund`).** The next epoch's are listed before they're paid: db-sync inserts them during the epoch before (preprod at epoch 318 listed epoch 319's), and its docs say some may be missing until then. What `account_info` counts as paid is `spendable_epoch` at or before the current epoch. (1.5.0's release review, C05: they're paid only to a key still registered at that epoch's start. A stopped key still has one listed in each of up to three epochs after it stops; at each epoch's start that one goes to the treasury, and db-sync deletes its row.)
 - **The public 12-word test account** has 87, all `member`, from two pools (LOGIC and GRADA), epochs 223 to 319 (`tests/fixtures/rewards-preprod.json`, recorded 2026-10-12 by `record-rewards.mjs`).
 
 ## The request
 
-One each time the page opens, 1,000 rows a request (Koios's most), newest first:
+One each time the page opens, 1,000 rows a request (Koios's most), newest first (oldest first since 1.5.0's release review: below):
 
 ```text
 POST account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool_id_bech32
@@ -21,13 +21,13 @@ POST account_reward_history?select=earned_epoch,spendable_epoch,amount,type,pool
 ```
 
 - **Read whole, not a page at a time:** a pool pays a member once an epoch, so an account staked since Shelley has about 400, one request, and the page can total them. A pool operator's reward account can pass 1,000 (the one 13 mainnet pools pay has 5,766); the next request is made then, as the pool list's is. One call reads every page from the same server (`data-layer.ts`).
-- **The order is total,** so no row is on two pages: an operator's account can take several pools' rewards in one epoch, and two treasury withdrawals could pay it in one.
+- **The order is total,** so no row is on two pages: an operator's account can take several pools' rewards in one epoch, and two treasury withdrawals could pay it in one. (1.5.0's release review, C24: not while db-sync changes the account's rows between requests. It adds next epoch's rewards during an epoch, and at an epoch's start adds its deposits back and deletes a stopped key's unpaid rows. Newest first, each change moved every later page, so a row came twice, counted twice in Paid in all, or not at all. The wallet now asks `spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc`, oldest first, where those changes land on the last page, and sorts the rows newest first itself. It drops none as a repeat: rows alike in every column, such as two governance deposits back in one epoch, were each paid.)
 - **Only when asked:** opening Staking costs what it did. The history is a page of its own, read each time it opens and kept nowhere.
 - **Koios cost:** 1 request a visit; at the data layer's edge, 4 units, and one more each 16 KB it sends.
 
 ## The data layer (mainnet)
 
-A 22nd public route, `POST /api/v1/account_reward_history` (`api/src/public/account.rs`): Koios's path and JSON, taking exactly the request above (one stake key, that select and order, `limit=1000`, an `offset` that's a multiple of 1,000, up to 100,000). About one user, so never kept.
+A 22nd public route, `POST /api/v1/account_reward_history` (`api/src/public/account.rs`): Koios's path and JSON, taking exactly the request above (one stake key, that select and order, `limit=1000`, an `offset` that's a multiple of 1,000, up to 100,000). About one user, so never kept. (Since 1.5.0's release review it takes the oldest-first order alone, and refuses the newest-first one, which only a build from before that review asked: C24.)
 
 - **The SQL** follows Koios's `grest.account_reward_history` (CC-BY-4.0): `reward` joined to `pool_hash`, whose `view` is the bech32 Koios makes, union all `reward_rest` with no pool, both by `addr_id` (db-sync's `idx_reward_addr_id`, home's `idx_reward_rest_addr_id`), sorted in SQL as the order says (ascending puts a null pool last, as PostgREST does).
 - **Checked against mainnet Koios on 2026-10-12,** every page, row for row: the reward account 13 pools pay (5,766 rows), one 34 pools pay (2,513, pools' deposits back among them), a member the reserves and the treasury paid too (457), and a key never paid (none). All four from home in 0.5 s.
@@ -36,9 +36,9 @@ A 22nd public route, `POST /api/v1/account_reward_history` (`api/src/public/acco
 ## The wallet
 
 - **koios.ts `rewardHistory`,** and `DataLayerKoios`'s override, as every public read.
-- **staking.ts `rewardHistory`** (the `reward-history` request): the active account's stake key; each row checked (whole epochs, an amount in lovelace, a `pool1` ID, or the row is left out, since the page adds them up) and its kind read from `type` (`other` for one the wallet doesn't know); each pool named from the device alone (`poolsKnown`: this session's pool details, then the pool list), never asked for.
-- **Staking:** **Rewards history** under the rewards while the key is registered, and under *Not staking* when it was ever paid (`StakeInfo.rewarded`: rewards available plus withdrawals over 0, from the reading's own `account_info`), so stopping doesn't hide them.
-- **The page** (`Rewards.tsx`): what's been paid in all; **Next epoch**, the rows later than now (`epochAt`); then each year, newest first, on this device's calendar, its total on its heading; 50 rows at first, **Show more** for 50 more, asking no one. A row: the day its epoch started, then "Epoch 319 · LOGIC", the pool by its ticker or its ID cut short (whole on hover), "LOGIC, as its operator", "LOGIC's deposit back", "From the reserves", "From the treasury", "A governance action's deposit back", or "Other". The title's ⓘ says a pool pays at an epoch's start, for the epoch two before. A note says it's read from the server, which already knows the account, each time the page opens.
+- **staking.ts `rewardHistory`** (the `reward-history` request): the active account's stake key; each row checked (whole epochs and an amount in lovelace, or the row is left out, since the page adds them up; a pool ID that isn't `pool1…` is dropped, and the row reads Other) and its kind read from `type` (`other` for one the wallet doesn't know); each pool named from the device alone (`poolsKnown`: this session's pool details, then the pool list), never asked for.
+- **Staking:** **Rewards history** under the rewards while the key is registered, and under *Not staking* when it was ever paid (`StakeInfo.rewarded`: rewards available plus withdrawals over 0, from the reading's own `account_info`), so stopping doesn't hide them. (1.5.0's release review, C26: under *Not staking* only when the key isn't registered; a registered key with no pool had the button twice.)
+- **The page** (`Rewards.tsx`): what's been paid in all; **Next epoch**, the rows later than now (`epochAt`), and since 1.5.0's release review only while the key is registered, since a stopped key's are never paid (C05); then each year, newest first, on this device's calendar, its total on its heading; 50 rows at first, **Show more** for 50 more, asking no one. A row: the day its epoch started, then "Epoch 319 · LOGIC", the pool by its ticker or its ID cut short (whole on hover), "LOGIC, as its operator", "LOGIC's deposit back", "From the reserves", "From the treasury", "A governance action's deposit back", or "Other". The title's ⓘ says a pool pays at an epoch's start, for the epoch two before. A note says it's read from the server, which already knows the account, each time the page opens.
 - **Hidden balances** hide every amount, the totals too.
 - **15 new strings,** none critical (no warning, privacy note or alert); Spanish and Japanese machine-translated, as recorded in the provenance files.
 
@@ -46,6 +46,7 @@ A 22nd public route, `POST /api/v1/account_reward_history` (`api/src/public/acco
 
 - **Data layer:** `public_grammar.rs` takes the one request and refuses every other (another page size, an offset off the thousands or past 100,000, two keys, `_epoch_no`, another select or order); `live_public.rs` reads the four keys above whole and checks the pages make one list in the order, Koios's five columns, a pool exactly on a pool's rows, and what's been paid against `account_info`.
 - **Wallet:** `staking.test.ts`: the exact request, 87 rows, tickers from the session and the pool list with no `pool_info`, a second page past 1,000, the rows left out, the active account's key, and `rewarded`; `data-layer.test.ts`: every page on the data layer, or all again on Koios when one fails, and its weight; `rewards-screen.test.ts`: the totals, the years, next epoch's apart, the first 50, who paid each, hidden amounts, nothing yet, and where Staking offers it; `e2e/extension.spec.ts`: opening Staking asks nothing about rewards, the history asks once, Show more asks no one, and it's read again each time it opens.
+- **Added in 1.5.0's release review:** `staking.test.ts` reads the history while rows are added between pages, and while a stopped key's are deleted, skipping and repeating none, and keeps rows alike in every column (C24); the fakes serve the route in the order asked. `rewards-screen.test.ts` leaves out a stopped key's next epoch (C05), and Staking offers the page once to a registered key with no pool (C26). The data layer's grammar test refuses the old order (C24).
 
 ## Left for later
 

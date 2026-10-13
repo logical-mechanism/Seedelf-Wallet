@@ -1,6 +1,10 @@
 // The user's settings, in chrome.storage.local: none of them says anything
-// about the user's money, so they aren't sealed. Removing the wallet deletes
-// them, and a new wallet starts from the defaults.
+// about the user's money, so they aren't sealed. Removing the wallet, or
+// restoring it after a forgotten password, deletes them, and a new wallet
+// starts from the defaults, but for `koiosOnly`, which is kept as the network
+// is (handlers.ts reset-wallet): the restore after it, its look for accounts
+// and its scan of the one-time accounts too, asks only the server the user
+// chose (1.5.0's release review, C08).
 //
 // spendRewards      Staking rewards are withdrawn whenever the Cardano
 //                   account pays (a send, a move-in, an account-paid mint),
@@ -28,7 +32,8 @@
 // lovejoinDelay     drawn from (lovejoin.ts).
 // koiosOnly         Everything goes through Koios, never the wallet's own
 //                   data layer (data-layer.ts). Off by default; read at each
-//                   request, so turning it on needs no restart.
+//                   request, so turning it on needs no restart. Kept when
+//                   the wallet is removed (above).
 //
 // Where the toolbar button opens the wallet isn't one of these: it's the
 // browser's, not the wallet's (shared/open-in.ts). Nor is the network, which

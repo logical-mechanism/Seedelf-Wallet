@@ -779,6 +779,15 @@ pub struct Cert {
     pub anchor: Option<String>,
     /// It's about the account's own stake key.
     pub own: bool,
+    /// The stake key it's about, as its hash (hex), the account's own or
+    /// anyone's: a registration's, a stop's or a delegation's, alone or
+    /// together, and a pool registration's reward account's (1.5.0's last
+    /// review, L1). None for a script's, and for a pool's retirement, a
+    /// DRep's or the committee's. The extension names it when it's another
+    /// of the wallet's: an old-style registration of one, or a pool's reward
+    /// account, needs no signature of that key's, and signing ties the two
+    /// (1.5.0's release review, X05).
+    pub credential: Option<String>,
     /// The pool it stakes with, or a stake pool's own certificate's pool.
     pub pool: Option<String>,
     /// A stake pool's own certificate (kind "pool"): "register" (a new pool,
@@ -1327,6 +1336,7 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
             C::PoolRegistration {
                 operator,
                 pool_owners,
+                reward_account,
                 ..
             } => {
                 // An owner's stake is the pool's pledge, and it earns an
@@ -1339,11 +1349,24 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                         pool_id(operator)
                     );
                 }
+                // Its reward account takes no signature of its key's, so it
+                // can be another of the wallet's stake keys, which signing
+                // ties to the account: the extension is told it, as the stake
+                // key the certificate names (1.5.0's last review, L1). Told
+                // only: it signs nothing, so it stays out of the signers.
+                let reward_key = match Address::from_bytes(reward_account) {
+                    Ok(Address::Stake(s)) => match s.payload() {
+                        StakePayload::Stake(h) => Some(hex::encode(h)),
+                        StakePayload::Script(_) => None,
+                    },
+                    _ => None,
+                };
                 (
                     None,
                     Cert {
                         pool: Some(pool_id(operator)),
                         pool_action: Some("register".into()),
+                        credential: reward_key,
                         ..cert_kind("pool")
                     },
                     true,
@@ -1405,7 +1428,9 @@ fn inspect(account: &CardanoAccount, request: &TxRequest) -> Result<Inspection> 
                 continue;
             }
         };
-        match cred.and_then(stake_hash) {
+        let hash = cred.and_then(stake_hash);
+        c.credential = hash.map(hex::encode).or(c.credential.take());
+        match hash {
             Some(h) if *h == keys.stake => {
                 c.own = true;
                 if witnessed {

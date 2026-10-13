@@ -209,6 +209,16 @@ const isOver = (s: SessionView) => s.stage === "closed" || (s.stage === "failed"
 /** A swap whose funding the chain hasn't shown yet, which may still land: it needs the user. */
 export const fundingUnseen = (s: SessionView) => s.stage === "failed" && !s.unsent && !!s.auto;
 
+/**
+ * A return's chain through Lovejoin still being sent. The record's stage reads open until the chain's own return is
+ * sent, though what the session held is on its way back and the worker refuses another return meanwhile. Not once
+ * it stopped or was cut: what's left waits at the account for Bring it back (1.5.0's release review, C09).
+ */
+export const chainGoing = (s: SessionView) => !!s.chain && !s.chain.cut && !s.chain.stopped && s.chain.sent < s.chain.total;
+
+/** Where a session brought back by hand is at, as its page and its row say it: coming back while its chain is sent. */
+const byHandStage = (s: SessionView): SessionView["stage"] => (s.stage === "open" && chainGoing(s) ? "returning" : s.stage);
+
 /** A swap that runs itself and isn't over: Home shows it. A mix (Lovejoin's) isn't a swap. */
 export function isRunningSwap(s: SessionView): boolean {
   return !!s.auto && !s.mix && !isOver(s);
@@ -225,9 +235,11 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   }
   const a = s.auto;
   if (!a) {
-    // From before: every step after the funding is the user's.
-    if (s.stage === "closed") return { tone: "done", label: t("swaps.tag.done") };
-    return s.stage === "open"
+    // From before, or found by a restore's scan: every step after the funding is the user's. A return on its way runs,
+    // its chain through Lovejoin's while it's sent too (C09).
+    const stage = byHandStage(s);
+    if (stage === "closed") return { tone: "done", label: t("swaps.tag.done") };
+    return stage === "open"
       ? { tone: "wait", label: t("swaps.tag.open") }
       : { tone: "live", label: t("swaps.tag.running") };
   }
@@ -252,7 +264,10 @@ const PAUSED: Record<SessionPause["why"], I18nKey> = {
 /** A session's second line: what it's doing while it runs (its tag says if it's stopping), or when it ran. */
 function subOf(s: SessionView, now: number): string {
   if (isOver(s)) return whenOf(s.createdAt, new Date(now));
-  if (!s.auto) return t(s.stage === "open" ? "swaps.sub.nextIsYours" : STAGE[s.stage]);
+  if (!s.auto) {
+    const stage = byHandStage(s);
+    return t(stage === "open" ? "swaps.sub.nextIsYours" : STAGE[stage]);
+  }
   if (fundingUnseen(s)) return t("swaps.sub.fundingUnseen");
   // Refused after Stop, it was the cancel, which the wallet builds itself (chunk 24 Step 3; the 1.3.0 release
   // review, C15): stopping, the runner builds nothing else that can be refused (pauseText).
@@ -379,6 +394,13 @@ function SwapList({ title, sessions, onOpen }: { title: string; sessions: Sessio
   );
 }
 
+/**
+ * Minswap's page lists its swaps alone: a site's private session (private CIP-30) is under the dApps page's Sites, a
+ * mix under Lovejoin, and a session a restore's scan found, whatever it was for, under After a restore. So is what a
+ * session's page hands back, every session, as Forget's answer is (1.5.0's release review, C20).
+ */
+export const swapsOnly = (all: SessionView[]) => all.filter((s) => !s.site && !s.mix && !s.recovered);
+
 /** Minswap's page in the dApp browser: its swaps, each from a one-time account, and New swap. */
 export function Swaps({
   seedelf,
@@ -407,9 +429,7 @@ export function Swaps({
   const load = useCallback(async (refresh: boolean) => {
     setReading(true);
     try {
-      // A site's private session (private CIP-30) is listed under the dApps page's Sites, not here, and a session a
-      // restore's scan found, whatever it was for, under its After a restore.
-      setSessions((await call("sessions", { refresh })).filter((s) => !s.site && !s.mix && !s.recovered));
+      setSessions(swapsOnly(await call("sessions", { refresh })));
       if (refresh) setUpdatedAt(Date.now());
       setError(undefined);
     } catch (e) {
@@ -455,7 +475,7 @@ export function Swaps({
           setOpen(undefined);
           void load(false);
         }}
-        onChanged={setSessions}
+        onChanged={(all) => setSessions(swapsOnly(all))}
         onPending={onPending}
       />
     );
@@ -1791,6 +1811,16 @@ function SlippageSettings({
 /** How often a running swap's page asks the runner for its next step. */
 const ADVANCE_EVERY_MS = 20_000;
 
+/**
+ * What a return brought back by hand says last, after what it ties: that the account is never used again. Not while
+ * it leaves something there for the next return, nor for a session a restore's scan found: its phrase may be open in
+ * another browser whose swap or site still uses the account, as its page warns (1.5.0's release review, C18).
+ * Exported for its test.
+ */
+export function neverAgain(s: SessionView, back: SessionBackSummary): string | undefined {
+  return back.leftOut?.length || s.recovered ? undefined : t("swaps.back.privacy.neverAgain");
+}
+
 export function Session({
   session,
   seedelf,
@@ -1833,8 +1863,11 @@ export function Session({
   const [stoppedLate, setStoppedLate] = useState<LateStop>();
   const [forgetting, setForgetting] = useState(false);
   // 5 ₳ from the private balance for its order's cancel, built for its review: a session the restore scan found
-  // whose account holds no ADA alone to put up as collateral (cancelCollateral). A refusal waits until it's built again.
+  // whose account holds no UTxO of ADA alone of 5 ₳ or more to put up as collateral (cancelCollateral). Or for its
+  // return through Lovejoin (`collateralBack`), whose mixes put up exactly 5 ₳ (backCollateral). A refusal waits until
+  // it's built again.
   const [collateral, setCollateral] = useState<SessionOutSummary>();
+  const [collateralBack, setCollateralBack] = useState(false);
   const stale = useStale();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -1909,10 +1942,11 @@ export function Session({
       setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }) }));
       setBackThrough(through);
     });
-  /** Builds the 5 ₳ for the cancel's collateral, for its review, or again after a refusal. */
-  const buildCollateral = () =>
+  /** Builds the 5 ₳ for the cancel's collateral, or the return's (`back`), for its review, or again after a refusal. */
+  const buildCollateral = (back: boolean) =>
     void act(async () => {
-      setCollateral(await call("session-cancel-collateral-build", { index: s.index }));
+      setCollateral(await call(back ? "session-back-collateral-build" : "session-cancel-collateral-build", { index: s.index }));
+      setCollateralBack(back);
       stale.built();
     });
   /** Sends it as a site's top-up is: the page reads the account again, and says it's on its way until it's there. */
@@ -2011,7 +2045,7 @@ export function Session({
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
-        <ReturnLinks back={back} after={back.leftOut?.length ? undefined : tr("swaps.back.privacy.neverAgain")} />
+        <ReturnLinks back={back} after={neverAgain(s, back)} />
       </Screen>
     );
   }
@@ -2020,6 +2054,7 @@ export function Session({
     return (
       <CancelCollateralReview
         review={collateral}
+        back={collateralBack}
         seedelf={seedelf}
         busy={busy}
         error={error}
@@ -2029,7 +2064,7 @@ export function Session({
           setError(undefined);
           stale.clear();
         }}
-        onAgain={buildCollateral}
+        onAgain={() => buildCollateral(collateralBack)}
         onSend={() => sendCollateral(collateral.txHash)}
       />
     );
@@ -2042,7 +2077,7 @@ export function Session({
       {!s.auto && (
         <Row
           label={tr("swaps.rows.whereAt")}
-          value={tr(s.stage === "failed" && !s.unsent ? "swaps.rows.fundingNotShown" : STAGE[s.stage])}
+          value={tr(s.stage === "failed" && !s.unsent ? "swaps.rows.fundingNotShown" : STAGE[byHandStage(s)])}
           strong
         />
       )}
@@ -2058,6 +2093,12 @@ export function Session({
           label={tr("swaps.rows.itHolds")}
           value={joinList([`${amounts.ada(holding.lovelace)}\u00a0₳`, ...holding.tokens.map((t) => amounts.text(heldText(t, s, network)))])}
         />
+      )}
+      {/* Brought back by hand, its return's chain through Lovejoin as a site's page shows it: how far it's got, or
+          that it stopped and the rest waits at the account for Bring it back (C09). A swap that runs itself says so
+          on its timeline. */}
+      {!s.auto && s.chain && !isOver(s) && (s.chain.cut || s.chain.confirmed < s.chain.total) && (
+        <Row label={tr("sites.throughLovejoin")} value={chainText(s.chain, true)} />
       )}
       {/* Over: what came back, as its return's review said, when the wallet kept it (DX-5). Through Lovejoin, its
           boxes come back later, on their own. */}
@@ -2226,7 +2267,8 @@ export function Session({
           busy={busy}
           onSwap={() => void act(async () => setReview(await call("session-swap-build", { index: s.index })))}
           onCancel={() => void act(async () => setReview(await call("session-cancel-build", { index: s.index })))}
-          onCollateral={buildCollateral}
+          onCollateral={() => buildCollateral(false)}
+          onBackCollateral={() => buildCollateral(true)}
           onBack={() => buildBack(true)}
           onForget={forget}
         />
@@ -2352,10 +2394,13 @@ export function SessionTxReviewScreen({
  * 5 ₳ into a session brought back by hand, from the private balance, for
  * its order's cancel to put up as collateral (a session the restore scan
  * found, whose return from before chunk 24 took everything while the order
- * waited): to read before its Send, as a site's top-up is.
+ * waited): to read before its Send, as a site's top-up is. `back`: for its
+ * return's mixes through Lovejoin to put up instead (1.5.0's release review,
+ * C53), the same payment with the same privacy note.
  */
 export function CancelCollateralReview({
   review,
+  back = false,
   seedelf,
   busy,
   error,
@@ -2365,6 +2410,7 @@ export function CancelCollateralReview({
   onSend,
 }: {
   review: SessionOutSummary;
+  back?: boolean;
   seedelf?: Balances["seedelf"];
   busy: boolean;
   error?: string;
@@ -2400,7 +2446,10 @@ export function CancelCollateralReview({
       <ReviewRows testId="cancel-collateral-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
         {collateral && (
-          <Row label={tr("swaps.collateral.row")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })} />
+          <Row
+            label={tr(back ? "swaps.backCollateral.row" : "swaps.collateral.row")}
+            value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })}
+          />
         )}
         <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
         <TotalRows
@@ -2410,7 +2459,7 @@ export function CancelCollateralReview({
         />
       </ReviewRows>
       <TxDetailButton txHash={review.txHash} testId="cancel-collateral-tx" />
-      <p className="note">{tr("swaps.collateral.note")}</p>
+      <p className="note">{tr(back ? "swaps.backCollateral.note" : "swaps.collateral.note")}</p>
       <Callout tone="privacy">{tr("sites.topUp.privacy.links")}</Callout>
       <HistoriesNote histories={review.histories} session={review.index} testId="cancel-collateral-histories" />
       <GivemeNote funding />
@@ -2891,9 +2940,12 @@ function neverSent(s: SessionView): string {
   return joinSentences([t("swaps.now.neverSent"), unsentWhyText(s.unsentWhy), t("swaps.now.removeIt")]);
 }
 
-/** A session from before swaps ran themselves, or one the restore scan found: what to do next, by hand. */
+/**
+ * A session from before swaps ran themselves, or one the restore scan found: what to do next, by hand. Its return's
+ * chain through Lovejoin, while it's sent, is its return on its way (C09).
+ */
 export function nextStep(s: SessionView, swapped: boolean, waiting: boolean): string {
-  switch (s.stage) {
+  switch (byHandStage(s)) {
     case "funding":
       return t("swaps.next.funding");
     case "failed":
@@ -2901,14 +2953,26 @@ export function nextStep(s: SessionView, swapped: boolean, waiting: boolean): st
     case "returning":
       return t("swaps.next.returning");
     case "closed":
-      return t("swaps.next.closed");
+      // Found by a restore's scan: over here only. Another browser may still use its account (C18), and one that ended
+      // by itself brought nothing back from here (C02): its Received row and what stays say the rest (cross-area
+      // review X09).
+      return t(s.recovered ? "swaps.next.closedFound" : "swaps.next.closed");
     case "open":
       // Found by a restore's scan, it has no swap to place: what it holds comes back.
       if (!swapped && !s.recovered) return t("swaps.next.placeOrder");
+      // Its cancel sent: the order reads open until it lands, and what it spent as gone (1.5.0's release review, C04).
+      if (waiting && s.cancelling) return t("swaps.next.cancelling");
       // Its cancel needs ADA alone at the account as collateral: 5 ₳ goes in first (cancelCollateral).
       if (waiting && s.cancelCollateral === "missing") return t("swaps.next.noCollateral");
       if (waiting && s.cancelCollateral === "coming") return t("swaps.next.collateralComing");
       if (waiting) return t("swaps.next.waiting");
+      // Found, its order over and nothing at its account at a refresh: it ends by itself, unless something comes in
+      // (settling; cross-area review X01, the last review L4).
+      if (s.settling) return t("swaps.next.settling");
+      // Its return through Lovejoin needs 5 ₳ at the account for the mixes: put in, or it comes back directly
+      // (backCollateral, C53).
+      if (!s.cancelling && s.backCollateral === "missing") return t("swaps.next.noBackCollateral");
+      if (!s.cancelling && s.backCollateral === "coming") return t("swaps.next.backCollateralComing");
       return t("swaps.next.bringBack");
   }
 }
@@ -2921,6 +2985,7 @@ export function SessionFoot({
   onSwap,
   onCancel,
   onCollateral,
+  onBackCollateral,
   onBack,
   onForget,
 }: {
@@ -2932,6 +2997,8 @@ export function SessionFoot({
   onCancel: () => void;
   /** 5 ₳ for the cancel's collateral, where the account holds none: built for its review. */
   onCollateral: () => void;
+  /** 5 ₳ for the collateral of its return's mixes through Lovejoin, where the account holds none: built for its review. */
+  onBackCollateral: () => void;
   onBack: () => void;
   onForget: () => void;
 }) {
@@ -2943,7 +3010,8 @@ export function SessionFoot({
       </button>
     );
   }
-  if (s.stage !== "open") return null;
+  // Its return on its way, its chain through Lovejoin too: another would only be refused (C09).
+  if (byHandStage(s) !== "open") return null;
   return (
     <div className="stack">
       {!swapped && !s.recovered && (
@@ -2952,20 +3020,43 @@ export function SessionFoot({
         </button>
       )}
       {/* A cancel the account can't put up a collateral for would only be refused: its 5 ₳ goes in first, and
-          until it's there, the cancel waits (cancelCollateral). */}
-      {waiting && s.cancelCollateral === "missing" && (
+          until it's there, the cancel waits (cancelCollateral). While a cancel is on its way, no 5 ₳ goes in and Cancel
+          the order waits too (cancelling). */}
+      {waiting && !s.cancelling && s.cancelCollateral === "missing" && (
         <button type="button" className="secondary" onClick={onCollateral} disabled={busy}>
           {tr(busy ? "common.building" : "swaps.foot.putCollateral")}
         </button>
       )}
-      {waiting && s.cancelCollateral !== "missing" && (
-        <button type="button" className="secondary" onClick={onCancel} disabled={busy || s.cancelCollateral === "coming"}>
+      {waiting && (s.cancelling || s.cancelCollateral !== "missing") && (
+        <button
+          type="button"
+          className="secondary"
+          onClick={onCancel}
+          disabled={busy || !!s.cancelling || s.cancelCollateral === "coming"}
+        >
           {tr("swaps.foot.cancelOrder")}
         </button>
       )}
+      {/* While 5 ₳ for its return's mixes is on its way, the page says to wait for it: Bring it back, which before
+          it lands comes back directly, isn't the main button then, though it stays, since that 5 ₳ may never land
+          (cross-area review X20). Nor while a found session waits to end by itself, its account read empty: it
+          stays, since it reads the account again and takes a payout a refresh missed (settling; X01, the last
+          review L4). */}
       {!waiting && (
-        <button type="button" className={swapped || s.recovered ? "primary" : "secondary"} onClick={onBack} disabled={busy}>
+        <button
+          type="button"
+          className={(swapped || s.recovered) && s.backCollateral !== "coming" && !s.settling ? "primary" : "secondary"}
+          onClick={onBack}
+          disabled={busy}
+        >
           {tr("swaps.foot.bringBack")}
+        </button>
+      )}
+      {/* Its return through Lovejoin, the private way, but for 5 ₳ at the account for the mixes: a button of its
+          own beside Bring it back, which brings it back directly (backCollateral; 1.5.0's release review, C53). */}
+      {!waiting && !s.cancelling && s.backCollateral === "missing" && (
+        <button type="button" className="secondary" onClick={onBackCollateral} disabled={busy}>
+          {tr("swaps.foot.putBackCollateral")}
         </button>
       )}
     </div>

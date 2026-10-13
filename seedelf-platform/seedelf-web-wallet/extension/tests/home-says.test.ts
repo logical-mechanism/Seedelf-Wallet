@@ -8,12 +8,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { t } from "../src/i18n";
 import { i18n } from "../src/i18n/core";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import type { Balances, KnownAccount } from "../src/shared/rpc";
+import type { Balances, KnownAccount, SessionView } from "../src/shared/rpc";
 import { AccountsContext, nameOf } from "../src/ui/accounts";
 import { ActionButton } from "../src/ui/components/ActionButton";
 import { PreferencesContext } from "../src/ui/preferences";
 import { OtherList, Who } from "../src/ui/screens/Activity";
-import { privateWhy, RestoredNote } from "../src/ui/screens/Home";
+import { privateWhy, RestoredNote, toBringBack } from "../src/ui/screens/Home";
 
 afterEach(async () => {
   await i18n.changeLanguage("en");
@@ -230,11 +230,51 @@ describe("a restore is confirmed on Home (blind test T20a, T20b)", () => {
     );
   });
 
+  it("says when the restore didn't finish looking for private sessions' money, and where to look again (1.5.0's release review, C19)", () => {
+    const said = (unscanned?: boolean) =>
+      text(renderToStaticMarkup(within(createElement(RestoredNote, { balances: reading(), unscanned, onDismiss: () => undefined }))));
+    expect(said(true)).toBe(
+      "Wallet restored This phrase holds nothing on Preprod yet, as expected for a new one. The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page. Dismiss",
+    );
+    expect(said(false)).not.toContain("Find leftovers");
+    expect(said()).not.toContain("Find leftovers");
+  });
+
   it("sets its sentences the Japanese way, with nothing between them", async () => {
     await i18n.changeLanguage("ja");
     expect(note(reading(), { accounts: [{ index: 0 }, { index: 1, foundAt: 5 }, { index: 2, foundAt: 5 }] })).toMatch(
       /あります。ほかに公開アカウントを 2 個/,
     );
+  });
+
+  it("counts a found session only while it's still to bring back, as the dApps page reads it (cross-area review X11)", () => {
+    const found = (over: Partial<SessionView> = {}): SessionView => ({
+      index: 4,
+      network: "preprod",
+      address: "addr_test1" + "q".repeat(50),
+      createdAt: 0,
+      stage: "open",
+      txs: [{ kind: "out", txHash: "ab".repeat(32), at: 0, confirmed: true }],
+      holding: { lovelace: "25000000", tokens: [], utxos: 2 },
+      recovered: true,
+      ...over,
+    });
+    const going = { total: 10, sent: 4, confirmed: 0, cut: false };
+    expect(toBringBack(found())).toBe(true);
+    // Its return sent: the dApps page reads it Running · Coming back, with no Bring it back.
+    expect(toBringBack(found({ stage: "returning" }))).toBe(false);
+    // Its return's chain through Lovejoin still being sent: the record reads open, the dApps page Coming back (C09).
+    expect(toBringBack(found({ chain: going }))).toBe(false);
+    // Stopped partway (a lock, say), or cut: the rest waits at the account for Bring it back.
+    const stopped = "The wallet locked, or the browser closed, while its chain was being sent.";
+    expect(toBringBack(found({ chain: { ...going, stopped } }))).toBe(true);
+    expect(toBringBack(found({ chain: { ...going, cut: true } }))).toBe(true);
+    // Its order over and nothing at its account at a refresh: it ends by itself unless something comes in, and its
+    // page says so rather than to bring it back (cross-area review X01; the last review, L4).
+    expect(toBringBack(found({ holding: none, settling: true }))).toBe(false);
+    // Over, or not found by the scan.
+    expect(toBringBack(found({ stage: "closed" }))).toBe(false);
+    expect(toBringBack(found({ recovered: undefined }))).toBe(false);
   });
 });
 

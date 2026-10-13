@@ -39,6 +39,14 @@ const MAX_OUTPUTS: i64 = 200_000;
 /// The most of an account's transactions one `account_txs` or `credential_txs` gives.
 const MAX_TXS: i64 = 1000;
 
+/// The deepest page of `account_txs` or `credential_txs`: Activity's 500th
+/// *Load more*, far past what anyone reads. A page joins every newer
+/// transaction too, so its cost grows with its offset: one past the end of
+/// a long list would join the whole history, as every page did before
+/// [`txs`] took the newest ids. Deeper, a 503, and the wallet reads that
+/// page alone from Koios.
+const MAX_OFFSET: i64 = 10_000;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AddressesBody {
@@ -257,11 +265,16 @@ pub async fn account_info(
 /// The columns a rewards history asks for, in its order: every row's, but its stake address.
 const REWARD_COLUMNS: &str = "earned_epoch,spendable_epoch,amount,type,pool_id_bech32";
 
-/// A total order, so no row is on two pages: an operator's reward account
-/// can take several pools' rewards in one epoch, and two treasury
-/// withdrawals could pay it in one.
+/// Oldest first, by every column: an operator's reward account can take
+/// several pools' rewards in one epoch, and two treasury withdrawals could
+/// pay it in one. Oldest first is what keeps the pages still while db-sync
+/// changes an account's rows: those it adds as an epoch goes on (next
+/// epoch's rewards, and refunds at an epoch's start) and those it takes back
+/// (a key deregistered before it was paid) are among the newest, at the end.
+/// Newest first, a row added mid-read pushed one already read onto the next
+/// page too, and one taken back pulled one not yet read onto a page read.
 const REWARD_ORDER: &str =
-    "spendable_epoch.desc,earned_epoch.desc,type.asc,pool_id_bech32.asc,amount.asc";
+    "spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc";
 
 /// A page of a rewards history: Koios's most. A member's reward comes once
 /// an epoch, so an account staked since Shelley has about 400.
@@ -297,10 +310,10 @@ const REWARDS: &str = "with sa as materialized (select id from stake_address whe
        union all \
        select rr.earned_epoch::bigint, rr.spendable_epoch::bigint, rr.amount::text, rr.type::text, null::text \
        from sa join reward_rest rr on rr.addr_id = sa.id) rewards \
-     order by spendable_epoch desc, earned_epoch desc, type, pool, amount \
+     order by spendable_epoch, earned_epoch, type, pool, amount \
      offset $2::bigint limit $3::bigint";
 
-/// A stake key's rewards history, newest first, a page of 1,000: Staking's
+/// A stake key's rewards history, oldest first, a page of 1,000: Staking's
 /// *Rewards history* (web wallet chunk 30), read only when it's opened.
 pub async fn account_reward_history(
     State(state): State<Arc<AppState>>,
@@ -423,8 +436,9 @@ impl Whose {
 /// from `$2` on (Koios's `_after_block_height` takes that block too), newest
 /// first, a page of them.
 ///
-/// A transaction's id rises with its block, so the query never joins the
-/// whole history (2.3 s a page for 221,000 transactions, 0.5 s this way):
+/// A transaction's id rises with its block, so a page joins only its own ids
+/// and the newer ones, never the whole history (2.3 s a page for 221,000
+/// transactions, 0.5 s this way; no page starts past [`MAX_OFFSET`]):
 /// - `from`: blocks from `$2` on are transactions from the first one in the
 ///   first block there with any (Koios's own `_tx_id_min`);
 /// - `top`: the page and everything before it are among the `$3 + $4`
@@ -533,8 +547,14 @@ async fn listing(
         // Activity's pages are 20.
         20
     };
-    if limit != wanted || offset > 1_000_000 {
+    if limit != wanted {
         return Err(NOT_ASKED);
+    }
+    // A page the wallet asks, too deep to answer here: a 503 sends this one
+    // request to Koios, where a 400 would hold all its public reads there
+    // for 5 minutes.
+    if offset > MAX_OFFSET {
+        return Err(ApiError::Heavy);
     }
     state.fresh_tip()?;
     let client = state.chain.public().await?;

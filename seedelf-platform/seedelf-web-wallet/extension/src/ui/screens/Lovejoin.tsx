@@ -264,9 +264,13 @@ export function subOf(s: SessionView, now: number): string {
   if (s.stage === "failed") return t(unseen(s) ? "lovejoin.sub.fundingUnseen" : "lovejoin.sub.fundingFailed");
   if (s.stage === "funding") return t("lovejoin.sub.funding");
   if (s.mix?.skipped) return t("lovejoin.sub.skipped");
-  if (s.chain?.cut || s.chain?.stopped) return chainText(s.chain, !s.auto);
+  // Its chain stopped before any of it went (a lock before its first send, a deposit turned away): nothing of it went
+  // in, so while it isn't over the runner builds it again, through Lovejoin (buildBack's `started`), and nothing comes
+  // back directly. It reads as a mix that goes on (the last review, L5); why it stopped is said under it (detailOf).
+  const again = !!s.auto && s.stage !== "closed" && !!s.chain?.stopped && !s.chain.cut && s.chain.sent === 0;
+  if ((s.chain?.cut || s.chain?.stopped) && !again) return chainText(s.chain, !s.auto);
   if (s.stage === "closed") return t("lovejoin.sub.since", { when: whenOf(s.createdAt, new Date(now)) });
-  if (s.chain) return chainText(s.chain, !s.auto);
+  if (s.chain && !again) return chainText(s.chain, !s.auto);
   if (s.auto?.stopping) return t("lovejoin.sub.stopping");
   if (s.auto?.retry) return t("lovejoin.sub.retrying");
   // Found as the wallet unlocked, its next step waits a fresh draw of up to 20 minutes (privacy review §3.1).

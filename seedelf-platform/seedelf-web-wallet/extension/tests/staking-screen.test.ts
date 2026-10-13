@@ -114,7 +114,7 @@ describe("a staking review's button says the act (ST-2)", () => {
     expect(html).toContain('data-testid="staking-stop-ends"');
     expect(shown).toContain("Your pool and voting power delegations end, and rewards stop.");
     expect(shown).toContain("Your 57.475311 ₳ of rewards are withdrawn too.");
-    expect(shown).toContain("Rewards not yet paid out, from the last epoch or two, are lost.");
+    expect(shown).toContain("Rewards not yet paid out, up to three epochs' worth, are lost.");
     expect(shown).toContain("The 2 ₳ deposit comes back to your public account.");
     expect(shown).toContain("You can start staking again any time");
     expect(html).toMatch(/<button type="button" class="danger">Stop staking<\/button>/);

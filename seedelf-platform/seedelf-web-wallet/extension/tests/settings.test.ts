@@ -64,10 +64,19 @@ describe("Settings' server status line", () => {
     expect(text(html).trim()).toBe("Using Seedelf's data layer.");
   });
 
-  it("is red with every part on Koios, and says until when", () => {
+  it("is red with every part on Koios, and says until when: the latest of their times", () => {
     const html = line(false, { public: at, private: at + 60_000, submit: at });
     expect(html).toContain("server-status--down");
-    expect(text(html).trim()).toBe("Using Koios until 17:42: Seedelf Wallet's own server didn't answer.");
+    expect(text(html).trim()).toBe("Using Koios until 17:43: Seedelf Wallet's own server didn't answer.");
+  });
+
+  it("never says a part is back on the server before it is (1.5.0's release review, C13)", () => {
+    // Each part is held from its own failure: the reads at 17:37, a send at 17:40. Sending stays on Koios until 17:45,
+    // and once the public account's hold ends, the line names sending alone.
+    const html = line(false, { public: at, submit: at + 3 * 60_000 });
+    expect(text(html).trim()).toBe(
+      "Using Koios for your public account and sending until 17:45: Seedelf Wallet's own server didn't answer. The rest uses the server.",
+    );
   });
 
   it("is amber with some on Koios, and names them", () => {
@@ -230,6 +239,19 @@ describe("Settings' Connected sites (launch review H7)", () => {
       expect(text(shown)).toContain(why);
       // A site on the public account has nothing on its way.
       expect(pub).not.toContain("disabled");
+    }
+  });
+
+  it("says to bring everything back first, not to wait, once a lock or a refusal stopped its return's chain (cross-area review X10)", () => {
+    // Nothing sends a stopped chain's rest: it waits at the account for Bring it back, whether what the chain sent
+    // before the stop is on chain yet or not (the worker's own check waits for that).
+    const stopped = "The wallet locked, or the browser closed, while its chain was being sent.";
+    for (const confirmed of [0, 4]) {
+      const chain = { total: 10, sent: 4, confirmed, cut: false, stopped };
+      const shown = html([session({ chain, holding: { lovelace: "45000000", tokens: [], utxos: 2 } })]);
+      expect(buttons(shown)[1]).toContain("disabled");
+      expect(text(shown)).toContain("Bring everything back first.");
+      expect(text(shown)).not.toContain("on its way");
     }
   });
 

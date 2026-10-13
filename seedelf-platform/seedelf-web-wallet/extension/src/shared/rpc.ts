@@ -917,9 +917,10 @@ export interface DappToken {
 
 /**
  * Another of the wallet's accounts a site's transaction pays or spends from,
- * which signing ties on chain to the one the site sees (independent review
- * M12): a public account by index (`{ account }`), or a private session by
- * index. A site on the public account is never tied to its own.
+ * or whose stake key it carries, which signing ties on chain to the one the
+ * site sees (independent review M12): a public account by index
+ * (`{ account }`), or a private session by index. A site on the public
+ * account is never tied to its own.
  */
 export type DappTie = { account: number } | number;
 
@@ -955,7 +956,10 @@ export interface DappTxSummary {
      * so it's paid, not change.
      */
     ownPaymentKey: boolean;
-    /** Another of the wallet's accounts, as the worker found it for a site's prompt (`DappTie`). */
+    /**
+     * Another of the wallet's accounts that can spend it, by its payment key, as the worker found it for a site's
+     * prompt (`DappTie`): never by its stake key alone, which anyone can pair with their own payment key (C01).
+     */
     yours?: DappTie;
   }>;
   ownOutputs: Array<{
@@ -984,8 +988,25 @@ export interface DappTxSummary {
     drepAction?: "register" | "update" | "retire" | null;
     /** A DRep certificate's profile address, as text (C14). */
     anchor?: string | null;
+    /**
+     * The stake key it's about, its hash in hex, for the kinds that name one (a registration, a stop, a delegation,
+     * alone or together, and a stake pool's registration's reward account), the account's own or anyone's; none for a
+     * script's, a pool's retirement, a DRep's or the committee's (WebAssembly's, X05; the last review, L1).
+     */
+    credential?: string | null;
+    /**
+     * Another of the wallet's accounts or sessions whose stake key it names, as the worker found it for a site's
+     * prompt (`DappTie`): WebAssembly's `own` is the signing account's alone (1.5.0's release review, X05).
+     */
+    yours?: DappTie;
   }>;
-  withdrawals: Array<{ address: string; lovelace: string; own: boolean }>;
+  withdrawals: Array<{
+    address: string;
+    lovelace: string;
+    own: boolean;
+    /** Another of the wallet's accounts or sessions whose reward address it is, as for a certificate (X05). */
+    yours?: DappTie;
+  }>;
   collateral: { own: number; lovelace: string; total: string | null; returnedLovelace: string | null; atRisk: string } | null;
   scripts: boolean;
   referenceInputs: number;
@@ -1354,11 +1375,26 @@ export type DappAsk =
       session?: number;
       collateralSpent?: boolean;
       /**
-       * The wallet's other accounts it pays or spends from (`DappTie`):
-       * public accounts first, then private sessions. Empty when none;
-       * missing when they couldn't be checked (independent review M12).
+       * The wallet's other accounts it pays or spends from (`DappTie`), at
+       * an address one of the wallet's keys spends: public accounts first,
+       * then private sessions. Empty when none; missing when they couldn't
+       * be checked (independent review M12).
        */
       ties?: DappTie[];
+      /**
+       * Those whose stake key alone is in it, at someone else's address or a
+       * contract's, paid or spent from: not their money, but signing ties
+       * them on chain all the same (1.5.0's release review, C01). Public
+       * accounts first, as `ties`; missing with it.
+       */
+      staked?: DappTie[];
+      /**
+       * Those whose stake key a certificate or a withdrawal in it names: an
+       * old-style registration of one needs no signature of that key's, and
+       * signing ties them on chain all the same (1.5.0's release review,
+       * X05). Public accounts first, as `ties`; missing with it.
+       */
+      certified?: DappTie[];
     }
   | {
       kind: "sign-data";
@@ -1665,13 +1701,41 @@ export interface SessionView {
    */
   recovered?: true;
   /**
+   * Found by the restore scan, with nothing sent for it from this device,
+   * and waiting to end by itself: a refresh found its order over and nothing
+   * at its account a return takes. It ends at a refresh once that has held
+   * 15 minutes, unless something comes in first, which a refresh can read
+   * late and Bring it back takes (cross-area review X01). Its page says so,
+   * rather than to bring it back, and Home's restore note doesn't count it
+   * (the last review, L4).
+   */
+  settling?: true;
+  /**
    * A session brought back by hand whose account, as last read, holds no
    * UTxO of ADA alone of 5 ₳ or more for a cancel's collateral: `missing`,
    * or `coming` while a top-up is on its way. While an order of it is open,
    * its page offers 5 ₳ from the private balance for the cancel
-   * (`session-cancel-collateral-build`, sent as a top-up is).
+   * (`session-cancel-collateral-build`, sent as a top-up is). None while a
+   * cancel of it is on its way (`cancelling`).
    */
   cancelCollateral?: "missing" | "coming";
+  /**
+   * A session brought back by hand with a cancel of its order sent and not
+   * on chain yet: the order reads open until it lands, and what it spends,
+   * 5 ₳ put in for it among them, as gone. No 5 ₳ goes in meanwhile, and its
+   * page says the cancel is on its way (1.5.0's release review, C04).
+   */
+  cancelling?: true;
+  /**
+   * A session brought back by hand whose return would go through Lovejoin
+   * but for the collateral its mixes put up: its account, as last read,
+   * holds no UTxO of exactly 5 ₳ of ADA alone, and its spare ADA pays for a
+   * box, as the return itself decides it. `missing`, or `coming` while a
+   * top-up is on its way. While no order of it waits, its page offers 5 ₳
+   * from the private balance for it (`session-back-collateral-build`, sent
+   * as a top-up is; 1.5.0's release review, C53).
+   */
+  backCollateral?: "missing" | "coming";
 }
 
 /** What the restore scan found on a network (`session-scan`). */
@@ -2240,6 +2304,8 @@ export interface Requests {
   "session-top-up-submit": { payload: { txHash: string }; result: PendingTx };
   /** 5 ₳ into a session brought back by hand, for its open order's cancel; sent by `session-top-up-submit`. */
   "session-cancel-collateral-build": { payload: { index: number }; result: SessionOutSummary };
+  /** 5 ₳ into a session brought back by hand, for its return through Lovejoin; sent by `session-top-up-submit`. */
+  "session-back-collateral-build": { payload: { index: number }; result: SessionOutSummary };
   /**
    * Bring everything back: a return for each of these sessions that holds
    * something, each its own transaction; `skipped` says why a session wasn't.
@@ -2254,6 +2320,15 @@ export interface Requests {
    * order open added as a session found. Asks the server about them together.
    */
   "session-scan": { payload: None; result: SessionScan };
+  /**
+   * Whether a restore's scan hasn't finished on this network since the
+   * restore (`due`): a restore marks every network, and a scan that finishes
+   * there, its own or Find leftovers', clears it; a read that fails, a lock
+   * or a worker stop leaves it, and so does the network a restore doesn't
+   * look at. `scanning`: a scan runs on it now, a restore's from its look for
+   * public accounts on. From the device's record alone: no Koios request.
+   */
+  "session-scan-due": { payload: None; result: { due: boolean; scanning: boolean } };
   /** Sends the chosen returns Bring everything back built, one after another. */
   "session-claim-submit": {
     payload: { txHashes: string[] };
@@ -2451,9 +2526,11 @@ const REQUEST_LIST = [
   "session-top-up-build",
   "session-top-up-submit",
   "session-cancel-collateral-build",
+  "session-back-collateral-build",
   "session-claim-build",
   "session-claim-submit",
   "session-scan",
+  "session-scan-due",
   "session-advance",
   "session-stop",
   "session-stop-cost",
