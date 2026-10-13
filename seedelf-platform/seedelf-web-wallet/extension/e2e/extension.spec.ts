@@ -459,9 +459,10 @@ test("home says so when Koios can't be read", async ({ context, koios }) => {
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("— ₳");
   // The restore's note doesn't say it's reading, under an alert that says reading failed (blind test T20a). Its scan
   // of the one-time accounts failed too, so it says where to look again, once the scan has ended (1.5.0's release
-  // review, C19).
+  // review, C19). Home asks every 3 s while the scan runs, so allow a slow machine a poll or two.
   await expect(page.getByTestId("home-restored-detail")).toHaveText(
     "A phrase you've used shows its balances once they're read. The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page.",
+    { timeout: 15_000 },
   );
 
   koios.failWith = undefined;
@@ -918,9 +919,12 @@ test("After a restore says to press Find leftovers when the restore's scan didn'
   koios.failWith = 400;
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
-  // Once the scan has ended, Home's note says where to look again.
+  // Once the scan has ended, Home's note says where to look again. Home asks every 3 s while it runs
+  // (SCAN_DUE_EVERY_MS), so on a slow machine that's a poll or two after the scan fails: more than the default 5 s.
   const note = page.getByTestId("home-restored-detail");
-  await expect(note).toContainText("The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page.");
+  await expect(note).toContainText("The restore didn't finish looking for private sessions' money: press Find leftovers on the dApps page.", {
+    timeout: 15_000,
+  });
   // Koios answers again: Refresh reads the balances, and the scan isn't run again by it.
   koios.failWith = undefined;
   await page.getByRole("button", { name: "Refresh" }).click();
