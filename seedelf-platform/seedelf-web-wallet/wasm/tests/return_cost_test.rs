@@ -140,6 +140,15 @@ fn spent(tx_cbor: &str) -> Vec<u8> {
     firsts
 }
 
+/// Whether the transaction spends an output of the transaction hashed `[byte; 32]`, by the whole hash: a chain's own
+/// transactions have hashes of their own, and `spent`'s first bytes read one starting with `0xbb` as the stranger's
+/// (about one run in 128 of the chain's test).
+fn spends(tx_cbor: &str, byte: u8) -> bool {
+    let bytes = hex::decode(tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    tx.inputs().iter().any(|i| i.hash().as_ref() == [byte; 32])
+}
+
 fn size(tx_cbor: &str) -> u64 {
     hex::decode(tx_cbor).unwrap().len() as u64
 }
@@ -395,9 +404,8 @@ fn a_chains_return_leaves_a_strangers_junk_behind_and_the_chain_still_goes() {
         assert!(result.skipped.is_none());
         let back = result.txs.last().unwrap();
         assert_eq!(back.kind, "back");
-        let inputs = spent(&back.tx_cbor);
-        assert!(inputs.contains(&0xaa) && inputs.contains(&0x20));
-        assert!(!inputs.contains(&0xbb));
+        assert!(spends(&back.tx_cbor, 0xaa) && spends(&back.tx_cbor, 0x20));
+        assert!(!spends(&back.tx_cbor, 0xbb));
         assert_eq!(result.left_out.len(), 1);
         assert_eq!(
             (
