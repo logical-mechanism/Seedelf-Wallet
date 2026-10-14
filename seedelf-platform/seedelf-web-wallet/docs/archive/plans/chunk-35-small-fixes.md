@@ -1,8 +1,8 @@
-# Chunk 35 · The owner's small fixes for 1.6.0
+# Chunk 35 · The owner's collateral fix for 1.6.0
 
-Things the owner noticed using the wallet (2026-10-14), lined up for 1.6.0 beside [chunk 34](chunk-34-token-pools.md). One branch, `web-wallet/small-fixes-1.6.0`, from `main` after #308. Each fix goes in as it's reported, and the PR merges before 1.6.0 is packaged. This file is the list and its record.
+What the owner noticed using the wallet (2026-10-14), lined up for 1.6.0 beside [chunk 34](../../plans/chunk-34-token-pools.md). The owner's other finding, how a Lovejoin mix is shown, went to chunk 34 (its *Screens*), since token pools change that page.
 
-**Status: 🚧 open for more of the owner's list.** Fix 1 is built.
+**Status: ✅ built 2026-10-14** on `web-wallet/small-fixes-1.6.0`, from `main` after #308, as PR #309. One PR: the plan, the build and the docs together, so this file went straight to the archive. What still holds is in [flows.md](../../flows.md) (*Collateral*, Settings' requests, and Lovejoin's Review reasons). The privacy policy is unchanged: nothing new is sent or kept.
 
 ## 1 · Collateral: a way in from the public side, and the page that kept waiting
 
@@ -31,4 +31,10 @@ Things the owner noticed using the wallet (2026-10-14), lined up for 1.6.0 besid
 - No row when the wallet set the collateral itself, or with an empty account.
 - Lovejoin's public mix: Review held, Set collateral in place, the reason while it's on its way, then Review released once it lands.
 
-The three that wait on a 15 s watch are marked `test.slow()`.
+The three that wait on a 15 s watch are marked `test.slow()`. Each passed 20 of 20 under 2-CPU load (`taskset -c 0,1`, `--repeat-each=4 --workers=4`), on the dev build and the store build.
+
+## 2 · A flaky Rust test, found by this PR's CI
+
+`a_chains_return_leaves_a_strangers_junk_behind_and_the_chain_still_goes` (`wasm/tests/return_cost_test.rs`) failed CI's first run, though nothing here touches it.
+- **Why:** it read each input by its hash's first byte. A chain's return spends the chain's own change, whose hash is new each run (fresh registers), so about one run in 128 it started with `0xbb` and read as the stranger's UTxO taken. It failed 2 of 400 local runs.
+- **The fix:** it compares whole hashes (`spends`), and failed 0 of 600 runs. The wallet's behaviour was right throughout.
