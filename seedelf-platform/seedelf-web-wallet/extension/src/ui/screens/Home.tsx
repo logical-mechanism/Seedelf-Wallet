@@ -39,6 +39,10 @@
 // the owner's calls on it: the actions name their side ("Send privately"),
 // the line under them names what each reason holds back, and a restore is
 // confirmed at the top, with what the phrase holds (T03, T20a, T20b).
+//
+// While the public account has money and no collateral, the Public tab's list
+// has a Collateral row, which opens the Settings page in place (the owner,
+// 2026-10-14): it was found in Settings alone.
 
 import { useCallback, useEffect, useState } from "react";
 import { type I18nKey, joinList, joinSentences, t, useT } from "../../i18n";
@@ -49,6 +53,7 @@ import type {
   Account,
   AdaPrice,
   Balances,
+  CollateralStatus,
   LovejoinHeld,
   PendingTx,
   SeedelfInfo,
@@ -76,6 +81,7 @@ import {
   SendIcon,
   ShieldIcon,
   SproutIcon,
+  VaultIcon,
   WalletIcon,
   WithdrawIcon,
 } from "../components/Icons";
@@ -97,6 +103,7 @@ import { publicAccountName, useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { assetFingerprint } from "../tokens";
 import { Activity } from "./Activity";
+import { Collateral } from "./Collateral";
 import { CardanoSend } from "./CardanoSend";
 import { CreateSeedelf } from "./CreateSeedelf";
 import { Dapps, DappsRow, type DappStart, SCAN_DUE_EVERY_MS } from "./Dapps";
@@ -280,6 +287,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     | "staking"
     | "staking-vote"
     | "dapps"
+    | "collateral"
   >("home");
   const { prefs } = usePreferences();
   const amounts = useAmounts();
@@ -364,6 +372,22 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     const tick = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(tick);
   }, [load, watch]);
+
+  // The public account's collateral, for the Public tab's row: from the reading Home has, asking no one, and again
+  // whenever Home has the balances again, a send's kept reading among them (same time, not the same answer), which is
+  // how a payment setting it, its landing, or another account shows.
+  const [collateral, setCollateral] = useState<CollateralStatus>();
+  useEffect(() => {
+    if (tab !== "cardano" || !balances) return;
+    let live = true;
+    call("collateral", {}).then(
+      (c) => live && setCollateral(c),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [tab, balances]);
 
   // A pool shown by its ID: the reading never waits for its ticker, which the worker asks for behind it
   // (staking.ts `readStake`). The kept reading a moment later has it, asking no one.
@@ -630,6 +654,9 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
         }}
       />
     );
+  }
+  if (screen === "collateral") {
+    return <Collateral onBack={home} onSent={sent} blocked={watching ? busy : undefined} />;
   }
   if ((screen === "staking" || screen === "staking-vote") && balances) {
     return (
@@ -1075,7 +1102,14 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
 
             {/* dApps here too: sites connect to the public account, and T15 looked for them on this tab (blind test
                 §9.2). */}
-            <Links onActivity={() => setActivityOf("cardano")} onUtxos={() => setUtxosOf("cardano")} onDapps={() => dapps()} />
+            <Links
+              onActivity={() => setActivityOf("cardano")}
+              onUtxos={() => setUtxosOf("cardano")}
+              onDapps={() => dapps()}
+              // Only while there's money to set it with: an empty account's next step is Receive.
+              collateral={balances && balances.cardano.utxos > 0 && collateral && collateral.state !== "set" ? collateral.state : undefined}
+              onCollateral={() => setScreen("collateral")}
+            />
           </section>
         )}
       </div>
@@ -1451,7 +1485,20 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
 const LOVEJOIN_BOX = 10_000_000n;
 
 /** Opens this tab's Activity, or its UTxOs, and the dApp browser. */
-function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtxos: () => void; onDapps?: () => void }) {
+function Links({
+  onActivity,
+  onUtxos,
+  onDapps,
+  collateral,
+  onCollateral,
+}: {
+  onActivity: () => void;
+  onUtxos: () => void;
+  onDapps?: () => void;
+  /** The public account's collateral, while it isn't set. */
+  collateral?: "none" | "waiting";
+  onCollateral?: () => void;
+}) {
   const t = useT();
   return (
     <section className="section">
@@ -1460,6 +1507,23 @@ function Links({ onActivity, onUtxos, onDapps }: { onActivity: () => void; onUtx
         {onDapps && (
           <li>
             <DappsRow onOpen={onDapps} />
+          </li>
+        )}
+        {/* Under the dApps, whose sites need it, and gone once it's set: Settings has it then (the owner, 2026-10-14). */}
+        {collateral && onCollateral && (
+          <li>
+            <button type="button" className="menu-row" onClick={onCollateral} data-testid="home-collateral">
+              <span className="menu-row__icon">
+                <VaultIcon size={16} />
+              </span>
+              <span className="menu-row__text">
+                <span>{t("utxos.tag.collateral")}</span>
+                <span className="menu-row__sub menu-row__sub--wrap" data-testid="home-collateral-state">
+                  {t(collateral === "waiting" ? "collateral.waiting" : "collateral.notSet")}
+                </span>
+              </span>
+              <ChevronRightIcon size={16} />
+            </button>
           </li>
         )}
         <li>

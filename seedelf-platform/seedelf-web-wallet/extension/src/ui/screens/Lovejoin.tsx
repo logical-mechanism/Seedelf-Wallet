@@ -12,6 +12,10 @@
 //                              and put up against its collateral; the change
 //                              stays in it.
 // Either way, each box comes back into the private balance on its own, later.
+// A mix from the public account needs its collateral: while there's none,
+// the form says so before Review, with Set collateral, Settings' page opened
+// here (the owner, 2026-10-14). It was found out after Review, sent to
+// Settings.
 //
 // Mix my boxes again fans every box of the wallet's in the pool out once
 // more (a chain cut short, or boxes nobody has mixed since), paid from the
@@ -46,6 +50,7 @@ import { dateLocale, type I18nKey, joinSentences, sentenceGap, t, useT } from ".
 
 import type {
   Balances,
+  CollateralStatus,
   LovejoinChainTx,
   LovejoinChainView,
   LovejoinFunding,
@@ -83,6 +88,7 @@ import { adaText, formatAda, formatPercent, shortHex, whenOf } from "../format";
 import { useAmounts } from "../preferences";
 import { withoutStop } from "../sentence";
 import { aboutAda, BOX_BACK_ESTIMATE, SESSION_FEE_ESTIMATE, toCents } from "../swap";
+import { Collateral } from "./Collateral";
 import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
@@ -97,6 +103,8 @@ const MAX_SEED_BOXES = 96;
 const ADVANCE_EVERY_MS = 20_000;
 /** And reads its chains' rows again this often while one is being sent: from the device, no Koios request. */
 const CHAINS_EVERY_MS = 5_000;
+/** How often the public account's collateral is asked about while its payment is on its way: the last reading alone. */
+const COLLATERAL_EVERY_MS = 15_000;
 
 type Source = "private" | "public";
 type PrivateSummary = SessionOutSummary & { mix: LovejoinFunding };
@@ -595,6 +603,10 @@ export function Lovejoin({
   const [readFailed, setReadFailed] = useState(false);
   // Seeding, behind its own link under Mix: it gives the seeder nothing (LJ-6).
   const [seedOpen, setSeedOpen] = useState(false);
+  // The public account's collateral, which a mix from it puts up, and its page, opened here while it isn't set.
+  const [collateral, setCollateral] = useState<CollateralStatus>();
+  const [collateralOpen, setCollateralOpen] = useState(false);
+  const readCollateral = useCallback(() => call("collateral", {}).then(setCollateral, () => undefined), []);
 
   // One pool read on open, and on Refresh; the mixes from the device's record.
   const load = useCallback(async () => {
@@ -680,6 +692,17 @@ export function Lovejoin({
     }, sendingPublic ? 1000 : 5000);
     return () => clearInterval(timer);
   }, [sendingPublic, publicRunning, lookChains]);
+
+  // Read when the public side is chosen, from the last reading (no request), and every 15 s while its payment is on
+  // its way: Home's watch reads the balances again once it lands, wherever the user is, and this follows.
+  const collateralComing = source === "public" && collateral?.state === "waiting";
+  useEffect(() => {
+    if (source !== "public") return;
+    void readCollateral();
+    if (!collateralComing) return;
+    const timer = setInterval(() => void readCollateral(), COLLATERAL_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [source, collateralComing, readCollateral]);
 
   // What the chosen number of boxes takes: WebAssembly and the settings, no Koios.
   useEffect(() => {
@@ -858,6 +881,22 @@ export function Lovejoin({
     setError(undefined);
   };
 
+  if (collateralOpen) {
+    const back = () => {
+      setCollateralOpen(false);
+      void readCollateral();
+    };
+    return (
+      <Collateral
+        onBack={back}
+        onSent={(pending) => {
+          onPending(pending);
+          back();
+        }}
+      />
+    );
+  }
+
   if (review) {
     const isSeed = seeds(review);
     return (
@@ -966,7 +1005,7 @@ export function Lovejoin({
   const costs = funding ? mixCosts(funding, source) : undefined;
   // Why Review can't be pressed now (LJ-1, LJ-5, LJ-6): the pool unread, under its floor, without enough other
   // boxes for one at this depth (and whether one wave deep would do), or a private balance short of one box.
-  const cannot = readFailed
+  const notNow = readFailed
     ? tr("lovejoin.status.unread")
     : room?.floorShort
       ? joinSentences([t("lj.floorShortSentence", { count: status!.others, floor: status!.floor }), tr("lovejoin.pool.seedBelow")])
@@ -982,6 +1021,14 @@ export function Lovejoin({
         : funding && affordable < 1
           ? tr("lovejoin.mix.cantAfford", { first: formatAda(firstBox.toString()), held: amounts.ada(seedelf.lovelace) })
           : undefined;
+  // Then, from the public account, its collateral: on its way, or not set, with the way to set it under the reason.
+  const collateralShort = source === "public" && !!collateral && collateral.state !== "set";
+  const cannot =
+    notNow ??
+    (collateralShort
+      ? tr(collateral.state === "waiting" ? "lovejoin.mix.collateralComing" : "lovejoin.mix.needsCollateral")
+      : undefined);
+  const offerCollateral = !notNow && collateralShort && collateral.state === "none";
   return (
     <Screen
       title="Lovejoin"
@@ -1257,6 +1304,17 @@ export function Lovejoin({
             <p className="field-note" data-testid="lovejoin-mix-why">
               {cannot}
             </p>
+          )}
+          {offerCollateral && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => setCollateralOpen(true)}
+              data-testid="lovejoin-set-collateral"
+            >
+              {tr("collateral.set")}
+            </button>
           )}
         </section>
       )}

@@ -52,6 +52,14 @@ import {
 const TUSDM = "asset13vxx…6fmzjw";
 const PRIVATE_TUSDM = "asset1synt…ctusdm";
 
+/** The 5 ₳ of ADA alone a collateral payment from the 12-word phrase's account makes, at its own address. */
+function collateralMadeBy(txHash: string) {
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  return { ...rich!, tx_hash: txHash, tx_index: 0, value: "5000000", asset_list: [] } as never;
+}
+
 test("the extension loads with a module service worker, and a dev build with the pinned ID", async ({ context }) => {
   const id = await extensionId(context);
   expect(context.serviceWorkers().map((w) => w.url())).toContain(`chrome-extension://${id}/sw.js`);
@@ -437,6 +445,9 @@ test("receive into Seedelf without a Seedelf says to create one first", async ({
   // the real blocker and the way to fund it, where it used to build and say to make ADA private first (GS-2).
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await cardanoTab(page);
+  // Nothing to set a collateral with: the tab doesn't offer it.
+  await expect(page.getByTestId("home-dapps")).toBeVisible();
+  await expect(page.getByTestId("home-collateral")).toHaveCount(0);
   await page.getByTestId("mint-first").getByRole("button", { name: "Create a Seedelf" }).click();
   await expect(page.getByRole("radio", { name: "Public account" })).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("button", { name: "Review" })).toBeDisabled();
@@ -1861,7 +1872,9 @@ test("UTxOs: each balance's from the last reading, and a locked one kept out of 
   await expect(quick).toHaveAttribute("aria-pressed", "true");
 });
 
-test("collateral: set in Settings by paying 5 ₳ to yourself, then watched on Home", async ({ context, koios }) => {
+test("collateral: set in Settings by paying 5 ₳ to yourself, and the page shows it set once it lands", async ({ context, koios }) => {
+  // It waits on the page's 15 s look and a new reading.
+  test.slow();
   // The 12-word phrase's account holds no 5 ₳ UTxO, so setting one is a payment.
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
@@ -1886,12 +1899,60 @@ test("collateral: set in Settings by paying 5 ₳ to yourself, then watched on H
   expect(koios.collateralAsked).toBe(0);
   await snap(page, "collateral-waiting");
 
-  // Home watches it like any other transaction.
-  await page.getByRole("button", { name: "Done" }).click();
-  await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByTestId("pending-tx")).toContainText("Collateral payment sent");
+  // The page asks about it itself, as Home does: Settings replaces Home, and it said "waiting" long after the payment
+  // was on chain, until Home was opened (the owner, 2026-10-14).
+  const [txHash] = koios.submitted;
+  koios.addedToAccounts.push(collateralMadeBy(txHash!));
   koios.confirmations = 1;
-  await expect(page.getByTestId("pending-tx")).toContainText("Collateral set", { timeout: 20_000 });
+  // Its next look, at most 15 s on, then a new reading of the account.
+  await expect(page.getByTestId("collateral-status")).toHaveText("Set: 5 ₳ kept aside for running contracts.", {
+    timeout: 40_000,
+  });
+  await expect(page.getByTestId("collateral-set")).toContainText("Set byYou");
+  await expect(page.getByTestId("collateral-waiting")).toHaveCount(0);
+
+  // The page saw it land, so Home has nothing left to watch, and doesn't offer it.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await cardanoTab(page);
+  await expect(page.getByTestId("home-dapps")).toBeVisible();
+  await expect(page.getByTestId("pending-tx")).toHaveCount(0);
+  await expect(page.getByTestId("home-collateral")).toHaveCount(0);
+});
+
+test("collateral: the Public tab offers it while it isn't set, opens it in place, and watches the payment", async ({
+  context,
+  koios,
+}) => {
+  // It waits on Home's 15 s watch and a new reading.
+  test.slow();
+  // The 12-word phrase's account holds no 5 ₳ UTxO.
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await cardanoTab(page);
+  // It was in Settings alone (the owner, 2026-10-14).
+  const row = page.getByTestId("home-collateral");
+  await expect(row).toContainText("CollateralNot set. Some sites need it to run their contracts.");
+  await snap(page, "home-collateral");
+  // Settings' page, here: Back comes back to the tab.
+  await row.click();
+  await expect(page.getByTestId("collateral-status")).toHaveText("Not set. Some sites need it to run their contracts.");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(row).toBeVisible();
+
+  // Sent from here, it's Home's banner's, as every payment from Home is, and the row says it's on its way.
+  await row.click();
+  await page.getByRole("button", { name: "Set collateral" }).click();
+  await expect(page.getByTestId("collateral-review")).toContainText("Set aside5 ₳");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral payment sent");
+  await expect(page.getByTestId("home-collateral-state")).toHaveText("Waiting for the network to confirm it");
+  const [txHash] = koios.submitted;
+  koios.addedToAccounts.push(collateralMadeBy(txHash!));
+  koios.confirmations = 1;
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral set", { timeout: 40_000 });
+  // Set, once the account is read again, it's Settings' alone again.
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
 });
 
 test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it's set again with no transaction", async ({ context, koios }) => {
@@ -1901,6 +1962,9 @@ test("collateral: the wallet takes a 5 ₳ UTxO the account holds; reclaimed, it
   await cardanoTab(page);
   await expect(page.getByTestId("cardano-meta")).toHaveText("5 ₳ locked");
   await lookedAfterRestore(koios);
+  // Set, so the Public tab doesn't offer it.
+  await expect(page.getByTestId("home-dapps")).toBeVisible();
+  await expect(page.getByTestId("home-collateral")).toHaveCount(0);
   const reads = koios.calls.length;
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Collateral" }).click();
@@ -3041,6 +3105,52 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
 // the box never comes back by itself, and its time went with the stop
 // (lovejoin.ts unschedule): Home's row counts the box, not mixed yet, and
 // no next one back.
+test("Lovejoin: a mix from the public account without its collateral says so before Review, and sets it in place", async ({
+  context,
+  koios,
+}) => {
+  // It waits on Home's 15 s watch, a new reading, and the page's 15 s look at it.
+  test.slow();
+  // The pool, and no 5 ₳ UTxO at the account to be the collateral.
+  koios.addedToAccounts.push(...lovejoinPool);
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "dApps", exact: true }).click();
+  await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the poolNone");
+  // From the private balance, giveme.my lends it.
+  await expect(page.getByTestId("lovejoin-mix")).toBeEnabled();
+  await expect(page.getByTestId("lovejoin-set-collateral")).toHaveCount(0);
+  // From the public account, said before Review rather than after it, with the way to set it (the owner, 2026-10-14).
+  await page.getByRole("tab", { name: "Public account" }).click();
+  await expect(page.getByTestId("lovejoin-mix-why")).toHaveText("Lovejoin's mixes need your public account's collateral, which isn't set.");
+  await expect(page.getByTestId("lovejoin-mix")).toBeDisabled();
+  await snap(page, "lovejoin-needs-collateral");
+  // Settings' page, here: Back comes back to the form.
+  await page.getByTestId("lovejoin-set-collateral").click();
+  await expect(page.getByTestId("collateral-status")).toHaveText("Not set. Some sites need it to run their contracts.");
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page.getByTestId("lovejoin-mix-why")).toBeVisible();
+
+  // Sent from there, it's Home's banner's, which the page shows, and the form waits for it.
+  await page.getByTestId("lovejoin-set-collateral").click();
+  await page.getByRole("button", { name: "Set collateral" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
+  await expect(page.getByTestId("pending-tx")).toContainText("Collateral payment sent");
+  await expect(page.getByTestId("lovejoin-mix-why")).toHaveText(
+    "Your public account's collateral is on its way. Once the network confirms it, review the mix.",
+  );
+  await expect(page.getByTestId("lovejoin-set-collateral")).toHaveCount(0);
+  // Once it lands, Review can be pressed.
+  const [txHash] = koios.submitted;
+  koios.addedToAccounts.push(collateralMadeBy(txHash!));
+  koios.confirmations = 1;
+  await expect(page.getByTestId("lovejoin-mix")).toBeEnabled({ timeout: 60_000 });
+  await expect(page.getByTestId("lovejoin-mix-why")).toHaveCount(0);
+});
+
 test("Lovejoin: a pool under its floor offers to seed it, and says the seed hides nothing", async ({ context, koios }) => {
   // No pool at all, and mainnet's floor of 30: nothing can be mixed, and a mix
   // is what puts boxes in, so the page has to offer the way to start one.
