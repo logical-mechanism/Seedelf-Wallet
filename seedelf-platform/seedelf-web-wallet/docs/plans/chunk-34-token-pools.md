@@ -329,6 +329,12 @@ A record with no `pool` is the classic pool's. Each of these gains a pool:
 - **Start a pool**, as a button, not a link: a choice that costs money is never a link.
 - The launch's form and its review.
 
+**How a mix is shown needs a review as a whole** (the owner, 2026-10-14: "how to display a current lovejoin mix just in general needs a review … Mixing from public does not show on the mixes so there is no way to track it"). What the page does today:
+- **A mix from the private balance** is a private session, so *Mixes* lists it with its stage: funding, mixing, waiting, coming back.
+- **A mix from the public account** has no session. Its chain shows under *Its transactions* only while it's being sent, or if it stopped partway, and Home's Public tab says it's being sent. Once it's all sent, its row goes. After that, its boxes count only in *Your boxes in the pool*, and in when the next box comes back.
+- **So a public mix can't be followed once it's sent.** Token pools make this wider: mixes in several pools, from either side.
+- **The design is 34f's, before its strings**, and the owner's to approve. A starting point: one list of every mix, from either side and in any pool, each shown until its last box is back.
+
 **Every other screen** — Home, Settings, UTxOs, Activity, ClaimAll, SiteSessions, the swap review — shows its figures per pool.
 
 **Strings**
@@ -486,3 +492,4 @@ One branch, and each step ends with its tests green.
 3. **Seed or Bootstrap:** keep today's seed beside Bootstrap, or let Bootstrap replace it.
 4. **S1:** what to ask of PR #163 before it merges (the owner's repo, so the owner's call).
 5. **Cert 0 or cert 7** for L's registration: S0c's probe decides, unless the owner prefers Lovejoin's tested cert 7.
+6. **How a mix is shown** (the owner, 2026-10-14): a mix from the public account can't be followed once it's sent. See [*The Lovejoin page*](#9-screens).

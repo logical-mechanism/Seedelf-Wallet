@@ -28,7 +28,7 @@
 
 It was parked on 2026-10-02, while Koios was good enough: "it will require some things that go beyond just making the wallet work as expected." Mainnet's slow Koios reads made it next.
 
-**Then Lovejoin token pools, 1.6.0's focus** (the owner, 2026-10-13). [Lovejoin PR #163](https://github.com/logical-mechanism/Lovejoin/pull/163) lets a launch pool one native token, so a token can be mixed and come back through the mixer the way ADA does. Seedelf users launch the pools from their private balance; we launch none. The classic ADA pool stays exactly as it is. 🚧 Chunk 34: [plans/chunk-34-token-pools.md](plans/chunk-34-token-pools.md), with two of its designs still under discussion: pool spam (D1) and bootstrap (D2).
+**Then Lovejoin token pools, 1.6.0's focus** (the owner, 2026-10-13). [Lovejoin PR #163](https://github.com/logical-mechanism/Lovejoin/pull/163) lets a launch pool one native token, so a token can be mixed and come back through the mixer the way ADA does. Seedelf users launch the pools from their private balance; we launch none. The classic ADA pool stays exactly as it is. 🚧 Chunk 34: [plans/chunk-34-token-pools.md](plans/chunk-34-token-pools.md), with two of its designs still under discussion: pool spam (D1) and bootstrap (D2). Beside it, what the owner noticed using the wallet: ✅ chunk 35, [archive/plans/chunk-35-small-fixes.md](archive/plans/chunk-35-small-fixes.md), the collateral (a way in from the Public tab and Lovejoin's public mix, and a Settings page that kept waiting); and how a Lovejoin mix is shown, which went to chunk 34's *Screens*.
 
 **[dApp additions](#dapp-additions)** run alongside all of it and are not counted in parity.
 

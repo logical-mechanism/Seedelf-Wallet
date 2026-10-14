@@ -7,11 +7,19 @@
 // The status comes from the last reading. Setting it from a 5 ₳ UTxO the
 // account already holds, or reclaiming it, sends nothing. Otherwise setting
 // it pays 5 ₳ from the account to its own 0/0, reviewed first like a send.
+//
+// Settings opens it, and so do Home's Public tab and Lovejoin's mix from the
+// public account while there's none (the owner, 2026-10-14). From those, the
+// payment goes to Home's banner, as every payment sent from Home does.
+// From Settings it waits here, asking about it as Home would: Settings
+// replaces Home, whose watch stops, and the last reading only gives way to a
+// new one once the worker sees the payment land (pending.ts), so the page
+// said "waiting" until Home was opened.
 
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n";
 
-import type { CollateralStatus, SendSummary } from "../../shared/rpc";
+import type { CollateralStatus, PendingTx, SendSummary } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -21,7 +29,20 @@ import { TxBanner } from "../components/TxBanner";
 import { formatAda, shortHex } from "../format";
 import { useNetwork } from "../network";
 
-export function Collateral({ onBack }: { onBack: () => void }) {
+/** How often the page asks about its payment while it waits: Home's pace for a sent transaction. */
+const WATCH_EVERY_MS = 15_000;
+
+export function Collateral({
+  onBack,
+  onSent,
+  blocked,
+}: {
+  onBack: () => void;
+  /** Opened from Home or a dApp page: the payment, once sent, goes to Home's banner rather than waiting here. */
+  onSent?: (pending: PendingTx) => void;
+  /** Why no payment can be made now: Home's one at a time. Taking a 5 ₳ UTxO the account holds sends nothing. */
+  blocked?: string;
+}) {
   const t = useT();
   const network = useNetwork();
   const [status, setStatus] = useState<CollateralStatus>();
@@ -51,6 +72,31 @@ export function Collateral({ onBack }: { onBack: () => void }) {
     );
   }, []);
 
+  // While its payment is on its way: asked about at once and every 15 s, the question Home asks, and the status read
+  // again once it has landed or was let go, or once the worker watches another (the owner, 2026-10-14: it showed
+  // "waiting" long after the payment was on chain).
+  const waitingFor = status?.state === "waiting" ? status.txHash : undefined;
+  useEffect(() => {
+    if (!waitingFor) return;
+    let live = true;
+    const look = async () => {
+      try {
+        const p = await call("pending-tx", {});
+        if (p?.txHash === waitingFor && p.confirmations === null && !p.dropped) return;
+        const now = await call("collateral", {});
+        if (live) setStatus(now);
+      } catch {
+        // Koios hiccup: asked again on the next tick.
+      }
+    };
+    void look();
+    const timer = setInterval(() => void look(), WATCH_EVERY_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [waitingFor]);
+
   const set = () =>
     run(async () => {
       if (status?.state === "none" && status.candidate) {
@@ -63,9 +109,10 @@ export function Collateral({ onBack }: { onBack: () => void }) {
   const reclaim = () => run(async () => setStatus(await call("collateral-reclaim", {})));
   const send = () =>
     run(async () => {
-      await call("collateral-submit", { txHash: summary!.txHash });
+      const pending = await call("collateral-submit", { txHash: summary!.txHash });
       setSummary(undefined);
-      setStatus(await call("collateral", {}));
+      if (onSent) onSent(pending);
+      else setStatus(await call("collateral", {}));
     });
 
   if (summary) {
@@ -159,7 +206,7 @@ export function Collateral({ onBack }: { onBack: () => void }) {
       </>
     );
     // An empty account can't pay itself 5 ₳: said before it's tried, not after (chunk 23's review, SET-3).
-    const why = !status.candidate && empty ? t("collateral.fundFirst") : undefined;
+    const why = status.candidate ? undefined : empty ? t("collateral.fundFirst") : blocked;
     foot = (
       <>
         <button type="button" className="primary" onClick={set} disabled={busy || !!why}>
