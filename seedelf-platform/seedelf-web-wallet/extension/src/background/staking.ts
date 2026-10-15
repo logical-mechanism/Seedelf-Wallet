@@ -16,6 +16,9 @@
 //           and `optimal_pool_count` for saturation. It's the same for
 //           everyone, so it's kept in chrome.storage.local for a day.
 //   pool    one pool's details, fresh (`pool_info`).
+//   history one pool's last 18 epochs, fresh (`pool_history`), when its page
+//           opens, or its details unfold on Staking (chunk 37): its return
+//           on stake, worked out here from what it paid, never Koios's.
 //   drep    a DRep's standing and name (`drep_info`, `drep_metadata`).
 //   rewards every reward the stake key was paid (`account_reward_history`,
 //           1,000 a request), fresh, when Rewards history opens (chunk 30).
@@ -46,6 +49,8 @@ import {
   type OwnDrep,
   type PendingTx,
   type PoolDetails,
+  type PoolEpoch,
+  type PoolHistory,
   type PoolList,
   type PoolRef,
   type PoolRow,
@@ -58,7 +63,16 @@ import {
 import { nothingInAccount, readAccount, validUntil } from "./account";
 import { stakingOf, txInfoPaged } from "./activity";
 import { governance, ownDrepId, profileFile, readOwnDrep } from "./governance";
-import type { Koios, KoiosAccountInfo, KoiosAccountUpdate, KoiosPoolInfo, KoiosReward, KoiosTxInfo } from "./koios";
+import {
+  POOL_EPOCHS,
+  type Koios,
+  type KoiosAccountInfo,
+  type KoiosAccountUpdate,
+  type KoiosPoolEpoch,
+  type KoiosPoolInfo,
+  type KoiosReward,
+  type KoiosTxInfo,
+} from "./koios";
 import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import type { Area } from "./storage";
@@ -258,6 +272,30 @@ const refOf = (info: KoiosPoolInfo): PoolRef => ({
   ...(info.meta_json?.name ? { name: info.meta_json.name } : {}),
 });
 
+/** Epochs in a year: five days each, on mainnet and preprod alike. Koios's `epoch_ros` compounds over 73 too. */
+const EPOCHS_A_YEAR = 73;
+
+/** An epoch's rate, as a yearly percentage, compounded once an epoch: rewards are staked as they're paid. */
+const yearly = (rate: number) => (Math.exp(EPOCHS_A_YEAR * Math.log1p(rate)) - 1) * 100;
+
+/**
+ * A pool's epoch as the page shows it, or undefined for a row that isn't one:
+ * an epoch, a block count or a stake that isn't a whole number. Its `ros` is
+ * what it paid its stake over that stake: none where the server didn't say
+ * what it paid (`deleg_rewards` null, which most Koios servers give for
+ * every other epoch, on both networks) or it had no stake. An epoch with no
+ * blocks paid nothing, and that's known.
+ */
+function poolEpochOf(row: KoiosPoolEpoch): { shown: PoolEpoch; rate?: number } | undefined {
+  if (!isEpoch(row.epoch_no) || !isEpoch(row.block_cnt) || !/^\d+$/.test(row.active_stake ?? "")) return undefined;
+  const stake = Number(row.active_stake);
+  // Koios gives the lovelace as text; a float column's text could carry an exponent, which Number reads too.
+  const paid = row.deleg_rewards === null ? NaN : Number(row.deleg_rewards);
+  const rate = stake > 0 && paid >= 0 ? paid / stake : undefined;
+  const shown = { epoch: row.epoch_no, blocks: row.block_cnt, ...(rate !== undefined ? { ros: yearly(rate) } : {}) };
+  return { shown, ...(rate !== undefined ? { rate } : {}) };
+}
+
 /** Saturation, a percentage to two places: `stake` against the supply over `optimal_pool_count`. */
 export function saturation(stake: bigint, supply: bigint, optimal: number): number {
   if (supply <= 0n || optimal <= 0) return 0;
@@ -348,6 +386,29 @@ export class StakingService {
       status: info.pool_status,
       retiringEpoch: info.retiring_epoch,
     };
+  }
+
+  /**
+   * One pool's last `POOL_EPOCHS` epochs, newest first, read fresh and kept
+   * nowhere: one request. Its return on stake is what an ADA staked through
+   * every epoch whose pay is known would have earned, rewards compounding, as
+   * a yearly rate; the epochs the server didn't say for are left out of it,
+   * not counted as paying nothing.
+   */
+  async poolHistory(network: NetworkName, id: string): Promise<PoolHistory> {
+    const poolId = this.deps.wasm.poolId(id);
+    const rows = await this.deps.koios(network).poolHistory(poolId);
+    // One row an epoch, newest first, whatever order the server gave: the page keys its rows by epoch.
+    const byEpoch = new Map<number, NonNullable<ReturnType<typeof poolEpochOf>>>();
+    for (const row of rows) {
+      const read = poolEpochOf(row);
+      if (read && !byEpoch.has(read.shown.epoch)) byEpoch.set(read.shown.epoch, read);
+    }
+    const epochs = [...byEpoch.values()].sort((a, b) => b.shown.epoch - a.shown.epoch).slice(0, POOL_EPOCHS);
+    const rates = epochs.flatMap((e) => (e.rate !== undefined ? [e.rate] : []));
+    // An ADA staked through each of them grew by the product of (1 + rate): its mean, a year of epochs over.
+    const ros = rates.length ? yearly(Math.expm1(rates.reduce((sum, r) => sum + Math.log1p(r), 0) / rates.length)) : undefined;
+    return { id: poolId, epochs: epochs.map((e) => e.shown), ...(ros !== undefined ? { ros } : {}) };
   }
 
   /** A DRep by ID, in any form WebAssembly reads: its standing and name. */

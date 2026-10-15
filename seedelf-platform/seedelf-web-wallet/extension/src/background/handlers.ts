@@ -280,6 +280,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.staking.pools(ctx.network, message.refresh ?? false);
     case "pool":
       return ctx.staking.pool(ctx.network, message.id);
+    case "pool-history":
+      return ctx.staking.poolHistory(ctx.network, message.id);
     case "drep":
       return ctx.staking.drep(ctx.network, message.id);
     case "drep-own":

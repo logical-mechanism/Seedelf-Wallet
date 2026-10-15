@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type I18nKey, joinList, useT } from "../../i18n";
 
-import type { PoolDetails, PoolList, PoolRow } from "../../shared/rpc";
+import type { PoolDetails, PoolHistory, PoolList, PoolRow } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { SearchIcon } from "../components/Icons";
@@ -36,15 +36,16 @@ const SORTS = [
 
 /**
  * What the browser was showing: the search, the sort, and the pool open with
- * its details once read. Kept by the Staking page, so Back from a pool's
- * review returns to the pool, not to the top of the list (chunk 23's second
- * review, ST-11).
+ * its details and recent epochs once read. Kept by the Staking page, so Back
+ * from a pool's review returns to the pool, not to the top of the list
+ * (chunk 23's second review, ST-11), and asks for neither again.
  */
 export interface PoolsView {
   query: string;
   sort: PoolSort;
   open?: PoolRow;
   details?: PoolDetails;
+  history?: PoolHistory;
 }
 
 export const NEW_POOLS_VIEW: PoolsView = { query: "", sort: "ticker" };
@@ -94,6 +95,7 @@ export function Pools({
   error,
   view,
   onView,
+  onHistory,
   onBack,
   onStake,
 }: {
@@ -107,6 +109,8 @@ export function Pools({
   error?: string;
   view: PoolsView;
   onView: (view: PoolsView) => void;
+  /** The open pool's recent epochs, read: kept in the view. */
+  onHistory: (history: PoolHistory) => void;
   onBack: () => void;
   /** The pool, and how many live pools use its ticker. */
   onStake: (pool: PoolDetails, shared: number) => void;
@@ -139,6 +143,8 @@ export function Pools({
       <PoolPage
         row={open}
         known={view.details}
+        knownHistory={view.history}
+        onHistory={onHistory}
         shared={sharing(tickers, open.ticker)}
         current={current}
         registered={registered}
@@ -201,7 +207,7 @@ export function Pools({
                 current={p.id === current}
                 shared={sharing(tickers, p.ticker) > 1}
                 sort={sort}
-                onOpen={(row) => onView({ ...view, open: row, details: undefined })}
+                onOpen={(row) => onView({ ...view, open: row, details: undefined, history: undefined })}
               />
             ))}
           </ul>
@@ -290,10 +296,12 @@ export function PoolListRow({
   );
 }
 
-/** One pool's details, fresh, and Stake. */
+/** One pool's details and recent epochs, fresh (two requests), and Stake. */
 function PoolPage({
   row,
   known,
+  knownHistory,
+  onHistory,
   shared,
   current,
   registered,
@@ -306,6 +314,9 @@ function PoolPage({
   row: PoolRow;
   /** Its details as read before its review: Back from the review shows them again without asking. */
   known?: PoolDetails;
+  /** Its recent epochs as read before, the same way. */
+  knownHistory?: PoolHistory;
+  onHistory: (history: PoolHistory) => void;
   /** How many live pools use its ticker. */
   shared: number;
   current?: string;
@@ -323,8 +334,21 @@ function PoolPage({
     setReadError(undefined);
     call("pool", { id: row.id }).then(setDetails, (e: Error) => setReadError(e.message));
   };
+  const [history, setHistory] = useState<PoolHistory | undefined>(knownHistory?.id === row.id ? knownHistory : undefined);
+  const [historyError, setHistoryError] = useState<string>();
+  const readHistory = () => {
+    setHistoryError(undefined);
+    call("pool-history", { id: row.id }).then(
+      (h) => {
+        setHistory(h);
+        onHistory(h);
+      },
+      (e: Error) => setHistoryError(e.message),
+    );
+  };
   useEffect(() => {
     if (!details) read();
+    if (!history) readHistory();
   }, [row.id]);
 
   const yours = row.id === current;
@@ -372,6 +396,7 @@ function PoolPage({
         onRetry={read}
         testId="pool-details"
         named={false}
+        returns={{ history, error: historyError, onRetry: readHistory }}
       />
       {details?.description && <p className="note">{details.description}</p>}
       <p className="note mono-id" title={row.id}>

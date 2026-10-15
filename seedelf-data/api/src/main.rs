@@ -7,6 +7,7 @@ use seedelf_data_api::config::Config;
 use seedelf_data_api::decimals::Decimals;
 use seedelf_data_api::edge::{self, Edge, Egress};
 use seedelf_data_api::kupo::Kupo;
+use seedelf_data_api::public::history;
 use seedelf_data_api::state::{AppState, watch_kupo, watch_tip};
 use seedelf_data_api::submit::{Submit, watch_node};
 use tracing::Level;
@@ -53,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
     );
     tokio::spawn(watch_tip(state.clone()));
     tokio::spawn(watch_kupo(state.clone()));
+    tokio::spawn(history::keep_filled(state.clone()));
     let submit = Arc::new(Submit::new(config.submit_api_url, config.ogmios_url)?);
     tokio::spawn(watch_node(submit.clone()));
     let egress = Egress::new(

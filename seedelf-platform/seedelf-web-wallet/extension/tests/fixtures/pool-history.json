@@ -1,0 +1,67 @@
+{
+  "recorded": "2026-10-15T04:47:27.635Z",
+  "preprod": {
+    "pool1rccstu3l9ty3k0a5cd06fl3szsss9r34dcg5j38fqgq9kvng0tg": [
+      { "epoch_no": 317, "active_stake": "12083138322242", "block_cnt": 161, "deleg_rewards": "8513495426" },
+      { "epoch_no": 316, "active_stake": "12063911158355", "block_cnt": 161, "deleg_rewards": "8512049008" },
+      { "epoch_no": 315, "active_stake": "12074281063162", "block_cnt": 161, "deleg_rewards": null },
+      { "epoch_no": 314, "active_stake": "12074617487501", "block_cnt": 180, "deleg_rewards": "9519824134" },
+      { "epoch_no": 313, "active_stake": "12099157711257", "block_cnt": 148, "deleg_rewards": null },
+      { "epoch_no": 312, "active_stake": "12090807685102", "block_cnt": 0, "deleg_rewards": "0" },
+      { "epoch_no": 311, "active_stake": "12076749767622", "block_cnt": 0, "deleg_rewards": "0" },
+      { "epoch_no": 310, "active_stake": "12117289022010", "block_cnt": 152, "deleg_rewards": "8024682395" },
+      { "epoch_no": 309, "active_stake": "11935509572550", "block_cnt": 165, "deleg_rewards": null },
+      { "epoch_no": 308, "active_stake": "11926485308560", "block_cnt": 147, "deleg_rewards": "7751743814" },
+      { "epoch_no": 307, "active_stake": "11917489331141", "block_cnt": 161, "deleg_rewards": null },
+      { "epoch_no": 306, "active_stake": "11908340024469", "block_cnt": 157, "deleg_rewards": "8639643907" },
+      { "epoch_no": 305, "active_stake": "15866327615932", "block_cnt": 207, "deleg_rewards": null },
+      { "epoch_no": 304, "active_stake": "15854046702037", "block_cnt": 185, "deleg_rewards": "10262775062" },
+      { "epoch_no": 303, "active_stake": "15985521507467", "block_cnt": 221, "deleg_rewards": null },
+      { "epoch_no": 302, "active_stake": "15978408405839", "block_cnt": 31, "deleg_rewards": "1576550219" },
+      { "epoch_no": 301, "active_stake": "15966643991779", "block_cnt": 0, "deleg_rewards": "0" },
+      { "epoch_no": 300, "active_stake": "15756655626899", "block_cnt": 0, "deleg_rewards": "0" }
+    ],
+    "pool1sh4cddrln788xmnjnsqhdwj9e7th3c3ck3zjk7ny9znwj44t8he": [
+      { "epoch_no": 317, "active_stake": "294280702908043", "block_cnt": 4037, "deleg_rewards": "45146265149" },
+      { "epoch_no": 316, "active_stake": "294231623542225", "block_cnt": 4042, "deleg_rewards": "45192896400" },
+      { "epoch_no": 315, "active_stake": "294176384321985", "block_cnt": 4080, "deleg_rewards": "45551533534" },
+      { "epoch_no": 314, "active_stake": "294139138588750", "block_cnt": 4163, "deleg_rewards": "46464338457" },
+      { "epoch_no": 313, "active_stake": "294092558646913", "block_cnt": 3837, "deleg_rewards": "42818573149" },
+      { "epoch_no": 312, "active_stake": "294044206096693", "block_cnt": 4068, "deleg_rewards": "45410784877" },
+      { "epoch_no": 311, "active_stake": "293995573562232", "block_cnt": 3949, "deleg_rewards": "44089444745" },
+      { "epoch_no": 310, "active_stake": "293960770157382", "block_cnt": 4097, "deleg_rewards": "45773602758" },
+      { "epoch_no": 309, "active_stake": "293913926144488", "block_cnt": 4119, "deleg_rewards": "46041742980" },
+      { "epoch_no": 308, "active_stake": "293864642213617", "block_cnt": 4114, "deleg_rewards": "45945514219" },
+      { "epoch_no": 307, "active_stake": "293816897741329", "block_cnt": 3965, "deleg_rewards": "44293842290" },
+      { "epoch_no": 306, "active_stake": "293738648678217", "block_cnt": 4012, "deleg_rewards": "46658234327" },
+      { "epoch_no": 305, "active_stake": "293691213488469", "block_cnt": 3877, "deleg_rewards": "45151325727" },
+      { "epoch_no": 304, "active_stake": "293644017578575", "block_cnt": 3945, "deleg_rewards": "45968333192" },
+      { "epoch_no": 303, "active_stake": "293595145635845", "block_cnt": 3860, "deleg_rewards": "44902094969" },
+      { "epoch_no": 302, "active_stake": "293546907350958", "block_cnt": 3845, "deleg_rewards": "44674614399" },
+      { "epoch_no": 301, "active_stake": "293500122340126", "block_cnt": 3982, "deleg_rewards": "46266845594" },
+      { "epoch_no": 300, "active_stake": "293451003956087", "block_cnt": 3930, "deleg_rewards": "45664870643" }
+    ]
+  },
+  "mainnet": {
+    "pool1z5uqdk7dzdxaae5633fqfcu2eqzy3a3rgtuvy087fdld7yws0xt": [
+      { "epoch_no": 659, "active_stake": "54821012257109", "block_cnt": 51, "deleg_rewards": "13897448406" },
+      { "epoch_no": 658, "active_stake": "57371128676230", "block_cnt": 48, "deleg_rewards": null },
+      { "epoch_no": 657, "active_stake": "57189513921224", "block_cnt": 44, "deleg_rewards": "12021458101" },
+      { "epoch_no": 656, "active_stake": "57294725302794", "block_cnt": 52, "deleg_rewards": null },
+      { "epoch_no": 655, "active_stake": "54980098660133", "block_cnt": 50, "deleg_rewards": "13794339706" },
+      { "epoch_no": 654, "active_stake": "60198033425117", "block_cnt": 50, "deleg_rewards": null },
+      { "epoch_no": 653, "active_stake": "59775432464682", "block_cnt": 56, "deleg_rewards": "15547217239" },
+      { "epoch_no": 652, "active_stake": "58406882406596", "block_cnt": 50, "deleg_rewards": null },
+      { "epoch_no": 651, "active_stake": "58552469666608", "block_cnt": 50, "deleg_rewards": "13613801966" },
+      { "epoch_no": 650, "active_stake": "58493633329138", "block_cnt": 52, "deleg_rewards": null },
+      { "epoch_no": 649, "active_stake": "58724483314143", "block_cnt": 43, "deleg_rewards": "11837460786" },
+      { "epoch_no": 648, "active_stake": "58716391519328", "block_cnt": 57, "deleg_rewards": null },
+      { "epoch_no": 647, "active_stake": "58387742068256", "block_cnt": 50, "deleg_rewards": "14158259172" },
+      { "epoch_no": 646, "active_stake": "58331740355344", "block_cnt": 58, "deleg_rewards": null },
+      { "epoch_no": 645, "active_stake": "58241778086578", "block_cnt": 63, "deleg_rewards": "17946664109" },
+      { "epoch_no": 644, "active_stake": "57045426478407", "block_cnt": 46, "deleg_rewards": null },
+      { "epoch_no": 643, "active_stake": "57047741183340", "block_cnt": 66, "deleg_rewards": "18938615359" },
+      { "epoch_no": 642, "active_stake": "57288419371626", "block_cnt": 67, "deleg_rewards": "2347121342" }
+    ]
+  }
+}

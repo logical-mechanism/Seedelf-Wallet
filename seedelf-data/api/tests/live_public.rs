@@ -875,3 +875,113 @@ async fn an_nfts_metadata_is_koioss() {
             .starts_with("addr1")
     );
 }
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn a_pools_history_is_koioss_with_every_epoch_paid() {
+    // The 18 epochs worked out first, as the server does behind its requests, so no answer is cut short by its wait.
+    let chain = chain();
+    let tip = chain.tip().await.unwrap();
+    let state = Arc::new(AppState::new(chain.clone()));
+    state.set_tip(tip.clone());
+    let started = std::time::Instant::now();
+    seedelf_data_api::public::history::fill(&state)
+        .await
+        .unwrap();
+    eprintln!("18 epochs, every pool's, in {:?}", started.elapsed());
+    let app = Router::new()
+        .merge(seedelf_data_api::public::routes())
+        .with_state(state);
+
+    // Koios's answers, recorded from mainnet Koios: every deleg_rewards any of its servers gave (fixtures/
+    // record-pool-history.py).
+    let koios: Value = serde_json::from_str(include_str!("fixtures/pool-history.json")).unwrap();
+    let lovelace = |v: &Value| v.as_str().unwrap().parse::<i128>().unwrap();
+    for recorded in koios["mainnet"].as_array().unwrap() {
+        let pool = recorded["pool"].as_str().unwrap();
+        let path = format!(
+            "/api/v1/pool_history?_pool_bech32={pool}\
+             &select=epoch_no,active_stake,block_cnt,deleg_rewards&order=epoch_no.desc&limit=18"
+        );
+        let started = std::time::Instant::now();
+        let ours = get(&app, &path).await;
+        assert!(
+            started.elapsed().as_millis() < 100,
+            "{:?}",
+            started.elapsed()
+        );
+        let ours = ours.as_array().unwrap();
+
+        // Newest first, two epochs ago at most, each epoch once, 18 at most, and every one paid.
+        let epochs: Vec<i64> = ours
+            .iter()
+            .map(|r| r["epoch_no"].as_i64().unwrap())
+            .collect();
+        assert!(!epochs.is_empty() && epochs.len() <= 18, "{pool}");
+        assert!(epochs.windows(2).all(|w| w[0] > w[1]), "{pool}");
+        assert!(
+            epochs[0] <= tip.epoch - 2 && epochs[epochs.len() - 1] > tip.epoch - 20,
+            "{pool}"
+        );
+        for row in ours {
+            assert_eq!(row.as_object().unwrap().len(), 4);
+            assert!(lovelace(&row["deleg_rewards"]) >= 0, "{pool}: {row}");
+            if row["block_cnt"] == 0 {
+                assert_eq!(row["deleg_rewards"], "0", "{pool}: {row}");
+            }
+        }
+
+        // Where the windows meet: the same epochs, the same stake and blocks, and what it paid one of the values
+        // Koios's servers gave. They can disagree: a value cached while db-sync was still inserting the epoch's
+        // rewards is low, and one cached before it took back those owed to keys deregistered before payday is high
+        // (OctasPool's epoch 642: 19,172 ₳ here and on some, 19,269 ₳ on another, with ~98 ₳ more to members).
+        let koios: Vec<&Value> = recorded["answer"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|k| k["epoch_no"].as_i64().unwrap() > tip.epoch - 20)
+            .collect();
+        assert!(
+            !koios.is_empty(),
+            "the recording is 18 epochs old: run record-pool-history.py again"
+        );
+        let oldest = koios
+            .iter()
+            .map(|k| k["epoch_no"].as_i64().unwrap())
+            .min()
+            .unwrap();
+        let newest = koios
+            .iter()
+            .map(|k| k["epoch_no"].as_i64().unwrap())
+            .max()
+            .unwrap();
+        let meeting: Vec<&Value> = ours
+            .iter()
+            .filter(|r| (oldest..=newest).contains(&r["epoch_no"].as_i64().unwrap()))
+            .collect();
+        assert_eq!(meeting.len(), koios.len(), "{pool}");
+        for (row, k) in meeting.iter().zip(&koios) {
+            assert_eq!(row["epoch_no"], k["epoch_no"], "{pool}");
+            assert_eq!(row["active_stake"], k["active_stake"], "{pool}: {row}");
+            assert_eq!(row["block_cnt"], k["block_cnt"], "{pool}: {row}");
+            let said: Vec<i128> = k["deleg_rewards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(lovelace)
+                .collect();
+            if !said.is_empty() {
+                let paid = lovelace(&row["deleg_rewards"]);
+                assert!(said.contains(&paid), "{pool}: {row}, Koios {said:?}");
+            }
+        }
+    }
+
+    // A pool db-sync doesn't know has no epochs.
+    let unknown = seedelf_data_api::ids::encode("pool", &[7; 28]);
+    let path = format!(
+        "/api/v1/pool_history?_pool_bech32={unknown}\
+         &select=epoch_no,active_stake,block_cnt,deleg_rewards&order=epoch_no.desc&limit=18"
+    );
+    assert_eq!(get(&app, &path).await, json!([]));
+}

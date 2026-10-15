@@ -3525,7 +3525,9 @@ test("staking: the page, the pool browser, a change of pool reviewed and sent, t
   reads = koios.calls.length;
   await results.getByRole("button", { name: /^TPREP,/ }).click();
   await expect(page.getByTestId("pool-details")).toContainText("oversaturated");
-  expect(koios.calls.slice(reads)).toEqual(["pool_info"]);
+  // And its recent epochs, for its return on stake (chunk 37), which the next test answers.
+  await expect(page.getByTestId("pool-details-return")).not.toContainText("Reading");
+  expect(koios.calls.slice(reads).sort()).toEqual(["pool_history", "pool_info"]);
   await snap(page, "pool-details");
   reads = koios.calls.length;
   await page.getByRole("button", { name: "Stake with TPREP" }).click();
@@ -3954,6 +3956,80 @@ test("staking: the delegation history, read only once it's opened (chunk 36)", a
   await page.getByRole("button", { name: "Delegation history" }).click();
   await expect(rows).toHaveCount(12);
   expect(asked.map((a) => a.path)).toEqual(["account_update_history", "tx_info", "account_update_history", "tx_info"]);
+});
+
+const poolHistory = JSON.parse(readFileSync(new URL("../tests/fixtures/pool-history.json", import.meta.url), "utf8")) as {
+  preprod: Record<string, Array<{ epoch_no: number; active_stake: string; block_cnt: number; deleg_rewards: string | null }>>;
+};
+
+test("staking: a pool's return on stake, read with its page, and on Staking only once Pool details opens (chunk 37)", async ({
+  context,
+  koios,
+}) => {
+  // Answered here, after the fixture's routes, so these win: the recorded 18 epochs of LOGIC and TPREP, some of whose
+  // rewards Koios left out.
+  const asked: URLSearchParams[] = [];
+  await context.route(
+    (url) => url.pathname.endsWith("/pool_history"),
+    (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      asked.push(query);
+      return route.fulfill({ json: poolHistory.preprod[query.get("_pool_bech32")!] ?? [] });
+    },
+  );
+  const LOGIC = "pool1rccstu3l9ty3k0a5cd06fl3szsss9r34dcg5j38fqgq9kvng0tg";
+  const TPREP = "pool1sh4cddrln788xmnjnsqhdwj9e7th3c3ck3zjk7ny9znwj44t8he";
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+
+  // Opening Staking asks nothing about it: the page reads its pool's details, which names LOGIC below.
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByTestId("your-pool")).toContainText("LOGIC · Logical Mechanism");
+  await expect(page.getByTestId("drep-card")).not.toContainText("Reading your DRep…");
+  expect(asked).toHaveLength(0);
+
+  // Pool details opens: its recent epochs, once, by the one request the data layer takes too.
+  await page.getByText("Pool details", { exact: true }).click();
+  const yours = page.getByTestId("your-pool-return");
+  await expect(yours).toContainText(/Return on stake\d+(\.\d+)?% a year/);
+  expect(asked.map((q) => [...q])).toEqual([
+    [
+      ["_pool_bech32", LOGIC],
+      ["select", "epoch_no,active_stake,block_cnt,deleg_rewards"],
+      ["order", "epoch_no.desc"],
+      ["limit", "18"],
+    ],
+  ]);
+  // Its epochs, folded: those Koios gave rewards for, and those it didn't.
+  const known = poolHistory.preprod[LOGIC]!.filter((r) => r.deleg_rewards !== null).length;
+  await page.getByTestId("your-pool").getByText("Recent epochs").click();
+  const epochs = page.getByTestId("your-pool-return-epoch-rows").locator(".review__row");
+  await expect(epochs).toHaveCount(18);
+  await expect(epochs.filter({ hasText: "not known" })).toHaveCount(18 - known);
+  await expect(epochs.first()).toContainText(/^Epoch 317161 blocks · \d+(\.\d+)?% a year$/);
+  await expect(page.getByTestId("your-pool-facts-note-hint")).toHaveAttribute("title", new RegExp(`over ${known} of its last 18 epochs`));
+  // Folded and opened again: kept while the page is.
+  await page.getByText("Pool details", { exact: true }).click();
+  await page.getByText("Pool details", { exact: true }).click();
+  await expect(yours).toBeVisible();
+  expect(asked).toHaveLength(1);
+  await snap(page, "staking-pool-return");
+
+  // A pool in the browser reads its recent epochs with its details; Back from its review shows them again, asking
+  // neither again.
+  await page.getByRole("button", { name: "Change pool" }).click();
+  await page.getByLabel("Search pools").fill("tprep");
+  await page.getByTestId("pool-results").getByRole("button", { name: /^TPREP,/ }).click();
+  await expect(page.getByTestId("pool-details-return")).toContainText(/Return on stake\d+(\.\d+)?% a year/);
+  expect(asked.map((q) => q.get("_pool_bech32"))).toEqual([LOGIC, TPREP]);
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Stake with TPREP" }).click();
+  await expect(page.getByTestId("staking-review")).toContainText("Stake withTPREP");
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByTestId("pool-details-return")).toContainText("Return on stake");
+  expect(asked).toHaveLength(2);
+  expect(koios.calls.slice(reads).filter((c) => c === "pool_info")).toEqual([]);
 });
 
 test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {

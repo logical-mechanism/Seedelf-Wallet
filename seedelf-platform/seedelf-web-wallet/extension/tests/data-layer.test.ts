@@ -237,6 +237,33 @@ describe("the data layer's client", () => {
     expect(later.calls.filter((c) => c.path === "account_update_history").map((c) => c.host)).toEqual([DATA, DATA, KOIOS]);
   });
 
+  it("reads a pool's recent epochs on the data layer, or on Koios when it fails (chunk 37)", async () => {
+    const POOL = "pool1z5uqdk7dzdxaae5633fqfcu2eqzy3a3rgtuvy087fdld7yws0xt";
+    const epochs = (from: number) =>
+      Response.json(Array.from({ length: 18 }, (_, i) => ({ epoch_no: from - i, active_stake: "1", block_cnt: 1, deleg_rewards: "0" })));
+    const s = servers();
+    s.data.set("pool_history", epochs(659));
+    const { make } = client(s);
+    expect((await make("mainnet").poolHistory(POOL)).map((r) => r.epoch_no)[0]).toBe(659);
+    const asked = s.calls.filter((c) => c.path === "pool_history");
+    expect(asked.map((c) => c.host)).toEqual([DATA]);
+    // The one request the data layer takes, in its order: a GET, the pool first.
+    expect([...new URLSearchParams(asked[0]!.query)]).toEqual([
+      ["_pool_bech32", POOL],
+      ["select", "epoch_no,active_stake,block_cnt,deleg_rewards"],
+      ["order", "epoch_no.desc"],
+      ["limit", "18"],
+    ]);
+    expect(dataCost("pool_history")).toBe(4);
+
+    const later = servers();
+    later.data.set("pool_history", new Response("", { status: 404 }));
+    later.koios.set("pool_history", epochs(658));
+    const { make: again } = client(later);
+    expect((await again("mainnet").poolHistory(POOL)).map((r) => r.epoch_no)[0]).toBe(658);
+    expect(later.calls.filter((c) => c.path === "pool_history").map((c) => c.host)).toEqual([DATA, KOIOS]);
+  });
+
   it("keeps each part apart, and a part's hold across a worker's restart", async () => {
     const s = servers();
     s.data.set("tip", "unreachable");
