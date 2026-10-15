@@ -398,6 +398,26 @@ export interface PoolDetails extends PoolRef {
   retiringEpoch: number | null;
 }
 
+/** One of a pool's recent epochs (Koios's `pool_history`). */
+export interface PoolEpoch {
+  epoch: number;
+  blocks: number;
+  /**
+   * What each ADA staked with it earned that epoch, after its fees, as a
+   * yearly percentage. Absent when the server didn't say, or the pool had no
+   * stake that epoch.
+   */
+  ros?: number;
+}
+
+/** A pool's recent epochs, newest first, and its return on stake over them. */
+export interface PoolHistory {
+  id: string;
+  epochs: PoolEpoch[];
+  /** The yearly percentage an ADA staked through every epoch with a `ros` earned: absent with none. */
+  ros?: number;
+}
+
 /** A DRep (Koios's `drep_info`, and its name from `drep_metadata`). */
 export interface DrepDetails {
   /** CIP-129. */
@@ -2176,6 +2196,8 @@ export interface Requests {
   pools: { payload: { refresh?: boolean }; result: PoolList };
   /** One pool's details, fresh. */
   pool: { payload: { id: string }; result: PoolDetails };
+  /** One pool's recent epochs and its return on stake over them, fresh (chunk 37). */
+  "pool-history": { payload: { id: string }; result: PoolHistory };
   /** A DRep by its ID (CIP-129 or CIP-105): its standing and name. */
   drep: { payload: { id: string }; result: DrepDetails };
   /** The account's own DRep, read fresh. */
@@ -2509,6 +2531,7 @@ const REQUEST_LIST = [
   "collateral-submit",
   "pools",
   "pool",
+  "pool-history",
   "drep",
   "drep-own",
   "reward-history",

@@ -307,6 +307,10 @@ export class DataLayerKoios extends Koios {
     return this.read((k) => k.poolInfo(poolIds), () => super.poolInfo(poolIds));
   }
 
+  override poolHistory(poolId: string) {
+    return this.read((k) => k.poolHistory(poolId), () => super.poolHistory(poolId));
+  }
+
   override drepInfo(drepIds: string[]) {
     return this.read((k) => k.drepInfo(drepIds), () => super.drepInfo(drepIds));
   }

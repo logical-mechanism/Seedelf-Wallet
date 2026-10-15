@@ -11,7 +11,7 @@
 // (the DRep deposit, or its profile's check).
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { type I18nKey, t, useT } from "../../i18n";
+import { type I18nKey, joinSentences, t, useT } from "../../i18n";
 
 import {
   ALWAYS_NO_CONFIDENCE,
@@ -22,6 +22,7 @@ import {
   type OwnDrep,
   type PendingTx,
   type PoolDetails,
+  type PoolHistory,
   type PoolRef,
   type StakeInfo,
   type StakingAction,
@@ -189,6 +190,25 @@ export function Staking({
   };
   useEffect(readPool, [poolId]);
 
+  // Its recent epochs, only once Pool details is opened, and then kept while the page is: opening Staking costs what
+  // it did (chunk 37).
+  const [poolHistory, setPoolHistory] = useState<PoolHistory>();
+  const [poolHistoryError, setPoolHistoryError] = useState<string>();
+  const historyAsked = useRef<string>(undefined);
+  const readPoolHistory = (again = false) => {
+    if (!poolId || (!again && historyAsked.current === poolId)) return;
+    historyAsked.current = poolId;
+    setPoolHistoryError(undefined);
+    call("pool-history", { id: poolId }).then(
+      (h) => historyAsked.current === poolId && setPoolHistory(h),
+      (e: Error) => historyAsked.current === poolId && setPoolHistoryError(e.message),
+    );
+  };
+  // A change of pool landing while the page is open, its details read before: the new pool's, at once.
+  useEffect(() => {
+    if (historyAsked.current && historyAsked.current !== poolId) readPoolHistory();
+  }, [poolId]);
+
   // The account's own DRep, fresh too.
   const readDrep = () => {
     setDrepError(undefined);
@@ -343,6 +363,8 @@ export function Staking({
         error={error}
         view={poolsView}
         onView={setPoolsView}
+        // Only for the pool still open: a read can finish after Back.
+        onHistory={(h) => setPoolsView((v) => (v.open?.id === h.id ? { ...v, history: h } : v))}
         onBack={back("overview")}
         onStake={(p, shared) => {
           setPoolsView((v) => ({ ...v, details: p }));
@@ -480,6 +502,12 @@ export function Staking({
             onRetry={readPool}
             testId="your-pool"
             folded
+            returns={{
+              history: poolHistory?.id === poolId ? poolHistory : undefined,
+              error: poolHistoryError,
+              onRetry: () => readPoolHistory(true),
+            }}
+            onUnfold={() => readPoolHistory()}
           >
             <p className="note" data-testid="staking-status">
               {t("staking.status.spendable")}
@@ -682,6 +710,59 @@ export function ReadFailed({
   );
 }
 
+/** A pool's recent epochs as read (`pool-history`), or why they aren't. */
+export interface PoolReturnRead {
+  history?: PoolHistory;
+  error?: string;
+  onRetry: () => void;
+}
+
+/** What a pool's Return on stake row says: its yearly rate, or why there's none. */
+function returnValue(read: PoolReturnRead): string {
+  const { history, error } = read;
+  if (!history) return error ? t("pool.ros.failed") : t("pool.ros.reading");
+  return history.ros === undefined ? t("pool.ros.none") : t("pool.ros.value", { percent: formatPercent(history.ros) });
+}
+
+/** What a pool's figures' hint says of its return on stake: over how many epochs, once it has one. */
+function returnHint(history: PoolHistory | undefined): string | undefined {
+  if (history?.ros === undefined) return undefined;
+  const total = history.epochs.length;
+  const count = history.epochs.filter((e) => e.ros !== undefined).length;
+  return count === total ? t("pool.ros.hint", { count }) : t("pool.ros.hintSome", { count, total });
+}
+
+/**
+ * Under a pool's figures (chunk 37): Try again when its recent epochs
+ * couldn't be read, or each of them, folded, with its blocks and the yearly
+ * rate it paid. An epoch the server gave no rewards for says so, and the
+ * return leaves it out: most Koios servers give none for every other epoch.
+ */
+export function PoolEpochs({ read, testId }: { read: PoolReturnRead; testId: string }) {
+  const t = useT();
+  const { history, error, onRetry } = read;
+  if (!history) return error ? <ReadFailed detail={error} onRetry={onRetry} testId={`${testId}-failed`} /> : null;
+  if (history.epochs.length === 0) return null;
+  return (
+    <details className="disclosure" data-testid={`${testId}-epochs`}>
+      <summary>{t("pool.epochs")}</summary>
+      <ReviewRows testId={`${testId}-epoch-rows`}>
+        {history.epochs.map((e) => (
+          <Row
+            key={e.epoch}
+            label={t("pool.epochs.epoch", { epoch: e.epoch })}
+            value={
+              e.ros === undefined
+                ? t("pool.epochs.unknown", { count: e.blocks })
+                : t("pool.epochs.paid", { count: e.blocks, percent: formatPercent(e.ros) })
+            }
+          />
+        ))}
+      </ReviewRows>
+    </details>
+  );
+}
+
 /** A pool's figures, and why it may earn its delegators less. */
 export function PoolFacts({
   pool,
@@ -690,6 +771,8 @@ export function PoolFacts({
   testId,
   named = true,
   folded = false,
+  returns,
+  onUnfold,
   children,
 }: {
   pool: PoolRef | PoolDetails;
@@ -700,6 +783,10 @@ export function PoolFacts({
   named?: boolean;
   /** The figures under "Pool details", for the Staking page, which leads with where the account stands (ST-7). */
   folded?: boolean;
+  /** Its return on stake, after the figures: the page reads it, and only once they're shown. */
+  returns?: PoolReturnRead;
+  /** "Pool details" opened, when `folded`: the figures are shown now. */
+  onUnfold?: () => void;
   /** Said after the name, before the warnings. */
   children?: ReactNode;
 }) {
@@ -715,9 +802,11 @@ export function PoolFacts({
         <Row label={t("pool.pledge")} value={`${formatAda(details.pledge)}\u00a0₳`} />
         <Row label={t("pool.delegators")} value={details.delegators.toLocaleString("en-US")} />
         <Row label={t("pool.blocks")} value={details.blocks.toLocaleString("en-US")} />
+        {returns && <Row label={t("pool.ros")} value={returnValue(returns)} testId={`${testId}-return`} />}
       </ReviewRows>
-      {/* What each figure means, behind the icon (chunk 23's review, ST-3). */}
-      <Hint text={t("pool.factsHint")} testId={`${testId}-facts-note`} />
+      {/* What each figure means, behind the icon (chunk 23's review, ST-3): the return's too, one icon for them all. */}
+      <Hint text={joinSentences([t("pool.factsHint"), returnHint(returns?.history)])} testId={`${testId}-facts-note`} />
+      {returns && <PoolEpochs read={returns} testId={`${testId}-return`} />}
     </>
   );
   return (
@@ -746,7 +835,11 @@ export function PoolFacts({
           <p className="note">{t("pool.reading")}</p>
         )
       ) : folded ? (
-        <details className="disclosure" data-testid={`${testId}-details`}>
+        <details
+          className="disclosure"
+          data-testid={`${testId}-details`}
+          onToggle={(e) => e.currentTarget.open && onUnfold?.()}
+        >
           <summary>{t("staking.poolDetails")}</summary>
           <div className="stack-tight">{facts}</div>
         </details>

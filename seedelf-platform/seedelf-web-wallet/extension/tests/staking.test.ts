@@ -5,11 +5,18 @@
 // payment, or not.
 import { describe, expect, it, vi } from "vitest";
 
-import { Koios, type FetchLike, type KoiosAccountUpdate, type KoiosReward, type KoiosTxInfo } from "../src/background/koios";
+import {
+  Koios,
+  type FetchLike,
+  type KoiosAccountUpdate,
+  type KoiosPoolEpoch,
+  type KoiosReward,
+  type KoiosTxInfo,
+} from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
 import { LOCAL_POOLS_PREFIX, NAMED_TXS, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation, takesDeposit } from "../src/background/staking";
 import { txIdOf } from "./fixtures/cbor";
-import { delegationsPreprod, rewardsPreprod, stakingPreprod, testBalances, vectors } from "./fakes";
+import { delegationsPreprod, poolHistoryFixture, rewardsPreprod, stakingPreprod, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -522,6 +529,126 @@ describe("pools", () => {
   it("works saturation out as the ledger does", () => {
     expect(saturation(12_063_859_426_304n, 32_087_426_319_532_351n, 500)).toBe(18.79);
     expect(saturation(1n, 0n, 500)).toBe(0);
+  });
+});
+
+describe("a pool's return on stake (chunk 37)", () => {
+  /** What an ADA staked through every epoch Koios gave rewards for grew by, a year of epochs over: a percentage. */
+  const compounded = (rows: KoiosPoolEpoch[]) => {
+    const paid = rows.filter((r) => r.deleg_rewards !== null && BigInt(r.active_stake!) > 0n);
+    const grown = paid.reduce((g, r) => g * (1 + Number(r.deleg_rewards) / Number(r.active_stake)), 1);
+    return (grown ** (73 / paid.length) - 1) * 100;
+  };
+
+  it("reads a pool's newest 18 epochs in one request, and its return over those Koios gave rewards for", async () => {
+    const t = await unlocked();
+    const recorded = poolHistoryFixture.preprod[LOGIC]!;
+    const history = await t.staking.poolHistory("preprod", LOGIC);
+    expect(paths(t)).toEqual(["pool_history"]);
+    expect([...new URLSearchParams(t.koios.calls[0]!.query)]).toEqual([
+      ["_pool_bech32", LOGIC],
+      ["select", "epoch_no,active_stake,block_cnt,deleg_rewards"],
+      ["order", "epoch_no.desc"],
+      ["limit", "18"],
+    ]);
+    expect(history.id).toBe(LOGIC);
+    expect(history.epochs.map((e) => e.epoch)).toEqual(recorded.map((r) => r.epoch_no));
+    expect(history.epochs.map((e) => e.blocks)).toEqual(recorded.map((r) => r.block_cnt));
+    // Koios's own `epoch_ros` for epoch 317, which the wallet doesn't ask for: the same yearly rate.
+    expect(history.epochs[0]!.ros).toBeCloseTo(5.276072341, 6);
+    // An epoch with no blocks paid nothing, and that's known; one Koios gave no rewards for isn't.
+    const at = (epoch: number) => history.epochs.find((e) => e.epoch === epoch)!;
+    expect(at(312)).toEqual({ epoch: 312, blocks: 0, ros: 0 });
+    for (const row of recorded.filter((r) => r.deleg_rewards === null)) {
+      expect(at(row.epoch_no)).toEqual({ epoch: row.epoch_no, blocks: row.block_cnt });
+    }
+    expect(history.ros).toBeCloseTo(compounded(recorded), 9);
+    // Those left out aren't counted as paying nothing, which would read as a pool paying a fraction of what it did.
+    const asZero = recorded.map((r) => ({ ...r, deleg_rewards: r.deleg_rewards ?? "0" }));
+    expect(history.ros! - compounded(asZero)).toBeGreaterThan(1);
+  });
+
+  it("isn't halved by mainnet Koios leaving out every other epoch's rewards", async () => {
+    const t = await unlocked();
+    const [[octas, recorded]] = Object.entries(poolHistoryFixture.mainnet) as [[string, KoiosPoolEpoch[]]];
+    t.koios.poolHistory.set(octas, recorded);
+    const history = await t.staking.poolHistory("preprod", octas);
+    const known = recorded.filter((r) => r.deleg_rewards !== null);
+    expect(known.length).toBeLessThan(recorded.length);
+    expect(history.epochs.filter((e) => e.ros !== undefined)).toHaveLength(known.length);
+    expect(history.ros).toBeCloseTo(compounded(recorded), 9);
+    // Each epoch it gave paid about the same: the return is theirs, not half of it.
+    const each = history.epochs.flatMap((e) => (e.ros === undefined ? [] : [e.ros]));
+    expect(history.ros).toBeGreaterThan(Math.min(...each));
+    expect(history.ros).toBeLessThan(Math.max(...each));
+  });
+
+  it("takes the pool's ID as hex too, and refuses one that isn't a pool's", async () => {
+    const t = await unlocked();
+    const history = await t.staking.poolHistory("preprod", LOGIC);
+    expect(await t.staking.poolHistory("preprod", "1e3105f23f2ac91b3fb4c35fa4fe301421028e356e114944e902005b")).toEqual(history);
+    await expect(t.staking.poolHistory("preprod", LOGIC_DREP)).rejects.toThrow("stake pool ID");
+    expect(paths(t)).toEqual(["pool_history", "pool_history"]);
+  });
+
+  it("leaves out a row that isn't an epoch, takes each epoch once, newest first, and none past 18", async () => {
+    const t = await unlocked();
+    const row = (epoch_no: number, over: Partial<KoiosPoolEpoch> = {}): KoiosPoolEpoch => ({
+      epoch_no,
+      active_stake: "1000000000000",
+      block_cnt: 2,
+      deleg_rewards: "100000000",
+      ...over,
+    });
+    t.koios.poolHistory.set(LOGIC, [
+      row(400),
+      row(402),
+      row(401, { deleg_rewards: "1.2e+8" }),
+      // Twice: the first one counts.
+      row(402, { deleg_rewards: "0" }),
+      row(-1),
+      row(399.5),
+      row(398, { active_stake: "1e12" }),
+      row(397, { active_stake: null }),
+      row(396, { block_cnt: null }),
+      row(395, { deleg_rewards: "-5" }),
+      // No stake: no rate, and it's not a row to leave out.
+      row(394, { active_stake: "0", block_cnt: 0, deleg_rewards: "0" }),
+      ...Array.from({ length: 20 }, (_, i) => row(370 + i)),
+    ]);
+    // Koios's 18 rows, newest first, of which these are epochs.
+    const history = await t.staking.poolHistory("preprod", LOGIC);
+    expect(history.epochs.map((e) => e.epoch)).toEqual([402, 401, 400, 395, 394, 389, 388, 387, 386, 385, 384, 383, 382]);
+    expect(history.epochs[0]!.ros).toBeCloseTo(history.epochs[2]!.ros!, 9);
+    expect(history.epochs[1]!.ros).toBeGreaterThan(history.epochs[0]!.ros!);
+    expect(history.epochs.find((e) => e.epoch === 395)).toEqual({ epoch: 395, blocks: 2 });
+    expect(history.epochs.find((e) => e.epoch === 394)).toEqual({ epoch: 394, blocks: 0 });
+    expect(Number.isFinite(history.ros)).toBe(true);
+
+    // A server giving more than it was asked for, out of order: the newest 18 alone.
+    const many: FetchLike = async (url, init) =>
+      url.includes("pool_history") ? Response.json(Array.from({ length: 30 }, (_, i) => row(370 + i))) : t.koios.fetch(url, init);
+    const { StakingService } = await import("../src/background/staking");
+    const staking = new StakingService({
+      ...t.deps,
+      koios: () => new Koios("https://preprod.koios.rest/api/v1", many, async () => undefined),
+      collateral: () => {
+        throw new Error("a pool's history needs no collateral");
+      },
+    });
+    expect((await staking.poolHistory("preprod", LOGIC)).epochs.map((e) => e.epoch)).toEqual(
+      Array.from({ length: 18 }, (_, i) => 399 - i),
+    );
+  });
+
+  it("gives no return when no epoch's rewards are known, and an empty history for a pool with none", async () => {
+    const t = await unlocked();
+    t.koios.poolHistory.set(LOGIC, poolHistoryFixture.preprod[LOGIC]!.map((r) => ({ ...r, deleg_rewards: null })));
+    const unknown = await t.staking.poolHistory("preprod", LOGIC);
+    expect(unknown.epochs).toHaveLength(18);
+    expect(unknown).not.toHaveProperty("ros");
+    t.koios.poolHistory.set(LOGIC, []);
+    expect(await t.staking.poolHistory("preprod", LOGIC)).toEqual({ id: LOGIC, epochs: [] });
   });
 });
 

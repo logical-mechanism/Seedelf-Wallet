@@ -214,6 +214,22 @@ export interface KoiosPoolInfo {
   retiring_epoch: number | null;
 }
 
+/** One epoch of a pool's history: `pool_history`. */
+export interface KoiosPoolEpoch {
+  epoch_no: number;
+  /** The stake its blocks were drawn by, from the epoch's snapshot (lovelace). */
+  active_stake: string | null;
+  block_cnt: number | null;
+  /**
+   * What the pool paid its stake for the epoch, after its fees (lovelace).
+   * Null for an epoch that made blocks and paid nothing: its rewards not
+   * worked out, a pledge not met, or every other epoch of mainnet Koios's
+   * cache, which its updates skip (`grest.pool_history_cache_update`, seen
+   * 2026-10-15).
+   */
+  deleg_rewards: string | null;
+}
+
 /** A DRep: `drep_info`. */
 export interface KoiosDrepInfo {
   drep_id: string;
@@ -319,6 +335,10 @@ const PAGE_SIZE = 1000;
 const POOL_COLUMNS = "pool_id_bech32,ticker,margin,fixed_cost,pledge,active_stake,retiring_epoch";
 const POOL_INFO_COLUMNS =
   "pool_id_bech32,meta_json,margin,fixed_cost,pledge,live_pledge,live_stake,live_saturation,live_delegators,block_count,pool_status,retiring_epoch";
+/** A pool's history: what its return is worked out from, without Koios's own `epoch_ros`, which the wallet works out. */
+const POOL_HISTORY_COLUMNS = "epoch_no,active_stake,block_cnt,deleg_rewards";
+/** The epochs of a pool's history asked for: about 90 days, in one request. */
+export const POOL_EPOCHS = 18;
 const DREP_INFO_COLUMNS = "drep_id,drep_status,active,expires_epoch_no,amount,live_delegator_count";
 /** CIP-119's name only: a DRep's image would be fetched from anywhere its author chose. */
 const DREP_NAME_COLUMNS = "drep_id,meta_json->body->givenName";
@@ -946,6 +966,19 @@ export class Koios {
   /** Details of the pools asked for (`pool1…`), in no particular order. */
   poolInfo(poolIds: string[]): Promise<KoiosPoolInfo[]> {
     return this.post<KoiosPoolInfo>("pool_info", { _pool_bech32_ids: poolIds }, `select=${POOL_INFO_COLUMNS}`);
+  }
+
+  /**
+   * A pool's newest `POOL_EPOCHS` epochs, newest first: Koios lists none
+   * whose rewards can't be known yet, so the newest is two epochs ago.
+   */
+  poolHistory(poolId: string): Promise<KoiosPoolEpoch[]> {
+    return this.request<KoiosPoolEpoch>(
+      "GET",
+      "pool_history",
+      undefined,
+      `_pool_bech32=${poolId}&select=${POOL_HISTORY_COLUMNS}&order=epoch_no.desc&limit=${POOL_EPOCHS}`,
+    );
   }
 
   /** The DReps asked for (CIP-129 IDs); ones Koios doesn't know are left out. */

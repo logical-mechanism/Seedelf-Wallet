@@ -25,6 +25,7 @@ import {
   type KoiosVote,
   type KoiosPool,
   type KoiosPoolInfo,
+  type KoiosPoolEpoch,
   type KoiosAccountUpdate,
   type KoiosReward,
   type KoiosTxInfo,
@@ -182,6 +183,16 @@ export const delegationsPreprod = fixture("delegations-preprod.json") as {
   tx_info: KoiosTxInfo[];
 };
 
+/**
+ * Koios's `pool_history` as the wallet asks it, newest first, 18 epochs: preprod's LOGIC and largest pool, and a
+ * mainnet pool. Most Koios instances leave out every other epoch's rewards (`deleg_rewards` null with blocks made),
+ * on both networks (tests/fixtures/record-pool-history.mjs).
+ */
+export const poolHistoryFixture = fixture("pool-history.json") as {
+  preprod: Record<string, KoiosPoolEpoch[]>;
+  mainnet: Record<string, KoiosPoolEpoch[]>;
+};
+
 /** The 12-word phrase's rewards history on preprod, newest first: 87, all from pools (tests/fixtures/record-rewards.mjs). */
 export const rewardsPreprod = fixture("rewards-preprod.json") as { stake: string; account_reward_history: KoiosReward[] };
 
@@ -239,6 +250,8 @@ export interface FakeKoios {
   rewards: Map<string, KoiosReward[]>;
   /** Each stake key's delegation history (`account_update_history`), by stake address, served in the order asked: the recorded 12-word account's to begin with. */
   delegations: Map<string, KoiosAccountUpdate[]>;
+  /** Each pool's `pool_history`, by pool ID, served newest first: preprod's recorded two to begin with. */
+  poolHistory: Map<string, KoiosPoolEpoch[]>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
   /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
@@ -370,6 +383,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     rewards: new Map([[rewardsPreprod.stake, rewardsPreprod.account_reward_history]]),
     delegations: new Map([[delegationsPreprod.stake, delegationsPreprod.account_update_history]]),
+    poolHistory: new Map(Object.entries(poolHistoryFixture.preprod)),
     txExtras: new Map(),
     txSpends: new Map(),
     txOutputs: new Map(),
@@ -524,6 +538,9 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = stakingPreprod.totals;
       } else if (path === "pool_info") {
         rows = stakingPreprod.pool_info.filter((p) => body._pool_bech32_ids.includes(p.pool_id_bech32));
+      } else if (path === "pool_history") {
+        // Koios's own order, newest first; PostgREST's `limit` below.
+        rows = [...(fake.poolHistory.get(searchParams.get("_pool_bech32") ?? "") ?? [])].sort((a, b) => b.epoch_no - a.epoch_no);
       } else if (path === "drep_info") {
         rows = [...stakingPreprod.drep_info, ...fake.dreps.values()].filter((d) => body._drep_ids.includes(d.drep_id));
       } else if (path === "drep_metadata") {
