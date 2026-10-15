@@ -198,6 +198,45 @@ describe("the data layer's client", () => {
     expect(later.calls.filter((c) => c.path === "account_reward_history").map((c) => c.host)).toEqual([DATA, DATA, KOIOS]);
   });
 
+  it("reads a delegation history's every page on the data layer, or all of it again on Koios (chunk 36)", async () => {
+    const update = (slot: number) => ({ action_type: "delegation_pool", tx_hash: TX, epoch_no: 500, absolute_slot: slot, block_time: slot });
+    // Oldest first, as the wallet asks: a certificate landing while it's read is on the last page.
+    const page = (from: number, length: number) => Response.json(Array.from({ length }, (_, i) => update(from + i)));
+    const STAKE = "stake1u9c0yhlklkdd7vcwkvv2cjrgnw48y82jmm2ulk3vxe2qupsv2va8g";
+
+    const s = servers();
+    let pages = 0;
+    s.data.set("account_update_history", () => (pages++ === 0 ? page(1001, 1000) : page(2001, 3)));
+    const { make } = client(s);
+    // Every page's, newest first.
+    expect((await make("mainnet").delegationHistory(STAKE)).map((r) => r.absolute_slot)).toEqual(
+      Array.from({ length: 1003 }, (_, i) => 2003 - i),
+    );
+    const asked = s.calls.filter((c) => c.path === "account_update_history");
+    expect(asked.map((c) => [c.host, new URLSearchParams(c.query).get("offset")])).toEqual([
+      [DATA, "0"],
+      [DATA, "1000"],
+    ]);
+    // The one request the data layer takes: no withdrawals, oldest first.
+    expect(Object.fromEntries(new URLSearchParams(asked[0]!.query))).toEqual({
+      select: "action_type,tx_hash,epoch_no,absolute_slot,block_time",
+      action_type: "neq.withdrawal",
+      order: "absolute_slot.asc,tx_hash.asc,action_type.asc",
+      offset: "0",
+      limit: "1000",
+    });
+    expect(dataCost("account_update_history")).toBe(4);
+
+    // A page that fails sends the whole read to Koios, from its first page.
+    const later = servers();
+    let tries = 0;
+    later.data.set("account_update_history", () => (tries++ === 0 ? page(1001, 1000) : new Response("", { status: 504 })));
+    later.koios.set("account_update_history", page(6, 2));
+    const { make: again } = client(later);
+    expect((await again("mainnet").delegationHistory(STAKE)).map((r) => r.absolute_slot)).toEqual([7, 6]);
+    expect(later.calls.filter((c) => c.path === "account_update_history").map((c) => c.host)).toEqual([DATA, DATA, KOIOS]);
+  });
+
   it("keeps each part apart, and a part's hold across a worker's restart", async () => {
     const s = servers();
     s.data.set("tip", "unreachable");

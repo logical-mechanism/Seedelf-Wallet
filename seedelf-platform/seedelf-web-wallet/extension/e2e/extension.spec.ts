@@ -3867,6 +3867,95 @@ test("staking: a key with no pool has one way to its rewards history, and one th
   await expect(page.getByTestId("rewards-coming")).toHaveCount(0);
 });
 
+const delegationsPreprod = JSON.parse(readFileSync(new URL("../tests/fixtures/delegations-preprod.json", import.meta.url), "utf8")) as {
+  stake: string;
+  account_update_history: Array<{ action_type: string; tx_hash: string; epoch_no: number; absolute_slot: number; block_time: number }>;
+  tx_info: Array<{ tx_hash: string }>;
+};
+
+test("staking: the delegation history, read only once it's opened (chunk 36)", async ({ context, koios }) => {
+  // Answered here, after the fixture's routes, so these win: the recorded certificates, and the transactions that
+  // made them; any other transaction's tx_info (Activity's) goes on to the fixture.
+  const asked: Array<{ path: string; query: URLSearchParams; body: { _stake_addresses?: string[]; _tx_hashes?: string[] } }> = [];
+  await context.route(
+    (url) => url.pathname.endsWith("/account_update_history"),
+    (route) => {
+      const url = new URL(route.request().url());
+      asked.push({ path: "account_update_history", query: url.searchParams, body: route.request().postDataJSON() });
+      const offset = Number(url.searchParams.get("offset"));
+      return route.fulfill({ json: delegationsPreprod.account_update_history.slice(offset, offset + Number(url.searchParams.get("limit"))) });
+    },
+  );
+  const recorded = new Map(delegationsPreprod.tx_info.map((t) => [t.tx_hash, t]));
+  await context.route(
+    (url) => url.pathname.endsWith("/tx_info"),
+    (route) => {
+      const body = route.request().postDataJSON() as { _tx_hashes: string[] };
+      if (!body._tx_hashes.every((h) => recorded.has(h))) return route.fallback();
+      asked.push({ path: "tx_info", query: new URLSearchParams(), body });
+      return route.fulfill({ json: body._tx_hashes.map((h) => recorded.get(h)) });
+    },
+  );
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+
+  // Opening Staking asks nothing about it: the page reads its pool's details, which names LOGIC below.
+  await page.getByTestId("staking-row").click();
+  await expect(page.getByTestId("your-pool")).toContainText("LOGIC · Logical Mechanism");
+  await expect(page.getByTestId("drep-card")).toBeVisible();
+  await expect(page.getByTestId("drep-card")).not.toContainText("Reading your DRep…");
+  expect(asked).toHaveLength(0);
+
+  const reads = koios.calls.length;
+  await page.getByRole("button", { name: "Delegation history" }).click();
+  await expect(page.getByRole("heading", { name: "Delegation history", level: 1 })).toBeVisible();
+  const rows = page.getByTestId("delegations").locator(".token-row");
+  await expect(rows).toHaveCount(12);
+  // Newest first: the vote to the account's own DRep, worked out from its key; registered again, staked and the vote
+  // delegated in one transaction; the stop before it, its 2 ₳ back.
+  await expect(rows.nth(0)).toContainText("Voting power to your own DRep");
+  await expect(rows.nth(0)).toContainText("Epoch 317");
+  await expect(rows.nth(2)).toContainText("Stake key registered−2 ₳");
+  await expect(rows.nth(3)).toContainText("Staked with LOGIC");
+  await expect(rows.nth(5)).toContainText("Stopped staking+2 ₳");
+  await expect(page.getByTestId("delegations-year")).toHaveCount(2);
+  // Two requests, for the account's own stake key: what it did, oldest first, then the seven transactions that did
+  // it; nothing else, not a pool's details for a ticker.
+  expect(asked.map((a) => a.path)).toEqual(["account_update_history", "tx_info"]);
+  expect(asked[0]!.body).toEqual({ _stake_addresses: [delegationsPreprod.stake] });
+  expect(Object.fromEntries(asked[0]!.query)).toEqual({
+    select: "action_type,tx_hash,epoch_no,absolute_slot,block_time",
+    action_type: "neq.withdrawal",
+    order: "absolute_slot.asc,tx_hash.asc,action_type.asc",
+    offset: "0",
+    limit: "1000",
+  });
+  expect(asked[1]!.body._tx_hashes).toHaveLength(7);
+  expect(koios.calls.slice(reads)).toEqual([]);
+  await snap(page, "delegation-history");
+
+  // A row opens its details, with the transaction on Cardanoscan.
+  await rows.nth(3).click();
+  const details = page.getByRole("dialog");
+  await expect(details.getByRole("heading", { name: "Staked with LOGIC" })).toBeVisible();
+  await expect(page.getByTestId("delegation-details")).toContainText("PoolLOGIC");
+  await expect(page.getByTestId("delegation-details")).toContainText("Epoch300");
+  await expect(details.getByRole("link", { name: /View on Cardanoscan/ })).toHaveAttribute(
+    "href",
+    /0bbe2af89ef2185689c1c967d4efad056bbd69c39325d960002f65446051fcb8/,
+  );
+  await page.keyboard.press("Escape");
+  await expect(details).toHaveCount(0);
+
+  // Back is the Staking page, and opening the history again reads it again: it's kept nowhere.
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("heading", { name: "Staking and governance", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "Delegation history" }).click();
+  await expect(rows).toHaveCount(12);
+  expect(asked.map((a) => a.path)).toEqual(["account_update_history", "tx_info", "account_update_history", "tx_info"]);
+});
+
 test("staking: the vote to a DRep by its ID, and the rewards withdrawn", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);

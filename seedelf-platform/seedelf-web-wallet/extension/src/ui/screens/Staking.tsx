@@ -3,7 +3,8 @@
 // rewards with Withdraw, where the voting power goes, Change pool and Stop
 // staking, and the account as its own DRep (Governance.tsx). Choosing a pool
 // opens the browser (Pools.tsx); the vote, Voting.tsx; the rewards paid,
-// Rewards.tsx (chunk 30), which reads them only then. Every change is built
+// Rewards.tsx (chunk 30), and the stake key's certificates, Delegations.tsx
+// (chunk 36), each of which reads them only then. Every change is built
 // and signed by the worker and reviewed here: nothing is sent until the user
 // presses the review's button, which names the act. Opening the page reads
 // the pool's details and the account's DRep, fresh: two requests, or three
@@ -29,7 +30,7 @@ import {
 import { useAccounts } from "../accounts";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
-import { ChevronRightIcon, PieIcon } from "../components/Icons";
+import { ChevronRightIcon, HistoryIcon, PieIcon } from "../components/Icons";
 import { MiddleEllipsis } from "../components/MiddleEllipsis";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { AfterRow } from "../components/ReviewTotals";
@@ -53,6 +54,7 @@ import {
   votesOut,
 } from "./Governance";
 import { NEW_POOLS_VIEW, Pools, SharedTicker, type PoolsView } from "./Pools";
+import { Delegations } from "./Delegations";
 import { Rewards } from "./Rewards";
 import { sharedDrepName, Voting, type VoteView } from "./Voting";
 
@@ -82,7 +84,7 @@ interface Chosen {
  */
 export type Building = "withdraw" | "stop" | "retire" | "delegate-own" | "review" | "remove-profile" | GovVote;
 
-type Page = "overview" | "pools" | "vote" | "drep-register" | "drep-profile" | "governance" | "rewards";
+type Page = "overview" | "pools" | "vote" | "drep-register" | "drep-profile" | "governance" | "rewards" | "delegations";
 
 /** What the stake key's first registration locks up: `key_deposit`, 2 ₳ on both networks. */
 export const KEY_DEPOSIT = 2_000_000n;
@@ -409,6 +411,7 @@ export function Staking({
     );
   }
   if (page === "rewards") return <Rewards onBack={back("overview")} registered={staking.registered} />;
+  if (page === "delegations") return <Delegations onBack={back("overview")} />;
   if (page === "vote") {
     return (
       <Voting
@@ -588,26 +591,40 @@ export function Staking({
         }
       />
 
-      {staking.registered && (
+      {/* The stake key's history (chunk 36): while it's registered, or once it was ever paid, as Rewards history is
+          offered (a key that stopped keeps its history). */}
+      {(staking.registered || staking.rewarded) && (
         <ul className="list">
           <li>
-            {/* Red, as Remove wallet's row is, and its review ends on a red "Stop staking" over what ends and
-                what's lost: it looked like any other row (chunk 23's second review, ST-3, V-3). The bin stays
-                Remove's: stopping deletes nothing, and gives the deposit back. */}
-            <button
-              type="button"
-              className="menu-row menu-row--danger"
-              onClick={() => void build({ kind: "stop" }, {}, "stop")}
-              disabled={locked || !!why || busy}
-              title={why ?? (locked ? t("staking.delegateFirstStop") : undefined)}
-            >
+            {/* A page of its own: it builds nothing, so only a build in progress holds it back. */}
+            <button type="button" className="menu-row" onClick={() => setPage("delegations")} disabled={busy}>
               <span className="menu-row__icon">
-                <PieIcon size={16} />
+                <HistoryIcon size={16} />
               </span>
-              <span>{building === "stop" ? t("staking.building.stop") : t("staking.stop")}</span>
+              <span>{t("delegations.title")}</span>
               <ChevronRightIcon size={16} />
             </button>
           </li>
+          {staking.registered && (
+            <li>
+              {/* Red, as Remove wallet's row is, and its review ends on a red "Stop staking" over what ends and
+                  what's lost: it looked like any other row (chunk 23's second review, ST-3, V-3). The bin stays
+                  Remove's: stopping deletes nothing, and gives the deposit back. */}
+              <button
+                type="button"
+                className="menu-row menu-row--danger"
+                onClick={() => void build({ kind: "stop" }, {}, "stop")}
+                disabled={locked || !!why || busy}
+                title={why ?? (locked ? t("staking.delegateFirstStop") : undefined)}
+              >
+                <span className="menu-row__icon">
+                  <PieIcon size={16} />
+                </span>
+                <span>{building === "stop" ? t("staking.building.stop") : t("staking.stop")}</span>
+                <ChevronRightIcon size={16} />
+              </button>
+            </li>
+          )}
         </ul>
       )}
 

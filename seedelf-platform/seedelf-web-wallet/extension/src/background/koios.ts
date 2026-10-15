@@ -170,6 +170,20 @@ export interface KoiosReward {
   pool_id_bech32: string | null;
 }
 
+/**
+ * One of a stake key's certificates: `account_update_history`, with its stake
+ * address left out, and its withdrawals too (the request filters them out).
+ */
+export interface KoiosAccountUpdate {
+  /** `registration`, `delegation_pool`, `delegation_drep` or `deregistration`. */
+  action_type: string;
+  tx_hash: string;
+  epoch_no: number;
+  absolute_slot: number;
+  /** Unix seconds. */
+  block_time: number;
+}
+
 /** A live pool, with only what the pool browser reads: `pool_list`. */
 export interface KoiosPool {
   pool_id_bech32: string;
@@ -337,6 +351,21 @@ const newestFirst = (a: KoiosReward, b: KoiosReward) =>
   byText(a.type, b.type) ||
   byText(a.pool_id_bech32, b.pool_id_bech32) ||
   byText(a.amount, b.amount);
+/**
+ * A delegation history: every column but the stake address, and every
+ * certificate but no withdrawal. The wallet withdraws the rewards with nearly
+ * every payment (Settings' "Use staking rewards when spending"), so they would
+ * bury the rest, and Activity lists them already.
+ */
+const UPDATE_COLUMNS = "action_type,tx_hash,epoch_no,absolute_slot,block_time";
+const UPDATE_FILTER = "action_type=neq.withdrawal";
+/**
+ * Oldest first, as a rewards history is asked (`REWARD_ORDER`), so a
+ * certificate landing while it's read is on the last page, never pushing one
+ * onto the next. Ties only rows alike in every column: one transaction can
+ * register, stake and delegate the vote, each a row of its own.
+ */
+const UPDATE_ORDER = "absolute_slot.asc,tx_hash.asc,action_type.asc";
 /**
  * A live governance action is one not yet ratified, enacted, dropped or
  * expired. Its metadata's text is most of a row (70 KB for mainnet's three on
@@ -865,6 +894,25 @@ export class Koios {
       );
       rows.push(...page);
       if (page.length < PAGE_SIZE) return rows.sort(newestFirst);
+    }
+  }
+
+  /**
+   * Every certificate naming a stake key (registered, staked, the vote
+   * delegated, stopped: no withdrawal), asked oldest first (`UPDATE_ORDER`),
+   * 1,000 a request, and given newest first: a handful for nearly every
+   * account, so one request.
+   */
+  async delegationHistory(stakeAddress: string): Promise<KoiosAccountUpdate[]> {
+    const rows: KoiosAccountUpdate[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await this.post<KoiosAccountUpdate>(
+        "account_update_history",
+        { _stake_addresses: [stakeAddress] },
+        `select=${UPDATE_COLUMNS}&${UPDATE_FILTER}&order=${UPDATE_ORDER}&offset=${offset}&limit=${PAGE_SIZE}`,
+      );
+      rows.push(...page);
+      if (page.length < PAGE_SIZE) return rows.reverse();
     }
   }
 

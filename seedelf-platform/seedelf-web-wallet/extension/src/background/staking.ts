@@ -20,6 +20,12 @@
 //   rewards every reward the stake key was paid (`account_reward_history`,
 //           1,000 a request), fresh, when Rewards history opens (chunk 30).
 //           Its pools' tickers come from the device, never asked for.
+//   delegations
+//           every certificate naming the stake key, withdrawals left out
+//           (`account_update_history`, 1,000 a request), and the
+//           transactions that made them (`tx_info`, 20 a request) for the
+//           pool, DRep and deposit each names, fresh, when Delegation history
+//           opens (chunk 36). Pools named from the device, as the rewards'.
 // Building  like a send (send.ts): the account and its `account_info` read
 //           fresh, then built and signed in WebAssembly with the payment keys
 //           and the stake key, and kept until Send, which only submits it.
@@ -31,6 +37,8 @@ import type { NetworkName } from "../networks";
 import {
   ALWAYS_ABSTAIN,
   ALWAYS_NO_CONFIDENCE,
+  type DelegationKind,
+  type DelegationRow,
   type DrepDetails,
   type DrepProfileFile,
   type DrepProfileRequest,
@@ -48,8 +56,9 @@ import {
   type StakingSummary,
 } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
+import { stakingOf, txInfoPaged } from "./activity";
 import { governance, ownDrepId, profileFile, readOwnDrep } from "./governance";
-import type { Koios, KoiosAccountInfo, KoiosPoolInfo, KoiosReward } from "./koios";
+import type { Koios, KoiosAccountInfo, KoiosAccountUpdate, KoiosPoolInfo, KoiosReward, KoiosTxInfo } from "./koios";
 import { settleMaybeSent } from "./pending";
 import { keep, send, type ScriptSpendDeps } from "./script-spend";
 import type { Area } from "./storage";
@@ -161,6 +170,58 @@ function rewardOf(row: KoiosReward, pool: (id: string) => PoolRef | undefined): 
     amount: row.amount,
     kind: REWARD_KINDS.has(row.type) ? (row.type as RewardKind) : "other",
     ...(id ? { pool: pool(id) ?? { id } } : {}),
+  };
+}
+
+/**
+ * The most transactions a delegation history names, newest first: 10 requests. A person's account has a few dozen
+ * certificates at most; mainnet's busiest re-delegator has 1,282, whose older rows then say only what they did.
+ */
+export const NAMED_TXS = 200;
+
+/** Koios's name for each certificate the delegation history lists: its withdrawals aren't asked for. */
+const DELEGATION_KINDS: Readonly<Record<string, DelegationKind>> = {
+  registration: "registration",
+  delegation_pool: "pool",
+  delegation_drep: "vote",
+  deregistration: "deregistration",
+};
+
+/** Whether a row is a certificate the page can show: a kind the wallet knows, a hash, an epoch and a time. */
+const isCertificate = (row: KoiosAccountUpdate) =>
+  Object.hasOwn(DELEGATION_KINDS, row.action_type) &&
+  /^[0-9a-f]{64}$/.test(row.tx_hash ?? "") &&
+  isEpoch(row.epoch_no) &&
+  isEpoch(row.block_time);
+
+/**
+ * A certificate as the page shows it (`isCertificate`). What it names comes
+ * from the transaction that made it (Activity's `stakingOf`), when the server
+ * had it: without it, the row says only what it did. A pool ID that isn't
+ * `pool1…` is left out, as a reward's is.
+ */
+function delegationOf(
+  row: KoiosAccountUpdate,
+  tx: KoiosTxInfo | undefined,
+  stake: string,
+  pool: (id: string) => PoolRef | undefined,
+  ownDrep?: string,
+): DelegationRow {
+  const kind = DELEGATION_KINDS[row.action_type]!;
+  const named = tx ? stakingOf(tx, stake) : undefined;
+  const lovelace = (text: string | undefined) => (text !== undefined && /^\d+$/.test(text) ? text : undefined);
+  const deposit = lovelace(kind === "registration" ? named?.deposit : kind === "deregistration" ? named?.refund : undefined);
+  const id = kind === "pool" && named?.pool?.startsWith("pool1") ? named.pool : undefined;
+  const drep = kind === "vote" ? named?.drep : undefined;
+  return {
+    kind,
+    txHash: row.tx_hash,
+    at: row.block_time * 1000,
+    epoch: row.epoch_no,
+    ...(id ? { pool: pool(id) ?? { id } } : {}),
+    ...(drep ? { drep } : {}),
+    ...(drep && drep === ownDrep ? { ownDrep: true } : {}),
+    ...(deposit ? { deposit } : {}),
   };
 }
 
@@ -326,6 +387,43 @@ export class StakingService {
     const stake = await wallet.withKeys(({ cardano }) => cardano.stakeAddress(net));
     const [rows, pool] = await Promise.all([this.deps.koios(network).rewardHistory(stake), poolsKnown(this.deps, network)]);
     return rows.flatMap((row) => rewardOf(row, pool) ?? []);
+  }
+
+  /**
+   * Every certificate naming the public account's stake key, newest first,
+   * read fresh and kept nowhere: what it did from `account_update_history`,
+   * then what each names (the pool, the DRep, the deposit) from the
+   * transactions that made them, 20 a request, up to the newest `NAMED_TXS`.
+   * A handful of each for nearly every account: two requests. Its pools are
+   * named from the device alone.
+   */
+  async delegationHistory(network: NetworkName): Promise<DelegationRow[]> {
+    const { wasm, wallet } = this.deps;
+    const net = network === "mainnet" ? wasm.Network.Mainnet : wasm.Network.Preprod;
+    const stake = await wallet.withKeys(({ cardano }) => cardano.stakeAddress(net));
+    const koios = this.deps.koios(network);
+    const [rows, pool, own] = await Promise.all([
+      koios.delegationHistory(stake),
+      poolsKnown(this.deps, network),
+      // Whether a vote went to the account's own DRep: its ID comes from the key, so nobody is asked.
+      ownDrepId(this.deps).catch(() => undefined),
+    ]);
+    // A row that isn't a certificate is left out, and its transaction isn't asked about; nor is one past the newest
+    // NAMED_TXS.
+    const certificates = rows.filter(isCertificate);
+    const hashes = [...new Set(certificates.map((row) => row.tx_hash))].slice(0, NAMED_TXS);
+    const txs = new Map((await txInfoPaged(koios, hashes)).map((tx) => [tx.tx_hash, tx]));
+    const history = certificates.map((row) => delegationOf(row, txs.get(row.tx_hash), stake, pool, own));
+    // Stopping gives back exactly the deposit registering took (2 ₳ on both networks since Shelley; Conway refunds
+    // what was paid), which Koios's deregistration certificate doesn't say: oldest first, each takes its own.
+    let held: string | undefined;
+    for (const row of history.toReversed()) {
+      if (row.kind === "registration") held = row.deposit;
+      if (row.kind !== "deregistration") continue;
+      if (!row.deposit && held) row.deposit = held;
+      held = undefined;
+    }
+    return history;
   }
 
   /** The live governance actions, the account's DRep and its votes. */

@@ -25,6 +25,7 @@ import {
   type KoiosVote,
   type KoiosPool,
   type KoiosPoolInfo,
+  type KoiosAccountUpdate,
   type KoiosReward,
   type KoiosTxInfo,
   type KoiosUtxo,
@@ -170,6 +171,17 @@ export const stakingPreprod = fixture("staking-preprod.json") as {
   drep_metadata: KoiosDrepName[];
 };
 
+/**
+ * The 12-word phrase's delegation history on preprod, oldest first as the wallet asks: 12 certificates in 7
+ * transactions, registered twice, stopped once, two pools and three votes; and those transactions' certificates
+ * (tests/fixtures/record-delegations.mjs).
+ */
+export const delegationsPreprod = fixture("delegations-preprod.json") as {
+  stake: string;
+  account_update_history: KoiosAccountUpdate[];
+  tx_info: KoiosTxInfo[];
+};
+
 /** The 12-word phrase's rewards history on preprod, newest first: 87, all from pools (tests/fixtures/record-rewards.mjs). */
 export const rewardsPreprod = fixture("rewards-preprod.json") as { stake: string; account_reward_history: KoiosReward[] };
 
@@ -225,6 +237,8 @@ export interface FakeKoios {
   stakes: Map<string, KoiosAccountInfo>;
   /** Each stake key's rewards history, by stake address, served in the order asked: the recorded 12-word account's to begin with. */
   rewards: Map<string, KoiosReward[]>;
+  /** Each stake key's delegation history (`account_update_history`), by stake address, served in the order asked: the recorded 12-word account's to begin with. */
+  delegations: Map<string, KoiosAccountUpdate[]>;
   /** More of a transaction's `tx_info`, by hash: its certificates, withdrawals or metadata, say. */
   txExtras: Map<string, Partial<KoiosTxInfo>>;
   /** What transactions the recordings don't hold spent, for `tx_info`, by hash: one that made a Lovejoin box, say. */
@@ -355,6 +369,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     addedToAccounts: [],
     stakes: new Map(stakingPreprod.account_info.map((a) => [a.stake_address, a])),
     rewards: new Map([[rewardsPreprod.stake, rewardsPreprod.account_reward_history]]),
+    delegations: new Map([[delegationsPreprod.stake, delegationsPreprod.account_update_history]]),
     txExtras: new Map(),
     txSpends: new Map(),
     txOutputs: new Map(),
@@ -430,8 +445,19 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const after = body._after_block_height;
         rows = after === undefined ? all : all.filter((t) => t.block_height >= after);
       } else if (path === "tx_info") {
+        // The recorded delegation history's transactions: their certificates on a row Activity's recording has too.
+        const delegationTx = (hash: string) => delegationsPreprod.tx_info.find((t) => t.tx_hash === hash);
+        const certified = (t: { tx_hash: string }) => {
+          const d = delegationTx(t.tx_hash);
+          return d ? { certificates: d.certificates, withdrawals: d.withdrawals } : {};
+        };
         rows = [
-          ...activityPreprod.tx_info.filter((t) => body._tx_hashes.includes(t.tx_hash)).map((t) => ({ ...t, ...fake.txExtras.get(t.tx_hash) })),
+          ...activityPreprod.tx_info
+            .filter((t) => body._tx_hashes.includes(t.tx_hash))
+            .map((t) => ({ ...t, ...certified(t), ...fake.txExtras.get(t.tx_hash) })),
+          ...delegationsPreprod.tx_info.filter(
+            (t) => body._tx_hashes.includes(t.tx_hash) && !activityPreprod.tx_info.some((a) => a.tx_hash === t.tx_hash),
+          ),
           ...[...fake.txRows.values()].filter((t) => body._tx_hashes.includes(t.tx_hash)),
           // And a row for every transaction an account's `account_txs` lists, as Koios always has one: nothing spent at a
           // key the tests know, unless they say (1.5.0's release review, C14).
@@ -477,6 +503,19 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         rows = koiosPreprod.accounts[body._stake_addresses[0]]?.account_utxos ?? [];
       } else if (path === "account_info") {
         rows = body._stake_addresses.flatMap((s: string) => fake.stakes.get(s) ?? []);
+      } else if (path === "account_update_history") {
+        // PostgREST's `action_type=neq.withdrawal`, and the order asked: by slot, hash and kind, ascending or not.
+        const not = searchParams.get("action_type")?.replace(/^neq\./, "");
+        const descending = searchParams.get("order")?.startsWith("absolute_slot.desc");
+        rows = body._stake_addresses
+          .flatMap((s: string) => fake.delegations.get(s) ?? [])
+          .filter((r: KoiosAccountUpdate) => r.action_type !== not)
+          .sort(
+            (a: KoiosAccountUpdate, b: KoiosAccountUpdate) =>
+              (a.absolute_slot - b.absolute_slot ||
+                (a.tx_hash < b.tx_hash ? -1 : a.tx_hash > b.tx_hash ? 1 : 0) ||
+                (a.action_type < b.action_type ? -1 : a.action_type > b.action_type ? 1 : 0)) * (descending ? -1 : 1),
+          );
       } else if (path === "account_reward_history") {
         rows = body._stake_addresses.flatMap((s: string) => fake.rewards.get(s) ?? []).sort(rewardsOrderedAs(searchParams.get("order")));
       } else if (path === "pool_list") {

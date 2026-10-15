@@ -5,11 +5,11 @@
 // payment, or not.
 import { describe, expect, it, vi } from "vitest";
 
-import { Koios, type FetchLike, type KoiosReward } from "../src/background/koios";
+import { Koios, type FetchLike, type KoiosAccountUpdate, type KoiosReward, type KoiosTxInfo } from "../src/background/koios";
 import { pendingKey } from "../src/background/pending";
-import { LOCAL_POOLS_PREFIX, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation, takesDeposit } from "../src/background/staking";
+import { LOCAL_POOLS_PREFIX, NAMED_TXS, POOLS_TTL_MS, SESSION_STAKE, drepName, saturation, takesDeposit } from "../src/background/staking";
 import { txIdOf } from "./fixtures/cbor";
-import { rewardsPreprod, stakingPreprod, testBalances, vectors } from "./fakes";
+import { delegationsPreprod, rewardsPreprod, stakingPreprod, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const account = (words: number) =>
@@ -253,6 +253,216 @@ describe("rewards history (chunk 30)", () => {
     t.koios.calls.length = 0;
     expect(await t.staking.rewardHistory("preprod")).toEqual([]);
     expect(t.koios.calls.map((c) => c.body)).toEqual([{ _stake_addresses: [both(1).preprod.stake] }]);
+  });
+});
+
+describe("delegation history (chunk 36)", () => {
+  const GRADA = "pool1nmfr5j5rnqndprtazre802glpc3h865sy50mxdny65kfgf3e5eh";
+  const OWN_DREP = "drep1y2e20afmrjh8wz02w92880qwdqephacyqlahqyp5n6rgnhg2egjc8";
+  const hash = (n: number) => n.toString(16).padStart(64, "0");
+
+  it("reads every certificate but a withdrawal, newest first, and what each names from its transaction: two requests", async () => {
+    const t = await unlocked();
+    const rows = await t.staking.delegationHistory("preprod");
+    expect(paths(t)).toEqual(["account_update_history", "tx_info"]);
+    const [asked, txs] = t.koios.calls;
+    expect(asked!.body).toEqual({ _stake_addresses: [delegationsPreprod.stake] });
+    // Asked oldest first, so a certificate landing while it's read is on the last page; shown newest first.
+    expect(Object.fromEntries(new URLSearchParams(asked!.query))).toEqual({
+      select: "action_type,tx_hash,epoch_no,absolute_slot,block_time",
+      action_type: "neq.withdrawal",
+      order: "absolute_slot.asc,tx_hash.asc,action_type.asc",
+      offset: "0",
+      limit: "1000",
+    });
+    // Each transaction once, as Activity asks for it.
+    expect(txs!.body._tx_hashes).toHaveLength(7);
+    expect(txs!.body._certs).toBe(true);
+
+    expect(rows.map((r) => [r.epoch, r.kind, r.pool?.id ?? r.drep ?? r.deposit])).toEqual([
+      [317, "vote", OWN_DREP],
+      [315, "vote", "drep1ytah77nvma8thq037ynn9sqf59rpsjfpnq2a0rtltfnyvjchvqhux"],
+      // Registered again, staked and the vote delegated in one transaction: in that order.
+      [300, "registration", "2000000"],
+      [300, "pool", LOGIC],
+      [300, "vote", "drep_always_abstain"],
+      // Stopped: the 2 ₳ its registration took back, which Koios's certificate doesn't say.
+      [300, "deregistration", "2000000"],
+      [300, "pool", LOGIC],
+      [300, "vote", "drep_always_abstain"],
+      [221, "pool", LOGIC],
+      [219, "registration", "2000000"],
+      [219, "pool", GRADA],
+      [219, "vote", "drep_always_abstain"],
+    ]);
+    expect(rows[0]).toEqual({
+      kind: "vote",
+      txHash: "938adb0946b58e82b3e1607515e0d847b0ee280268f307f87bf5a0e11134ea86",
+      at: 1_791_143_131_000,
+      epoch: 317,
+      drep: OWN_DREP,
+      // The account's own DRep, from its key: nobody asked.
+      ownDrep: true,
+    });
+    expect(rows.filter((r) => r.ownDrep)).toHaveLength(1);
+
+    // Once the device knows them, each pool by its ticker: LOGIC from the session, GRADA from the pool list. Still
+    // the two requests, and no pool_info.
+    await t.staking.pool("preprod", LOGIC);
+    await t.staking.pools("preprod");
+    t.koios.calls.length = 0;
+    const named = await t.staking.delegationHistory("preprod");
+    expect(paths(t)).toEqual(["account_update_history", "tx_info"]);
+    expect(named[3]!.pool).toEqual({ id: LOGIC, ticker: "LOGIC", name: "Logical Mechanism" });
+    expect(named[10]!.pool).toEqual({ id: GRADA, ticker: "GRADA" });
+  });
+
+  it("reads past 1,000 a page and 20 transactions a request, and leaves out a row that isn't a certificate", async () => {
+    const t = await unlocked();
+    const stake = delegationsPreprod.stake;
+    const row = (n: number, action_type = "delegation_pool"): KoiosAccountUpdate => ({
+      action_type,
+      tx_hash: hash(n),
+      epoch_no: 400,
+      absolute_slot: n,
+      block_time: 1_800_000_000 + n,
+    });
+    // 1,000 delegations to one pool in 25 transactions, then the odd ones.
+    t.koios.delegations.set(stake, [
+      ...Array.from({ length: 1000 }, (_, i) => ({ ...row(i + 1), tx_hash: hash(Math.floor(i / 40) + 1) })),
+      row(2001, "something new"),
+      { ...row(2002), tx_hash: "not a hash" },
+      { ...row(2003), epoch_no: 400.5 },
+      { ...row(2004), block_time: -1 },
+      row(2005, "deregistration"),
+    ]);
+    const rows = await t.staking.delegationHistory("preprod");
+    const asked = t.koios.calls.filter((c) => c.path === "account_update_history");
+    expect(asked.map((c) => new URLSearchParams(c.query).get("offset"))).toEqual(["0", "1000"]);
+    // 26 transactions: two requests.
+    expect(t.koios.calls.filter((c) => c.path === "tx_info").map((c) => c.body._tx_hashes.length)).toEqual([20, 6]);
+    expect(rows).toHaveLength(1001);
+    // The server had none of these transactions: each says only what it did.
+    expect(rows[0]).toEqual({ kind: "deregistration", txHash: hash(2005), at: (1_800_000_000 + 2005) * 1000, epoch: 400 });
+    expect(rows[1]).toEqual({ kind: "pool", txHash: hash(25), at: (1_800_000_000 + 1000) * 1000, epoch: 400 });
+  });
+
+  it("names the newest 200 transactions' alone: an account that re-delegates all day costs 10 requests, not 65", async () => {
+    const t = await unlocked();
+    const stake = delegationsPreprod.stake;
+    t.koios.delegations.set(
+      stake,
+      Array.from({ length: 250 }, (_, i) => ({
+        action_type: "delegation_pool",
+        tx_hash: hash(i + 1),
+        epoch_no: 400,
+        absolute_slot: i + 1,
+        block_time: i + 1,
+      })),
+    );
+    for (let i = 1; i <= 250; i++) {
+      t.koios.txRows.set(hash(i), {
+        tx_hash: hash(i),
+        block_height: i,
+        tx_timestamp: i,
+        fee: "170000",
+        inputs: [],
+        outputs: [],
+        certificates: [{ index: 0, type: "pool_delegation", info: { stake_address: stake, pool_id_bech32: LOGIC } }],
+      });
+    }
+    const rows = await t.staking.delegationHistory("preprod");
+    const asked = t.koios.calls.filter((c) => c.path === "tx_info").flatMap((c) => c.body._tx_hashes as string[]);
+    expect(asked).toHaveLength(NAMED_TXS);
+    expect(asked[0]).toBe(hash(250));
+    expect(rows).toHaveLength(250);
+    expect(rows[NAMED_TXS - 1]!.pool).toEqual({ id: LOGIC });
+    // Older: what it did, not who it named.
+    expect(rows[NAMED_TXS]).toEqual({ kind: "pool", txHash: hash(50), at: 50_000, epoch: 400 });
+  });
+
+  it("takes a pool and a DRep from the certificate naming its key alone, and a pool ID only as one", async () => {
+    const t = await unlocked();
+    const stake = delegationsPreprod.stake;
+    const someone = "stake_test1uzrvw62pn24xw0yk8ksyuj6m4ezg6jgw9n4vjqktstjd5aspv59nv";
+    const cert = (type: string, info: Record<string, unknown>, index = 0) => ({ index, type, info });
+    t.koios.delegations.set(stake, [
+      { action_type: "delegation_pool", tx_hash: hash(1), epoch_no: 400, absolute_slot: 1, block_time: 1 },
+      { action_type: "delegation_drep", tx_hash: hash(1), epoch_no: 400, absolute_slot: 1, block_time: 1 },
+      { action_type: "delegation_pool", tx_hash: hash(2), epoch_no: 401, absolute_slot: 2, block_time: 2 },
+    ]);
+    const tx = (n: number, certificates: KoiosTxInfo["certificates"]): KoiosTxInfo => ({
+      tx_hash: hash(n),
+      block_height: n,
+      tx_timestamp: n,
+      fee: "170000",
+      inputs: [],
+      outputs: [],
+      certificates,
+    });
+    // Someone else's key staked and voting beside ours in one transaction: only ours is read.
+    t.koios.txRows.set(
+      hash(1),
+      tx(1, [
+        cert("pool_delegation", { stake_address: someone, pool_id_bech32: GRADA }, 0),
+        cert("pool_delegation", { stake_address: stake, pool_id_bech32: LOGIC }, 1),
+        cert("vote_delegation", { stake_address: someone, drep_id: "drep_always_no_confidence" }, 2),
+        cert("vote_delegation", { stake_address: stake, drep_id: LOGIC_DREP }, 3),
+      ]),
+    );
+    t.koios.txRows.set(hash(2), tx(2, [cert("pool_delegation", { stake_address: stake, pool_id_bech32: "addr1x" })]));
+    const rows = await t.staking.delegationHistory("preprod");
+    expect(rows.map((r) => [r.kind, r.pool?.id, r.drep])).toEqual([
+      ["pool", undefined, undefined],
+      ["pool", LOGIC, undefined],
+      ["vote", undefined, LOGIC_DREP],
+    ]);
+  });
+
+  it("gives a stop the deposit its own registration took, and none when it never saw one", async () => {
+    const t = await unlocked();
+    const stake = delegationsPreprod.stake;
+    const at = (n: number, action_type: string): KoiosAccountUpdate => ({
+      action_type,
+      tx_hash: hash(n),
+      epoch_no: 400 + n,
+      absolute_slot: n,
+      block_time: n,
+    });
+    t.koios.delegations.set(stake, [at(1, "deregistration"), at(2, "registration"), at(3, "deregistration"), at(4, "registration")]);
+    const registered = (n: number, deposit: string): KoiosTxInfo => ({
+      tx_hash: hash(n),
+      block_height: n,
+      tx_timestamp: n,
+      fee: "170000",
+      inputs: [],
+      outputs: [],
+      certificates: [{ index: 0, type: "stake_registration", info: { stake_address: stake, deposit } }],
+    });
+    t.koios.txRows.set(hash(2), registered(2, "2000000"));
+    t.koios.txRows.set(hash(4), registered(4, "3000000"));
+    const rows = await t.staking.delegationHistory("preprod");
+    expect(rows.map((r) => [r.kind, r.deposit])).toEqual([
+      ["registration", "3000000"],
+      ["deregistration", "2000000"],
+      ["registration", "2000000"],
+      ["deregistration", undefined],
+    ]);
+  });
+
+  it("is the public account the wallet is on's", async () => {
+    const both = (index: 0 | 1) =>
+      vectors("cardano_account.json").find((v) => v.account === index && v.phrase.split(" ").length === 24)!;
+    const t = testBalances();
+    await t.wallet.create(both(0).phrase, PASSWORD);
+    await t.accounts.recordFirst();
+    t.koios.usedStakes.add(both(1).preprod.stake as string);
+    await t.accounts.discover("preprod");
+    await t.accounts.use(1, ["preprod"]);
+    t.koios.calls.length = 0;
+    // Nothing to name: no tx_info.
+    expect(await t.staking.delegationHistory("preprod")).toEqual([]);
+    expect(t.koios.calls.map((c) => [c.path, c.body])).toEqual([["account_update_history", { _stake_addresses: [both(1).preprod.stake] }]]);
   });
 });
 

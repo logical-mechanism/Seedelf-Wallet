@@ -649,7 +649,7 @@ function classOf(entry: ActivityEntry | undefined): HistoryClass {
 }
 
 /** tx_info, 20 at a time. */
-async function txInfoPaged(koios: Koios, hashes: string[]): Promise<KoiosTxInfo[]> {
+export async function txInfoPaged(koios: Koios, hashes: string[]): Promise<KoiosTxInfo[]> {
   const rows: KoiosTxInfo[] = [];
   for (let i = 0; i < hashes.length; i += PAGE) rows.push(...(await koios.txInfo(hashes.slice(i, i + PAGE))));
   return rows;

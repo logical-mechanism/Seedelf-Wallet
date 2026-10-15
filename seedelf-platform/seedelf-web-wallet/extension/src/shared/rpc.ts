@@ -292,6 +292,34 @@ export interface RewardRow {
   pool?: PoolRef;
 }
 
+/**
+ * What one of the stake key's certificates did (chunk 36): registered it, staked it with a pool, delegated its vote,
+ * or stopped staking, which deregisters it.
+ */
+export type DelegationKind = "registration" | "pool" | "vote" | "deregistration";
+
+/**
+ * One certificate naming the public account's stake key: a row of its delegation history (chunk 36, after Lace's).
+ * One transaction can make several: the first stake registers the key, stakes it and delegates the vote.
+ */
+export interface DelegationRow {
+  kind: DelegationKind;
+  /** The transaction that made it. */
+  txHash: string;
+  /** When its block was made (ms since the epoch). */
+  at: number;
+  /** The epoch it was made in. */
+  epoch: number;
+  /** `pool`: the pool it's staked with, with its ticker when the device knows it (none is asked for). */
+  pool?: PoolRef;
+  /** `vote`: a DRep's ID (CIP-129), `drep_always_abstain` or `drep_always_no_confidence`. */
+  drep?: string;
+  /** `vote`: the DRep is the account's own (chunk 21), worked out from the key, asking no one. */
+  ownDrep?: boolean;
+  /** `registration`: the deposit it took; `deregistration`: the deposit back. Lovelace, when the chain says. */
+  deposit?: string;
+}
+
 /** What the wallet holds on one network. Lovelace amounts are decimal strings. */
 export interface Balances {
   network: NetworkName;
@@ -2154,6 +2182,8 @@ export interface Requests {
   "drep-own": { payload: None; result: OwnDrep };
   /** Every reward paid to the public account's stake key, newest first, read fresh (chunk 30). */
   "reward-history": { payload: None; result: RewardRow[] };
+  /** Every certificate naming the public account's stake key, newest first, read fresh (chunk 36). */
+  "delegation-history": { payload: None; result: DelegationRow[] };
   /** The live governance actions (kept on the device for an hour, or read again with `refresh`), with the account's DRep and its votes. */
   governance: { payload: { refresh?: boolean }; result: GovernanceView };
   /** Writes a DRep's profile as CIP-119 metadata and hashes it, asking no one. */
@@ -2482,6 +2512,7 @@ const REQUEST_LIST = [
   "drep",
   "drep-own",
   "reward-history",
+  "delegation-history",
   "governance",
   "drep-profile",
   "stake-build",
