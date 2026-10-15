@@ -39,7 +39,7 @@ for pool in POOLS:
 doc = {
     "recorded": time.strftime("%Y-%m-%d", time.gmtime()),
     "request": f"GET https://api.koios.rest/api/v1/pool_history?_pool_bech32=<pool>&{Q}",
-    "merged": "ten answers each, merged: every deleg_rewards a Koios server gave for the epoch (they leave out different epochs, null, and some hold a value cached while db-sync was still inserting the epoch's rewards, lower); active_stake and block_cnt agreed in all",
+    "merged": "ten answers each, merged: every deleg_rewards a Koios server gave for the epoch (they leave out different epochs, null, and some hold a value cached while db-sync was still inserting the epoch's rewards, low, or before it took back those owed to keys deregistered before payday, high); active_stake and block_cnt agreed in all",
     "mainnet": out,
 }
 text = json.dumps(doc, indent=2)

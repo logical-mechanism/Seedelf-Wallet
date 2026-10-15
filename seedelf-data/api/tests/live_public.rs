@@ -931,8 +931,10 @@ async fn a_pools_history_is_koioss_with_every_epoch_paid() {
             }
         }
 
-        // Where the windows meet: the same epochs, the same stake and blocks, and what it paid the most any Koios
-        // server said, since a value cached while db-sync was inserting the epoch's rewards is lower.
+        // Where the windows meet: the same epochs, the same stake and blocks, and what it paid one of the values
+        // Koios's servers gave. They can disagree: a value cached while db-sync was still inserting the epoch's
+        // rewards is low, and one cached before it took back those owed to keys deregistered before payday is high
+        // (OctasPool's epoch 642: 19,172 ₳ here and on some, 19,269 ₳ on another, with ~98 ₳ more to members).
         let koios: Vec<&Value> = recorded["answer"]
             .as_array()
             .unwrap()
@@ -962,14 +964,15 @@ async fn a_pools_history_is_koioss_with_every_epoch_paid() {
             assert_eq!(row["epoch_no"], k["epoch_no"], "{pool}");
             assert_eq!(row["active_stake"], k["active_stake"], "{pool}: {row}");
             assert_eq!(row["block_cnt"], k["block_cnt"], "{pool}: {row}");
-            if let Some(paid) = k["deleg_rewards"]
+            let said: Vec<i128> = k["deleg_rewards"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(lovelace)
-                .max()
-            {
-                assert_eq!(lovelace(&row["deleg_rewards"]), paid, "{pool}: {row}");
+                .collect();
+            if !said.is_empty() {
+                let paid = lovelace(&row["deleg_rewards"]);
+                assert!(said.contains(&paid), "{pool}: {row}, Koios {said:?}");
             }
         }
     }
