@@ -2,14 +2,15 @@
 
 The owner asked for it on 2026-10-15: "branch and implement return on stake (ROS) for a pool. Lace shows it in the pool browser and on a pool's details, with recent epochs' rewards. Koios pool_history has a per-epoch ROS figure, so it would cost one request per pool opened. Small but worth it as a quick feature." It was one of the five Lace items declined on 2026-10-14; delegation history, another, came back the same day as chunk 36.
 
-**Status: 🚧 the wallet is built** on `web-wallet/pool-ros`, from `main` after #310, uncommitted. **What's left is the data layer's route,** which mainnet needs before this wallet ships (below), and the call on how it reads the rewards.
+**Status: 🚧 the wallet and the data layer's route are built** on `web-wallet/pool-ros`, from `main` after #310 (the wallet pushed as `86e8e45`, `bc2ed2d`). **What's left is the route's live test,** which reads home's db-sync, so the owner runs it; then the PR.
 
 ## Start here
 
-1. Get the owner's go-ahead for the read-only measurements on home's db-sync (*The measurements*). On 2026-10-15 the auto-mode classifier refused a read of `cexplorer_new` ("Production Reads"), so they need a permission rule, or the owner runs them.
-2. With the numbers, pick the route's design (*The data layer*) with the owner: a new index on home is theirs to build.
-3. Build `GET /api/v1/pool_history` in `seedelf-data/api/src/public/pools.rs`, its grammar test in `public_grammar.rs`, and a live test in `live_public.rs` against Koios's recorded answer for an epoch every Koios server has (Koios's holes differ by server).
-4. Then the usual order: one PR, merge, deploy the API, check the route live, then package.
+1. ~~The measurements~~: the owner ran them on 2026-10-15 (*Measured*), since the auto-mode classifier now refuses reads of `cexplorer_new` ("Production Reads"). The live test needs the same: the owner runs it, or gives a go-ahead.
+2. ~~The design~~: C, the per-epoch sweep (*Measured*), with nothing new on home.
+3. ~~The route~~: `GET /api/v1/pool_history`, `seedelf-data/api/src/public/history.rs`, with its grammar test (`public_grammar.rs`) and its live test (`live_public.rs`, `a_pools_history_is_koioss_with_every_epoch_paid`), offline suite, fmt and clippy clean.
+4. **The live test, by the owner,** on the dev box: `cargo test -p seedelf-data-api --test live_public a_pools_history -- --ignored --nocapture`. If its window no longer meets the recording's (18 epochs on), `python3 -I api/tests/fixtures/record-pool-history.py` first.
+5. Then the usual order: one PR, merge, deploy the API, check the route live, then package.
 
 ## What Lace does (2.4.2, `_reference/lace` at `e431933`)
 
@@ -31,26 +32,37 @@ The owner asked for it on 2026-10-15: "branch and implement return on stake (ROS
 - **Most Koios servers leave out every other epoch's rewards, on both networks** (`deleg_rewards`, `pool_fees` and `member_rewards` null, `epoch_ros` 0, with blocks made). Its cache job, `grest.pool_history_cache_update` (koios-artifacts, `files/grest/rpc/00_cached_tables/pool_history_cache.sql`), does nothing while it holds up to the epoch before the current one, so it runs every two epochs, and then from the newest epoch it holds: the epoch between is written before its rewards exist and never again. Koios's own `pool_history` carries the comment "temporary condition for testing, until cache table population fixed". Seen 2026-10-15 for OctasPool on mainnet (8 or 9 of 18 null on four answers in five; the fifth had 2) and LOGIC on preprod (6 of 18; the largest preprod pool's 18 were whole on one answer and had 8 null on another): a minute apart, the same request gave different holes.
 - **So a null is "not known",** left out of the return and shown as such, never counted as nothing: counted as zero, OctasPool's recorded answer reads 0.95% a year instead of 1.72%, and LOGIC's 2.04% instead of 3.08%. An epoch with no blocks paid nothing, which is known ("0 blocks · 0% a year"). Koios also writes null where a pool made blocks and was paid nothing (a pledge not met), which reads "not known" too; the pool's own page warns of a pledge not met today.
 
-## The data layer (mainnet): not built yet
+## The data layer (mainnet)
 
 **Needed before this wallet ships.** Every read goes there first on mainnet (`DataLayerKoios`, and `data-layer.test.ts`'s guard that no Koios call is left unrouted), and the privacy policy says it: reads go through our server first, Koios for a part it can't answer. Without the route the API answers 404, and any failure holds the wallet's whole public part on Koios for 5 minutes. The wallet's override is in already (`poolHistory`), as chunk 36's was before its route.
 
-**The route:** `GET /api/v1/pool_history`, exactly the query above (one pool, that select, that order, `limit=18`), Koios's columns and JSON, one row an epoch the pool had stake in, from two epochs ago back 18. The same for everyone, so kept per pool for the epoch, as `pool_info` is. It can do better than Koios: every epoch it serves is final, so `deleg_rewards` is never null; a pledge not met is `"0"`.
+**The route:** `GET /api/v1/pool_history`, exactly the query above (one pool, that select, that order, `limit=18`), Koios's columns and JSON, one row an epoch the pool had stake in, from two epochs ago back 18. As built (design C, below): every pool's epoch worked out once and kept for the server's life (`History`), 18 after a start, behind the requests every minute (`keep_filled`), one more as an epoch turns; a request waits at most 3 s for epochs still being worked out, then answers with those done. The newest epoch worked out in its first hour of being paid is worked out again 10 minutes on, since db-sync inserts an epoch's rewards bit by bit until then. Better than Koios: `deleg_rewards` is never null, and a pledge not met is `"0"`. [seedelf-data's README](../../../../seedelf-data/README.md) has the rest.
 
-**What it reads,** after Koios's `grest.get_pool_history_data_bulk` (CC-BY-4.0), for one pool:
+**What it reads,** after Koios's `grest.get_pool_history_data_bulk` (CC-BY-4.0), for every pool in one epoch, in one statement:
 
-- the stake: `epoch_stake` summed by pool and epoch, or `pool_stat.stake` (db-sync: "total stake in the mark snapshot"; whether its `epoch_no` lines up with `epoch_stake`'s is to be checked);
-- the blocks: `block` by `slot_leader` (`idx_block_slot_leader_id`), or `pool_stat.number_of_blocks` ("created on the previous epoch": the same alignment question);
-- the rewards: `reward` where `pool_id` is the pool, `earned_epoch` in the 18, `type` `member` or `leader`;
+- the stake: `pool_stat.stake` at epoch E − 1, which is `epoch_stake`'s sum for E (*Measured*);
+- the blocks: `block` by slot leader for the epoch (`idx_block_epoch_no`);
+- the rewards: `reward` earned in the epoch, `member` and `leader`, by pool;
 - the terms: `pool_update`, the latest active by each epoch, for Koios's `deleg_rewards` (members' rewards plus the leader's less the pool's fees: `fixed_cost + (total − fixed_cost) × margin`, or the members' alone when the leader's is under the cost).
 
-**The cost is the rewards.** Home's `reward` has `idx_reward_pool_id` and `idx_reward_earned_epoch`, each on its own, and no index on both: a large pool (35,000 delegators) has about 35,000 rows an epoch for every epoch since it started, and an epoch has a row for every delegator on the network. Three designs:
+**The cost was the rewards,** which chose the design. Home's `reward` has `idx_reward_pool_id` and `idx_reward_earned_epoch`, each on its own, and no index on both: a large pool (35,000 delegators) has about 35,000 rows an epoch for every epoch since it started, and an epoch has a row for every delegator on the network. Three designs:
 
 - **A. Per pool, kept for the epoch,** with `pool_info`'s 3 s budget. Cheapest to write; a large pool's first look may read gigabytes from a cold disk. Measure first.
 - **B. A new index on home,** `reward (pool_id, earned_epoch) include (type, amount)`, built `concurrently` from `deploy/home/db-sync-indexes.sql` by the owner: then A is a range scan. Its size and build time come from the measurements.
 - **C. A sweep a new epoch:** every pool's rewards for one epoch (`idx_reward_earned_epoch`, one epoch's rows), kept in memory for the 18 epochs (3,000 pools × 18 rows), the oldest dropped as a new one comes. Each pool's look is then a lookup; the cost is 18 epochs read once at each start, one an epoch after.
 
-### The measurements
+### Measured (2026-10-15, the owner's run on home)
+
+Epoch 661; the largest pool `pool1gaztx97t53k47fr7282d70tje8323vvzx8pshgts30t9krw62tm` (35,041 delegators); the `reward` table 457.5M rows, 33 GB.
+
+- **A, one pool over 18 epochs: 3.2 s cold, 1.1 s warm.** The planner reads `idx_reward_earned_epoch` for all 18 epochs and filters the pool out: 21M rows read, 621,000 kept, 246,000 buffers (1.9 GB) from disk. So a pool's look costs as much as every pool's over the same epochs, and would cost that for each pool opened. Out.
+- **C, one epoch for every pool: 0.18 s** (its pages warm from A; A's cold run read 18 epochs in 3.2 s, so about 0.2 s an epoch cold). 1.2M rows, 933 pools paid in epoch 659, under 1.1 MB of memory to group them.
+- **B isn't needed:** C is cheap without it, and an index on 457M rows would be many GB.
+- **`pool_stat` is the snapshot a step ahead** (one small pool, epochs 656–661, and the largest's blocks): its `stake` at epoch N is `epoch_stake`'s sum at N + 1, which is Koios's `active_stake` for N + 1, and its `number_of_blocks` at N is the blocks made in N − 1. So an epoch E's stake is `pool_stat`'s at E − 1, and its blocks `pool_stat`'s at E + 1 (or `block` by `idx_block_epoch_no`, about 21,000 rows an epoch). The live test checks both against Koios for real pools.
+
+**So: C.** Each epoch's every pool (stake, blocks, members' and leader's rewards, the terms active then) worked out once and kept for the API's life, the 18 newest final epochs (two ago back 18), the oldest dropped as an epoch turns; a pool's look is then a lookup. About 0.2–0.5 s an epoch, so 18 at a start in the background (single-flight, a few at a time), one more an epoch. It would also have every pool's return at hand, should the owner want it on the browser's rows on mainnet (preprod's Koios has nothing like it).
+
+### The measurements (the queries that were run)
 
 Read-only, as `seedelf_reader` on `cexplorer_new` (the URL in `seedelf-data/.env`), each with `set statement_timeout = '60s'`:
 

@@ -8,7 +8,7 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
-- **The public routes:** the other 23 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
+- **The public routes:** the other 24 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 - **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
 - **The deploy files and runbook,** [deploy/README.md](deploy/README.md): home's services through a WireGuard tunnel, and the API behind Caddy on a VPS.
 
@@ -76,6 +76,7 @@ cargo fmt --check
   - an NFT's `asset_info` equals Koios's recorded answer;
   - a rewards history's pages make one list in its order, for reward accounts many pools pay (six pages) and one the reserves and the treasury paid too, and what's been paid by now is `account_info`'s rewards available plus withdrawals;
   - a delegation history's pages make one list in its order, no row twice and no withdrawal, each row's time and epoch its slot's, and Koios's recorded answer is its start, row for row (`tests/fixtures/account-update-history.json`): for a key that registered and delegated in one transaction then delegated its vote, one that stopped and registered again four times, one delegated twice in one transaction, mainnet's busiest re-delegator (two pages), and a key never registered.
+  - a pool's history is newest first, 18 epochs at most, two epochs ago at most, every epoch paid (none with no blocks paid anything), and where the windows meet Koios's recorded answer, the same epochs, stake and blocks, and what it paid the most any Koios server said (`tests/fixtures/pool-history.json`, `record-pool-history.py`): for the pool with the most delegators, OctasPool and a pool of about 100; a pool db-sync doesn't know has none.
 
 - **The private index, from each source** (`tests/live_private.rs`):
   - from cursors a day, two days and a month back, and from Kupo's first block, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials (db-sync also from before the contract existed);
@@ -175,6 +176,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
 | `pool_list` | the registered pools, 1,000 a page | an hour, within its epoch |
 | `pool_info` | up to 5 pools' details and live stake | 10 minutes, within its epoch |
+| `pool_history` | one pool's last 18 epochs whose rewards are final: active stake, blocks, and what it paid its stake. A pool's *Return on stake* (web wallet chunk 37) | every pool's epoch, worked out once and kept for the server's life |
 | `drep_info` | up to 5 DReps' standing | 10 minutes, within its epoch; the account's own (`deposit,meta_url,meta_hash` selected) never |
 | `drep_metadata` | up to 5 DReps' profile names | 10 minutes; the account's own profile (`is_valid` selected) never |
 | `proposal_list` | the live governance actions | 5 minutes, within its epoch |
@@ -252,6 +254,12 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 - **A transaction's certificates of one kind for the key are one row,** as Koios's `union` makes them: a key delegated twice in each of two transactions has 31 rows, not 33.
 - **Each kind is read by its key's `addr_id`,** through db-sync's indexes and home's `delegation_vote_addr_id_idx`. Mainnet's busiest re-delegator (1,282 pool delegations, 1,289 rows): 117 ms from a cold disk, 5 ms warm.
 - **Checked against Koios (2026-10-14), oldest first:** every page the same, row for row, for that re-delegator (1,000 and 289), a key that stopped and registered again four times (16), the key delegated twice in one transaction (31), the reward account 13 pools pay (3: registered and delegated in one transaction, then its vote delegated), and a key never registered (none). Each page in 3–55 ms from home.
+
+**`pool_history` is Koios's `grest.get_pool_history_data_bulk`, every pool's epoch at once and kept** (web wallet chunk 37). Each row is an epoch's active stake, the blocks made by slot leader, and `deleg_rewards`: the members' rewards earned in it and the leader's, less the pool's fees by the terms active then (`pool_update`, the latest by `active_epoch_no`), in floating point and rounded half to even, as Postgres works Koios's out. The 18 epochs are those whose rewards are final, two ago back 18, as Koios's newest is.
+- **Why every pool's at once:** `reward` (457.5M rows, 33 GB) has `idx_reward_pool_id` and `idx_reward_earned_epoch`, none on both, so one pool over 18 epochs is read through the epochs and filtered: 21M rows for 0.6M, 3.2 s from a cold disk and 1.1 s warm for the pool with the most delegators (35,041), as much as every pool's. One epoch, every pool: 0.18 s (measured 2026-10-15). So each epoch is worked out for every pool once (`History`), 18 after a start, behind the requests every minute, and one more as an epoch turns; the oldest goes. A request waits at most 3 s for epochs still being worked out, then answers with those done.
+- **The stake is `pool_stat`'s, a step ahead:** its row for epoch E − 1 is `epoch_stake`'s sum for E, which Koios reads, without an epoch's 1.3M `epoch_stake` rows. Its `number_of_blocks` is likewise the epoch before's; the blocks come from `block` (`idx_block_epoch_no`).
+- **The newest epoch, worked out in its first hour** of being paid (3,600 slots), is worked out again 10 minutes on: db-sync inserts an epoch's rewards bit by bit until they're paid, and Koios has cached values from part way (OctasPool's epoch 642: 2,347, 14,373, 19,172 and 19,269 ₳ from four of its servers).
+- **Better than Koios's:** its cache leaves every other epoch's `deleg_rewards` null on most of its servers, and two answers a minute apart differ; here every epoch has one. A pool that made blocks and was paid nothing (a pledge not met) paid `"0"`, where Koios says null. Koios lists a pool's newest 18 epochs with stake, however old; this lists those of the 18 newest it had stake in.
 
 **`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
 
