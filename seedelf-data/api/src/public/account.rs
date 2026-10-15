@@ -1,7 +1,8 @@
-//! `account_addresses`, `account_info`, `account_reward_history` and
-//! `account_txs`: a stake key's addresses, standing, rewards and
-//! transactions; and `credential_txs`, an account's transactions by its
-//! payment keys. About one user each, so never cached.
+//! `account_addresses`, `account_info`, `account_reward_history`,
+//! `account_update_history` and `account_txs`: a stake key's addresses,
+//! standing, rewards, certificates and transactions; and `credential_txs`,
+//! an account's transactions by its payment keys. About one user each, so
+//! never cached.
 //!
 //! **A stake key's addresses come from `address.stake_address_id`,** which
 //! db-sync indexes. Koios gathers them from `tx_out.stake_address_id`, which
@@ -347,6 +348,114 @@ pub async fn account_reward_history(
                 amount: row.try_get(2)?,
                 r#type: row.try_get(3)?,
                 pool_id_bech32: row.try_get(4)?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(json(array(&rows)?))
+}
+
+/// The columns a delegation history asks for, in its order: every row's but
+/// its stake address and `epoch_slot`.
+const UPDATE_COLUMNS: &str = "action_type,tx_hash,epoch_no,absolute_slot,block_time";
+
+/// Every kind of row but Koios's fifth: the wallet withdraws an account's
+/// rewards with nearly every payment, so withdrawals would swamp the list,
+/// and Activity has them.
+const UPDATE_KINDS: &str = "neq.withdrawal";
+
+/// Oldest first, by every column it takes: a slot holds one block, and a
+/// transaction's certificates of one kind for the key are one row
+/// ([`UPDATES`]), so no two rows tie. Oldest first keeps the pages still
+/// while the key acts again: its next certificate lands at the end, as a
+/// rewards history's next rewards do.
+const UPDATE_ORDER: &str = "absolute_slot.asc,tx_hash.asc,action_type.asc";
+
+/// A page of a delegation history: Koios's most. Most keys have a few rows,
+/// a registration and a delegation or two.
+const UPDATE_PAGE: i64 = 1000;
+
+/// The furthest page, as a rewards history's: mainnet's busiest key has
+/// 1,289 rows, 1,282 of them pool delegations (2026-10-14).
+const MAX_UPDATE_OFFSET: i64 = 100_000;
+
+#[derive(Serialize)]
+struct UpdateRow {
+    action_type: String,
+    tx_hash: String,
+    epoch_no: i64,
+    absolute_slot: i64,
+    block_time: i64,
+}
+
+/// Koios's `account_update_history` (CC-BY-4.0), less its withdrawals: the
+/// stake key's registrations (`stake_registration`), deregistrations
+/// (`stake_deregistration`), pool delegations (`delegation`) and vote
+/// delegations (`delegation_vote`), each with its transaction's hash and its
+/// block's epoch, slot and time. Combined with `union`, as Koios's are, so a
+/// transaction's certificates of one kind for the key are one row: on
+/// mainnet a transaction can delegate one key twice, and Koios lists it
+/// once. Koios's union also keeps the key apart, which one key needs no
+/// column for (`hash_raw` is unique).
+///
+/// Each kind is read by `addr_id`: db-sync's `idx_stake_registration_addr_id`,
+/// `idx_stake_deregistration_addr_id` and `idx_delegation_addr_id` (the
+/// planner takes home's `idx_delegation_addr_id_tx_id`, read from the index
+/// alone), and home's `delegation_vote_addr_id_idx`
+/// (`deploy/home/db-sync-indexes.sql`); then each row's `tx` and `block` by
+/// their keys. Mainnet's busiest key, 1,289 rows: 117 ms from a cold disk,
+/// 5 ms warm, at home (2026-10-14).
+///
+/// Sorted as [`UPDATE_ORDER`] says, in SQL, as PostgREST sorts Koios's: by
+/// the hash's hex and the kind's name as text. Both sort the same under any
+/// collation: lowercase hex of one length, and four names that differ first
+/// at a letter.
+const UPDATES: &str = "with sa as materialized (select id from stake_address where hash_raw = $1::bytea), \
+     actions as ( \
+       select 'registration'::text as action_type, sr.tx_id from sa join stake_registration sr on sr.addr_id = sa.id \
+       union select 'deregistration'::text, sd.tx_id from sa join stake_deregistration sd on sd.addr_id = sa.id \
+       union select 'delegation_pool'::text, d.tx_id from sa join delegation d on d.addr_id = sa.id \
+       union select 'delegation_drep'::text, dv.tx_id from sa join delegation_vote dv on dv.addr_id = sa.id) \
+     select a.action_type, encode(t.hash, 'hex') as tx_hash, b.epoch_no::bigint as epoch_no, \
+       b.slot_no::bigint as absolute_slot, extract(epoch from b.time)::bigint as block_time \
+     from actions a join tx t on t.id = a.tx_id join block b on b.id = t.block_id \
+     order by absolute_slot, tx_hash, action_type \
+     offset $2::bigint limit $3::bigint";
+
+/// A stake key's certificates, oldest first, a page of 1,000: Staking's
+/// *Delegation history* (web wallet chunk 36), read only when it's opened.
+pub async fn account_update_history(
+    State(state): State<Arc<AppState>>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Result<Response, ApiError> {
+    let mut q = Query::parse(raw.as_deref())?;
+    q.exactly("select", UPDATE_COLUMNS)?;
+    q.exactly("action_type", UPDATE_KINDS)?;
+    q.exactly("order", UPDATE_ORDER)?;
+    let offset = natural(&q.value("offset")?)?;
+    let limit = natural(&q.value("limit")?)?;
+    q.end()?;
+    if limit != UPDATE_PAGE || offset % UPDATE_PAGE != 0 || offset > MAX_UPDATE_OFFSET {
+        return Err(NOT_ASKED);
+    }
+    let request: InfoBody = body(&headers, &bytes)?;
+    let keys = stake_list(&request._stake_addresses, MAX_ACCOUNTS)?;
+    state.fresh_tip()?;
+    let client = state.chain.public().await?;
+    let rows = client
+        .query(UPDATES, &[&keys[0], &offset, &limit])
+        .await
+        .map_err(anyhow::Error::from)?;
+    let rows = rows
+        .iter()
+        .map(|row| {
+            Ok(UpdateRow {
+                action_type: row.try_get(0)?,
+                tx_hash: row.try_get(1)?,
+                epoch_no: row.try_get(2)?,
+                absolute_slot: row.try_get(3)?,
+                block_time: row.try_get(4)?,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;

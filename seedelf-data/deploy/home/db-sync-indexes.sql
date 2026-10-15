@@ -28,7 +28,8 @@ create index concurrently if not exists idx_address_stake_address_id
 create index concurrently if not exists idx_collateral_tx_in_tx_in_id
   on collateral_tx_in (tx_in_id);
 
--- 107 MB.
+-- 107 MB. account_update_history: a key's pool delegations, read from the
+-- index alone (db-sync's idx_delegation_addr_id serves without it).
 create index concurrently if not exists idx_delegation_addr_id_tx_id
   on delegation (addr_id, tx_id);
 
@@ -79,6 +80,7 @@ create index concurrently if not exists idx_withdrawal_addr_id_incl_amount
 -- 14 MB. account_info read the whole table for an account's DRep: 16 of its
 -- 16.3 ms, then 0.1-0.4 ms.
 -- drep_info still reads every row, for every account's latest DRep: 260 ms.
+-- account_update_history reads a key's vote delegations through it too.
 create index concurrently if not exists delegation_vote_addr_id_idx
   on delegation_vote (addr_id, tx_id);
 

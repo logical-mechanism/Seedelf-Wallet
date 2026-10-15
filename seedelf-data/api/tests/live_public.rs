@@ -674,6 +674,128 @@ async fn a_rewards_history_is_every_reward_in_one_order() {
     }
 }
 
+/// A delegation history's pages, read as the wallet reads them (web wallet chunk 36): until one comes back short.
+async fn update_history(app: &Router, stake: &str) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for offset in (0..).step_by(1000) {
+        let path = format!(
+            "/api/v1/account_update_history?select=action_type,tx_hash,epoch_no,absolute_slot,block_time\
+             &action_type=neq.withdrawal&order=absolute_slot.asc,tx_hash.asc,action_type.asc\
+             &offset={offset}&limit=1000"
+        );
+        let page = post(app, &path, json!({ "_stake_addresses": [stake] })).await;
+        let page = page.as_array().unwrap().clone();
+        let short = page.len() < 1000;
+        rows.extend(page);
+        if short {
+            return rows;
+        }
+    }
+    unreachable!()
+}
+
+#[tokio::test]
+#[ignore = "live db-sync"]
+async fn a_delegation_history_is_every_certificate_in_one_order() {
+    let (app, _) = app().await;
+    // Koios's answers, recorded 2026-10-14 from mainnet Koios. A history only grows at its end, oldest first, so each
+    // stays the start of the key's rows.
+    let koios: Value =
+        serde_json::from_str(include_str!("fixtures/account-update-history.json")).unwrap();
+    let recorded = |stake: &str| -> Vec<Value> {
+        koios["mainnet"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["stake_address"] == stake)
+            .map_or_else(Vec::new, |k| k["answer"].as_array().unwrap().clone())
+    };
+    for (stake, at_least) in [
+        // The reward account 13 pools pay: registered and delegated in one transaction, then a vote delegation.
+        (
+            "stake1uxcmc9r2t7cxs0zw8qm8ztg3twvxryzghsc8eszek6kuwms23gya4",
+            3,
+        ),
+        // Deregistered and registered again, four times, delegating to a pool and a DRep each time.
+        (
+            "stake1u9rcc6ag7chscguuamyqm3p4vssdsl7m4qxufcxj69mypzc5f28jd",
+            16,
+        ),
+        // Delegated twice in one transaction, in two transactions: one row each, as Koios's union makes them (31
+        // rows, not 33), and its one withdrawal left out.
+        (
+            "stake1u9f3wpp9zxncgjdlnrdg228jldx40e7m5h379n54re9n74gyas8ey",
+            31,
+        ),
+        // Mainnet's busiest re-delegator: 1,282 pool delegations, two pages. Row for row Koios's on 2026-10-14, but
+        // too long to record here.
+        (
+            "stake1uxm5f52s97ylj5f0cj9alshjttdlzznj3sj50s0r0zkqdxglz8zuv",
+            1289,
+        ),
+        // Part of addresses with a long, busy history, and never registered: no rows.
+        (
+            "stake1uxkjkwuygxqf24wacumm8ph2nlhp9e0ahv37fshdr060cyc36wvr9",
+            0,
+        ),
+    ] {
+        let rows = update_history(&app, stake).await;
+        assert!(rows.len() >= at_least, "{stake}: {} rows", rows.len());
+        // Sorted as asked, every page after the one before, and no row twice: slot, hash and kind, strictly.
+        let key = |r: &Value| {
+            (
+                r["absolute_slot"].as_i64().unwrap(),
+                r["tx_hash"].as_str().unwrap().to_string(),
+                r["action_type"].as_str().unwrap().to_string(),
+            )
+        };
+        assert!(
+            rows.windows(2).all(|w| key(&w[0]) < key(&w[1])),
+            "{stake}: out of order"
+        );
+        for r in &rows {
+            assert_eq!(
+                r.as_object().unwrap().len(),
+                5,
+                "{stake}: Koios's five columns, no more"
+            );
+            assert!(
+                [
+                    "registration",
+                    "deregistration",
+                    "delegation_pool",
+                    "delegation_drep"
+                ]
+                .contains(&r["action_type"].as_str().unwrap()),
+                "{stake}: {r}"
+            );
+            let hash = r["tx_hash"].as_str().unwrap();
+            assert!(
+                hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{stake}: {r}"
+            );
+            // Every certificate is from Shelley on, where a slot is a second and an epoch 432,000 of them.
+            let slot = r["absolute_slot"].as_i64().unwrap();
+            assert_eq!(
+                r["block_time"].as_i64(),
+                Some(slot + 1_591_566_291),
+                "{stake}: {r}"
+            );
+            assert_eq!(
+                r["epoch_no"].as_i64(),
+                Some(208 + (slot - 4_492_800) / 432_000),
+                "{stake}: {r}"
+            );
+        }
+        // Koios's, row for row, as far as it was recorded.
+        let koios = recorded(stake);
+        assert_eq!(rows[..koios.len()], koios[..], "{stake}: not Koios's");
+        if at_least == 0 {
+            assert!(rows.is_empty(), "{stake}");
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "live db-sync"]
 async fn the_live_actions_and_a_dreps_votes_on_them() {
