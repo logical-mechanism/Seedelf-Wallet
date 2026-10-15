@@ -2,15 +2,11 @@
 
 The owner asked for it on 2026-10-15: "branch and implement return on stake (ROS) for a pool. Lace shows it in the pool browser and on a pool's details, with recent epochs' rewards. Koios pool_history has a per-epoch ROS figure, so it would cost one request per pool opened. Small but worth it as a quick feature." It was one of the five Lace items declined on 2026-10-14; delegation history, another, came back the same day as chunk 36.
 
-**Status: 🚧 the wallet and the data layer's route are built** on `web-wallet/pool-ros`, from `main` after #310 (the wallet pushed as `86e8e45`, `bc2ed2d`). **What's left is the route's live test,** which reads home's db-sync, so the owner runs it; then the PR.
+**Status: ✅ built 2026-10-15** on `web-wallet/pool-ros`, from `main` after #310: the wallet, the data layer's `pool_history` route and the docs in one PR, so this file went straight to the archive, as chunk 36's did. What still holds is in [architecture.md](../../architecture.md) (*Staking*: the request and the rate), [flows.md](../../flows.md) (the pool page and Staking), [privacy.md](../../privacy.md) (*What Koios learns*) and [seedelf-data's README](../../../../../seedelf-data/README.md) (the route). **The privacy policy is unchanged:** its staking row says a pool you look up is sent to the server.
 
-## Start here
+**The live test passed on 2026-10-15,** run by the owner on the dev box (the auto-mode classifier now refuses reads of home's db-sync, "Production Reads"): every pool's 18 epochs worked out in 2.7 s, and three mainnet pools matched Koios's recorded answers on every epoch, stake, blocks and what each paid. Its first run failed on OctasPool's epoch 642, where the test wanted the largest of four values Koios's servers gave: db-sync's is 19,172 ₳, and the 19,269 ₳ one has about 98 ₳ more paid to members, a value cached before db-sync took back at payday what keys deregistered since were owed. So a cached Koios value can be high as well as low, and the test takes any value a server gave.
 
-1. ~~The measurements~~: the owner ran them on 2026-10-15 (*Measured*), since the auto-mode classifier now refuses reads of `cexplorer_new` ("Production Reads"). The live test needs the same: the owner runs it, or gives a go-ahead.
-2. ~~The design~~: C, the per-epoch sweep (*Measured*), with nothing new on home.
-3. ~~The route~~: `GET /api/v1/pool_history`, `seedelf-data/api/src/public/history.rs`, with its grammar test (`public_grammar.rs`) and its live test (`live_public.rs`, `a_pools_history_is_koioss_with_every_epoch_paid`), offline suite, fmt and clippy clean.
-4. **The live test, by the owner,** on the dev box: `cargo test -p seedelf-data-api --test live_public a_pools_history -- --ignored --nocapture`. If its window no longer meets the recording's (18 epochs on), `python3 -I api/tests/fixtures/record-pool-history.py` first.
-5. Then the usual order: one PR, merge, deploy the API, check the route live, then package.
+**Deploy the API before a wallet with this ships:** an API without the route answers 404, and any failure holds the wallet's public part on Koios for 5 minutes. The usual order (merge, deploy the API, check it, then package) does it.
 
 ## What Lace does (2.4.2, `_reference/lace` at `e431933`)
 
@@ -36,7 +32,7 @@ The owner asked for it on 2026-10-15: "branch and implement return on stake (ROS
 
 **Needed before this wallet ships.** Every read goes there first on mainnet (`DataLayerKoios`, and `data-layer.test.ts`'s guard that no Koios call is left unrouted), and the privacy policy says it: reads go through our server first, Koios for a part it can't answer. Without the route the API answers 404, and any failure holds the wallet's whole public part on Koios for 5 minutes. The wallet's override is in already (`poolHistory`), as chunk 36's was before its route.
 
-**The route:** `GET /api/v1/pool_history`, exactly the query above (one pool, that select, that order, `limit=18`), Koios's columns and JSON, one row an epoch the pool had stake in, from two epochs ago back 18. As built (design C, below): every pool's epoch worked out once and kept for the server's life (`History`), 18 after a start, behind the requests every minute (`keep_filled`), one more as an epoch turns; a request waits at most 3 s for epochs still being worked out, then answers with those done. The newest epoch worked out in its first hour of being paid is worked out again 10 minutes on, since db-sync inserts an epoch's rewards bit by bit until then. Better than Koios: `deleg_rewards` is never null, and a pledge not met is `"0"`. [seedelf-data's README](../../../../seedelf-data/README.md) has the rest.
+**The route:** `GET /api/v1/pool_history`, exactly the query above (one pool, that select, that order, `limit=18`), Koios's columns and JSON, one row an epoch the pool had stake in, from two epochs ago back 18. As built (design C, below): every pool's epoch worked out once and kept for the server's life (`History`), 18 after a start, behind the requests every minute (`keep_filled`), one more as an epoch turns; a request waits at most 3 s for epochs still being worked out, then answers with those done. The newest epoch worked out in its first hour of being paid is worked out again 10 minutes on, since db-sync inserts an epoch's rewards bit by bit until then. Better than Koios: `deleg_rewards` is never null, and a pledge not met is `"0"`. [seedelf-data's README](../../../../../seedelf-data/README.md) has the rest.
 
 **What it reads,** after Koios's `grest.get_pool_history_data_bulk` (CC-BY-4.0), for every pool in one epoch, in one statement:
 
@@ -96,8 +92,9 @@ select ps.epoch_no, ps.stake, ps.number_of_blocks,
 
 Each twice: the first from a cold disk, the second warm.
 
-## Tests (the wallet)
+## Tests
 
+- **Data layer:** `public_grammar.rs` takes the one request and refuses every other (17 or 19 epochs, no limit, an offset, oldest first, no order, `epoch_ros` selected, the order of parameters, another filter, a DRep or a pool ID spelt otherwise); `history.rs`'s own tests, Koios's `deleg_rewards` for OctasPool's epoch 659 to the lovelace, the 18-epoch window as an epoch turns, a settling epoch worked out again, a pool's rows; `live_public.rs`, three mainnet pools against Koios's recorded answers (above), and a pool db-sync doesn't know.
 - `staking.test.ts`: the one request, in its order; 18 epochs newest first with their blocks; epoch 317's rate against Koios's own `epoch_ros`; Koios's nulls left out, not counted as zero (which would take a point off LOGIC's); mainnet's OctasPool, every other epoch null, not halved; the ID as hex, and a DRep's refused; rows that aren't epochs left out, each epoch once, none past 18; no rate with no epoch known.
 - `data-layer.test.ts`: the request on the data layer, in the order its grammar will take, or Koios when it fails.
 - `pool-return-screen.test.ts`: the figures' last row, the hint's three wordings and none without a rate, the epochs folded, not known, reading and Try again, folded with the figures on Staking, and nowhere without a read.
