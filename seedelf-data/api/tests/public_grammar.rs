@@ -234,6 +234,79 @@ async fn a_rewards_history_is_read_a_thousand_at_a_time() {
 }
 
 #[tokio::test]
+async fn a_delegation_history_is_read_a_thousand_at_a_time() {
+    // Staking's Delegation history (web wallet chunk 36): one stake key's certificates, withdrawals left out, oldest
+    // first in one total order.
+    let select = "select=action_type,tx_hash,epoch_no,absolute_slot,block_time";
+    let filter = "action_type=neq.withdrawal";
+    let order = "order=absolute_slot.asc,tx_hash.asc,action_type.asc";
+    let history =
+        |rest: &str| format!("/api/v1/account_update_history?{select}&{filter}&{order}{rest}");
+    let one = json!({ "_stake_addresses": [STAKE] });
+    for page in [
+        "&offset=0&limit=1000",
+        "&offset=1000&limit=1000",
+        "&offset=100000&limit=1000",
+    ] {
+        assert_eq!(post(&history(page), one.clone()).await.0, OK, "{page}");
+    }
+    for page in [
+        "&offset=0&limit=20",
+        "&offset=0&limit=1001",
+        "&offset=500&limit=1000",
+        "&offset=101000&limit=1000",
+        "&limit=1000",
+        "&offset=0",
+        "&limit=1000&offset=0",
+        "&offset=0&limit=1000&epoch_no=eq.300",
+        "&offset=0&limit=1000&action_type=neq.withdrawal",
+    ] {
+        assert_eq!(post(&history(page), one.clone()).await.0, BAD, "{page}");
+    }
+    let page = history("&offset=0&limit=1000");
+    let key =
+        |i: u8| seedelf_data_api::ids::encode("stake", &[[0xe1].as_slice(), &[i; 28]].concat());
+    for body in [
+        json!({ "_stake_addresses": [key(1), key(2)] }),
+        json!({ "_stake_addresses": [STAKE, STAKE] }),
+        json!({ "_stake_addresses": [] }),
+        json!({ "_stake_addresses": ["stake1"] }),
+        json!({ "_stake_addresses": [STAKE], "_epoch_no": 300 }),
+        json!({ "_stake_address": STAKE }),
+    ] {
+        assert_eq!(post(&page, body.clone()).await.0, BAD, "{body}");
+    }
+    // No filter (withdrawals in), the filter anywhere else in the order of parameters, another filter, another select
+    // or another order (newest first included) is another request.
+    let rest = "offset=0&limit=1000";
+    for query in [
+        format!("{select}&{order}&{rest}"),
+        format!("{filter}&{select}&{order}&{rest}"),
+        format!("{select}&{order}&{filter}&{rest}"),
+        format!("{select}&{order}&{rest}&{filter}"),
+        format!("{select}&action_type=neq.registration&{order}&{rest}"),
+        format!("{select}&action_type=eq.withdrawal&{order}&{rest}"),
+        format!("{select}&{filter}&tx_hash=eq.{TX}&{order}&{rest}"),
+        format!(
+            "select=action_type,tx_hash,epoch_no,epoch_slot,absolute_slot,block_time&{filter}&{order}&{rest}"
+        ),
+        format!(
+            "select=stake_address,action_type,tx_hash,epoch_no,absolute_slot,block_time&{filter}&{order}&{rest}"
+        ),
+        format!("select=action_type,tx_hash&{filter}&{order}&{rest}"),
+        format!("{select}&{filter}&order=absolute_slot.desc,tx_hash.asc,action_type.asc&{rest}"),
+        format!("{select}&{filter}&order=absolute_slot.desc&{rest}"),
+        format!("{select}&{filter}&order=absolute_slot.asc&{rest}"),
+        format!("{select}&{filter}&order=block_time.asc,tx_hash.asc,action_type.asc&{rest}"),
+        format!("{select}&{filter}&{rest}"),
+        format!("{select}&{filter}&{order}"),
+    ] {
+        let path = format!("/api/v1/account_update_history?{query}");
+        assert_eq!(post(&path, one.clone()).await.0, BAD, "{query}");
+    }
+}
+
+#[tokio::test]
 async fn credential_txs_pages_as_account_txs_does() {
     // Public activity, by the account's payment keys (web wallet chunk 28): up to 75 a request.
     let key = |i: u8| format!("{i:056x}");

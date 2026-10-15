@@ -8,7 +8,7 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
-- **The public routes:** the other 22 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
+- **The public routes:** the other 23 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 - **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
 - **The deploy files and runbook,** [deploy/README.md](deploy/README.md): home's services through a WireGuard tunnel, and the API behind Caddy on a VPS.
 
@@ -74,7 +74,8 @@ cargo fmt --check
   - an account's payment keys' `credential_txs` lists only transactions under them, and every one of its stake key's newest that is; its next page and its answer from a block carry on from it;
   - the pool list's pages make one sorted list;
   - an NFT's `asset_info` equals Koios's recorded answer;
-  - a rewards history's pages make one list in its order, for reward accounts many pools pay (six pages) and one the reserves and the treasury paid too, and what's been paid by now is `account_info`'s rewards available plus withdrawals.
+  - a rewards history's pages make one list in its order, for reward accounts many pools pay (six pages) and one the reserves and the treasury paid too, and what's been paid by now is `account_info`'s rewards available plus withdrawals;
+  - a delegation history's pages make one list in its order, no row twice and no withdrawal, each row's time and epoch its slot's, and Koios's recorded answer is its start, row for row (`tests/fixtures/account-update-history.json`): for a key that registered and delegated in one transaction then delegated its vote, one that stopped and registered again four times, one delegated twice in one transaction, mainnet's busiest re-delegator (two pages), and a key never registered.
 
 - **The private index, from each source** (`tests/live_private.rs`):
   - from cursors a day, two days and a month back, and from Kupo's first block, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials (db-sync also from before the contract existed);
@@ -168,6 +169,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `account_addresses` | up to 20 stake keys' addresses, empty ones too | never |
 | `account_info` | one stake key's standing | never |
 | `account_reward_history` | one stake key's rewards, oldest first, 1,000 a page: Staking's *Rewards history* (web wallet chunk 30), read only when it's opened | never |
+| `account_update_history` | one stake key's certificates — registered, staked, vote delegated, stopped — oldest first, 1,000 a page: Staking's *Delegation history* (web wallet chunk 36), read only when it's opened | never |
 | `account_txs` | one stake key's transactions: a page of 20, at most 10,000 in, or up to 1,000 from a block on; for a key with at most 200,000 outputs. The restore scan, and Public activity up to wallet 1.4.1 | never |
 | `credential_txs` | up to 75 payment credentials' transactions, whatever their addresses' staking part, paged as `account_txs` is; for at most 200,000 outputs in all. Public activity, by the account's payment keys (web wallet chunk 28) | never |
 | `tx_info` | up to 20 transactions, in Activity's shape or inputs alone | never |
@@ -245,6 +247,11 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 **`account_reward_history` is Koios's, from `reward` and `reward_rest`,** the pool's bech32 from `pool_hash.view`, sorted in SQL by the order the wallet asks for (`spendable_epoch.asc,earned_epoch.asc,type.asc,pool_id_bech32.asc,amount.asc`), oldest first by every column. The next epoch's rewards are listed before they're paid, as Koios's are.
 - **Oldest first is what keeps the pages still while db-sync adds rows.** It adds an account's next rewards as an epoch goes on, and refunds at an epoch's start, and takes back those of a key deregistered before it was paid: all among the newest, at the end. Newest first, a row added between two pages pushed one already read onto the next page too, and the wallet counted it twice. The wallet shows the list newest first.
 - **Checked against Koios (2026-10-12), oldest first:** every page the same, row for row, for the reward account 13 pools pay (5,766 rows), one 34 pools pay (2,513, pools' deposits back among them), a member the reserves and the treasury paid too (457), and a key never paid (none). All four, every page: 0.5 s from home.
+
+**`account_update_history` is Koios's, less withdrawals:** a stake key's rows from `stake_registration`, `stake_deregistration`, `delegation` and `delegation_vote` (`registration`, `deregistration`, `delegation_pool`, `delegation_drep`), each with its transaction's hash and its block's epoch, slot and time, sorted in SQL by the order the wallet asks for (`absolute_slot.asc,tx_hash.asc,action_type.asc`). The request filters out Koios's fifth kind (`action_type=neq.withdrawal`): the wallet withdraws rewards with nearly every payment, and Activity has them.
+- **A transaction's certificates of one kind for the key are one row,** as Koios's `union` makes them: a key delegated twice in each of two transactions has 31 rows, not 33.
+- **Each kind is read by its key's `addr_id`,** through db-sync's indexes and home's `delegation_vote_addr_id_idx`. Mainnet's busiest re-delegator (1,282 pool delegations, 1,289 rows): 117 ms from a cold disk, 5 ms warm.
+- **Checked against Koios (2026-10-14), oldest first:** every page the same, row for row, for that re-delegator (1,000 and 289), a key that stopped and registered again four times (16), the key delegated twice in one transaction (31), the reward account 13 pools pay (3: registered and delegated in one transaction, then its vote delegated), and a key never registered (none). Each page in 3–55 ms from home.
 
 **`tx_info` reads its parts at once,** pipelined on one connection: two round trips to home, not six.
 

@@ -1,0 +1,75 @@
+{
+  "recorded": "2026-10-14",
+  "request": "POST https://api.koios.rest/api/v1/account_update_history?select=action_type,tx_hash,epoch_no,absolute_slot,block_time&action_type=neq.withdrawal&order=absolute_slot.asc,tx_hash.asc,action_type.asc&offset=0&limit=1000, body {\"_stake_addresses\":[stake_address]}",
+  "mainnet": [
+    {
+      "stake_address": "stake1uxcmc9r2t7cxs0zw8qm8ztg3twvxryzghsc8eszek6kuwms23gya4",
+      "answer": [
+        {"action_type": "delegation_pool", "tx_hash": "e2e3ccf8c7a9615cbec2a78a59b506b41612c7aa5bf4d52d3cda0ec46e52a43e", "epoch_no": 244, "absolute_slot": 20092184, "block_time": 1611658475},
+        {"action_type": "registration", "tx_hash": "e2e3ccf8c7a9615cbec2a78a59b506b41612c7aa5bf4d52d3cda0ec46e52a43e", "epoch_no": 244, "absolute_slot": 20092184, "block_time": 1611658475},
+        {"action_type": "delegation_drep", "tx_hash": "0938cbba043055eee8e698587592d3305425f65144ef4082a1177fa1af98bd1a", "epoch_no": 521, "absolute_slot": 139924176, "block_time": 1731490467}
+      ]
+    },
+    {
+      "stake_address": "stake1u9rcc6ag7chscguuamyqm3p4vssdsl7m4qxufcxj69mypzc5f28jd",
+      "answer": [
+        {"action_type": "delegation_drep", "tx_hash": "e1ea14470be5613b419e13f497325a621840ce37120f54ffde43428d4bc12cdc", "epoch_no": 623, "absolute_slot": 184059598, "block_time": 1775625889},
+        {"action_type": "delegation_pool", "tx_hash": "e1ea14470be5613b419e13f497325a621840ce37120f54ffde43428d4bc12cdc", "epoch_no": 623, "absolute_slot": 184059598, "block_time": 1775625889},
+        {"action_type": "registration", "tx_hash": "e1ea14470be5613b419e13f497325a621840ce37120f54ffde43428d4bc12cdc", "epoch_no": 623, "absolute_slot": 184059598, "block_time": 1775625889},
+        {"action_type": "deregistration", "tx_hash": "53c8424aa36a59ad47d47da4b5de8c43abb505f95840996b57b64f6652d5dcf7", "epoch_no": 623, "absolute_slot": 184059913, "block_time": 1775626204},
+        {"action_type": "delegation_drep", "tx_hash": "bb1b8c9a03ad9deb4155017088dd1f268226c61cd717f7b912dc60ebc4be850b", "epoch_no": 633, "absolute_slot": 188217392, "block_time": 1779783683},
+        {"action_type": "delegation_pool", "tx_hash": "bb1b8c9a03ad9deb4155017088dd1f268226c61cd717f7b912dc60ebc4be850b", "epoch_no": 633, "absolute_slot": 188217392, "block_time": 1779783683},
+        {"action_type": "registration", "tx_hash": "bb1b8c9a03ad9deb4155017088dd1f268226c61cd717f7b912dc60ebc4be850b", "epoch_no": 633, "absolute_slot": 188217392, "block_time": 1779783683},
+        {"action_type": "deregistration", "tx_hash": "0769c0a1fbd29e3dcc55460365c4d68b3646aee0c4afc2d2ac9d967050569e77", "epoch_no": 637, "absolute_slot": 190138699, "block_time": 1781704990},
+        {"action_type": "delegation_drep", "tx_hash": "8179657b672bf47ac3c93ed8adf95fe442b152db925a107595798a12914ca3d6", "epoch_no": 637, "absolute_slot": 190138915, "block_time": 1781705206},
+        {"action_type": "delegation_pool", "tx_hash": "8179657b672bf47ac3c93ed8adf95fe442b152db925a107595798a12914ca3d6", "epoch_no": 637, "absolute_slot": 190138915, "block_time": 1781705206},
+        {"action_type": "registration", "tx_hash": "8179657b672bf47ac3c93ed8adf95fe442b152db925a107595798a12914ca3d6", "epoch_no": 637, "absolute_slot": 190138915, "block_time": 1781705206},
+        {"action_type": "deregistration", "tx_hash": "0d07437e256cf9eb0b9f0c01e50aceb6699dc0c4eb1cf7d2716a3200d8c68767", "epoch_no": 641, "absolute_slot": 191691034, "block_time": 1783257325},
+        {"action_type": "delegation_drep", "tx_hash": "e12a03139af8e284e2677371ad76648e056c566f7e662731f1809107076f01bd", "epoch_no": 646, "absolute_slot": 194041800, "block_time": 1785608091},
+        {"action_type": "delegation_pool", "tx_hash": "e12a03139af8e284e2677371ad76648e056c566f7e662731f1809107076f01bd", "epoch_no": 646, "absolute_slot": 194041800, "block_time": 1785608091},
+        {"action_type": "registration", "tx_hash": "e12a03139af8e284e2677371ad76648e056c566f7e662731f1809107076f01bd", "epoch_no": 646, "absolute_slot": 194041800, "block_time": 1785608091},
+        {"action_type": "deregistration", "tx_hash": "d5baea34794fa75e1d3395f531306fb7171763c873ce6073a70129322689be29", "epoch_no": 646, "absolute_slot": 194042029, "block_time": 1785608320}
+      ]
+    },
+    {
+      "stake_address": "stake1u9f3wpp9zxncgjdlnrdg228jldx40e7m5h379n54re9n74gyas8ey",
+      "answer": [
+        {"action_type": "registration", "tx_hash": "7496602d2d13d1bc37cb1cf555661deaf10bd1643ad27012540a38b9a6caf8a1", "epoch_no": 208, "absolute_slot": 4652720, "block_time": 1596219011},
+        {"action_type": "delegation_pool", "tx_hash": "c4c73b4a8481c712c62bd89061fa538ed893c72a6951756bdd33ae59dd265f1b", "epoch_no": 208, "absolute_slot": 4891520, "block_time": 1596457811},
+        {"action_type": "delegation_pool", "tx_hash": "16a8538b4ca1564828f9fb8af5e0f6ca803f5837af2f66d51e54151ecbeae6a4", "epoch_no": 208, "absolute_slot": 4913220, "block_time": 1596479511},
+        {"action_type": "delegation_pool", "tx_hash": "1e4c12eb529f3850e3aedef65bfa6c81bba2b8f0f477145aeb41e572ce00d7a2", "epoch_no": 210, "absolute_slot": 5686420, "block_time": 1597252711},
+        {"action_type": "delegation_pool", "tx_hash": "263cd32f70f375a99104722e1b58ef02fdbb6aa8cfe2a3bc29408aa7af7209a7", "epoch_no": 211, "absolute_slot": 6196600, "block_time": 1597762891},
+        {"action_type": "delegation_pool", "tx_hash": "3a7db0a6629794aaf44506f1f6183a68bb0c4600e6815e2ecd3ad08d8daf0a63", "epoch_no": 211, "absolute_slot": 6202422, "block_time": 1597768713},
+        {"action_type": "delegation_pool", "tx_hash": "0600a87286dbbc99ce8f1fe65f98b64483ac1bf70db65843dccda7a1d4c4afe5", "epoch_no": 213, "absolute_slot": 6965928, "block_time": 1598532219},
+        {"action_type": "delegation_pool", "tx_hash": "99f857bea01e471ea3099e40da84523ba680d2a2b5f08d85dc45555155424c40", "epoch_no": 217, "absolute_slot": 8549400, "block_time": 1600115691},
+        {"action_type": "delegation_pool", "tx_hash": "a75cb9d0ba14a6cb601c9ec9f6d7954cbf6a5c87f5bd67d6c22350a7cb5ce411", "epoch_no": 228, "absolute_slot": 13445716, "block_time": 1605012007},
+        {"action_type": "delegation_pool", "tx_hash": "ab35f209db2c6cc20532bd5e31ba09a8bf63647c5ebbe51bddd573d7ba3354d5", "epoch_no": 229, "absolute_slot": 13602798, "block_time": 1605169089},
+        {"action_type": "delegation_pool", "tx_hash": "5411f1b68bb7f8758c65f615aef60db74068e89dc05c51f5faa4f6bf53f2d8b5", "epoch_no": 229, "absolute_slot": 13603231, "block_time": 1605169522},
+        {"action_type": "delegation_pool", "tx_hash": "adc55e02054164389df6e163066fb1aafb3807c19fccbea7f09cca3e6b635016", "epoch_no": 231, "absolute_slot": 14812908, "block_time": 1606379199},
+        {"action_type": "delegation_pool", "tx_hash": "8524356c2a11a828f4bb768ac32fe386ae197639874872b33c3e66429e1a7c41", "epoch_no": 231, "absolute_slot": 14813371, "block_time": 1606379662},
+        {"action_type": "delegation_pool", "tx_hash": "d1b8187b1862608b13a86b3320c4471d125ac423b4e1a0eb783f48d598afdf79", "epoch_no": 233, "absolute_slot": 15334063, "block_time": 1606900354},
+        {"action_type": "delegation_pool", "tx_hash": "756a0385e9a2fe034f131014ee9dad52e07ade17a0f1a0c4455df542c05f73e8", "epoch_no": 234, "absolute_slot": 15865099, "block_time": 1607431390},
+        {"action_type": "delegation_pool", "tx_hash": "cbe13e5fb609bb6eb27d7b094a9dcf6162f5b9c2fac14b5c35ca4405a8dd03ab", "epoch_no": 248, "absolute_slot": 22156709, "block_time": 1613723000},
+        {"action_type": "delegation_pool", "tx_hash": "53d4c49af75cf7307390bb37c8431f7a343247faa1279dbe15ce32929b52542a", "epoch_no": 258, "absolute_slot": 26155098, "block_time": 1617721389},
+        {"action_type": "delegation_pool", "tx_hash": "60a7d41c851091c3001f5173a5adc0b92204079bf8aaa5130daeb884388ccdec", "epoch_no": 260, "absolute_slot": 27002487, "block_time": 1618568778},
+        {"action_type": "delegation_pool", "tx_hash": "2c6ca707f172b395c86bf1d7f281247f12d94cf41511676ae9ace51229165b24", "epoch_no": 260, "absolute_slot": 27268462, "block_time": 1618834753},
+        {"action_type": "delegation_pool", "tx_hash": "f5ebea795bb0c4915ac148b5251ed26d715823a500c57b14e7cb76065ca9f355", "epoch_no": 266, "absolute_slot": 29859210, "block_time": 1621425501},
+        {"action_type": "delegation_pool", "tx_hash": "b890138e8f9279194de70e82775f1e8012105ec51cdd349ec5763080bf1d092b", "epoch_no": 283, "absolute_slot": 37113680, "block_time": 1628679971},
+        {"action_type": "delegation_pool", "tx_hash": "320f1d530dd4cb5c79e42e85a60edeafa2ef1152e40dde36d9e83bf06713f3d6", "epoch_no": 346, "absolute_slot": 64498551, "block_time": 1656064842},
+        {"action_type": "delegation_pool", "tx_hash": "2ee3d1d716cd2feb4b999e22c251ecb5cad87f37f6ac0da4c5ce88c9bd642ff6", "epoch_no": 348, "absolute_slot": 65024476, "block_time": 1656590767},
+        {"action_type": "delegation_pool", "tx_hash": "06ea338c9f87689b621d5d4ff3a1e8acf98f0e117bb4d8e36563c15fabbd2a0c", "epoch_no": 351, "absolute_slot": 66417783, "block_time": 1657984074},
+        {"action_type": "delegation_pool", "tx_hash": "9329785da6704e194981ecaa2d1617b6480d534e3e2634206bf1df97cc4c5417", "epoch_no": 377, "absolute_slot": 77795537, "block_time": 1669361828},
+        {"action_type": "delegation_pool", "tx_hash": "5ed83dc4db4633f65d3de8f630e5182526b0d214f25f199d896df5e36b3bbddb", "epoch_no": 396, "absolute_slot": 85848778, "block_time": 1677415069},
+        {"action_type": "delegation_pool", "tx_hash": "65834166f2a471c2af6f5145422d78a69ec852fda024732e411cfeb28a4164aa", "epoch_no": 423, "absolute_slot": 97497121, "block_time": 1689063412},
+        {"action_type": "delegation_pool", "tx_hash": "aea6ebc0fffcc61649c2830530f1782e2e5499a1dd644702376e05e089a6d979", "epoch_no": 423, "absolute_slot": 97511426, "block_time": 1689077717},
+        {"action_type": "delegation_pool", "tx_hash": "5509377600daa88af0f07c28127378514900e68d1441b4311e61dc33d9ae731a", "epoch_no": 423, "absolute_slot": 97512676, "block_time": 1689078967},
+        {"action_type": "delegation_pool", "tx_hash": "bf15a0f6a2190d656616802829320b6102d148bd23d01ac72f820f38ba67b1cb", "epoch_no": 445, "absolute_slot": 107101633, "block_time": 1698667924},
+        {"action_type": "delegation_pool", "tx_hash": "a781d15b399be903a39a28fd0d37845424b839598c2a6ad873ce7b0de42be884", "epoch_no": 492, "absolute_slot": 127390411, "block_time": 1718956702}
+      ]
+    },
+    {
+      "stake_address": "stake1uxkjkwuygxqf24wacumm8ph2nlhp9e0ahv37fshdr060cyc36wvr9",
+      "answer": []
+    }
+  ]
+}

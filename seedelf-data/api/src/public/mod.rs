@@ -58,6 +58,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/v1/account_reward_history",
             post(account::account_reward_history),
         )
+        .route(
+            "/api/v1/account_update_history",
+            post(account::account_update_history),
+        )
         .route("/api/v1/account_txs", post(account::account_txs))
         .route("/api/v1/credential_txs", post(account::credential_txs))
         .route("/api/v1/tx_info", post(tx::tx_info))

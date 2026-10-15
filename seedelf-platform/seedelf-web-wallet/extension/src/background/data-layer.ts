@@ -291,6 +291,10 @@ export class DataLayerKoios extends Koios {
     return this.read((k) => k.rewardHistory(stakeAddress), () => super.rewardHistory(stakeAddress));
   }
 
+  override delegationHistory(stakeAddress: string) {
+    return this.read((k) => k.delegationHistory(stakeAddress), () => super.delegationHistory(stakeAddress));
+  }
+
   override poolList() {
     return this.read((k) => k.poolList(), () => super.poolList());
   }
