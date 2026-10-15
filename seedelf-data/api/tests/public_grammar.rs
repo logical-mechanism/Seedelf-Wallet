@@ -420,6 +420,40 @@ async fn pool_routes() {
             .0,
         BAD
     );
+
+    // A pool's last 18 epochs (web wallet chunk 37): that pool, those columns, newest first, 18.
+    let select = "select=epoch_no,active_stake,block_cnt,deleg_rewards";
+    let history =
+        |pool: &str, rest: &str| format!("/api/v1/pool_history?_pool_bech32={pool}&{rest}");
+    assert_eq!(
+        get(&history(
+            POOL,
+            &format!("{select}&order=epoch_no.desc&limit=18")
+        ))
+        .await,
+        OK
+    );
+    for rest in [
+        format!("{select}&order=epoch_no.desc&limit=17"),
+        format!("{select}&order=epoch_no.desc&limit=19"),
+        format!("{select}&order=epoch_no.desc"),
+        format!("{select}&order=epoch_no.desc&limit=18&offset=0"),
+        format!("{select}&order=epoch_no.asc&limit=18"),
+        format!("{select}&limit=18"),
+        format!("{select},epoch_ros&order=epoch_no.desc&limit=18"),
+        format!("order=epoch_no.desc&{select}&limit=18"),
+        format!("{select}&order=epoch_no.desc&limit=18&_epoch_no=659"),
+    ] {
+        assert_eq!(get(&history(POOL, &rest)).await, BAD, "{rest}");
+    }
+    let rest = format!("{select}&order=epoch_no.desc&limit=18");
+    for pool in [DREP, "pool1", &POOL.to_uppercase()] {
+        assert_eq!(get(&history(pool, &rest)).await, BAD, "{pool}");
+    }
+    assert_eq!(
+        get(&format!("/api/v1/pool_history?{rest}&_pool_bech32={POOL}")).await,
+        BAD
+    );
 }
 
 #[tokio::test]

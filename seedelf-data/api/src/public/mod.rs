@@ -16,6 +16,7 @@
 pub mod account;
 pub mod assets;
 pub mod governance;
+pub mod history;
 pub mod ledger;
 pub mod pools;
 pub mod query;
@@ -67,6 +68,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/tx_info", post(tx::tx_info))
         .route("/api/v1/pool_list", get(pools::pool_list))
         .route("/api/v1/pool_info", post(pools::pool_info))
+        .route("/api/v1/pool_history", get(history::pool_history))
         .route("/api/v1/drep_info", post(governance::drep_info))
         .route("/api/v1/drep_metadata", post(governance::drep_metadata))
         .route("/api/v1/proposal_list", get(governance::proposal_list))

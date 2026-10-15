@@ -19,6 +19,7 @@ use crate::chain::{Block, Chain, Tip};
 use crate::constants::slot_time;
 use crate::decimals::Decimals;
 use crate::kupo::Kupo;
+use crate::public::history::History;
 use crate::public::pools::Rewards;
 use crate::source::{self, Source, Upstream};
 
@@ -73,6 +74,8 @@ pub struct AppState {
     pub decimals: Decimals,
     /// Accounts' reward sums for the epoch, for pools' live stake.
     pub rewards: Rewards,
+    /// Every pool's last 18 epochs, for `pool_history`.
+    pub history: History,
     tip: RwLock<Option<Tip>>,
     /// db-sync's tip failed [`FAILED_READS`] reads in a row: the public routes
     /// answer 503 at once, and the private index reads Kupo.
@@ -131,6 +134,7 @@ impl AppState {
             kupo: None,
             decimals: Decimals::default(),
             rewards: Rewards::default(),
+            history: History::default(),
             tip: RwLock::new(None),
             db_failing: AtomicBool::new(false),
             kupo_tip: RwLock::new(None),
