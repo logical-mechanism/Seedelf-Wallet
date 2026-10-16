@@ -20,6 +20,11 @@ test.describe("the data layer", () => {
 
   test("reads the private balance from the private index, and the public side from Koios while that part is down", async ({ context, koios }) => {
     const data = await fakeDataLayer(context, [...koiosPreprod.contract_utxos, ...ownedUtxos]);
+    // The wallet asks some public reads together (the account's addresses and its stake, account.ts; the restore's
+    // look for more accounts), so each one sent before the first 503 is back reaches the data layer too. How many
+    // did varied with the runner's speed (CI once saw two where this test wanted one). Answering slowly puts them
+    // all on their way first, every run.
+    data.publicDelayMs = 300;
     const page = await openApp(context);
     await restore(page, vector(12).phrase);
     await expect(page.getByTestId("network")).toHaveText("MAINNET");
@@ -29,11 +34,20 @@ test.describe("the data layer", () => {
     expect(asked).toContain("contract/snapshot");
     expect(asked).toContain("names");
     expect(asked.some((p) => p.startsWith("contract/since/"))).toBe(true);
-    // The public part's first request answered 503: it and every public read after it went to Koios, the part held
-    // down for 5 minutes, without asking the data layer again. The contract never went to Koios.
-    expect(data.calls.filter((p) => p.startsWith("/api/v1/"))).toHaveLength(1);
-    expect(koios.calls).toContain("account_info");
-    expect(koios.calls.filter((c) => c === "credential_utxos")).toHaveLength(1);
+    // The public part answered 503, and every read on its way there went to Koios after it. The contract never did.
+    const publicCalls = () => data.calls.filter((p) => p.startsWith("/api/v1/"));
+    const scans = () => koios.calls.filter((c) => c === "credential_utxos").length;
+    await expect.poll(() => koios.calls.includes("account_info")).toBe(true);
+    await expect.poll(scans).toBe(1);
+    expect(publicCalls().length).toBeGreaterThan(0);
+    // Then the part is held on Koios for 5 minutes, without asking the data layer again: a refresh reads the account
+    // from Koios alone, and the contract from the private index, which is up.
+    const sent = publicCalls().length;
+    const refresh = page.getByRole("button", { name: "Refresh" });
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
+    await expect.poll(scans).toBe(2);
+    expect(publicCalls()).toHaveLength(sent);
   });
 
   test("reads Koios's scan of the contract while the private index is down", async ({ context, koios }) => {
