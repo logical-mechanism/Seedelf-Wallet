@@ -26,6 +26,8 @@ export interface DataFake {
   index: FakeIndex;
   /** Every request's path, preflights left out. */
   calls: string[];
+  /** How long the public routes take to answer their 503 (ms), as a slow server would: 0 unless a test sets it. */
+  publicDelayMs: number;
 }
 
 /** Routes DATA_ORIGIN on `context`: the private index over `contract`, made long ago at mainnet's tip now. */
@@ -33,7 +35,7 @@ export async function fakeDataLayer(context: BrowserContext, contract: KoiosUtxo
   const tip = Math.floor(Date.now() / 1000) - SLOT_TIME;
   const index = fakeIndex(tip);
   index.contract = contract.map((u) => ({ row: indexRowOf(u, tip - 100_000) }));
-  const fake: DataFake = { index, calls: [] };
+  const fake: DataFake = { index, calls: [], publicDelayMs: 0 };
   await context.route(`${DATA_ORIGIN}/**`, async (route) => {
     const request = route.request();
     if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
@@ -44,6 +46,7 @@ export async function fakeDataLayer(context: BrowserContext, contract: KoiosUtxo
       if (!answer) return route.abort("connectionrefused");
       return route.fulfill({ status: answer.status, headers: { ...CORS, "content-type": "application/json" }, body: await answer.text() });
     }
+    if (fake.publicDelayMs) await new Promise((done) => setTimeout(done, fake.publicDelayMs));
     return route.fulfill({
       status: 503,
       headers: { ...CORS, "content-type": "application/json", "retry-after": "30" },
