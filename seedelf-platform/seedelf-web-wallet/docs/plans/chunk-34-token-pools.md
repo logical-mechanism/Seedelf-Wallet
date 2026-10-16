@@ -6,7 +6,7 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 planned, nothing built.** One feature branch, `web-wallet/token-pools`, from `main` after #307. The plan went through two rounds of the owner's questions on 2026-10-13. Two of its designs, [D1](#d1--pool-spam-and-sync) and [D2](#d2--bootstrap-and-the-crowd-for-every-pool), are still under discussion, and the steps that depend on them say so.
+**Status: 🚧 planned, nothing built.** One feature branch, `web-wallet/token-pools`, from `main` after #307. The plan went through two rounds of the owner's questions on 2026-10-13. Three of its designs, [D1](#d1--pool-spam-and-sync), [D2](#d2--bootstrap-and-the-crowd-for-every-pool) and [D3](#d3--four-boxes-a-mix-as-an-option) (added 2026-10-16), are still under discussion, and the steps that depend on them say so.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md` on `feat/token-pools`.
@@ -422,6 +422,39 @@ Its shape waits on D1. Either way:
 - **The gate for mixing.** Until it's settled, 34d keeps today's floor per pool as a placeholder, and states the crowd plainly. Ideas a, b and c stay on the table.
 - **Today's seed** (a deposit alone, back by itself after the Settings delay; the owner, 2026-10-06): does it stay beside Bootstrap, or become it?
 
+### D3 · Four boxes a mix, as an option
+
+**The proposal (the owner, 2026-10-16):** Settings → *Lovejoin* offers four boxes a mix beside three, with three the default. If four fails, the wallet goes back to three. It's part of the upgrade path, decided here at the integration, not before.
+
+**What the measurements say** ([lovejoin-mix-width.md](../lovejoin-mix-width.md)):
+- **Four fits today,** on the classic pool and on token pools, by 111 to 118 million steps of 10 billion (1.1–1.2%). A token pool's is the thinnest: 9,889 million.
+- **The margin doesn't wander.** The network measures the wallet's mix to the step, and only where the fee input sorts moves it (10 million). So a four-box mix is refused when it's built, or it works. It never fails on chain.
+- **But it has no room:** whatever made a mix 1.2% dearer, a cost model that re-costs the BLS12-381 builtins say, would make every four-box mix refuse to build. A block holds two.
+- **Five can't be an option:** about 15,050 million steps in every case.
+
+**What it buys**
+- **Against someone holding a pool's boxes.** Holding a share f of the others, they trace a depth-2 chain with probability f⁴ at three wide and f⁶ at four (D2's measure). At f = ½ that's 1 in 16 against 1 in 64. That matters most in a thin token pool.
+- **A middle step between depths 2 and 3.** Four wide at depth 2 gives 16 leaves in 5 mixes, 6.07 ₳ a box. Three wide gives 9 leaves for 3.29 ₳ at depth 2, and 27 in 13 mixes for 10.70 ₳ at depth 3.
+
+**What it needs, if taken** (Claude's list, 2026-10-16):
+1. **The wallet falls back to three by itself,** and the review says so. That covers a four-wide chain that doesn't build, one whose first mix the network's check refuses, and one whose pool is short for four. Never a direct return because of the width: today a return whose chain can't be built or checked comes back directly, unmixed, and choosing three afterwards can't undo that. Building again at three is cheap, since it's all local.
+2. **Fewer in flight.** `CHAIN_WINDOW` keeps 4 mixes in the mempool on the assumption of three a block. Four four-box mixes are about 39.5 billion steps, all of what its comment says a node's mempool holds: the limit behind chunk 16's preprod submit timeouts. A four-wide chain wants 2.
+3. **More of the pool's others.** A box takes 15 others at depth 2 against 8, never one twice in a chain, so a pool covers about half as many boxes. A pool short for four falls back to three (1), never to fewer boxes. Ties into D2's gate.
+4. **Costs by width:**
+   - `mixCost` and `MIX_FEE_ESTIMATE`;
+   - the figures in Settings and on every review;
+   - the `3^depth` leaves lines, which are critical strings, in es and ja too.
+5. **The width wherever three is built in:** `mixes_per_box`, `fresh_for`, `fan_out` and the funding sums in core; `mixesPerBox` in the worker; the screens' `3 ** depth`. `lovejoin::mix` already takes four. 34a′ checks that no record assumes three.
+6. **A free check before shipping.** The live width test again at the integration (`cargo test -p seedelf-core --test lovejoin_width_test -- --ignored --nocapture`), in case the limits or the cost model moved. Then four-wide on preprod in 34g. No four-box mix has landed on mainnet; mainnet's evaluator agrees with the wallet's to the step.
+
+**Where it lands:** 34e (the planner and the fallback), 34f (Settings, strings, `privacy.md`), 34g (the preprod rehearsal).
+
+**To decide here:**
+- Whether to offer it at all.
+- On which pools: the classic, token pools, or both.
+- The fallback's words, and whether a chain's view says which width it went at.
+- The default. Three is the owner's lean, as depth defaults to 2 for cost; [the private-by-default rule](../privacy.md) would otherwise point to the more private one.
+
 ## The steps
 
 One branch, and each step ends with its tests green.
@@ -435,7 +468,7 @@ One branch, and each step ends with its tests green.
 | **34b** | The launch builder and its WebAssembly | S0c |
 | **34c** | The pool registry and the data layer | D1 |
 | **34d** | The tile's flows per pool (private, public, seed, again); **Bootstrap a pool**; the withdraw and its escape hatch; Activity | 34a′; the gate for mixing is a placeholder until D2 |
-| **34e** | The planner, and returns through token pools | D2 |
+| **34e** | The planner, and returns through token pools; D3's four-wide option and its fallback, if taken | D2; D3 |
 | **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |
 | **Re-pin** | The merge commit's templates; S0a and S0b again | the merge |
 | **34g** | The preprod rehearsal; the cross-area release review; `npm run tokens`, `dreps` and `lovejoin-pools`; deploy 34c; then package and upload; the handoff note | all |
@@ -482,6 +515,7 @@ One branch, and each step ends with its tests green.
 5. A return holding the token.
 6. A restore finding the token boxes.
 7. Discovery of PR #163's own pool, `c5852bb7…`, expected to be **not usable**: 2 ₳, with its scripts at a key address.
+8. If D3 is taken: a four-wide return and a four-wide mix, and the fallback to three, through a pool short for four.
 
 **Mainnet:** only the free checks of [§5](#5-starting-a-pool). Launching on mainnet waits until every preprod step above has worked.
 
@@ -493,3 +527,4 @@ One branch, and each step ends with its tests green.
 4. **S1:** what to ask of PR #163 before it merges (the owner's repo, so the owner's call).
 5. **Cert 0 or cert 7** for L's registration: S0c's probe decides, unless the owner prefers Lovejoin's tested cert 7.
 6. **How a mix is shown** (the owner, 2026-10-14): a mix from the public account can't be followed once it's sent. See [*The Lovejoin page*](#9-screens).
+7. **D3:** whether to offer four boxes a mix, on which pools, and the words for its fallback to three.
