@@ -78,6 +78,7 @@ The web wallet and [seedelf-cli](../seedelf-cli/) are separate products, much li
 | [keys-and-accounts.md](docs/keys-and-accounts.md) | One phrase and two key trees, the kinds of account, password encryption |
 | [flows.md](docs/flows.md) | Onboarding, receive, move in, create, transfer, withdraw, staking, being your own DRep, contract round trip |
 | [privacy.md](docs/privacy.md) | What stays hidden, what doesn't, and the rules the wallet enforces |
+| [lovejoin-mix-width.md](docs/lovejoin-mix-width.md) | Why a Lovejoin mix takes three boxes: each width's measured cost on both networks and on the token pools, and what four would need |
 | [development.md](docs/development.md) | The branching rule and where plans live, running it in Chrome, test funds, the testing layers, the rules for a change to the screens, the release checklist, sharing with testers |
 | [store/](docs/store/README.md) | The Chrome Web Store listing: its text, images and privacy policy |
 | [i18n/glossary.md](docs/i18n/glossary.md) | The translations: the words fixed in every language, and how each Spanish and Japanese string is recorded |

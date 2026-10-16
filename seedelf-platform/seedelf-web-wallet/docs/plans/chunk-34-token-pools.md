@@ -80,7 +80,7 @@ Nothing a 1.5.x user has, or relies on, moves. Each point is a test or a gate, n
 
 **What it doesn't check, and what it costs**
 - **Mix inputs aren't value-checked.** An over-funded box can be mixed by anyone, and the excess goes to whoever builds the mix.
-- **CPU:** a token pool costs about 11–12M more than an ADA pool. A wallet-paid mix uses 58% of the budget at N=3 and 98.8% at N=4. A box-paid withdraw to a key address cost 349,586 lovelace on preprod.
+- **CPU:** a token pool costs about 11–12M more than an ADA pool. A wallet-paid mix uses 58% of the budget at N=3 and 98.8% at N=4. Confirmed in the wallet's own mix, by the network too, in [lovejoin-mix-width.md](../lovejoin-mix-width.md): 5–10M more than the classic pool, and N=4 fits by 111M steps, so token pools stay three wide like the classic one. A box-paid withdraw to a key address cost 349,586 lovelace on preprod.
 - **Not yet run on a token pool:** fee shards, and a chained mix on a deposit still in flight.
 
 **The bytecode**
