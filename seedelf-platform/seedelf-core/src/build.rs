@@ -1380,6 +1380,9 @@ pub struct ScriptSpend {
     /// Certificates patched in ([`Self::with_staking`]); none for any spend
     /// but a Lovejoin launch.
     staking: Staking,
+    /// Whether the outputs go in a fresh random order each time it's staged
+    /// (every spend but a Lovejoin launch: [`Self::in_order`]).
+    shuffled: bool,
 }
 
 impl ScriptSpend {
@@ -1425,6 +1428,7 @@ impl ScriptSpend {
             signer,
             account: None,
             staking: Staking::none(),
+            shuffled: true,
         })
     }
 
@@ -1579,6 +1583,17 @@ impl ScriptSpend {
             script: Some(script),
         });
         Ok(self)
+    }
+
+    /// Stages the outputs in the order given, the change last, rather than
+    /// in a fresh random order: a Lovejoin launch. Its scripts look for an
+    /// output (`one_shot_mint` its reference UTxO), so a shuffled draft and
+    /// its finished transaction could cost them more than the margin apart;
+    /// and the order hides nothing there, the outputs' addresses saying what
+    /// each one is.
+    pub fn in_order(mut self) -> Self {
+        self.shuffled = false;
+        self
     }
 
     /// Patches `staking`'s certificates in, and takes their deposit out of
@@ -2004,7 +2019,9 @@ impl ScriptSpend {
             .chain(rest)
             .chain(change)
             .collect();
-        crate::lovejoin::shuffle(&mut outputs);
+        if self.shuffled {
+            crate::lovejoin::shuffle(&mut outputs);
+        }
         for output in outputs {
             tx = tx.output(output);
         }

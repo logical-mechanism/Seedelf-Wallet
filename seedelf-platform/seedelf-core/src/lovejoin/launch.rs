@@ -13,7 +13,10 @@
 //! - `mix_logic`'s stake registration (Shelley's certificate 0, which no
 //!   script witnesses), unless the credential is registered already, which
 //!   anyone who reads the seed can arrange first;
-//! - the change, back into the Seedelf under a fresh register.
+//! - the change, back into the Seedelf under a fresh register, last.
+//!
+//! The outputs go in that order, never shuffled: `one_shot_mint` looks for
+//! the reference UTxO among them, so its cost would move with a shuffle.
 //!
 //! The token isn't spent: the datum only names it. What never comes back is
 //! the three outputs' ADA and the stake deposit ([`Locked`]).
@@ -216,7 +219,8 @@ pub fn launch(
             1,
             UNIT.to_vec(),
         )?
-        .with_staking(staking.clone())?;
+        .with_staking(staking.clone())?
+        .in_order();
     Ok(Launch {
         spend,
         seed,
