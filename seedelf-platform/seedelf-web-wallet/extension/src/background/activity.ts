@@ -305,7 +305,8 @@ export class ActivityService {
     const paid: Array<Record<string, any>> = Array.isArray(s.payments) ? s.payments : [s];
     const lovelace = paid.reduce((sum, p) => sum + BigInt(p.lovelace ?? "0"), 0n).toString();
     const moved = paid.flatMap((p) => (Array.isArray(p.tokens) ? p.tokens : []));
-    const into = pending.kind === "move-in" || pending.kind === "session-back";
+    // A box back from Lovejoin brings its pool's token in with its ADA (a token pool's, chunk 34).
+    const into = pending.kind === "move-in" || pending.kind === "session-back" || pending.kind === "lovejoin-withdraw";
     const assets = signedAssets(moved, into ? 1n : -1n);
     const shared = {
       txHash: pending.txHash,

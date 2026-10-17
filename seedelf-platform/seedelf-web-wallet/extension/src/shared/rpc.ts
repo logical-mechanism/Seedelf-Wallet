@@ -2012,8 +2012,43 @@ export interface LovejoinStatus {
    * Paid from this one, they'd tie the two accounts together.
    */
   otherAccounts?: Array<{ txHash: string; txIndex: number; account: number }>;
+  /**
+   * Of `boxes`, those a Bootstrap holds (chunk 34): they never come back by
+   * themselves, and come back by hand. The classic pool's; each token pool's
+   * in its own `pools` entry.
+   */
+  bootstrap?: Array<{ txHash: string; txIndex: number }>;
   /** Its chains that aren't all sent: being sent (no withdraw meanwhile), or stopped partway. */
   chains: LovejoinChainView[];
+  /**
+   * Every token pool the wallet reads, beside the classic pool, whose figures
+   * are the fields above (chunk 34): each one's own. None while the wallet
+   * reads the classic pool alone.
+   */
+  pools?: LovejoinPoolStatus[];
+}
+
+/** A token pool, as the wallet read it (chunk 34): the fields LovejoinStatus has for the classic pool, its own. */
+export interface LovejoinPoolStatus {
+  /** Its NFT's policy: the pool's id. */
+  id: string;
+  /** What every box holds. */
+  box: { lovelace: string; token?: TokenQuantity };
+  others: number;
+  free: number;
+  floor: number;
+  /** The wallet's boxes in it, each named by the pool. */
+  boxes: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  /** Their ADA, and their token. */
+  lovelace: string;
+  token?: TokenQuantity;
+  due: number[];
+  notMixed: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  unsure?: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  deposits?: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  fromPublic: Array<{ txHash: string; txIndex: number; pool?: string }>;
+  otherAccounts?: Array<{ txHash: string; txIndex: number; pool?: string; account: number }>;
+  bootstrap?: Array<{ txHash: string; txIndex: number; pool?: string }>;
 }
 
 /** A chain through Lovejoin the wallet sent that isn't all sent. */
@@ -2040,6 +2075,30 @@ export interface LovejoinChainView {
 }
 
 /** One transaction of a chain through Lovejoin, as its row on the Lovejoin page lists it. */
+/**
+ * One mix in Lovejoin's list (chunk 34's session 1, 5): every mix, from
+ * either side and in any pool, followed until its last box is back. Its
+ * chain's view while the wallet still keeps its record.
+ */
+export interface LovejoinMixView {
+  /** Its chain's last transaction: the return, or a mix from the public account's last mix. */
+  id: string;
+  /** When it began to be sent (ms). */
+  at: number;
+  /** A session's return or mix (its index), or the public account that paid (its index). */
+  session?: number;
+  account?: number;
+  again?: true;
+  seed?: true;
+  bootstrap?: true;
+  /** Bring them all back was pressed: its boxes come back by themselves. */
+  released?: true;
+  /** Its boxes in each pool (none: the classic pool), how many are back, and how many a later mix took. */
+  shares: Array<{ pool?: string; boxes: number; back: number; moved: number }>;
+  /** Its chain, while the wallet keeps its record: how far it was sent, and how it ended. */
+  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true };
+}
+
 export interface LovejoinChainTx {
   txHash: string;
   kind: "deposit" | "mix" | "back";
@@ -2067,6 +2126,12 @@ export interface LovejoinHeld {
   notMixed: number;
   unsure?: number;
   stopped: number;
+  /**
+   * Each token pool's own figures, as the fields above are the classic
+   * pool's (chunk 34): its boxes on their way back, their ADA and token, and
+   * its boxes not mixed yet. Only pools with something there.
+   */
+  pools?: Array<{ id: string; boxes: number; lovelace: string; token?: TokenQuantity; next: number | null; notMixed: number; unsure?: number }>;
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */
