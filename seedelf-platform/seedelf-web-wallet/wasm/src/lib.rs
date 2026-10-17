@@ -2346,6 +2346,124 @@ pub mod api {
         })
     }
 
+    /// Starting a Lovejoin token pool from the Seedelf balance
+    /// (`lovejoin::launch`), as JSON from the extension.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct LaunchRequest {
+        pub network: String,
+        /// One row of Koios's `epoch_params`.
+        pub params: serde_json::Value,
+        /// The wallet's spendable contract UTxOs, as for a stealth mint; only
+        /// those holding ADA alone pay for a launch.
+        pub utxos: Vec<UtxoResponse>,
+        /// Each UTxO's history: a launch, like a stealth mint, is tied to
+        /// whatever pays for it, so it takes received money first.
+        #[serde(default)]
+        pub classes: Classes,
+        /// The token every box holds, and how much of it: `Q`.
+        pub token: TokenAmount,
+        /// Every box's ADA.
+        pub box_lovelace: String,
+        /// The most a fee shard pays a mix, under `box_lovelace`.
+        pub max_fee: String,
+        /// Whether `mix_logic`'s credential is still to register: false when
+        /// `account_info` says it is already.
+        pub register: bool,
+    }
+
+    /// What a launch locks for good.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct LockedOut {
+        pub reference: String,
+        pub mix_box: String,
+        pub mix_logic: String,
+        pub deposit: String,
+        pub total: String,
+    }
+
+    /// A launch, unsigned: `signScriptSpend` adds giveme.my's and the
+    /// one-time key's signatures.
+    #[derive(Serialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct LaunchResult {
+        pub tx_cbor: String,
+        pub tx_hash: String,
+        pub seed: String,
+        /// The pool it makes, read back from its own bytes and verified as a
+        /// stranger's pool would be.
+        pub pool: crate::lovejoin::PoolView,
+        pub locked: LockedOut,
+        pub fee: FeeOut,
+        /// Back into the Seedelf balance.
+        pub change_lovelace: String,
+        pub inputs: Vec<OutRef>,
+        pub classes_mixed: Vec<String>,
+    }
+
+    /// Starting a token pool in one step: picks the Seedelf UTxOs that pay,
+    /// keeping histories apart as a stealth mint does, proves them under a new
+    /// one-time key, measures the scripts in the wallet and finishes it. The
+    /// pool it makes is checked from the finished bytes before it's returned.
+    pub fn build_launch(sk: Scalar, request: LaunchRequest) -> Result<LaunchResult> {
+        let chain = chain_of(&request.network, &request.params)?;
+        check_spendable(sk, &chain, &request.utxos)?;
+        let number = |what: &str, text: &str| -> Result<u64> {
+            text.parse()
+                .map_err(|_| anyhow!("The launch's {what} isn't a whole number"))
+        };
+        let policy: [u8; 28] = hex::decode(&request.token.policy_id)?
+            .try_into()
+            .map_err(|_| anyhow!("The token's policy isn't 28 bytes"))?;
+        let terms = seedelf_core::lovejoin::Terms {
+            token: seedelf_core::lovejoin::BoxToken {
+                policy,
+                name: hex::decode(&request.token.asset_name)?,
+                quantity: number("token quantity", &request.token.quantity)?,
+            },
+            box_lovelace: number("box value", &request.box_lovelace)?,
+            max_fee: number("fee cap", &request.max_fee)?,
+        };
+        let seed = new_seed();
+        let owner = Register::create(sk)?;
+        let signer = key_hash(&one_time_key(&sk, &seed));
+        let launch = seedelf_core::lovejoin::launch_apart(
+            &chain,
+            &request.utxos,
+            &histories(Purpose::Mint, &request.classes)?,
+            &terms,
+            request.register,
+            &owner,
+            signer,
+        )?;
+        let spend = prove_with(sk, launch.spend.clone())?;
+        let built = measured(&spend)?;
+        let pool = seedelf_core::lovejoin::launched_pool(
+            chain.network_flag,
+            &built.tx.tx_bytes.0,
+            launch.seed,
+        )?;
+        let locked = &launch.locked;
+        Ok(LaunchResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            pool: crate::lovejoin::PoolView::of(&pool)?,
+            locked: LockedOut {
+                reference: locked.reference.to_string(),
+                mix_box: locked.mix_box.to_string(),
+                mix_logic: locked.mix_logic.to_string(),
+                deposit: locked.deposit.to_string(),
+                total: locked.total().to_string(),
+            },
+            fee: fee_out(&built.fee),
+            change_lovelace: built.change_lovelace.to_string(),
+            inputs: out_refs(&spend),
+            classes_mixed: classes_mixed(&request.classes, &spend)?,
+        })
+    }
+
     /// Creating a seedelf paid by the Cardano account, as JSON from the
     /// extension: the account's UTxOs, each with its key's path, as for a
     /// move-in.
@@ -4154,17 +4272,51 @@ pub fn declared_covers(tx_cbor: &str, answer: &str) -> Result<String, JsError> {
 }
 
 /// The wallet's boxes among the pool's rows, and how many other boxes a mix
-/// may take (`lovejoin::OwnedRequest` → `lovejoin::OwnedResult`).
+/// may take (`lovejoin::OwnedRequest` → `lovejoin::OwnedResult`), in the
+/// classic pool or the token pool `poolRef` names.
 #[wasm_bindgen(js_name = lovejoinOwned)]
 pub fn lovejoin_owned(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    to_json(&lovejoin::owned(key.sk, from_json(request)?).map_err(js_error)?)
+    let named: lovejoin::PoolNamed = from_json(request)?;
+    to_json(
+        &lovejoin::owned_in(key.sk, from_json(request)?, named.pool_ref.as_ref())
+            .map_err(js_error)?,
+    )
+}
+
+/// A token pool found on chain, verified from the bundled templates
+/// (`lovejoin::VerifyPoolRequest` → `lovejoin::PoolView`), or why it isn't
+/// one the wallet reads.
+#[wasm_bindgen(js_name = lovejoinVerifyPool)]
+pub fn lovejoin_verify_pool(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::verify_pool(from_json(request)?).map_err(js_error)?)
+}
+
+/// Whether a pool can take a new mix under today's parameters
+/// (`lovejoin::UsableRequest` → `lovejoin::UsableResult`).
+#[wasm_bindgen(js_name = lovejoinUsable)]
+pub fn lovejoin_usable(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::usable(from_json(request)?).map_err(js_error)?)
+}
+
+/// Starting a Lovejoin token pool from the Seedelf balance, measured and
+/// finished in the wallet, its pool checked from its own bytes
+/// (`api::LaunchRequest` → `api::LaunchResult`), unsigned for
+/// `signScriptSpend`.
+#[wasm_bindgen(js_name = buildLovejoinLaunch)]
+pub fn build_lovejoin_launch(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    to_json(&api::build_launch(key.sk, from_json(request)?).map_err(js_error)?)
 }
 
 /// One of the wallet's boxes into a fresh register, unsigned, for giveme.my
-/// (`lovejoin::WithdrawRequest` → `lovejoin::WithdrawResult`).
+/// (`lovejoin::WithdrawRequest` → `lovejoin::WithdrawResult`), from the
+/// classic pool or the token pool `poolRef` names.
 #[wasm_bindgen(js_name = buildLovejoinWithdraw)]
 pub fn build_lovejoin_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    to_json(&lovejoin::withdraw(key.sk, from_json(request)?).map_err(js_error)?)
+    let named: lovejoin::PoolNamed = from_json(request)?;
+    to_json(
+        &lovejoin::withdraw_in(key.sk, from_json(request)?, named.pool_ref.as_ref())
+            .map_err(js_error)?,
+    )
 }
 
 /// A withdraw with giveme.my's checked signature, ready to submit

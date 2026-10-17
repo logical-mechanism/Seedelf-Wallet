@@ -2287,7 +2287,7 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    tokens or not), or with UTxOs holding tokens last, for when their
 ///    tokens make it too large; and at the last the CLI's own order, so
 ///    nothing the CLI pays is refused.
-fn select_script_inputs<T>(
+pub(crate) fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
     floor: u64,

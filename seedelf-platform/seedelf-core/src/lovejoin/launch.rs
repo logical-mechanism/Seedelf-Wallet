@@ -232,6 +232,33 @@ pub fn launch(
     })
 }
 
+/// [`launch`] with the inputs picked from `available` (the wallet's Seedelf
+/// UTxOs; those holding tokens are left out), keeping their `histories`
+/// apart where a choice that pays does, as a stealth mint picks
+/// ([`crate::build::mint_apart`]): whatever pays for a launch is tied to it
+/// (pass [`crate::build::Purpose::Mint`]'s order). The first input picked is
+/// the seed.
+pub fn launch_apart(
+    chain: &Chain,
+    available: &[UtxoResponse],
+    histories: &crate::build::Histories,
+    terms: &Terms,
+    register: bool,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<Launch> {
+    let ada: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| u.asset_list.as_ref().is_none_or(|a| a.is_empty()))
+        .cloned()
+        .collect();
+    crate::build::select_script_inputs(&ada, &Assets::new(), 0, histories, |inputs| {
+        let built = launch(chain, inputs, terms, register, change_owner, signer)?;
+        built.spend.estimate()?;
+        Ok(built)
+    })
+}
+
 /// The pool a finished launch makes, read from its own outputs and checked
 /// as any found pool is: its reference UTxO, and its two scripts by
 /// reference at the holder. What the wallet records for a launch it made,

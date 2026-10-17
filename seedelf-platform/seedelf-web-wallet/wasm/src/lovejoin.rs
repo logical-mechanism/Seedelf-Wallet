@@ -20,6 +20,11 @@
 //!
 //! The boxes come back later, each on its own ([`withdraw`]), paid from
 //! themselves with giveme.my's collateral: nothing ties them to the session.
+//!
+//! A token pool (Lovejoin's PR #163) is named by a [`PoolRef`]: what the
+//! worker found of it on chain. It's verified here on every call, from the
+//! bundled templates ([`protocol_of`]); a request without one is the classic
+//! pool, exactly as before.
 
 use crate::api;
 use anyhow::{Context, Result, anyhow, bail};
@@ -31,7 +36,7 @@ use pallas_txbuilder::BuiltTransaction;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
-use seedelf_core::lovejoin::{self, Coin, PoolBox, PoolShort, Protocol};
+use seedelf_core::lovejoin::{self, Coin, PoolBox, PoolShort, Protocol, Version};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
@@ -73,6 +78,215 @@ impl OutRef {
             tx_index: b.utxo.index,
         }
     }
+}
+
+/// A token pool as the worker found it on chain: its reference UTxO at the
+/// holder (the NFT and the datum), the seed its launch spent, and any rows
+/// at the holder that may carry its scripts as reference scripts.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolRef {
+    pub reference: UtxoResponse,
+    pub seed: OutRef,
+    #[serde(default)]
+    pub scripts: Vec<UtxoResponse>,
+}
+
+/// The classic pool, or the token pool `pool` names, which is trusted only
+/// once its scripts are derived from its seed and match its datum
+/// (`lovejoin::verify_pool`). A script row is taken only when its bytes are
+/// a Plutus V3 script; `verify_pool` reads a script by reference only from
+/// the holder, and only the one it derived.
+pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protocol> {
+    let Some(pool) = pool else {
+        return Protocol::of(network_flag);
+    };
+    let reference = seedelf_core::eval::resolve_row(&pool.reference)?;
+    let mut scripts = Vec::new();
+    for row in &pool.scripts {
+        let Some(script) = &row.reference_script else {
+            continue;
+        };
+        let (Some("plutusV3"), Some(bytes)) = (script.kind.as_deref(), script.bytes.as_deref())
+        else {
+            continue;
+        };
+        let bytes = hex::decode(bytes).map_err(|e| {
+            anyhow!(
+                "UTxO {}#{}'s script isn't hex: {e}",
+                row.tx_hash,
+                row.tx_index
+            )
+        })?;
+        scripts.push(seedelf_core::eval::resolve_reference(row, 3, &bytes)?);
+    }
+    let seed: [u8; 32] = hex::decode(&pool.seed.tx_hash)?
+        .try_into()
+        .map_err(|_| anyhow!("The seed's transaction hash isn't 32 bytes"))?;
+    lovejoin::verify_pool(
+        network_flag,
+        &reference,
+        (seed, pool.seed.tx_index),
+        &scripts,
+    )
+    .map_err(|e| anyhow!("{e}"))
+}
+
+fn token_amount(token: &lovejoin::BoxToken, quantity: u64) -> api::TokenAmount {
+    api::TokenAmount {
+        policy_id: hex::encode(token.policy),
+        asset_name: hex::encode(&token.name),
+        quantity: quantity.to_string(),
+    }
+}
+
+/// A pool, as the worker records and shows it.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolView {
+    /// Its NFT's policy, P: the pool's id.
+    pub id: String,
+    /// `classic` or `tokenV1`.
+    pub version: String,
+    pub box_lovelace: String,
+    /// What a box holds besides its ADA; absent in the classic pool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
+    pub max_fee: String,
+    pub mix_box_hash: String,
+    pub mix_logic_hash: String,
+    pub fee_hash: String,
+    /// How many of its two scripts every transaction carries, for want of a
+    /// reference at the holder: they cost about 0.12 ₳ a transaction more.
+    pub scripts_inline: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<OutRef>,
+    /// Its reference UTxO.
+    pub reference: OutRef,
+}
+
+impl PoolView {
+    pub fn of(pool: &Protocol) -> Result<Self> {
+        let reference = pool
+            .references
+            .first()
+            .context("A pool without its reference UTxO")?;
+        Ok(PoolView {
+            id: hex::encode(pool.id),
+            version: match pool.version {
+                Version::Classic => "classic",
+                Version::TokenV1 => "tokenV1",
+            }
+            .to_string(),
+            box_lovelace: pool.denom.to_string(),
+            token: pool.token.as_ref().map(|t| token_amount(t, t.quantity)),
+            max_fee: pool.max_fee.to_string(),
+            mix_box_hash: hex::encode(pool.mix_box_hash),
+            mix_logic_hash: hex::encode(pool.mix_logic_hash),
+            fee_hash: hex::encode(pool.fee_hash),
+            scripts_inline: pool.inline_scripts.len(),
+            seed: pool.seed.map(|(tx, index)| OutRef {
+                tx_hash: hex::encode(tx),
+                tx_index: index,
+            }),
+            reference: OutRef {
+                tx_hash: hex::encode(reference.tx_hash),
+                tx_index: reference.index,
+            },
+        })
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyPoolRequest {
+    pub network: String,
+    pub pool: PoolRef,
+}
+
+/// A pool found on chain, verified: what it is, or why it isn't one the
+/// wallet reads.
+pub fn verify_pool(request: VerifyPoolRequest) -> Result<PoolView> {
+    PoolView::of(&protocol_of(
+        network_flag(&request.network)?,
+        Some(&request.pool),
+    )?)
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UsableRequest {
+    pub network: String,
+    /// One row of Koios's `epoch_params`.
+    pub params: serde_json::Value,
+    /// The classic pool when absent.
+    #[serde(default)]
+    pub pool_ref: Option<PoolRef>,
+    /// Whether the pool's `mix_logic` credential is registered (one
+    /// `account_info` for every pool).
+    pub registered: bool,
+}
+
+#[derive(Serialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UsableResult {
+    pub usable: bool,
+    /// Why not: `notRegistered`, `belowMinimum`, `cantComeBack` or
+    /// `unchecked`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// What a box holds, and what the ledger asks, when that's why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub box_minimum: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withdraw_fee: Option<String>,
+    /// What a box brings back into the Seedelf, its token aside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub back: Option<String>,
+}
+
+/// Whether a verified pool can take a new mix under today's parameters
+/// (`lovejoin::usable`). A pool that can't is still read: its boxes stay in
+/// view, and still come back.
+pub fn usable(request: UsableRequest) -> Result<UsableResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let pool = protocol_of(network_flag, request.pool_ref.as_ref())?;
+    Ok(match lovejoin::usable(&params, &pool, request.registered) {
+        Ok(u) => UsableResult {
+            usable: true,
+            box_minimum: Some(u.box_minimum.to_string()),
+            withdraw_fee: Some(u.withdraw_fee.to_string()),
+            back: Some(u.back.to_string()),
+            ..Default::default()
+        },
+        Err(why) => {
+            let (kind, has, needs) = match &why {
+                lovejoin::Unusable::NotRegistered => ("notRegistered", None, None),
+                lovejoin::Unusable::BelowMinimum { has, needs } => {
+                    ("belowMinimum", Some(*has), Some(*needs))
+                }
+                lovejoin::Unusable::CantComeBack { has, needs } => {
+                    ("cantComeBack", Some(*has), Some(*needs))
+                }
+                lovejoin::Unusable::Unchecked(_) => ("unchecked", None, None),
+            };
+            UsableResult {
+                usable: false,
+                why: Some(kind.to_string()),
+                has: has.map(|h| h.to_string()),
+                needs: needs.map(|n| n.to_string()),
+                detail: Some(why.to_string()),
+                ..Default::default()
+            }
+        }
+    })
 }
 
 /// What a session holds, split for its chain.
@@ -794,6 +1008,18 @@ pub struct OwnedRequest {
     pub pool: Vec<UtxoResponse>,
 }
 
+/// The pool a request names beside its own fields, `poolRef`: the token
+/// pool its rows are of, or the classic pool when absent. Read from the
+/// request's JSON on its own, so the request itself is read as ever: serde's
+/// `flatten` would buffer every field, a stranger's deeply nested datum too,
+/// past serde_json's depth limit, where skipping it costs nothing.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolNamed {
+    #[serde(default)]
+    pub pool_ref: Option<PoolRef>,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedResult {
@@ -805,13 +1031,21 @@ pub struct OwnedResult {
     pub others: usize,
     /// Those boxes.
     pub other_boxes: Vec<OutRef>,
+    /// A token pool's token, all the wallet's boxes together.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
 }
 
 /// The wallet's boxes in the pool, wherever other people's mixes have moved
 /// them: the Seedelf key's ownership check on each `{a, b}`. And the pool's
 /// other boxes, the ones a mix may take.
 pub fn owned(sk: Scalar, request: OwnedRequest) -> Result<OwnedResult> {
-    let protocol = Protocol::of(network_flag(&request.network)?)?;
+    owned_in(sk, request, None)
+}
+
+/// [`owned`] in the token pool `pool` names, or the classic pool.
+pub fn owned_in(sk: Scalar, request: OwnedRequest, pool: Option<&PoolRef>) -> Result<OwnedResult> {
+    let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     let (ours, others): (Vec<PoolBox>, Vec<PoolBox>) = request
         .pool
         .iter()
@@ -823,6 +1057,10 @@ pub fn owned(sk: Scalar, request: OwnedRequest) -> Result<OwnedResult> {
         boxes,
         others: others.len(),
         other_boxes: others.iter().map(OutRef::of_box).collect(),
+        token: protocol
+            .box_value()
+            .token_total(ours.len())?
+            .map(|(t, q)| token_amount(&t, q)),
     })
 }
 
@@ -846,13 +1084,25 @@ pub struct WithdrawResult {
     /// Into the new register.
     pub lovelace: String,
     pub box_ref: OutRef,
+    /// A token pool's token, into the same register.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
 }
 
 /// One of our boxes into a fresh register of the Seedelf key.
 pub fn withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
+    withdraw_in(sk, request, None)
+}
+
+/// [`withdraw`] from the token pool `pool` names, or the classic pool.
+pub fn withdraw_in(
+    sk: Scalar,
+    request: WithdrawRequest,
+    pool: Option<&PoolRef>,
+) -> Result<WithdrawResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
-    let protocol = Protocol::of(network_flag)?;
+    let protocol = protocol_of(network_flag, pool)?;
     let ours: Vec<PoolBox> = request
         .pool
         .iter()
@@ -883,6 +1133,7 @@ pub fn withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> 
         fee: built.fee.to_string(),
         lovelace: built.lovelace.to_string(),
         box_ref: OutRef::of_box(&chosen),
+        token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
     })
 }
 

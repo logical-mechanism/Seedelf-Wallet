@@ -73,7 +73,7 @@ mod pool;
 pub mod templates;
 mod value;
 
-pub use launch::{Launch, Locked, Terms, launch, launched_pool};
+pub use launch::{Launch, Locked, Terms, launch, launch_apart, launched_pool};
 
 pub use pool::{
     MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate, find_seed,
