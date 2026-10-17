@@ -9,6 +9,7 @@ import {
   KoiosError,
   MAX_BACK_OFF_MS,
   RateLimit,
+  RawJson,
   retryAfterMs,
   type FetchLike,
 } from "../src/background/koios";
@@ -291,6 +292,23 @@ describe("Koios client: transactions", () => {
     expect(delays).toEqual([1000]);
     const refused = scripted([new Response("", { status: 404 })]);
     await expect(refused.koios.evaluate("84a4")).rejects.toThrow("The server refused the request (404 for ogmios)");
+  });
+
+  it("hands Ogmios a chain's unsent UTxOs as WebAssembly wrote them, so no token amount is rounded", async () => {
+    // A token pool's box may hold up to 2^64 − 1 of its token, past what a JavaScript number holds exactly.
+    const sent: string[] = [];
+    const koios = new Koios(BASE, async (_url, init) => {
+      sent.push(String(init?.body));
+      return Response.json({ jsonrpc: "2.0", result: [] });
+    });
+    const rows = `[{"transaction":{"id":"${"ab".repeat(32)}"},"index":0,"value":{"ada":{"lovelace":2000000},"${"cd".repeat(28)}":{"4e49474854":18446744073709551615}}},{"transaction":{"id":"${"ab".repeat(32)}"},"index":1,"value":{"ada":{"lovelace":1},"${"cd".repeat(28)}":{"4e49474854":9007199254740993}}}]`;
+    await koios.evaluate("84a4", new RawJson(rows));
+    expect(sent[0]).toContain(":18446744073709551615}");
+    expect(sent[0]).toContain(":9007199254740993}");
+    expect(sent[0]).toBe(`{"jsonrpc":"2.0","method":"evaluateTransaction","params":{"transaction":{"cbor":"84a4"},"additionalUtxo":${rows}}}`);
+    // None to add: the plain request.
+    await koios.evaluate("84a4", new RawJson("[]"));
+    expect(JSON.parse(sent[1]!)).toEqual({ jsonrpc: "2.0", method: "evaluateTransaction", params: { transaction: { cbor: "84a4" } } });
   });
 
   it("says whether a submit Koios didn't answer may have gone through: not when it only asked to slow down", async () => {

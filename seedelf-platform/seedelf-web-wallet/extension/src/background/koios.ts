@@ -456,6 +456,14 @@ export interface Failure {
   error?: string;
 }
 
+/**
+ * JSON text sent as it is: a value whose integers may pass 2^53, which
+ * `JSON.parse` would round and `JSON.stringify` write rounded.
+ */
+export class RawJson {
+  constructor(readonly text: string) {}
+}
+
 export class KoiosError extends Error {
   constructor(
     message: string,
@@ -1187,11 +1195,15 @@ export class Koios {
    * used, or `error` says why they refused (Koios passes that on with status
    * 400). WebAssembly reads either. Retried like a read: evaluating changes
    * nothing. `additionalUtxo`: UTxOs it spends that aren't on chain yet, as
-   * Ogmios v6's (a chain's unsent parents, from WebAssembly's ogmiosUtxos).
+   * Ogmios v6's (a chain's unsent parents, from WebAssembly's ogmiosUtxos),
+   * as the JSON text WebAssembly wrote: a token pool's box can hold more of
+   * its token than a JavaScript number holds exactly (up to 2^64 − 1), so
+   * it's never parsed and written again on the way.
    */
-  evaluate(txCborHex: string, additionalUtxo?: unknown[]): Promise<unknown> {
-    const params = { transaction: { cbor: txCborHex }, ...(additionalUtxo?.length ? { additionalUtxo } : {}) };
-    const body = { jsonrpc: "2.0", method: "evaluateTransaction", params };
+  evaluate(txCborHex: string, additionalUtxo?: RawJson): Promise<unknown> {
+    const extra = additionalUtxo && (JSON.parse(additionalUtxo.text) as unknown[]).length ? `,"additionalUtxo":${additionalUtxo.text}` : "";
+    const params = `{"transaction":{"cbor":${JSON.stringify(txCborHex)}}${extra}}`;
+    const body = new RawJson(`{"jsonrpc":"2.0","method":"evaluateTransaction","params":${params}}`);
     return this.send<unknown>("POST", "ogmios", body, "", { answer400: true });
   }
 
@@ -1266,7 +1278,7 @@ export class Koios {
             method === "POST"
               ? { accept: "application/json", "content-type": "application/json" }
               : { accept: "application/json" },
-          body: method === "POST" ? JSON.stringify(body) : undefined,
+          body: method === "POST" ? (body instanceof RawJson ? body.text : JSON.stringify(body)) : undefined,
           signal: AbortSignal.timeout(this.backend.readTimeoutMs),
         });
         if (response.ok || (answer400 && response.status === 400)) return (await response.json()) as R;

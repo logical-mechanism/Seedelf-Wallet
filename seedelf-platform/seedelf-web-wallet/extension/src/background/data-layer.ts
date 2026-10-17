@@ -31,6 +31,7 @@ import {
   KoiosError,
   type KoiosUtxo,
   RateLimit,
+  type RawJson,
   SpentInputError,
   SpentMaybeSentError,
 } from "./koios";
@@ -360,7 +361,7 @@ export class DataLayerKoios extends Koios {
    * as it's the same upstream. A 400 is Ogmios's own answer (a script that
    * fails) only when it's JSON-RPC: the data layer's own refusal isn't.
    */
-  override async evaluate(txCborHex: string, additionalUtxo?: unknown[]): Promise<unknown> {
+  override async evaluate(txCborHex: string, additionalUtxo?: RawJson): Promise<unknown> {
     if (!(await this.uses("submit"))) return super.evaluate(txCborHex, additionalUtxo);
     try {
       const answer = await this.data.evaluate(txCborHex, additionalUtxo);

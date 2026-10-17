@@ -106,7 +106,7 @@ import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { txInputs } from "./cbor";
 import { fartherKeys, GAP_LIMIT } from "./chain";
-import { KoiosBusyError, KoiosError, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
+import { KoiosBusyError, KoiosError, RawJson, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
 import { chainStatus, noteCursor, type Watching } from "./feed";
 import { IndexDown, type IndexRow, utxoOf } from "./private-index";
 import { settleMaybeSent, watchSent } from "./pending";
@@ -1829,7 +1829,8 @@ export class LovejoinService {
     const first = chain.txs.find((t) => t.kind === "mix");
     const deposit = chain.txs.find((t) => t.kind === "deposit");
     if (!first) return;
-    const additional = deposit ? (JSON.parse(wasm.ogmiosUtxos(deposit.txCbor)) as unknown[]) : [];
+    // As WebAssembly wrote it: a token's amount can pass what a JavaScript number holds exactly.
+    const additional = deposit ? new RawJson(wasm.ogmiosUtxos(deposit.txCbor)) : undefined;
     const answer = await this.deps.koios(network).evaluate(first.txCbor, additional);
     // An input it doesn't know is a pool read that was behind, not a disagreement: built again.
     const unknown = unknownInputs(answer);
