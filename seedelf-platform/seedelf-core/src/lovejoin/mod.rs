@@ -68,9 +68,12 @@ use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use uplc::tx::to_plutus_data::ToPlutusData;
 
+mod launch;
 mod pool;
 pub mod templates;
 mod value;
+
+pub use launch::{Launch, Locked, Terms, launch, launched_pool};
 
 pub use pool::{
     MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate, find_seed,
