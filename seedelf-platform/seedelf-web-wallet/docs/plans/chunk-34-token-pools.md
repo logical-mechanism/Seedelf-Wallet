@@ -6,15 +6,99 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 the groundwork is done; the design is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: 🚧 the groundwork is done; the design is under way.** The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
-- **The rest waits on a design session** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part"): [D1](#d1--pool-spam-and-sync), [D2](#d2--bootstrap-and-the-crowd-for-every-pool), [D3](#d3--four-boxes-a-mix-as-an-option) (added 2026-10-16), the box value S0d measured, and how a mix is shown. The steps that depend on them say so. 34a′, the records, goes with them: their shapes follow the flows.
+- **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: what's listed there under *Open*. 34a′, the records, waits on them: their shapes follow the flows.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
 - [chunk-16-lovejoin.md](../archive/plans/chunk-16-lovejoin.md), the original integration and its decisions.
 - The Lovejoin sections of [architecture.md](../architecture.md), [flows.md](../flows.md) and [privacy.md](../privacy.md).
 - [chunk-26b-data-layer-wallet.md](../archive/plans/chunk-26b-data-layer-wallet.md), on how the wallet reads the pool today.
+
+## Design session 1 (2026-10-17)
+
+The owner's answers to Claude's first proposal. Where they differ from the sections below, these win.
+
+### Decided
+
+1. **Pools are permissionless.** Anyone may launch a pool of any token, at any amount: "it's not me determining what token deserves a pool".
+   - This replaces 2026-10-13's direction of listed tokens only: [D1](#d1--pool-spam-and-sync)'s A, and i's one amount per token.
+   - A token may have several pools, one per amount: a 10 $ and a 100 $ stable pool, say.
+   - **The pool's creator sets Q.** The wallet offers bounds, never a choice of its own.
+2. **Discovery is live.** A pool launched after a release must show up without one.
+   - Releases are rare. Waiting on the owner to list a pool would also make the owner the judge of what's real: "not that decentralized".
+   - A list bundled at packaging is only a head start, and never decides what's real.
+3. **Verifying a pool needs no contract change.** The owner asked whether the datum should carry the seed, so that the hashes could be reproduced locally. They already are:
+   - M, L and F come from P through the pinned templates, and P comes from its seed ([§2](#2-trusting-a-pool-verify_pool)).
+   - The seed is the launch transaction's spent input. It's read once per pool and checked by a hash, so whoever supplies it needn't be trusted.
+   - A seed in the datum would save that one read, at the cost of a new contract version.
+4. **The Lovejoin page becomes a hub:** your mixes, then the pools, with the most used first.
+5. **Your mixes: one list, followed to the end.** It shows every mix, from either side and in any pool, from its funding until its last box is back.
+   - Each card says enough to tell which mix it is.
+   - Within a pool, a box that comes back counts against the pool's oldest open mix, since mixed boxes are interchangeable.
+   - 34a′'s records follow from this: a public mix's record stays until its boxes are counted back.
+6. **Bootstrap** is a button that sends a number of boxes, at the pool's value, into the pool with no fan-out.
+   - The boxes never come back by themselves. The user brings them back by hand, one at a time.
+   - "The bootstrap is very important and must be done."
+7. **The gate stays a floor of 30 boxes not yours, for now**, with the crowd stated plainly. The owner's thought, still to explore: "the floor exists after some bootstrap event".
+8. **Four boxes a mix ([D3](#d3--four-boxes-a-mix-as-an-option)) is a Settings option.** Three stays the default. D3's fallback to three comes with it.
+9. **Cert 0** registers L ([Still open](#still-open) 5), and the first real preprod launch confirms it.
+10. **A launch is paid from the private balance by default.** The public account may pay instead, as the user's choice to show that link, the way the wallet allows it elsewhere.
+
+### Decided in round two
+
+Claude's second proposal, with the owner's answers.
+
+11. **A pool is shown when it's genuine and finished, and the earliest for its values.**
+    - **Genuine proves it's a real Lovejoin pool:** the derived hashes and the seed proof ([§2](#2-trusting-a-pool-verify_pool)).
+    - **Finished is the price of being shown:** its `mix_box` and `mix_logic` reference scripts sit at the holder, and L is registered.
+      - That's about 21.4 ₳ burned for good, beyond a bare pool's 2.1 ₳. The scripts differ for every pool, and `mix_logic` refuses deregistration (it allows `RegisterCredential` and nothing else).
+      - So a junk pool costs about 23 ₳, gone for good.
+      - Every pool the wallet launches is finished.
+    - **Earliest for its values,** `(token, Q, box ADA)`. A copy is never shown.
+      - The fee cap doesn't count: only `fee_contract` reads it (`self.fee <= max_fee_per_mix_lovelace`, line 171 at 8131b1d), and the wallet never uses it.
+      - Someone who launches a pool's values first does no harm. Same values mean the same scripts, and finished means it's ready.
+    - **None of this can be undone,** so a shown pool stays shown. The read set only grows, and no one's boxes drop out of view.
+12. **The holder is the index.** Every launch puts its reference UTxO at `288fea77…`, which takes no parameters, so discovery watches that one address.
+    - The data layer reads it from db-sync. Koios reads it bit by bit: the address's transactions after a block height.
+    - Everything at the holder is locked for good, so spam there is burned, not parked.
+    - The list bundled at packaging (`npm run lovejoin-pools`) is a head start: the shown pools' seeds and references, so a first sync skips their lookups.
+13. **The hub groups pools by token.**
+    - The tokens you hold come first, known without a read. Then come the most used, counted as boxes not yours.
+    - Each pool shows its numbers, never a "top" badge, since parked boxes can buy rank.
+    - Search by ticker or policy, with `tokenMark`'s listed, unlisted and lookalike marks.
+14. **The creator sets Q, and may change the box's ADA within limits.**
+    - **Q** is entered in display units.
+    - **Thirty boxes' worth (30 × Q)** must fit within the token's total supply.
+    - **The form lists the token's existing pools** with their crowds, so a creator can join one rather than split it.
+    - **A copy of a shown pool's values is refused.**
+    - **Mixing's cost per box is said plainly.** The wallet prices only ADA (`prices.ts`), so no bound is in money.
+    - **The box's ADA:** the wallet suggests the optimum, the least for the token's shape plus a margin, rounded up to 0.5 ₳. That's 4.5 ₳ for every token S0d measured.
+      - The creator may change it ("there is a lowerbound to the ada because of the token and datum").
+      - The lower bound is S0d's: a box must come back and then pay part of its token on its own, under the live parameters.
+      - The upper limit is 34f's to set.
+15. **Returns default to the token's most used pool that can take a box.**
+    - **Change** picks any other pool of the token that works, or skips it, as reviews already allow.
+    - "There are going to be a single pool for most tokens so this will probably be a none issue."
+16. **Bootstrap at its best is many users each putting in many boxes:** "N users depositing k boxes, where N and k are as large as possible".
+    - A creator doing 30 alone is fine, and "a group getting together" can do a proper bootstrap.
+    - The gate stays 30 boxes not yours.
+    - **The crowd line counts deposits as well as boxes,** for example "30 boxes, from 1 deposit, none mixed yet".
+    - Claude's addition: a pool below the floor shows how its bootstrap is going, with Bootstrap as its main button, so a group can see it fill.
+17. **ADA pools on the new contracts are allowed, at any amount but 10 ₳.** `one_shot_mint` accepts an ADA-only datum (an empty policy and name, `Q = 0`).
+    - The classic pool keeps 10 ₳, bundled and still an option.
+    - The wallet never launches a 10 ₳ ADA pool. One made elsewhere is a copy of the classic's value and is never shown (Claude's reading of "prevents making another 10 ada pool").
+    - This replaces [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 2's old rule.
+18. **Bootstrap replaces the seed** ("Help start the pool"). Seed boxes already in a pool still come back by themselves. It's to be tried and iterated: "this may just need some testing to figure out the best strat".
+
+### Still open after session 1
+
+Each is small, and the step named settles it.
+- The box ADA's upper limit (34f).
+- How deposits are counted once a pool's boxes have been mixed (34c). Before any mix, each unmixed box's making transaction is a deposit.
+- Whether every pool offers four boxes a mix, and the words for the fallback to three (34e, 34f).
+- The screens in detail (34f), drawn from session 1: the hub, a pool's page, the launch form, Bootstrap, and the mix cards.
 
 ## The owner's calls this builds on (2026-10-13)
 
@@ -44,7 +128,7 @@
 Nothing a 1.5.x user has, or relies on, moves. Each point is a test or a gate, not a hope.
 
 1. **The classic pool stays as it is.** Mainnet's `c145c10f…` and preprod's `67ffe4ed…` stay bundled, as `Pool::classic`, which is today's `Protocol::of`. They keep the same hashes, reference UTxOs and 10 ₳. Every builder's output for them stays byte-identical. `lovejoin_mainnet_test.rs`, `withdraw_zero_test.rs`, `lovejoin_test.rs` and the WebAssembly mainnet tests pass **unedited**.
-2. **The classic pool is the only ADA pool.** An ADA pool on the new code is never shown, read or used, "at this moment". Wanting one later is a decision for then, not code for now.
+2. **The classic pool keeps 10 ₳.** ADA pools on the new code are allowed at any other amount ([session 1](#design-session-1-2026-10-17), 17). The wallet never launches a 10 ₳ ADA pool, and one made elsewhere is a copy of the classic's value, never shown. (Until session 1: "an ADA pool on the new code is never shown, read or used".)
 3. **A return or a mix with no tokens plans exactly as 1.5.0 does.** A regression test runs 1.5.0's planner cases through the new planner and compares the plans byte for byte: the deposits, the fan-outs, the costs on the review. Token boxes only ever add to a plan.
 4. **Every record written before still reads, and means the same.** A record without a `pool` is the classic pool's. That covers:
    - the sealed `lovejoin.<network>` Schedule (due times, `notMixed`, `unsure`, `Withdrawing`), and chain records;
@@ -158,7 +242,8 @@ Cheap checks first, offline before network:
    - the bundled list;
    - the data layer;
    - or the inputs of the transaction that made the UTxO, which takes one `tx_info`, on the Koios path only.
-4. **Not an ADA pool on the new code** ([backward compatibility](#backward-compatibility-with-the-classic-ada-pool), 2).
+4. **Not a 10 ₳ ADA pool on the new code** ([backward compatibility](#backward-compatibility-with-the-classic-ada-pool), 2).
+5. **Shown only when finished, and the earliest for its values** ([session 1](#design-session-1-2026-10-17), 11). Run the cheap checks first, so a fake costs no lookup: are the derived scripts' references at the holder (from the same scan), and is L registered (one batched `account_info`)? Only then the seed proof.
 
 **Verified and usable aren't the same thing.**
 - **Verified pools are always read**, for ownership, a restore and boxes coming back. A pool's boxes must never vanish from view because the parameters changed.
@@ -173,7 +258,10 @@ Cheap checks first, offline before network:
 
 ### 3. Finding pools and reading them
 
-The answer waits on [D1](#d1--pool-spam-and-sync). Whatever it decides:
+[Session 1](#design-session-1-2026-10-17) settled it (11, 12):
+- **Discovery watches the holder,** the one address every launch uses. It reads from db-sync through the data layer, or from Koios bit by bit.
+- **The read set is every shown pool:** genuine, finished, and the earliest for its values. It only grows.
+- **The bundled list is a head start,** never a gate.
 - **No read names your pool.** The read set is the same for everyone.
 - **Verification is cached per network:** verified pools as public data, rejected candidates by UTxO ref.
 - **A pool joins the read set only once discovery finds it.** Never sooner from the launcher's own record, which would single out the launcher's IP.
@@ -212,7 +300,7 @@ The answer waits on [D1](#d1--pool-spam-and-sync). Whatever it decides:
 
 ### 5. Starting a pool
 
-**One transaction, straight from the private balance.** It holds:
+**One transaction, straight from the private balance**, or from the public account if the user chooses ([session 1](#design-session-1-2026-10-17), 10): an account-paid builder beside this one, for 34d. The private one holds:
 - a `ScriptSpend` of ADA-only Seedelf UTxOs, kept apart by history as `mint_apart` does, one of them the seed;
 - giveme.my's collateral;
 - the mint, with `one_shot_mint` inline;
@@ -233,14 +321,15 @@ It's about 6.6 KB, and atomic: no half-launched pool, no stranded deposit.
 - **The fallback** is a one-time account, funded as a mix session's is: about +0.5 ₳ and three transactions.
 
 **Checks before the review**
-- **The token is in your private balance**, which already shows it's a plain native token that can sit at a script.
+- **The token is in the paying side's balance**, which already shows it's a plain native token that can sit at a script. An ADA pool names no token.
 - **Refused:**
   - Seedelf identifier tokens;
-  - a total supply (`asset_info`) below what the crowd rule needs;
-  - a pool of the same token and Q that already exists and is usable (the form links to it).
-- **Warned:** another Q of a token that already has a pool.
-- **Q** is entered in display units, with the token's decimals.
-- **Fixed values:** `box_lovelace` is 4 ₳ until S0d proves the figure; `max_fee` is 1.5 ₳.
+  - a total supply (`asset_info`) below 30 × Q;
+  - a copy of a shown pool's values (the form links to it), and a 10 ₳ ADA pool.
+- **Shown:** the token's pools, with their crowds, so a creator can join one rather than split it.
+- **Q** is entered in display units, with the token's decimals. The creator sets it ([session 1](#design-session-1-2026-10-17), 14).
+- **`box_lovelace`** is suggested and can be changed: S0d's least for the token's shape, plus a margin, rounded up to 0.5 ₳ (4.5 ₳ for every token S0d measured). It never goes below S0d's bound. For an ADA pool, it is the amount.
+- **`max_fee`** is 1.5 ₳, and below `box_lovelace` as `one_shot_mint` requires.
 - **Live parameters:** a mix box and its return fit with margin.
 - **Self-verification:** before signing, `verify_pool` runs over the draft's own outputs, the same check a stranger's pool gets. The draft is also measured locally and through Ogmios.
 
@@ -259,11 +348,7 @@ It's about 6.6 KB, and atomic: no half-launched pool, no stranded deposit.
 Weighed against the review's traps.
 
 - **Cost against value.** At depth 2 a box costs about 3.8 ₳ in mixes, whatever its Q is worth. The planner never adds boxes beyond a cost the review shows, and any pool can be left out.
-- **The objective, in order:**
-  1. pools that pass D2's crowd rule;
-  2. the least of the amount left unmixed within that cost;
-  3. the fewest boxes;
-  4. then the bigger crowd, counted in distinct deposits rather than boxes, so stuffing a pool can't steer users into it.
+- **Which pool, per token** ([session 1](#design-session-1-2026-10-17), 15): the most used of its pools that can take a box and is open to mixing. **Change** on the review picks any other that works, or skips it. What's less than a box comes back directly, and the review names it.
 - **Shared across pools:** `MAX_CHAIN_MIXES` and the free-box accounting.
 - **ADA's share.** Token boxes are planned first. Each takes `box_lovelace + mixes × fee` (the withdraw fee is inside the box, so it isn't counted twice), plus the minimum for the token remainder's change. ADA boxes come from what's left. The review says it took spare ADA away from ADA boxes.
 - **The tile's picker** is grouped by token.
@@ -304,38 +389,27 @@ A record with no `pool` is the classic pool's. Each of these gains a pool:
 
 ### 9. Screens
 
-**The pools page is discovery, and the spam filter** (the owner, 2026-10-13).
-- **By default** it lists the classic ADA pool, then **one pool per listed token box value**, the earliest genuine one ([D1](#d1--pool-spam-and-sync)-i). That's everything the wallet reads, and it's the same for everyone.
-- **Behind a filter:** other box values of listed tokens, pools of unlisted tokens, empty pools, and pools that aren't usable, each saying why.
-- **Fakes and nonsense never reach it.** The checks run cheapest first:
-  1. the holder scan;
-  2. the shape and listed-token checks, offline;
-  3. derivation, on the CPU, offline;
-  4. the seed proof: offline when the bundled list or the data layer supplies the seed, otherwise one `tx_info`, and only for a pool the page is about to show.
-- **Use this pool** adds a non-default pool to your reads. It says that from then on Koios, or our server, sees this browser reading a pool few others read. That's a link you choose, said where you choose it, never one made for you.
-- **A pool's details** show:
-  - the token and its mark;
-  - the box value;
-  - the crowd;
-  - your boxes;
-  - its launch transaction;
-  - **Bootstrap**.
+**The Lovejoin page is a hub** ([session 1](#design-session-1-2026-10-17), 4, 5, 13):
+- **Your mixes:** every mix, from either side and in any pool, followed until its last box is back. Bootstrap's rows sit apart and stay until brought back by hand.
+- **The pools,** grouped by token:
+  - the tokens you hold first, then the most used (boxes not yours);
+  - each pool with its box value ("100 NIGHT + 4.5 ₳"), its crowd (boxes and deposits) and your boxes;
+  - search by ticker or policy, with `tokenMark`'s listed, unlisted and lookalike marks.
+- **Every pool shown is genuine and finished.** That's everything the wallet reads, and it's the same for everyone. Fakes, unfinished pools and copies never reach the page. The checks run cheapest first: the holder scan, then the shape, derivation, the references and the registration, and the seed proof last.
+- **Start a pool**, as a button, not a link: a choice that costs money is never a link. It opens the launch's form and its review.
 
-**The Lovejoin page**
-- A pool picker, each pool showing:
-  - its ticker or name, with `tokenMark`'s listed, unlisted and lookalike marks;
-  - its box value ("100 NIGHT + 4 ₳");
-  - the crowd as D2 measures it;
-  - your boxes.
-- A status per pool.
-- **Start a pool**, as a button, not a link: a choice that costs money is never a link.
-- The launch's form and its review.
+**A pool's own page** shows:
+- the token and its mark, and the box value;
+- the crowd, counting deposits as well as boxes;
+- your boxes, and when the next comes back;
+- its launch transaction;
+- **Mix** and **Bootstrap**. Below the floor, Bootstrap is the main button, and the page shows how the bootstrap is going.
 
-**How a mix is shown needs a review as a whole** (the owner, 2026-10-14: "how to display a current lovejoin mix just in general needs a review … Mixing from public does not show on the mixes so there is no way to track it"). What the page does today:
+**How a mix is shown** was settled in session 1 (5). The owner asked for it on 2026-10-14: "how to display a current lovejoin mix just in general needs a review … Mixing from public does not show on the mixes so there is no way to track it". What the page did before:
 - **A mix from the private balance** is a private session, so *Mixes* lists it with its stage: funding, mixing, waiting, coming back.
 - **A mix from the public account** has no session. Its chain shows under *Its transactions* only while it's being sent, or if it stopped partway, and Home's Public tab says it's being sent. Once it's all sent, its row goes. After that, its boxes count only in *Your boxes in the pool*, and in when the next box comes back.
 - **So a public mix can't be followed once it's sent.** Token pools make this wider: mixes in several pools, from either side.
-- **The design is 34f's, before its strings**, and the owner's to approve. A starting point: one list of every mix, from either side and in any pool, each shown until its last box is back.
+- **The design:** one list of every mix, from either side and in any pool, each shown until its last box is back (session 1, 5). Its screens are 34f's.
 
 **Every other screen** — Home, Settings, UTxOs, Activity, ClaimAll, SiteSessions, the swap review — shows its figures per pool.
 
@@ -350,8 +424,11 @@ A record with no `pool` is the classic pool's. Each of these gains a pool:
 
 ### 10. The data layer (mainnet; deployed before the wallet's upload)
 
-Its shape waits on D1. Either way:
-- **A pool list and one combined box feed, the same for everyone.** Only pools on the server's own verified list are ever queried.
+[Session 1](#design-session-1-2026-10-17) set its shape (11, 12):
+- **A pool list and one combined box feed, the same for everyone.**
+  - The pool list is every shown pool, with its seed and references, found from the holder in db-sync and verified with the shared crate.
+  - The box feed covers every shown pool. Only pools on the server's own verified list are ever queried.
+  - The wallet re-verifies every pool. The server can leave a pool out, but it can't make one look real.
 - **The 1.5.x routes and Kupo's patterns are untouched.**
 - **Token pools come from db-sync only.** Health is per route, so a 503 on a token pool doesn't send the contract index to Koios (`private-index.ts:220-233`).
 - **`mixed` is per pool** (`row.rs:128`, `kupo.rs:328`).
@@ -423,6 +500,8 @@ One branch, `web-wallet/token-pools-groundwork`, of what needs no more design, s
 
 ### D1 · Pool spam and sync
 
+**Superseded in part by [design session 1](#design-session-1-2026-10-17):** pools are permissionless and found live, so A, i and D below no longer hold. The costs and the threat still stand.
+
 **What spam costs an attacker**
 - A fake candidate (an output at the holder with a fake NFT and an 8-field datum) burns about 1.8 ₳.
 - A genuine, verifiable pool burns about 2.1 ₳. It needs no registration, no reference scripts, and none of the token held.
@@ -481,9 +560,10 @@ One branch, `web-wallet/token-pools-groundwork`, of what needs no more design, s
 - **What it can't fix, said plainly.** A bootstrapper knows their own boxes, so a mix whose other inputs were all theirs is traceable by them. The pool's crowd line says how many deposits its boxes came from (e).
 - **Home and the Lovejoin page** show bootstrap boxes apart: "Bootstrapping · stays until you bring it back".
 
-**Still open:**
-- **The gate for mixing.** Until it's settled, 34d keeps today's floor per pool as a placeholder, and states the crowd plainly. Ideas a, b and c stay on the table.
-- **Today's seed** (a deposit alone, back by itself after the Settings delay; the owner, 2026-10-06): does it stay beside Bootstrap, or become it?
+**Session 1's answer** ([7, 16 and 18](#design-session-1-2026-10-17)):
+- **The gate:** 30 boxes not yours, for every pool, for now. The crowd line counts deposits as well as boxes (e). Ideas a, b and c stay on the table.
+- **Bootstrap replaces today's seed,** to be tried and iterated. Seed boxes already in a pool still come back by themselves.
+- **The best bootstrap** is many users each putting in many boxes. A group can coordinate one.
 
 ### D3 · Four boxes a mix, as an option
 
@@ -512,11 +592,11 @@ One branch, `web-wallet/token-pools-groundwork`, of what needs no more design, s
 
 **Where it lands:** 34e (the planner and the fallback), 34f (Settings, strings, `privacy.md`), 34g (the preprod rehearsal).
 
-**To decide here:**
-- Whether to offer it at all.
+**Session 1's answer** ([8](#design-session-1-2026-10-17)): offered, as a Settings option, with three the default.
+
+**Still to decide** (34e, 34f):
 - On which pools: the classic, token pools, or both.
 - The fallback's words, and whether a chain's view says which width it went at.
-- The default. Three is the owner's lean, as depth defaults to 2 for cost; [the private-by-default rule](../privacy.md) would otherwise point to the more private one.
 
 ## The steps
 
@@ -527,11 +607,11 @@ One branch, and each step ends with its tests green.
 | **S0** | Free spikes: **(a)** ✅ `uplc` 1.1.23 against the 1.1.24 artifacts, reproducing the hashes and running `last-run.json`'s token Mix and Owner (a failure means a coordinated Pallas/uplc bump); **(b)** ✅ a synthetic token Mix and Owner evaluated by mainnet's Ogmios; **(c)** a preprod launch probe (a foreign inline mint, cert 0, reference outputs at the holder, giveme.my signing): its evaluation ✅, the submit still to send; **(d)** ✅ the box ADA test below, measured, the figure the owner's | — |
 | **S1** | ~~Asks of PR #163~~: moot, PR #163 merged as it was (8131b1d) | — |
 | **34a** | ✅ Core: `Pool`, `BoxValue`, the templates (at the merge, 8131b1d), derive, `verify_pool`, the generalized `ScriptSpend` and builders; the classic path byte-identical | S0a |
-| **34a′** | Records: their shapes, migrating 1.5.0's, and reading every verified pool. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault | 34a; the design (D2, how a mix is shown), since the shapes follow the flows |
+| **34a′** | Records: their shapes, migrating 1.5.0's, and reading every shown pool. Each mix's record lasts until its boxes are counted back, and Bootstrap is a kind of its own. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault | 34a; session 1 |
 | **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
-| **34c** | The pool registry and the data layer | D1 |
-| **34d** | The tile's flows per pool (private, public, seed, again); **Bootstrap a pool**; the withdraw and its escape hatch; Activity | 34a′; the gate for mixing is a placeholder until D2 |
-| **34e** | The planner, and returns through token pools; D3's four-wide option and its fallback, if taken | D2; D3 |
+| **34c** | Discovery and the data layer: the holder index, the shown-pool rule (genuine, finished, earliest for its values), the bundled head start, the shared verification crate, the pool list and the combined box feed, and deposit counts | session 1 (11, 12) |
+| **34d** | The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity | 34a′, 34c |
+| **34e** | The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback | 34a′ |
 | **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |
 | **Re-pin** | ✅ Folded into 34a: the templates were pinned to the merge from the start | the merge |
 | **34g** | The preprod rehearsal; the cross-area release review; `npm run tokens`, `dreps` and `lovejoin-pools`; deploy 34c; then package and upload; the handoff note | all |
@@ -543,7 +623,7 @@ One branch, and each step ends with its tests green.
   - the full send.
 - **What it checks:** that each one fits. It reports the least `box_lovelace` at which they all do, and the margin left against a rise in coinsPerUTxOByte.
 - **Its fees** are checked against what preprod measured.
-- **The result pins `box_lovelace`**, which is 4 ₳ until then.
+- **The result sets the suggested `box_lovelace`** ([session 1](#design-session-1-2026-10-17), 14).
 
 **The highest risks, taken first:** S0a, the evaluator; then 34a′, about 9k lines of TypeScript state that live ADA users depend on.
 
@@ -559,7 +639,7 @@ One branch, and each step ends with its tests green.
 
 **Rust tests**
 - The parity vectors, and the templates' reproduction.
-- `verify_pool`'s negatives: a fake policy; a wrong M, L or F; a stake credential; an extra asset; a 5-field datum on `TokenV1`; an ADA pool on v2; a wrong seed.
+- `verify_pool`'s negatives: a fake policy; a wrong M, L or F; a stake credential; an extra asset; a 5-field datum on `TokenV1`; a 10 ₳ ADA pool on v2; a wrong seed; an unfinished pool (no references at the holder, or L unregistered); a later copy of a shown pool's values.
 - A token mix with a real proof, through the derived `mix_logic`.
 - A large Q (2^53+1 and 2^64−1).
 - The planner's units: coverage, the cost cap, the caps, the crowd, and ADA's share.
@@ -571,7 +651,7 @@ One branch, and each step ends with its tests green.
 - The screen harness, for states the fakes can't reach.
 
 **Preprod, for real** (tADA, free):
-1. Launch a pool at 4 ₳ (or S0d's figure) with a test token: one the owner mints with `cardano-cli`, or LJTEST.
+1. Launch a pool at the suggested box value (4.5 ₳) with a test token: one the owner mints with `cardano-cli`, or LJTEST. A second wallet, on Koios alone, finds it live, though the bundled list predates it.
 2. Bootstrap it.
 3. A private mix and a public one.
 4. A box coming back by itself into a Seedelf.
@@ -584,12 +664,12 @@ One branch, and each step ends with its tests green.
 
 ## Still open
 
-1. **D1:** who sets each listed token's box value, and by what rule.
-2. **D2:** what replaces the 30-box floor as the gate for mixing.
-3. **Seed or Bootstrap:** keep today's seed beside Bootstrap, or let Bootstrap replace it.
+1. ~~**D1:** who sets each listed token's box value~~: the pool's creator sets Q ([session 1](#design-session-1-2026-10-17), 1). Discovery has no curator (session 1, 11 and 12).
+2. **D2:** what replaces the 30-box floor as the gate for mixing. For now, the floor stays (session 1, 7).
+3. ~~**Seed or Bootstrap**~~: Bootstrap replaces the seed (session 1, 18), to be tried and iterated.
 4. ~~**S1:** what to ask of PR #163 before it merges~~: moot, it merged as it was.
-5. **Cert 0 or cert 7** for L's registration: the launch builder uses cert 0, which Ogmios takes; a real preprod launch confirms the ledger does, unless the owner prefers Lovejoin's tested cert 7.
-6. **How a mix is shown** (the owner, 2026-10-14): a mix from the public account can't be followed once it's sent. See [*The Lovejoin page*](#9-screens).
-7. **D3:** whether to offer four boxes a mix, on which pools, and the words for its fallback to three.
-8. **The box value** for the pools the wallet launches: S0d's table. 4 ₳ covers a typical token with 1.7% to spare and not the worst; a fixed figure, a figure per listed token (D1), or a token shape the launch refuses past some size.
+5. ~~**Cert 0 or cert 7**~~: cert 0 (session 1, 9), which a real preprod launch confirms.
+6. ~~**How a mix is shown**~~: one list of every mix, followed to the end (session 1, 5).
+7. ~~**D3:** whether to offer four boxes a mix~~: a Settings option, three by default (session 1, 8). Still to settle: on which pools, and the words for its fallback to three.
+8. ~~**The box value**~~: the wallet suggests S0d's least plus a margin (4.5 ₳ in practice), and the creator may change it, never below S0d's bound (session 1, 14). Its upper limit is 34f's.
 9. **The Seedelf minimum's sizing:** about 0.12 ₳ an output too high, a wallet-wide and CLI change of its own, which would lower S0d's figures by about 0.24 ₳.
