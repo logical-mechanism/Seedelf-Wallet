@@ -440,3 +440,113 @@ pub fn find_seed(policy: &[u8; 28], inputs: &[([u8; 32], u64)]) -> Option<([u8; 
         .find(|seed| policy_of(seed).as_ref() == Some(policy))
         .copied()
 }
+
+/// Why a verified pool can't take a new mix. Its boxes are still read, so
+/// the wallet's never vanish from view, and still come back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unusable {
+    /// `mix_logic`'s stake credential isn't registered, so no mix or
+    /// withdraw can make its zero withdrawal. Anyone can register it.
+    NotRegistered,
+    /// A box holds less ADA than the ledger now asks of its output, so no
+    /// mix can make one.
+    BelowMinimum { has: u64, needs: u64 },
+    /// A box can't pay its own way back into a Seedelf ([`super::CantPayBack`]).
+    CantComeBack { has: u64, needs: u64 },
+    /// The check itself couldn't be built.
+    Unchecked(String),
+}
+
+impl fmt::Display for Unusable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Unusable::NotRegistered => write!(f, "Its mix_logic credential isn't registered"),
+            Unusable::BelowMinimum { has, needs } => write!(
+                f,
+                "A box holds {has} lovelace, under the {needs} the ledger asks of it now"
+            ),
+            Unusable::CantComeBack { has, needs } => write!(
+                f,
+                "A box can't pay its own way back: {has} lovelace is left after the fee, and its Seedelf output needs {needs}"
+            ),
+            Unusable::Unchecked(why) => write!(f, "It couldn't be checked: {why}"),
+        }
+    }
+}
+
+/// What [`usable`] measured: a box's minimum now, and what bringing one back
+/// costs and leaves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Usable {
+    pub box_minimum: u64,
+    pub withdraw_fee: u64,
+    /// What a box brings back into the Seedelf, its token aside.
+    pub back: u64,
+}
+
+/// Whether `pool` can take a new mix under `params`, checked at each read:
+/// `registered` says whether `mix_logic`'s credential is (one `account_info`
+/// for every pool); a box must meet the ledger's minimum; and one must pay
+/// its own way back into a Seedelf, which is built here (a box made up for
+/// the purpose, owned by a key used once) and measured against the pool's
+/// scripts, so the answer is the ledger's, not an estimate.
+pub fn usable(
+    params: &seedelf_koios::koios::ProtocolParameters,
+    pool: &Protocol,
+    registered: bool,
+) -> Result<Usable, Unusable> {
+    use blstrs::{G1Projective, Scalar};
+    use group::Group;
+    if !registered {
+        return Err(Unusable::NotRegistered);
+    }
+    let unchecked = |e: anyhow::Error| Unusable::Unchecked(e.to_string());
+    let sk = super::nonzero_scalar();
+    let a = G1Projective::generator() * super::nonzero_scalar();
+    let (a, b) = (
+        seedelf_crypto::lovejoin::point_to_bytes(&a),
+        seedelf_crypto::lovejoin::point_to_bytes(&(a * sk)),
+    );
+    let output = pool
+        .box_value()
+        .output(pool.mix_box_address())
+        .map_err(unchecked)?
+        .set_inline_datum(super::mix_datum(&a, &b));
+    let box_minimum = crate::transaction::calculate_min_required_utxo(output.clone(), params)
+        .map_err(unchecked)?;
+    if pool.denom < box_minimum {
+        return Err(Unusable::BelowMinimum {
+            has: pool.denom,
+            needs: box_minimum,
+        });
+    }
+    let utxo = Resolved {
+        tx_hash: [0; 32],
+        index: 0,
+        output: output
+            .build_babbage_raw()
+            .map_err(|e| Unusable::Unchecked(e.to_string()))?
+            .encode_fragment()
+            .map_err(|e| Unusable::Unchecked(e.to_string()))?,
+    };
+    let boxed = super::PoolBox::from_resolved(utxo, pool).ok_or_else(|| {
+        Unusable::Unchecked("a box of its own isn't one of its boxes".to_string())
+    })?;
+    let destination = seedelf_crypto::register::Register::create(Scalar::from(1u64))
+        .and_then(|r| r.rerandomize())
+        .map_err(unchecked)?;
+    match super::withdraw(params, pool, &[boxed], &sk, destination) {
+        Ok(back) => Ok(Usable {
+            box_minimum,
+            withdraw_fee: back.fee,
+            back: back.lovelace,
+        }),
+        Err(e) => match e.downcast_ref::<super::CantPayBack>() {
+            Some(short) => Err(Unusable::CantComeBack {
+                has: short.has,
+                needs: short.needs,
+            }),
+            None => Err(unchecked(e)),
+        },
+    }
+}

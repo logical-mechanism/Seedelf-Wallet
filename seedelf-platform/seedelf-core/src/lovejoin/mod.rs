@@ -73,8 +73,8 @@ pub mod templates;
 mod value;
 
 pub use pool::{
-    MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, candidate, find_seed, holder_address, policy_of,
-    verify_pool,
+    MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate, find_seed,
+    holder_address, policy_of, usable, verify_pool,
 };
 pub use value::{BoxToken, BoxValue};
 

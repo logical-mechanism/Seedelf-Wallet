@@ -1131,3 +1131,61 @@ fn classic_deposits_are_byte_for_byte_one_point_fives() {
         assert!(deposit.token_change.is_empty());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Usable for a new mix
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_classic_pool_is_usable() {
+    for flag in [true, false] {
+        let p = if flag { params() } else { mainnet_params() };
+        let usable = lovejoin::usable(&p, &Protocol::of(flag).unwrap(), true).unwrap();
+        assert!(usable.box_minimum < 1_500_000, "{usable:?}");
+        assert!(usable.back > 9_000_000, "{usable:?}");
+    }
+}
+
+/// Lovejoin's own preprod pool, 2 ₳ a box with its scripts carried inline:
+/// a box still pays its own way back, LJTEST's name being short.
+#[test]
+fn lovejoins_two_ada_pool_brings_a_box_back() {
+    let usable = lovejoin::usable(&params(), &lj_pool(), true).unwrap();
+    println!("{usable:?}");
+    assert_eq!(usable.back, 2_000_000 - usable.withdraw_fee);
+    assert!(usable.box_minimum < 2_000_000);
+}
+
+#[test]
+fn a_pool_isnt_usable_unregistered_too_small_or_unable_to_come_back() {
+    let pool = lj_pool();
+    assert_eq!(
+        lovejoin::usable(&params(), &pool, false).unwrap_err(),
+        lovejoin::Unusable::NotRegistered
+    );
+    let worst = BoxToken {
+        policy: [0xab; 28],
+        name: vec![0xcd; 32],
+        quantity: u64::MAX,
+    };
+    // Under the ledger's minimum for a box.
+    let tiny = Protocol {
+        denom: 1_000_000,
+        token: Some(worst.clone()),
+        ..pool.clone()
+    };
+    assert!(matches!(
+        lovejoin::usable(&params(), &tiny, true).unwrap_err(),
+        lovejoin::Unusable::BelowMinimum { has: 1_000_000, .. }
+    ));
+    // A box that exists but can't pay its own way back.
+    let poor = Protocol {
+        denom: 1_800_000,
+        token: Some(worst),
+        ..pool
+    };
+    assert!(matches!(
+        lovejoin::usable(&params(), &poor, true).unwrap_err(),
+        lovejoin::Unusable::CantComeBack { .. }
+    ));
+}
