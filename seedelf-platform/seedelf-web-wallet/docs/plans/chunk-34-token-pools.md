@@ -6,9 +6,10 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 the groundwork is done; the design is under way.** The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: 🚧 the groundwork, design session 1 and 34a′ are done; 34c is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
-- **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first. 34a′, the records, waits on them: their shapes follow the flows.
+- **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first.
+- **[34a′, the records](#34a--the-records-2026-10-17)** (`web-wallet/token-pools-records`, 2026-10-17): every pool's records beside the classic pool's, every mix followed until its boxes are back, Bootstrap's boxes held, gated on 1.5.0's own record of how it planned and ran.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
@@ -520,6 +521,75 @@ One branch, `web-wallet/token-pools-groundwork`, of what needs no more design, s
 - **The planner's per-pool costs** (`MIX_FEE_ESTIMATE`, `per_box` and the funding sums still take the classic pool's): 34e.
 - **The chain builders through WebAssembly** (a session's or the account's chain into a token pool): 34d, with the flows that call them.
 
+## 34a′ · The records (2026-10-17)
+
+Branch `web-wallet/token-pools-records`. The step that [§8](#8-records) and session 1 (5, 6, 18) set, as built, in the worker (`lovejoin.ts`, `rpc.ts`). Nothing in core or WebAssembly changed. Claude's choices, the owner's to overturn.
+
+**The gate comes first: 1.5.0's own record** (`tests/lovejoin-1-5-0.test.ts`, backward compatibility 3, 4, 5 and 8).
+- The fixture `tests/fixtures/lovejoin-1.5.0.json` was written by that test file run in a worktree at 1.5.0's release (63f87b8), on that commit's WebAssembly. This tree must meet it.
+- **The plans:** what Lovejoin funds, plans and reviews for a grid of returns and mixes on both networks, and every transaction of each chain built: its kind, its outputs and each box's value, exactly. Fees are measured, not planned (a mix's random draw of pool boxes moves its budgets by a few hundred lovelace), so they're met within 0.5%.
+- **A vault mid-flight:** a 1.5.0 wallet's local storage with six boxes due, a public mix all sent and its record still kept, a withdraw in its write-ahead slot that Koios didn't answer, and a return's chain four transactions in.
+- **After the update** (session storage gone, the wallet locked), nine hours of the worker's runs a minute apart: each run's sends, every Koios and giveme.my request, and the sealed schedule, compared whole but for the new `mixes`. The due times sit where the runs meet each rule: the unlock's waits, one box a run, the spread, the quiet after the user's own send and its pushes, a cut chain's boxes held, a public mix's record and leaves going. Every draw is seeded.
+- **A restore** of the same phrase on the chain that's left.
+- Five one-line changes to those rules each fail it (the spread, the quiet, its pushes, the unlock's wait, how long a record is kept).
+
+**What stays as 1.5.0 wrote it.** The sealed `lovejoin.<network>` schedule keeps the classic pool's fields where they are, with their meanings: `due`, `notMixed`, `unsure`, `withdrawing`, `chains`, `marks`, `leaves`, `origins`, `asking` and `unlock`. A wallet that never touches a token pool keeps the same record, and chain records keep their 1.5.0 lifetime. Token pools add beside them, never inside:
+- **A pool is named by its id,** the NFT's policy P. A record with no pool is the classic pool's; `classic` is never written.
+- **`pools`:** each token pool's own `due`, `notMixed` and `unsure`, by id. `marks` stay keyed by time across every pool.
+- **On a chain record:** `pools` (how many of its boxes went to each token pool; the rest are the classic pool's), and a pool on each leaf. A chain may span pools: one deposit, mixes in each, one return.
+- **On the withdraw in its slot:** its box's pool and token, and `bootstrap` when a Bootstrap held its box.
+- **On an origin:** `mixedIn`, the token pools whose `mix_box` an input sat at. `mixed` keeps meaning the classic pool's.
+
+**One rule set, run per pool.** Every rule that counted the classic pool's boxes now counts each pool's: due times against the boxes that can come back, boxes not mixed yet, a restore's lookups. Given the classic pool, each gives 1.5.0's answer, which the gate checks. What's network-wide stays network-wide: one box a run, the spread, the quiet, the unlock's draws, and the turns.
+
+**Every shown pool is read** (session 1, 11 and 12). The read set is the classic pool and what discovery hands the worker (`LovejoinDeps.pools`, 34c's). Until 34c, discovery hands it nothing, so the classic pool is all a wallet reads.
+- Each pool is verified from the bundled templates before its rows are read. One that doesn't verify is left out.
+- **The rows come in one Koios request for every pool,** the same for everyone. The data layer serves the classic pool's as before. Token pools come from Koios until 34c's combined box feed.
+- **A pool that isn't read this time never loses its boxes' due times.** Only a read counts a pool's due times against its boxes.
+
+**Your mixes: `mixes`, one entry a mix** (session 1, 5). The list the hub shows, followed until the mix's last box is back. Chain records keep their own lifetime, and no rule reads `mixes`, Bootstrap's hold aside, so it can't change how boxes come back.
+- An entry is made with its chain's record. It holds the mix's kind (a return, a mix, mixing again, a seed, Bootstrap), its session or account, when it began, and its boxes in each pool with how many have come back.
+- **A box that comes back counts against its pool's oldest open mix** with a mixed box out, since mixed boxes are interchangeable (session 1, 5). A box a recorded chain made, not mixed yet, counts against that chain's own; a box a Bootstrap held, against the pool's oldest Bootstrap. It's counted once the withdraw is known gone: sent, or seen on chain after Koios didn't answer.
+- **Mixing again** takes its boxes from the oldest open mixes of their pool as its first mix goes, the moment it takes their due times.
+- **An entry goes** once all its boxes are back or mixed again.
+- **Each pool read squares them up:** with no chain being sent and no withdraw in its slot, a pool with fewer of the wallet's boxes than its open mixes say closes the oldest, Bootstraps last. That covers a box brought back from another device, and a 1.5.0 chain's entry made after some of its boxes came back.
+  - **Only a mix whose chain's record went, or ended `RECORD_KEEP_MS` ago,** is squared up, and boxes a recent chain made don't count against older mixes. A listing that's behind (a Koios backend lagging) can miss a box that just landed, which is why chain records are kept that long. Without this rule, such a read closed a just-landed Bootstrap's entry, and its boxes then came back by themselves; a test holds it.
+- **1.5.0's chains get entries** at the first change after the update, from their records, and the first pool read squares them up.
+
+**Bootstrap, a kind of its own** (session 1, 6 and 18). Its chain record is a deposit with no mixes, as a seed's is, marked `bootstrap`.
+- **Its boxes never come back by themselves.** A pool's open Bootstrap entries hold that many of the wallet's boxes in the pool: those still at the deposit first, then others, since a box someone else's mix moved can't be told from the wallet's other boxes there.
+- A held box gets no due time, isn't "not mixed yet", and isn't taken to mix again. It comes back by hand, one at a time, and counts against its Bootstrap's entry.
+- **Bring them all back** marks the entries `released`: the boxes are no longer held, and come back by themselves, one a run, as any box does (round three, 24).
+- **Seeds keep coming back by themselves** (session 1, 18): a seed's record reads as it did.
+
+**Status and Home.** `status` and `held` keep the classic pool's figures where they are, so the classic screens read as today. Each token pool read adds an entry under `pools`, and Bootstrap's held boxes are listed apart (`bootstrap`). Two methods are new, for 34d and 34f: `mixes()`, the list with each mix's chain while its record is kept, and `releaseBootstrap()`, Bring them all back.
+
+**Also changed:**
+- **A token pool's box brought back** is built against its own pool (`poolRef`), carries its token into the Seedelf, and its history entry has the token coming in.
+- **A token pool's withdraw that Koios didn't answer** is looked for on the contract's feed: the data layer's pool feed lists the classic pool alone, and the box goes into a Seedelf.
+- **What made a token pool's box** is asked of Koios even while the data layer is up, since the data layer's listing carries who made each box for the classic pool alone.
+- **WebAssembly traps on mixing again at depth 0** (`planLovejoin` with `again` and no depth). Nothing asks for it, since mixing again always takes Settings' depth, 1 to 3; the gate's grid leaves it out. Not changed here.
+
+**An independent review** of the diff, adversarial, found three that the tests had missed. Each is fixed, with a test that fails without the fix:
+- **A box with no mix of its own was counted against a Bootstrap still holding its boxes:** a restore's box, a box from before the list, or another device's. The Bootstrap then held one fewer, and that box came back by itself, unmixed, the next one after it too. Such a box now counts against a mix, a Bootstrap brought back all at once, or nothing.
+- **A chain that stopped before anything of it was known sent closed its mix at once.** But a deposit Koios didn't answer may have gone in (a session's chain marks no `maybe`), and a Bootstrap's mix closing let its boxes go. It now closes only as its record goes, with none of its boxes listed.
+- **Discovery failing between a pool read and the look at what made its boxes** had the look see no token pool, and seal a token pool's mixed box as a deposit's. The wallet now reads what discovery last handed over.
+- **Left, low, two devices only:** a Bootstrap's boxes brought back on another device leave its entry here open, squared up last, so it may hold boxes no record accounts for (someone else's mix moved them) until it's closed by hand. 34d's Bootstrap flow decides how its entries close.
+
+**Tests:** the gate, and `tests/lovejoin-pools.test.ts` (18), with PR #163's preprod token pool read beside the classic pool. A token pool read in the same request as the classic pool's; a pool that doesn't verify left out; its own due times, and Home's figures; a token box back through its own pool, its token with it; one box a run across pools; due times kept through a read that didn't cover the pool; a chain spanning pools; squaring up, and the lag; mixing again taking boxes over; 1.5.0's entries made once; Bootstrap's hold, by hand, and Bring them all back, and against a box with no mix and a deposit Koios didn't answer; a chain that never went; a restore's lookup per pool, through discovery failing. Thirteen one-line changes to the new rules each fail them.
+
+**For later steps:**
+- **34c:**
+  - The data layer's combined box feed takes the token pools' rows off Koios.
+  - It must carry who made each box (`made_by`), as the classic pool's listing does. Until then, a restore of token pool boxes asks Koios even while our server is up, which tells Koios which boxes are the wallet's.
+- **34d:**
+  - The flows that build chains into token pools, passing `pools` and each leaf's pool to `recordChain`.
+  - Bootstrap's button and its review. Bring one back now takes a Bootstrap's box by hand with no `anyway`, as a seed's always could; its review says what bringing back a box nobody has mixed yet shows.
+  - Activity's two new kinds, and naming a token pool's deposit and mixes from the public account (`activity.ts`'s `describe` knows the classic `mix_box` alone).
+- **34g:** the policy's *Changes* entry names the new reads: every shown pool's rows in one Koios request, and whatever 34c leaves of the Koios lookup above.
+
+**Left to later steps:** building chains into token pools, Bootstrap's button and the launch's record (34d); the planner per pool (34e); discovery and the read set's source (34c); every screen (34f).
+
 ## Open for discussion
 
 ### D1 · Pool spam and sync
@@ -611,7 +681,7 @@ One branch, `web-wallet/token-pools-groundwork`, of what needs no more design, s
    - `mixCost` and `MIX_FEE_ESTIMATE`;
    - the figures in Settings and on every review;
    - the `3^depth` leaves lines, which are critical strings, in es and ja too.
-5. **The width wherever three is built in:** `mixes_per_box`, `fresh_for`, `fan_out` and the funding sums in core; `mixesPerBox` in the worker; the screens' `3 ** depth`. `lovejoin::mix` already takes four. 34a′ checks that no record assumes three.
+5. **The width wherever three is built in:** `mixes_per_box`, `fresh_for`, `fan_out` and the funding sums in core; `mixesPerBox` in the worker; the screens' `3 ** depth`. `lovejoin::mix` already takes four. No record assumes three (34a′): a chain's record keeps its mixes and leaves as built.
 6. **A free check before shipping.** The live width test again at the integration (`cargo test -p seedelf-core --test lovejoin_width_test -- --ignored --nocapture`), in case the limits or the cost model moved. Then four-wide on preprod in 34g. No four-box mix has landed on mainnet; mainnet's evaluator agrees with the wallet's to the step.
 
 **Where it lands:** 34e (the planner and the fallback), 34f (Settings, strings, `privacy.md`), 34g (the preprod rehearsal).
@@ -632,7 +702,7 @@ Each step ends with its tests green. The steps can land as parts, but they ship 
 | **S0** | Free spikes: **(a)** ✅ `uplc` 1.1.23 against the 1.1.24 artifacts, reproducing the hashes and running `last-run.json`'s token Mix and Owner (a failure means a coordinated Pallas/uplc bump); **(b)** ✅ a synthetic token Mix and Owner evaluated by mainnet's Ogmios; **(c)** a preprod launch probe (a foreign inline mint, cert 0, reference outputs at the holder, giveme.my signing): its evaluation ✅, the submit still to send; **(d)** ✅ the box ADA test below, measured, the figure the owner's | — |
 | **S1** | ~~Asks of PR #163~~: moot, PR #163 merged as it was (8131b1d) | — |
 | **34a** | ✅ Core: `Pool`, `BoxValue`, the templates (at the merge, 8131b1d), derive, `verify_pool`, the generalized `ScriptSpend` and builders; the classic path byte-identical | S0a |
-| **34a′** | Records: their shapes, migrating 1.5.0's, and reading every shown pool. Each mix's record lasts until its boxes are counted back, and Bootstrap is a kind of its own. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault | 34a; session 1 |
+| **34a′** | ✅ Records: their shapes, migrating 1.5.0's, and reading every shown pool. Each mix's record lasts until its boxes are counted back, and Bootstrap is a kind of its own. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault ([as built](#34a--the-records-2026-10-17)) | 34a; session 1 |
 | **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
 | **34c** | Discovery and the data layer: the holder index, the shown-pool rule (genuine, finished, earliest for its values), the bundled head start, the shared verification crate, the pool list and the combined box feed, and deposit counts | session 1 (11, 12) |
 | **34d** | The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity | 34a′, 34c |
