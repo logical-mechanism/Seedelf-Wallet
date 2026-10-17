@@ -341,7 +341,7 @@ pub(crate) fn change_outputs(
 }
 
 /// The least lovelace change outputs holding `tokens` need.
-fn minimum_change(
+pub(crate) fn minimum_change(
     params: &ProtocolParameters,
     change_addr: &Address,
     tokens: &Assets,
