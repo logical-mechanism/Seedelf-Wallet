@@ -341,7 +341,7 @@ pub(crate) fn change_outputs(
 }
 
 /// The least lovelace change outputs holding `tokens` need.
-fn minimum_change(
+pub(crate) fn minimum_change(
     params: &ProtocolParameters,
     change_addr: &Address,
     tokens: &Assets,
@@ -1311,13 +1311,18 @@ struct OwnedInput {
     register: Register,
 }
 
-/// A token minted (or burned, when negative) under the seedelf policy.
+/// A token minted (or burned, when negative) under the seedelf policy, or
+/// under a policy whose script the transaction carries.
 #[derive(Clone)]
 struct PolicyMint {
     policy: Hash<28>,
     token_name: Vec<u8>,
     amount: i64,
     redeemer: Vec<u8>,
+    /// None for the seedelf policy, read from its reference UTxO; otherwise
+    /// the policy's Plutus V3 script, in the witnesses (a Lovejoin launch's
+    /// one-shot mint, which is used once).
+    script: Option<Vec<u8>>,
 }
 
 /// A key account whose UTxOs a Seedelf spend takes too, and whose own
@@ -1372,6 +1377,12 @@ pub struct ScriptSpend {
     signer: Hash<28>,
     /// A key account spent alongside, with its collateral ([`Self::with_account`]).
     account: Option<AccountPart>,
+    /// Certificates patched in ([`Self::with_staking`]); none for any spend
+    /// but a Lovejoin launch.
+    staking: Staking,
+    /// Whether the outputs go in a fresh random order each time it's staged
+    /// (every spend but a Lovejoin launch: [`Self::in_order`]).
+    shuffled: bool,
 }
 
 impl ScriptSpend {
@@ -1416,6 +1427,8 @@ impl ScriptSpend {
             rest: None,
             signer,
             account: None,
+            staking: Staking::none(),
+            shuffled: true,
         })
     }
 
@@ -1543,7 +1556,55 @@ impl ScriptSpend {
             token_name,
             amount,
             redeemer,
+            script: None,
         });
+        Ok(self)
+    }
+
+    /// Mints `amount` of `token_name` under the Plutus V3 `script`, which
+    /// the transaction carries in its witnesses, with `redeemer`: a Lovejoin
+    /// launch's NFT. The script must hash to `policy`.
+    pub fn mint_inline(
+        mut self,
+        policy: Hash<28>,
+        script: Vec<u8>,
+        token_name: Vec<u8>,
+        amount: i64,
+        redeemer: Vec<u8>,
+    ) -> Result<Self> {
+        if *Hasher::<224>::hash_tagged(&script, 3) != *policy {
+            bail!("The minting script isn't the policy's");
+        }
+        self.mint = Some(PolicyMint {
+            policy,
+            token_name,
+            amount,
+            redeemer,
+            script: Some(script),
+        });
+        Ok(self)
+    }
+
+    /// Stages the outputs in the order given, the change last, rather than
+    /// in a fresh random order: a Lovejoin launch. Its scripts look for an
+    /// output (`one_shot_mint` its reference UTxO), so a shuffled draft and
+    /// its finished transaction could cost them more than the margin apart;
+    /// and the order hides nothing there, the outputs' addresses saying what
+    /// each one is.
+    pub fn in_order(mut self) -> Self {
+        self.shuffled = false;
+        self
+    }
+
+    /// Patches `staking`'s certificates in, and takes their deposit out of
+    /// the change: a Lovejoin launch registering `mix_logic`'s credential.
+    /// Only certificates no key signs for: the spend has no stake key, and
+    /// takes no withdrawal or vote.
+    pub fn with_staking(mut self, staking: Staking) -> Result<Self> {
+        if staking.withdrawal.is_some() || staking.votes.is_some() || staking.signers() > 0 {
+            bail!("A Seedelf spend takes only certificates no key signs for");
+        }
+        self.staking = staking;
         Ok(self)
     }
 
@@ -1579,9 +1640,12 @@ impl ScriptSpend {
         // Ogmios doesn't check the fee. Staging with the estimated one keeps
         // the draft's change valid whenever the finished transaction's is.
         let fee = self.estimate()?.fee.total;
-        self.stage(fee, None, redeemers)?
-            .build_conway_raw()
+        built_with(self.stage(fee, None, redeemers)?, self.patches())
             .context("Failed To Build The Draft Transaction")
+    }
+
+    fn patches(&self) -> Patches<'_> {
+        Patches::staking(&self.staking)
     }
 
     /// The unsigned transaction, with the budgets Ogmios measured on the
@@ -1672,9 +1736,9 @@ impl ScriptSpend {
         };
         // A fee the collateral can't cover: the guess wasn't what fell short.
         match self.stage(fee, None, redeemers) {
-            Ok(staged) => staged
-                .build_conway_raw()
-                .context("Failed To Build The Draft Transaction"),
+            Ok(staged) => {
+                built_with(staged, self.patches()).context("Failed To Build The Draft Transaction")
+            }
             Err(_) => Err(short),
         }
     }
@@ -1785,7 +1849,7 @@ impl ScriptSpend {
         // script on a spent input, which Conway charges for too.
         let contract = &self.chain.config.contract;
         let mut script_bytes = contract.wallet_contract_size;
-        if self.mint.is_some() {
+        if self.mint.as_ref().is_some_and(|m| m.script.is_none()) {
             script_bytes += contract.seedelf_contract_size;
         }
         let mut spent = self.inputs();
@@ -1799,7 +1863,7 @@ impl ScriptSpend {
         // the account's key when an account puts up the collateral.
         let (fee, staged) = settle(
             2,
-            Patches::staking(&Staking::none()),
+            self.patches(),
             |size| even(linear_fee(&self.chain.params, size) + compute + script_reference),
             |fee| self.stage(fee, Some(budgets), redeemers),
         )?;
@@ -1808,9 +1872,7 @@ impl ScriptSpend {
             - self.outputs.len()
             - usize::from(rest_lovelace.is_some());
         Ok(FinalSpend {
-            tx: staged
-                .build_conway_raw()
-                .context("Failed To Build The Transaction")?,
+            tx: built_with(staged, self.patches())?,
             fee: ScriptFee {
                 size: fee - compute - script_reference,
                 compute,
@@ -1886,8 +1948,12 @@ impl ScriptSpend {
             };
         }
         let lovelace = total
-            .checked_sub(self.paid_lovelace)
+            .checked_add(self.staking.refund())
+            .and_then(|total| total.checked_sub(self.paid_lovelace))
             .and_then(|rest| rest.checked_sub(fee))
+            .and_then(|rest| {
+                rest.checked_sub(self.staking.deposit_at(self.chain.params.key_deposit))
+            })
             .ok_or(SEEDELF_SHORT)?;
         let tokens = tokens
             .separate(self.paid_tokens.clone())
@@ -1953,7 +2019,9 @@ impl ScriptSpend {
             .chain(rest)
             .chain(change)
             .collect();
-        crate::lovejoin::shuffle(&mut outputs);
+        if self.shuffled {
+            crate::lovejoin::shuffle(&mut outputs);
+        }
         for output in outputs {
             tx = tx.output(output);
         }
@@ -1997,8 +2065,11 @@ impl ScriptSpend {
             tx = tx.add_spend_redeemer(owned.input.clone(), redeemer.clone(), Some(units(budget)));
         }
         if let Some(m) = &self.mint {
+            tx = match &m.script {
+                None => tx.reference_input(reference_utxo(config.reference.seedelf_reference_utxo)),
+                Some(script) => tx.script(ScriptKind::PlutusV3, script.clone()),
+            };
             tx = tx
-                .reference_input(reference_utxo(config.reference.seedelf_reference_utxo))
                 .mint_asset(m.policy, m.token_name.clone(), m.amount)
                 .context("Failed To Mint The Seedelf")?
                 .add_mint_redeemer(
@@ -2233,7 +2304,7 @@ fn holds_tokens(utxo: &UtxoResponse) -> bool {
 ///    tokens or not), or with UTxOs holding tokens last, for when their
 ///    tokens make it too large; and at the last the CLI's own order, so
 ///    nothing the CLI pays is refused.
-fn select_script_inputs<T>(
+pub(crate) fn select_script_inputs<T>(
     available: &[UtxoResponse],
     needed: &Assets,
     floor: u64,

@@ -1,10 +1,19 @@
 //! Lovejoin, the mixer (<https://github.com/logical-mechanism/Lovejoin>): its
-//! deployments on preprod and mainnet, the pool's boxes, and the three
-//! transactions the wallet makes with it.
+//! pools, their boxes, and the three transactions the wallet makes with them.
 //!
-//! - **Deposit:** a key account locks 10 ₳ boxes at `mix_box`, each with an
+//! A pool ([`Protocol`]) is one launch of Lovejoin's scripts: its boxes hold
+//! exactly its box value ([`BoxValue`]) and mix only with each other. The
+//! classic pool, live on preprod and mainnet, holds 10 ₳ a box and is bundled
+//! whole ([`Protocol::of`]). A token pool, on the generalized scripts of
+//! Lovejoin's PR #163, holds `box_lovelace` and `Q` of one token a box; it's
+//! found on chain and trusted only once its scripts are derived from its seed
+//! ([`verify_pool`]). One prover serves both: only the value's bytes differ.
+//!
+//! - **Deposit:** a key account locks boxes at `mix_box`, each with an
 //!   inline datum `{a, b}`. Nothing validates a deposit. The wallet's boxes are
-//!   a Seedelf register's shape (`b = [x]·a`), owned by the Seedelf key.
+//!   a Seedelf register's shape (`b = [x]·a`), owned by the Seedelf key, in
+//!   every pool: one scalar across pools leaves boxes unlinkable under DDH,
+//!   as it does across one pool's boxes.
 //! - **Mix:** N boxes in, N re-randomized boxes out, in a random order, at
 //!   outputs 0..N−1, with one sigma-OR proof per box in `mix_logic`'s
 //!   withdraw-zero redeemer. A key account pays the fee and puts up the
@@ -24,9 +33,10 @@
 //! chain.
 
 use crate::address::{collateral_address, wallet_contract};
+use crate::assets::{Asset, Assets};
 use crate::build::{
-    Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, check_fee, collateral_output, even, fake_signer,
-    linear_fee, reference_script_fee, settle_fee,
+    Budget, Budgets, DRAFT_BUDGET, MAX_TX_BUDGET, NotEnough, check_fee, collateral_output, even,
+    fake_signer, linear_fee, reference_script_fee, settle_fee,
 };
 use crate::cbor;
 use crate::constants::{COLLATERAL_HASH, VARIANT, get_config};
@@ -48,7 +58,7 @@ use pallas_primitives::conway::{
     ExUnits, PlutusData, ScriptRef, TransactionInput, TransactionOutput,
 };
 use pallas_primitives::{Fragment, MaybeIndefArray};
-use pallas_traverse::MultiEraTx;
+use pallas_traverse::{Era, MultiEraOutput, MultiEraTx};
 use pallas_txbuilder::{
     BuildConway, BuiltTransaction, Input, Output, ScriptKind, StagingTransaction,
 };
@@ -58,22 +68,65 @@ use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use uplc::tx::to_plutus_data::ToPlutusData;
 
+mod launch;
+mod pool;
+pub mod templates;
+mod value;
+
+pub use launch::{Launch, Locked, Terms, launch, launch_apart, launched_pool};
+
+pub use pool::{
+    MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate, find_seed,
+    holder_address, policy_of, usable, verify_pool,
+};
+pub use value::{BoxToken, BoxValue};
+
 /// The unit datum, `Constr 0 []`: `mix_box`'s spend redeemer (it reads none).
 const UNIT: [u8; 3] = hex!("d87980");
 
-/// Lovejoin's deployment on a network, with what evaluating against it needs.
+/// Which of Lovejoin's scripts a pool runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Version {
+    /// The classic ADA pool's, with its five-field reference datum: live on
+    /// mainnet since 2026-09-26, and on preprod.
+    Classic,
+    /// The generalized scripts of Lovejoin's PR #163 ([`templates`]), with an
+    /// eight-field datum: every token pool's.
+    TokenV1,
+}
+
+/// A pool: one launch of Lovejoin's scripts on a network, with what
+/// evaluating against it needs. (Its name is older than token pools.)
 #[derive(Debug, Clone)]
 pub struct Protocol {
     pub network_flag: bool,
-    /// Every box holds exactly this, and only ADA (`denom_lovelace`).
+    /// Every box holds exactly this much ADA (`box_lovelace`; the classic
+    /// pool's `denom_lovelace`), and [`Self::token`] besides.
     pub denom: u64,
     pub mix_box_hash: [u8; 28],
     pub mix_logic_hash: [u8; 28],
-    /// The protocol's reference UTxO and the two scripts' reference UTxOs.
+    /// The pool's reference UTxO, and its scripts' reference UTxOs where
+    /// they're read by reference.
     pub references: Vec<Resolved>,
     /// The reference scripts' size, for the reference-script fee, read from
     /// `references`.
     pub script_bytes: u64,
+    pub version: Version,
+    /// The pool's id: the policy of its `lovejoin` NFT, P.
+    pub id: [u8; 28],
+    /// What every box holds besides [`Self::denom`]: a token pool's token.
+    pub token: Option<BoxToken>,
+    /// The most a fee shard pays a mix (`max_fee_per_mix_lovelace`). The
+    /// wallet pays its own fees and never draws on a shard.
+    pub max_fee: u64,
+    /// `fee_contract`'s hash, F, which the wallet never uses.
+    pub fee_hash: [u8; 28],
+    /// Scripts every transaction carries in its witnesses, because no
+    /// reference to them is trusted (none at the holder): `mix_box`,
+    /// `mix_logic`, or both. Empty for the classic pool.
+    pub inline_scripts: Vec<Vec<u8>>,
+    /// The UTxO the launch spent, when known: what proves the pool genuine.
+    pub seed: Option<([u8; 32], u64)>,
 }
 
 impl Protocol {
@@ -93,6 +146,26 @@ impl Protocol {
                 index: 0,
                 output: hex::decode(output)?,
             })
+        };
+        // Lovejoin's artifacts/<network>/addresses.json: each pool's NFT
+        // policy, its fee shards' script, and its five-field datum's fee cap.
+        let (id, fee_hash, max_fee, seed) = if network_flag {
+            (
+                hex!("8ca2cc1836ff9c001384cd5c3c77ef1dab063c8048e801e27eb3ad42"),
+                hex!("64802866996e4712904ed21cfe36dd9b4c6672fe4051d5578086514a"),
+                2_000_000,
+                None,
+            )
+        } else {
+            (
+                hex!("f5592689c7ab35553a3234a54c0ee118090a5762c696819a53a5a826"),
+                hex!("a072c7e839ab9ddf24344d0b2f70f56971f187fee8089f5f64212406"),
+                1_000_000,
+                Some((
+                    hex!("ba815aa54b022a347a3e5e84d5491334cf6f878916eebeeb7f9014da9dc369bb"),
+                    2,
+                )),
+            )
         };
         let (mix_box_hash, mix_logic_hash, references) = if network_flag {
             (
@@ -145,7 +218,30 @@ impl Protocol {
             mix_logic_hash,
             references,
             script_bytes,
+            version: Version::Classic,
+            id,
+            token: None,
+            max_fee,
+            fee_hash,
+            inline_scripts: Vec::new(),
+            seed,
         })
+    }
+
+    /// What every box of the pool holds, exactly.
+    pub fn box_value(&self) -> BoxValue {
+        BoxValue {
+            lovelace: self.denom,
+            token: self.token.clone(),
+        }
+    }
+
+    /// Adds the scripts the pool's transactions carry in their witnesses.
+    fn with_scripts(&self, mut tx: StagingTransaction) -> StagingTransaction {
+        for script in &self.inline_scripts {
+            tx = tx.script(ScriptKind::PlutusV3, script.clone());
+        }
+        tx
     }
 
     /// `mix_box`'s enterprise script address, where every box sits.
@@ -168,19 +264,6 @@ impl Protocol {
             .iter()
             .map(|r| Input::new(Hash::new(r.tx_hash), r.index))
             .collect()
-    }
-
-    /// `serialise_data` of a box's value, `{"": {"": denom}}`, as the mix
-    /// context takes it.
-    fn denom_value_bytes(&self) -> Vec<u8> {
-        let mut e = minicbor::Encoder::new(Vec::new());
-        e.map(1)
-            .and_then(|e| e.bytes(&[]))
-            .and_then(|e| e.map(1))
-            .and_then(|e| e.bytes(&[]))
-            .and_then(|e| e.u64(self.denom))
-            .expect("encoding into a Vec doesn't fail");
-        e.into_writer()
     }
 }
 
@@ -248,12 +331,13 @@ pub struct PoolBox {
 
 impl PoolBox {
     /// A pool row, if it's a box a mix may take: at `mix_box`, exactly the
-    /// denomination in ADA alone, an inline `{a, b}` with `a ≠ b`, both points
-    /// in G1's prime-order subgroup and neither the identity. Anything else at
-    /// the address is someone's mistake, left alone.
+    /// pool's box value (10 ₳ alone in the classic pool), an inline `{a, b}`
+    /// with `a ≠ b`, both points in G1's prime-order subgroup and neither the
+    /// identity. Anything else at the address is someone's mistake, left
+    /// alone: a box holding more than the box value could be mixed by anyone,
+    /// who'd take the excess.
     pub fn from_row(row: &UtxoResponse, protocol: &Protocol) -> Option<Self> {
-        if row.value != protocol.denom.to_string()
-            || row.asset_list.as_ref().is_some_and(|a| !a.is_empty())
+        if !protocol.box_value().is_row(row)
             || row.payment_cred != hex::encode(protocol.mix_box_hash)
         {
             return None;
@@ -276,7 +360,7 @@ impl PoolBox {
             return None;
         };
         if output.address.to_vec() != protocol.mix_box_address().to_vec()
-            || output.value != pallas_primitives::conway::Value::Coin(protocol.denom)
+            || !protocol.box_value().is_value(&output.value)
         {
             return None;
         }
@@ -334,6 +418,70 @@ impl Coin {
         Input::new(Hash::new(self.utxo.tx_hash), self.utxo.index)
     }
 }
+
+/// A key account's UTxO, tokens and all: what a deposit into a token pool
+/// pays from. Never one with a reference script or a datum too deep to read
+/// ([`eval::resolve_row`] refuses both).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Holding {
+    pub utxo: Resolved,
+    pub lovelace: u64,
+    pub tokens: Assets,
+}
+
+impl Holding {
+    /// A Koios row of the account's.
+    pub fn from_row(row: &UtxoResponse) -> Result<Self> {
+        let (lovelace, tokens) = crate::utxos::assets_of(vec![row.clone()])?;
+        Ok(Holding {
+            utxo: eval::resolve_row(row)?,
+            lovelace,
+            tokens,
+        })
+    }
+
+    /// What a UTxO the wallet built holds, read from its output's bytes.
+    pub fn of(utxo: &Resolved) -> Result<Self> {
+        let output = MultiEraOutput::decode(Era::Conway, &utxo.output)
+            .map_err(|e| anyhow!("An output can't be read: {e}"))?;
+        let value = output.value();
+        let mut tokens = Assets::new();
+        for policy in value.assets() {
+            for asset in policy.assets() {
+                tokens = tokens.add(Asset::new(
+                    hex::encode(policy.policy()),
+                    hex::encode(asset.name()),
+                    asset
+                        .output_coin()
+                        .context("An output holds a negative amount")?,
+                )?)?;
+            }
+        }
+        Ok(Holding {
+            utxo: utxo.clone(),
+            lovelace: value.coin(),
+            tokens,
+        })
+    }
+
+    fn input(&self) -> Input {
+        Input::new(Hash::new(self.utxo.tx_hash), self.utxo.index)
+    }
+}
+
+impl From<&Coin> for Holding {
+    fn from(coin: &Coin) -> Self {
+        Holding {
+            utxo: coin.utxo.clone(),
+            lovelace: coin.lovelace,
+            tokens: Assets::new(),
+        }
+    }
+}
+
+/// A deposit's inputs can't pay for its boxes.
+const DEPOSIT_SHORT: NotEnough =
+    NotEnough("There isn't enough ADA for these boxes, the fee and the change");
 
 /// Who pays a deposit or a mix: its fee comes from `fee`, its collateral is
 /// `collateral` (left unspent), and the change goes back to `address`.
@@ -398,6 +546,11 @@ pub struct Deposit {
     pub fee: u64,
     pub boxes: Vec<PoolBox>,
     pub change: Coin,
+    /// The tokens the boxes didn't take, back at the change address with the
+    /// least ADA each output needs, apart from `change` so that it stays ADA
+    /// alone to pay the mixes. Empty when the inputs held only what the boxes
+    /// took, as in the classic pool always.
+    pub token_change: Vec<Holding>,
 }
 
 /// Locks one box per register in `owners` (each already re-randomized, so
@@ -407,6 +560,22 @@ pub fn deposit(
     params: &ProtocolParameters,
     protocol: &Protocol,
     inputs: &[Coin],
+    owners: &[Register],
+    change_address: &Address,
+    signers: usize,
+) -> Result<Deposit> {
+    let inputs: Vec<Holding> = inputs.iter().map(Holding::from).collect();
+    deposit_from(params, protocol, &inputs, owners, change_address, signers)
+}
+
+/// [`deposit`] from UTxOs that may hold tokens: a token pool's boxes take
+/// `Q` of its token each from them, and what they don't take comes back as
+/// [`Deposit::token_change`]. The outputs go boxes, then the token change,
+/// then the ADA change, last.
+pub fn deposit_from(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    inputs: &[Holding],
     owners: &[Register],
     change_address: &Address,
     signers: usize,
@@ -429,23 +598,51 @@ pub fn deposit(
             Ok((a, b))
         })
         .collect::<Result<_>>()?;
-    let total: u64 = inputs.iter().map(|c| c.lovelace).sum();
-    let boxed = protocol.denom * owners.len() as u64;
+    let total = inputs
+        .iter()
+        .try_fold(0u64, |sum, h| sum.checked_add(h.lovelace))
+        .context("The inputs' ADA overflows")?;
+    let tokens = inputs
+        .iter()
+        .try_fold(Assets::new(), |sum, h| sum.merge(h.tokens.clone()))?;
+    let box_value = protocol.box_value();
+    let boxed = box_value
+        .lovelace
+        .checked_mul(owners.len() as u64)
+        .context("Too many boxes")?;
+    let kept = match box_value.token_total(owners.len())? {
+        None => tokens,
+        Some((token, quantity)) => tokens
+            .separate(Assets::new().add(Asset::new(
+                hex::encode(token.policy),
+                hex::encode(&token.name),
+                quantity,
+            )?)?)
+            .context("The UTxOs paying for these boxes don't hold enough of the pool's token")?,
+    };
+    // The tokens the boxes don't take, each output with exactly its least.
+    let kept_lovelace = crate::build::minimum_change(params, change_address, &kept)?;
+    let token_outputs =
+        crate::build::change_outputs(params, change_address, kept_lovelace, &kept, DEPOSIT_SHORT)?;
     let least = least_change(params, change_address)?;
     let (fee, staged) = settle_fee(params, signers, |fee| {
         let change = total
-            .checked_sub(boxed + fee)
+            .checked_sub(boxed + kept_lovelace + fee)
             .filter(|c| *c >= least)
             .context("There isn't enough ADA for these boxes, the fee and the change")?;
         let mut tx = StagingTransaction::new();
-        for coin in inputs {
-            tx = tx.input(coin.input());
+        for held in inputs {
+            tx = tx.input(held.input());
         }
         for (a, b) in &datums {
             tx = tx.output(
-                Output::new(protocol.mix_box_address(), protocol.denom)
+                box_value
+                    .output(protocol.mix_box_address())?
                     .set_inline_datum(mix_datum(a, b)),
             );
+        }
+        for output in &token_outputs {
+            tx = tx.output(output.clone());
         }
         Ok(tx
             .output(Output::new(change_address.clone(), change))
@@ -455,6 +652,10 @@ pub fn deposit(
         .build_conway_raw()
         .context("Failed To Build The Deposit")?;
     let outputs = eval::resolve_outputs(&tx.tx_bytes.0)?;
+    let token_change = outputs[datums.len()..datums.len() + token_outputs.len()]
+        .iter()
+        .map(Holding::of)
+        .collect::<Result<Vec<_>>>()?;
     let boxes = datums
         .iter()
         .zip(&outputs)
@@ -466,13 +667,14 @@ pub fn deposit(
         .collect();
     let change = Coin {
         utxo: outputs.last().context("The deposit has no change")?.clone(),
-        lovelace: total - boxed - fee,
+        lovelace: total - boxed - kept_lovelace - fee,
     };
     Ok(Deposit {
         tx,
         fee,
         boxes,
         change,
+        token_change,
     })
 }
 
@@ -555,8 +757,9 @@ pub fn mix(
     let datums: Vec<Vec<u8>> = out_bytes.iter().map(|(a, b)| mix_datum(a, b)).collect();
 
     // ctx = blake2b_256(datums 0..N−1 ‖ values 0..N−1 ‖ mix_box's hash)
+    let box_value = protocol.box_value();
     let mut preimage: Vec<u8> = datums.concat();
-    let value = protocol.denom_value_bytes();
+    let value = box_value.cbor();
     for _ in 0..n {
         preimage.extend_from_slice(&value);
     }
@@ -632,7 +835,8 @@ pub fn mix(
         tx = tx.input(payer.fee.input());
         for (a, b) in &out_bytes {
             tx = tx.output(
-                Output::new(protocol.mix_box_address(), protocol.denom)
+                box_value
+                    .output(protocol.mix_box_address())?
                     .set_inline_datum(mix_datum(a, b)),
             );
         }
@@ -640,6 +844,7 @@ pub fn mix(
         for reference in protocol.reference_inputs() {
             tx = tx.reference_input(reference);
         }
+        tx = protocol.with_scripts(tx);
         tx = tx
             .collateral_input(collateral.input())
             .collateral_output(Output::new(payer.address.clone(), collateral_back))
@@ -733,15 +938,42 @@ pub fn mix(
     })
 }
 
-/// A withdraw, ready for giveme.my's collateral signature: the register the
-/// boxes went to and what it holds.
+/// A withdraw, ready for giveme.my's collateral signature (or the payer's,
+/// for [`withdraw_paid`]): the register the boxes went to and what it holds.
 #[derive(Debug, Clone)]
 pub struct Withdraw {
     pub tx: BuiltTransaction,
     pub fee: u64,
     pub lovelace: u64,
     pub register: Register,
+    /// A token pool's token, and how much of it the register holds.
+    pub token: Option<(BoxToken, u64)>,
+    /// The payer's change, for [`withdraw_paid`].
+    pub change: Option<Coin>,
 }
+
+/// A withdraw whose boxes can't pay their own way back: what's left of them
+/// after the fee (`has`) is less than the output they come back in needs
+/// (`needs`). A token pool launched with too little ADA a box is like this;
+/// [`withdraw_paid`] still brings its boxes back. Its own type, so a caller
+/// can tell it apart (`downcast_ref`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CantPayBack {
+    pub has: u64,
+    pub needs: u64,
+}
+
+impl std::fmt::Display for CantPayBack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "These boxes can't pay their own way back: {} lovelace is left of them after the fee, and the Seedelf output they come back in needs {}",
+            self.has, self.needs
+        )
+    }
+}
+
+impl std::error::Error for CantPayBack {}
 
 /// `blake2b_256(serialise_data(outputs) ‖ serialise_data(input refs) ‖
 /// mix_box's hash)`: what an owner's Schnorr proof binds, read from a built
@@ -775,6 +1007,35 @@ pub fn withdraw(
     owner: &Scalar,
     destination: Register,
 ) -> Result<Withdraw> {
+    withdraw_with(params, protocol, boxes, owner, destination, None)
+}
+
+/// [`withdraw`] with the fee paid by `payer`, a key account, which puts up
+/// its own collateral too: the boxes come back whole, and if their ADA is
+/// less than the Seedelf output needs, the account makes up the rest. For a
+/// box that can't pay its own way back ([`CantPayBack`]), as a token pool's
+/// can't once the ledger's price of a byte passes what its box value covers.
+/// The account's input and change are in the same transaction as the box,
+/// so it ties the box to the account: the caller says so before it's signed.
+pub fn withdraw_paid(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    owner: &Scalar,
+    destination: Register,
+    payer: &Payer,
+) -> Result<Withdraw> {
+    withdraw_with(params, protocol, boxes, owner, destination, Some(payer))
+}
+
+fn withdraw_with(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    owner: &Scalar,
+    destination: Register,
+    payer: Option<&Payer>,
+) -> Result<Withdraw> {
     if boxes.is_empty() {
         bail!("A withdraw needs a box");
     }
@@ -787,20 +1048,70 @@ pub fn withdraw(
     if sorted.iter().any(|b| !b.is_owned(owner)) {
         bail!("A box to withdraw isn't this wallet's");
     }
+    let collateral = match payer {
+        None => None,
+        Some(p) => Some(
+            p.collateral
+                .as_ref()
+                .context("A paid withdraw needs collateral")?,
+        ),
+    };
     let config = get_config(VARIANT, protocol.network_flag)?;
     let to = wallet_contract(protocol.network_flag, config.contract.wallet_contract_hash);
     let datum = destination.to_vec()?;
     let total = protocol.denom * sorted.len() as u64;
+    let token = protocol.box_value().token_total(sorted.len())?;
+    let least = match payer {
+        None => 0,
+        Some(p) => least_change(params, &p.address)?,
+    };
+    // Every input in the ledger's order, which the spend redeemers point into.
+    let mut all_inputs: Vec<Input> = sorted.iter().map(|b| b.input()).collect();
+    all_inputs.extend(payer.map(|p| p.fee.input()));
+    all_inputs.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
+    let positions: Vec<u64> = sorted
+        .iter()
+        .map(|b| {
+            all_inputs
+                .iter()
+                .position(|i| *i == b.input())
+                .expect("sorted in") as u64
+        })
+        .collect();
+    let back = |lovelace: u64| -> Result<Output> {
+        let output = Output::new(to.clone(), lovelace).set_inline_datum(datum.clone());
+        match &token {
+            None => Ok(output),
+            Some((t, quantity)) => output
+                .add_asset(Hash::new(t.policy), t.name.clone(), *quantity)
+                .context("The withdraw's token can't be added to its output"),
+        }
+    };
+    let minimum =
+        |lovelace: u64| crate::transaction::calculate_min_required_utxo(back(lovelace)?, params);
+    // Paid: the boxes' ADA, or what the output needs if that's more, the
+    // payer making up the difference.
+    let paid_back = match payer {
+        None => 0,
+        Some(_) => {
+            let first = minimum(total)?;
+            total.max(minimum(total.max(first))?)
+        }
+    };
+    let topped = paid_back.saturating_sub(total);
 
     let stage =
         |fee: u64, budgets: Option<&Budgets>, redeemer: &[u8]| -> Result<BuiltTransaction> {
-            let lovelace = total
-                .checked_sub(fee)
-                .context("The boxes can't pay the fee")?;
+            let lovelace = match payer {
+                None => total
+                    .checked_sub(fee)
+                    .context("The boxes can't pay the fee")?,
+                Some(_) => paid_back,
+            };
             let mut tx = StagingTransaction::new();
-            for (index, boxed) in sorted.iter().enumerate() {
+            for (boxed, index) in sorted.iter().zip(&positions) {
                 let budget = budgets
-                    .and_then(|b| b.spend(index as u64))
+                    .and_then(|b| b.spend(*index))
                     .unwrap_or(DRAFT_BUDGET);
                 tx = tx.input(boxed.input()).add_spend_redeemer(
                     boxed.input(),
@@ -808,19 +1119,46 @@ pub fn withdraw(
                     Some(staged_units(budget)),
                 );
             }
-            tx = tx.output(Output::new(to.clone(), lovelace).set_inline_datum(datum.clone()));
+            if let Some(p) = payer {
+                tx = tx.input(p.fee.input());
+            }
+            tx = tx.output(back(lovelace)?);
+            if let Some(p) = payer {
+                let change = p
+                .fee
+                .lovelace
+                .checked_sub(fee + topped)
+                .filter(|c| *c >= least)
+                .context(
+                    "There isn't enough ADA left to pay this withdraw's fee and keep the change",
+                )?;
+                tx = tx.output(Output::new(p.address.clone(), change));
+            }
             for reference in protocol.reference_inputs() {
                 tx = tx.reference_input(reference);
             }
-            tx = tx
-                .collateral_input(collateral_input(protocol.network_flag))
-                .collateral_output(collateral_output(
-                    collateral_address(protocol.network_flag),
-                    fee,
-                )?)
-                .fee(fee)
-                .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone())
-                .disclosed_signer(Hash::new(COLLATERAL_HASH));
+            tx = protocol.with_scripts(tx);
+            tx = match (payer, collateral) {
+                (Some(p), Some(c)) => tx
+                    .collateral_input(c.input())
+                    .collateral_output(Output::new(
+                        p.address.clone(),
+                        c.lovelace
+                            .checked_sub(fee * 3 / 2 + 1)
+                            .context("The collateral can't cover this withdraw")?,
+                    ))
+                    .fee(fee)
+                    .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone()),
+                _ => tx
+                    .collateral_input(collateral_input(protocol.network_flag))
+                    .collateral_output(collateral_output(
+                        collateral_address(protocol.network_flag),
+                        fee,
+                    )?)
+                    .fee(fee)
+                    .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone())
+                    .disclosed_signer(Hash::new(COLLATERAL_HASH)),
+            };
             let built = tx
                 .build_conway_raw()
                 .context("Failed To Build The Withdraw")?;
@@ -845,8 +1183,12 @@ pub fn withdraw(
             .map_err(|e| anyhow!("{e}"))
     };
     let mut known: Vec<Resolved> = sorted.iter().map(|b| b.utxo.clone()).collect();
+    if let (Some(p), Some(c)) = (payer, collateral) {
+        known.push(p.fee.utxo.clone());
+        known.push(c.utxo.clone());
+    }
     known.extend(protocol.references.iter().cloned());
-    let measure = |tx: &BuiltTransaction| -> Result<(Budgets, Vec<Budget>)> {
+    let measure = |tx: &BuiltTransaction| -> Result<Budgets> {
         let answer = eval::evaluate(
             &tx.tx_bytes.0,
             &known,
@@ -854,12 +1196,11 @@ pub fn withdraw(
             protocol.network_flag,
         )?;
         let budgets = Budgets::from_ogmios(&answer)?;
-        let mut used = Vec::with_capacity(sorted.len() + 1);
-        for index in 0..sorted.len() as u64 {
-            used.push(budgets.spend(index).context("No budget for a box")?);
+        for index in &positions {
+            budgets.spend(*index).context("No budget for a box")?;
         }
-        used.push(budgets.withdraw(0).context("No budget for mix_logic")?);
-        Ok((budgets, used))
+        budgets.withdraw(0).context("No budget for mix_logic")?;
+        Ok(budgets)
     };
     // A placeholder with a real proof's size, for the first build: a proof is
     // always a compressed point and 32 bytes, so no key is used on one that's
@@ -870,6 +1211,7 @@ pub fn withdraw(
             .encode_fragment()
             .map_err(|e| anyhow!("{e}"))?
     };
+    let signers = payer.map_or(1, |p| p.signers);
 
     // Each round's proof is new, and its scalars' sizes move the budget by a
     // hair, so the transaction declares 1% over what was measured, and is
@@ -881,21 +1223,44 @@ pub fn withdraw(
         let unproven = stage(fee, declared.as_ref(), &placeholder)?;
         let redeemer = prove(&unproven)?;
         let tx = stage(fee, declared.as_ref(), &redeemer)?;
-        let (measured, _) = measure(&tx)?;
+        let measured = measure(&tx)?;
         match &declared {
             Some(d) if d.covers(&measured) => {
                 let mut charged = Vec::with_capacity(sorted.len() + 1);
-                for index in 0..sorted.len() as u64 {
-                    charged.push(d.spend(index).context("No budget for a box")?);
+                for index in &positions {
+                    charged.push(d.spend(*index).context("No budget for a box")?);
                 }
                 charged.push(d.withdraw(0).context("No budget for mix_logic")?);
-                let needed = price(params, signed_size(&tx, 1)?, &charged, script_fee);
+                let needed = price(params, signed_size(&tx, signers)?, &charged, script_fee);
                 if needed <= fee && fee - needed < 5_000 {
+                    let lovelace = match payer {
+                        None => total - fee,
+                        Some(_) => paid_back,
+                    };
+                    let needs = minimum(lovelace)?;
+                    if lovelace < needs {
+                        bail!(CantPayBack {
+                            has: lovelace,
+                            needs,
+                        });
+                    }
+                    let change = match payer {
+                        None => None,
+                        Some(p) => Some(Coin {
+                            utxo: eval::resolve_outputs(&tx.tx_bytes.0)?
+                                .get(1)
+                                .context("The withdraw has no change")?
+                                .clone(),
+                            lovelace: p.fee.lovelace - fee - topped,
+                        }),
+                    };
                     return Ok(Withdraw {
                         tx,
                         fee,
-                        lovelace: total - fee,
+                        lovelace,
                         register: destination,
+                        token,
+                        change,
                     });
                 }
                 // Even, so giveme.my's collateral return (5 ₳ − 3/2 × fee) is
@@ -995,6 +1360,8 @@ pub struct Chain {
     pub txs: Vec<ChainTx>,
     pub leaves: Vec<PoolBox>,
     pub change: Coin,
+    /// The tokens the deposit's boxes didn't take ([`Deposit::token_change`]).
+    pub token_change: Vec<Holding>,
 }
 
 /// Builds a whole chain before any of it is sent: a deposit of one box per
@@ -1011,6 +1378,22 @@ pub fn chain(
     depth: u32,
     pool: &[PoolBox],
 ) -> Result<Chain> {
+    chain_from(params, protocol, funding, &[], owners, depth, pool)
+}
+
+/// [`chain`] whose deposit spends `tokens` too, UTxOs of the same account
+/// holding a token pool's token: its boxes take `Q` each, and what they
+/// don't take is [`Chain::token_change`]. The mixes are paid from ADA alone,
+/// as ever.
+pub fn chain_from(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    funding: &Funding,
+    tokens: &[Holding],
+    owners: &[Register],
+    depth: u32,
+    pool: &[PoolBox],
+) -> Result<Chain> {
     let Funding {
         coins,
         collateral,
@@ -1019,7 +1402,9 @@ pub fn chain(
         mix_signers,
     } = funding;
     let fresh = fresh_for(owners.len(), depth, pool, &[])?;
-    let deposit = deposit(params, protocol, coins, owners, address, *deposit_signers)?;
+    let mut inputs: Vec<Holding> = coins.iter().map(Holding::from).collect();
+    inputs.extend(tokens.iter().cloned());
+    let deposit = deposit_from(params, protocol, &inputs, owners, address, *deposit_signers)?;
     // A mix needs collateral; a seed makes none, so it may go without.
     if depth > 0 && collateral.is_none() {
         bail!("A chain that mixes needs collateral");
@@ -1031,6 +1416,7 @@ pub fn chain(
         signers: *mix_signers,
     };
     let mut fanned = fan_out(params, protocol, deposit.boxes, &payer, depth, fresh)?;
+    fanned.token_change = deposit.token_change;
     fanned.txs.insert(
         0,
         ChainTx {
@@ -1162,6 +1548,7 @@ fn fan_out(
         txs,
         leaves: ours,
         change,
+        token_change: Vec::new(),
     })
 }
 

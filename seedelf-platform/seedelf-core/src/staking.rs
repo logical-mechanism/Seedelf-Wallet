@@ -345,8 +345,14 @@ impl Staking {
     }
 
     /// Whether the stake key signs: for a stake certificate or a withdrawal.
+    /// A script's credential has no key: registering one (a Lovejoin pool's
+    /// `mix_logic`, at its launch) needs no signature.
     pub fn stake_signs(&self) -> bool {
-        self.withdrawal.is_some() || self.certificates.iter().any(|c| !is_drep_certificate(c))
+        self.withdrawal.is_some()
+            || self
+                .certificates
+                .iter()
+                .any(|c| !is_drep_certificate(c) && !is_scripts(c))
     }
 
     /// Whether the DRep key signs: for a DRep certificate or a vote.
@@ -373,6 +379,18 @@ impl Staking {
                 _ => 0,
             })
             .sum()
+    }
+
+    /// [`Self::deposit`], with the deposit Shelley's stake registration (cert
+    /// 0) locks up besides, which the certificate doesn't carry: the
+    /// protocol's `key_deposit` at the time.
+    pub fn deposit_at(&self, key_deposit: u64) -> u64 {
+        let registrations = self
+            .certificates
+            .iter()
+            .filter(|c| matches!(c, Certificate::StakeRegistration(_)))
+            .count() as u64;
+        self.deposit() + registrations * key_deposit
     }
 
     /// Of [`Self::deposit`], what registering a DRep locks up: it comes back
@@ -471,6 +489,19 @@ fn is_drep_certificate(certificate: &Certificate) -> bool {
         Certificate::RegDRepCert(..)
             | Certificate::UnRegDRepCert(..)
             | Certificate::UpdateDRepCert(..)
+    )
+}
+
+/// Whether a stake certificate is for a script's credential, which no key
+/// signs for.
+fn is_scripts(certificate: &Certificate) -> bool {
+    matches!(
+        certificate,
+        Certificate::StakeRegistration(StakeCredential::ScriptHash(_))
+            | Certificate::StakeDeregistration(StakeCredential::ScriptHash(_))
+            | Certificate::StakeDelegation(StakeCredential::ScriptHash(_), _)
+            | Certificate::Reg(StakeCredential::ScriptHash(_), _)
+            | Certificate::UnReg(StakeCredential::ScriptHash(_), _)
     )
 }
 

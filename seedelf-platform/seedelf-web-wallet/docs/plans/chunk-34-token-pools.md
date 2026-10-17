@@ -6,10 +6,12 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 planned, nothing built.** One feature branch, `web-wallet/token-pools`, from `main` after #307. The plan went through two rounds of the owner's questions on 2026-10-13. Three of its designs, [D1](#d1--pool-spam-and-sync), [D2](#d2--bootstrap-and-the-crowd-for-every-pool) and [D3](#d3--four-boxes-a-mix-as-an-option) (added 2026-10-16), are still under discussion, and the steps that depend on them say so.
+**Status: 🚧 the groundwork is done; the design is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
+- **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
+- **The rest waits on a design session** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part"): [D1](#d1--pool-spam-and-sync), [D2](#d2--bootstrap-and-the-crowd-for-every-pool), [D3](#d3--four-boxes-a-mix-as-an-option) (added 2026-10-16), the box value S0d measured, and how a mix is shown. The steps that depend on them say so. 34a′, the records, goes with them: their shapes follow the flows.
 
 **Read first:**
-- PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md` on `feat/token-pools`.
+- PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
 - [chunk-16-lovejoin.md](../archive/plans/chunk-16-lovejoin.md), the original integration and its decisions.
 - The Lovejoin sections of [architecture.md](../architecture.md), [flows.md](../flows.md) and [privacy.md](../privacy.md).
 - [chunk-26b-data-layer-wallet.md](../archive/plans/chunk-26b-data-layer-wallet.md), on how the wallet reads the pool today.
@@ -20,7 +22,7 @@
    - **The fee contract doesn't matter to the wallet.** Its private flow never uses fee shards, so the contract's N ≥ 3 junk-input issue needs no work here.
 2. **4 ₳ a box** in the pools the wallet launches, "but we may need to come back to this one with a provable test showing what exactly it has to be for this flow".
    - The owner chose 3 ₳ first. Then the review found that a 3 ₳ box comes back as about 2.70 ₳ plus Q, which can't pay for a partial token send on its own (about 3.39 ₳), so the send would co-spend another UTxO.
-   - Step S0d is that test, and its answer pins the value.
+   - Step S0d is that test. Its answer (2026-10-17): 4 ₳ covers a typical token with 1.7% to spare, and not the worst a launch can name. The table is under [The groundwork](#the-groundwork-2026-10-17); the figure is the owner's to choose.
 3. **Reference scripts at the holder, `mix_box` and `mix_logic` only.** About 23.3 ₳ that never comes back, plus the fee:
    - `mix_logic`'s reference, 15.82 ₳;
    - `mix_box`'s, 3.63 ₳;
@@ -356,6 +358,67 @@ Its shape waits on D1. Either way:
 - **Verification lives in a small shared crate:** the templates, derive and verify, used by core and by the server. A path dependency on `seedelf-core` won't do: it wouldn't resolve, since `[patch.crates-io]` lives in the platform workspace, and it would pull blst, Pallas and uplc into the server.
 - **Preprod has no data layer**, so 34c is checked by its own live mainnet tests.
 
+## The groundwork (2026-10-17)
+
+One branch, `web-wallet/token-pools-groundwork`, of what needs no more design, so the design session starts from what's proven. The classic pool doesn't move: a classic deposit is pinned byte for byte to 1.5.0's (`lovejoin_pools_test.rs`), and the classic Lovejoin, withdraw-zero, width and WebAssembly tests pass unedited.
+
+**Built, in core** (`seedelf-core/src/lovejoin/`, now a directory):
+- `templates.rs`: the four unapplied scripts, built with `aiken build` (v1.1.24) at Lovejoin 8131b1d, the merge, and pinned by their own hashes; `derive(seed)` applies them (P, L, M, F).
+- `value.rs`: `BoxValue`, checked on Lovejoin's 64 `box_value` vectors.
+- `pool.rs`: the eight-field datum, decoded as strictly as `one_shot_mint` checks it; `verify_pool`; `find_seed`; and `usable`, whose way back is a real withdraw, built and measured.
+- **`Protocol` is the pool.** It gained `version`, `id`, `token`, `max_fee`, `fee_hash`, `inline_scripts` and `seed`, and keeps its name: the classic tests build it by struct update, and run unedited. The classic pool's id, fee cap and fee script are checked against its bundled reference outputs.
+- **The builders:** `deposit_from` and `chain_from` take token UTxOs, and the tokens the boxes don't take come back apart from the ADA payer line (`token_change`). Mixes and withdraws carry the token. A withdraw that can't pay its own way back says so (`CantPayBack`), and `withdraw_paid` is §2's escape hatch: the fee from an account, which also makes up what the output needs.
+- `launch.rs`: §5's launch as one Seedelf spend, with cert 0 for `mix_logic`, and its pool checked from its own bytes (`launched_pool`). `launch_apart` picks its inputs with `Purpose::Mint`'s order. The Seedelf spend learnt a mint under a carried script (`mint_inline`) and certificates patched in (`with_staking`), and `Staking` counts cert 0's deposit (`deposit_at`) and asks no key of a script's credential.
+
+**Built, in WebAssembly** (none of it called by the worker yet):
+- A pool is named as data, a `PoolRef`: its reference row, its seed, and the holder's rows that may carry its scripts. It's verified on every call.
+- `lovejoinVerifyPool`, `lovejoinUsable`, `buildLovejoinLaunch`, and `poolRef` beside a `lovejoinOwned` or `buildLovejoinWithdraw` request.
+- The classic requests and their JSON are unchanged. `poolRef` is read on its own: serde's `flatten` would have buffered a stranger's deep datum past serde_json's limit (`deep.test.mjs` caught it).
+
+**Built, in the worker:** only §4's large-integer fix. The network's check now hands Ogmios a chain's unsent UTxOs as the JSON text WebAssembly wrote (`RawJson`), tested with 2^53 + 1 and 2^64 − 1.
+
+**What S0 found**
+- **S0a ✅** The wallet's `uplc` 1.1.23 reproduces every hash of Lovejoin's preprod token launch, and the very bytes of its two published scripts. It measures the launch's seven recorded mixes (N = 2 to 4) and withdraws (box-paid and wallet-paid) as the chain charged them, to the step. No Pallas or `uplc` bump. S1 is moot: PR #163 merged as it was, and the templates come from `aiken build` at the merge.
+- **S0b ✅** Preprod's and mainnet's Ogmios measure a token mix and a token withdraw (a 32-byte name, `Q = 2^64 − 1`) exactly as the wallet does (`lovejoin_live_test.rs`, `--ignored`).
+- **S0c, half done.** Both networks measure a launch exactly as the wallet does, and Ogmios takes cert 0 with no script witness. Ogmios can't show what the ledger checks before scripts run (cert 0 registering a script's credential with no witness), nor whether giveme.my signs a launch: that takes a real launch on preprod, in tADA, which is the owner's to send, or 34g's.
+- **S0d, measured; the figure is the owner's** (`lovejoin_box_value_test.rs`). Each case is a box's whole way back: its withdraw into a Seedelf, then part of the token or all of it to a Seedelf or an address, from what came back alone. The least box value, the same on both networks:
+
+  | token | scripts | least box value | withdraw fee |
+  |---|---|---|---|
+  | worst (32-byte name, `Q = 2^64 − 1`) | by reference | 4.11 ₳ | 0.298 ₳ |
+  | worst | inline | 4.23 ₳ | 0.412 ₳ |
+  | typical (5-byte name, 100 of a 6-decimal token) | by reference | 3.83 ₳ | 0.297 ₳ |
+  | typical | inline | 3.95 ₳ | 0.410 ₳ |
+
+  The step that binds is always part of the token paid to a Seedelf. How far the price of a byte (today 4,310 lovelace) can rise before a value stops covering a shape, inline:
+
+  | box value | worst token | typical token |
+  |---|---|---|
+  | 4.00 ₳ | doesn't cover it today (−6.3%) | +1.7% |
+  | 4.25 ₳ | +0.7% | +9.3% |
+  | 4.50 ₳ | +7.7% | +17.0% |
+  | 5.00 ₳ | +21.7% | +32.0% |
+
+  A box's ADA comes back with it: a bigger value costs capital while the box is out, not fees.
+
+**Other findings**
+- **Lovejoin's own 2 ₳ pool is usable** by §2's rules, against what [Verification](#verification)'s preprod step 7 expected. A box's minimum is 1.55 ₳, and one comes back with 1.59 ₳: LJTEST's name is short. What comes back can't pay alone for part of its token, though, so the pools page should say so.
+- **A launch locks 23.12 ₳ for good:** the reference UTxO 1.70, `mix_box` 3.62, `mix_logic` 15.81, and the deposit 2.00. It costs about 0.52 ₳ in fees and is 6,330 bytes.
+- **What a transaction costs** on Lovejoin's preprod pool, the classic's 0.88 ₳ mix beside them:
+
+  | | scripts by reference | inline |
+  |---|---|---|
+  | a mix | 0.833 ₳ | 0.947 ₳ |
+  | a withdraw | 0.297 ₳ | 0.411 ₳ |
+- **The wallet's Seedelf minimum runs high.** It's sized against a base address, about 0.12 ₳ an output over the contract's enterprise address. S0d's figures include it; sized exactly, each would drop about 0.24 ₳. Changing it moves every Seedelf payment's minimum, the CLI's too, so it isn't changed here.
+
+**Left for the design, and why**
+- **34a′, the records:** a pool on each record, and migrating 1.5.0's. Their shapes follow the flows: a Bootstrap kind (D2), seed or Bootstrap, and a record that lets a public mix be followed (*How a mix is shown*).
+- **34c, the data layer and the shared verification crate:** D1.
+- **34d to 34f:** the flows, the planner (D2, D3), and the screens.
+- **The planner's per-pool costs** (`MIX_FEE_ESTIMATE`, `per_box` and the funding sums still take the classic pool's): 34e.
+- **The chain builders through WebAssembly** (a session's or the account's chain into a token pool): 34d, with the flows that call them.
+
 ## Open for discussion
 
 ### D1 · Pool spam and sync
@@ -461,19 +524,19 @@ One branch, and each step ends with its tests green.
 
 | Step | What | Waits on |
 |---|---|---|
-| **S0** | Free spikes: **(a)** `uplc` 1.1.23 against the 1.1.24 artifacts, reproducing the hashes and running `last-run.json`'s token Mix and Owner (a failure means a coordinated Pallas/uplc bump); **(b)** a synthetic token Mix and Owner evaluated by mainnet's Ogmios; **(c)** a preprod launch probe (a foreign inline mint, cert 0, reference outputs at the holder, giveme.my signing); **(d)** the box ADA test below | — |
-| **S1** | Asks of PR #163: commit the unapplied token blueprint; a bootstrap default of 4 ₳ (or S0d's figure); reference scripts at the holder, not at a key's base address | the owner (outward-facing) |
-| **34a** | Core: `Pool`, `BoxValue`, the templates (from the PR head `791c59a`, behind one constant), derive, `verify_pool`, the generalized `ScriptSpend` and builders; the classic path byte-identical | S0a |
-| **34a′** | Records: their shapes, migrating 1.5.0's, and reading every verified pool. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault | 34a |
-| **34b** | The launch builder and its WebAssembly | S0c |
+| **S0** | Free spikes: **(a)** ✅ `uplc` 1.1.23 against the 1.1.24 artifacts, reproducing the hashes and running `last-run.json`'s token Mix and Owner (a failure means a coordinated Pallas/uplc bump); **(b)** ✅ a synthetic token Mix and Owner evaluated by mainnet's Ogmios; **(c)** a preprod launch probe (a foreign inline mint, cert 0, reference outputs at the holder, giveme.my signing): its evaluation ✅, the submit still to send; **(d)** ✅ the box ADA test below, measured, the figure the owner's | — |
+| **S1** | ~~Asks of PR #163~~: moot, PR #163 merged as it was (8131b1d) | — |
+| **34a** | ✅ Core: `Pool`, `BoxValue`, the templates (at the merge, 8131b1d), derive, `verify_pool`, the generalized `ScriptSpend` and builders; the classic path byte-identical | S0a |
+| **34a′** | Records: their shapes, migrating 1.5.0's, and reading every verified pool. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault | 34a; the design (D2, how a mix is shown), since the shapes follow the flows |
+| **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
 | **34c** | The pool registry and the data layer | D1 |
 | **34d** | The tile's flows per pool (private, public, seed, again); **Bootstrap a pool**; the withdraw and its escape hatch; Activity | 34a′; the gate for mixing is a placeholder until D2 |
 | **34e** | The planner, and returns through token pools; D3's four-wide option and its fallback, if taken | D2; D3 |
 | **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |
-| **Re-pin** | The merge commit's templates; S0a and S0b again | the merge |
+| **Re-pin** | ✅ Folded into 34a: the templates were pinned to the merge from the start | the merge |
 | **34g** | The preprod rehearsal; the cross-area release review; `npm run tokens`, `dreps` and `lovejoin-pools`; deploy 34c; then package and upload; the handoff note | all |
 
-**S0d, the box ADA test the owner asked for.** A Rust test that proves the figure rather than estimating it.
+**S0d, the box ADA test the owner asked for** (✅ `seedelf-core/tests/lovejoin_box_value_test.rs`, results under [The groundwork](#the-groundwork-2026-10-17)). A Rust test that proves the figure rather than estimating it.
 - **What it builds,** under given protocol parameters, for the worst-case token (a 32-byte name, Q = 2^64−1) and for a typical one:
   - the box-paid withdraw into a Seedelf, with reference scripts and inline;
   - the returned box's own partial token send: the recipient, the token change and the fee;
@@ -514,7 +577,7 @@ One branch, and each step ends with its tests green.
 4. A box coming back by itself into a Seedelf.
 5. A return holding the token.
 6. A restore finding the token boxes.
-7. Discovery of PR #163's own pool, `c5852bb7…`, expected to be **not usable**: 2 ₳, with its scripts at a key address.
+7. Discovery of PR #163's own pool, `c5852bb7…`: 2 ₳, with its scripts at a key address, so carried inline. Expected to be **not usable** when this was written; the groundwork found it usable (a box comes back with 1.59 ₳), though what comes back can't pay alone for part of its token.
 8. If D3 is taken: a four-wide return and a four-wide mix, and the fallback to three, through a pool short for four.
 
 **Mainnet:** only the free checks of [§5](#5-starting-a-pool). Launching on mainnet waits until every preprod step above has worked.
@@ -524,7 +587,9 @@ One branch, and each step ends with its tests green.
 1. **D1:** who sets each listed token's box value, and by what rule.
 2. **D2:** what replaces the 30-box floor as the gate for mixing.
 3. **Seed or Bootstrap:** keep today's seed beside Bootstrap, or let Bootstrap replace it.
-4. **S1:** what to ask of PR #163 before it merges (the owner's repo, so the owner's call).
-5. **Cert 0 or cert 7** for L's registration: S0c's probe decides, unless the owner prefers Lovejoin's tested cert 7.
+4. ~~**S1:** what to ask of PR #163 before it merges~~: moot, it merged as it was.
+5. **Cert 0 or cert 7** for L's registration: the launch builder uses cert 0, which Ogmios takes; a real preprod launch confirms the ledger does, unless the owner prefers Lovejoin's tested cert 7.
 6. **How a mix is shown** (the owner, 2026-10-14): a mix from the public account can't be followed once it's sent. See [*The Lovejoin page*](#9-screens).
 7. **D3:** whether to offer four boxes a mix, on which pools, and the words for its fallback to three.
+8. **The box value** for the pools the wallet launches: S0d's table. 4 ₳ covers a typical token with 1.7% to spare and not the worst; a fixed figure, a figure per listed token (D1), or a token shape the launch refuses past some size.
+9. **The Seedelf minimum's sizing:** about 0.12 ₳ an output too high, a wallet-wide and CLI change of its own, which would lower S0d's figures by about 0.24 ₳.
