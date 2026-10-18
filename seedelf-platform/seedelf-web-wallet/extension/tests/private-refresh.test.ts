@@ -92,6 +92,17 @@ describe("once a private spend lands", () => {
     expect(askedSince(t, from).account).toEqual([]);
   });
 
+  it("a pool started from the private balance is private too (34d's review 2)", async () => {
+    const t = await unlocked();
+    await sent(t, "lovejoin-launch", { from: "private", lovelace: "21000000", fee: "500000" });
+    await lands(t);
+    expect(await t.session.get(SESSION_BALANCES_PREFIX + "preprod")).toBeDefined();
+    expect(await t.session.get(SESSION_PRIVATE_STALE_PREFIX + "preprod")).toBe(true);
+    const from = t.koios.calls.length;
+    await t.balances.get("preprod");
+    expect(askedSince(t, from).account).toEqual([]);
+  });
+
   it("Refresh still reads both", async () => {
     const t = await unlocked();
     await sent(t, "transfer", { payments: [] });
@@ -135,6 +146,28 @@ describe("what touches the public account reads it again", () => {
       confirmations: null,
       invalidHereafter: 1,
     });
+    await lands(t);
+    await readsAll(t);
+  });
+
+  it("a pool the public account started, which carries a slot", async () => {
+    const t = await unlocked();
+    await watchSent(t.deps, {
+      kind: "lovejoin-launch",
+      network: "preprod",
+      txHash: "ce".repeat(32),
+      submittedAt: t.clock.now,
+      confirmations: null,
+      invalidHereafter: 1,
+    });
+    await lands(t);
+    await readsAll(t);
+  });
+
+  it("a box back from Lovejoin the public account paid for (34d's review 9)", async () => {
+    const t = await unlocked();
+    const box = { kind: "lovejoin-withdraw", network: "preprod", txHash: "cf".repeat(32), submittedAt: t.clock.now, confirmations: null } as const;
+    await watchSent(t.deps, box, { toAccount: true });
     await lands(t);
     await readsAll(t);
   });

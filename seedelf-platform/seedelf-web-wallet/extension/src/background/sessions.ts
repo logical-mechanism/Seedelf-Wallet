@@ -122,7 +122,7 @@ import {
   chainOwner,
   chainRetryMs,
   checkBoxes,
-  MAX_DEPOSIT_BOXES,
+  mostBootstrap,
   MAX_MIX_BOXES,
   LovejoinSkipped,
   firstTries,
@@ -399,9 +399,13 @@ interface SessionRecord {
    * go through Lovejoin and the rest comes back, one chain, run by itself.
    * `again`: the wallet's boxes in the pool, mixed again with no deposit;
    * `publicToo`, those a mix from the public account put in too (the user
-   * asked). `skipped`: why Lovejoin was left out, when it was.
+   * asked). `skipped`: why Lovejoin was left out, when it was. `seed`: a
+   * deposit with no mixes, from before chunk 34; `bootstrap`, one since,
+   * whose boxes are held in the pool until brought back by hand. `pool`: the
+   * token pool it goes into, by its id (none: the classic pool), whose token
+   * its funding paid with the ADA.
    */
-  mix?: { boxes: number; again?: boolean; publicToo?: boolean; seed?: boolean; skipped?: string };
+  mix?: { boxes: number; again?: boolean; publicToo?: boolean; seed?: boolean; bootstrap?: boolean; pool?: string; skipped?: string };
   /**
    * The latest return through Lovejoin: how many transactions its chain has,
    * the return last (`last`), and when it began to be sent (`at`), recorded
@@ -1481,16 +1485,22 @@ export class SessionService {
   async mixOutBuild(
     network: NetworkName,
     boxes: number,
-    seed = false,
+    { pool, bootstrap = false }: { pool?: string; bootstrap?: boolean } = {},
   ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
-    // A seed makes no mixes, so it draws nothing from the pool: the floor
-    // doesn't apply, and it takes as many boxes as one deposit holds. Its
-    // funding is still a Seedelf spend, with giveme.my's collateral as any is.
-    checkBoxes(boxes, seed ? MAX_DEPOSIT_BOXES : MAX_MIX_BOXES);
-    if (!seed) await lovejoin.fits(network, boxes);
-    return this.mixFunding(network, await lovejoin.funding(network, boxes, false, seed ? 0 : undefined));
+    // A Bootstrap makes no mixes, so it draws nothing from the pool: the floor
+    // doesn't apply, and it takes as many boxes as one deposit holds, and as
+    // the deposit's fee leaves its funding's reserve room for: past that, the
+    // session would be funded, then come back without a box, its fees spent
+    // (chunk 34's 34d review, 3). Its funding is still a Seedelf spend, with
+    // giveme.my's collateral as any is.
+    checkBoxes(boxes, bootstrap ? mostBootstrap(pool) : MAX_MIX_BOXES);
+    if (bootstrap) checkBoxes(boxes, await lovejoin.privateBootstrapMost(network, pool), true);
+    if (!bootstrap) await lovejoin.fits(network, boxes, pool);
+    const { seed: _seed, ...funding } = await lovejoin.funding(network, boxes, false, bootstrap ? 0 : undefined, pool);
+    // No mixes is a Bootstrap since chunk 34's 34d: its boxes are held in the pool until brought back by hand.
+    return this.mixFunding(network, bootstrap ? { ...funding, bootstrap: true } : funding);
   }
 
   /**
@@ -1501,12 +1511,13 @@ export class SessionService {
    * account put in only when asked `anyway`: paid from here, they tie the
    * private balance to the account (lovejoin.ts againBoxes).
    */
-  async againBuild(network: NetworkName, anyway = false): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+  async againBuild(network: NetworkName, anyway = false, pool?: string): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
     if (await this.mixingAgain(network)) throw new Error(t("sess.mixingAgain"));
-    const { boxes, owned } = await lovejoin.againBoxes(network, anyway);
-    return this.mixFunding(network, { ...(await lovejoin.funding(network, boxes, true)), owned, ...(anyway ? { publicToo: true } : {}) });
+    const { boxes, owned } = await lovejoin.againBoxes(network, anyway, pool);
+    const funding = await lovejoin.funding(network, boxes, true, undefined, pool);
+    return this.mixFunding(network, { ...funding, owned, ...(anyway ? { publicToo: true } : {}) });
   }
 
   /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
@@ -1523,7 +1534,8 @@ export class SessionService {
       index,
       address,
       [
-        { to: address, lovelace: mix.lovelace, tokens: [] },
+        // A token pool's boxes take its token too, paid with their ADA in one UTxO, which the deposit spends.
+        { to: address, lovelace: mix.lovelace, tokens: mix.token ? [mix.token] : [] },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
       t(mix.again ? "sess.emptyMixPay" : "sess.emptyMix"),
@@ -1556,7 +1568,8 @@ export class SessionService {
           boxes: built.mix.boxes,
           ...(built.mix.again ? { again: true } : {}),
           ...(built.mix.publicToo ? { publicToo: true } : {}),
-          ...(built.mix.seed ? { seed: true } : {}),
+          ...(built.mix.bootstrap ? { bootstrap: true } : {}),
+          ...(built.mix.pool ? { pool: built.mix.pool } : {}),
         },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
@@ -3577,8 +3590,10 @@ export class SessionService {
             own,
             record?.mix?.publicToo,
             // A swap's, as deep as it was approved (independent review L21);
-            // a seed's is 0, so its chain is the deposit alone.
-            record?.mix?.seed ? 0 : record?.auto?.lovejoin?.depth,
+            // a Bootstrap's is 0 (a seed's was), so its chain is the deposit alone.
+            record?.mix?.seed || record?.mix?.bootstrap ? 0 : record?.auto?.lovejoin?.depth,
+            // The pool its mix was funded for: a token pool's token went with its ADA.
+            record?.mix?.pool,
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -3618,6 +3633,8 @@ export class SessionService {
             txs: chain.txs.length,
             delay,
             ...(record?.mix?.again ? { again: true } : {}),
+            ...(record?.mix?.bootstrap ? { bootstrap: true } : {}),
+            ...(chain.pool ? { pool: chain.pool } : {}),
             // The deposit, which the review shows: `txHash` above is the return,
             // the last of the chain, which spends what nothing has sent yet.
             entry: chain.txs[0]!.txHash,
@@ -3885,9 +3902,12 @@ export class SessionService {
       leaves: leaves ?? [],
       boxes: summary.lovejoin?.boxes ?? 0,
       again: !!summary.lovejoin?.again,
-      // A seed (depth 0) makes no mixes: its boxes stay in the pool for other
-      // people, with no due time, until the user brings one back.
-      ...(summary.lovejoin?.depth === 0 ? { seed: true } : {}),
+      // A Bootstrap (depth 0) makes no mixes: its boxes stay in the pool for other
+      // people, held, with no due time, until the user brings them back. A seed
+      // from before chunk 34 is depth 0 too, its boxes coming back by themselves.
+      ...(summary.lovejoin?.bootstrap ? { bootstrap: true } : summary.lovejoin?.depth === 0 ? { seed: true } : {}),
+      // A token pool's boxes, all of them, each leaf named by its pool already.
+      ...(summary.lovejoin?.pool ? { pools: { [summary.lovejoin.pool]: summary.lovejoin.boxes } } : {}),
       // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
       ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
     };

@@ -10,6 +10,19 @@ import { drepList } from "./dreps";
 import { formatAda, formatQuantity, shortHex, voteLabel } from "./format";
 import { tokenDecimals, tokenMark, tokenText } from "./tokens";
 
+/**
+ * What an entry is called on `network`: as activityTitle says it, and a deposit of the public account's into a token
+ * pool with its token beside it ("Into Lovejoin · NIGHT", chunk 34), named as the wallet's token list names it.
+ */
+export function activityTitleIn(network: NetworkName, e: ActivityEntry): string {
+  // The token the boxes took from the account: the one token that went out.
+  const gone = e.assets?.filter((a) => BigInt(a.quantity) < 0n) ?? [];
+  if (e.kind === "lovejoin-deposit" && gone.length === 1) {
+    return t("activity.title.lovejoinMixToken", { token: tokenText(network, gone[0]!).label });
+  }
+  return activityTitle(e);
+}
+
 /** What an entry is called. */
 export function activityTitle(e: ActivityEntry): string {
   switch (e.kind) {
@@ -64,6 +77,10 @@ export function activityTitle(e: ActivityEntry): string {
       return t("activity.title.lovejoinMix");
     case "lovejoin-round":
       return t("activity.title.lovejoinRound");
+    case "lovejoin-launch":
+      return t("activity.title.lovejoinLaunch");
+    case "lovejoin-back-paid":
+      return t("activity.title.lovejoinBackPaid");
   }
 }
 

@@ -350,11 +350,11 @@ fn each_network_measures_a_launch_as_the_wallet_does() {
         }))
         .unwrap();
         let terms = Terms {
-            token: BoxToken {
+            token: Some(BoxToken {
                 policy: [0x1a; 28],
                 name: b"NIGHT".to_vec(),
                 quantity: 100_000_000,
-            },
+            }),
             box_lovelace: 4_500_000,
             max_fee: 1_500_000,
         };

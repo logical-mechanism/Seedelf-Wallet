@@ -33,6 +33,7 @@ import {
   Chains,
   detailOf as lovejoinDetail,
   mixCosts,
+  BootstrapHeld,
   NotMixed,
   poolRoom,
   PrivateReview,
@@ -1050,6 +1051,19 @@ describe("Lovejoin's page (launch review H2)", () => {
     expect(line).toContain("They never come back by themselves, since each still shows where it went in. Mix my boxes again takes them first.");
     expect(line).toContain("Bring one back anyway");
     expect(renderToStaticMarkup(createElement(NotMixed, { count: 0, busy: false, onAnyway: () => undefined }))).toBe("");
+  });
+
+  it("says how many boxes a Bootstrap holds, that they don't come back by themselves, and both ways back (chunk 34)", () => {
+    const one = () => undefined;
+    const line = text(shown(createElement(BootstrapHeld, { count: 3, busy: false, onOne: one, onAll: one })));
+    expect(line).toContain("3 boxes of yours are held in the pool by a Bootstrap: they don't come back by themselves.");
+    expect(line).toContain("Bring one back");
+    expect(line).toContain("Bring them all back");
+    expect(line).toContain("Bring them all back lets them come back by themselves from then on");
+    expect(text(shown(createElement(BootstrapHeld, { count: 1, busy: false, onOne: one, onAll: one })))).toContain(
+      "1 box of yours is held in the pool by a Bootstrap: it doesn't come back by itself.",
+    );
+    expect(renderToStaticMarkup(createElement(BootstrapHeld, { count: 0, busy: false, onOne: one, onAll: one }))).toBe("");
   });
 
   const chains = createElement(Chains, {

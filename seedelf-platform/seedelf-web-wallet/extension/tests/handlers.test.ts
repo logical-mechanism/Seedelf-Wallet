@@ -15,7 +15,7 @@ import { loadTestWasm, testBalances, vectors } from "./fakes";
 const PASSWORD = "correct horse battery";
 
 function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Context {
-  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, accounts, dataParts } =
+  const { wallet, session, balances, moveIn, mint, transfer, withdraw, send, pending, contacts, activity, coins, staking, preferences, prices, nftImages, dapp, sessions, lovejoin, launch, accounts, dataParts } =
     t;
   return {
     wasm: loadTestWasm(),
@@ -38,6 +38,7 @@ function context(t = testBalances(), networks: NetworkName[] = ["preprod"]): Con
     dapp,
     sessions,
     lovejoin,
+    launch,
     accounts,
     dataParts,
     connector: async (on) => on,

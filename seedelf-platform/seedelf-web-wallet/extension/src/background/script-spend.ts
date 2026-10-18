@@ -45,7 +45,7 @@ import { outpoint, reservedSet, spentSet } from "./spent";
 import type { Keys, Wallet } from "./wallet";
 
 /** A built transaction is only sent within this long; after that, build again. */
-const BUILT_TTL_MS = 10 * 60_000;
+export const BUILT_TTL_MS = 10 * 60_000;
 
 /**
  * What a kept transaction is, as `send` names it when it refuses to send it.
@@ -53,7 +53,7 @@ const BUILT_TTL_MS = 10 * 60_000;
  * language words the noun itself, with the gender and the pronoun it takes
  * ("Revísalo" for a payment, "Revísala" for a mix).
  */
-export type SpendWhat = "payment" | "seedelf" | "staking" | "collateral" | "removal" | "mix" | "topUp";
+export type SpendWhat = "payment" | "seedelf" | "staking" | "collateral" | "removal" | "mix" | "topUp" | "launch";
 
 /** The one kept isn't the one reviewed, or none is. */
 const NOT_READY: Record<SpendWhat, I18nKey> = {
@@ -64,6 +64,7 @@ const NOT_READY: Record<SpendWhat, I18nKey> = {
   removal: "worker.spend.notReady.removal",
   mix: "worker.spend.notReady.mix",
   topUp: "worker.spend.notReady.topUp",
+  launch: "worker.spend.notReady.launch",
 };
 
 /** Built more than BUILT_TTL_MS ago. */
@@ -75,6 +76,7 @@ const TOO_OLD: Record<SpendWhat, I18nKey> = {
   removal: "worker.spend.tooOld.removal",
   mix: "worker.spend.tooOld.mix",
   topUp: "worker.spend.tooOld.topUp",
+  launch: "worker.spend.tooOld.launch",
 };
 
 /** It spends what a chain through Lovejoin sent since will spend (refuseReserved). */
@@ -86,6 +88,7 @@ const CHAIN_CONFLICT: Record<SpendWhat, I18nKey> = {
   removal: "worker.spend.chainConflict.removal",
   mix: "worker.spend.chainConflict.mix",
   topUp: "worker.spend.chainConflict.topUp",
+  launch: "worker.spend.chainConflict.launch",
 };
 
 export interface ScriptSpendDeps {

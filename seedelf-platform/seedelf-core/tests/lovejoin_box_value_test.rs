@@ -47,32 +47,20 @@
 //! So 4 ₳ covers a typical token with almost nothing to spare, and not the
 //! worst a launch can name. The figure is the owner's to choose from these.
 //!
+//! Since chunk 34's 34d the search is core's own (`lovejoin::way_back`,
+//! `least_box_lovelace`), which the launch form runs under the live
+//! parameters; this test holds it to what was measured, and to the
+//! suggestion every token measured gets (4.5 ₳).
+//!
 //! ```text
 //! cargo test -p seedelf-core --test lovejoin_box_value_test -- --nocapture
 //! ```
 
-use blstrs::{G1Projective, Scalar};
-use group::Group;
-use pallas_addresses::Address;
-use pallas_crypto::hash::{Hash, Hasher};
-use pallas_crypto::key::ed25519::SecretKey;
-use pallas_primitives::Fragment;
-use pallas_traverse::MultiEraTx;
-use pallas_txbuilder::{Output, ScriptKind};
-use rand_core::OsRng;
-use seedelf_core::address::wallet_contract;
-use seedelf_core::assets::{Asset, Assets};
-use seedelf_core::build::{self, Chain, Payment};
-use seedelf_core::constants::{VARIANT, get_config};
-use seedelf_core::eval::Resolved;
 use seedelf_core::lovejoin::{
-    self, BoxToken, BoxValue, PoolBox, Protocol, ReferenceDatum, templates,
+    BoxToken, BoxValue, Probe, least_box_lovelace, suggested_box_lovelace, way_back,
 };
-use seedelf_crypto::lovejoin as crypto;
-use seedelf_crypto::register::Register;
-use seedelf_crypto::schnorr;
-use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
-use serde_json::{Value, json};
+use seedelf_koios::koios::ProtocolParameters;
+use serde_json::Value;
 
 /// The least box value each case needs, as measured 2026-10-17 under the
 /// bundled parameters (4,310 lovelace a byte on both networks): the same on
@@ -84,6 +72,10 @@ const MEASURED: [(Shape, bool, u64); 4] = [
     (Shape::Typical, true, 3_830_000),
     (Shape::Typical, false, 3_950_000),
 ];
+
+/// An ADA pool's least box value, as measured 2026-10-18, scripts by
+/// reference, the same on both networks.
+const ADA_MEASURED: u64 = 3_450_000;
 
 fn params(network_flag: bool) -> ProtocolParameters {
     let rows: Value = serde_json::from_str(if network_flag {
@@ -121,259 +113,11 @@ impl Shape {
     }
 }
 
-/// A token pool launched with `box_lovelace` a box, on the generalized
-/// scripts, its seed made up here; its scripts at the holder when
-/// `by_reference`, else carried in every transaction.
-fn pool(network_flag: bool, box_lovelace: u64, token: BoxToken, by_reference: bool) -> Protocol {
-    let seed = ([0x5e; 32], 1);
-    let derived = templates::derive(&seed.0, seed.1).unwrap();
-    let datum = ReferenceDatum {
-        box_value: BoxValue {
-            lovelace: box_lovelace,
-            token: Some(token),
-        },
-        max_fee: 1_500_000.min(box_lovelace - 1),
-        mix_box_hash: derived.mix_box.hash,
-        mix_logic_hash: derived.mix_logic.hash,
-        fee_hash: derived.fee_contract.hash,
-    };
-    let holder = lovejoin::holder_address(network_flag);
-    let at_holder = |first: u8, output: Output| Resolved {
-        tx_hash: [first; 32],
-        index: 0,
-        output: output
-            .build_babbage_raw()
-            .unwrap()
-            .encode_fragment()
-            .unwrap(),
-    };
-    let reference = at_holder(
-        0x71,
-        Output::new(holder.clone(), 2_000_000)
-            .add_asset(Hash::new(derived.policy()), b"lovejoin".to_vec(), 1)
-            .unwrap()
-            .set_inline_datum(datum.encode()),
-    );
-    let scripts: Vec<Resolved> = if by_reference {
-        [(0x72, &derived.mix_box), (0x73, &derived.mix_logic)]
-            .into_iter()
-            .map(|(first, s)| {
-                at_holder(
-                    first,
-                    Output::new(holder.clone(), 20_000_000)
-                        .set_inline_script(ScriptKind::PlutusV3, s.cbor.clone()),
-                )
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    lovejoin::verify_pool(network_flag, &reference, seed, &scripts).unwrap()
-}
-
-fn chain(network_flag: bool) -> Chain {
-    Chain {
-        params: params(network_flag),
-        network_flag,
-        config: get_config(VARIANT, network_flag).unwrap(),
+fn value(lovelace: u64, shape: Shape) -> BoxValue {
+    BoxValue {
+        lovelace,
+        token: Some(shape.token()),
     }
-}
-
-/// A box of `pool`'s that `sk` owns, made up here.
-fn own_box(pool: &Protocol, sk: &Scalar) -> PoolBox {
-    let a = G1Projective::generator() * Scalar::from(987_654_321u64);
-    let b = a * sk;
-    let (a, b) = (crypto::point_to_bytes(&a), crypto::point_to_bytes(&b));
-    let utxo = Resolved {
-        tx_hash: [0x30; 32],
-        index: 0,
-        output: pool
-            .box_value()
-            .output(pool.mix_box_address())
-            .unwrap()
-            .set_inline_datum(lovejoin::mix_datum(&a, &b))
-            .build_babbage_raw()
-            .unwrap()
-            .encode_fragment()
-            .unwrap(),
-    };
-    PoolBox::from_resolved(utxo, pool).unwrap()
-}
-
-fn assets_of(token: &BoxToken, quantity: u64) -> Assets {
-    Assets::new()
-        .add(
-            Asset::new(
-                hex::encode(token.policy),
-                hex::encode(&token.name),
-                quantity,
-            )
-            .unwrap(),
-        )
-        .unwrap()
-}
-
-/// What came back, as the wallet reads it from Koios: a row at the wallet
-/// contract under the withdraw's register.
-fn row(network_flag: bool, tx: &[u8], register: &Register, token: &BoxToken) -> UtxoResponse {
-    let decoded = MultiEraTx::decode(tx).unwrap();
-    let output = &decoded.outputs()[0];
-    let config = get_config(VARIANT, network_flag).unwrap();
-    let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-    let quantity = output.value().assets()[0].assets()[0]
-        .output_coin()
-        .unwrap();
-    serde_json::from_value(json!({
-        "tx_hash": hex::encode(*decoded.hash()), "tx_index": 0,
-        "address": wallet.to_bech32().unwrap(), "value": output.value().coin().to_string(),
-        "stake_address": null,
-        "payment_cred": hex::encode(config.contract.wallet_contract_hash),
-        "epoch_no": 0, "block_height": 0, "block_time": 0, "datum_hash": null,
-        "inline_datum": {
-            "bytes": hex::encode(register.to_vec().unwrap()),
-            "value": { "constructor": 0, "fields": [
-                { "bytes": register.generator }, { "bytes": register.public_value },
-            ]},
-        },
-        "reference_script": null,
-        "asset_list": [{
-            "policy_id": hex::encode(token.policy), "asset_name": hex::encode(&token.name),
-            "quantity": quantity.to_string(), "decimals": 0, "fingerprint": "",
-        }],
-        "is_spent": false,
-    }))
-    .unwrap()
-}
-
-/// The ledger's least fee for a finished transaction: its signed size, the
-/// budgets it declares, and its reference scripts.
-fn ledger_minimum(
-    params: &ProtocolParameters,
-    tx: &[u8],
-    signers: usize,
-    script_bytes: u64,
-) -> u64 {
-    let decoded = MultiEraTx::decode(tx).unwrap();
-    let units: u64 = decoded
-        .redeemers()
-        .iter()
-        .map(|r| {
-            seedelf_core::transaction::computation_fee(params, r.ex_units().mem, r.ex_units().steps)
-        })
-        .sum();
-    // A signature adds a 32-byte key and a 64-byte signature, about 101 bytes.
-    let size = tx.len() as u64 + 101 * signers as u64;
-    build::linear_fee(params, size)
-        + units
-        + build::reference_script_fee(params, script_bytes).unwrap()
-}
-
-/// Every step of a box's way back, at `box_lovelace`: `Ok` with the
-/// withdraw's fee and what came back, or the first step that can't be built.
-fn way_back(
-    network_flag: bool,
-    params: &ProtocolParameters,
-    box_lovelace: u64,
-    shape: Shape,
-    by_reference: bool,
-) -> Result<(u64, u64), String> {
-    let token = shape.token();
-    let pool = pool(network_flag, box_lovelace, token.clone(), by_reference);
-    let sk = Scalar::from(4_242_424u64);
-    let owner = Register::create(sk).unwrap();
-    let destination = owner.clone().rerandomize().unwrap();
-    let back = lovejoin::withdraw(
-        params,
-        &pool,
-        &[own_box(&pool, &sk)],
-        &sk,
-        destination.clone(),
-    )
-    .map_err(|e| format!("the withdraw: {e}"))?;
-    let minimum = ledger_minimum(params, &back.tx.tx_bytes.0, 1, pool.script_bytes);
-    assert!(
-        back.fee >= minimum,
-        "the withdraw pays {} of the ledger's {minimum}",
-        back.fee
-    );
-
-    let chain = Chain {
-        params: params.clone(),
-        ..chain(network_flag)
-    };
-    let came_back = row(network_flag, &back.tx.tx_bytes.0, &destination, &token);
-    let signer = Hasher::<224>::hash(SecretKey::new(OsRng).public_key().as_ref());
-    let other = Register::create(Scalar::from(31_337u64)).unwrap();
-    let mut address_bytes = vec![if network_flag { 0x60 } else { 0x61 }];
-    address_bytes.extend([0x44; 28]);
-    let address = Address::from_bytes(&address_bytes).unwrap();
-    let half = assets_of(&token, token.quantity / 2);
-    let all = assets_of(&token, token.quantity);
-    let measured = |what: &str, spend: anyhow::Result<build::ScriptSpend>| -> Result<(), String> {
-        spend
-            .and_then(|s| {
-                s.proven(|register, vkh| {
-                    schnorr::create_proof(register.clone(), sk, vkh.to_string())
-                })
-            })
-            .and_then(|s| s.measure_locally(&[]))
-            .map(|_| ())
-            .map_err(|e| format!("{what}: {e}"))
-    };
-    let inputs = std::slice::from_ref(&came_back);
-    let seedelf_part = build::minimum_seedelf_payment(params, &half).unwrap();
-    measured(
-        "part of the token to a Seedelf",
-        build::transfer_from(
-            &chain,
-            inputs,
-            &[Payment {
-                register: other.clone(),
-                lovelace: seedelf_part,
-                tokens: half.clone(),
-            }],
-            &owner,
-            signer,
-        ),
-    )?;
-    let address_part = build::minimum_address_payment(params, &address, &half).unwrap();
-    measured(
-        "part of the token to an address",
-        build::sweep_from(
-            &chain,
-            inputs,
-            &address,
-            address_part,
-            &half,
-            &owner,
-            signer,
-        ),
-    )?;
-    measured(
-        "all of it to a Seedelf",
-        build::transfer_most(&chain, inputs, &other, &all, &owner, signer),
-    )?;
-    measured(
-        "all of it to an address",
-        build::sweep_all(&chain, inputs, &address, &owner, signer),
-    )?;
-    Ok((back.fee, back.lovelace))
-}
-
-/// The least box value, to 0.01 ₳, at which every step builds.
-fn least(network_flag: bool, params: &ProtocolParameters, shape: Shape, by_reference: bool) -> u64 {
-    let (mut low, mut high) = (100u64, 1_000u64); // in hundredths of an ADA
-    assert!(way_back(network_flag, params, high * 10_000, shape, by_reference).is_ok());
-    assert!(way_back(network_flag, params, low * 10_000, shape, by_reference).is_err());
-    while high - low > 1 {
-        let mid = (low + high) / 2;
-        if way_back(network_flag, params, mid * 10_000, shape, by_reference).is_ok() {
-            high = mid;
-        } else {
-            low = mid;
-        }
-    }
-    high * 10_000
 }
 
 fn ada(lovelace: u64) -> String {
@@ -389,14 +133,15 @@ fn a_token_pools_box_value_is_proven() {
         let params = params(network_flag);
         let network = if network_flag { "preprod" } else { "mainnet" };
         for (shape, by_reference, expected) in MEASURED {
-            let least = least(network_flag, &params, shape, by_reference);
-            let (fee, back) = way_back(network_flag, &params, least, shape, by_reference).unwrap();
+            let probe = Probe::new(network_flag, by_reference).unwrap();
+            let least = least_box_lovelace(&probe, &params, Some(&shape.token())).unwrap();
+            let back = way_back(&probe, &params, &value(least, shape)).unwrap();
             println!(
                 "{network:<8} {shape:<8?} scripts {:<6} | least box value {} | its withdraw fee {} | back {}",
                 if by_reference { "by ref" } else { "inline" },
                 ada(least),
-                ada(fee),
-                ada(back),
+                ada(back.withdraw_fee),
+                ada(back.back),
             );
             assert_eq!(
                 least, expected,
@@ -404,18 +149,25 @@ fn a_token_pools_box_value_is_proven() {
             );
             // A hundredth less, and it's paying part of the token to a
             // Seedelf that can't be built.
-            let short =
-                way_back(network_flag, &params, least - 10_000, shape, by_reference).unwrap_err();
-            assert!(
-                short.starts_with("part of the token to a Seedelf"),
-                "{short}"
-            );
+            let short = way_back(&probe, &params, &value(least - 10_000, shape)).unwrap_err();
+            assert!(short.starts_with("part of it to a Seedelf"), "{short}");
+            // Every token measured is suggested 4.5 ₳.
+            assert_eq!(suggested_box_lovelace(least), 4_500_000);
         }
+        // An ADA pool's box: its way back, from what came back alone too.
+        let probe = Probe::new(network_flag, true).unwrap();
+        let least = least_box_lovelace(&probe, &params, None).unwrap();
+        println!(
+            "{network:<8} ADA pool scripts by ref | least box value {}",
+            ada(least)
+        );
+        assert_eq!(least, ADA_MEASURED, "{network} ADA pool");
     }
 
     // How far the price of a byte can rise before each candidate value stops
     // covering a shape, its scripts inline (the dearer): in steps of 10.
     let base = params(false);
+    let probe = Probe::new(false, false).unwrap();
     for shape in [Shape::Worst, Shape::Typical] {
         for candidate in [4_000_000u64, 4_250_000, 4_500_000, 5_000_000] {
             let at = |price: u64| ProtocolParameters {
@@ -423,7 +175,7 @@ fn a_token_pools_box_value_is_proven() {
                 ..base.clone()
             };
             let (mut low, mut high) = (base.coins_per_utxo_size / 2, base.coins_per_utxo_size * 4);
-            if way_back(false, &at(low), candidate, shape, false).is_err() {
+            if way_back(&probe, &at(low), &value(candidate, shape)).is_err() {
                 println!(
                     "{shape:?} at {}: not even at half today's price",
                     ada(candidate)
@@ -432,7 +184,7 @@ fn a_token_pools_box_value_is_proven() {
             }
             while high - low > 10 {
                 let mid = (low + high) / 2;
-                if way_back(false, &at(mid), candidate, shape, false).is_ok() {
+                if way_back(&probe, &at(mid), &value(candidate, shape)).is_ok() {
                     low = mid;
                 } else {
                     high = mid;

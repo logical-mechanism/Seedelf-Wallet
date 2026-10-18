@@ -160,6 +160,7 @@ fn usable_says_why_a_pool_cant_take_a_mix() {
         params: params(),
         pool_ref: None,
         registered: true,
+        back_only: false,
     })
     .unwrap();
     assert!(classic.usable && classic.why.is_none());
@@ -168,6 +169,7 @@ fn usable_says_why_a_pool_cant_take_a_mix() {
         params: params(),
         pool_ref: Some(lj_pool_ref(true)),
         registered: false,
+        back_only: false,
     })
     .unwrap();
     assert!(!unregistered.usable);
@@ -177,6 +179,7 @@ fn usable_says_why_a_pool_cant_take_a_mix() {
         params: params(),
         pool_ref: Some(lj_pool_ref(true)),
         registered: true,
+        back_only: false,
     })
     .unwrap();
     assert!(lj.usable, "{lj:?}");
@@ -301,11 +304,11 @@ fn a_pool_starts_from_the_seedelf_balance_and_signs_as_any_spend() {
         params: params(),
         utxos,
         classes: Default::default(),
-        token: api::TokenAmount {
+        token: Some(api::TokenAmount {
             policy_id: "1a".repeat(28),
             asset_name: hex::encode("NIGHT"),
             quantity: "100000000".into(),
-        },
+        }),
         box_lovelace: "4500000".into(),
         max_fee: "1500000".into(),
         register: true,

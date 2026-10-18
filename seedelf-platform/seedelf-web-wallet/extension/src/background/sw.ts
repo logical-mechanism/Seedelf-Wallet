@@ -35,6 +35,7 @@ import { StakingService } from "./staking";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { LovejoinService } from "./lovejoin";
+import { LovejoinLaunchService } from "./lovejoin-launch";
 import { PoolDiscovery } from "./lovejoin-pools";
 import { chromeArea } from "./storage";
 import { guardedConnector, keepStorageFromSites } from "./storage-access";
@@ -183,7 +184,8 @@ function getContext(): Promise<Worker> {
     const accounts = new AccountsService({ wasm, wallet, store, local, session, koios, now: Date.now });
     const prices = new PriceService({ session, local, preferences, now: Date.now });
     const nftImages = new NftImageService({ koios });
-    const activity = new ActivityService({ wasm, wallet, session, store, koios, local });
+    // Every Lovejoin pool's mix box names what the account did there (chunk 34): read from the service made below.
+    const activity = new ActivityService({ wasm, wallet, session, store, koios, local, mixBoxes: (n) => lovejoin.mixBoxes(n) });
     const contacts = new ContactsService({ wasm, store });
     const coins = new CoinControlService({ wallet, session, store, now: Date.now, activity, activeAccount: () => activeAccount(local) });
     const balances = new BalanceService({ wasm, wallet, session, local, koios, index, now: Date.now, activity, coins, store });
@@ -233,6 +235,8 @@ function getContext(): Promise<Worker> {
       lookForPools: (n) => discovery.look(n),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
+    // Starting a pool, from either side (chunk 34's 34d): what's shown already is discovery's.
+    const launch = new LovejoinLaunchService({ ...spends, lovejoin, discovery });
     dapp = new DappService({
       ...spends,
       preferences,
@@ -265,6 +269,7 @@ function getContext(): Promise<Worker> {
       dapp,
       sessions,
       lovejoin,
+      launch,
       connector,
       reachOpenPages,
       ...(protectedStorage ? {} : { connectorBlocked: "storage" as const }),

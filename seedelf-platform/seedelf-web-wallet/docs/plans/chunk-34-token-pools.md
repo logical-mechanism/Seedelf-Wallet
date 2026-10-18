@@ -6,11 +6,12 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 the groundwork, design session 1, 34a′ and 34c are done; 34d and 34e are next.** The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: 🚧 the groundwork, design session 1, 34a′, 34c and 34d are done; 34e is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
 - **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first.
 - **[34a′, the records](#34a--the-records-2026-10-17)** (`web-wallet/token-pools-records`, 2026-10-17): every pool's records beside the classic pool's, every mix followed until its boxes are back, Bootstrap's boxes held, gated on 1.5.0's own record of how it planned and ran.
 - **[34c, discovery and the data layer](#34c--discovery-and-the-data-layer-2026-10-17)** (`web-wallet/token-pools-discovery`, 2026-10-17): which pools are shown and how the wallet finds them, the data layer's copy of the rules, its pool list, crowds and combined box feed. The server's queries wait on one live run against home's db-sync, which the owner starts.
+- **[34d, the flows](#34d--the-flows-2026-10-18)** (`web-wallet/token-pools-flows`, 2026-10-18): the tile's mixes into a token pool from either side, Bootstrap in place of the seed, a pool's start from either side and every check before it, the escape hatch, and Activity's names. Worker, core and WebAssembly; the screens are 34f's.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
@@ -651,6 +652,76 @@ Branch `web-wallet/token-pools-discovery`, from main 88e5be7. [Session 1](#desig
 - **34f:** the hub's crowd line from `PoolDiscovery.crowdsOf` (the data layer's; none on Koios, which shows boxes alone), through an RPC of its own; the pools grouped by token from `known`.
 - **34g:** deploy the API before the upload, as ever; `npm run lovejoin-pools` with the other lists; the policy's *Changes* entry names the new reads: the data layer's `lovejoin/pools` and `lovejoin/tokens`, and on Koios the holder's outputs, launches' `tx_info` and L's registrations.
 
+## 34d · The flows (2026-10-18)
+
+Branch `web-wallet/token-pools-flows`, from main 87e83cb. The step's row as built: the tile's flows per pool, Bootstrap in place of the seed, a pool's start from either side, the withdraw's escape hatch, and Activity. Core, WebAssembly and the worker; the screens are 34f's, and today's page changed only where the worker's change would have made it untrue. Claude's choices, the owner's to overturn.
+
+**Core** (`seedelf-core/src/lovejoin/`)
+- **ADA pools launch** (session 1, 17): `Terms.token` is optional. A 10 ₳ ADA pool is refused before anything is built, as a copy of the classic pool's value.
+- **The account-paid launch** (`launch_from_account`, `AccountLaunch`): the public account's UTxOs, picked as an account-paid mint picks them (pure ADA first, the largest first), the first of them the seed; its own collateral; the change to its `0/0`; valid until a slot, as the account's transactions are. It's measured in the wallet, never as a draft through Ogmios. One step makes what a launch makes for both payers (`made`): the same outputs in the same order, the same certificate, the same checks.
+- **S0d's search is core's** (`box_value.rs`): `way_back`, `least_box_lovelace` (about a dozen ways back, about 20 ms each natively) and `suggested_box_lovelace`, the least plus 0.25 ₳ rounded up to 0.5 ₳. Every token S0d measured comes to 4.5 ₳, as session 1 (14) said. S0d's test now holds core's search to its table, and to an ADA pool's least, 3.45 ₳.
+- **`comes_back`** beside `usable`: whether a box already in a pool comes back, whatever a new box's minimum is now. It's the escape hatch's question; `usable` stops at the minimum first.
+- **A token deposit holds 64 boxes** at most (the worker's `MAX_TOKEN_DEPOSIT_BOXES`): 71 boxes of the worst token fit with two inputs, and 64 with 31, the same room the classic pool's 96 leaves.
+
+**WebAssembly**
+- **Every chain names its pool** beside its request (`poolRef`). The classic functions keep their signatures, the pool-aware forms are `*_in` beside them, so the classic tests run unedited.
+- **A session's chain into a token pool:** its deposit spends the session's own UTxOs holding the pool's token, its funding's, and never a stranger's. The tokens its boxes don't take come back with the return, read from the deposit's own outputs. A mix session funded for a token pool holds one UTxO: the boxes' ADA and their token together.
+- **The public account's chain:** its UTxOs holding the token first, the most first, their ADA counted; then ADA alone. The token change's least ADA counts in what the account pays. The worker's test found it short without that: an account holding two boxes' worth in one UTxO ran out at the first mix.
+- **What a funding names:** the token, Q × boxes.
+- **New:** `buildLovejoinLaunchFromAccount`; `lovejoinBoxValue` (least, suggested, a token pool's most); `buildLovejoinWithdrawPaid`, signed by the paying UTxO's key and the collateral's. Both launches report L's reward account, for the worker's `account_info`.
+
+**The worker**
+- **A pool is named by its id** (`poolNamed`): the classic pool, or one discovery found and WebAssembly verified. Any other is refused, so a mix only goes into a pool every wallet is shown.
+- **The tile's flows** take a pool: `mixOutBuild`, `againBuild`, `publicBuild`, `publicAgainBuild`, `funding` and `fits`. Each chain records its pool (`pools`) and each leaf's, so its boxes get that pool's due times. A swap's or a site's return still goes to the classic pool (34e).
+- **Bootstrap replaces the seed** on both builds (`bootstrap`): a chain record and a mix entry marked so, held by 34a′'s rules until brought back by hand. At most 96 boxes in the classic pool, 64 in a token pool; from the private balance, as many as its funding's reserve pays the deposit for (`privateBootstrapMost`, review 3 below). `funding` keeps 1.5.0's shape (`seed` at depth 0), since 1.5.0's gate holds it; a mix session renames it. A seed record from before reads as it did, and its boxes still come back by themselves.
+- **A pool's start** (`lovejoin-launch.ts`):
+  - `terms`: what a box may hold (least, suggested, a token pool's most) and the token's shown pools, to join instead (14). Worked out in WebAssembly once an epoch per token and Q.
+  - `build` checks first: the token in the list (20); Q a whole number; not a copy of a shown pool's values (11), once discovery has looked; an ADA pool not 10 ₳ (17); the box at least its least and, for a token, at most 9 ₳ (27). The fee cap is 1.5 ₳, under the box's ADA.
+  - It's built twice, registering L and without the certificate, and the review shows the first. Send checks 30 boxes' worth in the token's supply (`asset_info`, Koios alone) and asks `account_info` whether something registered L already: then the build without the certificate goes, still standard (34c), if it makes the same pool or its own L is registered too (review 4 and 7 below).
+  - Sent as any spend from its side: the private balance's with giveme.my's collateral (the default, session 1, 10); the public account's signed at review.
+  - Kept, sealed, in the schedule (`launches`): no rule reads it, and the pool is read from once discovery finds it, as every wallet's is (§3).
+- **The escape hatch** (§2):
+  - Whether a token pool's boxes come back is measured once an epoch (`comes_back`, a withdraw built in WebAssembly).
+  - A due box of a pool that can't is put off `STUCK_WAIT_MS` (6 h) and a spread, rather than built and refused every minute, each try costing a pool read.
+  - `status` says so per pool (`cantComeBack`), for the page's offer.
+  - `withdrawNow`'s `paid` brings a box back with the public account paying. The withdraw it keeps names its box and that it was paid; the private history's entry has no fee of its own.
+- **Activity:**
+  - Every pool's mix box names the account's deposits and mixes; a deposit of a token reads "Into Lovejoin · NIGHT".
+  - "Started a Lovejoin pool" on either side: the private history from the send, the account's from its NFT left at the holder.
+  - "Paid for a box back from Lovejoin" for the escape hatch.
+  - A new pending kind, `lovejoin-launch`, told apart as a stealth mint is: the account's carries a slot.
+- **New RPCs:** `lovejoin-mixes`, `lovejoin-bootstrap-release`, `lovejoin-launch-terms`, `-build` and `-submit`. The tile's builds take `pool` and `bootstrap`, and `lovejoin-withdraw-now` takes `paid`.
+
+**The page**, only where the worker's change made it untrue:
+- **The seed's offer is Bootstrap's**, behind *Help start the pool* as before. It's offered whatever the pool holds (D2's "any time"), with the floor's warning only while the pool is short. Its copy and reviews say the boxes stay until brought back.
+- **Held boxes:** a callout with *Bring one back*, which asks first (a box nobody has mixed since shows its way in and out; one someone else's mix has moved comes back first), and *Bring them all back*.
+- **Strings:** the seed's keys became `lovejoin.bootstrap.*`, beside the worker's and Activity's new ones, in es and ja. The critical ones, and eight more, were back-translated by an independent agent that saw only the Spanish and the Japanese. Its findings were applied, two of them the English's own (the note under *Bring them all back* read as a contradiction, and the box value's minimum as ambiguous).
+
+**Tests:** core's launch (7), box value and pools tests; WebAssembly's `lovejoin_flows_test.rs` (7); the worker's `lovejoin-flows.test.ts` (14): a mix into the token pool from either side, end to end; Bootstrap from either side; a pool's start and every refusal; the escape hatch; Activity's names. Also the screens' `BootstrapHeld`, the seed's tests made Bootstrap's, and the e2e offer. The classic pool's tests and 1.5.0's gate pass unedited.
+
+**The review's findings, fixed (2026-10-18).** An independent adversarial review of 84c2775 found nine; each is fixed, with a test.
+1. **Privacy, high: every mix flow named its pool to Koios.** `split` read one pool, so `fits`, `againBoxes`, a session's chain, `publicBuild` and `publicAgainBuild` sent `credential_utxos` for that pool's `mix_box` alone. It lists the whole read set now, as a status read does, and takes the pool's rows. Test: every read naming a `mix_box` names both pools, through `fits` (either pool), `room` and a token mix's `publicBuild`.
+2. **Privacy: a private launch landing read the public account again.** `lovejoin-launch` is in `PRIVATE_SPENDS`; the account's launch carries a slot, as an account-paid mint does. Tests: `private-refresh.test.ts`, either side.
+3. **Money: a large private Bootstrap was funded, then couldn't deposit.** Capped: core's `bootstrap_most` builds the deposit from one UTxO of `funding_for(n, 0, box)` and the boxes' token, its change at a base address, and finds the most it pays for by halving. The worker's `privateBootstrapMost` asks WebAssembly (`lovejoinBootstrapMost`) once an epoch per pool, and `mixOutBuild` refuses more with "Bootstrap 1 to N boxes at a time." On preprod's parameters that's 53 classic boxes, 40 of LJTEST and 35 of the worst token. Growing the reserve instead would have changed 1.5.0's funding at depth 0, which its gate holds. Tests: core's `a_private_bootstrap_is_held_to_what_its_reserve_pays_for` (N builds, N + 1 doesn't); the worker's refusal before giveme.my is asked, with the public account's cap unchanged.
+4. **Money: a launch rebuilt without the certificate could be another pool.** Both builds are made at review. Send sends the one without the certificate only if it makes the same pool, or `account_info` says its own L is registered too; otherwise it refuses (`lj.launch.otherPool`) and nothing is sent. Test: a build without the certificate made to name another pool is refused, then sent once that pool's L is registered.
+5. **Money, low: the copy check read a stale list.** `build` calls `discovery.look` first, the request every wallet makes. Test: a pool the look finds refuses the start as a copy.
+6. **Tests:** a 1.5.0 seed record (its chain a seed's, no `mixes`) still brings its box back by itself once someone else's mix moved it, as a Bootstrap's never does; a private Bootstrap's chain is recorded `bootstrap`, with its session and no due time, once its funding lands and the session runs.
+7. **Privacy: a launch's `asset_info` and `account_info` went out at review.** Both wait for Send now (see 4), before anything is sent; the review asks only what any spend asks. Test: neither at build, both at Send before `submittx`.
+8. **Privacy default, low: `from` missing or malformed launched from the public account.** Refused (`lj.launch.from`) before anything is read. Test: undefined, "", "account" and "Public".
+9. **Display, low: a paid withdraw left the public balance stale.** One the account paid for drops the whole reading as it's sent and as it lands (`watchSent`'s `toAccount`, and `settleWithdrawing`). Tests: the escape hatch's, at both moments; `private-refresh.test.ts` for the watch.
+
+The two new strings (`lj.launch.from`, `lj.launch.otherPool`) are machine drafts in es and ja; neither is in the critical set.
+
+**For later steps:**
+- **34e:** returns through token pools, the planner per pool (`MIX_FEE_ESTIMATE`, `per_box`), and D3.
+- **34f:** the screens over these RPCs:
+  - the hub, a pool's page and the mix cards (`lovejoin-mixes`);
+  - the launch form (`lovejoin-launch-terms`, `-build`, `-submit`);
+  - the tile's pool picker;
+  - the escape hatch's offer (`status.pools[].cantComeBack`, then `lovejoin-withdraw-now` with `paid`);
+  - Bootstrap per pool, with its progress below the floor.
+- **34g:** the policy's *Changes* entry names a launch's `asset_info` and `account_info`, the account-paid launch and the escape hatch; and the launch's first real submit on preprod (S0c).
+
 ## Open for discussion
 
 ### D1 · Pool spam and sync
@@ -766,7 +837,7 @@ Each step ends with its tests green. The steps can land as parts, but they ship 
 | **34a′** | ✅ Records: their shapes, migrating 1.5.0's, and reading every shown pool. Each mix's record lasts until its boxes are counted back, and Bootstrap is a kind of its own. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault ([as built](#34a--the-records-2026-10-17)) | 34a; session 1 |
 | **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
 | **34c** | ✅ Discovery and the data layer: the holder index, the shown-pool rule (standard, finished by its launch, earliest for its values), the bundled head start, the data layer's own copy of the rules (32), the pool list and the combined box feed, and deposit counts as possible origins ([as built](#34c--discovery-and-the-data-layer-2026-10-17); its live db-sync run is the owner's) | session 1 (11, 12) |
-| **34d** | The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity | 34a′, 34c |
+| **34d** | ✅ The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity ([as built](#34d--the-flows-2026-10-18)) | 34a′, 34c |
 | **34e** | The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback | 34a′ |
 | **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |
 | **Re-pin** | ✅ Folded into 34a: the templates were pinned to the merge from the start | the merge |

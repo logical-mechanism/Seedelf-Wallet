@@ -43,7 +43,8 @@ import { isTrap } from "./wasm";
 export const HOLDER = "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4";
 
 /** The NFT's name, ASCII `lovejoin`: the only one `one_shot_mint` allows. */
-const NFT_NAME = "6c6f76656a6f696e";
+export const LOVEJOIN_NFT = "6c6f76656a6f696e";
+const NFT_NAME = LOVEJOIN_NFT;
 
 /** The classic pool's box: an ADA pool on the new scripts at this value is a copy of its, never shown. */
 const CLASSIC_LOVELACE = "10000000";
@@ -115,6 +116,9 @@ const LISTED: Record<NetworkName, ReadonlySet<string>> = {
   preprod: new Set(tokenList.preprod.map((t) => t.policy + t.name)),
   mainnet: new Set(tokenList.mainnet.map((t) => t.policy + t.name)),
 };
+
+/** Whether a token (its policy and name, hex) is in the wallet's list on `network`: only such a token has pools. */
+export const isListed = (network: NetworkName, policyId: string, assetName: string) => LISTED[network].has(policyId + assetName);
 
 /** What WebAssembly answers about a pool (`lovejoin::PoolView`), as discovery reads it. */
 interface PoolView {

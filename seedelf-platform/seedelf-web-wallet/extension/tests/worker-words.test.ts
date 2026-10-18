@@ -143,7 +143,7 @@ describe("Lovejoin's pool under its floor", CHAINS, () => {
     try {
       await i18n.changeLanguage("ja");
       const e = (await t.lovejoin.fits("preprod", 1).catch((x: unknown) => x)) as Error;
-      expect(e.message).toBe(`${tr("lj.floorShortSentence", { count: 20, floor: 25 })}${tr("lj.poolSeedable")}`);
+      expect(e.message).toBe(`${tr("lj.floorShortSentence", { count: 20, floor: 25 })}${tr("lj.poolBootstrap")}`);
       expect(e.message).toContain("今は 20 件です。代わりに");
     } finally {
       preprod.poolFloor = floor;

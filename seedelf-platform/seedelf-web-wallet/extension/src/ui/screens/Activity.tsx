@@ -27,7 +27,7 @@ import {
   activityAmount as amount,
   activityCsv,
   activityDetail,
-  activityTitle as title,
+  activityTitleIn,
   exported,
   feeOnly,
   poolOf,
@@ -270,7 +270,7 @@ export function Activity({
                     <button type="button" className="token-row" onClick={() => setOpen(e)}>
                       <span className={`avatar activity__icon activity__icon--${e.direction}`}>{icon(e)}</span>
                       {/* Whole, on a second line if it must: "Already in your private bal…" was cut (AC-3). */}
-                      <span className="token-row__label activity__title">{title(e)}</span>
+                      <span className="token-row__label activity__title">{activityTitleIn(network, e)}</span>
                       <span className={`token-row__amount activity__amount--${e.direction}`}>
                         {amount(e, amounts.ada)}
                       </span>
@@ -318,7 +318,7 @@ export function Activity({
         </section>
       )}
       {open && (
-        <Modal title={title(open)} titleId="activity-details-title" onClose={() => setOpen(undefined)}>
+        <Modal title={activityTitleIn(network, open)} titleId="activity-details-title" onClose={() => setOpen(undefined)}>
           <ReviewRows testId="activity-details">
             {/* What it paid, or what came in, the fee apart below; one that moved nothing but its fee says the fee alone
                 (blind test §9.1: T08's read "Amount +32.300614 ₳" for 25 ₳ paid). */}

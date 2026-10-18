@@ -58,6 +58,7 @@ import { seedelfTokenOf } from "./chain";
 import { collateralPayments, SESSION_ACCOUNT_UTXOS_PREFIX } from "./coin-control";
 import { ownDrepId } from "./governance";
 import { pendingEntries, rewardAccountHex } from "./incoming";
+import { HOLDER, LOVEJOIN_NFT } from "./lovejoin-pools";
 import { CREDENTIALS_PER_REQUEST, type Koios, type KoiosAccountTx, type KoiosTxInfo, type KoiosTxOut, type KoiosUtxo } from "./koios";
 import { pendingKey } from "./pending";
 import type { PrivateStore } from "./private-store";
@@ -212,6 +213,7 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
   "session-out",
   "session-back",
   "lovejoin-withdraw",
+  "lovejoin-launch",
 ]);
 
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
@@ -246,6 +248,11 @@ export interface ActivityDeps {
   now?: () => number;
   /** Reads the account's transactions on their way (incoming.ts `pendingEntries`); without it, none are listed. */
   wasm?: typeof Wasm;
+  /**
+   * Every Lovejoin pool's `mix_box` the wallet reads on a network (lovejoin.ts `mixBoxes`, chunk 34): a token pool's
+   * deposits and mixes are named as the classic pool's are. Without it, the classic pool's alone.
+   */
+  mixBoxes?: (network: NetworkName) => Promise<string[]>;
 }
 
 /** Each token's quantity, signed by `sign`, from anything listing tokens. */
@@ -301,6 +308,8 @@ export class ActivityService {
     // A payment or a staking change on the Cardano account isn't Seedelf's: its Activity comes from Koios.
     if (!SEEDELF_KINDS.has(pending.kind)) return Promise.resolve();
     const s = summary as Record<string, any>;
+    // A Lovejoin pool the public account paid to start is that account's too (lovejoin-launch.ts).
+    if (pending.kind === "lovejoin-launch" && s.from !== "private") return Promise.resolve();
     // A transfer or a withdrawal pays one or more; the rest pay one amount.
     const paid: Array<Record<string, any>> = Array.isArray(s.payments) ? s.payments : [s];
     const lovelace = paid.reduce((sum, p) => sum + BigInt(p.lovelace ?? "0"), 0n).toString();
@@ -347,7 +356,10 @@ export class ActivityService {
                   }
                 : pending.kind === "mint"
                   ? { ...shared, kind: "mint", direction: "none", detail: s.label || undefined }
-                  : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
+                  : pending.kind === "lovejoin-launch"
+                    ? // What it locks for good left the balance, as what a payment pays does.
+                      { ...shared, kind: "lovejoin-launch", direction: "out" }
+                    : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
     return this.update(network, (h) => {
       // A return's money came from the session's account, which its fundings paid: it carries what they
       // spent, as their change does, and keeps it should their entries age out. `classes` reads all of a
@@ -480,7 +492,10 @@ export class ActivityService {
     const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
     // The account's DRep, from its key: its certificates and votes are named for what they did.
     const drep = await ownDrepId(this.deps).catch(() => undefined);
-    const mixBox = NETWORKS[network].lovejoin?.mixBox;
+    // Every pool's mix box the wallet reads, the classic pool's at least (chunk 34): from the device, no request.
+    const classic = NETWORKS[network].lovejoin?.mixBox;
+    const read_ = await this.deps.mixBoxes?.(network).catch(() => undefined);
+    const mixBox = new Set([...(classic ? [classic] : []), ...(read_ ?? [])]);
     // This account's collateral payments, which only the device knows are: a name, never worth failing the list for.
     const collateral = await collateralPayments(this.deps.store, network, index).catch(() => new Set<string>());
     const read = async (txs: KoiosTxInfo[]) => this.tickers(network, describe(txs, ours, own, stake, drep, mixBox, collateral));
@@ -769,6 +784,12 @@ const DREP_KIND = {
  * phrase, or one someone paid from their own box: the chain can't tell them
  * apart). With someone else's key beside the box, it's a payment, named with
  * who it paid or who paid it, never the box (release review C22).
+ *
+ * Every pool the wallet reads is named so (chunk 34): `mixBox` is the classic
+ * pool's mix box, or every pool's. A box spent into a Seedelf with the
+ * account's money beside it is a box it paid to bring back ("lovejoin-back-
+ * paid", the escape hatch); and one that left the `lovejoin` NFT at
+ * Lovejoin's holder, paid by the account, started a pool ("lovejoin-launch").
  */
 export function describe(
   txs: KoiosTxInfo[],
@@ -776,10 +797,17 @@ export function describe(
   own: ReadonlyMap<string, ActivityEntry>,
   stake?: string,
   drep?: string,
-  mixBox?: string,
+  mixBox?: string | ReadonlySet<string>,
   collateral: ReadonlySet<string> = new Set(),
 ): ActivityEntry[] {
-  const atBox = (o: KoiosTxOut) => !!mixBox && (o as TxOut).payment_addr.cred === mixBox;
+  const boxes = typeof mixBox === "string" ? new Set([mixBox]) : (mixBox ?? new Set<string>());
+  const atBox = (o: KoiosTxOut) => {
+    const cred = (o as TxOut).payment_addr.cred;
+    return !!cred && boxes.has(cred);
+  };
+  // A launch's reference UTxO: the pool's `lovejoin` NFT at the holder, for good.
+  const launched = (o: KoiosTxOut) =>
+    (o as TxOut).payment_addr.cred === HOLDER && (o.asset_list ?? []).some((a) => a.asset_name === LOVEJOIN_NFT && a.quantity === "1");
   // Someone else's key: not the account's, not the box, and not a script (Lovejoin's fee shard is one), which the
   // address's header says: a payment script's addresses go on from addr1 (addr_test1) with z, x, 2 or w.
   const someoneElse = (o: KoiosTxOut) => !ours(o) && !atBox(o) && !/^addr(_test)?1[zx2w]/.test(o.payment_addr.bech32);
@@ -807,9 +835,21 @@ export function describe(
     const [boxIn, boxOut] = [tx.inputs.some(atBox), tx.outputs.some(atBox)];
     // Beside the box, a payment to someone, or someone paying for their own box's withdrawal: a payment, saying who.
     const besideBox = (boxIn || boxOut) && [...tx.inputs, ...tx.outputs].some(someoneElse);
-    const lovejoin: ActivityEntry["kind"] | undefined = besideBox
-      ? undefined
-      : spent && boxOut ? (boxIn ? "lovejoin-round" : "lovejoin-deposit") : boxIn && !boxOut && direction === "in" ? "lovejoin-withdraw" : undefined;
+    const lovejoin: ActivityEntry["kind"] | undefined = spent && tx.outputs.some(launched)
+      ? "lovejoin-launch"
+      : besideBox
+        ? undefined
+        : spent && boxOut
+          ? boxIn
+            ? "lovejoin-round"
+            : "lovejoin-deposit"
+          : boxIn && !boxOut
+            ? direction === "in"
+              ? "lovejoin-withdraw"
+              : spent
+                ? "lovejoin-back-paid"
+                : undefined
+            : undefined;
     const kind: ActivityEntry["kind"] = mine
       ? mine.kind
       : collateral.has(tx.tx_hash)
