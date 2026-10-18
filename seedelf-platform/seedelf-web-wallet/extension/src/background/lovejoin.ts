@@ -92,6 +92,8 @@ import type { LovejoinDelay, LovejoinDepth, LovejoinWidth } from "../shared/pref
 import { lovejoinOn, NETWORKS, type NetworkName } from "../networks";
 import type {
   LeftOutUtxo,
+  LovejoinBoxValue,
+  LovejoinCrowd,
   LovejoinFunding,
   LovejoinChainTx,
   LovejoinChainView,
@@ -618,6 +620,15 @@ export interface LovejoinChain {
   width?: 4;
   /** Four was asked, and it went three: why. */
   fellBack?: string;
+  /** What a box holds in each token pool `ways` names, by its id, for the review (34f). */
+  values?: Record<string, LovejoinBoxValue>;
+}
+
+/** What a box holds in each of `pools`, by its id, for a review to name them (34f). */
+export function valuesOf(pools: LovejoinPool[]): Record<string, LovejoinBoxValue> {
+  return Object.fromEntries(
+    pools.filter((p) => p.id !== CLASSIC).map((p) => [p.id, { lovelace: p.lovelace.toString(), ...(p.token ? { token: p.token } : {}) }]),
+  );
 }
 
 /**
@@ -1095,9 +1106,18 @@ export interface LovejoinDeps extends ScriptSpendDeps {
   known?: (network: NetworkName) => Promise<PoolRef[]>;
   /** Looks for pools launched since (lovejoin-pools.ts' `look`): the Lovejoin page, as it opens. */
   lookForPools?: (network: NetworkName) => Promise<void>;
+  /**
+   * What discovery says of the pools it found, for the Lovejoin page (chunk 34's 34f): each one's launch
+   * transaction, by pool id, and the data layer's crowds as its last list counted them (the classic pool's under
+   * "classic"; none on Koios). From the device, no request.
+   */
+  facts?: (network: NetworkName) => Promise<{ launches: ReadonlyMap<string, string>; crowds?: ReadonlyMap<string, LovejoinCrowd> }>;
 }
 
 const HOUR = 3_600_000;
+
+/** How long a pool the wallet started is said to be on its way to the list, before no look has found it (34f). */
+const STARTED_SAID_MS = 24 * HOUR;
 
 /**
  * Boxes due at once come back one a run; each of the others waits again,
@@ -2472,12 +2492,14 @@ export class LovejoinService {
     const c: ChainCall = { owner, index, rows, collateral, params, merge, depth, again, own, publicToo, pool: into, asked };
     // A return's tokens go through their own pools beside its ADA's, one chain (chunk 34's §7).
     let tokens: LovejoinTokenWay[] | undefined;
+    let values: Record<string, LovejoinBoxValue> | undefined;
     // The pools as acrossOf read them, when no token went in: the classic pool's chain is built from that read.
     let read: Split | undefined;
     if (way.returns && !again && into.id === CLASSIC) {
       const across = await this.acrossOf(network, c, way.returns);
       if (across?.chain) return across.chain;
       tokens = across?.tokens;
+      values = across?.values;
       read = across?.classic;
     }
     // What the spare ADA pays for at a width, a mix session's no more than it was funded for.
@@ -2498,7 +2520,7 @@ export class LovejoinService {
       read = undefined;
       return this.fanOut(network, split, c, countAt);
     });
-    return tokens?.length ? { ...chain, ways: tokens } : chain;
+    return tokens?.length ? { ...chain, ways: tokens, ...(values ? { values } : {}) } : chain;
   }
 
   /**
@@ -2624,7 +2646,7 @@ export class LovejoinService {
     network: NetworkName,
     c: ChainCall,
     returns: NonNullable<ChainWay["returns"]>,
-  ): Promise<{ chain?: LovejoinChain; tokens: LovejoinTokenWay[]; classic?: Split } | undefined> {
+  ): Promise<{ chain?: LovejoinChain; tokens: LovejoinTokenWay[]; classic?: Split; values?: Record<string, LovejoinBoxValue> } | undefined> {
     // The pools as discovery last kept them, with no request: a return whose spare pays for no box asks for no list,
     // as before token pools (34e's review, 9). Its pool read below lists them as any read does.
     const tokenPools = (await this.readSet(network, true)).filter((p) => p.token && p.ref);
@@ -2649,6 +2671,8 @@ export class LovejoinService {
       byToken.set(unitOf(p), [...(byToken.get(unitOf(p)) ?? []), p]);
     }
     if (!byToken.size) return undefined;
+    // What a box holds in each pool a token could go into, for the review's names and Change (34f).
+    const values = valuesOf([...byToken.values()].flat());
     const classic = this.classic(network);
     const { depth, asked, owner } = c;
     // Before any pool read: whether the spare ADA pays for a box at all, each token in the pool named for it, or the
@@ -2703,7 +2727,7 @@ export class LovejoinService {
         if (chosen) legs.push({ pool: chosen, split: splits.get(chosen.id)! });
       }
       // No token goes into a pool: the classic pool's chain is the return's, from this same read.
-      if (!legs.length) return { tokens, classic: splits.get(CLASSIC)! };
+      if (!legs.length) return { tokens, classic: splits.get(CLASSIC)!, values };
       const classicSplit = splits.get(CLASSIC)!;
       legs.push({ pool: classic, split: classicSplit });
       // The ADA's pool under its floor takes no box this time: the tokens go, and the ADA left comes back with the return.
@@ -2797,7 +2821,7 @@ export class LovejoinService {
           if (way.boxes < 1) way.skipped = t("sess.skip.warn.noBox");
           else delete way.skipped;
         }
-        const chain: LovejoinChain = { ...built, leaves, parts, ways: tokens, ...(w === 4 ? { width: 4 as const } : {}) };
+        const chain: LovejoinChain = { ...built, leaves, parts, ways: tokens, values, ...(w === 4 ? { width: 4 as const } : {}) };
         const mine = await this.reserve(network, owner, chain.txs, this.deps.now() + BUILT_TTL_MS);
         await this.crossCheck(network, chain, firsts).catch(async (e: unknown) => {
           await this.unreserve(network, owner, mine).catch(() => undefined);
@@ -2840,7 +2864,7 @@ export class LovejoinService {
           tokenWay.boxes = 0;
           tokenWay.skipped ??= t("lj.tokens.skip.warn.failed");
         }
-        return { tokens, classic: classicSplit };
+        return { tokens, classic: classicSplit, values };
       }
     });
   }
@@ -4367,22 +4391,40 @@ export class LovejoinService {
     // hatch): said, so the page can offer the public account to pay. One request for the parameters, only then.
     const params = tokens.some((r) => r.owned.length) ? await this.deps.koios(network).epochParams().catch(() => undefined) : undefined;
     const stuck = (r: PoolRead) => (params && r.owned.length ? this.cantComeBack(network, r.pool, params) : undefined);
+    // What the hub says of each pool beside the read (chunk 34's 34f): its crowd, its launch, and whether this wallet
+    // started it; and the starts no look has found yet. From the device alone.
+    const facts = await this.deps.facts?.(network).catch(() => undefined);
+    const crowdOf = (id: string) => facts?.crowds?.get(id === CLASSIC ? "classic" : id);
+    const launched = schedule.launches ?? [];
+    // A start no look has found within a day never will be (a copy that lost the race, a rollback): no longer said
+    // to be on its way (34f's review, 11).
+    const started = launched
+      .filter((l) => !reads.some((r) => r.pool.id === l.id) && this.deps.now() - l.at < STARTED_SAID_MS)
+      .map((l) => ({ id: l.id, txHash: l.txHash, at: l.at }));
+    const classicCrowd = crowdOf(CLASSIC);
     return {
       available: true,
       ...view(classic!),
       chains: await this.rows(schedule.chains),
+      ...(classicCrowd ? { crowd: classicCrowd } : {}),
+      ...(started.length ? { started } : {}),
       ...(tokens.length
         ? {
             pools: tokens.map((r) => {
               const v = view(r);
               const token = r.pool.token;
               const cantComeBack = stuck(r);
+              const crowd = crowdOf(r.pool.id);
+              const launch = facts?.launches.get(r.pool.id);
               return {
                 id: r.pool.id,
                 box: { lovelace: r.pool.lovelace.toString(), ...(token ? { token } : {}) },
                 ...v,
                 ...(token ? { token: { ...token, quantity: (BigInt(token.quantity) * BigInt(v.boxes.length)).toString() } } : {}),
                 ...(cantComeBack ? { cantComeBack } : {}),
+                ...(crowd ? { crowd } : {}),
+                ...(launch ? { launch } : {}),
+                ...(launched.some((l) => l.id === r.pool.id) ? { mine: true as const } : {}),
               };
             }),
           }
@@ -4550,6 +4592,7 @@ export class LovejoinService {
           next: times.length ? Math.min(...times) : null,
           notMixed: counts.notMixed,
           ...(counts.unsure ? { unsure: counts.unsure } : {}),
+          ...(pool ? { box: { lovelace: pool.lovelace.toString(), ...(token ? { token } : {}) } } : {}),
         },
       ];
     });
@@ -4779,13 +4822,20 @@ export class LovejoinService {
    * brought back, it ties where it went in to the private balance. Nor,
    * unless asked `anyway`, one whose making no record of the wallet's
    * accounts for and Koios hasn't said: it's asked of first, and one Koios
-   * can't say of is refused (independent review M14).
+   * can't say of is refused (independent review M14). `pool`: with no `box`,
+   * one of that pool's boxes (a pool's own page, chunk 34's 34f); none, any's.
    */
-  withdrawNow(network: NetworkName, box?: OutRef, anyway = false, paid = false): Promise<PendingTx> {
-    return this.inTurn(`withdraw.${network}`, () => this.withdrawNowNow(network, box, anyway, paid));
+  withdrawNow(network: NetworkName, box?: OutRef, anyway = false, paid = false, pool?: string): Promise<PendingTx> {
+    return this.inTurn(`withdraw.${network}`, () => this.withdrawNowNow(network, box, anyway, paid, pool));
   }
 
-  private async withdrawNowNow(network: NetworkName, box: OutRef | undefined, anyway: boolean, paid: boolean): Promise<PendingTx> {
+  private async withdrawNowNow(
+    network: NetworkName,
+    box: OutRef | undefined,
+    anyway: boolean,
+    paid: boolean,
+    pool?: string,
+  ): Promise<PendingTx> {
     if (await this.deps.mixingAgain?.(network)) {
       throw new Error(t("lj.mixingAgain"));
     }
@@ -4805,6 +4855,8 @@ export class LovejoinService {
     const before = await this.read(network);
     const known = knownOf(before);
     let chosen: OutRef | undefined;
+    // A pool's own page brings back one of that pool's boxes; with none named, any pool's.
+    const of = (boxes: OutRef[]) => (pool === undefined ? boxes : inPool(boxes, pool));
     // What made the box it may take, when no record of the wallet's accounts for it and Koios hasn't said, is asked
     // of now, in the pool read's request, whatever its count says (independent review M14): the box asked for, or
     // those backOrder puts ahead of the first whose making is known. `anyway`: the user's call, taken as it is.
@@ -4816,7 +4868,7 @@ export class LovejoinService {
       if (!anyway && !known(chosen)) force = [chosen];
     } else {
       const held = new Set([...notMixedYet(before, owned), ...bootstrapOf(before, owned)].map(ref));
-      const order = backOrder(free(owned.filter((b) => !held.has(ref(b))), reserved), rows, ownLeaves(before), least, this.deps.now());
+      const order = backOrder(free(of(owned).filter((b) => !held.has(ref(b))), reserved), rows, ownLeaves(before), least, this.deps.now());
       const first = order.findIndex(known);
       force = first < 0 ? order : order.slice(0, first);
     }
@@ -4839,7 +4891,8 @@ export class LovejoinService {
       }
     } else {
       // One ahead Koios can't say of: none is taken in its place, which would bring back one backOrder puts after it.
-      if (untold.length) {
+      // A pool's page asks of its own boxes alone, and is told of them alone (34f's review, 6).
+      if (of(untold).length) {
         throw new Error(
           t("lj.untoldSomeMixed"),
         );
@@ -4847,16 +4900,17 @@ export class LovejoinService {
       // Only a box whose making is known now: a record accounts for it, or Koios said a mix made it. Never one
       // Koios said a deposit made, by an answer another lookup kept after the boxes were sorted out (mixedOf).
       const after = await this.read(network);
-      [chosen] = backOrder(free(back, reserved).filter(mixedOf(after)), rows, ownLeaves(after), least, this.deps.now());
+      [chosen] = backOrder(free(of(back), reserved).filter(mixedOf(after)), rows, ownLeaves(after), least, this.deps.now());
       if (!chosen) {
         // Mix my boxes again refuses while Koios hasn't said of a box (againBoxes): it's never "first" then. Those
         // known not to be mixed are said apart from those Koios hasn't said of, which may be (M14).
+        const [unsureHere, unmixedHere] = [of(unsure), of(unmixed)];
         throw new Error(
-          unsure.length && unsure.length === unmixed.length
+          unsureHere.length && unsureHere.length === unmixedHere.length
             ? t("lj.untoldAllBack")
-            : unsure.length
+            : unsureHere.length
               ? t("lj.privacy.someUnmixed")
-              : unmixed.length
+              : unmixedHere.length
                 ? t("lj.privacy.allUnmixed")
                 : t("lj.noneInPool"),
         );

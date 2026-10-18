@@ -3711,6 +3711,50 @@ button.dapp-tile:hover {
   user-select: text;
 }
 
+/* What a row's page has to say that isn't a warning: a pool's bootstrap under way, a pool the wallet started. */
+.token-row__detail--plain {
+  color: var(--muted);
+}
+
+/* How far a pool's bootstrap has got, of its floor (chunk 34's session 1, 16): under its row on the hub, and on its
+   page, larger. */
+.meter {
+  grid-column: 2 / -1;
+  display: block;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.meter--large {
+  height: 8px;
+  margin-top: 0;
+}
+
+/* A mix's card in Your mixes: what went in and where, and how it's going, said whole rather than cut short. */
+.mix-card .token-row__label,
+.mix-card .token-row__sub {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* A token's name over its pools on Lovejoin's hub. */
+.pool-group__title {
+  margin: var(--s2) 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 /* A token that isn't on the wallet's list, under its amount in a review or a
    site's prompt: its own line, plain weight, and the warning's colour when
    its name passes for ADA or a listed token (tokenText). */

@@ -10,7 +10,9 @@ Every Lovejoin mix the wallet makes takes three boxes (N = 3): a session's retur
 - **The margin doesn't wander, but it leaves no room.** The wallet's mix always has the same shape, and the network measures it to the step as the wallet does. The only thing that moves its cost is where the fee input sorts among the boxes: 10 million steps between first and last at N = 4. So a four-box mix wouldn't fail at random. But it has no room for anything to change: whatever made a mix 1.2% dearer (a cost model that re-costs the BLS12-381 builtins, say) would make every one refuse to build. And a block holds only two of them, and only when nothing else in it runs scripts.
 - **The cost is quadratic.** Each of a mix's N proofs checks a branch for each of the N outputs, about 540 million steps a branch. Going from three to four is 16/9 of the work, not 4/3.
 
-**So the width stays three.** Four becomes reasonable once a transaction may use about **11 billion steps** (10% to spare). Five needs 15.05 billion. Six needs 21.3 billion, past the 20 billion a whole block may use today.
+**So the width stays three by default.** Four becomes comfortable once a transaction may use about **11 billion steps** (10% to spare). Five needs 15.05 billion. Six needs 21.3 billion, past the 20 billion a whole block may use today.
+
+**Since 1.6.0 four is a choice** (chunk 34's D3): Settings → *Lovejoin* → *Four boxes a mix*, off by default, on every pool. A mix that can't go four wide goes three and says why: the pool too short for four, a chain longer than one goes, four costing more than the ADA pays for, or four refused when it's built (`widthFor`). A mix whose four-box build the network's check refuses is built again at three, never sent back unmixed. So the margin above is why it's an option and not the default, and why it falls back.
 
 ## How it was measured
 
@@ -127,7 +129,9 @@ At the default depth, four wide gives 16 leaves for 6.07 ₳, between three wide
 
 ## What changing the width touches
 
-`lovejoin::mix` already takes any N ≥ 2, measures it, and refuses one over `build::MAX_TX_BUDGET` (10 billion steps, mainnet's limit), which five or more would need raised with the network's. The width of three lives in:
+Chunk 34 (34e, 34f) did this for four: each item below now takes the width. Kept as the list of what a fifth width, or a change of default, would touch.
+
+`lovejoin::mix` already takes any N ≥ 2, measures it, and refuses one over `build::MAX_TX_BUDGET` (10 billion steps, mainnet's limit), which five or more would need raised with the network's. The width of three lived in:
 - `seedelf-core/src/lovejoin.rs`:
   - `mixes_per_box`, which is (3^depth − 1)/2;
   - `fresh_for` and `fan_out`, which take two other boxes for every mix;

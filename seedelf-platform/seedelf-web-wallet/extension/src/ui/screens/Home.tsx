@@ -92,6 +92,7 @@ import {
   formatFiat,
   poolLabel,
   rewardsLocked,
+  shortHex,
   spentRewards,
   tokenKey,
   unlocked,
@@ -102,6 +103,8 @@ import {
 import { publicAccountName, useAccounts } from "../accounts";
 import { useAmounts, usePreferences } from "../preferences";
 import { assetFingerprint } from "../tokens";
+import { boxText, CLASSIC_BOX, type BoxValue } from "../lovejoin-pools";
+import { useNetwork } from "../network";
 import { Activity } from "./Activity";
 import { Collateral } from "./Collateral";
 import { CardanoSend } from "./CardanoSend";
@@ -741,6 +744,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     return (
       <Dapps
         seedelf={free.seedelf}
+        cardano={free.cardano}
         blocked={watching ? busy : undefined}
         start={dappStart}
         banner={
@@ -973,7 +977,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
               <RunningSwaps swaps={swaps} onOpen={(index) => dapps({ dapp: "minswap", session: index })} />
             )}
 
-            {held && (held.boxes > 0 || held.notMixed > 0 || held.stopped > 0) && (
+            {held && inLovejoinShown(held) && (
               <InLovejoin held={held} now={now} onOpen={() => dapps({ dapp: "lovejoin" })} />
             )}
 
@@ -1438,53 +1442,78 @@ export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<M
  * partway needs looking at: both are said under it. Opens Lovejoin's page.
  * Every box is 10 ₳, so the counts are hidden with the balances.
  */
+/**
+ * Whether Home shows In Lovejoin: a box on its way back or not mixed yet in any pool, or a chain stopped partway. A
+ * token pool's alone counts too (34f's review, 1).
+ */
+export const inLovejoinShown = (held: LovejoinHeld) =>
+  held.boxes > 0 || held.notMixed > 0 || held.stopped > 0 || !!held.pools?.some((p) => p.boxes > 0 || p.notMixed > 0);
+
 export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
   const t = useT();
+  const network = useNetwork();
   const amounts = useAmounts();
   // Due, it goes a few minutes on: never the moment the wallet unlocks, nor right after it sends something else.
-  const next =
-    held.next === null
-      ? ""
-      : held.next <= now
-        ? t("home.lovejoin.nextSoon")
-        : t("home.lovejoin.next", { when: whenOf(held.next, new Date(now)) });
-  // Boxes not mixed yet have no due time: they're the row's own when none is on its way back.
-  const boxes = held.boxes || held.notMixed;
-  const lovelace = held.boxes ? held.lovelace : (BigInt(held.notMixed) * LOVEJOIN_BOX).toString();
-  // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy review §2.16).
-  // Those Koios hasn't said the making of yet, after a restore, may be mixed: said apart (independent review M14).
-  const unsure = Math.min(held.unsure ?? 0, held.notMixed);
-  const some = t("home.lovejoin.some");
-  const flags = [
-    held.notMixed > unsure ? t("home.lovejoin.flag.notMixed", { n: amounts.hidden ? some : held.notMixed - unsure }) : "",
-    unsure ? t("home.lovejoin.flag.unsure", { n: amounts.hidden ? some : unsure }) : "",
-    held.stopped ? t("home.lovejoin.flag.stopped", { count: held.stopped, n: held.stopped }) : "",
-  ].filter(Boolean);
-  const flagged = flags.join(t("home.lovejoin.flagJoin"));
+  const nextText = (next: number | null) =>
+    next === null ? "" : next <= now ? t("home.lovejoin.nextSoon") : t("home.lovejoin.next", { when: whenOf(next, new Date(now)) });
+  // A chain stopped partway is the wallet's, not a pool's: said on the first row.
+  const stoppedFlag = held.stopped ? t("home.lovejoin.flag.stopped", { count: held.stopped, n: held.stopped }) : "";
+  // The classic pool's row, then each token pool's with something there (chunk 34's 34f), each opening the hub.
+  const rows: Array<{ key: string; box?: BoxValue; figures: LovejoinHeld | NonNullable<LovejoinHeld["pools"]>[number] }> = [
+    { key: "classic", box: CLASSIC_BOX, figures: held },
+    ...(held.pools ?? []).map((p) => ({ key: p.id, box: boxOf(p), figures: p })),
+  ].filter((r, i) => i === 0 || r.figures.boxes > 0 || r.figures.notMixed > 0);
+  // The classic pool's row says "Your mixes" when only a stopped chain or a token pool has something.
+  const shown = rows.filter((r, i) => r.figures.boxes > 0 || r.figures.notMixed > 0 || (i === 0 && rows.length === 1));
   return (
     <section className="section" aria-labelledby="in-lovejoin-title">
       <h2 id="in-lovejoin-title">{t("home.lovejoin.title")}</h2>
-      <button type="button" className="token-row" onClick={onOpen} data-testid="in-lovejoin">
-        <span className="avatar avatar--contact" aria-hidden="true">
-          <ShieldIcon size={16} />
-        </span>
-        <span className="token-row__label">
-          {boxes ? t("home.lovejoin.boxesOf", { boxes: amounts.count(boxes, "amount.boxes") }) : t("home.lovejoin.yourMixes")}
-        </span>
-        <span className="token-row__amount">{boxes ? `${amounts.ada(lovelace)}\u00a0₳` : ""}</span>
-        <span className="token-row__sub">{held.boxes ? next : held.notMixed ? t("home.lovejoin.notBack") : ""}</span>
-        {flagged && (
-          <span className="token-row__detail" data-testid="in-lovejoin-flag">
-            {t("home.lovejoin.flagged", { flags: flagged.charAt(0).toUpperCase() + flagged.slice(1) })}
-          </span>
-        )}
-      </button>
+      {shown.map((r, i) => {
+        const f = r.figures;
+        // Boxes not mixed yet have no due time: they're the row's own when none is on its way back.
+        const boxes = f.boxes || f.notMixed;
+        const lovelace = f.boxes ? f.lovelace : (BigInt(f.notMixed) * BigInt(r.box?.lovelace ?? "0")).toString();
+        // How many aren't mixed yet is an amount too: said without the number while balances are hidden (privacy
+        // review §2.16). Those Koios hasn't said the making of yet, after a restore, may be mixed: said apart (M14).
+        const unsure = Math.min(f.unsure ?? 0, f.notMixed);
+        const some = t("home.lovejoin.some");
+        const flags = [
+          f.notMixed > unsure ? t("home.lovejoin.flag.notMixed", { n: amounts.hidden ? some : f.notMixed - unsure }) : "",
+          unsure ? t("home.lovejoin.flag.unsure", { n: amounts.hidden ? some : unsure }) : "",
+          i === 0 ? stoppedFlag : "",
+        ].filter(Boolean);
+        const flagged = flags.join(t("home.lovejoin.flagJoin"));
+        return (
+          <button key={r.key} type="button" className="token-row" onClick={onOpen} data-testid={i === 0 ? "in-lovejoin" : `in-lovejoin-${r.key}`}>
+            <span className="avatar avatar--contact" aria-hidden="true">
+              <ShieldIcon size={16} />
+            </span>
+            <span className="token-row__label">
+              {!boxes
+                ? t("home.lovejoin.yourMixes")
+                : r.box
+                  ? t("lovejoin.mixes.boxesOf", { boxes: amounts.count(boxes, "amount.boxes"), box: boxText(network, r.box) })
+                  : t("lovejoin.mixes.boxesIn", { boxes: amounts.count(boxes, "amount.boxes"), pool: shortHex(r.key, 8, 4) })}
+            </span>
+            <span className="token-row__amount">{boxes && r.box ? `${amounts.ada(lovelace)}\u00a0₳` : ""}</span>
+            <span className="token-row__sub">{f.boxes ? nextText(f.next) : f.notMixed ? t("home.lovejoin.notBack") : ""}</span>
+            {flagged && (
+              <span className="token-row__detail" data-testid={i === 0 ? "in-lovejoin-flag" : `in-lovejoin-flag-${r.key}`}>
+                {t("home.lovejoin.flagged", { flags: flagged.charAt(0).toUpperCase() + flagged.slice(1) })}
+              </span>
+            )}
+          </button>
+        );
+      })}
     </section>
   );
 }
 
-/** What every Lovejoin box holds. */
-const LOVEJOIN_BOX = 10_000_000n;
+/**
+ * What a box holds in a token pool Home lists, as the worker read it; none where the pool wasn't read this time (its
+ * token left the list, say), and the row names the pool instead (34f's review, 9).
+ */
+const boxOf = (p: NonNullable<LovejoinHeld["pools"]>[number]): BoxValue | undefined => p.box;
 
 /** Opens this tab's Activity, or its UTxOs, and the dApp browser. */
 function Links({

@@ -2860,7 +2860,12 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
-  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the poolNone");
+  // The first pool read checks every box in the pool against the Seedelf key: seconds on a loaded runner.
+  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the poolNone", { timeout: 15_000 });
+  // The hub lists the pools: the classic pool's page holds its Mix (chunk 34's 34f).
+  await expect(page.getByTestId("lovejoin-pool-classic")).toContainText("10 ₳");
+  await page.getByTestId("lovejoin-pool-classic").click();
+  await expect(page.getByRole("heading", { name: "10 ₳", level: 1 })).toBeVisible();
 
   // One box at depth 2 (the default): the box, four mixes, and the deposit's change, into a one-time account.
   await expect(page.getByTestId("lovejoin-boxes")).toHaveText("1 box, 10 ₳");
@@ -2920,12 +2925,15 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect(page.getByTestId("lovejoin-send")).toHaveCount(0);
   expect(koios.submitted).toHaveLength(0);
   await page.getByRole("button", { name: "Back", exact: true }).click();
+  // Your mixes are the hub's: back to it from the pool's page.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("lovejoin-mixes")).toContainText("1 box of 10 ₳Not fundedIts funding didn't go through");
   // Why: giveme.my turned it away, said as that, not as something the user's money did (blind test §9.5).
   await expect(page.getByTestId("lovejoin-mixes")).toContainText("giveme.my, the service that lends its collateral, turned it down.");
 
   // From the public account: the deposit and every mix, sent one after another.
+  await page.getByTestId("lovejoin-pool-classic").click();
   await page.getByRole("tab", { name: "Public account" }).click();
   await expect(page.getByTestId("lovejoin-mix-moves")).toContainText(
     "From your public accountNeeds 15.3 ₳ in ADA alone, plus collateral for the mixes; what isn't used stays",
@@ -2959,7 +2967,8 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect(page.getByTestId("lovejoin-chains")).toHaveCount(0);
   await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on their way to your private balance", { timeout: 20_000 });
 
-  // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page.
+  // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page. Sent, the
+  // page went back to the hub.
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   const held = page.getByTestId("in-lovejoin");
@@ -2984,7 +2993,10 @@ test("Lovejoin: mix my boxes again, paid from the private balance: the review sa
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
-  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the pool3 boxes, 30 ₳");
+  // The first pool read checks every box in the pool against the Seedelf key: seconds on a loaded runner.
+  await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the pool3 boxes, 30 ₳", { timeout: 15_000 });
+  await expect(page.getByTestId("lovejoin-pool-classic")).toContainText("3 boxes");
+  await page.getByTestId("lovejoin-pool-classic").click();
 
   // Two waves deep, the pool's 20 other boxes mix two of the three: eight mixes and the change they leave, into a
   // one-time account. No box to pay for.
@@ -3006,9 +3018,11 @@ test("Lovejoin: mix my boxes again, paid from the private balance: the review sa
   await expect(page.getByTestId("review-stale")).toContainText("refused this transaction");
   expect(koios.submitted).toHaveLength(0);
   await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByTestId("lovejoin-mixes")).toContainText("2 boxes mixed againNot fundedIts funding didn't go through");
   // Nothing is mixing them: both buttons stay.
+  await page.getByTestId("lovejoin-pool-classic").click();
   await expect(page.getByTestId("lovejoin-again")).toBeEnabled();
   await expect(page.getByTestId("lovejoin-now")).toBeEnabled();
   await expect(page.getByTestId("lovejoin-again-running")).toHaveCount(0);
@@ -3039,6 +3053,7 @@ async function stoppedPublicMix(context: BrowserContext, koios: KoiosFake): Prom
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+  await page.getByTestId("lovejoin-pool-classic").click();
   await page.getByRole("tab", { name: "Public account" }).click();
   await page.getByTestId("lovejoin-mix").click();
   await expect(page.getByTestId("lovejoin-public-review")).toContainText("Transactions5");
@@ -3064,10 +3079,14 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
   await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the pool1 box, 10 ₳");
   // It never comes back by itself: no next one back.
   await expect(page.getByTestId("lovejoin-status")).not.toContainText("Next one back");
+  // Its chain is the hub's, with every mix; the box's callout and buttons are its pool's page's (chunk 34's 34f).
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   const chains = page.getByTestId("lovejoin-chains");
   await expect(chains).toContainText("From your public account, 1 boxStopped");
   await expect(chains).toContainText("Stopped after 1 of 5 transactions");
   await expect(chains).toContainText("Why it stopped: The network rejected the transaction");
+  await expect(page.getByTestId("lovejoin-pool-classic")).toContainText("1 not mixed yet");
+  await page.getByTestId("lovejoin-pool-classic").click();
   const notMixed = page.getByTestId("lovejoin-not-mixed");
   await expect(notMixed).toContainText("One of your boxes isn't mixed yet");
   // Mixing it again comes first, paid by the public account that put it in: never the private balance unless asked (privacy review §2.10).
@@ -3096,6 +3115,7 @@ test("Lovejoin: a mix that stopped partway leaves its box not mixed yet, said so
   // Home's In Lovejoin row flags it too, and opens Lovejoin.
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByTestId("in-lovejoin-flag")).toHaveText("1 not mixed yet, and a mix stopped partway: open Lovejoin to see what to do.");
   await page.getByTestId("in-lovejoin").click();
   await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
@@ -3119,6 +3139,7 @@ test("Lovejoin: a mix from the public account without its collateral says so bef
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
   await expect(page.getByTestId("lovejoin-status")).toContainText("Your boxes in the poolNone");
+  await page.getByTestId("lovejoin-pool-classic").click();
   // From the private balance, giveme.my lends it.
   await expect(page.getByTestId("lovejoin-mix")).toBeEnabled();
   await expect(page.getByTestId("lovejoin-set-collateral")).toHaveCount(0);
@@ -3137,7 +3158,7 @@ test("Lovejoin: a mix from the public account without its collateral says so bef
   await page.getByTestId("lovejoin-set-collateral").click();
   await page.getByRole("button", { name: "Set collateral" }).click();
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "10 ₳", level: 1 })).toBeVisible();
   await expect(page.getByTestId("pending-tx")).toContainText("Collateral payment sent");
   await expect(page.getByTestId("lovejoin-mix-why")).toHaveText(
     "Your public account's collateral is on its way. Once the network confirms it, review the mix.",
@@ -3169,15 +3190,16 @@ test("Lovejoin: a pool under its floor offers to bootstrap it, and says a Bootst
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
 
-  // Mix says, before Review and with Review off, that the pool is under its floor (chunk 23's second review,
-  // LJ-1, LJ-6); bootstrapping sits under it, behind its own link, still saying it hides nothing (chunk 34: it
-  // replaces the seed).
-  await expect(page.getByTestId("lovejoin-mix")).toBeDisabled();
+  // The hub says the pool is being started; its page leads with Bootstrap and how far it's got (chunk 34's 34f), and
+  // Mix says why it can't yet, with no Review to press (chunk 23's second review, LJ-1, LJ-6). Bootstrap says it
+  // hides nothing (chunk 34: it replaces the seed).
+  await expect(page.getByTestId("lovejoin-pool-classic")).toContainText("Being started: 0 of 30 boxes");
+  await page.getByTestId("lovejoin-pool-classic").click();
+  await expect(page.getByTestId("lovejoin-mix")).toHaveCount(0);
   await expect(page.getByTestId("lovejoin-mix-why")).toContainText("pool holds 30 boxes not yours. It holds 0");
-  await expect(page.getByTestId("lovejoin-bootstrap-offer")).toHaveCount(0);
-  await expect(page.getByTestId("lovejoin-bootstrap-open")).toHaveText("Help start the pool");
-  await expect(page.getByTestId("lovejoin-bootstrap-short")).toContainText("It hides nothing of yours");
-  await page.getByTestId("lovejoin-bootstrap-open").click();
+  await expect(page.getByTestId("lovejoin-mix-why")).toContainText("Help start the pool above");
+  await expect(page.getByTestId("lovejoin-bootstrap-open")).toHaveCount(0);
+  await expect(page.getByTestId("lovejoin-bootstrap-progress")).toContainText("0 of 30 boxes not yours so far");
   const offer = page.getByTestId("lovejoin-bootstrap-offer");
   await expect(offer).toContainText("holds 0 boxes not yours");
   await expect(offer).toContainText("the wallet mixes only from 30");
@@ -3205,6 +3227,7 @@ test("Lovejoin: a pool under its floor offers to bootstrap it, and says a Bootst
 
 test("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {
   const page = await stoppedPublicMix(context, koios);
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   const held = page.getByTestId("in-lovejoin");
@@ -3272,6 +3295,7 @@ test("a mix being sent: Home's banner names its first transaction, each opens in
   await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
   await page.getByRole("button", { name: "dApps", exact: true }).click();
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
+  await page.getByTestId("lovejoin-pool-classic").click();
   await page.getByRole("tab", { name: "Public account" }).click();
   await page.getByTestId("lovejoin-mix").click();
   await expect(page.getByTestId("lovejoin-public-review")).toContainText("Transactions5");

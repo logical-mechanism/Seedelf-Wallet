@@ -235,6 +235,11 @@ function getContext(): Promise<Worker> {
       // What discovery kept, asking nobody: a swap's quote as the user types, and a return's first look.
       known: async (n) => (await discovery.known(n)).map((p) => p.ref),
       lookForPools: (n) => discovery.look(n),
+      // The hub's facts of each pool (chunk 34's 34f): its launch, and the data layer's crowds. No request.
+      facts: async (n) => ({
+        launches: new Map((await discovery.known(n)).map((p) => [p.id, p.launch.tx])),
+        crowds: discovery.crowdsOf(n),
+      }),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     // Starting a pool, from either side (chunk 34's 34d): what's shown already is discovery's.

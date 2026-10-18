@@ -6,13 +6,14 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 the groundwork, design session 1, 34a′, 34c, 34d and 34e are done; 34f is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: 🚧 the groundwork, design session 1, 34a′, 34c, 34d, 34e and 34f are done; 34g, the preprod rehearsal and the release, is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
 - **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first.
 - **[34a′, the records](#34a--the-records-2026-10-17)** (`web-wallet/token-pools-records`, 2026-10-17): every pool's records beside the classic pool's, every mix followed until its boxes are back, Bootstrap's boxes held, gated on 1.5.0's own record of how it planned and ran.
 - **[34c, discovery and the data layer](#34c--discovery-and-the-data-layer-2026-10-17)** (`web-wallet/token-pools-discovery`, 2026-10-17): which pools are shown and how the wallet finds them, the data layer's copy of the rules, its pool list, crowds and combined box feed. The server's queries wait on one live run against home's db-sync, which the owner starts.
 - **[34d, the flows](#34d--the-flows-2026-10-18)** (`web-wallet/token-pools-flows`, 2026-10-18): the tile's mixes into a token pool from either side, Bootstrap in place of the seed, a pool's start from either side and every check before it, the escape hatch, and Activity's names. Worker, core and WebAssembly; the screens are 34f's.
 - **[34e, the planner](#34e--the-planner-returns-through-token-pools-and-four-boxes-a-mix-2026-10-18)** (`web-wallet/token-pools-planner`, 2026-10-18): each pool's costs, a return's tokens through their own pools beside its ADA's in one chain, Change, a swap that funds its token's boxes (33), and four boxes a mix with its fallback to three. Worker, core and WebAssembly; the screens are 34f's.
+- **[34f, the screens](#34f--the-screens-2026-10-18)** (`web-wallet/token-pools-screens`, 2026-10-18): Lovejoin's page as a hub with a page per pool, Your mixes, the pools grouped by token, Start a pool, the escape hatch, Bootstrap leading below the floor, Change on reviews, the swap approval's funded token boxes (34e's release blocker), Settings' four boxes a mix, Home's row per pool, the strings in es and ja, and the docs.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
@@ -138,7 +139,7 @@ The owner's answers to Claude's remaining questions.
 
 Each is small, and the step named settles it.
 - ~~Whether a chain's view says which width it went at~~: it does (34e, `width`). The words for four boxes' fallback to three are drafted (`lj.width.warn.*`); where the screens show them is 34f's.
-- The screens in detail (34f), drawn from session 1: the hub, a pool's page, the launch form, Bootstrap, and the mix cards.
+- ~~The screens in detail (34f)~~: built ([34f](#34f--the-screens-2026-10-18)); the owner's look at them, with the style pass after parity, may move them.
 
 ## The owner's calls this builds on (2026-10-13)
 
@@ -837,6 +838,74 @@ Found sound: one leg three wide byte for byte as before; the fan-out at a width;
   - `collateralWanted` counts the classic pool's box alone, so a session whose only box would be a token's isn't offered *Put in 5 ₳ for Lovejoin*.
 - **34g:** the live width test again (`lovejoin_width_test -- --ignored`), then four wide and a return across pools on preprod (Verification's step 8). No new reads for the policy's *Changes*: a review's pool read is the one every read is, and its parameters the ones every build reads.
 
+## 34f · The screens (2026-10-18)
+
+Branch `web-wallet/token-pools-screens`, from main 6ca8016 (after #319 merged). The screens over 34d's and 34e's RPCs, drawn from [session 1](#design-session-1-2026-10-17) (4, 5, 13, 14, 16), and 34e's release blocker. Mostly the extension's UI; the worker gained only what the screens had to read. Claude's choices, the owner's to overturn: none was asked this time, and every one is listed under *Claude's calls* below.
+
+**Lovejoin's page is a hub** (`Lovejoin.tsx`; session 1, 4, 5, 13):
+- **Your boxes:** where they're all in the classic pool, its rows word for word ("Your boxes in the pool", not mixed yet, the next one back: backward compatibility 7). Across pools, "Your boxes in Lovejoin" in all, each pool's set in under it, a token pool's token beside its ADA ("2 boxes, 200 NIGHT + 9 ₳"). Hidden with the balances.
+- **Chains** and a public mix's progress, as before.
+- **Your mixes:** `lovejoin-mixes`' entries, each joined with its private mix session where it has one (`mixItems`), and the mix sessions with no entry (a funding on its way, never sent, or over with its boxes back, the last few). Each card says what went in and where ("2 boxes of 10 ₳, 1 box of 100 NIGHT + 4.5 ₳"), who paid (a private session; a swap's or a site's return; the public account, by name with several), how many are back (and mixed again), four boxes a mix where it went four, and a Bootstrap's hold (*Held*; *Coming back* once released). A private mix keeps its stage, Stop and Try now. A chain stopped is said under Chains while it's listed there, and on its card once it's gone from there.
+- **Pools**, grouped by token (`ui/lovejoin-pools.ts`): ADA's first, then the tokens held in either balance, then the most used (boxes not the wallet's, all its pools together); in a group, the busiest pool first. Each row: what a box holds (`boxText`: "10 ₳", "25 ₳", "100 NIGHT + 4.5 ₳"), its crowd (`crowdText`), the wallet's boxes in it, and its page's news (not mixed yet, held by a Bootstrap, can't pay its way back, *Being started: 12 of 30 boxes* with a bar, *You started it*). Search shows past four token groups. A start the wallet sent that no look has found yet is said under the pools.
+- **Start a pool**, a button.
+
+**A pool's page** (`PoolPage`, the classic pool's too): its box value as the title, its crowd as the aside (the classic pool's "The classic pool · …"), the wallet's boxes, where the data layer counted them the deposits its boxes could have come from (an ⓘ), its launch on Cardanoscan (the explorer's warning when this wallet started it), the escape hatch, the box actions, Mix and Bootstrap, each scoped to this pool (Bring one back now names it: `lovejoin-withdraw-now`'s `pool`). The hub owns the reads and every poll (sessions running, a public mix being sent), so they go on while a pool's page is open, and a Send comes back to the hub, where the mix is followed.
+- **Mix in a token pool:** the stepper's value and every row carry the token; the stepper stops at the boxes of the token the paying side holds, and says so; the cost is said in ₳ alone, no share, since the wallet prices no token (session 1, 14).
+- **Four boxes a mix on the form** (D3): priced four wide; where the pool has room for three and not four, the form says it mixes three at a time (`lj.width.warn.short`) and three's room decides.
+- **Below the floor, Bootstrap leads** (session 1, 16): *Help start this pool*, a bar and "12 of 30 boxes not yours so far", the side that pays (its tabs move here), the offer; Mix says in a line why nothing can be mixed yet, with no Review. Above the floor, Bootstrap stays behind its link under Mix.
+- **The escape hatch** (§2): a token pool whose boxes can't pay their own way back under the fees now says so, with what's left and what's needed; **Bring one back, paid by my public account** asks first, saying what it ties. A held box brought back from such a pool asks the same.
+
+**Start a pool** (`LovejoinLaunch.tsx`; session 1, 10, 14, 17, 20, 21, 23): the token from the wallet's list (held first) or ADA; Q in the token's units; each box's ADA, suggested, with its least and, in a token pool, 9 ₳ as bounds (`lovejoin-launch-terms`, asked once typing pauses); the token's pools already shown, with their crowds, each opening its page (a copy highlighted, and Review off with why); Pay from, two tabs, private by default. The review: each box, who pays, what never comes back (the reference UTxO, the two scripts, the stake deposit) and its total, the fee, the total leaving and the balance after, "at most" for the deposit, what's public, the floor, and the no-audit note. Sent: the pool shows once a look finds it, and Bootstrap is offered from its page, never forced.
+
+**Reviews:**
+- **The swap approval** (34e's fixes' review, 2, the release blocker): *The swap and its costs* is the swap's own funding, its parts adding up to it, and *For NIGHT's Lovejoin boxes* is apart, the boxes' ADA (comes back) and their mixes; the costs count the token's mixes and their way back; the plan's last step says the proceeds come back in boxes (`swaps.plan.backTokenPool`); the switch shows wherever a token's boxes go or a pool could; *What you get, on the way back* names the pool with Change; the stop line quotes the whole funding; and the token's costs stay shown while the classic pool is short. **Moving the switch or Change builds the funding again** (`session-out-build`'s new `through`, and `pools`): off, no token's boxes are funded. Four's fallback is said, on the approval and in Stop's dialog.
+- **A return's review** (Swaps and a site's session): each pool's boxes named (`partsText`), its tokens under *Its tokens* with Change (`TokenWays`), the width. Bring everything back names each pool's boxes, no Change.
+- **A mix's reviews** name the pool's box value and its token, four wide, and why four went three.
+
+**Elsewhere:** Settings' *Four boxes a mix* switch, each depth priced at the width (`depthCost`), and a line that a token comes back through its own pool. Home's In Lovejoin, a row per pool with something there. A site's way back priced at the width. The chain rows say four boxes a mix where they went four.
+
+**The worker, for the screens:**
+- `LovejoinStatus.crowd`, `.started`; `LovejoinPoolStatus.crowd`, `.launch`, `.mine`: a new `LovejoinDeps.facts` (discovery's launches and the data layer's crowds, from the device), wired in `sw.ts`.
+- `lovejoin-withdraw-now`'s `pool`: with no box, one of that pool's boxes ("classic" for the classic pool), never another's that waited longer.
+- `session-out-build`'s `through`: the approval's switch over Settings'.
+- Summaries carry each token pool's box value by id (`values`: SessionBackSummary's lovejoin, SwapLovejoin; LovejoinChain inside); `LovejoinHeld.pools[].box`.
+- `collateralWanted` counts a box of a token the session's own UTxOs hold, in a shown pool its spare ADA pays for (34e's *For later steps*): *Put in 5 ₳ for Lovejoin* is offered for a session whose only box would be a token's.
+
+**Strings:** about 130 new keys in en, es and ja; the "10 ₳" keys became the pool's value (`lovejoin.boxesOf`, `lovejoin.mixes.boxesOf`, `claim.andBoxesOf`, …), English byte-identical for the classic pool. Seventeen are accuracy-critical, back-translated by independent agents that saw only the Spanish and the Japanese, thirteen of them twice ("Chunk 34's 34f round" in verified-critical-*.json). The first pass found the English itself ambiguous in three ("not whose" with no noun, "the rest" readable as the other UTxOs, an unnamed fee), and all three languages were rewritten for them.
+
+**Docs:** flows.md (the hub, a pool's page, a token pool's mix, four wide, Bootstrap below the floor, the escape hatch, Start a pool, a return's tokens and the swap approval), architecture.md (the screens), privacy.md (the hub reads nothing new; why a crowd counts boxes not yours), lovejoin-mix-width.md (four is a choice since 1.6.0).
+
+**Tests:** `tests/lovejoin-hub.test.ts` (30): a box's value in words, the groups' order and search, the crowd line, the pool rows and their news, the hub's first rows (classic-only word for word, across pools, hidden), Your mixes (order, cards, hidden counts, a stopped chain), Change, the swap approval's (all but the switch-off case fail on main's screen), a mix's reviews in a token pool and four wide, Home's rows and gate, Settings' switch. `lovejoin-pools.test.ts` (7 new): the facts, none on Koios, Bring one back scoped to a token pool and to the classic pool, a pool page's own errors, a start aged out, the held pool's box. `lovejoin-planner.test.ts` (4 new): the switch-off build, a return's values, the token collateral offer, and a swap's fill for it in its approved pool. Each worker test fails without its fix. The e2e's Lovejoin tests take the hub's extra tap, and the floor's test Bootstrap leading. A screen harness (the scratchpad Vite harness over the real components) rendered the hub, each kind of pool page, the launch form and review, and the swap approval, for the visual check.
+
+**Checks (2026-10-18):** `npm run typecheck`; Vitest 2,299 on both builds (`VITE_ENABLE_MAINNET=false` too); `npm run build:ext`; e2e 100/100. No Rust changed. The Lovejoin e2e under `taskset -c 0,1 … --repeat-each=4 --workers=4`: two steps fail under that load, and fail the same on main's build (checked in a worktree): the first pool read after a restore (its assertion now waits 15 s, sized to the read) and Home's banner once a public mix lands (20 s already). Not run: the store build's e2e (CI's), nothing on preprod (34g).
+
+**The review's findings (2026-10-18, each fixed with a test that fails without its fix, but where said).** An independent adversarial review read the diff and ran the suites; it found the approval's totals, the pool scoping, the hidden balances, the classic pool's words and the hub's effects sound, and twelve issues:
+1. **Home hid In Lovejoin when every box was in token pools:** its gate read the classic pool's figures alone. `inLovejoinShown` counts every pool.
+2. **A refused swap's switch or Change built it again**, and Watch then opened the new, unsent build's index. The switch and Change wait while a refusal shows. (No test: a refusal's foot over a review, which the screens' renders can't reach; the e2e's refusal paths pass.)
+3. **The approval said all of the token is mixed:** what's less than a box comes back directly. It says so, about how much (`swaps.lovejoin.privacy.tokenRest`), and `onToken` says whole boxes.
+4. **The switch showed where nothing would go in** (a token too short for a box, and, with the first fix, every swap with Settings' Lovejoin off). It shows when something goes, or when it was turned off on this review; a token that makes no box is said under the switch's place.
+5. **The Mix form's four-wide fallback capped the stepper at four's room**, and priced four while it said three. The stepper offers what either width takes, as `widthFor` goes; falling back, the funding is asked at three (`lovejoin-funding`'s new `width`). Checked in the harness.
+6. **Bring one back on a pool's page gave the other pools' errors.** They're scoped to the pool too.
+7. **`collateralWanted` didn't count a swap's fill, counted a token its approval sent back, and strangers' with no session:** it follows `wayOf` now.
+8. **A token→token swap's stop line quoted ₳ its boxes weren't priced on:** the funding's ADA counts only for an ADA swap, as the worker prices it.
+9. **Home could say "2 boxes of 0 ₳"** for a pool not read this time: it names the pool by its id.
+10. **A failed Refresh on a pool's page threw the user to the hub** (and back later): the page stays, saying the read failed, Review off. A return review's Change no longer outlives the review. (No test of its own; the e2e's refresh paths pass.)
+11. **A start no look ever finds was said to be on its way for good:** a day on, it isn't said.
+12. **Money statements were unchecked machine drafts:** *About 23 ₳ never comes back* (the form's and the hub's) and the deposit's *at most* are `.warn.` keys now, back-translated; `lovejoin.boxesOfTen`, removed, left the verified lists.
+
+**Claude's calls, the owner's to overturn:**
+- **The hub always**, even with the classic pool alone: Mix is one tap further than in 1.5.0, and the hub has Your mixes, the pools and Start a pool. The classic pool's page reads as Lovejoin's page did.
+- **The crowd line counts boxes not yours,** with the server's deposits beside it, never its count of all a pool's boxes: the two side by side would give the wallet's boxes away while balances are hidden.
+- **Search shows past four token groups;** the hub's aside becomes "A mixer for ADA and tokens" once a token pool is read; Settings gains a sentence that a token comes back through its own pool (true of every return now).
+- **Below the floor, Mix collapses to its reason** and Bootstrap leads, with the tabs.
+- **A Send goes back to the hub**, where Your mixes and the chain show it.
+- **A token pool's mix cost has no share**, as the wallet prices no token.
+
+**For 34g:**
+- The policy's *Changes* entry, with the release PR (19): 34c's and 34d's reads, as their sections list them; 34f adds none.
+- The preprod rehearsal over these screens, Claude's in dev mode, then the owner's by hand (29).
+- The style pass waits for feature parity (the owner, 2026-10-02); the owner's look at these screens comes first.
+
 ## Open for discussion
 
 ### D1 · Pool spam and sync
@@ -954,7 +1023,7 @@ Each step ends with its tests green. The steps can land as parts, but they ship 
 | **34c** | ✅ Discovery and the data layer: the holder index, the shown-pool rule (standard, finished by its launch, earliest for its values), the bundled head start, the data layer's own copy of the rules (32), the pool list and the combined box feed, and deposit counts as possible origins ([as built](#34c--discovery-and-the-data-layer-2026-10-17); its live db-sync run is the owner's) | session 1 (11, 12) |
 | **34d** | ✅ The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity ([as built](#34d--the-flows-2026-10-18)) | 34a′, 34c |
 | **34e** | ✅ The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback; a swap's token boxes funded (33) ([as built](#34e--the-planner-returns-through-token-pools-and-four-boxes-a-mix-2026-10-18)) | 34a′ |
-| **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |
+| **34f** | ✅ Screens, strings, es and ja, and the docs ([as built](#34f--the-screens-2026-10-18)); the policy's *Changes* entry is 34g's, with the release PR (19) | 34d, 34e |
 | **Re-pin** | ✅ Folded into 34a: the templates were pinned to the merge from the start | the merge |
 | **34g** | The preprod rehearsal, dual: Claude's in dev mode, then the owner's by hand (session 1, 29); the cross-area release review; the policy's *Changes* entry; `npm run tokens`, `dreps` and `lovejoin-pools`; deploy 34c; then package and upload; the handoff note | all |
 

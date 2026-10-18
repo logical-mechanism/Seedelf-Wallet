@@ -936,3 +936,107 @@ describe("34e's fixes' review, each with a test", SLOW, () => {
     expect(out.mix.lovelace).toBe((1_500_000 + 10_000_000 + 950_000).toString());
   });
 });
+
+describe("what the screens read of the planner (chunk 34's 34f)", SLOW, () => {
+  it("builds a swap's funding with its switch off with no token boxes, and names each pool's box value when on", async () => {
+    const t = await wallet();
+    const min = await minPool(t);
+    const sessions = runner(t, pooled(t, [min.ref]));
+    const wasm = loadTestWasm();
+    const datum = await t.wallet.withKeys((keys) => Buffer.from(wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister()))).toString("hex"));
+    t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: "100000000", inline_datum: { bytes: datum, value: {} } } as KoiosUtxo);
+    t.koios.addedToAccounts.push(...POOL, ...strangers(t, min.mixBox, 8, 0x80, "4500000", asset(MIN_UNIT, MIN_Q)));
+    const quote = await sessions.quote("preprod", minswapEstimate.ask);
+    // On, as Settings has it: the pool's box value comes with it, for the approval's words and Change.
+    const on = await sessions.outBuild("preprod", quote);
+    expect(on.lovejoin?.on).toBe(true);
+    expect(on.lovejoin?.values?.[min.id]).toEqual({ lovelace: "4500000", token: { policyId: MIN.policy, assetName: MIN.name, quantity: MIN_Q.toString() } });
+    // The switch turned off, built again: nothing for the token's boxes, which would come back directly with the rest.
+    const off = await sessions.outBuild("preprod", quote, undefined, undefined, false);
+    expect(off.lovejoin?.on).toBe(false);
+    expect(off.lovejoin?.fund).toBeUndefined();
+    expect(off.lovejoin?.ways).toBeUndefined();
+    expect(BigInt(off.payments[0]!.lovelace)).toBe(BigInt(quote.fund.lovelace));
+    // And turned on again over Settings' off: funded as before.
+    await t.deps.preferences.set({ lovejoinReturns: false });
+    const again = await sessions.outBuild("preprod", quote, undefined, undefined, true);
+    expect(again.lovejoin?.on).toBe(true);
+    expect(again.lovejoin?.fund).toBe(on.lovejoin?.fund);
+  });
+
+  it("names the box value of each token pool a return's review shows", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [TOKEN_POOL]));
+    await siteSession(t);
+    t.koios.addedToAccounts.push(
+      atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]),
+      atSession(OUT, 1, "40000000"),
+      atSession(OUT, 2, "5000000"),
+      ...POOL,
+      ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+    );
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin?.parts?.[0]).toEqual({ pool: TOKEN, boxes: 2 });
+    expect(review.lovejoin?.values).toEqual({ [TOKEN]: { lovelace: "2000000", token: VIEW.token } });
+  });
+
+  it("says a return whose only box would be a token's wants its collateral, as it does for an ADA box (34e, for 34f)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [TOKEN_POOL]));
+    await siteSession(t);
+    // A box's worth of LJTEST and 6 ₳: a box of it (2 ₳, a mix and the deposit's reserve), never a 10 ₳ box; and no
+    // 5 ₳ UTxO at the account for the mixes to put up.
+    t.koios.addedToAccounts.push(
+      atSession(OUT, 0, "3000000", [asset(LJTEST, Q)]),
+      atSession(OUT, 1, "6000000"),
+      ...POOL,
+      ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+    );
+    const review = await sessions.backBuild("preprod", 0);
+    // It comes back directly, and says it's for want of the collateral, which Put in 5 ₳ offers to fix.
+    expect(review.lovejoin).toBeUndefined();
+    expect(review.lovejoinSkipped).toBe(tr("sess.skip.warn.noCollateral"));
+  });
+
+  it("counts a swap's fill for that offer, in the pool its approval chose, and none its approval sent back (34f's review, 7)", async () => {
+    const t = await wallet();
+    const min = await minPool(t);
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [min.ref]));
+    const fill = "f1".repeat(32);
+    const session = (tokens: Record<string, string | null>) => ({
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: t.clock.now,
+          txs: [{ kind: "out", txHash: OUT, at: t.clock.now, confirmed: true }],
+          swap: { ...minswapEstimate.ask, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: {
+            approved: { minAmountOut: "902083681", fund: { lovelace: "16000000", tokens: [] } },
+            direct: false,
+            lovejoin: { depth: 1, delay: "1-6", tokens },
+            filled: t.clock.now,
+            fills: [fill],
+          },
+        },
+      ],
+    });
+    // Its fill brought a box's worth of MIN; 8 ₳ at the account pays a MIN box (4.5 ₳, a mix and the reserve), not a
+    // 10 ₳ one; and no 5 ₳ UTxO for the mixes.
+    t.koios.addedToAccounts.push(
+      atSession(fill, 0, "2000000", [asset(MIN_UNIT, 902_083_681n)]),
+      atSession(OUT, 0, "8000000"),
+      ...POOL,
+      ...strangers(t, min.mixBox, 2, 0x80, "4500000", asset(MIN_UNIT, MIN_Q)),
+    );
+    await t.store.set("sessions.preprod", session({ [MIN_UNIT]: min.id }));
+    expect((await sessions.backBuild("preprod", 0)).lovejoinSkipped).toBe(tr("sess.skip.warn.noCollateral"));
+    // Approved to come back directly: no box of it is wanted, so no 5 ₳ for its mixes.
+    await t.store.set("sessions.preprod", session({ [MIN_UNIT]: null }));
+    expect((await sessions.backBuild("preprod", 0)).lovejoinSkipped).not.toBe(tr("sess.skip.warn.noCollateral"));
+  });
+});

@@ -38,6 +38,7 @@ import {
   LovejoinRows,
   LovejoinSkipped,
   LovejoinSwitch,
+  TokenWays,
   ReturnLinks,
   useSendingLabel,
 } from "../components/LovejoinReturn";
@@ -177,6 +178,8 @@ export function SiteSession({
   const [back, setBack] = useState<SessionBackSummary>();
   // Which way the return shown was built: through Lovejoin as Settings has it, or directly, by its switch.
   const [backThrough, setBackThrough] = useState(true);
+  // Change on its review (chunk 34's 34e): the pool each token goes into, by its unit, null for back directly.
+  const [backPools, setBackPools] = useState<Record<string, string | null>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [disconnecting, setDisconnecting] = useState(false);
@@ -212,10 +215,12 @@ export function SiteSession({
   }
 
   /** Builds the return through Lovejoin, as Settings has it, or directly: Bring it back, then its review's switch. */
-  const buildBack = (through: boolean) =>
+  /** Its return, built through Lovejoin or not; `pools`: Change's choices for its tokens, kept until it's built directly. */
+  const buildBack = (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) =>
     void act(async () => {
-      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }) }));
+      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
       setBackThrough(through);
+      setBackPools(pools);
     });
 
   if (back) {
@@ -224,7 +229,11 @@ export function SiteSession({
         title={tr("swaps.back.title")}
         titleId="site-back-review"
         review
-        onBack={() => setBack(undefined)}
+        onBack={() => {
+          setBack(undefined);
+          // Its Change goes with the review it was made on (34f's review, 10).
+          setBackPools({});
+        }}
         backDisabled={busy}
         aside={tr("review.nothingSent")}
         error={error}
@@ -264,6 +273,13 @@ export function SiteSession({
           />
           <IntoRow back={back} />
         </ReviewRows>
+        {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
+        <TokenWays
+          ways={back.lovejoin?.ways ?? []}
+          values={back.lovejoin?.values}
+          busy={busy}
+          onChange={(unit, pool) => buildBack(true, { ...backPools, [unit]: pool })}
+        />
         <TxDetailButton txHash={back.txHash} testId="site-back-tx" />
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />

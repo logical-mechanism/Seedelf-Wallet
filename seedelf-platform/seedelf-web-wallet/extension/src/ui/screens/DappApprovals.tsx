@@ -508,7 +508,8 @@ export function ConnectRequest({
   // Settings' depth, said in plain words with a figure where it's chosen (blind test §9.8, T16).
   const { prefs } = usePreferences();
   const lovejoinBack = prefs.lovejoinReturns && lovejoinOn(network);
-  const perBox = aboutAda(boxCost(prefs.lovejoinDepth));
+  // At Settings' width (chunk 34's D3): four boxes a mix costs more a box.
+  const perBox = aboutAda(boxCost(prefs.lovejoinDepth, prefs.lovejoinWidth));
   // The amount's lines about the private balance hide with the balances, as a top-up's do (HM-9).
   const amounts = useAmounts();
   const [amount, setAmount] = useState("");
