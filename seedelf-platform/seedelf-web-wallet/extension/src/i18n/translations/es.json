@@ -2959,6 +2959,8 @@
   "lj.launch.accountEmpty": "Tu cuenta pública está vacía, así que no hay nada con lo que poner en marcha un pool.",
   "lj.launch.classicCopy": "Un pool de ADA de 10 ₳ por caja copiaría el valor del pool clásico, y ninguna billetera mostraría esa copia. Elige otra cantidad, o mezcla en el pool clásico.",
   "lj.launch.copy": "Ya existe un pool con estos valores, y una copia nunca se mostraría. Usa ese pool en su lugar.",
+  "lj.launch.from": "Elige qué paga la puesta en marcha del pool: tu saldo privado o tu cuenta pública.",
+  "lj.launch.otherPool": "Algo registró la credencial de este pool antes de su puesta en marcha. Construida para tenerlo en cuenta, la puesta en marcha crearía otro pool, uno que ninguna billetera mostraría, así que no se envió nada. Revísala otra vez más tarde.",
   "lj.launch.quantity": "La cantidad del token de cada caja debe ser un número entero mayor que cero, y la de 30 cajas debe caber en una sola salida.",
   "lj.launch.supply": "De este token existe menos de lo que llenan {{boxes}} cajas. Elige una cantidad menor para cada caja.",
   "lj.launch.tooLittle": "Con las comisiones de red de hoy, cada caja necesita al menos {{least}} ₳: lo suficiente para pagar su propia vuelta y, después, para pagar una parte de lo que volvió sin otro dinero.",

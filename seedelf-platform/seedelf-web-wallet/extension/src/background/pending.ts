@@ -142,6 +142,8 @@ const PRIVATE_SPENDS: ReadonlySet<PendingTx["kind"]> = new Set([
   "session-cancel",
   "session-back",
   "lovejoin-withdraw",
+  // A pool's start from the private balance; the public account's carries a slot, as an account-paid mint does.
+  "lovejoin-launch",
 ]);
 
 /** Whether a Seedelf spend's reviewed summary pays the wallet's own public account: a removal to it, or a Make public to it. */
@@ -342,9 +344,11 @@ async function take(deps: PendingDeps, record: Watched, alongside?: () => Promis
  * Has Home's banner watch a transaction sent outside Send (Lovejoin's
  * withdraw brought back now, its mix from the public account), unless a
  * payment on that network may still go through: that one's watch stays.
+ * `toAccount`: it spends or pays the public account too (a box the account
+ * paid to bring back), so its landing reads both sides again.
  */
-export async function watchSent(deps: PendingDeps, pending: PendingTx): Promise<void> {
-  await take(deps, pending);
+export async function watchSent(deps: PendingDeps, pending: PendingTx, { toAccount }: { toAccount?: true } = {}): Promise<void> {
+  await take(deps, { ...pending, ...(toAccount ? { toAccount } : {}) });
 }
 
 /** The watched transaction as Home is shown it. */

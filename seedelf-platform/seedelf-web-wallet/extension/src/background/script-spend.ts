@@ -45,7 +45,7 @@ import { outpoint, reservedSet, spentSet } from "./spent";
 import type { Keys, Wallet } from "./wallet";
 
 /** A built transaction is only sent within this long; after that, build again. */
-const BUILT_TTL_MS = 10 * 60_000;
+export const BUILT_TTL_MS = 10 * 60_000;
 
 /**
  * What a kept transaction is, as `send` names it when it refuses to send it.

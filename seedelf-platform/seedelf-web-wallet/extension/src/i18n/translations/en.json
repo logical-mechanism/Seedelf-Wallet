@@ -2824,6 +2824,8 @@
   "lj.launch.accountEmpty": "Your public account is empty, so there's nothing to start a pool with.",
   "lj.launch.classicCopy": "An ADA pool of 10 ₳ a box would be a copy of the classic pool's value, and no wallet shows such a copy. Choose another amount, or mix in the classic pool.",
   "lj.launch.copy": "A pool of these values exists already, and a copy would never be shown. Use that pool instead.",
+  "lj.launch.from": "Choose what pays for the pool's start: your private balance or your public account.",
+  "lj.launch.otherPool": "Something registered this pool's credential before its start. Built to suit that, the start would make a different pool, one no wallet would show, so nothing was sent. Review it again later.",
   "lj.launch.quantity": "Each box's amount of the token must be a whole number above zero, and 30 boxes' worth must fit in one output.",
   "lj.launch.supply": "Fewer than {{boxes}} boxes' worth of this token exist. Choose a smaller amount for each box.",
   "lj.launch.tooLittle": "Each box needs at least {{least}} ₳ under today's network fees: enough to pay its own way back, and then to pay out part of what came back without other money.",

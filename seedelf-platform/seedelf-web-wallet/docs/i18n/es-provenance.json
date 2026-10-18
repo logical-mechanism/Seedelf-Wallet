@@ -2942,6 +2942,8 @@
   "lj.launch.supply": "machine",
   "lj.launch.classicCopy": "mtpe",
   "lj.launch.copy": "mtpe",
+  "lj.launch.from": "machine",
+  "lj.launch.otherPool": "machine",
   "lj.launch.tooLittle": "mtpe",
   "lj.launch.tooMuch": "machine",
   "lj.launch.privateEmpty": "machine",

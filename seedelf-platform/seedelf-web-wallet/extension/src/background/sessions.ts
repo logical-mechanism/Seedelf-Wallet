@@ -1490,9 +1490,13 @@ export class SessionService {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
     // A Bootstrap makes no mixes, so it draws nothing from the pool: the floor
-    // doesn't apply, and it takes as many boxes as one deposit holds. Its
-    // funding is still a Seedelf spend, with giveme.my's collateral as any is.
+    // doesn't apply, and it takes as many boxes as one deposit holds, and as
+    // the deposit's fee leaves its funding's reserve room for: past that, the
+    // session would be funded, then come back without a box, its fees spent
+    // (chunk 34's 34d review, 3). Its funding is still a Seedelf spend, with
+    // giveme.my's collateral as any is.
     checkBoxes(boxes, bootstrap ? mostBootstrap(pool) : MAX_MIX_BOXES);
+    if (bootstrap) checkBoxes(boxes, await lovejoin.privateBootstrapMost(network, pool), true);
     if (!bootstrap) await lovejoin.fits(network, boxes, pool);
     const { seed: _seed, ...funding } = await lovejoin.funding(network, boxes, false, bootstrap ? 0 : undefined, pool);
     // No mixes is a Bootstrap since chunk 34's 34d: its boxes are held in the pool until brought back by hand.

@@ -745,7 +745,7 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     ...deps,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
     lovejoin,
-    discovery: { known: async () => [] },
+    discovery: { known: async () => [], look: async () => undefined },
   });
   return {
     ...t,

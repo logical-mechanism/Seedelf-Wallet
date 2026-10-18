@@ -2102,7 +2102,11 @@ export interface LovejoinLaunchSummary {
   from: "private" | "public";
   /** The pool it makes, as checked from its own bytes. */
   pool: { id: string; boxLovelace: string; token?: TokenQuantity };
-  /** What never comes back: the reference UTxO, the two scripts at the holder, and the stake deposit. */
+  /**
+   * What never comes back: the reference UTxO, the two scripts at the holder, and the stake deposit. At most: when
+   * Send finds something registered mix_logic's credential already, the start it sends pays no deposit, and its total
+   * is that much less (lovejoin-launch.ts).
+   */
   locked: { reference: string; mixBox: string; mixLogic: string; deposit: string; total: string };
   fee: string;
   /** Back into the balance it was paid from. */

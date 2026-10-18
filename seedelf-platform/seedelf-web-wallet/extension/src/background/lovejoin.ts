@@ -1083,6 +1083,13 @@ function quiet(now: number, sent: number, forgotten: number): "sent" | "forgotte
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 
 /**
+ * A withdraw sent or seen: the next balance reading reads the private side again, where its box comes back, and
+ * the account's too when the account `paid` for it, spending a UTxO of its own. Call it while unlocked.
+ */
+const stale = (session: ScriptSpendDeps["session"], network: NetworkName, paid?: boolean): Promise<void> =>
+  paid ? session.remove(SESSION_BALANCES_PREFIX + network) : session.set(SESSION_PRIVATE_STALE_PREFIX + network, true);
+
+/**
  * A withdraw that never went (refused, or a 429): its box is free, and it's no longer kept as sent either, so the
  * withdraw drawn again on that box counts alone as on its way back (incoming.ts), rather than neither, as two
  * spending one box do (chunk 23's second review, fix round). `at`: when it was held, as `forgetSpent` takes it.
@@ -1681,12 +1688,14 @@ export const POOL_ROOM_MS = 5 * 60_000;
 /**
  * A whole number of boxes, one to `most`, or why not. A mix is capped at
  * MAX_MIX_BOXES because each box costs a wave of mix transactions and the
- * chain has to be sent one after another. A seed makes no mixes at all: it's
- * one deposit, so only the transaction's size caps it (MAX_DEPOSIT_BOXES).
+ * chain has to be sent one after another. A Bootstrap makes no mixes at all:
+ * it's one deposit, so only the transaction's size caps it (mostBootstrap),
+ * and from the private balance its funding's reserve too
+ * (privateBootstrapMost). `bootstrap`: said as a Bootstrap's range.
  */
-export function checkBoxes(boxes: number, most: number = MAX_MIX_BOXES): void {
+export function checkBoxes(boxes: number, most: number = MAX_MIX_BOXES, bootstrap = most !== MAX_MIX_BOXES): void {
   if (!Number.isInteger(boxes) || boxes < 1 || boxes > most) {
-    throw new Error(t(most === MAX_MIX_BOXES ? "lj.boxRange.mix" : "lj.boxRange.bootstrap", { most }));
+    throw new Error(t(bootstrap ? "lj.boxRange.bootstrap" : "lj.boxRange.mix", { most }));
   }
 }
 
@@ -1737,6 +1746,9 @@ export class LovejoinService {
    * under an epoch's parameters (cantComeBack): measured once an epoch, since it builds a withdraw.
    */
   private comeBack = new Map<string, { epoch: string; why?: { has: string; needs: string } }>();
+
+  /** The most boxes a Bootstrap paid from the private balance puts in, by network, pool and epoch (privateBootstrapMost). */
+  private bootstrapMosts = new Map<string, number>();
 
   constructor(private readonly deps: LovejoinDeps) {}
 
@@ -1898,6 +1910,24 @@ export class LovejoinService {
     }
     this.comeBack.set(key, { epoch, ...(why ? { why } : {}) });
     return why;
+  }
+
+  /**
+   * The most boxes a Bootstrap paid from the private balance puts into pool `pool` (none: the classic pool's) at
+   * once: one deposit's (mostBootstrap), held to what its mix session's funding pays the deposit's fee and change
+   * for, a reserve that doesn't grow with the boxes (chunk 34's 34d review, 3). Measured in WebAssembly, by
+   * building the deposit, once an epoch.
+   */
+  async privateBootstrapMost(network: NetworkName, pool?: string): Promise<number> {
+    const read = await this.poolNamed(network, pool);
+    const params = await this.deps.koios(network).epochParams();
+    const key = `${network}:${read.id}:${String(params.epoch_no ?? "")}`;
+    const kept = this.bootstrapMosts.get(key);
+    if (kept !== undefined) return kept;
+    const request = { network, params, most: mostBootstrap(read.id), ...(read.ref ? { poolRef: read.ref } : {}) };
+    const most = JSON.parse(this.deps.wasm.lovejoinBootstrapMost(JSON.stringify(request))) as number;
+    this.bootstrapMosts.set(key, most);
+    return most;
   }
 
   /**
@@ -4237,7 +4267,8 @@ export class LovejoinService {
     // makes: a box that can't pay its own way back comes back so.
     const pending = await this.withdrawOne(network, read, chosen, { due, ...(held ? { bootstrap: true } : {}), ...(paid ? { paid: true } : {}) });
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
-    await watchSent(this.deps, pending);
+    // One the public account paid for spent the account too: its landing reads both sides again (34d's review 9).
+    await watchSent(this.deps, pending, paid ? { toAccount: true } : {});
     return pending;
   }
 
@@ -4251,8 +4282,11 @@ export class LovejoinService {
     // Pool `of`'s, the classic pool's when none: a swap's return draws from it alone until chunk 34's 34e. Never the
     // boxes a Bootstrap holds: they're for other people's mixes (bootstrapOf).
     const read = of ?? this.classic(network);
+    // Every pool the wallet reads is listed, as a status read lists them, and this one's rows taken: a read of one
+    // pool alone would name the pool the wallet is about to mix in (chunk 34's §3, 34d's review 1).
+    const set = await this.readSet(network);
     const [{ rows, spent }, { inputs }] = await Promise.all([
-      this.listing(network, [read]),
+      this.listing(network, set.some((p) => p.id === read.id) ? set : [...set, read]),
       wallet.withKeys(() => reservedSet(session, network, { except, now: now() })),
     ]);
     const pool = unspent(rows.get(read.id) ?? [], spent);
@@ -4386,8 +4420,8 @@ export class LovejoinService {
     // Sent: what's left is best effort. A lock before its history is written
     // leaves it looked for, and settleWithdrawing writes it once it's seen.
     // The box comes back into the private balance: the next reading reads that side again, and not the
-    // account's (independent review M8).
-    await wallet.withKeys(() => session.set(SESSION_PRIVATE_STALE_PREFIX + network, true)).catch(() => undefined);
+    // account's (independent review M8), unless the account paid for it (stale).
+    await wallet.withKeys(() => stale(session, network, paid)).catch(() => undefined);
     const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: built.txHash, submittedAt: now(), confirmations: null };
     // A token pool's box brings its token back with its ADA. One the public account paid for paid no fee of its own.
     const back = { lovelace: built.lovelace, ...(paid ? {} : { fee: built.fee }), ...(built.token ? { tokens: [built.token] } : {}) };
@@ -4487,8 +4521,8 @@ export class LovejoinService {
       const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: w.txHash, submittedAt: w.at, confirmations: seen };
       const back = { lovelace: w.lovelace, ...(w.paid ? {} : { fee: w.fee }), ...(w.token ? { tokens: [w.token] } : {}) };
       await this.deps.activity?.sent(network, pending, back).catch(() => undefined);
-      // Only the private side is read again (independent review M8).
-      await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_PRIVATE_STALE_PREFIX + network, true));
+      // Only the private side is read again (independent review M8), unless the account paid for it (stale).
+      await this.deps.wallet.withKeys(() => stale(this.deps.session, network, w.paid));
       await drop(true);
       return false;
     }

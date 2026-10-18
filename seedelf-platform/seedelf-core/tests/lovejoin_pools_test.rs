@@ -1278,3 +1278,63 @@ fn a_box_already_there_is_asked_only_about_its_way_back() {
         lovejoin::Unusable::CantComeBack { .. }
     ));
 }
+
+/// A Bootstrap paid from the private balance (chunk 34's 34d review, 3):
+/// its mix session's one UTxO holds [`lovejoin::funding_for`]'s ADA at depth
+/// 0, so the deposit's fee and change come from the 1.5 ₳ reserve alone, and
+/// the fee grows with the boxes. `bootstrap_most` is the count past which
+/// the deposit can't be built: in the classic pool above 1.5.0's tested 40,
+/// below its 96; in a token pool fewer, the fewer the longer its token.
+#[test]
+fn a_private_bootstrap_is_held_to_what_its_reserve_pays_for() {
+    let deposits = |pool: &Protocol, boxes: usize| {
+        let owner = Register::create(Scalar::from(7u64)).unwrap();
+        let owners: Vec<Register> = (0..boxes)
+            .map(|_| owner.clone().rerandomize().unwrap())
+            .collect();
+        let lovelace = lovejoin::funding_for(boxes, 0, pool.denom);
+        let input = match &pool.token {
+            None => Holding::from(&coin(true, 0x10, lovelace)),
+            Some(_) => token_holding(pool, 0x10, lovelace, boxes as u64, None),
+        };
+        lovejoin::deposit_from(&params(), pool, &[input], &owners, &session(true), 1).is_ok()
+    };
+    let classic = Protocol::of(true).unwrap();
+    let most = lovejoin::bootstrap_most(&params(), &classic, true, 96).unwrap();
+    println!("a private Bootstrap of the classic pool: at most {most}");
+    assert!((40..96).contains(&most), "{most}");
+    assert!(deposits(&classic, most));
+    assert!(!deposits(&classic, most + 1));
+    // Capped by what's asked, too.
+    assert_eq!(
+        lovejoin::bootstrap_most(&params(), &classic, true, 12).unwrap(),
+        12
+    );
+    assert_eq!(
+        lovejoin::bootstrap_most(&params(), &classic, true, 0).unwrap(),
+        0
+    );
+
+    let lj = lj_pool();
+    let lj_most = lovejoin::bootstrap_most(&params(), &lj, true, 64).unwrap();
+    println!("a private Bootstrap of LJTEST's pool: at most {lj_most}");
+    assert!((1..64).contains(&lj_most), "{lj_most}");
+    assert!(deposits(&lj, lj_most));
+    assert!(!deposits(&lj, lj_most + 1));
+
+    // The worst a token can be: fewer still, and still some.
+    let worst = Protocol {
+        denom: 9_000_000,
+        token: Some(BoxToken {
+            policy: [0xab; 28],
+            name: vec![0xcd; 32],
+            quantity: u64::MAX / 128,
+        }),
+        ..lj_pool()
+    };
+    let worst_most = lovejoin::bootstrap_most(&params(), &worst, true, 64).unwrap();
+    println!("a private Bootstrap of the worst token's pool: at most {worst_most}");
+    assert!((1..=lj_most).contains(&worst_most), "{worst_most}");
+    assert!(deposits(&worst, worst_most));
+    assert!(!deposits(&worst, worst_most + 1));
+}

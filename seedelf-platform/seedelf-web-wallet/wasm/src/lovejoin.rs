@@ -1040,6 +1040,30 @@ pub fn funding_in(request: FundingRequest, pool: Option<&PoolRef>) -> Result<Fun
     })
 }
 
+/// How many boxes a Bootstrap paid from the private balance may put in, as
+/// JSON from the extension: in the classic pool, or the token pool `poolRef`
+/// names ([`PoolNamed`]).
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapMostRequest {
+    pub network: String,
+    /// One row of Koios's `epoch_params`.
+    pub params: serde_json::Value,
+    /// The most one deposit makes in this pool, whatever pays for it.
+    pub most: usize,
+}
+
+/// The most boxes, of `request.most`, a Bootstrap paid from the private
+/// balance puts into the pool under `request.params`: what its funding's
+/// reserve pays the deposit's fee and change for
+/// ([`lovejoin::bootstrap_most`], chunk 34's 34d review, 3).
+pub fn bootstrap_most_in(request: BootstrapMostRequest, pool: Option<&PoolRef>) -> Result<usize> {
+    let network_flag = network_flag(&request.network)?;
+    let protocol = protocol_of(network_flag, pool)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    lovejoin::bootstrap_most(&params, &protocol, network_flag, request.most)
+}
+
 /// A chain paid by the public account (the Lovejoin tile's "from your public
 /// account"), as JSON from the extension.
 #[derive(Deserialize)]

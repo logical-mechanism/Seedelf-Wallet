@@ -12,33 +12,44 @@
 // - a token pool's token is in the wallet's token list for this network
 //   (round three, 20); an ADA pool names none, and is never the classic
 //   pool's 10 ₳, whose copy no wallet shows (session 1, 17);
-// - 30 boxes' worth fit in the token's total supply (Koios's asset_info);
-// - no shown pool has these values already (11): a copy is never shown, so
-//   it's refused, and the form lists the pools there are to join (14);
+// - no shown pool has these values already (11), once discovery has looked
+//   for pools launched since it last did: a copy is never shown, so it's
+//   refused, and the form lists the pools there are to join (14);
 // - every box's ADA is at least what one needs to come back and pay part of
 //   itself on its own under the live parameters (S0d's rule, worked out in
 //   WebAssembly: lovejoinBoxValue), and at most 9 ₳ in a token pool (27).
-// Then WebAssembly builds it, measures it in the wallet, and checks the pool
-// it makes from its own bytes, as a stranger's would be checked. mix_logic's
-// credential is registered in the launch unless account_info says something
-// registered it already (whoever reads the seed can): it's built again
-// without the certificate then, and is still standard (34c).
+// Then WebAssembly builds it twice, measures each in the wallet, and checks
+// the pool each makes from its own bytes, as a stranger's would be checked:
+// once registering mix_logic's credential, once without the certificate.
+//
+// Checked at Send, before anything is sent, so only a start the user sends
+// names its token and its pool to Koios (34d's review 7):
+// - 30 boxes' worth fit in the token's total supply (Koios's asset_info);
+// - whether something registered mix_logic's credential already (whoever
+//   reads the seed can; account_info): the build without the certificate is
+//   sent then, and is still standard (34c). Built without the deposit, it may
+//   have picked another seed, so another pool: that one is sent only if its
+//   credential is registered too, never as a pool no wallet would show (34d's
+//   review 4).
 //
 // Koios requests: the protocol parameters and the contract or the account,
-// as any spend reads them; asset_info for a token pool's supply; one
-// account_info. Sent as any spend from its side is: a Seedelf spend with
-// giveme.my's collateral, or the account's, signed at review.
+// as any spend reads them, and the holder, as every wallet's look reads it;
+// at Send, asset_info for a token pool's supply, and one account_info, or
+// two. Sent as any spend from its side is: a Seedelf spend with giveme.my's
+// collateral, or the account's, signed at review.
 
 import { t } from "../i18n";
 import { lovejoinOn, type NetworkName } from "../networks";
 import type { HistoryClass } from "../shared/histories";
 import type { LovejoinLaunchSummary, LovejoinLaunchTerms, PendingTx, TokenQuantity } from "../shared/rpc";
 import { nothingInAccount, readAccount, validUntil } from "./account";
+import type { KoiosUtxo } from "./koios";
 import type { LovejoinService } from "./lovejoin";
 import { isListed, type PoolDiscovery } from "./lovejoin-pools";
 import { settleMaybeSent } from "./pending";
 import { adaWords, privateShort } from "./short";
 import {
+  BUILT_TTL_MS,
   changeHistory,
   keep,
   measureLocally,
@@ -94,10 +105,46 @@ interface Built {
   mixLogicStake: string;
 }
 
+/** One of a start's two builds, as Send needs it. */
+interface Sendable {
+  txHash: string;
+  txCbor: string;
+  seed?: string;
+  pool: LovejoinLaunchSummary["pool"];
+  locked: LovejoinLaunchSummary["locked"];
+  fee: string;
+  change: string;
+  inputs: number;
+  /** What leaves the balance for good, for the private history once it's sent: what the launch locks. */
+  lovelace: string;
+  /** L's reward account, which Send asks account_info of. */
+  mixLogicStake: string;
+  /** From the private balance: the history of what it leaves there, for the Seedelf history once it's sent. */
+  origin?: HistoryClass;
+}
+
+/** A start as review keeps it for Send: its registering build, and what Send checks and may send instead. */
+type KeptLaunch = Omit<LovejoinLaunchSummary, "locked" | "fee" | "change" | "pool" | "inputs"> &
+  Sendable & {
+    /** The hash the review showed: Send is asked for it, whichever build goes. */
+    reviewed: string;
+    /** Built without the certificate: sent instead when something registered L already. Gone once Send chose. */
+    bare?: Sendable;
+    /** A token pool's token and Q, whose supply Send checks. Gone once Send checked it. */
+    supply?: TokenQuantity;
+    invalidHereafter?: number;
+    builtAt: number;
+    account?: number;
+    sentCbor?: string;
+  };
+
 export interface LaunchDeps extends ScriptSpendDeps {
   lovejoin: Pick<LovejoinService, "recordLaunch">;
-  /** The pools shown on a network (lovejoin-pools.ts): a launch of their values would be a copy, never shown. */
-  discovery: Pick<PoolDiscovery, "known">;
+  /**
+   * The pools shown on a network (lovejoin-pools.ts): a launch of their values would be a copy, never shown. Looked
+   * for again before the check, as the Lovejoin page does as it opens.
+   */
+  discovery: Pick<PoolDiscovery, "known" | "look">;
   /** Whether a token has pools on a network: the wallet's list unless a test names others. */
   listed?: (network: NetworkName, token: Token) => boolean;
 }
@@ -160,12 +207,15 @@ export class LovejoinLaunchService {
 
   /**
    * Builds a pool's start, from `from`'s side: a token pool of `quantity` (raw) of `token` a box, or an ADA pool, with
-   * `boxLovelace` of ADA a box. Every check first (see the top of this file), then the build, kept for Send.
+   * `boxLovelace` of ADA a box. Every check that asks Koios nothing it wouldn't for any spend first (see the top of
+   * this file), then both builds, kept for Send.
    */
   async build(
     network: NetworkName,
     { from, token, quantity, boxLovelace }: { from: "private" | "public"; token?: Token; quantity?: string; boxLovelace: string },
   ): Promise<LovejoinLaunchSummary> {
+    // Never the public account by default: who pays is said, or nothing is built (34d's review 8).
+    if (from !== "private" && from !== "public") throw new Error(t("lj.launch.from"));
     this.check(network, token);
     await settleMaybeSent(this.deps, network);
     const box = whole(boxLovelace, () => t("lj.launch.boxLovelace"));
@@ -173,16 +223,15 @@ export class LovejoinLaunchService {
     if (token) {
       const q = whole(quantity, () => t("lj.launch.quantity"));
       if (q < 1n || q > MAX_QUANTITY) throw new Error(t("lj.launch.quantity"));
-      // Thirty boxes' worth must exist (session 1, 14), and a box of them must fit what an output may hold.
+      // A box of them must fit what an output may hold, and so must thirty boxes' worth; Send checks they exist.
       if (q * LAUNCH_SUPPLY_BOXES > MAX_QUANTITY) throw new Error(t("lj.launch.quantity"));
-      const supply = await this.deps.koios(network).assetSupply(token.policyId, token.assetName);
-      if (supply === undefined) throw new Error(t("lj.launch.unknownToken"));
-      if (q * LAUNCH_SUPPLY_BOXES > supply) throw new Error(t("lj.launch.supply", { boxes: Number(LAUNCH_SUPPLY_BOXES) }));
       tokenQuantity = { ...token, quantity: q.toString() };
     } else if (box === CLASSIC_LOVELACE) {
       throw new Error(t("lj.launch.classicCopy"));
     }
     // A copy of a shown pool's values is never shown: the form lists the pools there are to join instead (11, 14).
+    // Read once discovery has looked for pools launched since (34d's review 5): the request every wallet makes.
+    await this.deps.discovery.look(network);
     const copy = (await this.deps.discovery.known(network)).find(
       (p) => BigInt(p.boxLovelace) === box && sameToken(p.token, token) && (!p.token || p.token.quantity === tokenQuantity?.quantity),
     );
@@ -196,67 +245,68 @@ export class LovejoinLaunchService {
     const terms = { ...(tokenQuantity ? { token: tokenQuantity } : {}), boxLovelace: box.toString(), maxFee };
 
     const launch = from === "private" ? await this.fromPrivate(network, terms) : await this.fromPublic(network, terms);
-    const { built, origin, histories, invalidHereafter } = launch;
+    const { built, bare, origins, histories, invalidHereafter } = launch;
     const summary: LovejoinLaunchSummary = {
       network,
       txHash: built.txHash,
       from,
-      pool: {
-        id: built.pool.id,
-        boxLovelace: built.pool.boxLovelace,
-        ...(built.pool.token ? { token: built.pool.token } : {}),
-      },
+      pool: poolOf(built),
       locked: built.locked,
       fee: built.fee.total,
       change: built.changeLovelace,
       inputs: built.inputs.length,
       ...(histories ? { histories } : {}),
     };
-    // What leaves the balance for good, for the private history once it's sent: what the launch locks.
-    const kept = {
+    const kept: Omit<KeptLaunch, "builtAt"> = {
       ...summary,
-      lovelace: built.locked.total,
-      txCbor: built.txCbor,
-      ...(built.seed !== undefined ? { seed: built.seed } : {}),
+      ...sendable(built, origins?.built),
+      reviewed: built.txHash,
+      bare: sendable(bare, origins?.bare),
+      ...(tokenQuantity ? { supply: tokenQuantity } : {}),
       ...(invalidHereafter !== undefined ? { invalidHereafter } : {}),
-      ...(origin ? { origin } : {}),
     };
     await keep(this.deps, SESSION_LOVEJOIN_LAUNCH, kept);
     return summary;
   }
 
   /**
-   * Built twice at most: once registering mix_logic's credential, and again without the certificate when
-   * account_info says something registered it already. A read that fails keeps the certificate: a launch whose
-   * credential was registered meanwhile is refused at submit, and built again.
+   * Built twice, for Send to choose between: registering mix_logic's credential, which the review shows, and without
+   * the certificate. `only`: the second may spend these alone, the first's inputs.
    */
-  private async registered(network: NetworkName, build: (register: boolean) => Promise<Built>): Promise<Built> {
-    const first = await build(true);
-    const info = await this.deps
-      .koios(network)
-      .accountInfo(first.mixLogicStake)
-      .catch(() => undefined);
-    return info?.status === "registered" ? build(false) : first;
+  private async both(build: (register: boolean, only?: OutRef[]) => Promise<Built>): Promise<{ built: Built; bare: Built }> {
+    const built = await build(true);
+    return { built, bare: await build(false, built.inputs) };
   }
 
   private async fromPrivate(
     network: NetworkName,
     terms: { token?: TokenQuantity; boxLovelace: string; maxFee: string },
-  ): Promise<{ built: Built; origin: HistoryClass; histories?: HistoryClass[]; invalidHereafter?: number }> {
+  ): Promise<{
+    built: Built;
+    bare: Built;
+    origins: { built: HistoryClass; bare: HistoryClass };
+    histories?: HistoryClass[];
+    invalidHereafter?: number;
+  }> {
     const { wasm } = this.deps;
     const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
     if (!utxos.length) throw nothingToSpend(this.deps, view, t("lj.launch.privateEmpty"), returning);
-    const built = await this.registered(network, (register) =>
-      measureLocally<Built>(this.deps, { network, params, utxos, classes, ...terms, register }, (keys, r) =>
-        wasm.buildLovejoinLaunch(keys.seedelf, r),
-      ).catch((e: unknown) => {
-        if (isTrap(e)) throw e;
-        throw privateShort(e);
-      }),
-    );
+    // Without the certificate, from what the review showed it spends alone: coin selection keeps histories apart
+    // (launch_apart), and needing 2 ₳ less it could pick UTxOs, and ties, the review never showed.
+    const { built, bare } = await this.both((register, only) => {
+      const request = { network, params, utxos: only ? utxos.filter(among(only)) : utxos, classes, ...terms, register };
+      return measureLocally<Built>(this.deps, request, (keys, r) => wasm.buildLovejoinLaunch(keys.seedelf, r)).catch(
+        (e: unknown) => {
+          if (isTrap(e)) throw e;
+          throw privateShort(e);
+        },
+      );
+    });
     return {
       built,
-      origin: changeHistory(classes, built.inputs),
+      bare,
+      origins: { built: changeHistory(classes, built.inputs), bare: changeHistory(classes, bare.inputs) },
+      // The registering build's, the one reviewed: the most the start can tie together.
       histories: spentHistories(classes, built.inputs, built.classesMixed),
     };
   }
@@ -264,7 +314,7 @@ export class LovejoinLaunchService {
   private async fromPublic(
     network: NetworkName,
     terms: { token?: TokenQuantity; boxLovelace: string; maxFee: string },
-  ): Promise<{ built: Built; origin?: undefined; histories?: undefined; invalidHereafter: number }> {
+  ): Promise<{ built: Built; bare: Built; origins?: undefined; histories?: undefined; invalidHereafter: number }> {
     const { wasm, wallet } = this.deps;
     const [{ params, utxos, collateral, held }, invalidHereafter] = await Promise.all([
       readAccount(this.deps, network),
@@ -272,27 +322,35 @@ export class LovejoinLaunchService {
     ]);
     if (!utxos.length) throw nothingInAccount(held, t("lj.launch.accountEmpty"));
     const request = { network, params, utxos, collateral, ...terms, invalidHereafter };
-    const built = await this.registered(network, (register) =>
+    // The account's UTxOs in the same order each time (pure ADA, the largest first): the second spends a first part
+    // of the first's, the same seed among them.
+    const { built, bare } = await this.both((register) =>
       wallet.withKeys(
         (keys) => JSON.parse(wasm.buildLovejoinLaunchFromAccount(keys.cardano, JSON.stringify({ ...request, register }))) as Built,
       ),
     );
-    return { built, invalidHereafter };
+    return { built, bare, invalidHereafter };
   }
 
   /**
-   * Sends the pool's start built last (`txHash`), as any spend from its side is sent, then keeps, sealed, that the
+   * Sends the pool's start reviewed as `txHash`, as any spend from its side is sent, then keeps, sealed, that the
    * wallet started it (lovejoin.ts recordLaunch). The pool is read from when discovery finds it, as every wallet's.
+   * First, at its first Send, what only a start the user sends asks Koios (see the top of this file).
    */
   async submit(network: NetworkName, txHash: string): Promise<PendingTx> {
     const { wallet, session } = this.deps;
-    const kept = await wallet.withKeys(() => session.get<LovejoinLaunchSummary & { account?: number }>(SESSION_LOVEJOIN_LAUNCH));
-    const pending = await send(this.deps, network, txHash, SESSION_LOVEJOIN_LAUNCH, "lovejoin-launch", "launch");
-    if (kept?.txHash === txHash && kept.network === network) {
+    let kept = await wallet.withKeys(() => session.get<KeptLaunch>(SESSION_LOVEJOIN_LAUNCH));
+    const ours = kept?.network === network && (kept.txHash === txHash || kept.reviewed === txHash);
+    // Not for a review too old to send, which Send refuses as it is (send).
+    const fresh = !!kept && this.deps.now() - kept.builtAt <= BUILT_TTL_MS;
+    if (kept && ours && fresh && kept.sentCbor === undefined && (kept.bare || kept.supply)) kept = await this.choose(network, kept);
+    const sending = kept && ours ? kept.txHash : txHash;
+    const pending = await send(this.deps, network, sending, SESSION_LOVEJOIN_LAUNCH, "lovejoin-launch", "launch");
+    if (kept && ours) {
       await this.deps.lovejoin
         .recordLaunch(network, {
           id: kept.pool.id,
-          txHash,
+          txHash: kept.txHash,
           from: kept.from,
           ...(kept.from === "public" && kept.account !== undefined ? { account: kept.account } : {}),
         })
@@ -300,4 +358,58 @@ export class LovejoinLaunchService {
     }
     return pending;
   }
+
+  /**
+   * Send's checks on the start `kept`: its token's supply, and which build goes. Kept again as it will be sent, the
+   * checks' fields gone, so Send again sends it as it is. Nothing is sent when one refuses.
+   */
+  private async choose(network: NetworkName, kept: KeptLaunch): Promise<KeptLaunch> {
+    const koios = this.deps.koios(network);
+    const { bare, supply, ...rest } = kept;
+    // Thirty boxes' worth must exist (session 1, 14).
+    if (supply) {
+      const total = await koios.assetSupply(supply.policyId, supply.assetName);
+      if (total === undefined) throw new Error(t("lj.launch.unknownToken"));
+      if (BigInt(supply.quantity) * LAUNCH_SUPPLY_BOXES > total) {
+        throw new Error(t("lj.launch.supply", { boxes: Number(LAUNCH_SUPPLY_BOXES) }));
+      }
+    }
+    let chosen: KeptLaunch = rest;
+    // A read that fails keeps the certificate: a start whose credential was registered meanwhile is refused at
+    // submit, and built again.
+    const registered = async (stake: string) => (await koios.accountInfo(stake).catch(() => undefined))?.status === "registered";
+    if (bare && (await registered(kept.mixLogicStake))) {
+      // Built without the deposit, it may spend another seed: another pool, whose credential nothing registered.
+      // Never sent so: no wallet would show it, its ADA locked for good (34d's review 4).
+      if (bare.pool.id !== kept.pool.id && !(await registered(bare.mixLogicStake))) throw new Error(t("lj.launch.otherPool"));
+      chosen = { ...rest, ...bare };
+    }
+    await this.deps.wallet.withKeys(() => this.deps.session.set(SESSION_LOVEJOIN_LAUNCH, chosen));
+    return chosen;
+  }
+}
+
+/** Whether a UTxO is one of `refs`. */
+const among = (refs: OutRef[]) => (u: KoiosUtxo) => refs.some((r) => r.txHash === u.tx_hash && r.txIndex === u.tx_index);
+
+/** The pool a build makes, as a summary shows it. */
+function poolOf(built: Built): LovejoinLaunchSummary["pool"] {
+  return { id: built.pool.id, boxLovelace: built.pool.boxLovelace, ...(built.pool.token ? { token: built.pool.token } : {}) };
+}
+
+/** What Send needs of a build. */
+function sendable(built: Built, origin?: HistoryClass): Sendable {
+  return {
+    txHash: built.txHash,
+    txCbor: built.txCbor,
+    ...(built.seed !== undefined ? { seed: built.seed } : {}),
+    pool: poolOf(built),
+    locked: built.locked,
+    fee: built.fee.total,
+    change: built.changeLovelace,
+    inputs: built.inputs.length,
+    lovelace: built.locked.total,
+    mixLogicStake: built.mixLogicStake,
+    ...(origin ? { origin } : {}),
+  };
 }

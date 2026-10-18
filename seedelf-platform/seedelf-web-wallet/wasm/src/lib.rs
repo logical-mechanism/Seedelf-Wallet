@@ -4371,6 +4371,18 @@ pub fn lovejoin_funding(request: &str) -> Result<String, JsError> {
     to_json(&lovejoin::funding_in(from_json(request)?, named.pool_ref.as_ref()).map_err(js_error)?)
 }
 
+/// The most boxes a Bootstrap paid from the private balance puts in at once
+/// (`lovejoin::BootstrapMostRequest` → a number), in the classic pool or the
+/// token pool `poolRef` names.
+#[wasm_bindgen(js_name = lovejoinBootstrapMost)]
+pub fn lovejoin_bootstrap_most(request: &str) -> Result<String, JsError> {
+    let named: lovejoin::PoolNamed = from_json(request)?;
+    to_json(
+        &lovejoin::bootstrap_most_in(from_json(request)?, named.pool_ref.as_ref())
+            .map_err(js_error)?,
+    )
+}
+
 /// Boxes from the public account straight into Lovejoin: the deposit and
 /// every mix, built, measured and signed with the account's keys
 /// (`lovejoin::AccountChainRequest` → `lovejoin::ChainResult`).

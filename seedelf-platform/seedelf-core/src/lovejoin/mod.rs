@@ -1324,6 +1324,64 @@ pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> u64 {
     DEPOSIT_RESERVE + boxes as u64 * per_box(depth, denom)
 }
 
+/// The most boxes, of `most`, a Bootstrap paid from the private balance
+/// puts into `protocol`'s pool under `params`, or none when not one fits.
+/// Its mix session holds one UTxO of [`funding_for`]'s ADA at depth 0 and
+/// the boxes' token, beside a collateral the deposit never spends, so
+/// [`DEPOSIT_RESERVE`] alone pays the deposit's fee and its change's least:
+/// a fee that grows with the boxes (chunk 34's 34d review, 3). Each count is
+/// built ([`deposit_from`]), never estimated, its change at a base address,
+/// as long as a session's is.
+pub fn bootstrap_most(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    network_flag: bool,
+    most: usize,
+) -> Result<usize> {
+    let mut address = vec![if network_flag { 0x00 } else { 0x01 }];
+    address.extend([0x5e; 56]);
+    let address = Address::from_bytes(&address).map_err(|e| anyhow!("{e}"))?;
+    // One register for every box: each datum is as long as a fresh one's.
+    let owner = Register::create(Scalar::from(4_242_424u64))?;
+    let fits = |boxes: usize| -> Result<bool> {
+        let tokens = match protocol.box_value().token_total(boxes) {
+            Ok(None) => Assets::new(),
+            Ok(Some((token, quantity))) => Assets::new().add(Asset::new(
+                hex::encode(token.policy),
+                hex::encode(&token.name),
+                quantity,
+            )?)?,
+            // More of the token than one output holds: no deposit of this many.
+            Err(_) => return Ok(false),
+        };
+        let input = Holding {
+            utxo: Resolved {
+                tx_hash: [0x5e; 32],
+                index: 0,
+                output: Vec::new(),
+            },
+            lovelace: funding_for(boxes, 0, protocol.denom),
+            tokens,
+        };
+        let owners = vec![owner.clone(); boxes];
+        // Short of ADA, or over a transaction's size: both grow with the boxes.
+        Ok(deposit_from(params, protocol, &[input], &owners, &address, 1).is_ok())
+    };
+    if most == 0 || !fits(1)? {
+        return Ok(0);
+    }
+    let (mut low, mut high) = (1, most);
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        if fits(mid)? {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    Ok(low)
+}
+
 /// How many of the wallet's boxes `spare` lovelace mixes again at `depth`
 /// ([`again`]): none if it can't pay for one's mixes.
 pub fn again_affordable(spare: u64, depth: u32) -> usize {
