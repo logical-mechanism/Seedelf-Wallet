@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { SeedelfKey, lovejoinOwned, lovejoinUsable, lovejoinVerifyPool } from "./wasm.mjs";
+import { SeedelfKey, lovejoinCandidate, lovejoinLaunchCheck, lovejoinOwned, lovejoinUsable, lovejoinVerifyPool } from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const params = json("../../../seedelf-core/tests/fixtures/epoch_params.json")[0];
@@ -64,4 +64,62 @@ test("a stranger's deep datum at the holder, named as a pool, is refused and lea
   const text = JSON.stringify({ network: "preprod", pool: { ...poolRef, reference: { ...found.reference, inline_datum: "DATUM" } } });
   assert.throws(() => lovejoinVerifyPool(text.replace('"DATUM"', deepDatum)));
   assert.equal(JSON.parse(lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: poolRef }))).version, "tokenV1");
+});
+
+const MIX_BOX = "b51f7e0331d32c706c0657a9ae28e5900e651d569d922b7093b52ea4";
+const MIX_LOGIC = "ada2c293ad286873fb2d265b4a8597edc5271e927e13dc0496e7b953";
+
+/** A row at the holder carrying the script of `hash` as a reference script, its bytes named or not. */
+const atHolder = (index, hash, bytes = null) => ({
+  ...found.reference,
+  tx_hash: "ee".repeat(32),
+  tx_index: index,
+  value: "3620000",
+  inline_datum: null,
+  datum_hash: null,
+  asset_list: [],
+  reference_script: { hash, size: null, type: "plutusV3", bytes },
+});
+
+test("a candidate's cheap checks say what it claims to be, before anything is asked", () => {
+  const view = JSON.parse(lovejoinCandidate(JSON.stringify({ network: "preprod", reference: found.reference })));
+  assert.deepEqual(view, {
+    id: "c5852bb700034b0b259c9e237e58ffc5d022ce8f67600fbf32736e69",
+    boxLovelace: "2000000",
+    token: { policyId: "02d597331203e9e2ec8b954b26a33503f044578c836407bf125f31fa", assetName: Buffer.from("LJTEST").toString("hex"), quantity: "10000000000000000" },
+    mixBoxHash: MIX_BOX,
+    mixLogicHash: MIX_LOGIC,
+  });
+  assert.throws(() => lovejoinCandidate(JSON.stringify({ network: "mainnet", reference: found.reference })), /holder/);
+  const noNft = { ...found.reference, asset_list: [] };
+  assert.throws(() => lovejoinCandidate(JSON.stringify({ network: "preprod", reference: noNft })), /NFT/);
+});
+
+test("a launch is checked from its transaction: its seed among the inputs, its scripts at the holder", () => {
+  const other = { txHash: "00".repeat(32), txIndex: 0 };
+  const check = (inputs, scripts) =>
+    JSON.parse(lovejoinLaunchCheck(JSON.stringify({ network: "preprod", reference: found.reference, inputs, scripts })));
+  // Lovejoin's own launch: genuine, but its scripts went to a key address, so a standard launch it isn't.
+  const own = check([other, found.seed], found.scripts);
+  assert.deepEqual([own.pool.id, own.pool.scriptsInline], ["c5852bb700034b0b259c9e237e58ffc5d022ce8f67600fbf32736e69", 2]);
+  assert.deepEqual(own.pool.seed, found.seed);
+  assert.match(own.mixLogicStake, /^stake_test1/);
+  // The same pool had its launch put both at the holder: read by reference.
+  const atTheHolder = check([found.seed], [atHolder(1, MIX_BOX), atHolder(2, MIX_LOGIC)]);
+  assert.equal(atTheHolder.pool.scriptsInline, 0);
+  assert.equal(atTheHolder.mixLogicStake, own.mixLogicStake);
+  assert.throws(() => check([other], found.scripts), /inputs/);
+});
+
+test("a script at the holder named by its hash alone is read with the bytes derived here", () => {
+  const verify = (scripts) =>
+    JSON.parse(lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: { ...poolRef, scripts } })));
+  const bytes = Object.fromEntries(found.scripts.map((s) => [s.reference_script.hash, s.reference_script.bytes]));
+  const named = verify([atHolder(1, MIX_BOX), atHolder(2, MIX_LOGIC)]);
+  const whole = verify([atHolder(1, MIX_BOX, bytes[MIX_BOX]), atHolder(2, MIX_LOGIC, bytes[MIX_LOGIC])]);
+  assert.equal(named.scriptsInline, 0);
+  assert.deepEqual(named, whole);
+  // A hash that isn't one of the pool's, or bytes that aren't the script's, read as no reference at all.
+  assert.equal(verify([atHolder(1, "11".repeat(28)), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
+  assert.equal(verify([atHolder(1, MIX_BOX, bytes[MIX_LOGIC]), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
 });

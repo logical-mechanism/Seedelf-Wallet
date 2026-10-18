@@ -102,27 +102,50 @@ pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protoco
         return Protocol::of(network_flag);
     };
     let reference = seedelf_core::eval::resolve_row(&pool.reference)?;
+    let seed: [u8; 32] = hex::decode(&pool.seed.tx_hash)?
+        .try_into()
+        .map_err(|_| anyhow!("The seed's transaction hash isn't 32 bytes"))?;
+    let mut derived = None;
     let mut scripts = Vec::new();
     for row in &pool.scripts {
         let Some(script) = &row.reference_script else {
             continue;
         };
-        let (Some("plutusV3"), Some(bytes)) = (script.kind.as_deref(), script.bytes.as_deref())
-        else {
-            continue;
+        let bytes = match (
+            script.kind.as_deref(),
+            script.bytes.as_deref(),
+            script.hash.as_deref(),
+        ) {
+            (Some("plutusV3"), Some(bytes), _) => hex::decode(bytes).map_err(|e| {
+                anyhow!(
+                    "UTxO {}#{}'s script isn't hex: {e}",
+                    row.tx_hash,
+                    row.tx_index
+                )
+            })?,
+            // Named by its hash alone, as the data layer's pool list names a
+            // pool's scripts: the bytes are the ones derived here, if they
+            // hash to it. `verify_pool` then checks them as any others.
+            (Some("plutusV3") | None, None, Some(hash)) => {
+                let derived = match &mut derived {
+                    Some(d) => d,
+                    none => none.insert(
+                        lovejoin::templates::derive(&seed, pool.seed.tx_index)
+                            .map_err(|e| anyhow!("{e}"))?,
+                    ),
+                };
+                let Some(found) = [&derived.mix_box, &derived.mix_logic]
+                    .into_iter()
+                    .find(|s| hex::encode(s.hash) == hash)
+                else {
+                    continue;
+                };
+                found.cbor.clone()
+            }
+            _ => continue,
         };
-        let bytes = hex::decode(bytes).map_err(|e| {
-            anyhow!(
-                "UTxO {}#{}'s script isn't hex: {e}",
-                row.tx_hash,
-                row.tx_index
-            )
-        })?;
         scripts.push(seedelf_core::eval::resolve_reference(row, 3, &bytes)?);
     }
-    let seed: [u8; 32] = hex::decode(&pool.seed.tx_hash)?
-        .try_into()
-        .map_err(|_| anyhow!("The seed's transaction hash isn't 32 bytes"))?;
     lovejoin::verify_pool(
         network_flag,
         &reference,
@@ -211,6 +234,109 @@ pub fn verify_pool(request: VerifyPoolRequest) -> Result<PoolView> {
         network_flag(&request.network)?,
         Some(&request.pool),
     )?)
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateRequest {
+    pub network: String,
+    /// A row at the holder.
+    pub reference: UtxoResponse,
+}
+
+/// What a candidate at the holder says it is, before anything proves it
+/// (`lovejoin::candidate`): enough to tell whether its launch is worth
+/// asking about, which costs a request.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateView {
+    /// Its NFT's policy: the pool's id, if it's genuine.
+    pub id: String,
+    pub box_lovelace: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
+    /// The scripts its datum names, unproven: a standard launch puts both at
+    /// the holder in its own transaction, which is checked before asking.
+    pub mix_box_hash: String,
+    pub mix_logic_hash: String,
+}
+
+/// The cheap checks of a candidate at the holder, offline: its shape and its
+/// datum, and that it isn't a 10 ₳ ADA pool. Why not, if it fails them.
+pub fn candidate(request: CandidateRequest) -> Result<CandidateView> {
+    let reference = seedelf_core::eval::resolve_row(&request.reference)?;
+    let (id, datum) = lovejoin::candidate(network_flag(&request.network)?, &reference)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(CandidateView {
+        id: hex::encode(id),
+        box_lovelace: datum.box_value.lovelace.to_string(),
+        token: datum
+            .box_value
+            .token
+            .as_ref()
+            .map(|t| token_amount(t, t.quantity)),
+        mix_box_hash: hex::encode(datum.mix_box_hash),
+        mix_logic_hash: hex::encode(datum.mix_logic_hash),
+    })
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchCheckRequest {
+    pub network: String,
+    /// The candidate's row at the holder.
+    pub reference: UtxoResponse,
+    /// What the transaction that made it spent: one is its seed.
+    pub inputs: Vec<OutRef>,
+    /// That transaction's outputs at the holder.
+    #[serde(default)]
+    pub scripts: Vec<UtxoResponse>,
+}
+
+/// A genuine pool, and what its launch must have registered.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchCheck {
+    pub pool: PoolView,
+    /// L's reward account (bech32): a standard launch registers it.
+    pub mix_logic_stake: String,
+}
+
+/// A candidate checked against its launch: the seed found among its inputs,
+/// its scripts derived and matched, those its outputs at the holder carry
+/// read by reference (`PoolView::scripts_inline` says how many weren't).
+/// Why not, if it isn't a genuine pool.
+pub fn launch_check(request: LaunchCheckRequest) -> Result<LaunchCheck> {
+    let flag = network_flag(&request.network)?;
+    let reference = seedelf_core::eval::resolve_row(&request.reference)?;
+    let (policy, _) = lovejoin::candidate(flag, &reference).map_err(|e| anyhow!("{e}"))?;
+    let inputs = request
+        .inputs
+        .iter()
+        .map(|i| {
+            let tx: [u8; 32] = hex::decode(&i.tx_hash)?
+                .try_into()
+                .map_err(|_| anyhow!("An input's transaction hash isn't 32 bytes"))?;
+            Ok((tx, i.tx_index))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (tx, index) = lovejoin::find_seed(&policy, &inputs)
+        .context("None of its launch's inputs makes its NFT, so it can't be proven genuine")?;
+    let pool = PoolRef {
+        reference: request.reference,
+        seed: OutRef {
+            tx_hash: hex::encode(tx),
+            tx_index: index,
+        },
+        scripts: request.scripts,
+    };
+    let protocol = protocol_of(flag, Some(&pool))?;
+    let mut stake = vec![if flag { 0xf0 } else { 0xf1 }];
+    stake.extend_from_slice(&protocol.mix_logic_hash);
+    Ok(LaunchCheck {
+        pool: PoolView::of(&protocol)?,
+        mix_logic_stake: Address::from_bytes(&stake)?.to_bech32()?,
+    })
 }
 
 #[derive(Deserialize, Debug)]
