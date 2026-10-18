@@ -59,6 +59,8 @@ import {
   LovejoinRows,
   LovejoinSkipped,
   LovejoinSwitch,
+  TokenWays,
+  WidthNote,
   ReturnLinks,
   useSendingLabel,
   useSessionsWhile,
@@ -678,6 +680,10 @@ export function NewSwap({
   const [out, setOut] = useState<{ summary: SessionOutSummary; quote: SwapQuote; lovejoin?: SwapLovejoin }>();
   // The approval's switch: through Lovejoin, as Settings starts it, or directly (privacy review §4.1).
   const [through, setThrough] = useState(true);
+  // Change on the approval (chunk 34's 34e): the pool the token it gets goes into, by its unit, null for none.
+  const [pools, setPools] = useState<Record<string, string | null>>({});
+  // The switch turned off on this review: built without the token's boxes, it stays to be turned back on (34f).
+  const [turnedOff, setTurnedOff] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   // Send was refused: the review gives way to building it again, or to watching one that may have gone out (DX-1).
@@ -769,9 +775,11 @@ export function NewSwap({
    * Builds the funding on the quote shown, asked again first when it's over a
    * minute old (prices move). False: the fresh quote is more than the private
    * balance has, which the form then says. `keepWay`: a review built again
-   * keeps the way back the user chose on the one before.
+   * keeps the way back the user chose on the one before, its switch and its
+   * Change, built that way (chunk 34's 34f: the switch's way decides whether
+   * the token's boxes are funded). `way` sets them anew.
    */
-  async function buildOut(keepWay = false): Promise<boolean> {
+  async function buildOut(keepWay = false, way?: { through?: boolean; pools?: Record<string, string | null> }): Promise<boolean> {
     if (!current || !quoted || !get) return false;
     let quote = current;
     if (Date.now() - quoted.at > QUOTE_FRESH_MS) {
@@ -779,10 +787,36 @@ export function NewSwap({
       setQuoted({ quote, at: Date.now() });
       if (adaShort(seedelf.lovelace, quote)) return false;
     }
-    const { lovejoin, ...summary } = await call("session-out-build", { quote, display: { in: pay.side, out: get.side } });
-    if (!keepWay) setThrough(lovejoin?.on ?? false);
+    const wantThrough = way?.through ?? (keepWay ? through : undefined);
+    const wantPools = way?.pools ?? (keepWay ? pools : {});
+    const { lovejoin, ...summary } = await call("session-out-build", {
+      quote,
+      display: { in: pay.side, out: get.side },
+      ...(wantThrough !== undefined ? { through: wantThrough } : {}),
+      ...(Object.keys(wantPools).length ? { pools: wantPools } : {}),
+    });
+    setThrough(wantThrough ?? lovejoin?.on ?? false);
+    setPools(wantPools);
+    setTurnedOff(way?.through === false || (keepWay && turnedOff && wantThrough === false));
     setOut({ summary, quote, lovejoin });
     return true;
+  }
+
+  /**
+   * The approval's switch or Change moved: the funding is built again that way (chunk 34's 34f), since a token's
+   * boxes are funded only through Lovejoin, and only in the pool chosen. Its review gives way to the new one.
+   */
+  async function rebuild(way: { through?: boolean; pools?: Record<string, string | null> }) {
+    if (busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (!(await buildOut(true, way))) setOut(undefined);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function review(e: FormEvent) {
@@ -863,7 +897,18 @@ export function NewSwap({
           )
         }
       >
-        <SwapApproval {...out} pay={pay} get={get} through={through} onThrough={setThrough} busy={busy} before={homeBalance(seedelf)} />
+        <SwapApproval
+          {...out}
+          pay={pay}
+          get={get}
+          through={through}
+          onThrough={(on) => void rebuild({ through: on })}
+          onPool={(unit, pool) => void rebuild({ pools: { ...pools, [unit]: pool } })}
+          turnedOff={turnedOff}
+          // A refused funding's foot watches or builds it again: the switch and Change wait (34f's review, 2).
+          busy={busy || !!refusal}
+          before={homeBalance(seedelf)}
+        />
         <TxDetailButton txHash={out.summary.txHash} testId="swap-out-tx" />
       </Screen>
     );
@@ -1172,6 +1217,8 @@ export function SwapApproval({
   get,
   through,
   onThrough,
+  onPool,
+  turnedOff = false,
   busy,
   before,
 }: {
@@ -1181,7 +1228,12 @@ export function SwapApproval({
   pay: Pick;
   get: Pick;
   through: boolean;
+  /** The switch moved: the funding is built again that way. */
   onThrough: (through: boolean) => void;
+  /** Change picked another pool for the token it gets, by its unit, or none (null). */
+  onPool?: (unit: string, pool: string | null) => void;
+  /** The switch was turned off on this review: it stays, to be turned back on. */
+  turnedOff?: boolean;
   busy: boolean;
   before?: string;
 }) {
@@ -1190,14 +1242,31 @@ export function SwapApproval({
   const [swapPart, collateral] = summary.payments;
   const got = get.id === "lovelace" ? undefined : tokenText(network, tokenOf(get.id));
   const adaOut = quote.ask.tokenOut === "lovelace";
-  // Lovejoin would take something, now or after a stop or a refund: the approval says which way it comes back.
-  const any = !!l && (l.boxes > 0 || !!l.of || !!l.ifStopped);
+  // The token it gets, through a pool of it (chunk 34's 34e): its boxes are funded beside the swap, as built.
+  const way = through ? l?.ways?.[0] : undefined;
+  const tokenBoxes = way?.pool ? way.boxes : 0;
+  const tokenFund = through && l?.fund ? BigInt(l.fund) : 0n;
+  // Lovejoin would take something, now or after a stop or a refund, or the token's boxes, or it was turned off for
+  // them: the approval says which way it comes back. Built with the switch off, the token's boxes aren't worked out,
+  // so the switch stays, to turn back on (34f's review, 4).
+  const any =
+    !!l && ((turnedOff && !through) || l.boxes > 0 || !!l.of || !!l.ifStopped || !!l.ways?.some((w) => w.boxes > 0 || w.direct));
+  // What of the token it gets is less than a box, which comes back directly beside its boxes (34f's review, 3).
+  const rest =
+    way?.pool && way.boxes > 0 && way.quantity ? BigInt(quote.amountOut) - BigInt(way.boxes) * BigInt(way.quantity) : 0n;
+  // What a stop brings back through Lovejoin instead: the funding's ADA for an ADA swap, and the token's boxes' (34f's
+  // review, 8), as the worker prices it.
+  const stopFunded = (quote.ask.tokenIn === "lovelace" ? BigInt(quote.fund.lovelace) : 0n) + BigInt(l?.fund ?? "0");
   // Its return goes through Lovejoin, and the pool takes a box: its mixes and their way back are costs too.
   const mixes = through && !!l && !l.skipped && l.boxes > 0;
   // What leaves now, what it all costs and what comes back, as the other reviews say it (blind test §9.8, T10: one
-  // Start swap approves three transactions, and the tester added up Transaction details to find what left).
+  // Start swap approves three transactions, and the tester added up Transaction details to find what left). The
+  // token's boxes' mixes and their way back are Lovejoin's costs too; their ADA comes back with each box (34f).
   const paid = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), 0n);
-  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, mixes ? l : undefined);
+  const lovejoinCosts = mixes || tokenBoxes > 0 ? lovejoinOf(mixes ? l : undefined, tokenBoxes > 0 ? way : undefined) : undefined;
+  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, lovejoinCosts);
+  // What the funding pays for the swap itself, apart from the token's boxes (34e's fixes' review, 2).
+  const forSwap = (BigInt(swapPart!.lovelace) - tokenFund).toString();
   const tokensOut = new Set(summary.payments.flatMap((p) => p.tokens.map(tokenKey))).size;
   return (
     <>
@@ -1245,8 +1314,12 @@ export function SwapApproval({
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
         {/* Not bold, and not "For the swap": above the 5 ₳ and the fee, it read as the total (blind test T10). The
             total is its own row now. */}
-        <Row label={tr("swaps.review.forSwap")} value={fundText(swapPart!.lovelace, swapPart!.tokens, pay.side, network)} />
-        <FundParts quote={quote} funded={swapPart!.lovelace} />
+        <Row label={tr("swaps.review.forSwap")} value={fundText(forSwap, swapPart!.tokens, pay.side, network)} />
+        <FundParts quote={quote} funded={forSwap} />
+        {/* The token's boxes, funded beside the swap: their ADA comes back with each box, their mixes don't (34e). */}
+        {tokenFund > 0n && way && (
+          <TokenBoxesRows way={way} fund={tokenFund} box={way.pool ? l?.values?.[way.pool] : undefined} token={got?.label ?? ""} />
+        )}
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
         {/* What leaves, and the balance after, as every other review says them. The change isn't a row, as it isn't
@@ -1255,16 +1328,19 @@ export function SwapApproval({
       </ReviewRows>
       <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
-      <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} />
+      <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} tokenBoxes={tokenBoxes > 0} />
       <p className="note" data-testid="swap-approves">
         {tr(quote.againstPools ? "swaps.review.approvesPools" : "swaps.review.approves")}
       </p>
       {any && (
         <LovejoinChoice
           lovejoin={l!}
-          funded={quote.fund.lovelace}
+          funded={stopFunded.toString()}
+          // A token a pool takes is on the wallet's list, so its ticker alone names it, with no mark to add.
+          rest={rest > 0n ? `${formatQuantity(rest.toString(), get.side.decimals)} ${got?.label ?? get.side.label}` : undefined}
           through={through}
           onThrough={onThrough}
+          onPool={onPool}
           busy={busy}
         />
       )}
@@ -1273,6 +1349,8 @@ export function SwapApproval({
           {tr("swaps.review.noBox")}
         </p>
       )}
+      {/* What it gets makes no box of its pool: said, with no Change to make (34f). */}
+      {l && !any && through && l.ways && <TokenWays ways={l.ways} values={l.values} busy={busy} funded />}
       <Callout tone="privacy">{tr("swaps.review.privacy.links")}</Callout>
       <HistoriesNote histories={summary.histories} session={summary.index} testId="swap-histories" />
       <GivemeNote funding />
@@ -1343,16 +1421,34 @@ export function SwapCosts({
  * swaps against a DEX's pools (Danogo's), with no order, and is filled in
  * the swap itself (chunk 24).
  */
-export function Plan({ lovejoin, adaOut, pools = false }: { lovejoin: boolean; adaOut: boolean; pools?: boolean }) {
+export function Plan({
+  lovejoin,
+  adaOut,
+  pools = false,
+  tokenBoxes = false,
+}: {
+  lovejoin: boolean;
+  adaOut: boolean;
+  pools?: boolean;
+  /** The token it gets goes through a pool of its own, in boxes funded now (chunk 34's 34e). */
+  tokenBoxes?: boolean;
+}) {
   const tr = useT();
+  // The proceeds in boxes, the spare ADA too where it pays for a box; or the spare ADA alone; or nothing.
+  const back = tokenBoxes
+    ? lovejoin
+      ? "swaps.plan.backAdaOut"
+      : "swaps.plan.backTokenPool"
+    : !lovejoin
+      ? "swaps.plan.backDirect"
+      : adaOut
+        ? "swaps.plan.backAdaOut"
+        : "swaps.plan.backTokenOut";
   const steps = [
     [tr("swaps.plan.funded"), tr("swaps.plan.fundedSub")],
     [tr(pools ? "swaps.plan.swapped" : "swaps.plan.ordered"), tr("swaps.plan.orderedSub")],
     [tr("swaps.plan.filled"), tr(pools ? "swaps.step.filledInSwap" : "swaps.plan.filledSub")],
-    [
-      tr("swaps.plan.back"),
-      tr(!lovejoin ? "swaps.plan.backDirect" : adaOut ? "swaps.plan.backAdaOut" : "swaps.plan.backTokenOut"),
-    ],
+    [tr("swaps.plan.back"), tr(back)],
   ];
   return (
     <div className="timeline" data-testid="swap-steps">
@@ -1382,18 +1478,27 @@ export function Plan({ lovejoin, adaOut, pools = false }: { lovejoin: boolean; a
 export function LovejoinChoice({
   lovejoin: l,
   funded,
+  rest,
   through,
   onThrough,
+  onPool,
   busy,
 }: {
   lovejoin: SwapLovejoin;
   funded: string;
+  /** The token it gets that's less than a box, about: it comes back directly, beside its boxes. */
+  rest?: string;
   through: boolean;
   onThrough: (through: boolean) => void;
+  /** Change, for the token it gets (chunk 34's 34e): another of its pools, or none. */
+  onPool?: (unit: string, pool: string | null) => void;
   busy: boolean;
 }) {
   const tr = useT();
-  const cost = through && !l.skipped && l.boxes > 0;
+  // What goes through Lovejoin: the spare ADA's boxes, where the classic pool takes them; the token's, in its pool.
+  const tokenBoxes = through ? (l.ways ?? []).reduce((sum, w) => sum + (w.pool ? w.boxes : 0), 0) : 0;
+  const ada = through && !l.skipped && l.boxes > 0;
+  const cost = ada || tokenBoxes > 0;
   const stopped = through && !l.skipped ? l.ifStopped : undefined;
   return (
     <>
@@ -1403,7 +1508,15 @@ export function LovejoinChoice({
           {/* On while the pool has no room now: the switch says it doesn't apply as things are, as the note under
               it does (chunk 23's second review, DX-3). */}
           <span className="note" id="swap-lovejoin-note" data-testid="swap-lovejoin-choice">
-            {tr(!through ? "swaps.lovejoin.privacy.off" : l.skipped ? "swaps.lovejoin.privacy.onPoolShort" : "swaps.lovejoin.privacy.on")}
+            {tr(
+              !through
+                ? "swaps.lovejoin.privacy.off"
+                : tokenBoxes > 0
+                  ? "swaps.lovejoin.privacy.onToken"
+                  : l.skipped
+                    ? "swaps.lovejoin.privacy.onPoolShort"
+                    : "swaps.lovejoin.privacy.on",
+            )}
           </span>
         </span>
         <button
@@ -1423,7 +1536,16 @@ export function LovejoinChoice({
           {tr("swaps.lovejoin.warn.pool", { why: l.skipped })}
         </Callout>
       )}
-      {cost && <LovejoinCost lovejoin={l} />}
+      {/* The token it gets, through a pool of it, with Change (chunk 34's 34e and 34f); its boxes' costs below. */}
+      {through && l.ways && <TokenWays ways={l.ways} values={l.values} busy={busy} onChange={onPool} funded />}
+      {through && tokenBoxes > 0 && rest && (
+        <p className="note" data-testid="swap-token-rest">
+          {tr("swaps.lovejoin.privacy.tokenRest", { rest })}
+        </p>
+      )}
+      {cost && <LovejoinCost lovejoin={l} ada={ada} />}
+      {/* Four boxes a mix asked, and it goes three: why (chunk 34's D3). */}
+      {through && <WidthNote fellBack={l.fellBack} testId="swap-width-fell-back" />}
       {stopped && (
         <p className="note" data-testid="swap-lovejoin-stopped">
           {tr("swaps.lovejoin.ifStopped", {
@@ -1459,28 +1581,33 @@ function boxesText(l: { boxes: number; of?: number }): string {
  * (the proceeds too when they're ADA, launch review #26) is the Plan's last
  * step, said once.
  */
-export function LovejoinCost({ lovejoin: l }: { lovejoin: SwapLovejoin }) {
+export function LovejoinCost({ lovejoin: l, ada = true }: { lovejoin: SwapLovejoin; ada?: boolean }) {
   const tr = useT();
+  // The token's boxes, through its own pool (chunk 34's 34e): their mixes and their way back, beside the ADA's.
+  const tokens = (l.ways ?? []).filter((w) => w.pool && w.boxes > 0);
+  const mixes = (ada ? l.mixes : 0) + tokens.reduce((sum, w) => sum + w.mixes, 0);
+  const mixFees = (ada ? BigInt(l.mixFees) : 0n) + tokens.reduce((sum, w) => sum + BigInt(w.mixFees), 0n);
+  const withdrawFees = (ada ? BigInt(l.withdrawFees) : 0n) + tokens.reduce((sum, w) => sum + BigInt(w.withdrawFees), 0n);
+  const mixed = tr("lovejoin.mix.depthAndMixes", { count: l.depth, mixes: tr("amount.mixes", { count: mixes }) });
   return (
     <>
       <h2>{tr("swaps.cost.title")}</h2>
       <ReviewRows testId="swap-lovejoin-cost">
-        <Row
-          label={tr("swaps.cost.boxesLabel")}
-          value={l.of ? tr("swaps.cost.boxesOf", { boxes: l.boxes, of: l.of }) : tr("swaps.cost.boxesAtMost", { boxes: l.boxes })}
-        />
-        <Row
-          label={tr("lovejoin.mixedLabel")}
-          value={tr("lovejoin.mix.depthAndMixes", { count: l.depth, mixes: tr("amount.mixes", { count: l.mixes }) })}
-        />
-        <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(l.mixFees)}\u00a0₳`} />
-        <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(l.withdrawFees)}\u00a0₳`} />
+        {ada && (
+          <Row
+            label={tr("swaps.cost.boxesLabel")}
+            value={l.of ? tr("swaps.cost.boxesOf", { boxes: l.boxes, of: l.of }) : tr("swaps.cost.boxesAtMost", { boxes: l.boxes })}
+          />
+        )}
+        <Row label={tr("lovejoin.mixedLabel")} value={l.width === 4 ? tr("lovejoin.review.fourWide", { value: mixed }) : mixed} />
+        <Row label={tr("lovejoin.mix.feesLabel")} value={`${formatAda(mixFees.toString())}\u00a0₳`} />
+        <Row label={tr("swaps.cost.backLabel")} value={`${formatAda(withdrawFees.toString())}\u00a0₳`} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(l.delay) })} stack />
       </ReviewRows>
       {/* The rows say the boxes, their fees and their wait: the note says only what they hide, and that this swap
           keeps them whatever Settings says later (independent review L21). */}
       <p className="note" data-testid="swap-lovejoin">
-        {joinSentences([lovejoinHides(l.depth), tr("swaps.cost.settingsLater")])}
+        {joinSentences([lovejoinHides(l.depth, l.width), tr("swaps.cost.settingsLater")])}
       </p>
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
@@ -1532,6 +1659,51 @@ function FundParts({ quote, funded }: { quote: SwapQuote; funded: string }) {
       <Row label={tr("swaps.review.part.room")} value={tr("swaps.review.part.roomValue", { ada: formatAda(parts.room) })} part />
     </>
   );
+}
+
+/**
+ * What the funding adds for the token's boxes, set apart from the swap's (34e's fixes' review, 2): each box's ADA,
+ * which comes back with it, and its mixes, which don't. `box`: what a box holds in the pool chosen.
+ */
+function TokenBoxesRows({
+  way,
+  fund,
+  box,
+  token,
+}: {
+  way: NonNullable<SwapLovejoin["ways"]>[number];
+  fund: bigint;
+  box?: { lovelace: string };
+  token: string;
+}) {
+  const tr = useT();
+  const ada = (lovelace: bigint) => `${formatAda(lovelace.toString())}\u00a0₳`;
+  const boxesAda = box ? BigInt(box.lovelace) * BigInt(way.boxes) : undefined;
+  return (
+    <>
+      <Row label={tr("swaps.review.forTokenBoxes", { token })} value={ada(fund)} testId="swap-token-boxes" />
+      {boxesAda !== undefined && (
+        <Row label={tr("swaps.review.part.boxesAda", { count: way.boxes })} value={tr("swaps.review.comesBack", { ada: formatAda(boxesAda.toString()) })} part />
+      )}
+      <Row
+        label={tr("swaps.review.part.boxesMixes")}
+        value={tr("swaps.review.part.roomValue", { ada: formatAda((boxesAda !== undefined ? fund - boxesAda : BigInt(way.mixFees)).toString()) })}
+        part
+      />
+    </>
+  );
+}
+
+/**
+ * Lovejoin's costs on a swap's way back, for its totals: the spare ADA's boxes' mixes and their way back where the
+ * classic pool takes them (`ada`), and the token's boxes' in its own pool (`token`, chunk 34's 34e).
+ */
+function lovejoinOf(
+  ada: { mixFees: string; withdrawFees: string } | undefined,
+  token: { mixFees: string; withdrawFees: string } | undefined,
+): { mixFees: string; withdrawFees: string } {
+  const sum = (key: "mixFees" | "withdrawFees") => (BigInt(ada?.[key] ?? "0") + BigInt(token?.[key] ?? "0")).toString();
+  return { mixFees: sum("mixFees"), withdrawFees: sum("withdrawFees") };
 }
 
 /** What the funding carries for the swap, in words: each token named by `tokenAmountText`. */
@@ -1851,6 +2023,8 @@ export function Session({
   const [back, setBack] = useState<SessionBackSummary>();
   // Which way the return shown was built: as the swap was approved, or directly, by its switch.
   const [backThrough, setBackThrough] = useState(true);
+  // Change on its review (chunk 34's 34e): the pool each token goes into, by its unit, null for back directly.
+  const [backPools, setBackPools] = useState<Record<string, string | null>>({});
   const [stopping, setStopping] = useState(false);
   // What Stop brings back through Lovejoin, read as its dialog opens: null, directly.
   const [stopCost, setStopCost] = useState<SwapLovejoin | null>();
@@ -1937,10 +2111,12 @@ export function Session({
     }
   };
   /** Builds its return as approved, or directly: Bring it back, then its review's switch. */
-  const buildBack = (through: boolean) =>
+  /** Its return, built through Lovejoin or not; `pools`: Change's choices for its tokens, kept until it's built directly. */
+  const buildBack = (through: boolean, pools: Record<string, string | null> = through ? backPools : {}) =>
     void act(async () => {
-      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }) }));
+      setBack(await call("session-back-build", { index: s.index, ...(through ? {} : { direct: true }), ...(through && Object.keys(pools).length ? { pools } : {}) }));
       setBackThrough(through);
+      setBackPools(pools);
     });
   /** Builds the 5 ₳ for the cancel's collateral, or the return's (`back`), for its review, or again after a refusal. */
   const buildCollateral = (back: boolean) =>
@@ -1996,7 +2172,11 @@ export function Session({
         title={tr("swaps.back.title")}
         titleId="session-back-review"
         review
-        onBack={() => setBack(undefined)}
+        onBack={() => {
+          setBack(undefined);
+          // Its Change goes with the review it was made on (34f's review, 10).
+          setBackPools({});
+        }}
         backDisabled={busy}
         aside={tr("review.nothingSent")}
         error={error}
@@ -2035,6 +2215,13 @@ export function Session({
           />
           <IntoRow back={back} />
         </ReviewRows>
+        {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
+        <TokenWays
+          ways={back.lovejoin?.ways ?? []}
+          values={back.lovejoin?.values}
+          busy={busy}
+          onChange={(unit, pool) => buildBack(true, { ...backPools, [unit]: pool })}
+        />
         {/* Through Lovejoin, its chain's first transaction: `txHash` is the
             return, the last of the chain, which spends what isn't sent yet. */}
         <TxDetailButton
@@ -2606,6 +2793,8 @@ export function StopDialog({
           {tr("swaps.stop.poolShort", { why: cost.skipped })}
         </p>
       )}
+      {/* Four boxes a mix asked, and it would go three: why (chunk 34's D3). */}
+      {lovejoin && <WidthNote fellBack={cost.fellBack} testId="session-stop-width" />}
       {cost === undefined && <p className="note">{tr("swaps.stop.working")}</p>}
     </Modal>
   );

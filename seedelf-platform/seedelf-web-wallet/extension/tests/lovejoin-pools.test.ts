@@ -20,6 +20,7 @@ import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, testBalances, vectors } from "./fakes";
+import { t as t_ } from "../src/i18n";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -61,7 +62,12 @@ type T = ReturnType<typeof testBalances>;
  * when one's given (pointed at preprod's fixtures: its client is the same on
  * any network).
  */
-function pooled(t: T, pools: () => PoolRef[] = () => [TOKEN_POOL], index?: { fetch: FakeIndex["fetch"]; parts: DataParts }) {
+function pooled(
+  t: T,
+  pools: () => PoolRef[] = () => [TOKEN_POOL],
+  index?: { fetch: FakeIndex["fetch"]; parts: DataParts },
+  extra: Partial<ConstructorParameters<typeof LovejoinService>[0]> = {},
+) {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   return new LovejoinService({
@@ -80,6 +86,7 @@ function pooled(t: T, pools: () => PoolRef[] = () => [TOKEN_POOL], index?: { fet
     store: t.store,
     pools: async () => pools(),
     random: () => 0.5,
+    ...extra,
   });
 }
 
@@ -233,6 +240,8 @@ describe("the pools the wallet reads (chunk 34, 34a′)", SLOW, () => {
         token: { ...VIEW.token, quantity: (2n * BigInt(VIEW.token.quantity)).toString() },
         next: expect.any(Number),
         notMixed: 0,
+        // What each box holds, for Home's row (34f).
+        box: { lovelace: "2000000", token: VIEW.token },
       },
     ]);
     expect(await lj.returning("preprod")).toBe(true);
@@ -602,5 +611,99 @@ describe("the token pools on the data layer (chunk 34's 34c)", SLOW, () => {
     const status = await pooled(t, undefined, { fetch: index.fetch, parts }).status("preprod");
     expect(status.pools![0]!.boxes).toHaveLength(2);
     expect(mixBoxReads(t)).toEqual([[VIEW.mixBoxHash]]);
+  });
+});
+
+describe("what the Lovejoin hub reads of each pool (chunk 34's 34f)", SLOW, () => {
+  it("says each pool's crowd and launch, whether this wallet started it, and the starts no look has found yet", async () => {
+    const t = await wallet();
+    const launch = "ab".repeat(32);
+    const lj = pooled(t, undefined, undefined, {
+      facts: async () => ({
+        launches: new Map([[TOKEN, launch]]),
+        crowds: new Map([
+          ["classic", { boxes: 21, deposits: 7, mixed: 15 }],
+          [TOKEN, { boxes: 11, deposits: 2, mixed: 0 }],
+        ]),
+      }),
+    });
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "f1"), ...(await strangers(t)));
+    await lj.recordLaunch("preprod", { id: TOKEN, txHash: launch, from: "private" });
+    await lj.recordLaunch("preprod", { id: "ee".repeat(28), txHash: "cd".repeat(32), from: "public", account: 0 });
+    const status = await lj.status("preprod");
+    expect(status.crowd).toEqual({ boxes: 21, deposits: 7, mixed: 15 });
+    expect(status.pools![0]).toMatchObject({ id: TOKEN, crowd: { boxes: 11, deposits: 2, mixed: 0 }, launch, mine: true });
+    // The start not found yet is the hub's note; the one found is a pool like any other.
+    expect(status.started).toEqual([{ id: "ee".repeat(28), txHash: "cd".repeat(32), at: expect.any(Number) }]);
+  });
+
+  it("names no crowd, launch or start where discovery has none to say, as on Koios", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "f1"), ...(await strangers(t)));
+    const status = await lj.status("preprod");
+    expect(status.crowd).toBeUndefined();
+    expect(status.started).toBeUndefined();
+    expect(status.pools![0]!.crowd).toBeUndefined();
+    expect(status.pools![0]!.launch).toBeUndefined();
+    expect(status.pools![0]!.mine).toBeUndefined();
+  });
+
+  it("brings back one of a pool's own boxes from its page, never another pool's that waited longer", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    // The classic pool's box moved an hour longer ago than the token pool's: any pool's, it would come first.
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 9), await tokenBox(t, "f1", true, 5), ...(await strangers(t)));
+    await lj.status("preprod");
+    await unlockedAnHourAgo(t);
+    await lj.withdrawNow("preprod", undefined, false, false, TOKEN);
+    expect(withdrawn(t)).toEqual([`${"f1".repeat(32)}#0`]);
+  });
+
+  it("brings back one of the classic pool's boxes from its page, by its name", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 5), await tokenBox(t, "f1", true, 9), ...(await strangers(t)));
+    await lj.status("preprod");
+    await unlockedAnHourAgo(t);
+    await lj.withdrawNow("preprod", undefined, false, false, "classic");
+    expect(withdrawn(t)).toEqual([`${"c1".repeat(32)}#0`]);
+  });
+
+  it("tells a pool's page of its own boxes alone when none can come back (34f's review, 6)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    // The token pool's box is held by a Bootstrap; the classic pool's isn't mixed yet: Koios says a deposit made it
+    // (its input sits at a key's address, not the pool's), as after a restore.
+    const deposited = await classicBox(t, "c1", 5);
+    t.koios.txSpends.set("c1".repeat(32), [{ payment_addr: { bech32: TOKEN_ADDRESS.replace("addr_test1w", "addr_test1v"), cred: "ab".repeat(28) } }]);
+    t.koios.addedToAccounts.push(...POOL, deposited, await tokenBox(t, "f1"), ...(await strangers(t)));
+    await sentChain(lj, "b1", { pools: { [TOKEN]: 1 }, leaves: [{ txHash: "f1".repeat(32), txIndex: 0, pool: TOKEN }], bootstrap: true });
+    const status = await lj.status("preprod");
+    expect(status.notMixed).toEqual([{ txHash: "c1".repeat(32), txIndex: 0 }]);
+    await unlockedAnHourAgo(t);
+    // The token pool's page: none of its boxes comes back now, said as its own, never the classic pool's unmixed one.
+    await expect(lj.withdrawNow("preprod", undefined, false, false, TOKEN)).rejects.toThrow(t_("lj.noneInPool"));
+  });
+
+  it("says a start no look has found for a day no more (34f's review, 11)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "f1"), ...(await strangers(t)));
+    await lj.recordLaunch("preprod", { id: "ee".repeat(28), txHash: "cd".repeat(32), from: "private" });
+    expect((await lj.status("preprod")).started).toHaveLength(1);
+    // Sent 25 hours ago (moving the clock would lock the wallet).
+    const kept = (await t.store.get<{ launches: Array<{ at: number }> }>("lovejoin.preprod"))!;
+    await t.store.set("lovejoin.preprod", { ...kept, launches: kept.launches.map((l) => ({ ...l, at: t.clock.now - 25 * HOUR })) });
+    expect((await lj.status("preprod")).started).toBeUndefined();
+  });
+
+  it("lists each token pool's box value with Home's figures, for its row", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "f1"), ...(await strangers(t)));
+    await lj.status("preprod");
+    const held = await lj.held("preprod");
+    expect(held.pools?.[0]?.box).toEqual({ lovelace: "2000000", token: VIEW.token });
   });
 });

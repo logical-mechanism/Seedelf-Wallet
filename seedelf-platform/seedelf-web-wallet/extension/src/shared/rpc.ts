@@ -1603,6 +1603,14 @@ export interface SwapLovejoin {
   width?: number;
   /** Four was asked, and it goes three: why (34e's review, 5). */
   fellBack?: string;
+  /** What a box holds in each pool `ways` names, by its id, so the approval can name them (34f). */
+  values?: Record<string, LovejoinBoxValue>;
+}
+
+/** What every box in a pool holds: ADA, and a token pool's token. Amounts in raw units. */
+export interface LovejoinBoxValue {
+  lovelace: string;
+  token?: TokenQuantity;
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
@@ -1904,6 +1912,8 @@ export interface SessionBackSummary {
     width?: number;
     /** Four was asked, and it goes three: why. */
     fellBack?: string;
+    /** What a box holds in each token pool `parts` and `ways` name, by its id, so the review can name them (34f). */
+    values?: Record<string, LovejoinBoxValue>;
     /**
      * The chain's first transaction: the deposit, or the first mix where its own
      * boxes are mixed again. `txHash` is the return, the last of the chain; this
@@ -2099,6 +2109,23 @@ export interface LovejoinStatus {
    * reads the classic pool alone.
    */
   pools?: LovejoinPoolStatus[];
+  /** The classic pool's crowd, as the data layer last counted it (chunk 34's 34c); none on Koios. */
+  crowd?: LovejoinCrowd;
+  /**
+   * Pools this wallet started that no look has found yet (chunk 34's 34d): the hub says each shows once found. The
+   * device's own record, no request.
+   */
+  started?: Array<{ id: string; txHash: string; at: number }>;
+}
+
+/**
+ * A pool's crowd as the data layer counts it (chunk 34's session 1, 16, and 34c, 31): its boxes, everyone's; the
+ * deposits they could have come from, worked back through each mix; and how many of them a mix made.
+ */
+export interface LovejoinCrowd {
+  boxes: number;
+  deposits: number;
+  mixed: number;
 }
 
 /** A token pool, as the wallet read it (chunk 34): the fields LovejoinStatus has for the classic pool, its own. */
@@ -2128,6 +2155,12 @@ export interface LovejoinPoolStatus {
    * Bring one back with the public account paying does (`lovejoin-withdraw-now`'s `paid`).
    */
   cantComeBack?: { has: string; needs: string };
+  /** Its crowd, as the data layer last counted it; none on Koios. */
+  crowd?: LovejoinCrowd;
+  /** Its launch transaction, as discovery found it. */
+  launch?: string;
+  /** This wallet started it (the device's own record). */
+  mine?: true;
 }
 
 /**
@@ -2251,7 +2284,17 @@ export interface LovejoinHeld {
    * pool's (chunk 34): its boxes on their way back, their ADA and token, and
    * its boxes not mixed yet. Only pools with something there.
    */
-  pools?: Array<{ id: string; boxes: number; lovelace: string; token?: TokenQuantity; next: number | null; notMixed: number; unsure?: number }>;
+  pools?: Array<{
+    id: string;
+    boxes: number;
+    lovelace: string;
+    token?: TokenQuantity;
+    next: number | null;
+    notMixed: number;
+    unsure?: number;
+    /** What each of its boxes holds, as the read set has it; none when the pool isn't read this time (34f). */
+    box?: LovejoinBoxValue;
+  }>;
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */
@@ -2510,8 +2553,12 @@ export interface Requests {
   "swap-quote": { payload: SwapAsk; result: SwapQuote };
   /** Builds the payment that funds a new session for `quote`, from the private balance, without sending it. */
   "session-out-build": {
-    /** `pools`: Change on its review, the pool for the token it gets by the token's unit, null for none (chunk 34's 34e). */
-    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide }; pools?: Record<string, string | null> };
+    /**
+     * `pools`: Change on its review, the pool for the token it gets by the token's unit, null for none (chunk 34's 34e).
+     * `through`: the approval's switch, built the way it's set (chunk 34's 34f): off, the token's boxes aren't funded,
+     * as it all comes back directly. None: Settings'.
+     */
+    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide }; pools?: Record<string, string | null>; through?: boolean };
     /** `lovejoin`: the quote's, checked against Lovejoin's pool as it is now (privacy review §2.7). */
     result: SessionOutSummary & { lovejoin?: SwapLovejoin };
   };
@@ -2593,8 +2640,11 @@ export interface Requests {
    * holder where there's none. The next pool read reads what's found.
    */
   "lovejoin-look-for-pools": { payload: None; result: None };
-  /** What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. */
-  "lovejoin-funding": { payload: { boxes: number; pool?: string }; result: LovejoinFunding };
+  /**
+   * What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. `width`: three, where
+   * the form says four falls back (34f); none, Settings'.
+   */
+  "lovejoin-funding": { payload: { boxes: number; pool?: string; width?: 3 }; result: LovejoinFunding };
   /**
    * Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself
    * once sent. `pool`: a token pool's id (none: the classic pool), whose boxes take its token too. `bootstrap`: boxes
@@ -2643,8 +2693,9 @@ export interface Requests {
    * `paid`: the public account pays its fee (chunk 34's escape hatch, for a
    * box that can't pay its own way back), which ties the box to the account.
    */
+  /** `pool`: with no `box`, the one of this pool's boxes that has waited longest (none: any pool's). */
   "lovejoin-withdraw-now": {
-    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean };
+    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean; pool?: string };
     result: PendingTx;
   };
   /** Every mix in Lovejoin's list, from the device alone (chunk 34's session 1, 5): the hub's (34f). */

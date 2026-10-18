@@ -59,7 +59,7 @@ import {
 import { PasswordField } from "../components/PasswordField";
 import { PhraseGrid } from "../components/PhraseGrid";
 import { PhraseInput, phraseProblem, WORD_COUNTS, type WordCount } from "../components/PhraseInput";
-import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides, mixFeesText } from "../components/LovejoinReturn";
+import { delayText, LOVEJOIN_SEEN, LOVEJOIN_UNAUDITED, lovejoinHides, mixesPerBox, mixFeesText } from "../components/LovejoinReturn";
 import { HintButton, HintText, Hinted, useHint } from "../components/Hint";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
@@ -769,14 +769,14 @@ function PreferencesSection({ network }: { network: Status["network"] }) {
 
 /**
  * About what a box's fan-out costs where Lovejoin is on `network`: its mixes
- * (1, 4 or 13, three wide), at what the wallet plans a mix at, the figure
- * the Lovejoin page and its reviews give (mixFeesText). It priced them at
- * what a mix measured (networks.ts), so Settings and the page disagreed
- * (chunk 23's second review, LJ-3).
+ * (1, 4 or 13, three wide; 1, 5 or 21 four wide, chunk 34's D3), at what the
+ * wallet plans a mix at, the figure the Lovejoin page and its reviews give
+ * (mixFeesText). It priced them at what a mix measured (networks.ts), so
+ * Settings and the page disagreed (chunk 23's second review, LJ-3).
  */
-export function depthCost(network: NetworkName, depth: LovejoinDepth): string {
-  const mixes = (3 ** depth - 1) / 2;
-  return t("settings.lovejoin.depthCost", { count: mixes, ada: NETWORKS[network].lovejoin ? mixFeesText(mixes) : "0" });
+export function depthCost(network: NetworkName, depth: LovejoinDepth, width = 3): string {
+  const mixes = mixesPerBox(depth, width);
+  return t("settings.lovejoin.depthCost", { count: mixes, ada: NETWORKS[network].lovejoin ? mixFeesText(mixes, width) : "0" });
 }
 
 /**
@@ -792,6 +792,8 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
   const fail = (err: Error) => setError(err.message);
   const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
   const on = prefs.lovejoinReturns;
+  const width = prefs.lovejoinWidth;
+  const four = width === 4;
   return (
     <section className="section" aria-labelledby="lovejoin-settings-title">
       {/* On its own page, the screen's title says it. */}
@@ -800,7 +802,12 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
       </h2>
       {/* What it costs, what a lock does to it and what it doesn't hide: on the page, not behind an icon (chunk 23). */}
       <p className="note">
-        {joinSentences([t("settings.lovejoin.note"), floor > 0 && t("settings.lovejoin.floor", { count: floor }), LOVEJOIN_SEEN()])}
+        {joinSentences([
+          t("settings.lovejoin.note"),
+          t("settings.lovejoin.tokens"),
+          floor > 0 && t("settings.lovejoin.floor", { count: floor }),
+          LOVEJOIN_SEEN(),
+        ])}
       </p>
       <Callout tone="warn" testId="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
@@ -811,7 +818,7 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
           <span className="note" id="lovejoin-returns-note" data-testid="lovejoin-returns-note">
             {on
               ? t("settings.lovejoin.returnsOn")
-              : t("settings.lovejoin.privacy.returnsOff", { cost: depthCost(network, prefs.lovejoinDepth) })}
+              : t("settings.lovejoin.privacy.returnsOff", { cost: depthCost(network, prefs.lovejoinDepth, width) })}
           </span>
         </span>
         <button
@@ -837,13 +844,34 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
               under it says how far the chosen depth hides a box (chunk 23's review, SET-2). */}
           {LOVEJOIN_DEPTHS.map((d) => (
             <option key={d} value={d}>
-              {t("settings.lovejoin.depthOption", { count: d, cost: depthCost(network, d) })}
+              {t("settings.lovejoin.depthOption", { count: d, cost: depthCost(network, d, width) })}
             </option>
           ))}
         </select>
         <p className="note" data-testid="lovejoin-hides">
-          {lovejoinHides(prefs.lovejoinDepth)}
+          {lovejoinHides(prefs.lovejoinDepth, width)}
         </p>
+      </div>
+      {/* Four boxes a mix (chunk 34's D3): every mix the wallet makes, from either side and every return, in every
+          pool. Three by default; where four can't go, it goes three and says why. */}
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="lovejoin-four-label">{t("settings.lovejoin.four")}</span>
+          <span className="note" id="lovejoin-four-note" data-testid="lovejoin-four-note">
+            {t(four ? "settings.lovejoin.privacy.fourOn" : "settings.lovejoin.privacy.fourOff")}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={four}
+          aria-labelledby="lovejoin-four-label"
+          aria-describedby="lovejoin-four-note"
+          onClick={() => void set({ lovejoinWidth: four ? 3 : 4 }).catch(fail)}
+          disabled={!loaded}
+          data-testid="lovejoin-four-switch"
+        />
       </div>
       <div className="field">
         <Hinted text={t("settings.lovejoin.delayNote")} testId="lovejoin-delay-note">

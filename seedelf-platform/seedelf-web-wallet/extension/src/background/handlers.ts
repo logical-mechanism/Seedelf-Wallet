@@ -419,7 +419,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         slippage: message.slippage,
       });
     case "session-out-build":
-      return ctx.sessions.outBuild(ctx.network, message.quote, message.display, poolChoice(message.pools));
+      return ctx.sessions.outBuild(
+        ctx.network,
+        message.quote,
+        message.display,
+        poolChoice(message.pools),
+        typeof message.through === "boolean" ? message.through : undefined,
+      );
     case "session-out-submit":
       return ctx.sessions.outSubmit(ctx.network, message.txHash, message.direct);
     case "session-swap-build":
@@ -474,7 +480,15 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.lovejoin.lookForPools(ctx.network).then(() => ({}));
     case "lovejoin-funding":
       // A pool's id from the page, or none: never a pool object it made up (its fixes' review, 6).
-      return ctx.lovejoin.funding(ctx.network, message.boxes, false, undefined, typeof message.pool === "string" ? message.pool : undefined);
+      return ctx.lovejoin.funding(
+        ctx.network,
+        message.boxes,
+        false,
+        undefined,
+        typeof message.pool === "string" ? message.pool : undefined,
+        // Three where the form says four falls back; never wider than Settings' (34f's review, 5).
+        message.width === 3 ? 3 : undefined,
+      );
     case "lovejoin-mix-private-build":
       return ctx.sessions.mixOutBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
     case "lovejoin-again-build":
@@ -490,7 +504,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-mix-public-progress":
       return ctx.lovejoin.progress(ctx.network, message.advance ?? false);
     case "lovejoin-withdraw-now":
-      return ctx.lovejoin.withdrawNow(ctx.network, message.box, message.anyway ?? false, message.paid ?? false);
+      return ctx.lovejoin.withdrawNow(
+        ctx.network,
+        message.box,
+        message.anyway ?? false,
+        message.paid ?? false,
+        typeof message.pool === "string" ? message.pool : undefined,
+      );
     case "lovejoin-mixes":
       return ctx.lovejoin.mixes(ctx.network);
     case "lovejoin-bootstrap-release":

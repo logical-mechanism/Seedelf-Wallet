@@ -136,6 +136,7 @@ import {
   SpentUnread,
   UNLOCK_WAIT_MS,
   unlockWait,
+  valuesOf,
   wayOver,
   type ChainProgress,
   type ChainWay,
@@ -1369,17 +1370,19 @@ export class SessionService {
    * `pool`: at Review, as Lovejoin's pool has room for now, or why it has
    * none (§2.7); read only when the return would go through it. `params`:
    * the protocol parameters the review read. `short`: why the token's boxes
-   * aren't funded after all (34e's review, 2).
+   * aren't funded after all (34e's review, 2). `through`: the approval's
+   * switch as the review was built, over Settings' (chunk 34's 34f): off, no
+   * token's boxes are funded, as it all comes back directly.
    */
   private async lovejoinCost(
     network: NetworkName,
     quote: SwapQuote,
     pool = false,
     pools?: Record<string, string | null>,
-    { params, short }: { params?: unknown; short?: string } = {},
+    { params, short, through }: { params?: unknown; short?: string; through?: boolean } = {},
   ): Promise<SwapLovejoin | undefined> {
     if (!this.deps.lovejoin?.available(network)) return undefined;
-    const on = await this.throughLovejoin();
+    const on = through ?? (await this.throughLovejoin());
     const { price, at, skipped, depth, delay, asked } = await this.priced(network, pool && on);
     // A token's proceeds go through a pool of it, their boxes' ADA funded beside the swap's (chunk 34's 34e): what
     // it adds is the boxes' alone, so the ADA's boxes below are as before. Only where the return goes through Lovejoin.
@@ -1413,6 +1416,8 @@ export class SessionService {
       ...(skipped ? { skipped } : {}),
       ...(more ? { ifStopped: stopped } : {}),
       ...(token ? { ways: [token.way], ...(funded > 0n ? { fund: token.fund } : {}) } : {}),
+      // What a box holds in each pool the token could go into, for the approval's names and Change (34f).
+      ...(choice?.works.length || choice?.chosen ? { values: valuesOf([...choice.works, ...(choice.chosen ? [choice.chosen] : [])]) } : {}),
     };
   }
 
@@ -1565,12 +1570,16 @@ export class SessionService {
     return verified;
   }
 
-  /** Builds the payment that funds a new session for `quote`: the swap and its costs, and the account's collateral. */
+  /**
+   * Builds the payment that funds a new session for `quote`: the swap and its costs, and the account's collateral.
+   * `through`: the approval's switch, when the user moved it (chunk 34's 34f); none, Settings'.
+   */
   async outBuild(
     network: NetworkName,
     quote: SwapQuote,
     display?: { in: SwapSide; out: SwapSide },
     pools?: Record<string, string | null>,
+    through?: boolean,
   ): Promise<SessionOutSummary & { lovejoin?: SwapLovejoin }> {
     const ask = checkAsk(quote.ask);
     if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED());
@@ -1580,7 +1589,7 @@ export class SessionService {
     const params = await this.deps.koios(network).epochParams();
     // Once, at Review, never as the user types: whether Lovejoin's pools take the boxes now (privacy review §2.7).
     // A token it gets through a pool of it has its boxes' ADA funded beside the swap's (chunk 34's 34e).
-    let lovejoin = await this.lovejoinCost(network, quote, true, pools, { params });
+    let lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, through });
     const fund = (l?: SwapLovejoin) =>
       this.buildFunding(
         network,
@@ -1604,7 +1613,7 @@ export class SessionService {
       // mend is thrown as it is, and so is the swap's own funding failing too.
       const mendable = e instanceof WalletLocked || e instanceof KoiosError || e instanceof CollateralError || e instanceof StaleReviewError || isTrap(e);
       if (!lovejoin?.fund || mendable) throw e;
-      lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, short: t("lj.tokens.skip.warn.balance") });
+      lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, short: t("lj.tokens.skip.warn.balance"), through });
       funding = await fund(lovejoin);
     }
     const { summary, txCbor, seed } = funding;
@@ -3886,6 +3895,7 @@ export class SessionService {
             ...(chain.ways ? { ways: chain.ways } : {}),
             ...(chain.width ? { width: chain.width } : {}),
             ...(chain.fellBack ? { fellBack: chain.fellBack } : {}),
+            ...(chain.values && chain.ways?.length ? { values: chain.values } : {}),
             // The deposit, which the review shows: `txHash` above is the return,
             // the last of the chain, which spends what nothing has sent yet.
             entry: chain.txs[0]!.txHash,
@@ -3948,8 +3958,32 @@ export class SessionService {
    */
   private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[]): Promise<boolean> {
     if (rows.some(collateralFits)) return false;
+    if (s?.mix) return true;
     // A box three a mix: four falls back to three where it costs more than the spare pays (34e's review, 6).
-    return !!s?.mix || spareOf(rows) >= BigInt((await this.deps.lovejoin!.funding(network, 1, false, undefined, undefined, 3)).lovelace);
+    const lovejoin = this.deps.lovejoin!;
+    const spare = spareOf(rows);
+    if (spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, undefined, 3)).lovelace)) return true;
+    // Or a box of a token the session's own UTxOs (or its swap's fill) hold, in a pool of it its return may use, which
+    // its spare ADA pays for (chunk 34's 34e, for 34f): its box's ADA and its mixes, as acrossOf counts them (wayOf:
+    // an approved swap's token in its approved pool only). The pools as discovery kept them, asking nobody.
+    const returns = s ? wayOf(s).returns : undefined;
+    if (!s || !returns) return false;
+    const own = new Set([...s.txs.map((t) => t.txHash), ...(returns.fills ?? [])]);
+    const held = new Map<string, bigint>();
+    for (const u of rows) {
+      if (!own.has(u.tx_hash)) continue;
+      for (const a of u.asset_list ?? []) held.set(a.policy_id + a.asset_name, (held.get(a.policy_id + a.asset_name) ?? 0n) + BigInt(a.quantity));
+    }
+    for (const [unit, quantity] of held) {
+      const named = returns.tokens && unit in returns.tokens ? returns.tokens[unit] : returns.only ? null : undefined;
+      if (named === null) continue;
+      for (const pool of await lovejoin.poolsOf(network, unit, true)) {
+        if (named !== undefined && pool.id !== named) continue;
+        if (quantity < BigInt(pool.token!.quantity)) continue;
+        if (spare >= BigInt((await lovejoin.funding(network, 1, false, undefined, pool, 3)).lovelace)) return true;
+      }
+    }
+    return false;
   }
 
   /**

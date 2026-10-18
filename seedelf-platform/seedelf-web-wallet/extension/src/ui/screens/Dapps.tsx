@@ -65,6 +65,7 @@ export interface DappStart {
 
 export function Dapps({
   seedelf,
+  cardano,
   blocked,
   start,
   banner,
@@ -72,6 +73,8 @@ export function Dapps({
   onPending,
 }: {
   seedelf: Balances["seedelf"];
+  /** The public account: Lovejoin lists the pools of the tokens held there first, and a public mix's token. */
+  cardano?: Balances["cardano"];
   /** Why a dApp can't start something now: a transaction still waiting, say. */
   blocked?: string;
   start?: DappStart;
@@ -182,7 +185,7 @@ export function Dapps({
   }
 
   if (open === "lovejoin") {
-    return <Lovejoin seedelf={seedelf} banner={banner} onBack={() => setOpen(undefined)} onPending={onPending} />;
+    return <Lovejoin seedelf={seedelf} cardano={cardano} banner={banner} onBack={() => setOpen(undefined)} onPending={onPending} />;
   }
 
   if (open === "minswap") {

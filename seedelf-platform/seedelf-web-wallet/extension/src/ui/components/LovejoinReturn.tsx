@@ -9,12 +9,19 @@
 import { useEffect, useRef, useState } from "react";
 import { joinSentences, t, useT } from "../../i18n";
 
-import type { SessionBackSummary, SessionView } from "../../shared/rpc";
+import type { NetworkName } from "../../networks";
+import type { LovejoinBoxValue, LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { adaText, formatAda } from "../format";
+import { boxText, CLASSIC_BOX } from "../lovejoin-pools";
+import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
 import { BOX_BACK_ESTIMATE } from "../swap";
+import { tokenText } from "../tokens";
 import { Callout } from "./Callout";
+import { ArrowDownIcon } from "./Icons";
+import { Modal } from "./Modal";
+import { PoolAvatar } from "./PoolAvatar";
 import { Row } from "./ReviewRows";
 
 /**
@@ -36,8 +43,11 @@ export const LOVEJOIN_UNAUDITED = () => t("lovejoin.warn.unaudited");
  */
 export const LOVEJOIN_SEEN = () => t("lovejoin.privacy.seen");
 
-/** How many mixes fan one box out `depth` waves deep, three wide (lovejoin.ts mixesPerBox): 1, 4 or 13. */
-export const mixesPerBox = (depth: number) => (3 ** depth - 1) / 2;
+/**
+ * How many mixes fan one box out `depth` waves deep, `width` boxes a mix (lovejoin.ts mixesPerBox): 1, 4 or 13 three
+ * wide; 1, 5 or 21 four wide (chunk 34's D3).
+ */
+export const mixesPerBox = (depth: number, width = 3) => (width ** depth - 1) / (width - 1);
 
 /**
  * What the wallet plans a mix at, as WebAssembly prices a mix's funding and
@@ -50,8 +60,17 @@ export const mixesPerBox = (depth: number) => (3 ** depth - 1) / 2;
  */
 const MIX_FEE_ESTIMATE = 950_000;
 
-/** About what `mixes` mixes cost, in ₳, as every screen that prices Lovejoin says it. */
-export const mixFeesText = (mixes: number): string => formatAda(String(mixes * MIX_FEE_ESTIMATE));
+/**
+ * And a mix four boxes wide (chunk 34's D3; seedelf-core's MIX_FEE_ESTIMATE_FOUR): 1.35 ₳, above the 1.214 ₳ one
+ * measured on mainnet's classic pool and 1.227 ₳ on a token pool.
+ */
+const MIX_FEE_ESTIMATE_FOUR = 1_350_000;
+
+/** What the wallet plans one mix at, `width` boxes a mix. */
+export const mixFeeEstimate = (width = 3) => (width === 4 ? MIX_FEE_ESTIMATE_FOUR : MIX_FEE_ESTIMATE);
+
+/** About what `mixes` mixes cost, in ₳, as every screen that prices Lovejoin says it; `width` boxes a mix. */
+export const mixFeesText = (mixes: number, width = 3): string => formatAda(String(mixes * mixFeeEstimate(width)));
 
 /**
  * About what one 10 ₳ box costs on a session's way back at `depth`: its
@@ -59,16 +78,32 @@ export const mixFeesText = (mixes: number): string => formatAda(String(mixes * M
  * connector says a private session's return through Lovejoin adds (blind
  * test §9.8, T16: "adds Lovejoin's fees" gave no figure).
  */
-export const boxCost = (depth: number): bigint => BigInt(mixesPerBox(depth) * MIX_FEE_ESTIMATE) + BOX_BACK_ESTIMATE;
+export const boxCost = (depth: number, width = 3): bigint =>
+  BigInt(mixesPerBox(depth, width) * mixFeeEstimate(width)) + BOX_BACK_ESTIMATE;
 
 /**
  * How well Lovejoin hides a box at `depth`, said wherever the user chooses
- * it (privacy review §2.6): at best one of the fan-out's 3^depth leaves, and
- * fewer while few people bring boxes back into a Seedelf (§5.3). Spending
- * returned boxes together, or with the session's funding change, narrows it.
+ * it (privacy review §2.6): at best one of the fan-out's width^depth leaves
+ * (`width` boxes a mix, chunk 34's D3), and fewer while few people bring
+ * boxes back into a Seedelf (§5.3). Spending returned boxes together, or with
+ * the session's funding change, narrows it.
  */
-export function lovejoinHides(depth: number): string {
-  return t("lovejoin.privacy.hides", { count: depth, one: 3 ** depth });
+export function lovejoinHides(depth: number, width = 3): string {
+  return t("lovejoin.privacy.hides", { count: depth, one: width ** depth });
+}
+
+/**
+ * Why a mix asked four boxes wide goes three (chunk 34's D3, `fellBack`: the
+ * worker's reason, a whole sentence), said where its review or its approval
+ * shows the width. Nothing when it went at the width asked.
+ */
+export function WidthNote({ fellBack, testId = "lovejoin-width-fell-back" }: { fellBack?: string; testId?: string }) {
+  if (!fellBack) return null;
+  return (
+    <p className="note" data-testid={testId}>
+      {fellBack}
+    </p>
+  );
 }
 
 /**
@@ -128,18 +163,168 @@ export function delayText(delay: string): string {
   return t("lovejoin.delayHours", { low, high });
 }
 
-/** The review's rows for the part that goes through Lovejoin; nothing for a plain return. */
+/**
+ * What a return puts through Lovejoin, in words: "3 boxes of 10 ₳" into the classic pool, as it said before; across
+ * pools (chunk 34's 34e), each pool's, "2 boxes of 10 ₳, 1 box of 100 NIGHT + 4.5 ₳". A pool the summary didn't
+ * value is named by its boxes alone.
+ */
+export function partsText(network: NetworkName, l: NonNullable<SessionBackSummary["lovejoin"]>): string {
+  const boxOf = (pool?: string) => (pool === undefined ? CLASSIC_BOX : l.values?.[pool]);
+  const one = (pool: string | undefined, boxes: number) => {
+    const box = boxOf(pool);
+    return box ? t("lovejoin.boxesOf", { count: boxes, box: boxText(network, box) }) : t("amount.boxes", { count: boxes, n: boxes });
+  };
+  if (l.parts?.length) return l.parts.map((p) => one(p.pool, p.boxes)).join(t("histories.list.comma"));
+  return one(l.pool, l.boxes);
+}
+
+/** "2 waves deep, 8 mixes", and four boxes a mix where it goes four (chunk 34's D3). */
+function mixedText(l: { depth: number; mixes: number; width?: number }): string {
+  const value = t("lovejoin.mixedValue", { count: l.depth, mixes: l.mixes });
+  return l.width === 4 ? t("lovejoin.review.fourWide", { value }) : value;
+}
+
+/**
+ * The review's rows for the part that goes through Lovejoin; nothing for a plain return. Its tokens, each through
+ * its own pool or back directly, are TokenWays' (with Change), under the rows.
+ */
 export function LovejoinRows({ back }: { back: SessionBackSummary }) {
   const tr = useT();
+  const network = useNetwork();
   const l = back.lovejoin;
   if (!l) return null;
   return (
     <>
-      <Row label={tr("claim.throughLovejoin")} value={tr("lovejoin.boxesOfTen", { count: l.boxes })} strong />
-      <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.mixedValue", { count: l.depth, mixes: l.mixes })} />
+      <Row label={tr("claim.throughLovejoin")} value={partsText(network, l)} strong />
+      <Row label={tr("lovejoin.mixedLabel")} value={mixedText(l)} />
       <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachAfter", { delay: delayText(l.delay) })} stack />
       <BoxesBackRow boxes={l.boxes} />
     </>
+  );
+}
+
+/**
+ * A return's or a swap's tokens on their way back (chunk 34's 34e and 34f): each through its own pool, its boxes
+ * and what a box holds there, or back directly and why. Change, where there's a choice, picks another of its pools
+ * that can take a box now, or back directly (`onChange`, by the token's unit, null for directly), and the review is
+ * built again. `values`: what a box holds in each pool, by id. `funded`: a swap's, whose boxes are as many as the
+ * least it asks for makes, funded at Send.
+ */
+export function TokenWays({
+  ways,
+  values,
+  busy,
+  onChange,
+  funded = false,
+}: {
+  ways: LovejoinTokenWay[];
+  values?: Record<string, LovejoinBoxValue>;
+  busy: boolean;
+  onChange?: (unit: string, pool: string | null) => void;
+  funded?: boolean;
+}) {
+  const tr = useT();
+  const network = useNetwork();
+  const [changing, setChanging] = useState<LovejoinTokenWay>();
+  if (!ways.length) return null;
+  const valueOf = (pool?: string) => (pool ? values?.[pool] : undefined);
+  return (
+    <div className="stack-tight">
+      <h2 id="lovejoin-ways-title">{tr(funded ? "lovejoin.ways.titleSwap" : "lovejoin.ways.title")}</h2>
+      <ul className="list" data-testid="lovejoin-token-ways">
+        {ways.map((w) => {
+          const name = tokenText(network, w).label;
+          const box = valueOf(w.pool);
+          const into = w.pool && w.boxes > 0;
+          const text = into
+            ? tr(funded ? "lovejoin.ways.fundedInto" : "lovejoin.ways.into", {
+                boxes: box ? t("lovejoin.boxesOf", { count: w.boxes, box: boxText(network, box) }) : t("amount.boxes", { count: w.boxes, n: w.boxes }),
+              })
+            : w.direct
+              ? tr("lovejoin.ways.directChosen")
+              : w.skipped
+                ? tr("lovejoin.ways.warn.direct", { why: withoutStop(w.skipped) })
+                : tr("lovejoin.ways.direct");
+          // A choice to make: another pool that takes a box, or back directly, or back into one after choosing directly.
+          const choice = !!onChange && (w.pools.length > (w.pool ? 1 : 0) || (!!w.pool && !w.direct) || (!!w.direct && w.pools.length > 0));
+          return (
+            <li key={`${w.policyId}.${w.assetName}`} className="token-row swap-row mix-card" data-testid="lovejoin-token-way">
+              <PoolAvatar token={w} />
+              <span className="token-row__label">{name}</span>
+              {choice && (
+                <button
+                  type="button"
+                  className="link"
+                  disabled={busy}
+                  onClick={() => setChanging(w)}
+                  data-testid="lovejoin-token-way-change"
+                >
+                  {tr("lovejoin.ways.change")}
+                </button>
+              )}
+              <span className={`token-row__sub wrap${!into && !w.direct ? " token-row__sub--warn" : ""}`}>{text}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {changing && onChange && (
+        <Modal
+          title={tr("lovejoin.ways.changeTitle", { token: tokenText(network, changing).label })}
+          titleId="lovejoin-way-change-title"
+          onClose={() => setChanging(undefined)}
+          foot={
+            <button type="button" className="secondary" onClick={() => setChanging(undefined)}>
+              {tr("common.cancel")}
+            </button>
+          }
+        >
+          <ul className="list" data-testid="lovejoin-way-options">
+            {changing.pools.map((id) => {
+              const box = valueOf(id);
+              const chosen = id === changing.pool && !changing.direct;
+              return (
+                <li key={id}>
+                  <button
+                    type="button"
+                    className="token-row"
+                    aria-pressed={chosen}
+                    disabled={busy || chosen}
+                    onClick={() => {
+                      setChanging(undefined);
+                      onChange(`${changing.policyId}${changing.assetName}`, id);
+                    }}
+                    data-testid={`lovejoin-way-option-${id}`}
+                  >
+                    <PoolAvatar token={box?.token} />
+                    <span className="token-row__label">{box ? boxText(network, box) : id.slice(0, 8)}</span>
+                    <span className="token-row__sub">{chosen ? tr("lovejoin.ways.chosen") : tr("lovejoin.ways.intoThis")}</span>
+                  </button>
+                </li>
+              );
+            })}
+            <li>
+              <button
+                type="button"
+                className="token-row"
+                aria-pressed={!!changing.direct}
+                disabled={busy || !!changing.direct}
+                onClick={() => {
+                  setChanging(undefined);
+                  onChange(`${changing.policyId}${changing.assetName}`, null);
+                }}
+                data-testid="lovejoin-way-option-direct"
+              >
+                <span className="avatar avatar--contact" aria-hidden="true">
+                  <ArrowDownIcon size={16} />
+                </span>
+                <span className="token-row__label">{tr("lovejoin.ways.directOption")}</span>
+                <span className="token-row__sub wrap">{tr("lovejoin.ways.privacy.direct")}</span>
+              </button>
+            </li>
+          </ul>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -220,8 +405,7 @@ export function LovejoinNote({ back }: { back: SessionBackSummary }) {
       <Callout tone="privacy">
         {tr("lovejoin.privacy.spare", {
           count: l.depth,
-          boxes: tr("lovejoin.boxesOfTen", { count: l.boxes }),
-          hides: lovejoinHides(l.depth),
+          hides: lovejoinHides(l.depth, l.width),
           fees: formatAda(l.fees),
           txs: l.txs,
           delay: delayText(l.delay),

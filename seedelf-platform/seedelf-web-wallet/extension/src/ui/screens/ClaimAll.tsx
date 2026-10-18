@@ -23,7 +23,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
-import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED } from "../components/LovejoinReturn";
+import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED, partsText } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
@@ -307,7 +307,7 @@ export function ClaimReview({
                     <span className="token-row__sub">
                       {asideOf(r.index, byIndex.get(r.index))}
                       {r.tokens.length ? ` · ${t("claim.andTokens", { count: r.tokens.length })}` : ""}
-                      {r.lovejoin ? ` · ${t("claim.andBoxes", { count: r.lovejoin.boxes })}` : ""}
+                      {r.lovejoin ? ` · ${t("claim.andBoxesOf", { boxes: partsText(network, r.lovejoin) })}` : ""}
                       {r.lovejoinSkipped ? ` · ${t("claim.lovejoinLeftOut")}` : ""}
                       {r.leftOut?.length ? ` · ${t("claim.leaves", { count: r.leftOut.length })}` : ""}
                     </span>
@@ -365,7 +365,10 @@ export function ClaimReview({
         <Row label={t(boxes ? "claim.backNow" : "moveIn.review.into")} value={`${formatAda(total.toString())}\u00a0₳`} strong />
         {tokens > 0 && <Row label="" value={t("claim.andTokens", { count: tokens })} />}
         {boxes > 0 && delay && (
-          <Row label={t("claim.throughLovejoin")} value={t("claim.boxesBackAfter", { count: boxes, delay: delayText(delay) })} />
+          <Row
+            label={t("claim.throughLovejoin")}
+            value={t("claim.boxesOfBackAfter", { boxes: partsText(network, allParts(picked)), delay: delayText(delay) })}
+          />
         )}
         {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
         {boxes > 0 && <BoxesBackRow boxes={boxes} />}
@@ -394,4 +397,24 @@ export function ClaimReview({
       )}
     </>
   );
+}
+
+/**
+ * Every pick's boxes through Lovejoin together, each pool's summed (chunk 34's 34e): what the total row names, the
+ * classic pool's alone as before.
+ */
+function allParts(picked: SessionBackSummary[]): NonNullable<SessionBackSummary["lovejoin"]> {
+  const byPool = new Map<string | undefined, number>();
+  const values: NonNullable<NonNullable<SessionBackSummary["lovejoin"]>["values"]> = {};
+  for (const r of picked) {
+    const l = r.lovejoin;
+    if (!l) continue;
+    for (const part of l.parts?.length ? l.parts : [{ pool: l.pool, boxes: l.boxes }]) {
+      byPool.set(part.pool, (byPool.get(part.pool) ?? 0) + part.boxes);
+    }
+    Object.assign(values, l.values ?? {});
+  }
+  const parts = [...byPool].map(([pool, boxes]) => ({ ...(pool !== undefined ? { pool } : {}), boxes }));
+  const boxes = parts.reduce((sum, p) => sum + p.boxes, 0);
+  return { boxes, depth: 0, mixes: 0, fees: "0", txs: 0, delay: "", entry: "", parts, values };
 }
