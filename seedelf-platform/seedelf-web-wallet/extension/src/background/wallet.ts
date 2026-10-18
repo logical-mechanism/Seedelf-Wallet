@@ -36,6 +36,8 @@ export const LOCAL_CACHES = [
   "seedelf.govActions.preprod",
   "seedelf.govActions.mainnet",
   "seedelf.prices",
+  "seedelf.lovejoinPools.preprod",
+  "seedelf.lovejoinPools.mainnet",
 ] as const;
 import { isTrap } from "./wasm";
 

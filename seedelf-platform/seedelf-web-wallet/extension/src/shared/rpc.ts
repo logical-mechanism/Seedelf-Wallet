@@ -2462,6 +2462,12 @@ export interface Requests {
    * row, or says so (1.3.0's release review, C28).
    */
   "lovejoin-chains": { payload: None; result: LovejoinChainView[] };
+  /**
+   * Looks for Lovejoin token pools launched since the wallet last did, as the
+   * Lovejoin page opens (chunk 34's 34c): the data layer's list, or Koios's
+   * holder where there's none. The next pool read reads what's found.
+   */
+  "lovejoin-look-for-pools": { payload: None; result: None };
   /** What mixing `boxes` boxes at the set depth takes. */
   "lovejoin-funding": { payload: { boxes: number }; result: LovejoinFunding };
   /** Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself once sent. */
@@ -2658,6 +2664,7 @@ const REQUEST_LIST = [
   "lovejoin-withdraw-now",
   "lovejoin-held",
   "lovejoin-chains",
+  "lovejoin-look-for-pools",
   "lovejoin-funding",
   "lovejoin-mix-private-build",
   "lovejoin-again-build",

@@ -284,6 +284,16 @@ export class DataLayerKoios extends Koios {
     return this.read((k) => k.txSpends(txHashes), () => super.txSpends(txHashes));
   }
 
+  /** Pool discovery's, on Koios alone: the data layer lists the shown pools itself (`lovejoin/pools`, chunk 34's 34c). */
+  override launches(txHashes: string[]) {
+    return super.launches(txHashes);
+  }
+
+  /** Pool discovery's, on Koios alone, as `launches` is. */
+  override firstRegistrations(stakeAddresses: string[]) {
+    return super.firstRegistrations(stakeAddresses);
+  }
+
   override accountInfo(stakeAddress: string) {
     return this.read((k) => k.accountInfo(stakeAddress), () => super.accountInfo(stakeAddress));
   }

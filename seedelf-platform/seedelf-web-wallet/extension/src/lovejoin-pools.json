@@ -1,0 +1,11 @@
+{
+  "//": "Lovejoin's token pools shown on each network when this was written, and the block Koios's holder was read to: a new device's head start (chunk 34's 34c). Written at each release by `npm run lovejoin-pools`; never a gate, as the wallet verifies every pool and looks on from the height.",
+  "preprod": {
+    "height": 5299707,
+    "pools": []
+  },
+  "mainnet": {
+    "height": 14080490,
+    "pools": []
+  }
+}

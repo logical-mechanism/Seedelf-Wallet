@@ -23,6 +23,14 @@ export interface FakeIndex {
   contract: ChainRow[];
   /** The mix box's. */
   pool: ChainRow[];
+  /** Every shown token pool's boxes, for `lovejoin/tokens` (chunk 34's 34c). */
+  tokens: ChainRow[];
+  /** The pools `lovejoin/tokens` says it covers: their `mix_box` hashes. */
+  tokenPools: string[];
+  /** `lovejoin/pools`'s answer; none shown, and nothing in the classic pool, when unset. */
+  poolList?: unknown;
+  /** While set, the token pools' three routes are answered with it (db-sync down while Kupo serves the rest). */
+  tokensFail?: Response;
   /** Grid slots whose block was rolled back: a `since` from a cursor there answers `reset`. */
   forked: Set<number>;
   /** Grid slots this server no longer reads from: a `since` from a cursor there answers 400. */
@@ -60,6 +68,8 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
     tip,
     contract: [],
     pool: [],
+    tokens: [],
+    tokenPools: [],
     forked: new Set(),
     refused: new Set(),
     calls: [],
@@ -72,8 +82,17 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
       if (fake.fail) return fake.fail.clone();
       const tipView = { ...point(fake.tip), hash: hashAt(fake.tip) };
       const stable = stableSlot(fake.tip);
-      const [kind, route, from] = path.split("/");
-      const rows = kind === "lovejoin" ? fake.pool : fake.contract;
+      if (path === "lovejoin/pools" || path.startsWith("lovejoin/tokens")) {
+        if (fake.tokensFail) return fake.tokensFail.clone();
+        if (path === "lovejoin/pools") {
+          const crowd = { boxes: 0, deposits: 0, mixed: 0 };
+          return Response.json(fake.poolList ?? { network: "mainnet", cursor: cursorAt(stable), classic: { crowd }, pools: [] });
+        }
+      }
+      const tokens = path.startsWith("lovejoin/tokens");
+      const [kind, route, from] = tokens ? ["lovejoin", path.includes("/since/") ? "since" : "pool", path.split("/")[3]] : path.split("/");
+      const rows = tokens ? fake.tokens : kind === "lovejoin" ? fake.pool : fake.contract;
+      const covered = tokens ? { pools: fake.tokenPools } : {};
       if (path === "names") {
         const names = unspentAsOf(fake.contract, fake.tip).flatMap((row) => {
           const name = row.assets?.find(([p, n]) => p === SEEDELF_POLICY && n.startsWith("5eed0e1f"))?.[1];
@@ -82,7 +101,7 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
         return Response.json({ network: "mainnet", tip: tipView, names });
       }
       if (route === "snapshot" || route === "pool") {
-        return Response.json({ network: "mainnet", tip: tipView, cursor: cursorAt(stable), rows: unspentAsOf(rows, stable) });
+        return Response.json({ network: "mainnet", tip: tipView, cursor: cursorAt(stable), ...covered, rows: unspentAsOf(rows, stable) });
       }
       if (route === "since" && from) {
         const slot = Number(from.split(".")[0]);
@@ -99,6 +118,7 @@ export function fakeIndex(tip = 200_000_000): FakeIndex {
           tip: tipView,
           from,
           cursor: cursorAt(Math.max(stable, slot)),
+          ...covered,
           created,
           spent,
         });

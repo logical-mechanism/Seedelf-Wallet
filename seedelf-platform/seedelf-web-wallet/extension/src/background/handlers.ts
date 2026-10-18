@@ -467,6 +467,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     // review, C28).
     case "lovejoin-chains":
       return ctx.lovejoin.chains(ctx.network);
+    case "lovejoin-look-for-pools":
+      return ctx.lovejoin.lookForPools(ctx.network).then(() => ({}));
     case "lovejoin-funding":
       return ctx.lovejoin.funding(ctx.network, message.boxes);
     case "lovejoin-mix-private-build":

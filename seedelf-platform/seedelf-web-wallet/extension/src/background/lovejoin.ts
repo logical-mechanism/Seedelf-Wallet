@@ -983,6 +983,8 @@ export interface LovejoinDeps extends ScriptSpendDeps {
    * the wallet's. None: the classic pool alone.
    */
   pools?: (network: NetworkName) => Promise<PoolRef[]>;
+  /** Looks for pools launched since (lovejoin-pools.ts' `look`): the Lovejoin page, as it opens. */
+  lookForPools?: (network: NetworkName) => Promise<void>;
 }
 
 const HOUR = 3_600_000;
@@ -1652,12 +1654,14 @@ export class LovejoinService {
   /** One task at a time on each record (inTurn). */
   private turns = new Map<string, Promise<unknown>>();
   /**
-   * Who made each box in the pool the private index listed last, by the
+   * Who made each box in the pools the private index listed last, by the
    * transaction that made it (madeBy): what the index says of a box beside
-   * it, so the wallet asks nobody about one box. None while the pool was
-   * read from Koios, whose tx_info madeBy asks instead.
+   * it, so the wallet asks nobody about one box. `classic`: the classic pool
+   * came from the index; `fed`: the token pools its combined feed covered
+   * (chunk 34's 34c). A pool read from Koios has its boxes' makings asked of
+   * Koios's tx_info instead.
    */
-  private provenance = new Map<NetworkName, Map<string, NonNullable<IndexRow["made_by"]>>>();
+  private provenance = new Map<NetworkName, { made: Map<string, NonNullable<IndexRow["made_by"]>>; classic: boolean; fed: Set<string> }>();
   /**
    * The chains recorded whose progress is being put where they wait
    * (recordChain), by id: not cut meanwhile (cuts). In memory: a worker that
@@ -1819,29 +1823,51 @@ export class LovejoinService {
   /**
    * Each pool's rows at the tip, by pool. The classic pool's from the private
    * index where it's up, each box with who made it (`provenance`), as Koios
-   * rows; from Koios's credential_utxos otherwise, as before (chunk 26b). Every
-   * token pool's from Koios, in one request with the classic pool's when that
-   * goes to Koios too, until the data layer's box feed (chunk 34's 34c): the
-   * shown pools, the same for every wallet.
+   * rows; from Koios's credential_utxos otherwise, as before (chunk 26b). The
+   * token pools' from the data layer's combined feed of every shown pool, each
+   * box with who made it too (chunk 34's 34c), for the pools it covers; a
+   * pool it doesn't, or every one while it can't answer, from Koios, in one
+   * request with the classic pool's when that goes to Koios too. The same
+   * reads for every wallet.
    */
   private async poolRows(network: NetworkName, pools: LovejoinPool[]): Promise<Map<string, KoiosUtxo[]>> {
     const rows = new Map<string, KoiosUtxo[]>();
+    const made = new Map<string, NonNullable<IndexRow["made_by"]>>();
+    const fed = new Set<string>();
+    const note = (listed: IndexRow[]) => {
+      for (const r of listed) if (r.made_by) made.set(r.ref.slice(0, r.ref.lastIndexOf("#")), r.made_by);
+    };
     const classic = pools.find((p) => p.id === CLASSIC);
-    const index = classic ? await this.deps.index?.(network) : undefined;
+    const tokens = pools.filter((p) => p.id !== CLASSIC);
+    const index = await this.deps.index?.(network);
     if (classic && index) {
       try {
         const { rows: listed, cursors } = await index.poolNow();
         // For the private watches of mixes and withdraws (feed.ts).
         for (const cursor of new Set(cursors)) await noteCursor(this.deps.session, network, "lovejoin", cursor, this.deps.now());
-        const made = new Map<string, NonNullable<IndexRow["made_by"]>>();
-        for (const r of listed) if (r.made_by) made.set(r.ref.slice(0, r.ref.lastIndexOf("#")), r.made_by);
-        this.provenance.set(network, made);
+        note(listed);
         rows.set(CLASSIC, listed.map((r) => utxoOf(r, classic.mixBox, network)));
       } catch (e) {
         if (!(e instanceof IndexDown)) throw e;
       }
     }
-    if (classic && !rows.has(CLASSIC)) this.provenance.delete(network);
+    if (tokens.length && index && (!classic || rows.has(CLASSIC))) {
+      try {
+        const { rows: listed, pools: covered } = await index.tokensNow();
+        const cover = new Set(covered);
+        const credOf = (r: IndexRow) => this.keysOf({ bech32: r.address }).cred;
+        for (const p of tokens) {
+          if (!cover.has(p.mixBox)) continue;
+          rows.set(p.id, listed.filter((r) => credOf(r) === p.mixBox).map((r) => utxoOf(r, p.mixBox, network)));
+          fed.add(p.id);
+        }
+        note(listed);
+      } catch (e) {
+        if (!(e instanceof IndexDown)) throw e;
+      }
+    }
+    if (rows.has(CLASSIC) || fed.size) this.provenance.set(network, { made, classic: rows.has(CLASSIC), fed });
+    else this.provenance.delete(network);
     const ask = pools.filter((p) => !rows.has(p.id));
     if (!ask.length) return rows;
     const answer = await this.deps.koios(network).credentialUtxos(ask.map((p) => p.mixBox));
@@ -1853,6 +1879,15 @@ export class LovejoinService {
     const credOf = (u: KoiosUtxo) => u.payment_cred ?? this.keysOf({ bech32: u.address }).cred;
     for (const p of ask) rows.set(p.id, answer.filter((u) => credOf(u) === p.mixBox));
     return rows;
+  }
+
+  /**
+   * Looks for token pools launched since the wallet last did, as the
+   * Lovejoin page opens (chunk 34's 34c): the data layer's list, or Koios's
+   * holder where there's none. What's found is read from the next pool read on.
+   */
+  async lookForPools(network: NetworkName): Promise<void> {
+    if (this.available(network)) await this.deps.lookForPools?.(network);
   }
 
   /**
@@ -3312,9 +3347,12 @@ export class LovejoinService {
       const was = await this.read(network);
       const said = was.origins ?? {};
       const asked = [...new Set(ask.map((b) => b.txHash))].filter((tx) => !said[tx]);
-      // The private index lists the classic pool's boxes alone, with who made each: a token pool's are Koios's to say.
-      const tokens = new Set(ask.filter((b) => poolOf(b) !== CLASSIC).map((b) => b.txHash));
-      const told = asked.length ? await this.madeBy(network, asked, tokens) : new Map<string, Told>();
+      // What the private index listed says who made each box it covered: a box of a pool read from Koios is
+      // Koios's to say (a transaction that made boxes in both, Koios's too).
+      const p = this.provenance.get(network);
+      const covered = (pool: string) => (pool === CLASSIC ? p?.classic === true : p?.fed.has(pool) === true);
+      const koios = new Set(ask.filter((b) => !covered(poolOf(b))).map((b) => b.txHash));
+      const told = asked.length ? await this.madeBy(network, asked, koios) : new Map<string, Told>();
       const at = this.deps.now();
       const fresh = Object.fromEntries([...told].map(([tx, o]) => [tx, { ...o, seen: at }]));
       const silent = asked.filter((tx) => !told.has(tx) && holding.has(tx));
@@ -3348,10 +3386,10 @@ export class LovejoinService {
    * after it: each is asked of again at a later read, and what came back
    * before it is kept.
    */
-  private async madeBy(network: NetworkName, txHashes: string[], tokens: Set<string> = new Set()): Promise<Map<string, Told>> {
+  private async madeBy(network: NetworkName, txHashes: string[], koios: Set<string>): Promise<Map<string, Told>> {
     const mixBox = NETWORKS[network].lovejoin?.mixBox;
     const told = new Map<string, Told>();
-    const spent = await this.inputsOf(network, txHashes, tokens);
+    const spent = await this.inputsOf(network, txHashes, koios);
     if (!mixBox || !spent.length) return told;
     // Each token pool's mix_box too: a mix in that pool made its boxes there (Origin `mixedIn`).
     const pools = (await this.readSet(network)).filter((p) => p.id !== CLASSIC);
@@ -3389,29 +3427,25 @@ export class LovejoinService {
   /**
    * Each of `txHashes`' inputs, as their payment and stake keys: what the
    * private index's last pool listing said made each box (`provenance`),
-   * asking nobody; or, while the pool came from Koios, its tx_info. A
-   * transaction the index's row has no inputs for (Kupo answered) is left
-   * out, as one Koios doesn't answer for, and asked of again at the next
-   * look.
+   * asking nobody; or, for those of `koios` (their pool came from Koios), its
+   * tx_info. A transaction the index's row has no inputs for (Kupo answered)
+   * is left out, as one Koios doesn't answer for, and asked of again at the
+   * next look.
    */
   private async inputsOf(
     network: NetworkName,
     txHashes: string[],
-    tokens: Set<string> = new Set(),
+    askKoios: Set<string>,
   ): Promise<Array<readonly [string, Array<{ cred?: string; stake?: string }>]>> {
-    const provenance = this.provenance.get(network);
-    // The index lists the classic pool's boxes alone: a token pool's box's making is Koios's to say, until the data
-    // layer's box feed carries it (chunk 34's 34c).
-    const listed = provenance
-      ? txHashes
-          .filter((tx) => !tokens.has(tx))
-          .flatMap((tx) => {
-            const inputs = provenance.get(tx)?.inputs;
-            if (!inputs?.length) return [];
-            return [[tx, inputs.map(([cred, stake]) => ({ ...(cred ? { cred } : {}), ...(stake ? { stake } : {}) }))] as const];
-          })
-      : [];
-    const unlisted = provenance ? txHashes.filter((tx) => tokens.has(tx)) : txHashes;
+    const made = this.provenance.get(network)?.made;
+    const listed = txHashes
+      .filter((tx) => !askKoios.has(tx))
+      .flatMap((tx) => {
+        const inputs = made?.get(tx)?.inputs;
+        if (!inputs?.length) return [];
+        return [[tx, inputs.map(([cred, stake]) => ({ ...(cred ? { cred } : {}), ...(stake ? { stake } : {}) }))] as const];
+      });
+    const unlisted = txHashes.filter((tx) => askKoios.has(tx));
     if (!unlisted.length) return listed;
     // The data layer answers this for every box alike, from the pool's listing (above): asked about the wallet's own
     // boxes while its private part is down, it would learn which are the wallet's. So Koios alone is asked, as the

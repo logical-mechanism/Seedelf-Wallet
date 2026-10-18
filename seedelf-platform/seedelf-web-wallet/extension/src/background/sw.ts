@@ -35,6 +35,7 @@ import { StakingService } from "./staking";
 import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { LovejoinService } from "./lovejoin";
+import { PoolDiscovery } from "./lovejoin-pools";
 import { chromeArea } from "./storage";
 import { guardedConnector, keepStorageFromSites } from "./storage-access";
 import { serveUi } from "./ui-port";
@@ -212,6 +213,9 @@ function getContext(): Promise<Worker> {
     const pending = new PendingService({ wallet, session, koios, index, now: Date.now, activity, store, alarm: sessionsAlarm });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
+    // Lovejoin's token pools: the data layer's list at each pool read, Koios's holder as the Lovejoin page opens
+    // (chunk 34's 34c).
+    const discovery = new PoolDiscovery({ local, wasm, koios, index, now: Date.now });
     // No box is withdrawn while a chain mixing them again may still spend it.
     const lovejoin: LovejoinService = new LovejoinService({
       ...spends,
@@ -219,6 +223,14 @@ function getContext(): Promise<Worker> {
       preferences,
       mixingAgain: (n) => sessions.mixingAgain(n),
       alarm: sessionsAlarm,
+      // The data layer's list failing is no pool gone: what was found before is read. A trap isn't swallowed.
+      pools: async (n) => {
+        await discovery.refresh(n).catch((e: unknown) => {
+          if (isTrap(e)) throw e;
+        });
+        return (await discovery.known(n)).map((p) => p.ref);
+      },
+      lookForPools: (n) => discovery.look(n),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
     dapp = new DappService({
