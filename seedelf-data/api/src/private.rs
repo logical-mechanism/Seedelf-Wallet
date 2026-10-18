@@ -82,10 +82,11 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/seedelf/v1/mainnet/lovejoin/since/{cursor}",
             get(lovejoin_since),
         )
+        .merge(crate::lovejoin::routes::routes())
 }
 
 #[derive(Serialize)]
-struct TipView {
+pub(crate) struct TipView {
     slot: i64,
     hash: String,
     time: i64,
@@ -165,7 +166,7 @@ async fn lovejoin_since(
 
 /// How long one source has to answer before the other is asked: a read takes
 /// milliseconds, so one that takes seconds is stuck behind a dead connection.
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `make`'s answer from the first source that gives one, kept in that
 /// source's cache until its tip moves. A source that fails passes the request
@@ -205,7 +206,7 @@ where
 }
 
 /// The stable cursor for `tip`: its grid slot, and the block there.
-async fn stable(source: &Source, tip: &Block) -> Result<(Cursor, Block), ApiError> {
+pub(crate) async fn stable(source: &Source, tip: &Block) -> Result<(Cursor, Block), ApiError> {
     let slot = stable_slot(tip.slot);
     let block = source
         .block_before(slot)

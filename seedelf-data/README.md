@@ -7,6 +7,7 @@ Seedelf Wallet's data layer: the API in front of the home db-sync, Kupo and node
 ## What's built
 
 - **The private index** of the Seedelf contract and Lovejoin's mix box, read from db-sync, or from the Seedelf-only Kupo when db-sync is down or behind. Every answer is the same for whoever asks: none names a UTxO, a register or an owner. The wallet keeps deciding which rows are its own.
+- **Lovejoin's token pools** (web wallet chunk 34's 34c), from db-sync alone: which pools are shown, found at the holder every launch uses and checked with this crate's own copy of the wallet's rules, each pool's crowd, and every shown pool's boxes in one feed.
 - **The submit part:** Koios's `/api/v1/submittx` and `/api/v1/ogmios` paths, passed to the home cardano-submit-api and Ogmios.
 - **The public routes:** the other 24 Koios endpoints the wallet uses, under Koios's own `/api/v1/` paths and JSON, taking only the requests `koios.ts` makes.
 - **The edge,** for the VPS: buckets per IP, a monthly egress ceiling, and CORS for the wallet's origins only.
@@ -62,7 +63,8 @@ cargo fmt --check
 **One test at a time:** the database role allows 10 connections, and a running server holds some of them.
 
 **What the offline tests check,** beyond each module's own:
-- the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`): a fork under a cursor answers `reset`, and with no source fresh the index answers 503;
+- the private index against a scripted Kupo on loopback, with db-sync unreachable (`tests/scripted_kupo.rs`): a fork under a cursor answers `reset`, with no source fresh the index answers 503, and the token pools' routes answer 503 with a wait while the contract's answer from Kupo;
+- the token pools' checks against the wallet's own vectors and scenarios (above), and a launch as the wallet makes one standard, anything else refused with its reason;
 - the whole app behind its edge (`tests/edge.rs`): CORS for the wallet's origin alone, a 429 the wallet can read, a bucket per client Caddy names, the month's ceiling, and `no-store` on every answer but a preflight.
 
 **What the live tests check:**
@@ -82,6 +84,7 @@ cargo fmt --check
   - from cursors a day, two days and a month back, and from Kupo's first block, the snapshot plus the delta replays exactly to the rows unspent at the tip, for both credentials (db-sync also from before the contract existed);
   - db-sync and Kupo name the same block at every slot asked, and give the same rows, field for field and in the same order, but for `made_by.inputs`;
   - a box's `mixed` is the same from both.
+- **Lovejoin's token pools** (`tests/live_lovejoin.rs`, with `--nocapture` to see each candidate's verdict): the combined feed's queries, given the classic pool's mix box alone, give the classic route's rows field for field, `mixed` included; the classic pool's crowd counts the route's 10 ₳ boxes and their mixes; every candidate at the holder is read, its launch's inputs, scripts and registrations included, and checked.
 - **The submit part,** at no cost, since nothing sent can ever land: bytes that aren't a transaction, the contract's first transaction resubmitted (`All inputs are spent`), and Ogmios's error for evaluating it, each passed through as the service gave it. It also covers what the server refuses itself.
 
 **Checked end to end (2026-10-09):** the server run once as is and once with db-sync unreachable gave byte-identical contract snapshots, `since` answers and names at the same tip. The Lovejoin answers differed only in `made_by.inputs`.
@@ -123,6 +126,8 @@ All routes are under `/seedelf/v1/mainnet/`.
 | `contract/since/{cursor}` | what changed after `cursor`: `created` (each with its `spent`, if it's gone since) and `spent` (older rows spent after it), plus the new stable `cursor` |
 | `names` | every Seedelf name unspent at the tip, with the row that holds it |
 | `lovejoin/pool` and `lovejoin/since/{cursor}` | the same for the mix box. Each box carries `made_by`: whether its transaction spent a box itself, and each input's payment and stake credentials |
+| `lovejoin/pools` | every shown token pool as of the stable cursor (below): its reference UTxO, the seed its launch spent, its `mix_box` and `mix_logic` reference scripts at the holder (each row with its `script_hash`; the wallet derives the bytes), where its launch is (`tx`, `block`, `index` in the block, slot and time), and its `crowd`; and the classic pool's `crowd`. db-sync alone |
+| `lovejoin/tokens` and `lovejoin/tokens/since/{cursor}` | the boxes of every shown token pool, read as `lovejoin/pool` and `lovejoin/since` are, with `pools`: the `mix_box` hashes covered, those shown as of the cursor (or `from`'s). A box's `mixed` is whether its transaction spent from its own pool. db-sync alone |
 | `/health` | each part's state (`private`, `public`, `submit`), the private index's `source`, db-sync's and Kupo's tips and ages, and the node's as Ogmios says (`node`, with `connected`): 200 while the private index and the public routes answer, 503 when either can't. The submit part's state is said but not counted, since the deploy compares the status with the one before |
 
 **How a wallet reads it:**
@@ -152,6 +157,28 @@ All routes are under `/seedelf/v1/mainnet/`.
 - **Requests that miss together share one read.**
 - **Each source keeps at most 4,096 answers and 64 MB.** A `since` answer from an old cursor can be hundreds of KB, and anyone can ask for one. The answers every wallet reads (the snapshots, the names, `epoch_params`, `totals`) are kept whatever the budget holds.
 - **A failure is logged at most once every 10 s:** a source that's down fails every request.
+
+## Lovejoin's token pools
+
+The code is `src/lovejoin/`. Its checks are a copy of the wallet's: this workspace can't depend on `seedelf-core` (the owner, 2026-10-17: core keeps its own copy), so the two are held to one set of vectors.
+
+**A pool is shown when it's standard and the earliest launched of its values** (the box's ADA and its token), by block, then place in the block, then id. Standard means:
+- its reference UTxO is at the holder's enterprise address, with no reference script, holding one `lovejoin` NFT and ADA alone, and its datum decodes as `one_shot_mint` holds a launch to (`datum.rs`);
+- its token is in the wallet's mainnet token list (`tokens/list.json`, built in: a release that lists a token is deployed here first), or it's an ADA pool at any amount but the classic pool's 10 ₳;
+- one of its launch's inputs, the seed, makes its NFT's policy, and the datum names exactly the scripts that seed makes (`templates.rs`, `flat.rs`: the pinned templates applied by hand, with no Pallas, uplc or blst);
+- its launch transaction itself put `mix_box` and `mix_logic` at the holder, and registered L, unless an earlier block did (the owner, 2026-10-17).
+
+None of it changes once it's on chain, so each candidate is checked once and its verdict kept in memory (`discovery.rs`, at most 200,000; past that, a candidate is checked again at each request, and still shown when it's standard), and a pool shown stays shown. Everything at the holder is locked for good, so spam there is burned, and costs this server one check.
+- **The holder is read on, not again:** each read asks only for outputs above the highest id read so far (a later block's outputs have higher ids), and all of them again every hour, so a block rolled back under the stable cursor is forgotten within it. What's refused is dropped from what's kept.
+- **A launch's inputs are tried once each,** however many candidates it made.
+
+**A pool's crowd** (`crowd.rs`): its boxes, the deposits they could have come from, and how many a mix made. A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output of exactly the box value with a box's datum (two 48-byte points, `a ≠ b`: whether they're on the curve is the wallet's to check).
+
+**Kept:** `lovejoin/pools` for its cursor (an hour), worked out once per cursor in a task of its own with a minute's budget, off any request: a request waits for it up to its 5 s, and one that waits no longer gets the last list meanwhile, or 503 before the first. The feed is kept for db-sync's tip.
+
+**Held together with the wallet:**
+- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`, which `seedelf-core`'s `lovejoin_vectors_test.rs` writes from its own derive and datum decoder: ten seeds' four script hashes, and 32 datum encodings with what each reads as.
+- `seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/lovejoin-shown.json`: the earliest-of-each-value scenarios, which the wallet's `lovejoin-pools.ts` is tested against too.
 
 ## The public routes
 
@@ -301,6 +328,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 ```
 
 - **Omitted when empty:** `assets`, `datum`, `script`, `spent` and `made_by` (Lovejoin only).
+- **`made_by.mixed`** says whether the box's transaction spent from its own pool's mix box: the classic pool's on its routes, each token pool's own on `lovejoin/tokens`.
 - **An asset** is `[policy, name, quantity, decimals]`: hex, hex, a decimal string, and the token registry's decimals, 0 for a token it doesn't list, as Koios gives them in an `asset_list`. The wallet shows a token its own list lacks by these, without asking about the token. Both sources fill them from the same file, so their rows stay the same.
 - **`datum`** is the inline datum's raw CBOR. The wallet's own parser decides what it means.
 - **The address** is the exact bech32. The contract has outputs in both enterprise and staked form.

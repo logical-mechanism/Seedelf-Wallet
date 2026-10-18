@@ -111,6 +111,13 @@ const OUTS: &str = "with outs as materialized ( \
      from address a join tx_out o on o.address_id = a.id \
      where a.payment_cred = $1::bytea)";
 
+/// `$1`: payment credentials, any of them (the token pools' combined feed).
+const OUTS_ANY: &str = "with outs as materialized ( \
+     select o.id, o.tx_id, o.index, o.address_id, o.value, o.inline_datum_id, \
+            o.reference_script_id, o.consumed_by_tx_id \
+     from address a join tx_out o on o.address_id = a.id \
+     where a.payment_cred = any($1::bytea[]))";
+
 const JOINS: &str = "from outs o \
      join tx t on t.id = o.tx_id \
      join block b on b.id = t.block_id \
@@ -123,7 +130,7 @@ const SPEND_COLUMNS: &str = "encode(ct.hash, 'hex') as spent_by, cb.slot_no::big
 
 /// The row's columns. `provenance` is the bool parameter that asks for a
 /// Lovejoin box's making: its transaction's inputs and their credentials.
-fn row_columns(provenance: &str) -> String {
+pub(crate) fn row_columns(provenance: &str) -> String {
     format!(
         "encode(t.hash, 'hex') || '#' || o.index::text as ref, \
          a.address::text as address, o.value::text as lovelace, \
@@ -174,6 +181,11 @@ impl Chain {
             pool: pool(OPTIONS, PRIVATE_CONNECTIONS)?,
             public: pool(PUBLIC_OPTIONS, PUBLIC_CONNECTIONS)?,
         })
+    }
+
+    /// A connection of the private index's, for Lovejoin's token pools (`crate::lovejoin::db`).
+    pub(crate) async fn private(&self) -> Result<Object> {
+        Ok(self.pool.get().await?)
     }
 
     /// A connection for a public route: 503 when all are busy, so the wallet goes to Koios.
@@ -254,6 +266,54 @@ impl Chain {
             client.query(&created, created_params),
             client.query(&spent, spent_params),
         )?;
+        Ok((
+            created
+                .iter()
+                .map(|row| read_row(row, true))
+                .collect::<Result<_>>()?,
+            spent
+                .iter()
+                .map(|row| {
+                    Ok(Spent {
+                        reference: row.try_get("ref")?,
+                        spend: read_spend(row)?.context("a spent row without its spend")?,
+                    })
+                })
+                .collect::<Result<_>>()?,
+        ))
+    }
+
+    /// The rows at any of `creds` unspent as of the block at slot `at`, each
+    /// box with its making: the token pools' combined feed. Each row's `mixed`
+    /// is whether its transaction spent from its own credential.
+    pub async fn unspent_as_of_any(&self, creds: &[Vec<u8>], at: i64) -> Result<Vec<Row>> {
+        let sql = format!(
+            "{OUTS_ANY} select {}, encode(a.payment_cred, 'hex') as cred {JOINS} \
+             where b.slot_no <= $2 and (o.consumed_by_tx_id is null or cb.slot_no > $2) \
+             order by o.id",
+            row_columns("true")
+        );
+        let client = self.pool.get().await?;
+        let rows = client.query(&sql, &[&creds, &at]).await?;
+        rows.iter().map(|row| read_row(row, false)).collect()
+    }
+
+    /// [`Self::since`] for any of `creds`, each box with its making.
+    pub async fn since_any(&self, creds: &[Vec<u8>], after: i64) -> Result<(Vec<Row>, Vec<Spent>)> {
+        let created = format!(
+            "{OUTS_ANY} select {}, encode(a.payment_cred, 'hex') as cred, {SPEND_COLUMNS} {JOINS} \
+             where b.slot_no > $2 order by o.id",
+            row_columns("true")
+        );
+        let spent = format!(
+            "{OUTS_ANY} select encode(t.hash, 'hex') || '#' || o.index::text as ref, {SPEND_COLUMNS} \
+             {JOINS} where b.slot_no <= $2 and cb.slot_no > $2 \
+             order by cb.slot_no, ct.hash, o.id"
+        );
+        let client = self.pool.get().await?;
+        let params: &[&(dyn ToSql + Sync)] = &[&creds, &after];
+        let (created, spent) =
+            tokio::try_join!(client.query(&created, params), client.query(&spent, params),)?;
         Ok((
             created
                 .iter()

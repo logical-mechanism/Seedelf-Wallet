@@ -13,6 +13,8 @@ anyhow = "1.0.98"
 axum = "0.8"
 # CIP-5 and CIP-129 IDs: db-sync holds bytes, and pg_cardano, which Koios encodes them with, isn't installed.
 bech32 = "0.11"
+# blake2b-224: Lovejoin's script hashes, for the token pools' checks (src/lovejoin/). The crate Pallas hashes with.
+cryptoxide = { version = "0.4", default-features = false, features = ["blake2"] }
 deadpool-postgres = "0.14"
 dotenvy = "0.15"
 # Counts the bytes of every answer as it's sent, for the month's egress ceiling.

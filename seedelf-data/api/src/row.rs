@@ -120,6 +120,9 @@ pub fn read_row(row: &tokio_postgres::Row, with_spend: bool) -> anyhow::Result<R
         .into_iter()
         .map(|[policy, name, quantity]| Asset::new(policy, name, quantity))
         .collect();
+    // The box's own pool: the classic pool's routes read only its mix box;
+    // the token pools' feed names each row's credential.
+    let own = row.try_get::<_, &str>("cred").unwrap_or(MIXBOX_HASH);
     let made_by = row
         .try_get::<_, Option<&str>>("inputs")?
         .map(serde_json::from_str::<Vec<[Option<String>; 2]>>)
@@ -127,7 +130,7 @@ pub fn read_row(row: &tokio_postgres::Row, with_spend: bool) -> anyhow::Result<R
         .map(|inputs| MadeBy {
             mixed: inputs
                 .iter()
-                .any(|[payment, _]| payment.as_deref() == Some(MIXBOX_HASH)),
+                .any(|[payment, _]| payment.as_deref() == Some(own)),
             inputs: Some(inputs),
         });
     Ok(Row {

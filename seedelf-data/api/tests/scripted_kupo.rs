@@ -276,3 +276,33 @@ async fn with_no_source_fresh_the_private_index_is_behind() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "behind");
 }
+
+/// Kupo indexes neither the holder nor the token pools: while db-sync can't
+/// answer, their routes say 503 with a wait (the wallet reads Koios for
+/// them), and the contract's go on answering from Kupo (web wallet chunk
+/// 34's 34c: health is per route).
+#[tokio::test]
+async fn the_token_pools_routes_wait_for_db_sync_while_kupo_answers_the_rest() {
+    let (url, _) = scripted_kupo().await;
+    let (app, _) = app(&url).await;
+    assert_eq!(
+        get_json(&app, "/seedelf/v1/mainnet/contract/snapshot")
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let cursor = format!("{}.{}", stable_slot(now_slot()), "00".repeat(32));
+    for path in [
+        "/seedelf/v1/mainnet/lovejoin/pools".to_string(),
+        "/seedelf/v1/mainnet/lovejoin/tokens".to_string(),
+        format!("/seedelf/v1/mainnet/lovejoin/tokens/since/{cursor}"),
+    ] {
+        let request = Request::get(&path).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(response.headers()["retry-after"], "30", "{path}");
+    }
+    // A cursor this server wouldn't hand out is the request's own fault, whatever db-sync is doing.
+    let (status, _) = get_json(&app, "/seedelf/v1/mainnet/lovejoin/tokens/since/7.00").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

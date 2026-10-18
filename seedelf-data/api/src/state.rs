@@ -76,6 +76,8 @@ pub struct AppState {
     pub rewards: Rewards,
     /// Every pool's last 18 epochs, for `pool_history`.
     pub history: History,
+    /// Lovejoin's token pools: each candidate at the holder, checked once.
+    pub lovejoin: crate::lovejoin::discovery::Discovery,
     tip: RwLock<Option<Tip>>,
     /// db-sync's tip failed [`FAILED_READS`] reads in a row: the public routes
     /// answer 503 at once, and the private index reads Kupo.
@@ -135,6 +137,7 @@ impl AppState {
             decimals: Decimals::default(),
             rewards: Rewards::default(),
             history: History::default(),
+            lovejoin: Default::default(),
             tip: RwLock::new(None),
             db_failing: AtomicBool::new(false),
             kupo_tip: RwLock::new(None),

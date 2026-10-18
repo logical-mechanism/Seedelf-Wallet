@@ -11,6 +11,7 @@ pub mod decimals;
 pub mod edge;
 pub mod ids;
 pub mod kupo;
+pub mod lovejoin;
 pub mod private;
 pub mod public;
 pub mod row;
