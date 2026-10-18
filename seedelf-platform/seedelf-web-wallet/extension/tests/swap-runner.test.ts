@@ -950,6 +950,21 @@ describe("a swap's order found spent (independent review M18)", () => {
     ));
     expect(view.auto).toMatchObject({ filled: true, partly: true });
   });
+
+  it("takes as its fill only what holds ADA and the swap's own tokens: a stranger's UTxO with others beside them is none (chunk 34's 34e review, 3)", async () => {
+    // A transaction of a stranger's paid the account 1 MIN and 500 of another token as the fill landed: taken as the
+    // fill, it would go into MIN's pool with the session's own, its other token riding along on the user's ADA.
+    const junk = "77".repeat(28) + "6a756e6b";
+    const { t } = await spent(buying, [
+      atSession("aa".repeat(32), 0, "2000000", [[MIN, "906594100"]]),
+      atSession("cc".repeat(32), 0, "3000000", [
+        [MIN, "1"],
+        [junk, "500"],
+      ]),
+      atSession("dd".repeat(32), 0, "1500000"),
+    ]);
+    expect((await bookOf(t)).sessions[0]!.auto!.fills).toEqual(["aa".repeat(32), "dd".repeat(32)]);
+  });
 });
 
 describe("Stop while the runner places the order (independent review L22)", () => {

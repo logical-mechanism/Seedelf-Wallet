@@ -4322,17 +4322,34 @@ pub fn check_order_cancels(request: &str) -> Result<String, JsError> {
 
 /// How many Lovejoin boxes a session's spare ADA pays for at `depth`, before
 /// anything is built (`lovejoin::PlanRequest` → `lovejoin::PlanResult`), in
-/// the classic pool or the token pool `poolRef` names.
+/// the classic pool or the token pool `poolRef` names; or, a return's across
+/// the pools `legs` names, each leg's (`lovejoin::Across`, chunk 34's 34e).
 #[wasm_bindgen(js_name = planLovejoin)]
 pub fn plan_lovejoin(accounts: &WasmOneTimeAccounts, request: &str) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
     let own: lovejoin::PlanOwn = from_json(request)?;
+    let across: lovejoin::Across = from_json(request)?;
+    let wide: lovejoin::Wide = from_json(request)?;
+    let width = wide.width().map_err(js_error)?;
+    if !across.legs.is_empty() {
+        return to_json(
+            &lovejoin::plan_across_pools(
+                &accounts.inner,
+                from_json(request)?,
+                &own.own,
+                &across,
+                width,
+            )
+            .map_err(js_error)?,
+        );
+    }
     to_json(
-        &lovejoin::plan_in(
+        &lovejoin::plan_at(
             &accounts.inner,
             from_json(request)?,
             named.pool_ref.as_ref(),
             &own.own,
+            width,
         )
         .map_err(js_error)?,
     )
@@ -4343,7 +4360,9 @@ pub fn plan_lovejoin(accounts: &WasmOneTimeAccounts, request: &str) -> Result<St
 /// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`); with `again`, the
 /// wallet's boxes in the pool mixed again, with no deposit. The worker sends
 /// them in order. A pool with too few boxes builds nothing and says why in
-/// `skipped`. In the classic pool or the token pool `poolRef` names.
+/// `skipped`. In the classic pool or the token pool `poolRef` names; or a
+/// return's across the pools `legs` names (`lovejoin::Across`, chunk 34's
+/// 34e), one deposit into each and the mixes in each.
 #[wasm_bindgen(js_name = buildLovejoinChain)]
 pub fn build_lovejoin_chain(
     accounts: &WasmOneTimeAccounts,
@@ -4351,12 +4370,28 @@ pub fn build_lovejoin_chain(
     request: &str,
 ) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
+    let across: lovejoin::Across = from_json(request)?;
+    let wide: lovejoin::Wide = from_json(request)?;
+    let width = wide.width().map_err(js_error)?;
+    if !across.legs.is_empty() {
+        return to_json(
+            &lovejoin::chain_across_pools(
+                &accounts.inner,
+                key.sk,
+                from_json(request)?,
+                &across,
+                width,
+            )
+            .map_err(js_error)?,
+        );
+    }
     to_json(
-        &lovejoin::chain_in(
+        &lovejoin::chain_at(
             &accounts.inner,
             key.sk,
             from_json(request)?,
             named.pool_ref.as_ref(),
+            width,
         )
         .map_err(js_error)?,
     )
@@ -4368,7 +4403,12 @@ pub fn build_lovejoin_chain(
 #[wasm_bindgen(js_name = lovejoinFunding)]
 pub fn lovejoin_funding(request: &str) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
-    to_json(&lovejoin::funding_in(from_json(request)?, named.pool_ref.as_ref()).map_err(js_error)?)
+    let wide: lovejoin::Wide = from_json(request)?;
+    let width = wide.width().map_err(js_error)?;
+    to_json(
+        &lovejoin::funding_at(from_json(request)?, named.pool_ref.as_ref(), width)
+            .map_err(js_error)?,
+    )
 }
 
 /// The most boxes a Bootstrap paid from the private balance puts in at once
@@ -4393,12 +4433,15 @@ pub fn build_lovejoin_from_account(
     request: &str,
 ) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
+    let wide: lovejoin::Wide = from_json(request)?;
+    let width = wide.width().map_err(js_error)?;
     to_json(
-        &lovejoin::chain_from_account_in(
+        &lovejoin::chain_from_account_at(
             &account.inner,
             key.sk,
             from_json(request)?,
             named.pool_ref.as_ref(),
+            width,
         )
         .map_err(js_error)?,
     )
@@ -4414,12 +4457,15 @@ pub fn build_lovejoin_again_from_account(
     request: &str,
 ) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
+    let wide: lovejoin::Wide = from_json(request)?;
+    let width = wide.width().map_err(js_error)?;
     to_json(
-        &lovejoin::again_from_account_in(
+        &lovejoin::again_from_account_at(
             &account.inner,
             key.sk,
             from_json(request)?,
             named.pool_ref.as_ref(),
+            width,
         )
         .map_err(js_error)?,
     )

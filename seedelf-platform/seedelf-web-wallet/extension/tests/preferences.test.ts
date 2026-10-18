@@ -27,6 +27,8 @@ describe("preferences", () => {
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
+      // Three boxes a mix; four is the option (chunk 34's D3).
+      lovejoinWidth: 3,
       // Mainnet reads the wallet's own data layer first, where the build has one (chunk 26b).
       koiosOnly: false,
     });
@@ -42,6 +44,7 @@ describe("preferences", () => {
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
+      lovejoinWidth: 3,
       koiosOnly: false,
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
@@ -55,6 +58,13 @@ describe("preferences", () => {
     expect((await prefs.get()).dappConnector).toBe(false);
     await prefs.set({ dappConnector: true });
     expect((await prefs.get()).dappConnector).toBe(true);
+    // Four boxes a mix, or three, and nothing else (chunk 34's D3).
+    await prefs.set({ lovejoinWidth: 5 as never });
+    expect((await prefs.get()).lovejoinWidth).toBe(3);
+    await prefs.set({ lovejoinWidth: 4 });
+    expect((await prefs.get()).lovejoinWidth).toBe(4);
+    await prefs.set({ lovejoinWidth: "3" as never });
+    expect((await prefs.get()).lovejoinWidth).toBe(4);
     await prefs.set({ dappPassword: "no" as never });
     expect((await prefs.get()).dappPassword).toBe(true);
     await prefs.set({ dappPassword: false });

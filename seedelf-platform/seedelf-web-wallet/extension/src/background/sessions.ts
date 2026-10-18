@@ -86,7 +86,7 @@ import type {
   UnsentWhy,
 } from "../shared/rpc";
 import { merged, sessionClass, type HistoryClass } from "../shared/histories";
-import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth } from "../shared/preferences";
+import { DEFAULT_PREFERENCES, type LovejoinDelay, type LovejoinDepth, type LovejoinWidth } from "../shared/preferences";
 import tokenList from "../tokens/list.json";
 import { bodyOutpoints, txId, txInputs, txWithdrawals } from "./cbor";
 import { CollateralError, CollateralRefusedError, StaleReviewError } from "./collateral";
@@ -120,10 +120,12 @@ import {
   chainBoxes,
   ChainGone,
   chainOwner,
+  chainWindow,
   chainRetryMs,
   checkBoxes,
   mostBootstrap,
   MAX_MIX_BOXES,
+  MAX_TOKEN_DEPOSIT_BOXES,
   LovejoinSkipped,
   firstTries,
   mayBeIn,
@@ -134,8 +136,11 @@ import {
   SpentUnread,
   UNLOCK_WAIT_MS,
   unlockWait,
+  wayOver,
   type ChainProgress,
+  type ChainWay,
   type LovejoinChain,
+  type LovejoinPool,
   type LovejoinService,
 } from "./lovejoin";
 import { pendingKey } from "./pending";
@@ -180,6 +185,15 @@ export const SESSION_CHAIN_PREFIX = "seedelf.session.chain.";
 export const SESSION_COLLATERAL = 5_000_000n;
 /** Room in the funding for the swap's fee and the change it leaves: it all comes back. */
 export const SWAP_MARGIN = 2_000_000n;
+
+/** The pool a swap's review takes the token it gets into (SessionService tokenPool), and those it could. */
+interface TokenChoice {
+  unit: string;
+  works: LovejoinPool[];
+  named: string | null | undefined;
+  chosen?: LovejoinPool;
+  rooms?: Map<string, { others: number; free: number }>;
+}
 /** About what bringing one Lovejoin box back costs, paid from the box: a 1-box withdraw measured 0.2897 ₳ on mainnet. */
 export const LOVEJOIN_WITHDRAW_ESTIMATE = 300_000n;
 /** A funding payment the chain doesn't have after this long never reached it. */
@@ -371,8 +385,29 @@ interface AutoRecord {
    * Through Lovejoin, how deep and how long, as its approval showed them:
    * Settings changes swaps started later (independent review L21). None on
    * a swap from before, or one that comes back directly: as Settings has it.
+   * `width`: four boxes a mix, as approved (chunk 34's D3); none, three.
+   * `tokens`: the pool approved for each token, by its unit, a null for one
+   * approved to come back directly (chunk 34's 34e): its return never takes
+   * a token into another pool than its review showed. None, from before: its
+   * tokens come back directly, as they did. `tokenBoxes`: how many boxes of
+   * each its review showed, by the token's unit, which its return takes no
+   * more of, whatever the fill brought (34e's review, 10).
    */
-  lovejoin?: { depth: LovejoinDepth; delay: LovejoinDelay };
+  lovejoin?: {
+    depth: LovejoinDepth;
+    delay: LovejoinDelay;
+    width?: 4;
+    tokens?: Record<string, string | null>;
+    tokenBoxes?: Record<string, number>;
+    /** What its funding added for those boxes, in lovelace, beside the swap's own (`approved.fund`, which withinFunding holds the swap to). */
+    fund?: string;
+  };
+  /**
+   * The transactions the runner took for its order's fill or refund (outcomeOf): a batcher's, not the session's
+   * own, which its return may take into a token's pool all the same, since the proceeds are the user's (chunk 34's
+   * 34e). None from before.
+   */
+  fills?: string[];
 }
 
 interface SessionRecord {
@@ -405,7 +440,17 @@ interface SessionRecord {
    * token pool it goes into, by its id (none: the classic pool), whose token
    * its funding paid with the ADA.
    */
-  mix?: { boxes: number; again?: boolean; publicToo?: boolean; seed?: boolean; bootstrap?: boolean; pool?: string; skipped?: string };
+  mix?: {
+    boxes: number;
+    again?: boolean;
+    publicToo?: boolean;
+    seed?: boolean;
+    bootstrap?: boolean;
+    pool?: string;
+    skipped?: string;
+    /** Funded for four boxes a mix (chunk 34's D3): its chain goes four wide, or three if four can't. None: three. */
+    width?: 4;
+  };
   /**
    * The latest return through Lovejoin: how many transactions its chain has,
    * the return last (`last`), and when it began to be sent (`at`), recorded
@@ -827,6 +872,13 @@ const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace
 
 /** WebAssembly couldn't fund a payment from the private balance: core's `NotEnough` (build.rs), in its fixed English. */
 const NOT_ENOUGH_PRIVATE = /Not enough ADA in the Seedelf balance/;
+
+/** The private balance doesn't pay for a funding (buildFunding), in the user's words: told apart by its type, never its words. */
+class NotEnoughPrivate extends Error {
+  constructor() {
+    super(t("sess.notEnoughPrivate"));
+  }
+}
 
 /**
  * A UTxO at a session's account its return's chain can put up as collateral
@@ -1315,19 +1367,131 @@ export class SessionService {
    * when it's more, what the funding's ADA takes instead, if the swap is
    * stopped or its order refunded (`ifStopped`, privacy review §2.8).
    * `pool`: at Review, as Lovejoin's pool has room for now, or why it has
-   * none (§2.7); read only when the return would go through it.
+   * none (§2.7); read only when the return would go through it. `params`:
+   * the protocol parameters the review read. `short`: why the token's boxes
+   * aren't funded after all (34e's review, 2).
    */
-  private async lovejoinCost(network: NetworkName, quote: SwapQuote, pool = false): Promise<SwapLovejoin | undefined> {
+  private async lovejoinCost(
+    network: NetworkName,
+    quote: SwapQuote,
+    pool = false,
+    pools?: Record<string, string | null>,
+    { params, short }: { params?: unknown; short?: string } = {},
+  ): Promise<SwapLovejoin | undefined> {
     if (!this.deps.lovejoin?.available(network)) return undefined;
     const on = await this.throughLovejoin();
-    const { price, skipped, depth, delay } = await this.priced(network, pool && on);
-    // A token's proceeds come back with its deposit, and aren't spare: tokens never go in.
+    const { price, at, skipped, depth, delay, asked } = await this.priced(network, pool && on);
+    // A token's proceeds go through a pool of it, their boxes' ADA funded beside the swap's (chunk 34's 34e): what
+    // it adds is the boxes' alone, so the ADA's boxes below are as before. Only where the return goes through Lovejoin.
+    const choice = on ? await this.tokenPool(network, quote, depth, pool && on, pools, params) : undefined;
+    const three = choice && (await this.tokenAt(network, quote, choice, depth, 3, short));
+    const four = choice && asked === 4 ? await this.tokenAt(network, quote, choice, depth, 4, short) : undefined;
+    // An ADA's proceeds come back with its deposit, and are spare.
     const proceeds = quote.ask.tokenOut === "lovelace" ? BigInt(quote.amountOut) + BigInt(quote.deposits) : 0n;
-    const filled = price(proceeds + SWAP_MARGIN);
-    // Stopped, cancelled or refunded: the funding comes back instead. A token's carries the token, so none of it goes in.
-    const stopped = price(quote.ask.tokenIn === "lovelace" ? BigInt(quote.fund.lovelace) : 0n);
+    const spare = proceeds + SWAP_MARGIN;
+    // One width for its return, as one chain goes, the token's boxes and the ADA's alike: four where asked and, in
+    // each pool, it takes all it pays for or as many as three would; three otherwise, and why, which its approval
+    // keeps (wayOver, 34e's review, 5). Nothing paid for at either width: as asked, for its return to decide.
+    const way = at[4]
+      ? wayOver([...(four?.leg ? [four.leg] : []), at[4].leg(spare)], [...(three?.leg ? [three.leg] : []), at[3].leg(spare)])
+      : undefined;
+    const width: LovejoinWidth = way?.fellBack ? 3 : asked;
+    const token = width === 4 ? four : three;
+    const filled = (width === 4 ? at[4]! : at[3]).price(spare);
+    // Stopped, cancelled or refunded: the funding comes back instead, its boxes' ADA with it, at the width its return
+    // would go at from the approved one. A token's carries the token, which no pool was approved for.
+    const funded = token ? BigInt(token.fund) : 0n;
+    const stopped = price((quote.ask.tokenIn === "lovelace" ? BigInt(quote.fund.lovelace) : 0n) + funded, width);
     const more = (stopped.of ?? stopped.boxes) > (filled.of ?? filled.boxes);
-    return { ...filled, depth, delay, on, ...(skipped ? { skipped } : {}), ...(more ? { ifStopped: stopped } : {}) };
+    return {
+      ...filled,
+      depth,
+      delay,
+      on,
+      ...(width === 4 ? { width } : {}),
+      ...(way?.fellBack ? { fellBack: way.fellBack } : {}),
+      ...(skipped ? { skipped } : {}),
+      ...(more ? { ifStopped: stopped } : {}),
+      ...(token ? { ways: [token.way], ...(funded > 0n ? { fund: token.fund } : {}) } : {}),
+    };
+  }
+
+  /**
+   * The pool the token swap `quote` gets goes through (chunk 34's 34e), or undefined when no pool the wallet shows
+   * holds it: the pool chosen in `pools` (Change, by the token's unit; null, none), else its most used pool that
+   * takes a box now, as the review read the pools (`pool`: their room, once, at Review, and whether a box of each
+   * comes back under `params`; as the user types, the first shown, as discovery last kept them, asking nobody).
+   */
+  private async tokenPool(
+    network: NetworkName,
+    quote: SwapQuote,
+    depth: number,
+    pool: boolean,
+    pools?: Record<string, string | null>,
+    params?: unknown,
+  ): Promise<TokenChoice | undefined> {
+    const lovejoin = this.deps.lovejoin!;
+    const unit = quote.ask.tokenOut;
+    // As the user types, no request at all, not even the data layer's list (34e's review, 9).
+    const candidates = await lovejoin.poolsOf(network, unit, !pool);
+    if (!candidates.length) return undefined;
+    const rooms = pool ? await lovejoin.rooms(network) : undefined;
+    const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+    const works = (pool ? await lovejoin.usable(network, candidates, params) : candidates).filter((p) => {
+      const room = rooms?.get(p.id);
+      return !rooms || (!!room && room.others >= floor && room.free >= mixesPerBox(depth) * 2);
+    });
+    if (rooms) works.sort((a, b) => (rooms.get(b.id)?.others ?? 0) - (rooms.get(a.id)?.others ?? 0));
+    const named = pools?.[unit];
+    const chosen = named === null ? undefined : named === undefined ? works[0] : works.find((p) => p.id === named);
+    return { unit, works, named, chosen, rooms };
+  }
+
+  /**
+   * The way back of `choice`'s token, `width` a mix and `depth` deep: as many boxes as the least the swap asks for
+   * makes, at most what one deposit holds, one chain takes and the pool has room for; `fund`, what its boxes take,
+   * their ADA and every mix; and `leg`, what D3's rule weighs for its pool (wayOver): its boxes are funded, so it
+   * pays for all its token makes. `short`: why its boxes aren't funded after all, said for the token, which then
+   * comes back directly (34e's review, 2).
+   */
+  private async tokenAt(
+    network: NetworkName,
+    quote: SwapQuote,
+    { unit, works, named, chosen, rooms }: TokenChoice,
+    depth: number,
+    width: LovejoinWidth,
+    short?: string,
+  ): Promise<{ way: NonNullable<SwapLovejoin["ways"]>[number]; fund: string; leg?: { pays: number; fits: number; room: number } }> {
+    const perBox = mixesPerBox(depth, width) * (width - 1);
+    const room = chosen && rooms ? Math.floor((rooms.get(chosen.id)?.free ?? 0) / perBox) : Infinity;
+    const tokens = chosen ? Math.min(Number(BigInt(quote.minAmountOut) / BigInt(chosen.token!.quantity)), MAX_TOKEN_DEPOSIT_BOXES) : 0;
+    const boxes = chosen && !short ? Math.min(tokens, chainBoxes(depth, width), room) : 0;
+    const skipped = chosen
+      ? short && tokens >= 1
+        ? short
+        : undefined
+      : named === null
+        ? undefined
+        : named === undefined
+          ? t("lj.tokens.skip.warn.noPool")
+          : t("lj.tokens.skip.warn.poolCant");
+    const funding = chosen && boxes >= 1 ? await this.deps.lovejoin!.funding(network, boxes, false, depth as LovejoinDepth, chosen, width) : undefined;
+    return {
+      way: {
+        policyId: unit.slice(0, 56),
+        assetName: unit.slice(56),
+        ...(chosen ? { pool: chosen.id, quantity: chosen.token!.quantity } : {}),
+        boxes: funding ? boxes : 0,
+        ...(named === null ? { direct: true as const } : {}),
+        pools: works.map((p) => p.id),
+        ...(skipped ? { skipped } : {}),
+        mixes: funding?.mixes ?? 0,
+        mixFees: funding?.mixFees ?? "0",
+        withdrawFees: ((funding ? BigInt(boxes) : 0n) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
+      },
+      fund: funding?.lovelace ?? "0",
+      ...(chosen && !short ? { leg: { pays: tokens, fits: boxes, room } } : {}),
+    };
   }
 
   /**
@@ -1339,32 +1503,51 @@ export class SessionService {
    * kept five minutes), `of` the boxes the ADA pays for when that's fewer,
    * and `skipped`, why it has none. `fixed`: a swap's approved depth and
    * wait, rather than Settings' now.
+   *
+   * Four boxes a mix as approved, or as Settings has it (chunk 34's D3), or
+   * `width`; and three where four can't take what three would, as its
+   * return goes (wayOver, 34e's review, 5): `price` from a width down, with
+   * the width it went at and why; `at` each width's own, and what D3's rule
+   * weighs (`leg`). `skipped` is three's: four falls back to it.
    */
-  private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"]) {
+  private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"], width?: LovejoinWidth) {
     const lovejoin = this.deps.lovejoin!;
-    // What each box more takes, and what the chain takes besides: the deposit and its change.
-    const [one, two] = await Promise.all([
-      lovejoin.funding(network, 1, false, fixed?.depth),
-      lovejoin.funding(network, 2, false, fixed?.depth),
-    ]);
-    const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
-    const besides = BigInt(one.lovelace) - perBox;
+    const asked: LovejoinWidth = width ?? (fixed ? (fixed.width ?? 3) : (await lovejoin.settings()).width);
     const room = pool ? await lovejoin.room(network) : undefined;
-    const skipped = room && poolShort(network, room, one.depth);
-    const fits = !room ? Infinity : skipped ? 0 : Math.floor(room.free / (mixesPerBox(one.depth) * 2));
-    const price = (spare: bigint) => {
-      const affordable = spare > besides ? Number((spare - besides) / perBox) : 0;
-      const pays = Math.min(affordable, chainBoxes(one.depth));
-      const boxes = Math.min(pays, fits);
-      return {
-        boxes,
-        mixes: boxes * one.mixes,
-        mixFees: (BigInt(boxes) * BigInt(one.mixFees)).toString(),
-        withdrawFees: (BigInt(boxes) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
-        ...(boxes < pays ? { of: pays } : {}),
+    const at = async (w: LovejoinWidth) => {
+      // What each box more takes, and what the chain takes besides: the deposit and its change.
+      const [one, two] = await Promise.all([
+        lovejoin.funding(network, 1, false, fixed?.depth, undefined, w),
+        lovejoin.funding(network, 2, false, fixed?.depth, undefined, w),
+      ]);
+      const perBox = BigInt(two.lovelace) - BigInt(one.lovelace);
+      const besides = BigInt(one.lovelace) - perBox;
+      const fits = !room ? Infinity : poolShort(network, room, one.depth, w) ? 0 : Math.floor(room.free / (mixesPerBox(one.depth, w) * (w - 1)));
+      const affordable = (spare: bigint) => (spare > besides ? Number((spare - besides) / perBox) : 0);
+      const price = (spare: bigint) => {
+        const pays = Math.min(affordable(spare), chainBoxes(one.depth, w));
+        const boxes = Math.min(pays, fits);
+        return {
+          boxes,
+          mixes: boxes * one.mixes,
+          mixFees: (BigInt(boxes) * BigInt(one.mixFees)).toString(),
+          withdrawFees: (BigInt(boxes) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
+          ...(boxes < pays ? { of: pays } : {}),
+        };
       };
+      const leg = (spare: bigint) => ({ pays: affordable(spare), fits: Math.min(affordable(spare), chainBoxes(one.depth, w), fits), room: fits });
+      return { one, price, leg };
     };
-    return { price, skipped, depth: one.depth, delay: fixed?.delay ?? one.delay };
+    const three = await at(3);
+    const four = asked === 4 ? await at(4) : undefined;
+    const price = (spare: bigint, upTo: LovejoinWidth = asked) => {
+      if (upTo === 3 || !four) return three.price(spare);
+      const way = wayOver([four.leg(spare)], [three.leg(spare)]);
+      if (way.width === 4) return { ...four.price(spare), width: 4 as const };
+      return { ...three.price(spare), ...(way.fellBack ? { fellBack: way.fellBack } : {}) };
+    };
+    const skipped = room && poolShort(network, room, three.one.depth);
+    return { price, at: { 3: three, 4: four }, skipped, depth: three.one.depth, delay: fixed?.delay ?? three.one.delay, asked };
   }
 
   /**
@@ -1387,21 +1570,44 @@ export class SessionService {
     network: NetworkName,
     quote: SwapQuote,
     display?: { in: SwapSide; out: SwapSide },
+    pools?: Record<string, string | null>,
   ): Promise<SessionOutSummary & { lovejoin?: SwapLovejoin }> {
     const ask = checkAsk(quote.ask);
     if (!(await this.verified(network, ask.tokenOut))) throw new Error(UNVERIFIED());
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
-    const { summary, txCbor, seed } = await this.buildFunding(
-      network,
-      index,
-      address,
-      [
-        { to: address, lovelace: quote.fund.lovelace, tokens: quote.fund.tokens },
-        { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
-      ],
-      t("sess.emptySwap"),
-    );
+    // The parameters, once: for the funding, and whether a pool of the token it gets takes a box (34e's review, 9).
+    const params = await this.deps.koios(network).epochParams();
+    // Once, at Review, never as the user types: whether Lovejoin's pools take the boxes now (privacy review §2.7).
+    // A token it gets through a pool of it has its boxes' ADA funded beside the swap's (chunk 34's 34e).
+    let lovejoin = await this.lovejoinCost(network, quote, true, pools, { params });
+    const fund = (l?: SwapLovejoin) =>
+      this.buildFunding(
+        network,
+        index,
+        address,
+        [
+          { to: address, lovelace: (BigInt(quote.fund.lovelace) + BigInt(l?.fund ?? "0")).toString(), tokens: quote.fund.tokens },
+          { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
+        ],
+        t("sess.emptySwap"),
+        undefined,
+        params,
+      );
+    let funding: Awaited<ReturnType<typeof fund>>;
+    try {
+      funding = await fund(lovejoin);
+    } catch (e) {
+      // The private balance pays for the swap, as 1.5.0 funded it, but not its token's boxes as well: too little ADA
+      // (NotEnoughPrivate), or more of its UTxOs than one transaction can spend. The token comes back directly, and
+      // says why, rather than the swap be refused (34e's review, 2, and its fixes' review, 1). What another try may
+      // mend is thrown as it is, and so is the swap's own funding failing too.
+      const mendable = e instanceof WalletLocked || e instanceof KoiosError || e instanceof CollateralError || e instanceof StaleReviewError || isTrap(e);
+      if (!lovejoin?.fund || mendable) throw e;
+      lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, short: t("lj.tokens.skip.warn.balance") });
+      funding = await fund(lovejoin);
+    }
+    const { summary, txCbor, seed } = funding;
     const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
     // Sending this is the approval: the swap runs itself within it. Through the pools, as its review said, and
     // not as an order, whose minimum it didn't say the wallet relies on Minswap for (release review C09).
@@ -1411,10 +1617,28 @@ export class SessionService {
       aggregatorFee: quote.aggregatorFee,
       ...(quote.againstPools ? { againstPools: true } : {}),
     };
-    // Once, at Review, never as the user types: whether Lovejoin's pool takes the boxes now (privacy review §2.7).
-    const lovejoin = await this.lovejoinCost(network, quote, true);
-    // Its depth and wait, as this review shows them, are the ones its return takes (independent review L21).
-    const way = lovejoin ? { lovejoin: { depth: lovejoin.depth as LovejoinDepth, delay: lovejoin.delay as LovejoinDelay } } : {};
+    // Its depth, wait and width, as this review shows them, are the ones its return takes (independent review L21),
+    // and the pool it shows for the token it gets the one its token goes into, or none (chunk 34's 34e).
+    // How many boxes of each, which its return takes no more of (34e's review, 10).
+    const ways = lovejoin?.ways ?? [];
+    const boxed = ways.filter((w) => w.boxes >= 1);
+    const tokens = ways.length
+      ? {
+          tokens: Object.fromEntries(ways.map((w) => [w.policyId + w.assetName, w.boxes ? w.pool! : null])),
+          ...(boxed.length ? { tokenBoxes: Object.fromEntries(boxed.map((w) => [w.policyId + w.assetName, w.boxes])) } : {}),
+        }
+      : {};
+    const way = lovejoin
+      ? {
+          lovejoin: {
+            depth: lovejoin.depth as LovejoinDepth,
+            delay: lovejoin.delay as LovejoinDelay,
+            ...(lovejoin.width === 4 ? { width: 4 as const } : {}),
+            ...tokens,
+            ...(lovejoin.fund ? { fund: lovejoin.fund } : {}),
+          },
+        }
+      : {};
     const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved, ...way };
     await keep(this.deps, SESSION_OUT, kept);
     return { ...summary, ...(lovejoin ? { lovejoin } : {}) };
@@ -1497,10 +1721,13 @@ export class SessionService {
     // giveme.my's collateral as any is.
     checkBoxes(boxes, bootstrap ? mostBootstrap(pool) : MAX_MIX_BOXES);
     if (bootstrap) checkBoxes(boxes, await lovejoin.privateBootstrapMost(network, pool), true);
-    if (!bootstrap) await lovejoin.fits(network, boxes, pool);
-    const { seed: _seed, ...funding } = await lovejoin.funding(network, boxes, false, bootstrap ? 0 : undefined, pool);
+    // Four boxes a mix where Settings has it and the pool has room for it, funded for that (chunk 34's D3).
+    const way = bootstrap ? undefined : await lovejoin.fits(network, boxes, pool);
+    // None to say is three: the width fits chose, never Settings read again (34e's review, 4).
+    const { seed: _seed, ...funding } = await lovejoin.funding(network, boxes, false, bootstrap ? 0 : undefined, pool, way?.width ?? 3);
     // No mixes is a Bootstrap since chunk 34's 34d: its boxes are held in the pool until brought back by hand.
-    return this.mixFunding(network, bootstrap ? { ...funding, bootstrap: true } : funding);
+    if (bootstrap) return this.mixFunding(network, { ...funding, bootstrap: true });
+    return this.mixFunding(network, way?.fellBack ? { ...funding, fellBack: way.fellBack } : funding);
   }
 
   /**
@@ -1515,9 +1742,11 @@ export class SessionService {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
     if (await this.mixingAgain(network)) throw new Error(t("sess.mixingAgain"));
-    const { boxes, owned } = await lovejoin.againBoxes(network, anyway, pool);
-    const funding = await lovejoin.funding(network, boxes, true, undefined, pool);
-    return this.mixFunding(network, { ...funding, owned, ...(anyway ? { publicToo: true } : {}) });
+    const { boxes, owned, width, fellBack } = await lovejoin.againBoxes(network, anyway, pool);
+    // At the width againBoxes chose, three when it names none: never Settings' read again, which a fallback to three
+    // would over-fund (34e's review, 4).
+    const funding = await lovejoin.funding(network, boxes, true, undefined, pool, width ?? 3);
+    return this.mixFunding(network, { ...funding, owned, ...(anyway ? { publicToo: true } : {}), ...(fellBack ? { fellBack } : {}) });
   }
 
   /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
@@ -1570,6 +1799,7 @@ export class SessionService {
           ...(built.mix.publicToo ? { publicToo: true } : {}),
           ...(built.mix.bootstrap ? { bootstrap: true } : {}),
           ...(built.mix.pool ? { pool: built.mix.pool } : {}),
+          ...(built.mix.width === 4 ? { width: 4 as const } : {}),
         },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
@@ -2202,7 +2432,8 @@ export class SessionService {
    * left last; session `index`'s own (a top-up's) first of all (privacy
    * review §2.3). `own`: the transactions whose outputs in the private
    * balance are the session's whatever their history says, which a restore
-   * doesn't know (collateralTopUp, 1.5.0's release review, C36).
+   * doesn't know (collateralTopUp, 1.5.0's release review, C36). `known`: the
+   * protocol parameters, when its caller read them already.
    */
   private async buildFunding(
     network: NetworkName,
@@ -2211,9 +2442,10 @@ export class SessionService {
     payments: Array<{ to: string; lovelace: string; tokens: TokenQuantity[] }>,
     empty: string,
     own?: ReadonlySet<string>,
+    known?: Record<string, unknown>,
   ): Promise<{ summary: SessionOutSummary & { origin: HistoryClass }; txCbor: string; seed: string }> {
     const { wasm } = this.deps;
-    const { view, utxos, params, returning, classes: read } = await readContract(this.deps, network);
+    const { view, utxos, params, returning, classes: read } = await readContract(this.deps, network, known);
     if (!utxos.length) throw nothingToSpend(this.deps, view, empty, returning);
     const classes = own ? ownClassed(read, utxos, own, index) : read;
     type Finished = Omit<SessionOutSummary, "network" | "payments" | "inputs" | "index" | "address" | "histories"> & {
@@ -2228,7 +2460,7 @@ export class SessionService {
       (e: unknown) => {
         // Core's own words name the balance the screens call the private balance, and are English whatever the
         // language: said in the user's words (chunk 23's second review, LJ-6). Core's text is fixed, never translated.
-        if (e instanceof Error && NOT_ENOUGH_PRIVATE.test(e.message)) throw new Error(t("sess.notEnoughPrivate"));
+        if (e instanceof Error && NOT_ENOUGH_PRIVATE.test(e.message)) throw new NotEnoughPrivate();
         throw e;
       },
     );
@@ -2386,13 +2618,18 @@ export class SessionService {
   }
 
   /** Builds and signs the return of everything at the session's account into the private balance. */
-  backBuild(network: NetworkName, index: number, direct = false): Promise<SessionBackSummary> {
+  backBuild(network: NetworkName, index: number, direct = false, pools?: Record<string, string | null>): Promise<SessionBackSummary> {
     // In turn with the sends and the runner: it may mark the session's record, and
     // a save it overlapped would be lost.
-    return this.serial(() => this.backBuildNow(network, index, direct));
+    return this.serial(() => this.backBuildNow(network, index, direct, pools));
   }
 
-  private async backBuildNow(network: NetworkName, index: number, direct: boolean): Promise<SessionBackSummary> {
+  private async backBuildNow(
+    network: NetworkName,
+    index: number,
+    direct: boolean,
+    pools?: Record<string, string | null>,
+  ): Promise<SessionBackSummary> {
     const { wallet, session } = this.deps;
     const s = await this.live(network, index);
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
@@ -2402,7 +2639,7 @@ export class SessionService {
     }
     const rows = await this.utxosOf(network, keyHash);
     if (!rows.length) throw new Error(t("sess.accountEmptyBack"));
-    const built = await this.buildBack(network, index, rows, undefined, direct);
+    const built = await this.buildBack(network, index, rows, undefined, direct, pools);
     await wallet.withKeys(() => session.set(SESSION_BACK, built));
     const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, ...summary } = built;
     return summary;
@@ -2552,9 +2789,13 @@ export class SessionService {
     if (s.mix || !this.deps.lovejoin?.available(network) || !(await this.throughLovejoin(s))) return null;
     const rows = this.seen.get(`${network}:${index}`);
     const held = rows ? spareOf(returnable(s, rows)) : 0n;
-    const funded = s.swap?.tokenIn === "lovelace" && !s.auto!.filled ? BigInt(s.auto!.approved.fund.lovelace) : 0n;
-    // As deep and as long as the swap was approved (independent review L21).
-    const { price, skipped, depth, delay } = await this.priced(network, true, s.auto!.lovejoin);
+    // Its token's boxes' ADA too, funded beside the swap's, which comes back with it (its fixes' review, 5).
+    const funded = s.auto!.filled
+      ? 0n
+      : (s.swap?.tokenIn === "lovelace" ? BigInt(s.auto!.approved.fund.lovelace) : 0n) + BigInt(s.auto!.lovejoin?.fund ?? "0");
+    // As deep and as long as the swap was approved (independent review L21), and as wide: three for a swap from
+    // before approvals kept a way, as its return goes (wayOf).
+    const { price, skipped, depth, delay } = await this.priced(network, true, s.auto!.lovejoin, s.auto!.lovejoin ? undefined : 3);
     return { ...price(held > funded ? held : funded), depth, delay, on: true, ...(skipped ? { skipped } : {}) };
   }
 
@@ -2893,10 +3134,13 @@ export class SessionService {
           (r) => !own.has(r.tx_hash) && !arrived.some((a) => outpoint(a) === outpoint(r)),
         );
         const outcome = outcomeOf(s, [...arrived, ...since]);
+        // What arrived is the fill or the refund: its token may go into the pool approved for it (chunk 34's 34e).
+        const fills = fillsOf(s, [...arrived, ...since]);
         await this.update(network, s.index, (r) => {
           if (outcome === "refunded") r.auto!.refunded = now();
           else r.auto!.filled = now();
           if (outcome === "partly") r.auto!.partly = true;
+          if (fills.length) r.auto!.fills = fills;
         });
       }
     } else if (!(await this.ordersSpent(network, s))) {
@@ -3514,6 +3758,7 @@ export class SessionService {
     held: KoiosUtxo[],
     known?: unknown,
     direct = false,
+    pools?: Record<string, string | null>,
   ): Promise<KeptBack> {
     const { wasm, wallet, now } = this.deps;
     if (await this.pendingChain(network, index)) {
@@ -3594,6 +3839,8 @@ export class SessionService {
             record?.mix?.seed || record?.mix?.bootstrap ? 0 : record?.auto?.lovejoin?.depth,
             // The pool its mix was funded for: a token pool's token went with its ADA.
             record?.mix?.pool,
+            // Its width, and a return's tokens' pools (chunk 34's 34e).
+            wayOf(record, pools),
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -3635,6 +3882,10 @@ export class SessionService {
             ...(record?.mix?.again ? { again: true } : {}),
             ...(record?.mix?.bootstrap ? { bootstrap: true } : {}),
             ...(chain.pool ? { pool: chain.pool } : {}),
+            ...(chain.parts ? { parts: chain.parts } : {}),
+            ...(chain.ways ? { ways: chain.ways } : {}),
+            ...(chain.width ? { width: chain.width } : {}),
+            ...(chain.fellBack ? { fellBack: chain.fellBack } : {}),
             // The deposit, which the review shows: `txHash` above is the return,
             // the last of the chain, which spends what nothing has sent yet.
             entry: chain.txs[0]!.txHash,
@@ -3697,7 +3948,8 @@ export class SessionService {
    */
   private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[]): Promise<boolean> {
     if (rows.some(collateralFits)) return false;
-    return !!s?.mix || spareOf(rows) >= BigInt((await this.deps.lovejoin!.funding(network, 1)).lovelace);
+    // A box three a mix: four falls back to three where it costs more than the spare pays (34e's review, 6).
+    return !!s?.mix || spareOf(rows) >= BigInt((await this.deps.lovejoin!.funding(network, 1, false, undefined, undefined, 3)).lovelace);
   }
 
   /**
@@ -3887,7 +4139,9 @@ export class SessionService {
       // Being sent: its change to come and its collateral are the chain's too.
       await lovejoin?.reserve(network, chainOwner(built.index), txs!);
       try {
-        await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary });
+        // Four boxes a mix go fewer at a time (chainWindow).
+        const window = summary.lovejoin?.width === 4 ? { window: chainWindow(4) } : {};
+        await this.savePending(network, { txs: txs!, next: 0, flying: [], index: built.index, kept, summary, ...window });
       } catch (e) {
         await lovejoin?.release(network, chainOwner(built.index)).catch(() => undefined);
         throw e;
@@ -3906,8 +4160,10 @@ export class SessionService {
       // people, held, with no due time, until the user brings them back. A seed
       // from before chunk 34 is depth 0 too, its boxes coming back by themselves.
       ...(summary.lovejoin?.bootstrap ? { bootstrap: true } : summary.lovejoin?.depth === 0 ? { seed: true } : {}),
-      // A token pool's boxes, all of them, each leaf named by its pool already.
+      // A token pool's boxes, all of them, each leaf named by its pool already; across pools, each token pool's.
       ...(summary.lovejoin?.pool ? { pools: { [summary.lovejoin.pool]: summary.lovejoin.boxes } } : {}),
+      ...(summary.lovejoin?.parts ? { pools: tokenShares(summary.lovejoin.parts) } : {}),
+      ...(summary.lovejoin?.width === 4 ? { width: 4 as const } : {}),
       // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
       ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
     };
@@ -4706,10 +4962,10 @@ export function clauseOf(message: string, end = false): string {
  * (`room`), at `depth`, in the review's words: under the network's floor, or
  * too few boxes free to mix with. Undefined when it can.
  */
-function poolShort(network: NetworkName, room: { others: number; free: number }, depth: number): string | undefined {
+function poolShort(network: NetworkName, room: { others: number; free: number }, depth: number, width: LovejoinWidth = 3): string | undefined {
   const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
   if (room.others < floor) return t("sess.skip.warn.poolFloor", { count: room.others, floor });
-  const needs = mixesPerBox(depth) * 2;
+  const needs = mixesPerBox(depth, width) * (width - 1);
   if (room.free < needs) {
     return t("sess.skip.warn.poolFree", { count: room.free, deep: t("sess.skip.warn.deep", { count: depth }), needs });
   }
@@ -4725,6 +4981,44 @@ function spareOf(rows: KoiosUtxo[]): bigint {
   const ada = rows.filter((u) => !u.asset_list?.length && !u.reference_script);
   const total = ada.reduce((sum, u) => sum + BigInt(u.value), 0n);
   return ada.some((u) => BigInt(u.value) === SESSION_COLLATERAL) ? total - SESSION_COLLATERAL : total;
+}
+
+/**
+ * How session `s`'s chain goes (lovejoin.ts ChainWay, chunk 34's 34e): a mix's as wide as it was funded, into its one
+ * pool; a swap's as approved, its tokens only into the pools approved (none approved, from before: none); any other
+ * return at Settings' width, each token into its most used pool, or `pools`, the pools its review chose (Change).
+ * Exported for its test.
+ */
+export function wayOf(s: SessionRecord | undefined, pools?: Record<string, string | null>): ChainWay {
+  if (s?.mix) return { width: s.mix.width ?? 3 };
+  const fills = s?.auto?.fills?.length ? { fills: s.auto.fills } : {};
+  const approved = s?.auto?.lovejoin;
+  if (s?.swap && s.auto) {
+    // From before approvals kept a way: three wide, as 1.5.0 went, its tokens back directly (34e's review, 10).
+    if (!approved) return { width: 3 };
+    const tokens = pools ?? approved.tokens;
+    // Its approval followed: no more boxes of a token than its review showed, whatever the fill brought.
+    const most = !pools && approved.tokenBoxes ? { most: approved.tokenBoxes } : {};
+    return { width: approved.width ?? 3, ...(tokens ? { returns: { tokens, only: !pools, ...fills, ...most } } : {}) };
+  }
+  return { returns: { ...(pools ? { tokens: pools } : {}), ...fills } };
+}
+
+/**
+ * The transactions among `arrived` that paid session `s` its swap's fill or refund, which its return may take into a
+ * token's pool (chunk 34's 34e): each whose every UTxO at the account holds ADA and the swap's own tokens alone. A
+ * stranger's holding any other token beside them is none, so that token never rides into a deposit on the user's
+ * ADA, nor past a transaction's size (34e's review, 3).
+ */
+function fillsOf(s: SessionRecord, arrived: KoiosUtxo[]): string[] {
+  const swapped = new Set([s.swap?.tokenIn, s.swap?.tokenOut]);
+  const odd = new Set(arrived.filter((u) => (u.asset_list ?? []).some((a) => !swapped.has(a.policy_id + a.asset_name))).map((u) => u.tx_hash));
+  return [...new Set(arrived.map((u) => u.tx_hash))].filter((h) => !odd.has(h));
+}
+
+/** A chain's token pools' shares of its boxes, by pool (ChainRecord `pools`): the classic pool's are the rest. */
+function tokenShares(parts: Array<{ pool?: string; boxes: number }>): Record<string, number> {
+  return Object.fromEntries(parts.filter((p) => p.pool).map((p) => [p.pool!, p.boxes]));
 }
 
 /** What's left behind at a session's account, as far as the last reading (`utxos`) still has it. */

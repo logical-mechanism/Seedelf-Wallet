@@ -2830,5 +2830,13 @@
   "lj.launch.supply": "Fewer than {{boxes}} boxes' worth of this token exist. Choose a smaller amount for each box.",
   "lj.launch.tooLittle": "Each box needs at least {{least}} ₳ under today's network fees: enough to pay its own way back, and then to pay out part of what came back without other money.",
   "lj.launch.tooMuch": "A token pool's box holds at most {{most}} ₳.",
-  "lj.launch.unknownToken": "Koios doesn't know this token's supply, so the wallet can't check that a pool of it can fill. Try again later."
+  "lj.launch.unknownToken": "Koios doesn't know this token's supply, so the wallet can't check that a pool of it can fill. Try again later.",
+  "lj.tokens.skip.warn.balance": "your private balance covers the swap, but not its boxes as well",
+  "lj.tokens.skip.warn.failed": "the wallet couldn't build the mixes in its pool this time",
+  "lj.tokens.skip.warn.noPool": "none of its pools can take a box now",
+  "lj.tokens.skip.warn.poolCant": "the pool chosen for it can't take a box now",
+  "lj.width.warn.cost": "Four boxes at a time would cost more than this ADA pays for, so it mixes three at a time.",
+  "lj.width.warn.long": "Four boxes at a time would make this chain longer than the wallet sends at once, so it mixes three at a time.",
+  "lj.width.warn.refused": "Four boxes at a time couldn't be built this time, so it mixes three at a time.",
+  "lj.width.warn.short": "Lovejoin's pool hasn't enough boxes free to mix four at a time, so this mixes three at a time."
 }

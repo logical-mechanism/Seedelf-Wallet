@@ -84,6 +84,13 @@ export type Currency = (typeof CURRENCIES)[number] | "off";
 export const LOVEJOIN_DEPTHS = [1, 2, 3] as const;
 export type LovejoinDepth = (typeof LOVEJOIN_DEPTHS)[number];
 
+/**
+ * How many boxes each Lovejoin mix takes (chunk 34's D3): three, or four, which fits a transaction by about 1% and
+ * costs more, for more cover (docs/lovejoin-mix-width.md). Where four can't be built, the wallet goes three.
+ */
+export const LOVEJOIN_WIDTHS = [3, 4] as const;
+export type LovejoinWidth = (typeof LOVEJOIN_WIDTHS)[number];
+
 /** How long, in hours, a box waits in Lovejoin's pool before it comes back: a random time in the range. */
 export const LOVEJOIN_DELAYS = ["1-6", "2-12", "6-24"] as const;
 export type LovejoinDelay = (typeof LOVEJOIN_DELAYS)[number];
@@ -133,6 +140,8 @@ export interface Preferences {
   lovejoinDepth: LovejoinDepth;
   /** Lovejoin: the range each box's wait is drawn from. */
   lovejoinDelay: LovejoinDelay;
+  /** Lovejoin: how many boxes each mix takes, three by default (chunk 34's D3). */
+  lovejoinWidth: LovejoinWidth;
   /**
    * Read and send everything through Koios, never Seedelf Wallet's own data
    * layer (chunk 26b). Off by default: where the build has a data layer
@@ -154,11 +163,15 @@ export const DEFAULT_PREFERENCES: Preferences = {
   lovejoinReturns: true,
   lovejoinDepth: 2,
   lovejoinDelay: "1-6",
+  lovejoinWidth: 3,
   koiosOnly: false,
 };
 
 export const isLovejoinDepth = (value: unknown): value is LovejoinDepth =>
   (LOVEJOIN_DEPTHS as readonly unknown[]).includes(value);
+
+export const isLovejoinWidth = (value: unknown): value is LovejoinWidth =>
+  (LOVEJOIN_WIDTHS as readonly unknown[]).includes(value);
 
 export const isLovejoinDelay = (value: unknown): value is LovejoinDelay =>
   (LOVEJOIN_DELAYS as readonly unknown[]).includes(value);

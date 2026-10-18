@@ -824,6 +824,7 @@ describe("spending rewards", () => {
       lovejoinReturns: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
+      lovejoinWidth: 3,
       koiosOnly: false,
     });
     await t.wallet.reset();
