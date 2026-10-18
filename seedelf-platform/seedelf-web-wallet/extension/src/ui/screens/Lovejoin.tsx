@@ -94,11 +94,12 @@ import { SwapTag, type SwapTone } from "./Swaps";
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
 const MAX_BOXES = 10;
 /**
- * The most boxes one seed puts in (the worker's MAX_DEPOSIT_BOXES): a seed is
- * a single deposit with no mixes, so the transaction's size is the only limit,
- * not the handful of boxes a chain of mixes can send.
+ * The most boxes one Bootstrap of the classic pool puts in (the worker's
+ * MAX_DEPOSIT_BOXES): a Bootstrap is a single deposit with no mixes, so the
+ * transaction's size is the only limit, not the handful of boxes a chain of
+ * mixes can send.
  */
-const MAX_SEED_BOXES = 96;
+const MAX_BOOTSTRAP_BOXES = 96;
 /** A running mix's page asks the worker to move it on this often. */
 const ADVANCE_EVERY_MS = 20_000;
 /** And reads its chains' rows again this often while one is being sent: from the device, no Koios request. */
@@ -532,6 +533,49 @@ export function NotMixed({
 }
 
 /**
+ * The wallet's boxes a Bootstrap holds in the pool (chunk 34's session 1, 6): they stay there for other people to mix
+ * with, and never come back by themselves. Bring one back takes one by hand, after its own question (what a box
+ * nobody has mixed shows); Bring them all back lets them come back by themselves, one at a time. How many is hidden
+ * with the balances, as every count of boxes is (privacy review §2.16).
+ */
+export function BootstrapHeld({
+  count,
+  busy,
+  mixingAgain = false,
+  pressed,
+  onOne,
+  onAll,
+}: {
+  count: number;
+  busy: boolean;
+  mixingAgain?: boolean;
+  pressed?: string;
+  onOne: () => void;
+  onAll: () => void;
+}) {
+  const amounts = useAmounts();
+  const tr = useT();
+  if (!count) return null;
+  return (
+    <Callout tone="info" testId="lovejoin-held">
+      <div className="stack-tight">
+        <span>{tr("lovejoin.bootstrap.held", { count: amounts.hidden ? 2 : count, boxes: amounts.count(count, "amount.boxes") })}</span>
+        <span>
+          <button type="button" className="link" disabled={busy || mixingAgain} onClick={onOne} data-testid="lovejoin-held-one">
+            {pressed === "held" ? tr("lovejoin.working") : tr("lovejoin.bootstrap.bringOne")}
+          </button>
+          {" "}
+          <button type="button" className="link" disabled={busy} onClick={onAll} data-testid="lovejoin-held-all">
+            {pressed === "release" ? tr("lovejoin.working") : tr("lovejoin.bootstrap.bringAll")}
+          </button>
+        </span>
+        <span className="note">{tr("lovejoin.bootstrap.allNote")}</span>
+      </div>
+    </Callout>
+  );
+}
+
+/**
  * The wallet's boxes in the pool that a mix from a public account put in (privacy review §2.10), by
  * `txHash#txIndex`: every account's (`all`), which the private balance leaves out; the active account's (`mine`),
  * which Mix again from my public account takes; and the other accounts (`accounts`, by index), each the one to
@@ -583,26 +627,28 @@ export function Lovejoin({
   // close it (1.3.0's release review, C28).
   const [opened, setOpened] = useState<{ txHash: string; i: number }>();
   const [mixes, setMixes] = useState<SessionView[]>([]);
-  // Asked first: bringing back a box not mixed yet, stopping a mix, or mixing a public mix's boxes again from the private balance.
-  const [asking, setAsking] = useState<{ anyway: true } | { stop: number } | { privateAnyway: true }>();
+  // Asked first: bringing back a box not mixed yet, stopping a mix, mixing a public mix's boxes again from the private
+  // balance, or bringing back a box a Bootstrap holds.
+  const [asking, setAsking] = useState<{ anyway: true } | { stop: number } | { privateAnyway: true } | { held: true }>();
   const [reading, setReading] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [busy, setBusy] = useState(false);
   /** Which of the page's buttons is working. */
-  const [pressed, setPressed] = useState<"now" | "again" | "again-public" | "anyway">();
+  const [pressed, setPressed] = useState<"now" | "again" | "again-public" | "anyway" | "held" | "release">();
   const [error, setError] = useState<string>();
   const [source, setSource] = useState<Source>("private");
   const [boxes, setBoxes] = useState(1);
-  /** How many a seed puts in, its own count: typed, so 30 isn't 30 presses. */
-  const [seedBoxes, setSeedBoxes] = useState<number>();
+  /** How many a Bootstrap puts in, its own count: typed, so 30 isn't 30 presses. */
+  const [bootstrapBoxes, setBootstrapBoxes] = useState<number>();
   const [funding, setFunding] = useState<LovejoinFunding>();
   const [review, setReview] = useState<Review>();
   // A refused mix's funding: built again, or watched where it may have gone out (chunk 23's second review, DX-1).
   const [refusal, setRefusal] = useState<Refusal>();
   // The last pool read failed: what the page showed from before isn't the pool now (LJ-5).
   const [readFailed, setReadFailed] = useState(false);
-  // Seeding, behind its own link under Mix: it gives the seeder nothing (LJ-6).
-  const [seedOpen, setSeedOpen] = useState(false);
+  // Bootstrapping, behind its own link under Mix: it gives whoever puts it in nothing (LJ-6; chunk 34: it replaces
+  // the seed).
+  const [bootstrapOpen, setBootstrapOpen] = useState(false);
   // The public account's collateral, which a mix from it puts up, and its page, opened here while it isn't set.
   const [collateral, setCollateral] = useState<CollateralStatus>();
   const [collateralOpen, setCollateralOpen] = useState(false);
@@ -733,7 +779,7 @@ export function Lovejoin({
     if (most >= 1 && boxes > most) setBoxes(most);
   }, [most, boxes]);
 
-  async function act(task: () => Promise<void>, button?: "now" | "again" | "again-public" | "anyway") {
+  async function act(task: () => Promise<void>, button?: "now" | "again" | "again-public" | "anyway" | "held" | "release") {
     setBusy(true);
     setPressed(button);
     setError(undefined);
@@ -764,6 +810,27 @@ export function Lovejoin({
       await load();
     }, "anyway");
   };
+
+  /**
+   * Brings back one box a Bootstrap holds (chunk 34's session 1, 6): one someone else's mix has moved since it went
+   * in, when there's one, as status lists those after the boxes still where the deposit put them.
+   */
+  const bringHeld = () => {
+    const box = status?.bootstrap?.at(-1);
+    setAsking(undefined);
+    if (!box) return;
+    void act(async () => {
+      onPending(await call("lovejoin-withdraw-now", { box }));
+      await load();
+    }, "held");
+  };
+
+  /** Bring them all back: the Bootstraps' boxes come back by themselves from here, one at a time (round three, 24). */
+  const releaseHeld = () =>
+    act(async () => {
+      await call("lovejoin-bootstrap-release", {});
+      await load();
+    }, "release");
 
   /** Stops a mix before its boxes go in: everything at its account comes back directly. */
   const stop = (index: number) => {
@@ -797,20 +864,20 @@ export function Lovejoin({
       setMixes((was) => was.map((m) => (m.index === index ? moved : m)));
     });
 
-  /** A seed puts boxes in with no mixes, from either side. */
-  const seeds = (r: Review) => !!(r.source === "private" ? r.summary.mix.seed : r.summary.seed);
+  /** A Bootstrap puts boxes in with no mixes, from either side (chunk 34: it replaces the seed). */
+  const bootstraps = (r: Review) => !!(r.source === "private" ? r.summary.mix.bootstrap : r.summary.bootstrap);
   const reviewTitle = (r: Review) => {
-    if (seeds(r)) return tr("lovejoin.review.seed");
+    if (bootstraps(r)) return tr("lovejoin.review.bootstrap");
     return tr((r.source === "private" ? r.summary.mix.again : r.summary.again) ? "lovejoin.review.again" : "lovejoin.review.mix");
   };
   // How the reviewed mix runs once sent, behind the icon by the title (chunk 23): what it costs, hides and
   // ties stays in the review's rows and callouts.
   const howItRuns = (r: Review) => {
-    // A seed has its own note on either side: nothing is mixed, and its boxes come back as a mix's do (the owner, 2026-10-06).
-    if (seeds(r)) return tr("lovejoin.review.seedNote");
+    // A Bootstrap has its own note on either side: nothing is mixed, and its boxes stay until brought back by hand.
+    if (bootstraps(r)) return tr("lovejoin.review.bootstrapNote");
     if (r.source === "private") return tr(r.summary.mix.again ? "lovejoin.review.againNote" : "lovejoin.review.privateNote");
     if (r.summary.again) return tr("lovejoin.review.publicAgainNote");
-    return tr(r.summary.seed ? "lovejoin.review.seedNote" : "lovejoin.review.publicNote");
+    return tr("lovejoin.review.publicNote");
   };
 
   const build = () =>
@@ -820,22 +887,20 @@ export function Lovejoin({
     });
 
   /**
-   * Puts boxes in with no mixes, from the public account. A mix needs two
-   * other people's boxes for each of its own, and the wallet's own never
-   * count towards the floor, so an empty pool can only be started by someone
-   * depositing into it for nothing.
+   * Bootstraps from whichever side is chosen, as a mix does: boxes in with no
+   * mixes, held in the pool until brought back by hand. A mix needs two other
+   * people's boxes for each of its own, and the wallet's own never count
+   * towards the floor, so an empty pool can only be started by someone
+   * depositing into it for nothing. From the public account it's one deposit,
+   * which spends no script and so needs no collateral; from the private
+   * balance it's a one-time account funded by a Seedelf spend, which puts up
+   * giveme.my's collateral as every Seedelf spend does, and deposits from
+   * there.
    */
-  /**
-   * Seeds from whichever side is chosen, as a mix does. From the public
-   * account it's one deposit, which spends no script and so needs no
-   * collateral; from the private balance it's a one-time account funded by a
-   * Seedelf spend, which puts up giveme.my's collateral as every Seedelf
-   * spend does, and deposits from there.
-   */
-  const seed = () =>
+  const bootstrap = () =>
     act(async () => {
-      if (source === "private") await privateReview(() => call("lovejoin-mix-private-build", { boxes: seeding, seed: true }));
-      else setReview({ source, summary: await call("lovejoin-mix-public-build", { boxes: seeding, seed: true }) });
+      if (source === "private") await privateReview(() => call("lovejoin-mix-private-build", { boxes: putting, bootstrap: true }));
+      else setReview({ source, summary: await call("lovejoin-mix-public-build", { boxes: putting, bootstrap: true }) });
     });
 
   const send = async () => {
@@ -904,7 +969,7 @@ export function Lovejoin({
   }
 
   if (review) {
-    const isSeed = seeds(review);
+    const isBootstrap = bootstraps(review);
     return (
       <Screen
         title={reviewTitle(review)}
@@ -914,7 +979,7 @@ export function Lovejoin({
         hintTestId="lovejoin-review-note"
         onBack={leaveReview}
         backDisabled={busy}
-        aside={tr(isSeed ? "lovejoin.review.nothingSentSeed" : "lovejoin.review.nothingSent")}
+        aside={tr(isBootstrap ? "lovejoin.review.nothingSentBootstrap" : "lovejoin.review.nothingSent")}
         error={error}
         foot={
           refusal ? (
@@ -930,7 +995,7 @@ export function Lovejoin({
           ) : (
             <button type="button" className="primary" disabled={busy} onClick={() => void send()} data-testid="lovejoin-send">
               {!busy
-                ? tr(isSeed ? "lovejoin.review.seedStart" : "lovejoin.review.start")
+                ? tr(isBootstrap ? "lovejoin.review.bootstrapStart" : "lovejoin.review.start")
                 : sending
                   ? tr("lovejoin.sendingOf", { sent: sending.sent, total: sending.total })
                   : tr("common.sending")}
@@ -984,14 +1049,17 @@ export function Lovejoin({
   const shown = [...mixes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   // The public mix being sent shows its own progress below: the list takes the others.
   const chains = rows.filter((c) => !(sending && c.session === undefined));
-  // The pool can't be mixed in yet: seeding is the only thing that starts one.
+  // The pool can't be mixed in yet: a Bootstrap is the only thing that starts one. It's offered whatever the pool
+  // holds (chunk 34's D2: "Bootstrap a pool, any time"), the floor's warning only while it's short.
   const short = !!status?.available && status.others < status.floor;
-  // What it still needs, which is what a seed defaults to: one transaction's
+  // What it still needs, which is what a Bootstrap defaults to: one transaction's
   // worth at most, and the user can type any of it.
-  const needed = short ? Math.min(status!.floor - status!.others, MAX_SEED_BOXES) : 0;
-  const seeding = Math.min(Math.max(seedBoxes ?? needed, 1), MAX_SEED_BOXES);
-  // Seeding from the private balance: the boxes, the collateral and the fee are more than it holds.
-  const seedShort = source === "private" && BigInt(seeding) * BOX + COLLATERAL + FEE_ROOM > BigInt(seedelf.lovelace);
+  const needed = short ? Math.min(status!.floor - status!.others, MAX_BOOTSTRAP_BOXES) : 1;
+  const putting = Math.min(Math.max(bootstrapBoxes ?? needed, 1), MAX_BOOTSTRAP_BOXES);
+  // Bootstrapping from the private balance: the boxes, the collateral and the fee are more than it holds.
+  const bootstrapShort = source === "private" && BigInt(putting) * BOX + COLLATERAL + FEE_ROOM > BigInt(seedelf.lovelace);
+  // The wallet's boxes a Bootstrap holds in the classic pool: they never come back by themselves (chunk 34).
+  const held = status?.bootstrap?.length ?? 0;
   // A box's share of the funding (its 10 ₳ and its mixes), and the first box's, which carries the rest (LJ-3).
   const perBox = funding ? BOX + BigInt(funding.mixFees) / BigInt(funding.boxes) : 0n;
   const firstBox = funding ? BigInt(funding.lovelace) - perBox * BigInt(funding.boxes - 1) : 0n;
@@ -1085,6 +1153,14 @@ export function Lovejoin({
         deposits={status?.deposits?.length ?? 0}
         busy={busy || mixingAgain}
         onAnyway={() => setAsking({ anyway: true })}
+      />
+      <BootstrapHeld
+        count={held}
+        busy={busy}
+        mixingAgain={mixingAgain}
+        pressed={pressed}
+        onOne={() => setAsking({ held: true })}
+        onAll={() => void releaseHeld()}
       />
       {owned > 0 && (
         <div className="stack">
@@ -1324,66 +1400,69 @@ export function Lovejoin({
           )}
         </section>
       )}
-      {/* Seeding, under Mix and behind its own link: it starts a pool, and gives the seeder nothing (LJ-6). */}
-      {short && !seedOpen && (
+      {/* Bootstrapping, under Mix and behind its own link: it starts or helps a pool, and gives whoever puts it in
+          nothing (LJ-6). Offered whatever the pool holds (chunk 34's D2); its floor's warning while it's short. */}
+      {status?.available && !bootstrapOpen && (
         <div className="stack-tight">
-          <button type="button" className="link align-start" onClick={() => setSeedOpen(true)} data-testid="lovejoin-seed-open">
-            {tr("lovejoin.seed.open")}
+          <button type="button" className="link align-start" onClick={() => setBootstrapOpen(true)} data-testid="lovejoin-bootstrap-open">
+            {tr("lovejoin.bootstrap.open")}
           </button>
-          <p className="note" data-testid="lovejoin-seed-short">
-            {tr("lovejoin.seed.privacy.short")}
+          <p className="note" data-testid="lovejoin-bootstrap-short">
+            {tr("lovejoin.bootstrap.privacy.short")}
           </p>
         </div>
       )}
-      {short && seedOpen && (
-        <div className="stack" data-testid="lovejoin-seed-offer">
-          <Callout tone="warn">
-            {tr("lovejoin.seed.warn.floor", { count: status!.others, floor: status!.floor })}
-          </Callout>
+      {status?.available && bootstrapOpen && (
+        <div className="stack" data-testid="lovejoin-bootstrap-offer">
+          {short && (
+            <Callout tone="warn">
+              {tr("lovejoin.bootstrap.warn.floor", { count: status.others, floor: status.floor })}
+            </Callout>
+          )}
           <Callout tone="privacy">
             {joinSentences([
-              tr("lovejoin.seed.privacy.hidesNothing"),
-              tr(source === "private" ? "lovejoin.seed.privacy.fromPrivate" : "lovejoin.seed.privacy.fromPublic"),
+              tr("lovejoin.bootstrap.privacy.hidesNothing"),
+              tr(source === "private" ? "lovejoin.bootstrap.privacy.fromPrivate" : "lovejoin.bootstrap.privacy.fromPublic"),
             ])}
           </Callout>
           <div className="field">
-            <label htmlFor="lovejoin-seed-boxes">{tr("lovejoin.seed.boxesLabel")}</label>
+            <label htmlFor="lovejoin-bootstrap-boxes">{tr("lovejoin.bootstrap.boxesLabel")}</label>
             <input
-              id="lovejoin-seed-boxes"
+              id="lovejoin-bootstrap-boxes"
               type="number"
               min={1}
-              max={MAX_SEED_BOXES}
+              max={MAX_BOOTSTRAP_BOXES}
               step={1}
               inputMode="numeric"
-              value={seedBoxes ?? needed}
+              value={bootstrapBoxes ?? needed}
               disabled={busy}
-              onChange={(e) => setSeedBoxes(e.target.value === "" ? undefined : Math.floor(Number(e.target.value)))}
-              data-testid="lovejoin-seed-boxes"
+              onChange={(e) => setBootstrapBoxes(e.target.value === "" ? undefined : Math.floor(Number(e.target.value)))}
+              data-testid="lovejoin-bootstrap-boxes"
             />
-            <p className="note" data-testid="lovejoin-seed-cost">
+            <p className="note" data-testid="lovejoin-bootstrap-cost">
               {joinSentences([
-                tr(source === "private" ? "lovejoin.seed.costPrivate" : "lovejoin.seed.costPublic", {
-                  count: seeding,
-                  ada: formatAda((BigInt(seeding) * BOX).toString()),
+                tr(source === "private" ? "lovejoin.bootstrap.costPrivate" : "lovejoin.bootstrap.costPublic", {
+                  count: putting,
+                  ada: formatAda((BigInt(putting) * BOX).toString()),
                 }),
-                tr("lovejoin.seed.needs", { count: needed }),
-                tr("lovejoin.seed.atMost", { most: MAX_SEED_BOXES }),
+                short && tr("lovejoin.bootstrap.needs", { count: needed }),
+                tr("lovejoin.bootstrap.atMost", { most: MAX_BOOTSTRAP_BOXES }),
               ])}
             </p>
           </div>
           <button
             type="button"
             className="secondary"
-            disabled={busy || seedShort}
-            onClick={() => void seed()}
-            data-testid="lovejoin-seed"
+            disabled={busy || bootstrapShort}
+            onClick={() => void bootstrap()}
+            data-testid="lovejoin-bootstrap"
           >
-            {tr("lovejoin.seed.button", { count: seeding })}
+            {tr("lovejoin.bootstrap.button", { count: putting })}
           </button>
           {/* From the private balance, the obvious shortfall is said here, in its words, before a build (LJ-6). */}
-          {seedShort && (
-            <p className="field-note" data-testid="lovejoin-seed-why">
-              {tr("lovejoin.seed.cantAfford", { held: amounts.ada(seedelf.lovelace) })}
+          {bootstrapShort && (
+            <p className="field-note" data-testid="lovejoin-bootstrap-why">
+              {tr("lovejoin.bootstrap.cantAfford", { held: amounts.ada(seedelf.lovelace) })}
             </p>
           )}
         </div>
@@ -1479,6 +1558,26 @@ export function Lovejoin({
           <p className="note">{tr("lovejoin.privateAnyway.privacy.ties")}</p>
         </Modal>
       )}
+      {/* Bringing back a Bootstrap's box: what one nobody has mixed shows, said first (chunk 34's 34a′, for 34d). */}
+      {asking && "held" in asking && (
+        <Modal
+          title={tr("lovejoin.bootstrap.oneTitle")}
+          titleId="lovejoin-held-title"
+          onClose={() => setAsking(undefined)}
+          foot={
+            <>
+              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
+                {tr("lovejoin.bootstrap.keep")}
+              </button>
+              <button type="button" className="primary" onClick={bringHeld} data-testid="lovejoin-held-confirm">
+                {tr("lovejoin.bootstrap.bringOne")}
+              </button>
+            </>
+          }
+        >
+          <p className="note">{tr("lovejoin.bootstrap.privacy.one")}</p>
+        </Modal>
+      )}
       {asking && "stop" in asking && (
         <Modal
           title={tr("lovejoin.stop.title")}
@@ -1557,17 +1656,21 @@ export function PrivateReview({ summary, before }: { summary: SessionOutSummary 
         <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: mix.boxes })} strong />
         <Row
           label={tr("lovejoin.mixedLabel")}
-          value={mix.seed ? tr("lovejoin.review.notAtAll") : tr("lovejoin.review.depthMixesCost", {
+          value={mix.bootstrap ? tr("lovejoin.review.notAtAll") : tr("lovejoin.review.depthMixesCost", {
             count: mix.depth,
             mixes: tr("amount.mixes", { count: mix.mixes }),
             ada: formatAda(mix.mixFees),
           })}
         />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })} stack />
+        <Row
+          label={tr("lovejoin.backLater")}
+          value={mix.bootstrap ? tr("lovejoin.review.bootstrapBack") : tr("lovejoin.eachBoxAfter", { delay: delayText(mix.delay) })}
+          stack
+        />
       </ReviewRows>
-      {mix.seed ? (
-        <Callout tone="warn" testId="lovejoin-seed-warning">
-          {tr("lovejoin.seed.privacy.hidesNothing")}
+      {mix.bootstrap ? (
+        <Callout tone="warn" testId="lovejoin-bootstrap-warning">
+          {tr("lovejoin.bootstrap.privacy.hidesNothing")}
         </Callout>
       ) : (
         <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth)])}</Callout>
@@ -1644,7 +1747,7 @@ const publicLeaving = (summary: LovejoinPublicSummary) => (summary.again ? 0n : 
 export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
   const tr = useT();
   if (summary.again) return <PublicAgainReview summary={summary} />;
-  if (summary.seed) return <PublicSeedReview summary={summary} />;
+  if (summary.bootstrap) return <PublicBootstrapReview summary={summary} />;
   return (
     <>
       <ReviewRows testId="lovejoin-public-review">
@@ -1664,23 +1767,24 @@ export function PublicReview({ summary }: { summary: LovejoinPublicSummary }) {
 }
 
 /**
- * Seed the pool: the deposit alone, no mixes. It buys the seeder nothing, so
- * the review says that plainly rather than borrowing the mix's words.
+ * Bootstrap the pool: the deposit alone, no mixes, its boxes held there until
+ * brought back by hand. It buys whoever puts it in nothing, so the review
+ * says that plainly rather than borrowing the mix's words.
  */
-function PublicSeedReview({ summary }: { summary: LovejoinPublicSummary }) {
+function PublicBootstrapReview({ summary }: { summary: LovejoinPublicSummary }) {
   const tr = useT();
   return (
     <>
-      <ReviewRows testId="lovejoin-seed-review">
+      <ReviewRows testId="lovejoin-bootstrap-review">
         <Row label={tr("lovejoin.review.intoLovejoin")} value={tr("lovejoin.boxesOfTen", { count: summary.boxes })} strong />
         <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.review.notAtAll")} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
         <TotalRows side="public" leaving={publicLeaving(summary)} />
-        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
+        <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.bootstrapBack")} stack />
       </ReviewRows>
-      <Callout tone="warn" testId="lovejoin-seed-warning">
-        {tr("lovejoin.review.warn.seed")}
+      <Callout tone="warn" testId="lovejoin-bootstrap-warning">
+        {tr("lovejoin.review.warn.bootstrap")}
       </Callout>
     </>
   );

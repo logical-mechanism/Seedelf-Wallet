@@ -378,7 +378,7 @@ pub fn verify_pool(
 
 /// The pool a verified reference UTxO describes, with its scripts read from
 /// `script_refs` at the holder where they are.
-fn pool_of(
+pub(crate) fn pool_of(
     network_flag: bool,
     reference: &Resolved,
     seed: ([u8; 32], u64),
@@ -501,11 +501,34 @@ pub fn usable(
     pool: &Protocol,
     registered: bool,
 ) -> Result<Usable, Unusable> {
-    use blstrs::{G1Projective, Scalar};
-    use group::Group;
     if !registered {
         return Err(Unusable::NotRegistered);
     }
+    measured(params, pool, true)
+}
+
+/// Whether a box of `pool`'s already there can pay its own way back into a
+/// Seedelf under `params`, whatever a new box's minimum is now: the escape
+/// hatch's question (chunk 34's §2). A box below today's minimum can't be
+/// made by a mix, but one made before still comes back if its withdraw pays,
+/// so only [`Unusable::CantComeBack`] (or a check that couldn't be built)
+/// says no.
+pub fn comes_back(
+    params: &seedelf_koios::koios::ProtocolParameters,
+    pool: &Protocol,
+) -> Result<Usable, Unusable> {
+    measured(params, pool, false)
+}
+
+/// [`usable`]'s measure: a box's minimum, refused below it when `minimum`,
+/// and a withdraw of one built and measured.
+fn measured(
+    params: &seedelf_koios::koios::ProtocolParameters,
+    pool: &Protocol,
+    minimum: bool,
+) -> Result<Usable, Unusable> {
+    use blstrs::{G1Projective, Scalar};
+    use group::Group;
     let unchecked = |e: anyhow::Error| Unusable::Unchecked(e.to_string());
     let sk = super::nonzero_scalar();
     let a = G1Projective::generator() * super::nonzero_scalar();
@@ -520,7 +543,7 @@ pub fn usable(
         .set_inline_datum(super::mix_datum(&a, &b));
     let box_minimum = crate::transaction::calculate_min_required_utxo(output.clone(), params)
         .map_err(unchecked)?;
-    if pool.denom < box_minimum {
+    if minimum && pool.denom < box_minimum {
         return Err(Unusable::BelowMinimum {
             has: pool.denom,
             needs: box_minimum,

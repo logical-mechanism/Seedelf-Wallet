@@ -85,11 +85,11 @@ fn owned(w: &World, tx: u8, lovelace: u64, token: Option<(&str, u64)>) -> UtxoRe
 
 fn terms() -> Terms {
     Terms {
-        token: BoxToken {
+        token: Some(BoxToken {
             policy: [0x1a; 28],
             name: b"NIGHT".to_vec(),
             quantity: 100_000_000,
-        },
+        }),
         box_lovelace: 4_500_000,
         max_fee: 1_500_000,
     }
@@ -128,7 +128,7 @@ fn a_launch_makes_a_pool_the_wallet_trusts() {
         assert_eq!(pool.id, derived.policy());
         assert_eq!(pool.mix_logic_hash, derived.mix_logic.hash);
         assert_eq!(pool.denom, 4_500_000);
-        assert_eq!(pool.token, Some(terms().token));
+        assert_eq!(pool.token, terms().token);
         // Both scripts by reference, from the holder, as every later mix reads them.
         assert!(pool.inline_scripts.is_empty());
         assert_eq!(pool.references.len(), 3);
@@ -211,21 +211,22 @@ fn a_launch_refuses_what_isnt_a_pool_to_start() {
         .try_into()
         .unwrap();
     let mut t = terms();
-    t.token.policy = seedelf;
+    t.token.as_mut().unwrap().policy = seedelf;
     assert!(refused(t).contains("identifier"));
     // Terms one_shot_mint would refuse.
     let mut t = terms();
     t.max_fee = t.box_lovelace;
     assert!(refused(t).contains("one_shot_mint"));
     let mut t = terms();
-    t.token.name = vec![0; 33];
+    t.token.as_mut().unwrap().name = vec![0; 33];
     assert!(refused(t).contains("one_shot_mint"));
     // A box too small to come back.
     let mut t = terms();
     t.box_lovelace = 1_700_000;
     t.max_fee = 1_000_000;
-    t.token.name = vec![0xee; 32];
-    t.token.quantity = u64::MAX;
+    let token = t.token.as_mut().unwrap();
+    token.name = vec![0xee; 32];
+    token.quantity = u64::MAX;
     let why = refused(t);
     assert!(why.contains("couldn't be used"), "{why}");
     // Inputs holding tokens.
@@ -285,4 +286,199 @@ fn a_launched_pools_change_goes_back_to_the_seedelf() {
             .count(),
         3
     );
+}
+
+/// An ADA pool's terms: no token, every box `lovelace` of ADA.
+fn ada_terms(lovelace: u64) -> Terms {
+    Terms {
+        token: None,
+        box_lovelace: lovelace,
+        max_fee: 1_500_000,
+    }
+}
+
+#[test]
+fn an_ada_pool_launches_at_any_amount_but_the_classic_pools() {
+    for network_flag in [true, false] {
+        let w = world(network_flag);
+        let inputs = vec![owned(&w, 0x41, 40_000_000, None)];
+        let launch = lovejoin::launch(
+            &w.chain,
+            &inputs,
+            &ada_terms(25_000_000),
+            true,
+            &w.owner,
+            w.signer,
+        )
+        .unwrap();
+        let done = finished(&w, &launch);
+        let pool = lovejoin::launched_pool(network_flag, &done.tx.tx_bytes.0, launch.seed).unwrap();
+        assert_eq!(pool.version, Version::TokenV1);
+        assert_eq!(pool.denom, 25_000_000);
+        assert_eq!(pool.token, None);
+        assert!(pool.inline_scripts.is_empty());
+        // The classic pool's 10 ₳ would be a copy of its value: refused before anything is built.
+        let why = lovejoin::launch(
+            &w.chain,
+            &inputs,
+            &ada_terms(10_000_000),
+            true,
+            &w.owner,
+            w.signer,
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(why.contains("copy of the classic pool"), "{why}");
+    }
+}
+
+/// A UTxO at the public account's base address, under payment key `key`.
+fn account_row(
+    network_flag: bool,
+    key: [u8; 28],
+    tx: u8,
+    lovelace: u64,
+    token: Option<(&str, u64)>,
+) -> UtxoResponse {
+    let mut bytes = vec![if network_flag { 0x00 } else { 0x01 }];
+    bytes.extend(key);
+    bytes.extend([0x5a; 28]);
+    let address = Address::from_bytes(&bytes).unwrap();
+    let assets: Vec<Value> = token
+        .map(|(policy, q)| {
+            json!({ "policy_id": policy, "asset_name": hex::encode("tok"),
+                    "quantity": q.to_string(), "decimals": 0, "fingerprint": "" })
+        })
+        .into_iter()
+        .collect();
+    serde_json::from_value(json!({
+        "tx_hash": hex::encode([tx; 32]), "tx_index": 0,
+        "address": address.to_bech32().unwrap(), "value": lovelace.to_string(),
+        "stake_address": null, "payment_cred": hex::encode(key),
+        "epoch_no": 0, "block_height": 0, "block_time": 0, "datum_hash": null,
+        "inline_datum": null, "reference_script": null, "asset_list": assets, "is_spent": false,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn the_public_account_launches_a_pool_the_wallet_trusts() {
+    for network_flag in [true, false] {
+        let w = world(network_flag);
+        let change: Address = account_row(network_flag, [0x0a; 28], 0, 1, None)
+            .address
+            .parse::<String>()
+            .map(|a| Address::from_bech32(&a).unwrap())
+            .unwrap();
+        let available = vec![
+            account_row(network_flag, [0x0a; 28], 0x51, 18_000_000, None),
+            account_row(network_flag, [0x0b; 28], 0x52, 14_000_000, None),
+            account_row(
+                network_flag,
+                [0x0a; 28],
+                0x53,
+                3_000_000,
+                Some((
+                    "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+                    7,
+                )),
+            ),
+        ];
+        let collateral = account_row(network_flag, [0x0a; 28], 0x5c, 5_000_000, None);
+        let launch = lovejoin::launch_from_account(
+            &w.chain,
+            &available,
+            Some(&collateral),
+            &terms(),
+            true,
+            &change,
+            Some(123_456_789),
+        )
+        .unwrap();
+        // The largest pure ADA UTxO first, and it's the seed; as few as pay.
+        assert_eq!(launch.seed, ([0x51; 32], 0));
+        assert_eq!(launch.inputs().len(), 2);
+        assert_eq!(launch.collateral().tx_hash, collateral.tx_hash);
+        let done = launch.measure_locally().unwrap();
+        let tx = &done.tx.tx_bytes.0;
+        assert!((tx.len() as u64) < MAX_TX_SIZE);
+        let pool = lovejoin::launched_pool(network_flag, tx, launch.seed).unwrap();
+        assert_eq!(pool.id, launch.derived.policy());
+        assert_eq!(pool.token, terms().token);
+        assert!(pool.inline_scripts.is_empty());
+
+        let decoded = MultiEraTx::decode(tx).unwrap();
+        let conway = decoded.as_conway().unwrap();
+        assert_eq!(
+            conway
+                .transaction_body
+                .certificates
+                .clone()
+                .unwrap()
+                .to_vec(),
+            vec![Certificate::StakeRegistration(StakeCredential::ScriptHash(
+                Hash::new(launch.derived.mix_logic.hash)
+            ))]
+        );
+        assert_eq!(conway.transaction_body.ttl, Some(123_456_789));
+        // The holder's three first, in order, then the change, at the account.
+        let holder = lovejoin::holder_address(network_flag);
+        let outputs = decoded.outputs();
+        assert!(outputs[..3].iter().all(|o| o.address().unwrap() == holder));
+        assert!(outputs[3..].iter().all(|o| o.address().unwrap() == change));
+        assert_eq!(outputs.len(), 4);
+        // What goes in comes out, but the fee and the deposit.
+        let out: u64 = outputs.iter().map(|o| o.value().coin()).sum();
+        assert_eq!(
+            32_000_000,
+            out + done.fee.total + w.chain.params.key_deposit
+        );
+        assert_eq!(done.change_lovelace, outputs[3].value().coin());
+        assert!(done.change_tokens.is_empty());
+        // The one-shot mint is the only script carried, and the collateral is the one set aside.
+        assert_eq!(decoded.plutus_v3_scripts().len(), 1);
+        assert_eq!(decoded.collateral().len(), 1);
+    }
+}
+
+#[test]
+fn an_account_launch_takes_tokens_only_when_ada_alone_doesnt_pay() {
+    let w = world(true);
+    let change = Address::from_bech32(&account_row(true, [0x0a; 28], 0, 1, None).address).unwrap();
+    let token = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
+    let available = vec![
+        account_row(true, [0x0a; 28], 0x61, 20_000_000, None),
+        account_row(true, [0x0a; 28], 0x62, 9_000_000, Some((token, 7))),
+    ];
+    let launch = lovejoin::launch_from_account(
+        &w.chain,
+        &available,
+        None,
+        &ada_terms(25_000_000),
+        true,
+        &change,
+        None,
+    )
+    .unwrap();
+    assert_eq!(launch.inputs().len(), 2);
+    let done = launch.measure_locally().unwrap();
+    // The token comes back to the account with the change.
+    assert_eq!(done.change_tokens.items.len(), 1);
+    assert!(lovejoin::launched_pool(true, &done.tx.tx_bytes.0, launch.seed).is_ok());
+    // Too little altogether: said in words.
+    let poor = vec![account_row(true, [0x0a; 28], 0x63, 15_000_000, None)];
+    let why = lovejoin::launch_from_account(
+        &w.chain,
+        &poor,
+        None,
+        &ada_terms(25_000_000),
+        true,
+        &change,
+        None,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(why.contains("public account"), "{why}");
 }

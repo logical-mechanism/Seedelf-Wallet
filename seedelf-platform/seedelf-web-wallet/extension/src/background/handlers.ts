@@ -20,7 +20,8 @@ import type { PendingService } from "./pending";
 import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
-import type { LovejoinService } from "./lovejoin";
+import { CLASSIC, type LovejoinService } from "./lovejoin";
+import type { LovejoinLaunchService } from "./lovejoin-launch";
 import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
 import type { Area } from "./storage";
@@ -54,6 +55,8 @@ export interface Context {
   sessions: SessionService;
   /** Lovejoin, the mixer: a session's spare ADA on its way back, and the boxes' withdraws (lovejoin.ts). */
   lovejoin: LovejoinService;
+  /** Starting a Lovejoin pool, from either side (lovejoin-launch.ts, chunk 34's 34d). */
+  launch: LovejoinLaunchService;
   /** Registers or removes the dApp connector's content scripts (connector.ts). */
   connector: (on: boolean) => Promise<boolean>;
   /** Why the connector can't be turned on, when it can't (storage-access.ts). */
@@ -470,23 +473,33 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-look-for-pools":
       return ctx.lovejoin.lookForPools(ctx.network).then(() => ({}));
     case "lovejoin-funding":
-      return ctx.lovejoin.funding(ctx.network, message.boxes);
+      return ctx.lovejoin.funding(ctx.network, message.boxes, false, undefined, message.pool);
     case "lovejoin-mix-private-build":
-      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, message.seed ?? false);
+      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
     case "lovejoin-again-build":
-      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false);
+      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false, message.pool);
     case "lovejoin-again-public-build":
-      return ctx.lovejoin.publicAgainBuild(ctx.network);
+      return ctx.lovejoin.publicAgainBuild(ctx.network, message.pool);
     case "lovejoin-mix-private-submit":
       return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-build":
-      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, message.seed ?? false);
+      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
     case "lovejoin-mix-public-submit":
       return ctx.lovejoin.publicSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-progress":
       return ctx.lovejoin.progress(ctx.network, message.advance ?? false);
     case "lovejoin-withdraw-now":
-      return ctx.lovejoin.withdrawNow(ctx.network, message.box, message.anyway ?? false);
+      return ctx.lovejoin.withdrawNow(ctx.network, message.box, message.anyway ?? false, message.paid ?? false);
+    case "lovejoin-mixes":
+      return ctx.lovejoin.mixes(ctx.network);
+    case "lovejoin-bootstrap-release":
+      return ctx.lovejoin.releaseBootstrap(ctx.network, message.pool ?? CLASSIC).then(() => ({}));
+    case "lovejoin-launch-terms":
+      return ctx.launch.terms(ctx.network, message.token, message.quantity);
+    case "lovejoin-launch-build":
+      return ctx.launch.build(ctx.network, message);
+    case "lovejoin-launch-submit":
+      return ctx.launch.submit(ctx.network, message.txHash);
   }
 }
 

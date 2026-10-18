@@ -36,7 +36,7 @@ use pallas_txbuilder::BuiltTransaction;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
-use seedelf_core::lovejoin::{self, Coin, PoolBox, PoolShort, Protocol, Version};
+use seedelf_core::lovejoin::{self, Coin, Holding, PoolBox, PoolShort, Protocol, Version};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
@@ -160,6 +160,18 @@ fn token_amount(token: &lovejoin::BoxToken, quantity: u64) -> api::TokenAmount {
         policy_id: hex::encode(token.policy),
         asset_name: hex::encode(&token.name),
         quantity: quantity.to_string(),
+    }
+}
+
+/// Lovelace as ADA for a message: whole when it is ("10"), else with the
+/// decimals it needs ("4.5").
+fn format_ada(lovelace: u64) -> String {
+    let whole = lovelace / 1_000_000;
+    let rest = lovelace % 1_000_000;
+    if rest == 0 {
+        whole.to_string()
+    } else {
+        format!("{whole}.{}", format!("{rest:06}").trim_end_matches('0'))
     }
 }
 
@@ -351,6 +363,11 @@ pub struct UsableRequest {
     /// Whether the pool's `mix_logic` credential is registered (one
     /// `account_info` for every pool).
     pub registered: bool,
+    /// Only whether a box already there can pay its own way back
+    /// (`lovejoin::comes_back`): the escape hatch's question, whatever a new
+    /// box's minimum is now, and whatever the registration.
+    #[serde(default)]
+    pub back_only: bool,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -384,7 +401,12 @@ pub fn usable(request: UsableRequest) -> Result<UsableResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let pool = protocol_of(network_flag, request.pool_ref.as_ref())?;
-    Ok(match lovejoin::usable(&params, &pool, request.registered) {
+    let measured = if request.back_only {
+        lovejoin::comes_back(&params, &pool)
+    } else {
+        lovejoin::usable(&params, &pool, request.registered)
+    };
+    Ok(match measured {
         Ok(u) => UsableResult {
             usable: true,
             box_minimum: Some(u.box_minimum.to_string()),
@@ -420,20 +442,88 @@ struct Holdings {
     address: String,
     /// Its ADA-only UTxOs, the collateral aside, and their rows.
     coins: Vec<(Coin, UtxoResponse)>,
+    /// A token pool's chain: the session's own UTxOs holding the pool's
+    /// token, which its deposit spends (chunk 34's 34d). A mix from the
+    /// private balance funds one UTxO holding the boxes' ADA and their token
+    /// together. Never a stranger's: what anyone else sent the session stays
+    /// in `kept`, and comes back only if it pays its own way.
+    tokens: Vec<(Holding, UtxoResponse)>,
     collateral: UtxoResponse,
     /// What comes back with the return: its token UTxOs, and any the
     /// evaluator can't take.
     kept: Vec<UtxoResponse>,
 }
 
+impl Holdings {
+    /// The ADA a deposit can spend: the ADA-only UTxOs', and the token
+    /// UTxOs' that a token pool's deposit spends too.
+    fn spare(&self) -> u64 {
+        self.coins.iter().map(|(c, _)| c.lovelace).sum::<u64>()
+            + self.tokens.iter().map(|(h, _)| h.lovelace).sum::<u64>()
+    }
+}
+
+/// How much of `token` (its policy and name) `tokens` hold.
+fn held_of(tokens: &seedelf_core::assets::Assets, token: &lovejoin::BoxToken) -> Result<u64> {
+    Ok(tokens
+        .quantity_of(hex::encode(token.policy), hex::encode(&token.name))?
+        .unwrap_or(0))
+}
+
+/// How many boxes of a pool whose box holds `token` the UTxOs `held` have
+/// enough of it for: as many as the ADA allows when the pool has no token.
+fn token_boxes(
+    held: &[(Holding, UtxoResponse)],
+    token: Option<&lovejoin::BoxToken>,
+) -> Result<usize> {
+    let Some(token) = token else {
+        return Ok(usize::MAX);
+    };
+    let total = held.iter().try_fold(0u128, |sum, (h, _)| {
+        held_of(&h.tokens, token).map(|q| sum + u128::from(q))
+    })?;
+    Ok(usize::try_from(total / u128::from(token.quantity.max(1))).unwrap_or(usize::MAX))
+}
+
+/// A UTxO the wallet built and holds the bytes of (a deposit's token
+/// change), as Koios would list it at `address`: what a return takes it from.
+fn row_of(held: &Holding, address: &str) -> UtxoResponse {
+    UtxoResponse {
+        tx_hash: hex::encode(held.utxo.tx_hash),
+        tx_index: held.utxo.index,
+        address: address.to_string(),
+        value: held.lovelace.to_string(),
+        asset_list: Some(
+            held.tokens
+                .items
+                .iter()
+                .map(|a| seedelf_koios::koios::Asset {
+                    decimals: 0,
+                    quantity: a.amount.to_string(),
+                    policy_id: hex::encode(a.policy_id),
+                    asset_name: hex::encode(&a.token_name),
+                    fingerprint: String::new(),
+                })
+                .collect(),
+        ),
+        ..Default::default()
+    }
+}
+
+/// Session `index`'s UTxOs, split for its chain: `token` is a token pool's,
+/// whose UTxOs the session's own transactions (`own`) made go to its
+/// deposit. Without one, as before token pools.
 fn holdings(
     accounts: &CardanoAccount,
     index: u32,
     utxos: &[UtxoResponse],
     collateral: &OutRef,
+    token: Option<&lovejoin::BoxToken>,
+    own: &[String],
 ) -> Result<Holdings> {
     let key = accounts.key_hash(Role::Receive, index)?;
     let mut coins = Vec::new();
+    let mut tokens = Vec::new();
     let mut kept = Vec::new();
     let mut found = None;
     for row in utxos {
@@ -444,14 +534,23 @@ fn holdings(
                 row.tx_index
             );
         }
+        let evaluable = seedelf_core::eval::refusal(row).is_none();
         // An ADA-only UTxO the evaluator can't take (a stranger's, carrying
         // a reference script) can't pay a mix: it comes back with the return.
         if collateral.is(row) {
             found = Some(row.clone());
-        } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty())
-            && seedelf_core::eval::refusal(row).is_none()
-        {
+        } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty()) && evaluable {
             coins.push((Coin::from_row(row)?, row.clone()));
+        } else if let Some(t) = token
+            && evaluable
+            && own.contains(&row.tx_hash)
+        {
+            let held = Holding::from_row(row)?;
+            if held_of(&held.tokens, t)? > 0 {
+                tokens.push((held, row.clone()));
+            } else {
+                kept.push(row.clone());
+            }
         } else {
             kept.push(row.clone());
         }
@@ -460,6 +559,7 @@ fn holdings(
     Ok(Holdings {
         address: collateral.address.clone(),
         coins,
+        tokens,
         collateral,
         kept,
     })
@@ -479,6 +579,16 @@ pub struct PlanRequest {
     pub again: bool,
 }
 
+/// What a plan's request names beside its own fields, read on its own as
+/// `poolRef` is ([`PoolNamed`]): the session's own transactions, whose UTxOs
+/// holding a token pool's token pay for its boxes too.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanOwn {
+    #[serde(default)]
+    pub own: Vec<String>,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanResult {
@@ -491,16 +601,37 @@ pub struct PlanResult {
     pub mix_fees: String,
 }
 
+/// What session `request.index`'s UTxOs pay for in the classic pool.
 pub fn plan(accounts: &CardanoAccount, request: PlanRequest) -> Result<PlanResult> {
-    let protocol = Protocol::of(network_flag(&request.network)?)?;
-    let held = holdings(accounts, request.index, &request.utxos, &request.collateral)?;
-    let spare: u64 = held.coins.iter().map(|(c, _)| c.lovelace).sum();
+    plan_in(accounts, request, None, &[])
+}
+
+/// [`plan`] in the token pool `pool` names, or the classic pool: `own`, the
+/// session's own transactions, whose UTxOs holding the pool's token pay for
+/// its boxes too.
+pub fn plan_in(
+    accounts: &CardanoAccount,
+    request: PlanRequest,
+    pool: Option<&PoolRef>,
+    own: &[String],
+) -> Result<PlanResult> {
+    let protocol = protocol_of(network_flag(&request.network)?, pool)?;
+    let held = holdings(
+        accounts,
+        request.index,
+        &request.utxos,
+        &request.collateral,
+        protocol.token.as_ref(),
+        own,
+    )?;
+    let spare = held.spare();
     let boxes = if request.again {
         // The mixes pay from one UTxO, the largest ([`chain`]).
         let largest = held.coins.iter().map(|(c, _)| c.lovelace).max();
         lovejoin::again_affordable(largest.unwrap_or(0), request.depth)
     } else {
         lovejoin::boxes_affordable(spare, request.depth, protocol.denom)
+            .min(token_boxes(&held.tokens, protocol.token.as_ref())?)
     };
     let mixes = boxes * lovejoin::mixes_per_box(request.depth);
     Ok(PlanResult {
@@ -611,11 +742,30 @@ fn sign(tx: BuiltTransaction, accounts: &CardanoAccount, index: u32) -> Result<B
 /// takes) are too few for it, nothing is built: the result says why
 /// (`skipped`), so the worker brings the session back directly.
 pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Result<ChainResult> {
+    chain_in(accounts, sk, request, None)
+}
+
+/// [`chain`] into the token pool `pool_ref` names, or the classic pool. A
+/// token pool's deposit spends the session's own UTxOs holding its token,
+/// and the tokens its boxes don't take come back with the return.
+pub fn chain_in(
+    accounts: &CardanoAccount,
+    sk: Scalar,
+    request: ChainRequest,
+    pool_ref: Option<&PoolRef>,
+) -> Result<ChainResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
-    let protocol = Protocol::of(network_flag)?;
-    let held = holdings(accounts, request.index, &request.utxos, &request.collateral)?;
-    let spare: u64 = held.coins.iter().map(|(c, _)| c.lovelace).sum();
+    let protocol = protocol_of(network_flag, pool_ref)?;
+    let held = holdings(
+        accounts,
+        request.index,
+        &request.utxos,
+        &request.collateral,
+        protocol.token.as_ref(),
+        &request.own,
+    )?;
+    let spare = held.spare();
     let (ours, pool): (Vec<PoolBox>, Vec<PoolBox>) = request
         .pool
         .iter()
@@ -635,6 +785,8 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
             .next()
             .context("The session holds no ADA to pay for the mixes")?;
         unused.extend(coins.map(|(_, row)| row));
+        // Mixing again spends no token: what the session holds of it comes back.
+        unused.extend(held.tokens.iter().map(|(_, row)| row.clone()));
         let boxes = request
             .boxes
             .unwrap_or_else(|| lovejoin::again_affordable(fee.lovelace, request.depth))
@@ -660,9 +812,14 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
     } else {
         let boxes = request
             .boxes
-            .unwrap_or_else(|| lovejoin::boxes_affordable(spare, request.depth, protocol.denom));
+            .unwrap_or_else(|| lovejoin::boxes_affordable(spare, request.depth, protocol.denom))
+            .min(token_boxes(&held.tokens, protocol.token.as_ref())?);
         if boxes == 0 {
-            bail!("The session's spare ADA doesn't pay for a Lovejoin box");
+            bail!(if protocol.token.is_some() {
+                "The session's spare ADA and token don't pay for a box of this Lovejoin pool"
+            } else {
+                "The session's spare ADA doesn't pay for a Lovejoin box"
+            });
         }
         let base = Register::create(sk)?;
         let owners = (0..boxes)
@@ -675,8 +832,17 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
             deposit_signers: 1,
             mix_signers: 1,
         };
-        lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)
-            .map(|built| (built, boxes))
+        let tokens: Vec<lovejoin::Holding> = held.tokens.iter().map(|(h, _)| h.clone()).collect();
+        lovejoin::chain_from(
+            &params,
+            &protocol,
+            &funding,
+            &tokens,
+            &owners,
+            request.depth,
+            &pool,
+        )
+        .map(|built| (built, boxes))
     };
     let (built, boxes) = match fanned {
         Err(e) => match e.downcast_ref::<PoolShort>() {
@@ -700,12 +866,22 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
     rows.push(held.collateral.clone());
     rows.extend(unused);
     rows.extend(held.kept.iter().cloned());
+    // A token pool's deposit: the tokens its boxes didn't take, back at the
+    // session's account, made by the deposit, which is the session's own.
+    rows.extend(built.token_change.iter().map(|h| row_of(h, &held.address)));
     // What the return takes by cost (independent review H1, H2): the chain's
     // change and the session's own and ADA-only UTxOs first, a stranger's
     // token UTxO only when it pays its own way. The rest waits for a later
     // return, or stays.
     let mut own = request.own.clone();
     own.push(rows[0].tx_hash.clone());
+    if let Some(deposit) = built.token_change.first() {
+        own.push(hex::encode(deposit.utxo.tx_hash));
+    }
+    // What the return spends that isn't on chain yet: the chain's change, and
+    // the deposit's token change.
+    let mut unsent = vec![built.change.utxo.clone()];
+    unsent.extend(built.token_change.iter().map(|h| h.utxo.clone()));
     let plan = api::plan_return(&params, &rows, &request.merge, &own)?;
     let ((back, back_fee), plan) = api::built_or_without_strangers(plan, |plan| {
         if !plan.merged {
@@ -729,7 +905,7 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
                 &plan.taken,
                 &held.collateral,
                 &request.merge,
-                std::slice::from_ref(&built.change.utxo),
+                &unsent,
             )?;
             Ok((signed, spend.fee.total))
         }
@@ -797,6 +973,10 @@ pub struct FundingResult {
     pub mixes: usize,
     /// About what the mixes cost, all boxes together.
     pub mix_fees: String,
+    /// A token pool's: how much of its token the boxes take, which goes with
+    /// the ADA. None when mixing again, which deposits nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
 }
 
 fn check_mix(boxes: usize, depth: u32) -> Result<()> {
@@ -823,9 +1003,16 @@ fn check_depth(boxes: usize, depth: u32, least: u32) -> Result<()> {
 
 /// What mixing `boxes` boxes at `depth` takes, before anything is built:
 /// the boxes, every mix of their fan-out, and the deposit and its change; or,
-/// `again`, every mix alone. What the mixes don't use comes back.
+/// `again`, every mix alone. What the mixes don't use comes back. In the
+/// classic pool, or the token pool `pool` names, whose boxes take its token
+/// too.
 pub fn funding(request: FundingRequest) -> Result<FundingResult> {
-    let protocol = Protocol::of(network_flag(&request.network)?)?;
+    funding_in(request, None)
+}
+
+/// [`funding`] in the token pool `pool` names, or the classic pool.
+pub fn funding_in(request: FundingRequest, pool: Option<&PoolRef>) -> Result<FundingResult> {
+    let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     if request.again {
         check_mix(request.boxes, request.depth)?;
     } else {
@@ -837,10 +1024,19 @@ pub fn funding(request: FundingRequest) -> Result<FundingResult> {
     } else {
         lovejoin::funding_for(request.boxes, request.depth, protocol.denom)
     };
+    let token = if request.again {
+        None
+    } else {
+        protocol
+            .box_value()
+            .token_total(request.boxes)?
+            .map(|(t, q)| token_amount(&t, q))
+    };
     Ok(FundingResult {
         lovelace: lovelace.to_string(),
         mixes,
         mix_fees: (mixes as u64 * lovejoin::MIX_FEE_ESTIMATE).to_string(),
+        token,
     })
 }
 
@@ -875,9 +1071,22 @@ pub fn chain_from_account(
     sk: Scalar,
     request: AccountChainRequest,
 ) -> Result<ChainResult> {
+    chain_from_account_in(account, sk, request, None)
+}
+
+/// [`chain_from_account`] into the token pool `pool_ref` names, or the
+/// classic pool: its deposit takes the pool's token from as few of the
+/// account's UTxOs holding it as hold enough, the most first, and what the
+/// boxes don't take comes back to the account's `0/0`.
+pub fn chain_from_account_in(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: AccountChainRequest,
+    pool_ref: Option<&PoolRef>,
+) -> Result<ChainResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
-    let protocol = Protocol::of(network_flag)?;
+    let protocol = protocol_of(network_flag, pool_ref)?;
     check_deposit(request.boxes, request.depth)?;
     // Only a mix puts collateral up. A seed is the deposit alone, which spends
     // no script, so it asks for none and spends the account as it is.
@@ -893,43 +1102,107 @@ pub fn chain_from_account(
         .collateral
         .as_ref()
         .map(|c| (c.utxo.tx_hash.clone(), c.utxo.tx_index));
+    let not_collateral = |p: &&api::PathedUtxo| {
+        collateral_ref.as_ref() != Some(&(p.utxo.tx_hash.clone(), p.utxo.tx_index))
+    };
 
-    // As few ADA-only UTxOs as pay for the boxes, the largest first.
-    let needed = lovejoin::funding_for(request.boxes, request.depth, protocol.denom);
+    let mut needed = lovejoin::funding_for(request.boxes, request.depth, protocol.denom);
     let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
+    let mut picked: Vec<&UtxoResponse> = Vec::new();
+    let mut total = 0u64;
+    let address = account.base_address(network_flag, Role::Receive, 0)?;
+    // A token pool's boxes take its token first: as few of the account's UTxOs
+    // holding it as hold enough, the most first, their ADA counted too. Never
+    // one the evaluator can't take.
+    let mut tokens: Vec<lovejoin::Holding> = Vec::new();
+    if let Some((token, wanted)) = protocol.box_value().token_total(request.boxes)? {
+        let mut holding: Vec<(&api::PathedUtxo, lovejoin::Holding, u64)> = request
+            .utxos
+            .iter()
+            .filter(not_collateral)
+            .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
+            .filter_map(|p| {
+                let held = lovejoin::Holding::from_row(&p.utxo).ok()?;
+                let quantity = held_of(&held.tokens, &token).ok()?;
+                (quantity > 0).then_some((p, held, quantity))
+            })
+            .collect();
+        holding.sort_by_key(|(_, _, q)| std::cmp::Reverse(*q));
+        let mut have = 0u64;
+        for (p, held, quantity) in holding {
+            if have >= wanted {
+                break;
+            }
+            have = have.saturating_add(quantity);
+            total += held.lovelace;
+            picked.push(&p.utxo);
+            tokens.push(held);
+        }
+        if have < wanted {
+            bail!(
+                "Your public account doesn't hold enough of this pool's token for {}",
+                if request.boxes == 1 {
+                    "a box".to_string()
+                } else {
+                    format!("{} boxes", request.boxes)
+                }
+            );
+        }
+        // What the boxes don't take of those UTxOs' tokens comes back to the account in an output of its own, whose
+        // least ADA the funding must cover too (the deposit's reserve is for its fee and the ADA change).
+        let held = tokens
+            .iter()
+            .try_fold(seedelf_core::assets::Assets::new(), |sum, h| {
+                sum.merge(h.tokens.clone())
+            })?;
+        let kept = held.separate(seedelf_core::assets::Assets::new().add(
+            seedelf_core::assets::Asset::new(
+                hex::encode(token.policy),
+                hex::encode(&token.name),
+                wanted,
+            )?,
+        )?)?;
+        if !kept.is_empty() {
+            needed += build::minimum_address_payment(&params, &address, &kept)?;
+        }
+    }
+    // Then as few ADA-only UTxOs as pay for the rest, the largest first.
     // Never one the evaluator can't take: one carrying a reference script.
     let mut ada: Vec<&api::PathedUtxo> = request
         .utxos
         .iter()
         .filter(|p| p.utxo.asset_list.as_ref().is_none_or(|a| a.is_empty()))
         .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
-        .filter(|p| collateral_ref.as_ref() != Some(&(p.utxo.tx_hash.clone(), p.utxo.tx_index)))
+        .filter(not_collateral)
         .collect();
     ada.sort_by_key(|p| std::cmp::Reverse(lovelace(p)));
-    let mut picked: Vec<&UtxoResponse> = Vec::new();
-    let mut total = 0u64;
+    let mut coin_rows: Vec<&UtxoResponse> = Vec::new();
     for p in ada {
         if total >= needed {
             break;
         }
         total += lovelace(p);
-        picked.push(&p.utxo);
+        coin_rows.push(&p.utxo);
     }
     if total < needed {
+        let ada = format_ada(protocol.denom);
         bail!(
             "Your public account's ADA doesn't pay for {}: that takes {} ₳ in UTxOs of ADA alone, besides the collateral",
             if request.boxes == 1 {
-                "a box of 10 ₳ and its mixes".to_string()
+                format!("a box of {ada} ₳ and its mixes")
             } else {
-                format!("{} boxes of 10 ₳ and their mixes", request.boxes)
+                format!("{} boxes of {ada} ₳ and their mixes", request.boxes)
             },
-            needed.div_ceil(1_000_000)
+            needed
+                .saturating_sub(tokens.iter().map(|h| h.lovelace).sum::<u64>())
+                .div_ceil(1_000_000)
         );
     }
-    let coins = picked
+    let coins = coin_rows
         .iter()
         .map(|u| Coin::from_row(u))
         .collect::<Result<Vec<_>>>()?;
+    picked.extend(coin_rows);
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
     let mut deposit_keys: Vec<(Role, u32)> = picked.iter().map(|u| path_of(u)).collect();
     deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
@@ -961,11 +1234,19 @@ pub fn chain_from_account(
             Some(c) => Some(Coin::from_row(&c.utxo)?),
             None => None,
         },
-        address: account.base_address(network_flag, Role::Receive, 0)?,
+        address,
         deposit_signers: deposit_keys.len(),
         mix_signers: mix_keys.len(),
     };
-    let built = lovejoin::chain(&params, &protocol, &funding, &owners, request.depth, &pool)?;
+    let built = lovejoin::chain_from(
+        &params,
+        &protocol,
+        &funding,
+        &tokens,
+        &owners,
+        request.depth,
+        &pool,
+    )?;
 
     let sign_with = |tx: BuiltTransaction, keys: &[(Role, u32)]| -> Result<BuiltTransaction> {
         let mut signed = tx;
@@ -1025,9 +1306,20 @@ pub fn again_from_account(
     sk: Scalar,
     request: AccountChainRequest,
 ) -> Result<ChainResult> {
+    again_from_account_in(account, sk, request, None)
+}
+
+/// [`again_from_account`] in the token pool `pool_ref` names, or the classic
+/// pool.
+pub fn again_from_account_in(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: AccountChainRequest,
+    pool_ref: Option<&PoolRef>,
+) -> Result<ChainResult> {
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
-    let protocol = Protocol::of(network_flag)?;
+    let protocol = protocol_of(network_flag, pool_ref)?;
     check_mix(request.boxes, request.depth)?;
     // This one only ever mixes (no deposit), so it always needs collateral.
     let put_up = request
@@ -1260,6 +1552,189 @@ pub fn withdraw_in(
         lovelace: built.lovelace.to_string(),
         box_ref: OutRef::of_box(&chosen),
         token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
+    })
+}
+
+/// One of the wallet's boxes brought back with the public account paying its
+/// fee (the escape hatch, chunk 34's §2), as JSON from the extension.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawPaidRequest {
+    pub network: String,
+    pub params: serde_json::Value,
+    pub pool: Vec<UtxoResponse>,
+    /// The box to take; the first of ours in the pool when absent.
+    pub box_ref: Option<OutRef>,
+    /// The public account's spendable UTxOs, each with its key's path: the
+    /// largest of ADA alone pays.
+    pub utxos: Vec<api::PathedUtxo>,
+    /// Its collateral, with its path: put up, never spent.
+    pub collateral: api::PathedUtxo,
+}
+
+/// A box brought back paid by the public account, signed: ready to submit.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawPaidResult {
+    /// Signed by the paying UTxO's key and the collateral's.
+    pub tx_cbor: String,
+    pub tx_hash: String,
+    pub fee: String,
+    /// Into the new register: the box's ADA, or what the Seedelf output
+    /// needs when that's more, the account making up the rest.
+    pub lovelace: String,
+    /// What the public account pays: the fee, and what it made up.
+    pub paid: String,
+    pub box_ref: OutRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
+}
+
+/// One of our boxes into a fresh register of the Seedelf key, its fee paid
+/// by the public account (`lovejoin::withdraw_paid`): for a box that can't
+/// pay its own way back. The account's UTxO and change are in the same
+/// transaction as the box, so it ties the box to the account; the worker
+/// says so before it's built. In the classic pool, or the token pool `pool`
+/// names.
+pub fn withdraw_paid_in(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: WithdrawPaidRequest,
+    pool: Option<&PoolRef>,
+) -> Result<WithdrawPaidResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let protocol = protocol_of(network_flag, pool)?;
+    let mut every = request.utxos.clone();
+    every.push(request.collateral.clone());
+    let paths = api::check_paths(account, network_flag, &every)?;
+    let collateral_ref = (
+        request.collateral.utxo.tx_hash.clone(),
+        request.collateral.utxo.tx_index,
+    );
+    let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
+    let paying = request
+        .utxos
+        .iter()
+        .filter(|p| p.utxo.asset_list.as_ref().is_none_or(|a| a.is_empty()))
+        .filter(|p| seedelf_core::eval::refusal(&p.utxo).is_none())
+        .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
+        .max_by_key(|p| lovelace(p))
+        .context("Your public account holds no UTxO of ADA alone to pay for this box's way back, besides its collateral")?;
+    let ours: Vec<PoolBox> = request
+        .pool
+        .iter()
+        .filter_map(|row| PoolBox::from_row(row, &protocol))
+        .filter(|b| b.is_owned(&sk))
+        .collect();
+    let chosen = match &request.box_ref {
+        Some(r) => ours
+            .into_iter()
+            .find(|b| OutRef::of_box(b) == *r)
+            .context("That box isn't in the pool as this wallet's anymore")?,
+        None => ours
+            .into_iter()
+            .next()
+            .context("This wallet has no box in Lovejoin's pool")?,
+    };
+    let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
+    let mut keys = vec![path_of(&paying.utxo)];
+    let collateral_key = path_of(&request.collateral.utxo);
+    if !keys.contains(&collateral_key) {
+        keys.push(collateral_key);
+    }
+    let payer = lovejoin::Payer {
+        fee: Coin::from_row(&paying.utxo)?,
+        collateral: Some(Coin::from_row(&request.collateral.utxo)?),
+        address: account.base_address(network_flag, Role::Receive, 0)?,
+        signers: keys.len(),
+    };
+    let destination = Register::create(sk)?.rerandomize()?;
+    let built = lovejoin::withdraw_paid(
+        &params,
+        &protocol,
+        std::slice::from_ref(&chosen),
+        &sk,
+        destination,
+        &payer,
+    )?;
+    let change = built
+        .change
+        .as_ref()
+        .context("A paid withdraw has the account's change")?;
+    let mut signed = built.tx.clone();
+    for (role, index) in &keys {
+        signed = signed
+            .sign(account.private_key(*role, *index)?.to_ed25519_private_key())
+            .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
+    }
+    Ok(WithdrawPaidResult {
+        tx_cbor: hex::encode(&signed.tx_bytes.0),
+        tx_hash: hex::encode(signed.tx_hash.0),
+        fee: built.fee.to_string(),
+        lovelace: built.lovelace.to_string(),
+        paid: (payer.fee.lovelace - change.lovelace).to_string(),
+        box_ref: OutRef::of_box(&chosen),
+        token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
+    })
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxValueRequest {
+    pub network: String,
+    /// One row of Koios's `epoch_params`: the live parameters.
+    pub params: serde_json::Value,
+    /// The token every box would hold: none for an ADA pool.
+    #[serde(default)]
+    pub token: Option<api::TokenAmount>,
+}
+
+/// What a box of a pool the wallet launches may hold, under the live
+/// parameters (chunk 34's session 1, 14). Amounts in lovelace.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BoxValueResult {
+    /// The least at which a box comes back and pays part of itself on its
+    /// own (`lovejoin::least_box_lovelace`): no launch goes below it.
+    pub least: String,
+    /// What the launch form suggests: the least with a margin, rounded up to
+    /// 0.5 ₳.
+    pub suggested: String,
+    /// The most a token pool's box may hold (9 ₳); none for an ADA pool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub most: Option<String>,
+}
+
+/// The token a request names, as a box's.
+pub fn box_token(token: &api::TokenAmount) -> Result<lovejoin::BoxToken> {
+    Ok(lovejoin::BoxToken {
+        policy: hex::decode(&token.policy_id)?
+            .try_into()
+            .map_err(|_| anyhow!("The token's policy isn't 28 bytes"))?,
+        name: hex::decode(&token.asset_name)?,
+        quantity: token
+            .quantity
+            .parse()
+            .map_err(|_| anyhow!("The token's quantity isn't a whole number"))?,
+    })
+}
+
+/// The least, the suggested and the most box value for a launch: about a
+/// dozen ways back built and measured here (`lovejoin::way_back`), scripts by
+/// reference, as every launch the wallet makes publishes them.
+pub fn box_value(request: BoxValueRequest) -> Result<BoxValueResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let token = request.token.as_ref().map(box_token).transpose()?;
+    let probe = lovejoin::Probe::new(network_flag, true)?;
+    let least = lovejoin::least_box_lovelace(&probe, &params, token.as_ref())?;
+    Ok(BoxValueResult {
+        least: least.to_string(),
+        suggested: lovejoin::suggested_box_lovelace(least).to_string(),
+        most: token
+            .is_some()
+            .then(|| lovejoin::MAX_TOKEN_BOX_LOVELACE.to_string()),
     })
 }
 

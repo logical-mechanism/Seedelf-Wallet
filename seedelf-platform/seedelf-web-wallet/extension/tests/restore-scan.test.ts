@@ -849,9 +849,9 @@ describe("a restore's scan that doesn't finish", () => {
         },
       ],
       [
-        "a mix (a seed's, which draws nothing from the pool)",
+        "a mix (a Bootstrap's, which draws nothing from the pool)",
         async (sessions) => {
-          const out = await sessions.mixOutBuild("preprod", 1, true);
+          const out = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
           await sessions.mixOutSubmit("preprod", out.txHash);
         },
       ],

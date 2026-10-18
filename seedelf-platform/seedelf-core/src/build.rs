@@ -201,7 +201,7 @@ fn signed_size(staged: &StagingTransaction, signers: usize, patches: Patches) ->
 }
 
 /// Builds a staged transaction, then patches `patches` into it.
-fn built_with(staged: StagingTransaction, patches: Patches) -> Result<BuiltTransaction> {
+pub(crate) fn built_with(staged: StagingTransaction, patches: Patches) -> Result<BuiltTransaction> {
     patches.apply(
         staged
             .build_conway_raw()
@@ -213,7 +213,10 @@ fn built_with(staged: StagingTransaction, patches: Patches) -> Result<BuiltTrans
 /// refuses it from that slot on, so one that never landed can't land later.
 /// Staged, not patched, so every draft is priced with it and the staking and
 /// note patches hash a body that holds it.
-fn expiring(tx: StagingTransaction, invalid_hereafter: Option<u64>) -> StagingTransaction {
+pub(crate) fn expiring(
+    tx: StagingTransaction,
+    invalid_hereafter: Option<u64>,
+) -> StagingTransaction {
     match invalid_hereafter {
         Some(slot) => tx.invalid_from_slot(slot),
         None => tx,
@@ -1128,7 +1131,7 @@ impl Budgets {
 
     /// A guess for `spends` wallet-contract inputs and `mints` seedelf
     /// policies, before Ogmios has measured anything.
-    fn guess(spends: &[u64], mints: usize) -> Self {
+    pub(crate) fn guess(spends: &[u64], mints: usize) -> Self {
         Budgets {
             spend: spends.iter().map(|i| (*i, SPEND_BUDGET_GUESS)).collect(),
             mint: (0..mints as u64).map(|i| (i, MINT_BUDGET_GUESS)).collect(),
@@ -3480,6 +3483,61 @@ impl AccountMint {
     }
 }
 
+/// What an account-paid script transaction may spend, in the order it takes
+/// them: `available` but the set-aside `collateral` and any UTxO holding a
+/// reference script that can't be measured (so can't be priced), as many as
+/// fit together; pure ADA first, largest first, then token UTxOs, those
+/// carrying a reference script after the rest, since it costs more to spend.
+pub(crate) fn account_inputs(
+    available: &[UtxoResponse],
+    collateral: Option<&UtxoResponse>,
+) -> Result<Vec<UtxoResponse>> {
+    let pure_ada = |u: &UtxoResponse| u.asset_list.as_ref().is_none_or(|a| a.is_empty());
+    let spendable: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| collateral.is_none_or(|c| !same_utxo(u, c)))
+        .filter(|u| reference_script_size(u).is_ok())
+        .cloned()
+        .collect();
+    let (mut spendable, _) = fitting(&spendable, &Assets::new(), |_| false)?;
+    spendable.sort_by_key(|u| {
+        (
+            !pure_ada(u),
+            u.reference_script.is_some(),
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    Ok(spendable)
+}
+
+/// What an account-paid script transaction spending `inputs` puts up as
+/// collateral: `given` when there is one (the web wallet's, set aside), else
+/// one of `available`, preferring an ADA-only one, then one of at least 2 ADA
+/// (3/2 of the fee plus the return), then one that isn't spent, then a 5 ADA
+/// one, then the largest.
+pub(crate) fn account_collateral<'a>(
+    available: &'a [UtxoResponse],
+    inputs: &[UtxoResponse],
+    given: Option<&'a UtxoResponse>,
+) -> Option<&'a UtxoResponse> {
+    if given.is_some() {
+        return given;
+    }
+    let pure_ada = |u: &UtxoResponse| u.asset_list.as_ref().is_none_or(|a| a.is_empty());
+    let spent = |u: &UtxoResponse| inputs.iter().any(|i| same_utxo(i, u));
+    let mut candidates: Vec<&UtxoResponse> = available.iter().collect();
+    candidates.sort_by_key(|u| {
+        (
+            !pure_ada(u),
+            lovelace_of(u) < ACCOUNT_COLLATERAL_MINIMUM,
+            spent(u),
+            lovelace_of(u) != COLLATERAL_LOVELACE,
+            std::cmp::Reverse(lovelace_of(u)),
+        )
+    });
+    candidates.first().copied()
+}
+
 /// Mints a seedelf paid by the Cardano account. `available` is what may be
 /// spent (key addresses the caller can sign for), as for [`move_in`]:
 ///
@@ -3512,31 +3570,10 @@ pub fn account_mint(
     if !is_payable(seedelf) {
         bail!("The Seedelf's register isn't made of valid points");
     }
-    let pure_ada = |u: &UtxoResponse| u.asset_list.as_ref().is_none_or(|a| a.is_empty());
-    let lovelace_of = |u: &UtxoResponse| u.value.parse::<u64>().unwrap_or(0);
-    let same =
-        |a: &UtxoResponse, b: &UtxoResponse| a.tx_hash == b.tx_hash && a.tx_index == b.tx_index;
-
-    // Never one holding a reference script that can't be measured, so can't
-    // be priced.
-    let spendable: Vec<UtxoResponse> = available
-        .iter()
-        .filter(|u| collateral.is_none_or(|c| !same(u, c)))
-        .filter(|u| reference_script_size(u).is_ok())
-        .cloned()
-        .collect();
-    let (mut spendable, _) = fitting(&spendable, &Assets::new(), |_| false)?;
+    let spendable = account_inputs(available, collateral)?;
     if spendable.is_empty() {
         bail!("There is nothing in the Cardano account to pay for a Seedelf");
     }
-    // A reference script costs more to spend: those after the rest.
-    spendable.sort_by_key(|u| {
-        (
-            !pure_ada(u),
-            u.reference_script.is_some(),
-            std::cmp::Reverse(lovelace_of(u)),
-        )
-    });
 
     let config = &chain.config;
     let policy = policy_hash(config)?;
@@ -3547,18 +3584,7 @@ pub fn account_mint(
     let mut last_error = None;
     for k in 1..=spendable.len() {
         let inputs = &spendable[..k];
-        let spent = |u: &UtxoResponse| inputs.iter().any(|i| same(i, u));
-        let mut candidates: Vec<&UtxoResponse> = available.iter().collect();
-        candidates.sort_by_key(|u| {
-            (
-                !pure_ada(u),
-                lovelace_of(u) < ACCOUNT_COLLATERAL_MINIMUM,
-                spent(u),
-                lovelace_of(u) != COLLATERAL_LOVELACE,
-                std::cmp::Reverse(lovelace_of(u)),
-            )
-        });
-        let Some(collateral) = collateral.or(candidates.first().copied()) else {
+        let Some(collateral) = account_collateral(available, inputs, collateral) else {
             bail!("There is nothing in the Cardano account to pay for a Seedelf");
         };
 

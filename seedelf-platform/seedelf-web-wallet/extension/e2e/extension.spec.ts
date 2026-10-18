@@ -3151,7 +3151,7 @@ test("Lovejoin: a mix from the public account without its collateral says so bef
   await expect(page.getByTestId("lovejoin-mix-why")).toHaveCount(0);
 });
 
-test("Lovejoin: a pool under its floor offers to seed it, and says the seed hides nothing", async ({ context, koios }) => {
+test("Lovejoin: a pool under its floor offers to bootstrap it, and says a Bootstrap hides nothing", async ({ context, koios }) => {
   // No pool at all, and mainnet's floor of 30: nothing can be mixed, and a mix
   // is what puts boxes in, so the page has to offer the way to start one.
   const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
@@ -3170,35 +3170,37 @@ test("Lovejoin: a pool under its floor offers to seed it, and says the seed hide
   await page.getByTestId("dapps").getByRole("button", { name: /Lovejoin/ }).click();
 
   // Mix says, before Review and with Review off, that the pool is under its floor (chunk 23's second review,
-  // LJ-1, LJ-6); seeding sits under it, behind its own link, still saying it hides nothing.
+  // LJ-1, LJ-6); bootstrapping sits under it, behind its own link, still saying it hides nothing (chunk 34: it
+  // replaces the seed).
   await expect(page.getByTestId("lovejoin-mix")).toBeDisabled();
   await expect(page.getByTestId("lovejoin-mix-why")).toContainText("pool holds 30 boxes not yours. It holds 0");
-  await expect(page.getByTestId("lovejoin-seed-offer")).toHaveCount(0);
-  await expect(page.getByTestId("lovejoin-seed-open")).toHaveText("Help start the pool");
-  await expect(page.getByTestId("lovejoin-seed-short")).toContainText("It hides nothing of yours");
-  await page.getByTestId("lovejoin-seed-open").click();
-  const offer = page.getByTestId("lovejoin-seed-offer");
+  await expect(page.getByTestId("lovejoin-bootstrap-offer")).toHaveCount(0);
+  await expect(page.getByTestId("lovejoin-bootstrap-open")).toHaveText("Help start the pool");
+  await expect(page.getByTestId("lovejoin-bootstrap-short")).toContainText("It hides nothing of yours");
+  await page.getByTestId("lovejoin-bootstrap-open").click();
+  const offer = page.getByTestId("lovejoin-bootstrap-offer");
   await expect(offer).toContainText("holds 0 boxes not yours");
   await expect(offer).toContainText("the wallet mixes only from 30");
-  await expect(offer).toContainText("Seeding hides nothing of yours");
-  await expect(offer).toContainText("so seeding won't let this wallet mix");
+  await expect(offer).toContainText("Bootstrapping hides nothing of yours");
+  await expect(offer).toContainText("so bootstrapping won't let this wallet mix");
   // The count is typed, and starts at what the pool still needs: the whole
   // floor goes in one transaction, not thirty presses of a stepper.
-  await expect(page.getByTestId("lovejoin-seed-boxes")).toHaveValue("30");
-  await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 30 boxes");
-  // It seeds from whichever side is chosen, as a mix does, and says which pays.
-  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your private balance");
+  await expect(page.getByTestId("lovejoin-bootstrap-boxes")).toHaveValue("30");
+  await expect(page.getByTestId("lovejoin-bootstrap")).toContainText("Bootstrap the pool with 30 boxes");
+  // It goes from whichever side is chosen, as a mix does, says which pays, and that its boxes stay until brought back.
+  await expect(page.getByTestId("lovejoin-bootstrap-cost")).toContainText("30 boxes, 300 ₳ from your private balance");
+  await expect(page.getByTestId("lovejoin-bootstrap-cost")).toContainText("They stay in the pool until you bring them back.");
   await expect(offer).toContainText("Paid from your private balance, it ties the private UTxOs it spends to the boxes");
   // 300 ₳ is more than the private balance's 28 ₳: said up front, in its own words (LJ-6).
-  await expect(page.getByTestId("lovejoin-seed")).toBeDisabled();
-  await expect(page.getByTestId("lovejoin-seed-why")).toContainText("not enough for that many");
+  await expect(page.getByTestId("lovejoin-bootstrap")).toBeDisabled();
+  await expect(page.getByTestId("lovejoin-bootstrap-why")).toContainText("not enough for that many");
   await page.getByRole("tab", { name: "Public account" }).click();
-  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("30 boxes, 300 ₳ from your public account");
+  await expect(page.getByTestId("lovejoin-bootstrap-cost")).toContainText("30 boxes, 300 ₳ from your public account");
   await expect(offer).toContainText("It's paid from your public account, in one transaction.");
   // The count is typed, so the whole floor isn't thirty presses of a stepper.
-  await page.getByTestId("lovejoin-seed-boxes").fill("12");
-  await expect(page.getByTestId("lovejoin-seed-cost")).toContainText("12 boxes, 120 ₳");
-  await expect(page.getByTestId("lovejoin-seed")).toContainText("Seed the pool with 12 boxes");
+  await page.getByTestId("lovejoin-bootstrap-boxes").fill("12");
+  await expect(page.getByTestId("lovejoin-bootstrap-cost")).toContainText("12 boxes, 120 ₳");
+  await expect(page.getByTestId("lovejoin-bootstrap")).toContainText("Bootstrap the pool with 12 boxes");
 });
 
 test("Lovejoin: Home's row doesn't count a box not mixed yet as on its way back", async ({ context, koios }) => {

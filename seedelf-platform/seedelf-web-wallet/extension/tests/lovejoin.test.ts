@@ -24,7 +24,7 @@ import {
   pumpChain,
   firstTries,
   QUIET_AFTER_SEND_MS,
-  POOL_SEEDABLE,
+  POOL_BOOTSTRAP,
   QUIET_PUSH_MS,
   QUIET_PUSHES,
   secureRandom,
@@ -733,7 +733,7 @@ describe("the pool the chains draw from", CHAINS, () => {
     t.koios.addedToAccounts.push(...POOL.map((u) => ({ ...u, tx_hash: `f${u.tx_hash.slice(1)}`, payment_cred: mainnetBox })));
     // The tile's own mix says the public account could seed the pool instead.
     await expect(t.lovejoin.fits("mainnet", 1)).rejects.toThrow(
-      `The wallet mixes only once Lovejoin's pool holds 30 boxes not yours. It holds 20. ${POOL_SEEDABLE()}`,
+      `The wallet mixes only once Lovejoin's pool holds 30 boxes not yours. It holds 20. ${POOL_BOOTSTRAP()}`,
     );
     expect(t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials[0])).toContain(mainnetBox);
     // Preprod's pool of the same size has no floor.
@@ -1824,8 +1824,8 @@ describe("mixing from the tile", CHAINS, () => {
 
       // A mix is refused on this pool; a seed isn't.
       await expect(sessions.mixOutBuild("preprod", 1)).rejects.toThrow("mixes only once Lovejoin's pool holds 30");
-      const out = await sessions.mixOutBuild("preprod", 1, true);
-      expect(out.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
+      const out = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
+      expect(out.mix).toMatchObject({ bootstrap: true, depth: 0, boxes: 1, mixes: 0 });
       await sessions.mixOutSubmit("preprod", out.txHash);
 
       // The funding lands: the runner must build the deposit, not skip Lovejoin.
@@ -1873,8 +1873,8 @@ describe("mixing from the tile", CHAINS, () => {
     // alone and draws nothing from the pool. Its funding is a Seedelf spend
     // like any other, so giveme.my puts the collateral up for it.
     const asked = t.koios.calls.length;
-    const seeded = await sessions.mixOutBuild("preprod", 1, true);
-    expect(seeded.mix).toMatchObject({ seed: true, depth: 0, boxes: 1, mixes: 0 });
+    const seeded = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
+    expect(seeded.mix).toMatchObject({ bootstrap: true, depth: 0, boxes: 1, mixes: 0 });
     // One box of 10 ₳ and the deposit's reserve, and no mix fees at all: a
     // mix of one box at depth 2 asks 15.3 ₳ for the same box.
     expect(BigInt(seeded.mix.lovelace)).toBe(11_500_000n);
@@ -1882,7 +1882,7 @@ describe("mixing from the tile", CHAINS, () => {
     expect(t.koios.calls.length).toBeGreaterThan(asked);
     // More than the private balance holds: said in the screens' words, not core's "Seedelf balance" (chunk 23's
     // second review, LJ-6).
-    await expect(sessions.mixOutBuild("preprod", 30, true)).rejects.toThrow(
+    await expect(sessions.mixOutBuild("preprod", 30, { bootstrap: true })).rejects.toThrow(
       /^Not enough ADA in your private balance for this, its fee and the change\.$/,
     );
 
@@ -2267,7 +2267,7 @@ describe("mixing from the tile", CHAINS, () => {
     expect(onMainnet).toMatchObject({ available: true, others: 0, floor: 30 });
   });
 
-  it("seeds an empty pool: the deposit alone, no mixes, and its boxes wait for Bring one back", async () => {
+  it("bootstraps an empty pool: the deposit alone, no mixes, and its boxes wait for Bring one back", async () => {
     const t = await wallet();
     const [first] = Object.values(koiosPreprod.accounts)[0]!.account_utxos.filter((u) => BigInt(u.value) > 1_000_000_000n);
     const at = (tx: string, value: string) => ({ ...first!, tx_hash: tx.repeat(32), tx_index: 0, value, asset_list: [] });
@@ -2275,21 +2275,21 @@ describe("mixing from the tile", CHAINS, () => {
     // it needs none, while a mix still asks for it.
     t.koios.addedToAccounts.push(at("e6", "30000000"));
     await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow("Set it aside in Settings, Collateral");
-    await expect(t.lovejoin.publicBuild("preprod", 1, true)).resolves.toMatchObject({ seed: true, txs: 1 });
+    await expect(t.lovejoin.publicBuild("preprod", 1, { bootstrap: true })).resolves.toMatchObject({ bootstrap: true, txs: 1 });
     t.koios.addedToAccounts.push(at("e5", "5000000"));
     // Mainnet's floor is 30; preprod's is 0, so the refusal is forced by raising it here.
     const floor = NETWORKS.preprod.lovejoin!.poolFloor;
     NETWORKS.preprod.lovejoin!.poolFloor = 30;
     try {
       // Nothing in the pool: a mix is refused, and says the pool can be seeded instead.
-      await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(POOL_SEEDABLE());
+      await expect(t.lovejoin.publicBuild("preprod", 1)).rejects.toThrow(POOL_BOOTSTRAP());
       // A seed needs no other boxes at all.
-      const summary = await t.lovejoin.publicBuild("preprod", 1, true);
-      expect(summary).toMatchObject({ seed: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
+      const summary = await t.lovejoin.publicBuild("preprod", 1, { bootstrap: true });
+      expect(summary).toMatchObject({ bootstrap: true, boxes: 1, depth: 0, mixes: 0, txs: 1 });
       // It makes no mixes, so it isn't held to a mix chain's handful: the
       // whole pool floor goes in one transaction.
       await expect(t.lovejoin.publicBuild("preprod", 30)).rejects.toThrow("Mix 1 to 10 boxes at a time.");
-      await expect(t.lovejoin.publicBuild("preprod", 97, true)).rejects.toThrow("Seed 1 to 96 boxes at a time.");
+      await expect(t.lovejoin.publicBuild("preprod", 97, { bootstrap: true })).rejects.toThrow("Bootstrap 1 to 96 boxes at a time.");
       const before = t.koios.submitted.length;
       await t.lovejoin.publicSubmit("preprod", summary.txHash);
       t.koios.confirmations = 1;
@@ -2300,8 +2300,8 @@ describe("mixing from the tile", CHAINS, () => {
 
       // The whole floor in one go: 30 boxes, one transaction, no mixes.
       t.koios.addedToAccounts.push(at("e7", "400000000"));
-      const whole = await t.lovejoin.publicBuild("preprod", 30, true);
-      expect(whole).toMatchObject({ seed: true, boxes: 30, depth: 0, mixes: 0, txs: 1 });
+      const whole = await t.lovejoin.publicBuild("preprod", 30, { bootstrap: true });
+      expect(whole).toMatchObject({ bootstrap: true, boxes: 30, depth: 0, mixes: 0, txs: 1 });
     } finally {
       NETWORKS.preprod.lovejoin!.poolFloor = floor;
     }

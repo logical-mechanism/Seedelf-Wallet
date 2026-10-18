@@ -1202,3 +1202,79 @@ fn a_pool_isnt_usable_unregistered_too_small_or_unable_to_come_back() {
         lovejoin::Unusable::CantComeBack { .. }
     ));
 }
+
+/// How many boxes one deposit into a token pool holds at the worst a box's
+/// token can be (a 32-byte name and a quantity in eight bytes): the worker's
+/// MAX_TOKEN_DEPOSIT_BOXES leaves room for a few dozen more inputs, as the
+/// classic pool's 96 does (106 fit with one input there).
+#[test]
+fn a_token_deposit_holds_the_worker_s_most_boxes() {
+    const MAX_TOKEN_DEPOSIT_BOXES: usize = 64;
+    let worst = BoxToken {
+        policy: [0xab; 28],
+        name: vec![0xcd; 32],
+        quantity: u64::MAX / 128,
+    };
+    let pool = Protocol {
+        denom: 9_000_000,
+        token: Some(worst.clone()),
+        ..lj_pool()
+    };
+    let sk = Scalar::from(5u64);
+    let owner = Register::create(sk).unwrap();
+    let fits = |boxes: usize, coins: usize| {
+        let owners: Vec<Register> = (0..boxes)
+            .map(|_| owner.clone().rerandomize().unwrap())
+            .collect();
+        let mut inputs = vec![token_holding(&pool, 0x10, 3_000_000, boxes as u64, None)];
+        inputs
+            .extend((0..coins).map(|i| Holding::from(&coin(true, 0x80 + i as u8, 1_000_000_000))));
+        lovejoin::deposit_from(&params(), &pool, &inputs, &owners, &session(true), 1).is_ok()
+    };
+    let most = (1..=128).take_while(|n| fits(*n, 1)).last().unwrap();
+    println!("{most} worst token boxes fit one deposit with two inputs");
+    assert!(fits(MAX_TOKEN_DEPOSIT_BOXES, 30));
+    assert!((MAX_TOKEN_DEPOSIT_BOXES + 6..128).contains(&most), "{most}");
+}
+
+/// Whether a box already in a pool comes back (the escape hatch's question,
+/// chunk 34's 34d) is its way back alone: where `usable` stops at a new box's
+/// minimum, `comes_back` says whether the withdraw pays.
+#[test]
+fn a_box_already_there_is_asked_only_about_its_way_back() {
+    let worst = BoxToken {
+        policy: [0xab; 28],
+        name: vec![0xcd; 32],
+        quantity: u64::MAX,
+    };
+    let pool = Protocol {
+        denom: 3_000_000,
+        token: Some(worst.clone()),
+        ..lj_pool()
+    };
+    // Under today's price a box comes back.
+    assert!(lovejoin::comes_back(&params(), &pool).is_ok());
+    // At twice the price of a byte, usable stops at the box's minimum; comes_back says it can't come back.
+    let dear = ProtocolParameters {
+        coins_per_utxo_size: params().coins_per_utxo_size * 2,
+        ..params()
+    };
+    assert!(matches!(
+        lovejoin::usable(&dear, &pool, true).unwrap_err(),
+        lovejoin::Unusable::BelowMinimum { .. }
+    ));
+    assert!(matches!(
+        lovejoin::comes_back(&dear, &pool).unwrap_err(),
+        lovejoin::Unusable::CantComeBack { .. }
+    ));
+    // Registration isn't its question: a box comes back through a registered credential, which it can't unregister.
+    let poor = Protocol {
+        denom: 1_800_000,
+        token: Some(worst),
+        ..lj_pool()
+    };
+    assert!(matches!(
+        lovejoin::comes_back(&params(), &poor).unwrap_err(),
+        lovejoin::Unusable::CantComeBack { .. }
+    ));
+}

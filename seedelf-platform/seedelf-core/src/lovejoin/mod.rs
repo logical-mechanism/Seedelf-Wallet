@@ -68,16 +68,24 @@ use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use uplc::tx::to_plutus_data::ToPlutusData;
 
+mod box_value;
 mod launch;
 mod pool;
 pub mod templates;
 mod value;
 
-pub use launch::{Launch, Locked, Terms, launch, launch_apart, launched_pool};
+pub use box_value::{
+    BOX_MARGIN, BOX_STEP, MAX_TOKEN_BOX_LOVELACE, Probe, WayBack, least_box_lovelace,
+    suggested_box_lovelace, way_back,
+};
+pub use launch::{
+    AccountLaunch, FinalAccountLaunch, Launch, Locked, Terms, launch, launch_apart,
+    launch_from_account, launched_pool,
+};
 
 pub use pool::{
     CLASSIC_LOVELACE, MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate,
-    find_seed, holder_address, policy_of, usable, verify_pool,
+    comes_back, find_seed, holder_address, policy_of, usable, verify_pool,
 };
 pub use value::{BoxToken, BoxValue};
 

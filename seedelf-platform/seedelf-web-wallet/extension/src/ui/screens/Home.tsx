@@ -159,6 +159,8 @@ const SPENT_FROM: Record<PendingTx["kind"], Tab> = {
   "session-back": "seedelf",
   "lovejoin-withdraw": "seedelf",
   "lovejoin-mix": "seedelf",
+  // From the private balance by default; a start the public account paid for says so where it's sent (34f).
+  "lovejoin-launch": "seedelf",
 };
 
 /**

@@ -47,7 +47,9 @@ export const PRIVATE_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
  * who paid, and its banner linked to Cardanoscan without the note.
  */
 export function privateBanner(pending: PendingTx): boolean {
-  return PRIVATE_KINDS.has(pending.kind) || (pending.kind === "mint" && pending.invalidHereafter === undefined);
+  // A Lovejoin pool's start is told apart the same way: the public account's carries a slot (lovejoin-launch.ts).
+  const stealth = pending.kind === "mint" || pending.kind === "lovejoin-launch";
+  return PRIVATE_KINDS.has(pending.kind) || (stealth && pending.invalidHereafter === undefined);
 }
 
 /** How the banner names a sent transaction, and says it's confirmed. */
@@ -73,6 +75,7 @@ export const SENT: Record<PendingTx["kind"], I18nKey> = {
   "session-back": "pending.sent.session_back",
   "lovejoin-withdraw": "pending.sent.lovejoin_withdraw",
   "lovejoin-mix": "pending.sent.lovejoin_mix",
+  "lovejoin-launch": "pending.sent.lovejoin_launch",
 };
 export const CONFIRMED: Record<PendingTx["kind"], I18nKey> = {
   "move-in": "pending.confirmed.move_in",
@@ -96,6 +99,7 @@ export const CONFIRMED: Record<PendingTx["kind"], I18nKey> = {
   "session-back": "pending.confirmed.session_back",
   "lovejoin-withdraw": "pending.confirmed.lovejoin_withdraw",
   "lovejoin-mix": "pending.confirmed.lovejoin_mix",
+  "lovejoin-launch": "pending.confirmed.lovejoin_launch",
 };
 
 /** What the banner says of a transaction that never landed, by why it was let go. */

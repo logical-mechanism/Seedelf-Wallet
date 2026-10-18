@@ -37,6 +37,7 @@ import { NftImageService } from "../src/background/nft-image";
 import { PriceService } from "../src/background/prices";
 import { SendService } from "../src/background/send";
 import { LovejoinService } from "../src/background/lovejoin";
+import { LovejoinLaunchService } from "../src/background/lovejoin-launch";
 import { SessionService } from "../src/background/sessions";
 import { StakingService } from "../src/background/staking";
 import { AccountsService, activeAccount } from "../src/background/accounts";
@@ -278,6 +279,10 @@ export interface FakeKoios {
   votes: Array<KoiosVote & { voter_id: string }>;
   /** Datums by hash, for `datum_info`: the swap's order's (fixtures/swap-tx.ts) to begin with. */
   datums: Map<string, string>;
+  /** Each token's total supply, by policy and name (hex), for `asset_info`'s `total_supply`: a Lovejoin pool's launch reads it. */
+  supplies: Map<string, string>;
+  /** Changes to the protocol parameters `epoch_params` answers with: a higher price of a byte, say. */
+  params?: Record<string, unknown>;
 }
 
 /**
@@ -397,6 +402,7 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
     proposals: governanceFixture.proposal_list.preprod,
     votes: [],
     datums: new Map([[ORDER_DATUM_HASH, ORDER_DATUM]]),
+    supplies: new Map(),
     fetch: async (url, init) => {
       const { pathname, searchParams } = new URL(url);
       const path = pathname.split("/").pop()!;
@@ -420,7 +426,12 @@ export function fakeKoios({ owned = true } = {}): FakeKoios {
         const holder = fake.nfts.get(`${searchParams.get("_asset_policy")}.${searchParams.get("_asset_name")}`);
         rows = holder ? [{ payment_address: holder }] : [];
       } else if (path === "epoch_params") {
-        rows = epochParams;
+        rows = fake.params ? (epochParams as object[]).map((p) => ({ ...p, ...fake.params })) : epochParams;
+      } else if (path === "asset_info") {
+        rows = (body._asset_list as Array<[string, string]>).flatMap(([p, n]) => {
+          const supply = fake.supplies.get(p + n);
+          return supply === undefined ? [] : [{ total_supply: supply }];
+        });
       } else if (path === "tip") {
         rows = [{ abs_slot: fake.tip }];
       } else if (path === "tx_status") {
@@ -729,12 +740,20 @@ export function testBalances(options?: { owned?: boolean; sleep?: (ms: number) =
     store,
     preferences,
   });
+  // Starting a pool: no pool shown, unless a test gives its own discovery.
+  const launch = new LovejoinLaunchService({
+    ...deps,
+    collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", collateral.fetch),
+    lovejoin,
+    discovery: { known: async () => [] },
+  });
   return {
     ...t,
     koios,
     collateral,
     deps,
     lovejoin,
+    launch,
     balances: new BalanceService(deps),
     moveIn: new MoveInService(deps),
     mint: new MintService({
