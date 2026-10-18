@@ -633,6 +633,12 @@ export function Lovejoin({
     void load();
   }, [load]);
 
+  // Token pools launched since the wallet last looked (chunk 34's 34c), once as the page opens: read from the next
+  // pool read on.
+  useEffect(() => {
+    void call("lovejoin-look-for-pools", {}).catch(() => undefined);
+  }, []);
+
   // A mix that runs takes its next step while the page is open, as the alarm would: keyed on which mixes run, not on
   // the list the watch below reads afresh every 2 s (runningKey).
   const running = runningKey(mixes);

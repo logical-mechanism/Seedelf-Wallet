@@ -266,6 +266,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cryptoxide"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "382ce8820a5bb815055d3553a610e8cb542b2d767bbacea99038afda96cd760d"
+
+[[package]]
 name = "ctutils"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1010,6 +1016,7 @@ dependencies = [
  "anyhow",
  "axum",
  "bech32",
+ "cryptoxide",
  "deadpool-postgres",
  "dotenvy",
  "http-body-util",

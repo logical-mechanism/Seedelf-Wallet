@@ -76,8 +76,8 @@ mod value;
 pub use launch::{Launch, Locked, Terms, launch, launch_apart, launched_pool};
 
 pub use pool::{
-    MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate, find_seed,
-    holder_address, policy_of, usable, verify_pool,
+    CLASSIC_LOVELACE, MAX_TOKEN_QUANTITY, ReferenceDatum, Rejected, Unusable, Usable, candidate,
+    find_seed, holder_address, policy_of, usable, verify_pool,
 };
 pub use value::{BoxToken, BoxValue};
 
@@ -213,7 +213,7 @@ impl Protocol {
             .sum::<Result<u64>>()?;
         Ok(Protocol {
             network_flag,
-            denom: 10_000_000,
+            denom: CLASSIC_LOVELACE,
             mix_box_hash,
             mix_logic_hash,
             references,

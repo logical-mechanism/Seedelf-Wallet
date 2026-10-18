@@ -76,6 +76,43 @@ export interface IndexNames {
 export class IndexDown extends Error {}
 
 /**
+ * A route of the token pools' answered 503: db-sync, which alone indexes
+ * them, can't answer now, while Kupo may still serve the contract and the
+ * classic pool. The part isn't marked down: the caller reads the token
+ * pools from Koios this time (chunk 34's 34c).
+ */
+export class TokensDown extends IndexDown {}
+
+/** A Lovejoin pool's crowd as the data layer counts it, the same for everyone (seedelf-data/README.md). */
+export interface IndexCrowd {
+  boxes: number;
+  /** The deposits its boxes could have come from. */
+  deposits: number;
+  /** How many of its boxes a mix made. */
+  mixed: number;
+}
+
+/** A shown token pool, as the data layer's `lovejoin/pools` lists it. */
+export interface IndexPool {
+  /** Its NFT's policy. */
+  id: string;
+  /** `<tx hash>#<index>`: the UTxO its launch spent. */
+  seed: string;
+  /** Its reference UTxO at the holder. */
+  reference: IndexRow;
+  /** Its `mix_box` and `mix_logic` reference scripts at the holder, each named by its hash. */
+  scripts: Array<IndexRow & { script_hash: string }>;
+  launch: IndexPoint & { tx: string; block: number; index: number };
+  crowd: IndexCrowd;
+}
+
+export interface IndexPools {
+  cursor: string;
+  classic: { crowd: IndexCrowd };
+  pools: IndexPool[];
+}
+
+/**
  * The index won't read from a cursor kept from before (a 400): not one it
  * hands out now, after a change on the server, say. The part isn't down: the
  * caller starts again from a snapshot, or a watch asks tx_status this once.
@@ -112,6 +149,32 @@ function isRow(row: unknown): row is IndexRow {
   );
 }
 
+const isCrowd = (c: unknown): c is IndexCrowd =>
+  typeof (c as IndexCrowd | null)?.boxes === "number" &&
+  typeof (c as IndexCrowd).deposits === "number" &&
+  typeof (c as IndexCrowd).mixed === "number";
+
+const HASH28 = /^[0-9a-f]{56}$/;
+
+function isPool(p: unknown): p is IndexPool {
+  const x = p as IndexPool | null;
+  return (
+    typeof x?.id === "string" &&
+    HASH28.test(x.id) &&
+    typeof x.seed === "string" &&
+    REF.test(x.seed) &&
+    isRow(x.reference) &&
+    Array.isArray(x.scripts) &&
+    x.scripts.every((r) => isRow(r) && typeof r.script_hash === "string" && HASH28.test(r.script_hash)) &&
+    isPoint(x.launch) &&
+    typeof x.launch.tx === "string" &&
+    /^[0-9a-f]{64}$/.test(x.launch.tx) &&
+    typeof x.launch.block === "number" &&
+    typeof x.launch.index === "number" &&
+    isCrowd(x.crowd)
+  );
+}
+
 const credOrNull = (c: unknown) => c === null || (typeof c === "string" && /^[0-9a-f]{56}$/.test(c));
 const isMadeBy = (m: IndexRow["made_by"]) =>
   typeof m?.mixed === "boolean" &&
@@ -121,6 +184,7 @@ const isPoint = (p: unknown): p is IndexPoint =>
   typeof (p as IndexPoint | null)?.slot === "number" && typeof (p as IndexPoint).time === "number";
 const isTip = (t: unknown): t is IndexTip => isPoint(t) && typeof (t as IndexTip).hash === "string";
 const isCursor = (c: unknown): c is string => typeof c === "string" && /^\d+\.[0-9a-f]{64}$/.test(c);
+const isPools = (p: unknown): p is string[] => Array.isArray(p) && p.every((h) => typeof h === "string" && HASH28.test(h));
 
 /** The index's client: one part of the data layer, its failures marking it down. */
 export class PrivateIndex {
@@ -177,6 +241,36 @@ export class PrivateIndex {
     return { tip: since.tip, rows: atTip(snapshot.rows, since), cursors: [snapshot.cursor, since.cursor] };
   }
 
+  /**
+   * Every token pool shown as of a stable cursor, and each pool's crowd, the
+   * classic pool's too: the same answer for every wallet (chunk 34's 34c).
+   * `TokensDown` while db-sync can't answer.
+   */
+  async pools(): Promise<IndexPools> {
+    const answer = await this.get<IndexPools>("lovejoin/pools", false, true);
+    if (!isCursor(answer?.cursor) || !isCrowd(answer.classic?.crowd) || !Array.isArray(answer.pools) || !answer.pools.every(isPool)) {
+      throw new TokensDown("The data layer's pool list isn't one the wallet reads.");
+    }
+    return answer;
+  }
+
+  /**
+   * Every shown token pool's boxes at the tip, each with who made it, read as
+   * `poolNow` reads the classic pool's, and the pools they're of (their
+   * `mix_box` hashes). `TokensDown` while db-sync can't answer.
+   */
+  async tokensNow(): Promise<{ tip: IndexTip; rows: IndexRow[]; pools: string[]; cursors: string[] }> {
+    const snapshot = await this.get<IndexSnapshot & { pools: string[] }>("lovejoin/tokens", false, true);
+    if (!isTip(snapshot?.tip) || !isCursor(snapshot.cursor) || !Array.isArray(snapshot.rows) || !snapshot.rows.every(isRow) || !isPools(snapshot.pools)) {
+      throw new TokensDown("The data layer's token pools aren't an answer the wallet reads.");
+    }
+    const since = await this.sinceAt(`lovejoin/tokens/since/${snapshot.cursor}`, false, true);
+    if (since.reset) throw new TokensDown("The token pools were rolled back as they were read.");
+    // `since` covers the pools shown as of the snapshot's cursor: the same ones.
+    if (!isPools((since as { pools?: unknown }).pools)) throw new TokensDown("The data layer's token pools aren't an answer the wallet reads.");
+    return { tip: since.tip, rows: atTip(snapshot.rows, since), pools: snapshot.pools, cursors: [snapshot.cursor, since.cursor] };
+  }
+
   private async snapshotAt(path: string): Promise<IndexSnapshot> {
     const answer = await this.get<IndexSnapshot>(path);
     if (!isTip(answer?.tip) || !isCursor(answer.cursor) || !Array.isArray(answer.rows) || !answer.rows.every(isRow)) {
@@ -185,9 +279,11 @@ export class PrivateIndex {
     return answer;
   }
 
-  private async sinceAt(path: string, kept: boolean): Promise<IndexSince> {
-    const answer = await this.get<IndexSince>(path, kept);
-    if (!isTip(answer?.tip)) throw await this.failed();
+  private async sinceAt(path: string, kept: boolean, tokens = false): Promise<IndexSince> {
+    const answer = await this.get<IndexSince>(path, kept, tokens);
+    // A token route's answer the wallet can't read is that route's trouble alone (TokensDown), as its refusals are.
+    const unread = async () => (tokens ? new TokensDown("The data layer's token pools aren't an answer the wallet reads.") : await this.failed());
+    if (!isTip(answer?.tip)) throw await unread();
     if (answer.reset === true) return { tip: answer.tip, reset: true };
     const spent = (answer as { spent?: unknown }).spent;
     if (
@@ -197,13 +293,19 @@ export class PrivateIndex {
       !Array.isArray(spent) ||
       !spent.every((s: IndexSpent) => isPoint(s) && typeof s.ref === "string" && REF.test(s.ref) && typeof s.by === "string")
     ) {
-      throw await this.failed();
+      throw await unread();
     }
     return answer;
   }
 
-  /** One request: an answer, or the part marked down and `IndexDown` thrown; `CursorRefused` for a kept cursor's 400. */
-  private async get<T>(path: string, keptCursor = false): Promise<T> {
+  /**
+   * One request: an answer, or the part marked down and `IndexDown` thrown;
+   * `CursorRefused` for a kept cursor's 400. `tokens`: a token pools' route,
+   * whose refusal (a 503 while db-sync can't answer; a 404 from a server
+   * older than the route, deployed back) throws `TokensDown` and leaves the
+   * part up. Its 429 is the shared limit's, and holds the part as any does.
+   */
+  private async get<T>(path: string, keptCursor = false, tokens = false): Promise<T> {
     await this.limit?.take(1);
     let response: Response;
     try {
@@ -217,10 +319,12 @@ export class PrivateIndex {
       throw await this.failed();
     }
     if (keptCursor && response.status === 400) throw new CursorRefused("The private index refused a kept cursor.");
+    if (tokens && !response.ok && response.status !== 429) throw new TokensDown("The data layer can't read the token pools now.");
     if (!response.ok) throw await this.failed(response.status === 429 ? retryAfterMs(response) : undefined);
     try {
       return (await response.json()) as T;
     } catch {
+      if (tokens) throw new TokensDown("The data layer's token pools aren't an answer the wallet reads.");
       throw await this.failed();
     }
   }

@@ -477,7 +477,7 @@ fn verify_pool_refuses_what_isnt_a_genuine_token_pool() {
         lovejoin::verify_pool(false, &genuine, LJ_SEED, &[]).unwrap_err(),
         Rejected::NotAtHolder
     );
-    // An ADA pool on the new scripts.
+    // An ADA pool on the new scripts at the classic pool's 10 ₳: a copy of its value.
     let ada = ReferenceDatum {
         box_value: BoxValue::ada(10_000_000),
         ..datum.clone()
@@ -493,6 +493,19 @@ fn verify_pool_refuses_what_isnt_a_genuine_token_pool() {
         )),
         Rejected::AdaPool
     );
+    // At any other amount, an ADA pool is a pool like the token pools (session 1, 17).
+    let ada = ReferenceDatum {
+        box_value: BoxValue::ada(25_000_000),
+        ..datum.clone()
+    };
+    let pool = lovejoin::verify_pool(
+        true,
+        &candidate_output(LJ_POLICY, &ada.encode(), None, false, None, holder),
+        LJ_SEED,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(pool.box_value(), BoxValue::ada(25_000_000));
     // The classic pool's five-field datum isn't a token pool's.
     let five = PlutusData::Constr(pallas_primitives::Constr {
         tag: 121,

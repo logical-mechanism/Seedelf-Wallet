@@ -1,0 +1,311 @@
+{
+  "//": "The shown-pool rule's last step, earliest of each value (web wallet chunk 34's 34c), for the wallet (tests/lovejoin-discovery.test.ts) and the data layer (seedelf-data/api/src/lovejoin/standard.rs). Every pool here is standard; a value is (boxLovelace, token). Ordered by block, then place in the block, then id.",
+  "scenarios": [
+    {
+      "about": "one pool",
+      "pools": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "about": "a copy launched later is never shown",
+      "pools": [
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 20,
+            "index": 0
+          }
+        },
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "about": "the same token at another Q is a pool of its own",
+      "pools": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "1000000000"
+          },
+          "launch": {
+            "block": 20,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "about": "the same token and Q at another box ADA is a pool of its own",
+      "pools": [
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "5000000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 20,
+            "index": 0
+          }
+        },
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "about": "in one block, the one earlier in it",
+      "pools": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 5
+          }
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 2
+          }
+        }
+      ],
+      "shown": [
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "about": "in one transaction, the lower id",
+      "pools": [
+        {
+          "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 2
+          }
+        },
+        {
+          "id": "11111111111111111111111111111111111111111111111111111111",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 2
+          }
+        }
+      ],
+      "shown": [
+        "11111111111111111111111111111111111111111111111111111111"
+      ]
+    },
+    {
+      "about": "ADA pools by their amount",
+      "pools": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "25000000",
+          "token": null,
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "25000000",
+          "token": null,
+          "launch": {
+            "block": 11,
+            "index": 0
+          }
+        },
+        {
+          "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "boxLovelace": "50000000",
+          "token": null,
+          "launch": {
+            "block": 12,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ]
+    },
+    {
+      "about": "a token pool and an ADA pool of the same ADA are two values",
+      "pools": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "100000000"
+          },
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "4500000",
+          "token": null,
+          "launch": {
+            "block": 11,
+            "index": 0
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "about": "shown in the order they were launched",
+      "pools": [
+        {
+          "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "boxLovelace": "6000000",
+          "token": null,
+          "launch": {
+            "block": 30,
+            "index": 0
+          }
+        },
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "boxLovelace": "4500000",
+          "token": {
+            "policy": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61",
+            "name": "446a65644d6963726f555344",
+            "quantity": "5"
+          },
+          "launch": {
+            "block": 10,
+            "index": 0
+          }
+        },
+        {
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "boxLovelace": "7000000",
+          "token": null,
+          "launch": {
+            "block": 20,
+            "index": 1
+          }
+        }
+      ],
+      "shown": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ]
+    },
+    {
+      "about": "nothing found, nothing shown",
+      "pools": [],
+      "shown": []
+    }
+  ]
+}

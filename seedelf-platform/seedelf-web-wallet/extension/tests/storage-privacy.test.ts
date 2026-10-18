@@ -13,6 +13,7 @@ import { LOCAL_GOV_ACTIONS_PREFIX } from "../src/background/governance";
 import { LOCAL_POOLS_PREFIX } from "../src/background/staking";
 import { fromBase64, toBase64 } from "../src/background/storage";
 import { VAULT_KEY } from "../src/background/vault";
+import { LOCAL_LOVEJOIN_POOLS_PREFIX } from "../src/background/lovejoin-pools";
 import { LOCAL_CACHES } from "../src/background/wallet";
 import { OPEN_IN } from "../src/shared/open-in";
 import { testWallet, vectors } from "./fakes";
@@ -78,7 +79,7 @@ describe("the vault", () => {
 });
 
 describe("Remove wallet", () => {
-  it("deletes the pool list, the governance actions and a price kept on the disk before, and keeps where the wallet opens and its network", async () => {
+  it("deletes the pool list, the governance actions, the Lovejoin pools found and a price kept on the disk before, and keeps where the wallet opens and its network", async () => {
     // The caches it names are the ones those modules keep.
     expect([...LOCAL_CACHES].sort()).toEqual(
       [
@@ -86,6 +87,8 @@ describe("Remove wallet", () => {
         `${LOCAL_POOLS_PREFIX}preprod`,
         `${LOCAL_GOV_ACTIONS_PREFIX}mainnet`,
         `${LOCAL_GOV_ACTIONS_PREFIX}preprod`,
+        `${LOCAL_LOVEJOIN_POOLS_PREFIX}mainnet`,
+        `${LOCAL_LOVEJOIN_POOLS_PREFIX}preprod`,
         LOCAL_PRICES,
       ].sort(),
     );

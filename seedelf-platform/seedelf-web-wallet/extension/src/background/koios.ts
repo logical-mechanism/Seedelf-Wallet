@@ -140,6 +140,22 @@ export interface KoiosTxSpends {
   outputs?: Array<{ payment_addr: { bech32: string; cred?: string | null }; tx_index?: number }> | null;
 }
 
+/**
+ * The transaction that made a candidate at Lovejoin's holder, as pool
+ * discovery reads it (`tx_info`): where it sits, what it spent (one input is
+ * its seed) and the reward accounts it registered.
+ */
+export interface KoiosLaunch {
+  tx_hash: string;
+  block_height: number;
+  /** Its place in its block. */
+  tx_block_index: number;
+  /** Unix seconds. */
+  tx_timestamp: number;
+  inputs: Array<{ tx_hash: string; tx_index: number }> | null;
+  certificates?: Array<{ type: string; info: Record<string, unknown> | null }> | null;
+}
+
 /** A stake key's standing: `account_info`. No row at all means it was never registered. */
 export interface KoiosAccountInfo {
   stake_address: string;
@@ -899,6 +915,53 @@ export class Koios {
       );
     }
     return rows;
+  }
+
+  /**
+   * The transactions that made candidates at Lovejoin's holder (pool
+   * discovery, chunk 34's 34c): each one's place, inputs and certificates,
+   * nothing of its outputs, tokens or metadata. At most `TXS_PER_REQUEST` go
+   * in a request. A transaction Koios doesn't know has no row.
+   */
+  async launches(txHashes: string[]): Promise<KoiosLaunch[]> {
+    const rows: KoiosLaunch[] = [];
+    for (let i = 0; i < txHashes.length; i += TXS_PER_REQUEST) {
+      rows.push(
+        ...(await this.post<KoiosLaunch>(
+          "tx_info",
+          {
+            _tx_hashes: txHashes.slice(i, i + TXS_PER_REQUEST),
+            _inputs: true,
+            _metadata: false,
+            _assets: false,
+            _withdrawals: false,
+            _certs: true,
+            _scripts: false,
+            _bytecode: false,
+          },
+          "select=tx_hash,block_height,tx_block_index,tx_timestamp,inputs,certificates",
+        )),
+      );
+    }
+    return rows;
+  }
+
+  /**
+   * When each of `stakeAddresses` was first registered (Unix seconds of its
+   * block), for those that were: whether a pool's `mix_logic` was registered
+   * before its launch, when the launch didn't register it itself.
+   */
+  async firstRegistrations(stakeAddresses: string[]): Promise<Map<string, number>> {
+    const first = new Map<string, number>();
+    for (let i = 0; i < stakeAddresses.length; i += CREDENTIALS_PER_REQUEST) {
+      const rows = await this.post<{ stake_address: string; block_time: number }>(
+        "account_update_history",
+        { _stake_addresses: stakeAddresses.slice(i, i + CREDENTIALS_PER_REQUEST) },
+        "select=stake_address,block_time&action_type=eq.registration",
+      );
+      for (const r of rows) first.set(r.stake_address, Math.min(first.get(r.stake_address) ?? Infinity, r.block_time));
+    }
+    return first;
   }
 
   /** A stake key's standing; undefined when it was never registered. */

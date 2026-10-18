@@ -9,6 +9,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { txInputs } from "../src/background/cbor";
+import { DataParts } from "../src/background/data-layer";
+import { privateIndexClient, type IndexRow } from "../src/background/private-index";
+import { fakeIndex, indexRowOf, type FakeIndex } from "./fake-index";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
@@ -52,12 +55,20 @@ const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
 
 type T = ReturnType<typeof testBalances>;
 
-/** Lovejoin reading the classic pool and `pools` (the token pool), with giveme.my's witness stood in for. */
-function pooled(t: T, pools: () => PoolRef[] = () => [TOKEN_POOL]) {
+/**
+ * Lovejoin reading the classic pool and `pools` (the token pool), with
+ * giveme.my's witness stood in for; on the data layer's private index too,
+ * when one's given (pointed at preprod's fixtures: its client is the same on
+ * any network).
+ */
+function pooled(t: T, pools: () => PoolRef[] = () => [TOKEN_POOL], index?: { fetch: FakeIndex["fetch"]; parts: DataParts }) {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   return new LovejoinService({
     ...t.deps,
+    ...(index
+      ? { index: privateIndexClient({ koiosOnly: async () => false, parts: index.parts, fetch: index.fetch, limits: {} }, () => "https://data.test") }
+      : {}),
     wasm: {
       ...wasm,
       finishLovejoinWithdraw: (request: string) => {
@@ -521,5 +532,75 @@ describe("what made a token pool's box, after a restore (independent review M14)
     expect(kept.origins?.["f1".repeat(32)]).toMatchObject({ mixed: false, mixedIn: [TOKEN] });
     expect(kept.pools?.[TOKEN]?.due).toHaveLength(1);
     expect(kept.pools?.[TOKEN]?.notMixed).toBeUndefined();
+  });
+});
+
+describe("the token pools on the data layer (chunk 34's 34c)", SLOW, () => {
+  /** The index listing the classic pool and the token pool, each box with what made it. */
+  async function onIndex(t: T) {
+    const index = fakeIndex();
+    const at = index.tip - 100_000;
+    const made = (cred: string): IndexRow["made_by"] => ({ mixed: true, inputs: [[cred, null]] });
+    index.pool = [...POOL, await classicBox(t, "c1")].map((u) => ({ row: { ...indexRowOf(u, at), made_by: made(CLASSIC_BOX) } }));
+    index.tokens = [await tokenBox(t, "f1"), await tokenBox(t, "f2"), ...(await strangers(t))].map((u) => ({
+      row: { ...indexRowOf(u, at), made_by: made(VIEW.mixBoxHash) },
+    }));
+    index.tokenPools = [VIEW.mixBoxHash];
+    // What Koios would list, were it asked: the token pool's boxes, and the classic pool's.
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), await tokenBox(t, "f2"), ...(await strangers(t)));
+    t.koios.calls.length = 0;
+    return { index, parts: new DataParts(t.session, () => t.clock.now) };
+  }
+
+  const mixBoxReads = (t: T) =>
+    t.koios.calls.filter((c) => c.path === "credential_utxos").map((c) => c.body._payment_credentials as string[]);
+
+  it("reads a token pool's boxes from the combined feed, each with what made it: Koios is asked about neither", async () => {
+    const t = await wallet();
+    const { index, parts } = await onIndex(t);
+    const status = await pooled(t, undefined, { fetch: index.fetch, parts }).status("preprod");
+    expect(status.pools![0]).toMatchObject({
+      id: TOKEN,
+      boxes: [
+        { txHash: "f1".repeat(32), txIndex: 0, pool: TOKEN },
+        { txHash: "f2".repeat(32), txIndex: 0, pool: TOKEN },
+      ],
+      others: 10,
+    });
+    expect(index.calls.filter((c) => c.startsWith("lovejoin/"))).toEqual([
+      "lovejoin/pool",
+      expect.stringMatching(/^lovejoin\/since\//),
+      "lovejoin/tokens",
+      expect.stringMatching(/^lovejoin\/tokens\/since\//),
+    ]);
+    // No pool listed by Koios, and nobody asked what made a box: the feed said, as the classic pool's does.
+    expect(mixBoxReads(t)).toEqual([]);
+    expect(t.koios.calls.filter((c) => c.path === "tx_info")).toEqual([]);
+    const origins = (await sealed(t)).origins ?? {};
+    expect(origins["f1".repeat(32)]).toMatchObject({ mixed: false, mixedIn: [TOKEN] });
+  });
+
+  it("reads the token pools from Koios while the feed can't answer, the classic pool from the index, the part kept up", async () => {
+    const t = await wallet();
+    const { index, parts } = await onIndex(t);
+    index.tokensFail = Response.json({ error: "behind" }, { status: 503 });
+    const status = await pooled(t, undefined, { fetch: index.fetch, parts }).status("preprod");
+    expect(status.pools![0]!.boxes).toHaveLength(2);
+    expect(mixBoxReads(t)).toEqual([[VIEW.mixBoxHash]]);
+    expect(await parts.up("private")).toBe(true);
+    // A token box's making is Koios's to say now; the classic pool's box's still the index's.
+    const asked = t.koios.calls.filter((c) => c.path === "tx_info").flatMap((c) => c.body._tx_hashes as string[]);
+    expect(asked).toEqual(expect.arrayContaining(["f1".repeat(32), "f2".repeat(32)]));
+    expect(asked).not.toContain("c1".repeat(32));
+  });
+
+  it("reads from Koios a shown pool the feed doesn't cover yet", async () => {
+    const t = await wallet();
+    const { index, parts } = await onIndex(t);
+    index.tokenPools = [];
+    index.tokens = [];
+    const status = await pooled(t, undefined, { fetch: index.fetch, parts }).status("preprod");
+    expect(status.pools![0]!.boxes).toHaveLength(2);
+    expect(mixBoxReads(t)).toEqual([[VIEW.mixBoxHash]]);
   });
 });

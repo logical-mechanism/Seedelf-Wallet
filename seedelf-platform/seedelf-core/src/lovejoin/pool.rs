@@ -39,6 +39,10 @@ use std::fmt;
 /// The ledger's ceiling on one asset's quantity in an output, and so on `Q`.
 pub const MAX_TOKEN_QUANTITY: u64 = u64::MAX;
 
+/// What every box of the classic pool holds. An ADA pool on the generalized
+/// scripts at this value is a copy of the classic pool's, and never read.
+pub const CLASSIC_LOVELACE: u64 = 10_000_000;
+
 /// A token pool's reference datum, decoded as strictly as `one_shot_mint`
 /// checks it at the launch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +75,9 @@ pub enum Rejected {
     NotOneNft,
     /// No inline datum, or not the eight fields within their ranges.
     BadDatum(String),
-    /// An ADA pool on the generalized scripts. The classic pool is the only
-    /// ADA pool the wallet uses ("at this moment", the owner, 2026-10-13).
+    /// An ADA pool on the generalized scripts at the classic pool's 10 ₳: a
+    /// copy of its value, never shown (chunk 34's session 1, 17). ADA pools
+    /// at any other amount are pools like the token pools.
     AdaPool,
     /// The seed given doesn't make this NFT's policy: no proof it's genuine.
     WrongSeed,
@@ -98,7 +103,7 @@ impl fmt::Display for Rejected {
             Rejected::BadDatum(why) => write!(f, "Its datum isn't a token pool's: {why}"),
             Rejected::AdaPool => write!(
                 f,
-                "It's an ADA pool on the new scripts, which the wallet doesn't use"
+                "It's a 10 ₳ ADA pool on the new scripts, a copy of the classic pool's value"
             ),
             Rejected::WrongSeed => write!(
                 f,
@@ -301,8 +306,9 @@ fn nft_policy(value: &Value) -> Option<[u8; 28]> {
 
 /// The cheap part of [`verify_pool`], offline and without a seed: whether
 /// `reference` has a launch's shape (at the holder, no stake credential, no
-/// reference script, one `lovejoin` NFT and ADA alone, a token pool's eight
-/// fields). Returns the NFT's policy (the pool's id) and its datum.
+/// reference script, one `lovejoin` NFT and ADA alone, a pool's eight fields,
+/// not a 10 ₳ ADA pool). Returns the NFT's policy (the pool's id) and its
+/// datum.
 pub fn candidate(
     network_flag: bool,
     reference: &Resolved,
@@ -326,7 +332,7 @@ pub fn candidate(
     };
     let datum =
         ReferenceDatum::decode(&data.0.encode_fragment().map_err(|_| Rejected::Unreadable)?)?;
-    if datum.box_value.token.is_none() {
+    if datum.box_value.token.is_none() && datum.box_value.lovelace == CLASSIC_LOVELACE {
         return Err(Rejected::AdaPool);
     }
     Ok((policy, datum))

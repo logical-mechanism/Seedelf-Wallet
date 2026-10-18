@@ -6,10 +6,11 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 the groundwork, design session 1 and 34a′ are done; 34c is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: 🚧 the groundwork, design session 1, 34a′ and 34c are done; 34d and 34e are next.** The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
 - **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first.
 - **[34a′, the records](#34a--the-records-2026-10-17)** (`web-wallet/token-pools-records`, 2026-10-17): every pool's records beside the classic pool's, every mix followed until its boxes are back, Bootstrap's boxes held, gated on 1.5.0's own record of how it planned and ran.
+- **[34c, discovery and the data layer](#34c--discovery-and-the-data-layer-2026-10-17)** (`web-wallet/token-pools-discovery`, 2026-10-17): which pools are shown and how the wallet finds them, the data layer's copy of the rules, its pool list, crowds and combined box feed. The server's queries wait on one live run against home's db-sync, which the owner starts.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
@@ -117,10 +118,19 @@ The owner's answers to Claude's remaining questions.
 28. **The Seedelf minimum stays as it is** ([Still open](#still-open) 9): the suggested 4.5 ₳ already allows for it.
 29. **The preprod tests are dual.** Claude runs them in dev mode, the launch included, from the private test wallet. Then the owner tries them by hand, perhaps bootstrapping Claude's pool: Claude's automatic run, then the owner's manual one.
 
+### Decided at 34c (the owner, 2026-10-17)
+
+30. **"Finished" is finished by its launch.** The launch transaction itself puts `mix_box` and `mix_logic` at the holder and registers L, unless L was registered in an earlier block. "Earliest for its values" is then the earliest launch: by block, place in the block, then id.
+    - So a pool's standing is final the moment it's found: never checked again, never displaced. A shown pool stays shown.
+    - Every launch the wallet makes qualifies. A pool finished later, in another transaction, is never shown.
+    - Claude's reason: "first to finish" needs every event's place on chain and re-checks unfinished pools forever, and "earliest launch, shown once finished" lets a bare 2.1 ₳ launch hold a value.
+31. **Deposits are counted as possible origins.** A pool's crowd is every deposit some box in it now could have come from: a mix's boxes could be any of its inputs. A deposit whose boxes have all left, mixed or not, no longer counts. The data layer works it out (mainnet); on Koios the crowd line shows boxes alone.
+32. **Core keeps its own copy of the rules.** The data layer's copy is its own (`seedelf-data/api/src/lovejoin/`), and nothing new is published for the CLI. The two are held to shared vectors and scenarios. This replaces [§10](#10-the-data-layer-mainnet-deployed-before-the-wallets-upload)'s small shared crate.
+    - The owner asked for an explanation first. The trade: one copy would need `seedelf-lovejoin` published before core at the next CLI release; two copies can disagree where the vectors don't reach.
+
 ### Still open after session 1
 
 Each is small, and the step named settles it.
-- How deposits are counted once a pool's boxes have been mixed (34c). Before any mix, each unmixed box's making transaction is a deposit.
 - The words for four boxes' fallback to three, and whether a chain's view says which width it went at (34e, 34f).
 - The screens in detail (34f), drawn from session 1: the hub, a pool's page, the launch form, Bootstrap, and the mix cards.
 
@@ -590,6 +600,57 @@ Branch `web-wallet/token-pools-records`. The step that [§8](#8-records) and ses
 
 **Left to later steps:** building chains into token pools, Bootstrap's button and the launch's record (34d); the planner per pool (34e); discovery and the read set's source (34c); every screen (34f).
 
+## 34c · Discovery and the data layer (2026-10-17)
+
+Branch `web-wallet/token-pools-discovery`, from main 88e5be7. [Session 1](#design-session-1-2026-10-17)'s 11, 12 and 26, and 30 to 32, as built. Claude's choices, the owner's to overturn.
+
+**The rule, three times over.** A pool is shown when it's **standard** and the **earliest launched of its values**.
+- Standard: the reference UTxO's shape (the holder's enterprise address, no reference script, one `lovejoin` NFT and ADA alone, a datum that decodes); a token in `tokens/list.json`, or ADA at any amount but 10 ₳; a seed among the launch's inputs that makes the NFT's policy, and a datum naming exactly the scripts that seed makes; and finished by its launch (30).
+- Core: `candidate` now takes ADA pools at any amount but the classic pool's 10 ₳ (17); WebAssembly's `lovejoinCandidate` (the cheap offline checks) and `lovejoinLaunchCheck` (the seed among the inputs, the derivation, which scripts the launch put at the holder, and L's reward account).
+- The wallet: `background/lovejoin-pools.ts` (`shown`, `PoolDiscovery`).
+- The data layer: `seedelf-data/api/src/lovejoin/` (32), its own copy written without Pallas, uplc or blst:
+  - `flat.rs` applies a template's parameters by hand. A term moved along isn't its bits shifted: every byte string in it is padded to a byte boundary, so moving it moves its pads. The term is read and written again, item by item.
+  - `templates.rs` (the four templates, copied from core and pinned by their hashes), `datum.rs` (as strict as core's `ReferenceDatum::decode`: any integer width, chunked bytes, either list form; no bignum, no tag 102), `standard.rs`, `crowd.rs`, `db.rs`, `discovery.rs`, `routes.rs`.
+- **Held together:** `seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`, which core's `lovejoin_vectors_test.rs` writes from its own derive and decoder (ten seeds' four hashes; 32 datum encodings and what each reads as), and `extension/tests/fixtures/lovejoin-shown.json` (ten scenarios of the earliest of each value), read by both sides' tests. The data layer's CI runs when either changes, or the token list.
+
+**The data layer** (mainnet, db-sync alone; Kupo indexes neither the holder nor the token pools):
+- `lovejoin/pools`: every shown pool as of the stable cursor (its reference UTxO, seed, two scripts at the holder named by their hashes, its launch's place and its crowd), and the classic pool's crowd.
+- `lovejoin/tokens` and `/since/{cursor}`: every shown pool's boxes, read as the classic pool's routes are, each with `made_by` (`mixed` per its own pool), and the pools covered: those shown as of the cursor, or of `from`'s.
+- Each candidate at the holder is checked once and its verdict kept in memory (at most 200,000, past which it's checked at each request), the derivations off the request threads; the holder is read on by output id, all of it hourly.
+- `lovejoin/pools` is worked out once per cursor, off any request, and kept an hour; a request waits up to its 5 s, then gets the last list.
+- While db-sync can't answer, the three routes say 503 with a wait, and the classic pool's go on from Kupo (per route, as §10 asked). The wallet takes any refusal of theirs but a 429 as theirs alone (`TokensDown`).
+- **The crowd** (31): its boxes (exactly the box value, a box's datum), the deposits they could have come from, worked backwards from the boxes through each mix, and how many a mix made.
+
+**The wallet:**
+- **Found** (`PoolDiscovery`): the data layer's list at each pool read, at most every 5 minutes, each pool verified again in WebAssembly; or, when the Lovejoin page opens (`lovejoin-look-for-pools`) and the data layer hasn't answered within those 5 minutes, Koios's holder from the last height looked to, less 20 blocks:
+  - the cheap checks first, offline: the shape, the datum, a listed token, and both scripts its datum names at the holder in the same transaction. Only a candidate that passes costs a request;
+  - its launch's `tx_info` (inputs and certificates, 20 a request); for a launch that didn't register L, L's `account_update_history`;
+  - a launch under 10 minutes old, or one Koios doesn't know yet, holds the height back to before its block, and a look that fails keeps nothing.
+- **Kept** in `seedelf.lovejoinPools.<network>`, unsealed (the same for everyone; the height dates the last look; deleted with the wallet): every standard pool, its scripts named by their hashes alone, which WebAssembly fills in from its own derivation. Rejected candidates aren't kept: the next look starts past them.
+- **The bundled head start** (`src/lovejoin-pools.json`): written by `npm run lovejoin-pools` with the wallet's own look against the real Koios, and checked on every test run (each pool verifies, none is a copy). Today: no standard pool on either network; preprod looked to block 5,299,707, mainnet to 14,080,490.
+- **Read** (`LovejoinService`): `pools` is `discovery.known`, after the data layer's refresh. A token pool's rows come from `lovejoin/tokens` for the pools it covers, each box's making with it, so nobody is asked what made a token pool's box while the data layer answers (34a′'s *For later steps*, done). A pool it doesn't cover, or all of them while it says 503 (`TokensDown`, which leaves the part up), comes from Koios, in the classic pool's request when that goes to Koios too.
+- **Provenance per pool:** what the index listed says who made the boxes of the pools it covered (`classic`, `fed`); a box of a pool read from Koios is Koios's to say, and so is a transaction that made boxes in both.
+
+**Tests:** core's vectors (2), the ADA pool case in `lovejoin_pools_test.rs`; the data layer's rule, settling and assembly tests, 5 crowd tests and the 503 route test (`scripted_kupo.rs`); WebAssembly's candidate, launch check and hash-named scripts (`lovejoin-pools.test.mjs`); the extension's `lovejoin-discovery.test.ts` (13), three feed tests in `lovejoin-pools.test.ts`, the head start's check, and Remove wallet's caches. The classic pool's tests and 1.5.0's gate pass unedited. Against the real preprod Koios (`LIVE_KOIOS=1`): the holder, a launch's `tx_info` with `tx_block_index`, and registrations read as discovery reads them.
+
+**An independent review** of the diff, adversarial, found these. Each is fixed, with a test where one can run offline:
+- **The discovery tests read the bundled head start**, so writing it (`npm run lovejoin-pools`, at block 5,299,707 on preprod) moved their look past the fixture's launch: five failed. A test now gives its own head start (`headStart`), and one checks the bundled one is where a look starts.
+- **The server's verdict cap dropped what it had just checked:** past 200,000 kept, a new standard pool's verdict was thrown away and the pool never shown, so a holder filled with junk would have hidden every later launch from every mainnet wallet. A request's own verdicts now count whether kept or not.
+- **A token route's 404 marked the whole private index down** for every wallet, every 5 minutes (a server deployed back to 1.5.x, or the upload ahead of the deploy). Any refusal of the token routes but a 429, and any answer of theirs the wallet can't read, is now `TokensDown`.
+- **The token routes' cost grew with the holder and every pool's history** under a request's 5 s, on the private index's two connections. The holder is now read on by output id (all of it hourly), refused candidates aren't kept, a launch's inputs are tried once, and the pool list (with its crowds) is worked out once per cursor off the request, the last list answering meanwhile.
+- **Koios's look took launches at the tip**, so one rolled back stayed kept for good, and one made again elsewhere kept its old place. A launch is now taken only once its block is 10 minutes old (`SETTLE_MS`), the height held short of it until then.
+- **A spread over a long holder answer would overflow** (`Math.max(...)` past about 125,000 rows): a fold now.
+- **The live check of first registrations passed vacuously:** it now asks about a key the recorded delegation history registered too.
+- Left as they are: the fake index's `tokens/since` covers the snapshot's pools (the server's newer-cursor case is checked server-side); `privacy.md`'s wording of the fallback request, corrected.
+
+**Waiting on the owner:** the server's queries against home's db-sync (Production Reads are the owner's to run), from `seedelf-data/`:
+`cargo test --test live_lovejoin -- --ignored --test-threads=1 --nocapture`. It checks that the combined feed's queries give the classic route's rows field for field when given the classic pool's mix box, that the classic pool's crowd counts the route's boxes, and that every candidate at the holder is read and checked; with `--nocapture` it prints each one's verdict and the classic pool's crowd.
+
+**For later steps:**
+- **34d:** the launch's review can say a pool of the same values exists (the form's list of pools, 14) from `discovery.known`; a launch whose L an earlier block registered needs no cert and is still standard, but one registered in the same block isn't.
+- **34f:** the hub's crowd line from `PoolDiscovery.crowdsOf` (the data layer's; none on Koios, which shows boxes alone), through an RPC of its own; the pools grouped by token from `known`.
+- **34g:** deploy the API before the upload, as ever; `npm run lovejoin-pools` with the other lists; the policy's *Changes* entry names the new reads: the data layer's `lovejoin/pools` and `lovejoin/tokens`, and on Koios the holder's outputs, launches' `tx_info` and L's registrations.
+
 ## Open for discussion
 
 ### D1 · Pool spam and sync
@@ -704,7 +765,7 @@ Each step ends with its tests green. The steps can land as parts, but they ship 
 | **34a** | ✅ Core: `Pool`, `BoxValue`, the templates (at the merge, 8131b1d), derive, `verify_pool`, the generalized `ScriptSpend` and builders; the classic path byte-identical | S0a |
 | **34a′** | ✅ Records: their shapes, migrating 1.5.0's, and reading every shown pool. Each mix's record lasts until its boxes are counted back, and Bootstrap is a kind of its own. **Gated on [backward compatibility](#backward-compatibility-with-the-classic-ada-pool) 3–5 and 8**: the plan-equality test and the mid-flight 1.5.0 vault ([as built](#34a--the-records-2026-10-17)) | 34a; session 1 |
 | **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
-| **34c** | Discovery and the data layer: the holder index, the shown-pool rule (genuine, finished, earliest for its values), the bundled head start, the shared verification crate, the pool list and the combined box feed, and deposit counts | session 1 (11, 12) |
+| **34c** | ✅ Discovery and the data layer: the holder index, the shown-pool rule (standard, finished by its launch, earliest for its values), the bundled head start, the data layer's own copy of the rules (32), the pool list and the combined box feed, and deposit counts as possible origins ([as built](#34c--discovery-and-the-data-layer-2026-10-17); its live db-sync run is the owner's) | session 1 (11, 12) |
 | **34d** | The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity | 34a′, 34c |
 | **34e** | The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback | 34a′ |
 | **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |

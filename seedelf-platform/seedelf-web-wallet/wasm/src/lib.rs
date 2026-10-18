@@ -4291,6 +4291,21 @@ pub fn lovejoin_verify_pool(request: &str) -> Result<String, JsError> {
     to_json(&lovejoin::verify_pool(from_json(request)?).map_err(js_error)?)
 }
 
+/// A candidate at Lovejoin's holder, its cheap offline checks alone
+/// (`lovejoin::CandidateRequest` → `lovejoin::CandidateView`), or why it isn't one.
+#[wasm_bindgen(js_name = lovejoinCandidate)]
+pub fn lovejoin_candidate(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::candidate(from_json(request)?).map_err(js_error)?)
+}
+
+/// A candidate checked against its launch transaction: its seed among the
+/// inputs, its scripts derived and matched (`lovejoin::LaunchCheckRequest`
+/// → `lovejoin::LaunchCheck`), or why it isn't a genuine pool.
+#[wasm_bindgen(js_name = lovejoinLaunchCheck)]
+pub fn lovejoin_launch_check(request: &str) -> Result<String, JsError> {
+    to_json(&lovejoin::launch_check(from_json(request)?).map_err(js_error)?)
+}
+
 /// Whether a pool can take a new mix under today's parameters
 /// (`lovejoin::UsableRequest` → `lovejoin::UsableResult`).
 #[wasm_bindgen(js_name = lovejoinUsable)]
