@@ -6,12 +6,13 @@
 
 **Why it matters:** today a token in a one-time account, or one coming back into a Seedelf, is never mixed, so under some circumstances it can be tied to its owner. With token pools, someone buying NIGHT or a stable token can mix it and go back into the mixer, the way ADA already does.
 
-**Status: 🚧 the groundwork, design session 1, 34a′, 34c and 34d are done; 34e is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
+**Status: 🚧 the groundwork, design session 1, 34a′, 34c, 34d and 34e are done; 34f is next.** The plan went through two rounds of the owner's questions on 2026-10-13.
 - **The groundwork** (`web-wallet/token-pools-groundwork`, 2026-10-17) did every step that needs no more design: S0a, S0b, S0d, S0c's evaluation, 34a and 34b, core and WebAssembly. Nothing in the worker uses them yet. What it built and found is under [The groundwork](#the-groundwork-2026-10-17).
 - **The design sessions** (the owner, 2026-10-17: "the biggest back n forth we will have will be how this all looks for the ux ui and how we handle the pool discovery part") run on `web-wallet/token-pools-design`. **[Session 1](#design-session-1-2026-10-17)'s calls override the sections below** wherever they differ, until a later session folds them in. Still to settle: its *Still open after session 1*, each small and owned by a step. The design is otherwise ready for the steps: 34a′ and 34c first.
 - **[34a′, the records](#34a--the-records-2026-10-17)** (`web-wallet/token-pools-records`, 2026-10-17): every pool's records beside the classic pool's, every mix followed until its boxes are back, Bootstrap's boxes held, gated on 1.5.0's own record of how it planned and ran.
 - **[34c, discovery and the data layer](#34c--discovery-and-the-data-layer-2026-10-17)** (`web-wallet/token-pools-discovery`, 2026-10-17): which pools are shown and how the wallet finds them, the data layer's copy of the rules, its pool list, crowds and combined box feed. The server's queries wait on one live run against home's db-sync, which the owner starts.
 - **[34d, the flows](#34d--the-flows-2026-10-18)** (`web-wallet/token-pools-flows`, 2026-10-18): the tile's mixes into a token pool from either side, Bootstrap in place of the seed, a pool's start from either side and every check before it, the escape hatch, and Activity's names. Worker, core and WebAssembly; the screens are 34f's.
+- **[34e, the planner](#34e--the-planner-returns-through-token-pools-and-four-boxes-a-mix-2026-10-18)** (`web-wallet/token-pools-planner`, 2026-10-18): each pool's costs, a return's tokens through their own pools beside its ADA's in one chain, Change, a swap that funds its token's boxes (33), and four boxes a mix with its fallback to three. Worker, core and WebAssembly; the screens are 34f's.
 
 **Read first:**
 - PR #163's own write-up: `docs/generalize-lovejoin.md` and `docs/perf.md`, on Lovejoin's `main` since the merge (8131b1d).
@@ -129,10 +130,14 @@ The owner's answers to Claude's remaining questions.
 32. **Core keeps its own copy of the rules.** The data layer's copy is its own (`seedelf-data/api/src/lovejoin/`), and nothing new is published for the CLI. The two are held to shared vectors and scenarios. This replaces [§10](#10-the-data-layer-mainnet-deployed-before-the-wallets-upload)'s small shared crate.
     - The owner asked for an explanation first. The trade: one copy would need `seedelf-lovejoin` published before core at the next CLI release; two copies can disagree where the vectors don't reach.
 
+### Decided at 34e (the owner, 2026-10-18)
+
+33. **A swap that buys a token a pool takes funds its boxes,** on by default. Without it, a swap's return holds only its 2 ₳ margin beside the token, so no swap's proceeds would ever go through a token pool. Its review adds the ADA the proceeds' boxes take (each box's own ADA, which comes back with it, and its mixes' fees, which don't), apart from the swap's own funding; Change picks another pool of the token, or none. Claude asked; the owner chose it.
+
 ### Still open after session 1
 
 Each is small, and the step named settles it.
-- The words for four boxes' fallback to three, and whether a chain's view says which width it went at (34e, 34f).
+- ~~Whether a chain's view says which width it went at~~: it does (34e, `width`). The words for four boxes' fallback to three are drafted (`lj.width.warn.*`); where the screens show them is 34f's.
 - The screens in detail (34f), drawn from session 1: the hub, a pool's page, the launch form, Bootstrap, and the mix cards.
 
 ## The owner's calls this builds on (2026-10-13)
@@ -722,6 +727,116 @@ The two new strings (`lj.launch.from`, `lj.launch.otherPool`) are machine drafts
   - Bootstrap per pool, with its progress below the floor.
 - **34g:** the policy's *Changes* entry names a launch's `asset_info` and `account_info`, the account-paid launch and the escape hatch; and the launch's first real submit on preprod (S0c).
 
+## 34e · The planner, returns through token pools, and four boxes a mix (2026-10-18)
+
+Branch `web-wallet/token-pools-planner`, from main 9cb97a3. The step's row as built: each pool's costs, a return's tokens through their own pools (§6, §7), Change, a swap that funds its token's boxes (33), and D3. Core, WebAssembly and the worker; the screens are 34f's. Claude's choices, the owner's to overturn, but 33, the owner's.
+
+**Core** (`seedelf-core/src/lovejoin/mod.rs`)
+- **Each pool plans on its own mix** (`mix_fee_estimate`): 0.95 ₳ three wide, as ever; 1.35 ₳ four wide (1.214 ₳ measured on mainnet's classic pool and 1.227 ₳ on a token pool, and about a tenth); and 0.15 ₳ more a mix for a pool whose scripts no reference carries (0.114 ₳ measured). `per_box_in`, `boxes_affordable_in`, `funding_for_in` and `again_*_in` take the pool and the width. The classic pool three wide is the old functions exactly, at every depth and count (a test holds it).
+- **A chain across pools.** `deposit_across` is one deposit: each leg's boxes at its own `mix_box` and value, then the token change, then the ADA change. `chain_across` fans each leg out in its own pool, a leg at a time, every mix paid from the one before's change. One leg three wide is `deposit_from` and `chain_from` byte for byte (a test compares the transactions); both are now that one leg.
+- **`plan_across`:** the token pools first, each taking as many boxes as its token makes (Q each), its `most` and the ADA allow; then the ADA's from what they leave. It keeps back the least the tokens left need in their own change output, and nothing when the boxes take them all.
+- **The width:** `mixes_per_box_at` ((width^depth − 1)/(width − 1): 1, 5 and 21 four wide), `fresh_for`'s `width − 1` others a mix, `fan_out`, `again_at`, `check_width` (3 or 4).
+
+**WebAssembly**
+- **A request's width** (`Wide`) **and a return's pools** (`Across`: `legs`, `fills`, `params`) are read on their own, as `poolRef` is. The classic native tests build their request structs field by field, so a new field would have edited them; `*_at` sits beside every `*_in`, three wide.
+- **`plan_across_pools`, `chain_across_pools`:** a session's own UTxOs holding a leg's token, or `fills`', go into its deposit, and never a stranger's. `PlanResult.legs` and `ChainResult.legs` give each leg's boxes, a leg's leaves in that order among `leaves`. One pool named twice, or a token into two pools, is refused.
+
+**The worker**
+- **Four boxes a mix** (D3): Settings' `lovejoinWidth`, 3 by default (its switch is 34f's). `widthFor`: four goes when it takes every box it pays for, or as many as three would. Otherwise it goes three, and says why (`fellBack`):
+  - the pool is short for four (`lj.width.warn.short`);
+  - the chain would be longer than one goes, MAX_CHAIN_MIXES (`long`);
+  - four costs more than the spare ADA pays a box at, where three pays for one (`cost`);
+  - four didn't build, or the network's check of its first mix refused it (`refused`), so it's built again at three.
+
+  Never fewer boxes for the width, nor a box back unmixed. It applies to the tile's mix from either side (`fits`, `publicBuild`), mixing again from either side (`againBoxes`, `publicAgainBuild`), and every session's chain (`fanOut`, `acrossOf`).
+  - A mix session is funded at its width and keeps it (`mix.width`), whatever Settings says since: a session funded for three, sent four wide, would come up short. A swap's approval keeps its own (`auto.lovejoin.width`). Either without one is three, as 1.5.0 went.
+  - A four-wide chain has two in the mempool at once (`CHAIN_WINDOW_FOUR`, carried as the progress's own `window`).
+  - Its record and its views say `width: 4` (ChainRecord, LovejoinChainView, LovejoinMixView's chain): a chain's view says which width it went at (session 1's open question). How to word it is 34f's.
+- **Returns through token pools** (`acrossOf`, §7):
+  - Each token the session's own UTxOs hold a box's worth of goes into a pool of it, its ADA into the classic pool with what they leave: one deposit, one chain, the first mix in each pool checked by the network (`crossCheck`, its deposit and the change it spends as `additionalUtxo`).
+  - A swap's fill counts as its own: the runner records the transactions it took for the fill or refund (`auto.fills`, outcomeOf). None from before.
+  - **Which pool:** the review's (`session-back-build`'s `pools`, Change: by the token's unit, a null for back directly) or the approval's. Otherwise, the token's most used pool that takes a box now: not under its floor, with room for a box, and usable (a new box's minimum and its way back, measured once an epoch). Among equals, the earliest shown.
+  - An approved swap takes no token into a pool its review didn't show (`only`): one it didn't name comes back directly, and so does one whose approved pool can't take a box now.
+  - `SessionBackSummary.lovejoin` gains `parts` (each pool's boxes, `pool` none) and `ways`. Each way is a token: its pool, its boxes, the pools Change can offer, and why it came back directly, if it did (`lj.tokens.skip.warn.*`, or `sess.skip.warn.noBox` when the ADA left pays for no box of it). The chain's record has the token pools' shares (`pools`) and each leaf in its pool.
+  - When no token goes in, the classic pool's chain is built from the same pool read.
+- **A swap that buys a token a pool takes funds its boxes** (33):
+  - `SwapLovejoin.ways` and `fund`: floor(minAmountOut / Q) boxes, at most what a chain, a deposit and the pool's room take, at the review's depth and width.
+  - The funding's first payment carries that ADA beside `quote.fund`, which stays the approval's: `withinFunding` checks what leaves the account against the swap's own alone.
+  - `session-out-build`'s `pools` is Change. As the user types, the quote names the token's first shown pool with no request; the review reads every pool's room once, and the parameters once for whether each is usable.
+  - Stopped, the funding's ADA comes back with its boxes' share (`ifStopped`).
+- **Every pool's room in one read** (`rooms`, `room(network, pool)`): one listing, as any read is, kept POOL_ROOM_MS. `poolsOf` and `usable` serve the review.
+
+**Strings:** six new accuracy-critical keys, `lj.width.warn.*` (4) and `lj.tokens.skip.warn.*` (2), the worker's reasons, in es and ja. An independent agent that saw only the Spanish and the Japanese back-translated them. It found the Spanish "mezcla" with no subject (in `cost`, readable as the ADA doing the mixing), "sus" and "para él" loose for a token, and "alcanza a pagar". In the Japanese, 件 with no noun read as transactions, 空きボックス as empty boxes, and トークンに選ばれた as chosen by the token. Each was rewritten. The round is "Chunk 34's 34e round" in verified-critical-*.json.
+
+**Tests:** core's `lovejoin_planner_test.rs` (9): the classic pool three wide as before, each pool's estimate, `plan_across`, a deposit and a chain across pools, four wide and short for four. WebAssembly's `lovejoin_across_test.rs` (4): a return's plan and chain across pools, a fill's token in and a stranger's out, four wide, the width read on its own. The worker's `lovejoin-planner.test.ts` (13):
+- a return's token in its pool beside the ADA's, each mix in its own pool, its record;
+- Change none, and a stranger's token out;
+- `wayOf` for each kind of session, and `poolChoice`;
+- a swap funding its MIN box (a MIN pool the wallet's own start makes), and its fill's MIN into the approved pool while a token its review didn't name comes back;
+- four wide from the public account, two in flight; three when the pool is short or four doesn't build;
+- a mix funded four wide staying four wide;
+- `fits`, and the funding at four;
+- the window;
+- every pool's room in one read.
+
+The classic pool's tests and the 1.5.0 gate pass unedited. The two preference tests that list every setting gained the width.
+
+**Claude's calls, the owner's to overturn:**
+- 1.35 ₳ planned for a four-box mix; 0.15 ₳ more for scripts carried inline.
+- Four's rule: it goes when it takes all it pays for, or as many as three would. Four-wide mixes cost more, so a return's spare ADA makes fewer boxes four wide. That's four's price, not a fallback.
+- A swap's token boxes are floor(minAmountOut / Q): what the least it asks for makes, never a box that may not fill.
+- A fill is every transaction that arrived as the runner read the outcome: a stranger's gift in that reading would go in with it, into the approved pool only.
+- One deposit holds MAX_TOKEN_DEPOSIT_BOXES (64) when a token pool is in it, all its boxes counted. Past it, or past one chain, the ADA's boxes go first, then the last token's.
+- A token whose approved or chosen pool can't take a box comes back directly, never into another pool.
+
+**Where it stands (2026-10-18).** Built on `web-wallet/token-pools-planner`. The review's ten findings below are fixed, each with a test that failed without its fix. Every check passed on the final tree: `cargo fmt --check`, clippy `-D warnings` (crypto, core, wasm), `cargo test --workspace --locked` (618), `wasm/build.sh` then `node --test` (53), `npm run typecheck`, Vitest 2,258 both builds (`VITE_ENABLE_MAINNET=false` too), `npm run build:ext` and e2e 100/100. Not run: the store build's e2e (CI's last step: never `package.mjs` in the main tree), and nothing on preprod. Next: commit (code, then docs), push and open the PR into main, as 34d's #318 went; then 34f.
+
+**The review's findings (2026-10-18, each fixed with a test).** An independent adversarial review read the diff (no code run) and found ten. Line numbers are the tree's before the fixes. The tests are in `lovejoin-planner.test.ts`'s *34e's review findings* (3's in `swap-runner.test.ts`, 8's in core's `lovejoin_planner_test.rs`).
+1. **Medium-high, privacy and backward compatibility 3: a token leg that fails sends the whole return back directly, ADA included.** `chain` returns `acrossOf`'s chain or its throw (lovejoin.ts ~2434). `buildBack`'s `leftOut` (sessions.ts ~3726) then returns it all directly when only the token leg failed: its pool's first mix refused by the network, a `PoolShort` for that leg, or a deposit over 16 KiB or short of ADA. 1.5.0 would have mixed that ADA. **Fixed:** a Lovejoin failure across pools (`narrower`) builds the classic pool's chain alone, from the same read; each token that was to go in comes back directly, `skipped` with `lj.tokens.skip.warn.failed`.
+2. **Medium-high: a swap 1.5.0 allowed is now refused at review, with no `ways` to Change from.** `tokenWay` (sessions.ts ~1383) caps a swap's token boxes by the chain, the deposit and the room, never by what the private balance pays beside the swap. With a box worth about 10 ₳ that's about 9 boxes, about 76 ₳ more, and `buildFunding` refuses (`sess.notEnoughPrivate`). The pool read also comes before a funding that then fails. **Fixed:** a funding refused for the private balance (`NotEnoughPrivate`, by its type) is built again with the token's boxes at none, the token back directly and `skipped` with `lj.tokens.skip.warn.balance`. A swap the balance can't pay at all is refused as before. The pool read before it stays: it's the one listing every read is, kept POOL_ROOM_MS.
+3. **Medium, privacy griefing (around final review F4): `auto.fills` takes every arrival as the fill** (sessions.ts ~3018). A stranger's UTxO holding 1 of the approved token and hundreds of junk assets goes into the deposit. Its junk's least ADA comes from the user's spare, and the junk comes back as the session's own token change; enough of it pushes the deposit past 16 KiB, which through 1 sends it all back directly. **Fixed:** a fill is a transaction whose every UTxO at the account holds ADA and the swap's `tokenIn`/`tokenOut` alone (`fillsOf`).
+4. **Medium, over-funding: `againBuild` funds at Settings' width after `againBoxes` fell back to three.** `againBoxes` names its width only when it's four (lovejoin.ts ~2305), so `funding(..., undefined)` reads Settings' four, records `mix.width: 4` beside a `fellBack` saying three, and over-funds (about 16 ₳ a box at depth 3; it comes back with the return). `mixOutBuild` reads Settings twice the same way (sessions.ts ~1614). **Fixed:** both callers pass on the width chosen, three when none is named. `fits` and `againBoxes` return what they did, so the classic tests run unedited.
+5. **Low-medium: the swap review prices only at the width asked.** `priced`'s `poolShort` and `fits`, `tokenWay`'s room and `stopCost` use four's need: a pool with room for three but not four reads "comes back directly" while the return falls back to three and mixes. **Fixed:** one rule for every chain's width, `wayOver` (fanOut, acrossOf, the review). The review weighs the token's boxes and the ADA's together, as one chain goes, and shows three with `fellBack` (new on `SwapLovejoin`) where four can't take what three would. Its approval keeps that width. `ifStopped` and Stop's dialog go from that width down, as the return does, each with its own `width`/`fellBack`. `skipped` is three's.
+6. **Low: `collateralWanted` uses Settings' width** (sessions.ts ~3831): at four, a session whose spare pays a three-wide box isn't offered *Put in 5 ₳*, and reads `noBox`. **Fixed:** priced at three.
+7. **Low: with both widths short, four is chosen,** so the refusal quotes four's need (`fanOut`'s and `acrossOf`'s rule; `againBoxes`, `publicAgainBuild`'s `count(4) >= count(3)` at 0). **Fixed:** four only when it takes a box (`wayOver`, `againWay`).
+8. **Low: `plan_across` keeps the reserved plan as soon as it leaves tokens** (mod.rs ~1516), one token box short at a boundary. **Fixed:** the unreserved plan is tried first and kept when it leaves no token.
+9. **Low, reads: `readSet` now runs where it didn't, and can ask the data layer for its pool list** (`discovery.refresh`, throttled by REFRESH_MS): a swap's quote as the user types (`tokenWay` → `poolsOf`), and a return whose spare pays for nothing (`acrossOf` before `countAt`'s gate). `usable` adds an `epoch_params` read at review. **Fixed:** a new dep, `known` (discovery's kept pools, asking nobody), serves the quote and `acrossOf`'s first look (`readSet(network, true)`). `funding` takes the pool as read, so the quote asks nothing at all. The review reads the parameters once, for `usable` and the funding alike (`readContract`'s `known`).
+10. **Low, the plan and the code disagree:** `wayOf` gives `{}` for a swap with no `auto.lovejoin`, which then goes at Settings' width (maybe four) where the plan says three; and a swap's token leg at return isn't capped at the approved boxes, so a fill above `minAmountOut` can take more token boxes, and the classic leg's ADA, than the review showed. **Fixed:** such a swap goes three wide (its Stop dialog too). The approval keeps each token's boxes (`auto.lovejoin.tokenBoxes`), and its return takes no more (`ChainWay.returns.most`). Change at a return's review isn't capped: that review shows what it builds.
+
+**Found while fixing:** core's `one_leg_deposits_exactly_as_deposit_from` passed about half the time. pallas-txbuilder keeps an output's tokens in a `HashMap`, so a token change holding two policies is written in either order, by chance, and so is the deposit's id. That's harmless on chain and true of every builder in the workspace. The test now compares byte for byte with one policy, and with two compares the transaction as the ledger reads it, its tokens sorted (`read_tx`).
+
+**The strings:** two new accuracy-critical keys, `lj.tokens.skip.warn.balance` and `.failed`, in es and ja, back-translated twice by independent agents that saw only the Spanish and the Japanese ("Chunk 34's 34e review round" in verified-critical-*.json). The first pass found the balance reason readable as the swap itself being short, in the English too. All three languages were rewritten.
+
+**Claude's calls in the fixes, the owner's to overturn:**
+- A swap's balance short for its token's boxes brings the token back directly, rather than fund fewer boxes: finding the most it pays would take a build for each count.
+- The review's width is its approval's: three where four falls back at review, so the token's boxes are funded at the width they go at. Where nothing pays at either width, it keeps the width asked, for its return to decide.
+- A swap's token boxes that can't be funded beside it, for any reason but what another try may mend (a lock, Koios, giveme.my, a stale review, a trap), bring the token back directly with the balance's reason: too little ADA, or more of the private balance's UTxOs than one transaction spends, both mean the balance doesn't cover the boxes as well.
+
+**The fixes' review (2026-10-18).** An independent read-only review of the fixes found no money bug in the worker's arithmetic, confirmed each test above fails without its fix for the reason it states, and found three wide unchanged, the reservations sound and the reads within the listing rule. What it found is fixed, each with a test that fails without it (`lovejoin-planner.test.ts`' *34e's fixes' review*; 7's public side in `lovejoin.test.ts`), but where said:
+1. The retry was on `NotEnoughPrivate` alone. A funding whose token boxes took more of the private balance's UTxOs than one transaction spends (a balance of returned 10 ₳ boxes) still refused the swap. Now any failure but what another try may mend builds the swap's own funding again; the swap's own failing too is refused as before (tested).
+3. The fallback marked every token with a pool `.failed`, over the `noBox` a leg had this time. Each try now starts each way afresh, and the fallback marks only those with no reason yet. No test of its own: a token leg with no box beside a classic box can't arise, as the token legs are paid first; the path is the first round's 1.
+4. The width's counts and the guess were outside the fallback, so a failure there sent the ADA back directly. Both are inside it now: a guess that fails is the classic pool alone. `mixOutBuild`'s half of the first round's 4 has a test now too: Settings changed between the pool check and the funding.
+5. Stop's dialog left out the token boxes' ADA when it hadn't read the account yet. The approval keeps it (`auto.lovejoin.fund`).
+6. `funding` threw on a `pool: null` from a page (`typeof null` is "object"), which the old code read as the classic pool. Fixed there, and the handler passes a string or nothing.
+7. The guess before any pool read took a token's first shown pool, where the build takes its most used: now its cheapest box.
+
+Left open:
+- **2, a release blocker until 34f:** the screens misstate a swap whose token boxes are funded. `fundParts` (`ui/swap.ts`) counts `lovejoin.fund` as room for network fees. With the ADA's boxes at none (a typical ADA→token swap) the review says it all comes back at once, though the token goes into its pool. There's no Lovejoin switch when `quote.fund` is under about 15 ₳. The `ifStopped` line quotes `quote.fund` while counting `fund` too. And `skipped` (the classic pool short) hides the cost while the token still goes. 34f's review takes these; no build from main ships before it (a 1.5.x hotfix would branch from 1.5.0's commit).
+- **8, the owner's call:** four's price applies to a token too. Token legs are paid first, so at four an earlier token can take the ADA a later token needed for its box (four pays it none where three makes one). That token comes back directly, tied to the session, where three would have mixed it. Asked, the rule could hold every token leg to what three would make.
+- 4's other half: a token pool whose boxes keep reading stale fails the whole return after STALE_POOL_TRIES (tried again later), as a stale classic pool does, where the classic leg alone might go.
+- 3's other half: when the classic pool's chain after the fallback pays for no box, the return is plain and says `noBox`, not why its token came back (`chain` carries no ways without a chain).
+
+Found sound: one leg three wide byte for byte as before; the fan-out at a width; indexing of legs, leaves and each leg's first mix, and `crossCheck`'s additional UTxOs; the records' `pools`, leaves, width and window; strangers' tokens kept out; `protocols_of`, `poolChoice`, `namedFor`; `narrower`'s exclusions; one listing for the rooms; the i18n keys.
+
+**For later steps:**
+- **34f:**
+  - The swap review's words for a token's funded boxes (*The fixes' review*, 2): before any build from main.
+  - Settings' four-wide switch. The review's Change over `ways[].pools`, with `session-back-build`'s and `session-out-build`'s `pools`. `fellBack`'s words on reviews, and a chain's width on its view.
+  - The swap review's Lovejoin switch: the funding carries its token boxes' ADA when built through Lovejoin. Switched off at Send, that ADA comes back directly with the return. The page should build the funding again when the switch moves (a parameter for that is 34f's).
+  - What still says three wide: the screens' `3 ** depth` (Settings, the Lovejoin page, LovejoinReturn), their costs, `lovejoin.mix.privacy.waves_*` ("two others, and three boxes come out"), and lovejoin-mix-width.md's "So the width stays three".
+  - `collateralWanted` counts the classic pool's box alone, so a session whose only box would be a token's isn't offered *Put in 5 ₳ for Lovejoin*.
+- **34g:** the live width test again (`lovejoin_width_test -- --ignored`), then four wide and a return across pools on preprod (Verification's step 8). No new reads for the policy's *Changes*: a review's pool read is the one every read is, and its parameters the ones every build reads.
+
 ## Open for discussion
 
 ### D1 · Pool spam and sync
@@ -838,7 +953,7 @@ Each step ends with its tests green. The steps can land as parts, but they ship 
 | **34b** | ✅ The launch builder and its WebAssembly (cert 0; S0c's submit still to confirm it) | S0c |
 | **34c** | ✅ Discovery and the data layer: the holder index, the shown-pool rule (standard, finished by its launch, earliest for its values), the bundled head start, the data layer's own copy of the rules (32), the pool list and the combined box feed, and deposit counts as possible origins ([as built](#34c--discovery-and-the-data-layer-2026-10-17); its live db-sync run is the owner's) | session 1 (11, 12) |
 | **34d** | ✅ The tile's flows per pool (private, public, again); **Bootstrap a pool**, which replaces the seed; the launch from either side (an account-paid builder); the withdraw and its escape hatch; Activity ([as built](#34d--the-flows-2026-10-18)) | 34a′, 34c |
-| **34e** | The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback | 34a′ |
+| **34e** | ✅ The planner, and returns through each token's most used pool, with Change; D3's four-wide option and its fallback; a swap's token boxes funded (33) ([as built](#34e--the-planner-returns-through-token-pools-and-four-boxes-a-mix-2026-10-18)) | 34a′ |
 | **34f** | Screens, strings, es and ja, the docs, and the policy's *Changes* | 34d, 34e |
 | **Re-pin** | ✅ Folded into 34a: the templates were pinned to the merge from the start | the merge |
 | **34g** | The preprod rehearsal, dual: Claude's in dev mode, then the owner's by hand (session 1, 29); the cross-area release review; the policy's *Changes* entry; `npm run tokens`, `dreps` and `lovejoin-pools`; deploy 34c; then package and upload; the handoff note | all |
