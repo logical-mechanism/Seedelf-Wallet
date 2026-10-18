@@ -521,6 +521,21 @@ fn holdings(
     token: Option<&lovejoin::BoxToken>,
     own: &[String],
 ) -> Result<Holdings> {
+    let tokens: Vec<&lovejoin::BoxToken> = token.into_iter().collect();
+    holdings_of(accounts, index, utxos, collateral, &tokens, own)
+}
+
+/// [`holdings`] for a chain across pools: a UTxO the session's own
+/// transactions (`own`) made goes to the deposit when it holds the token of
+/// any of the chain's token pools (`tokens`).
+fn holdings_of(
+    accounts: &CardanoAccount,
+    index: u32,
+    utxos: &[UtxoResponse],
+    collateral: &OutRef,
+    tokens_wanted: &[&lovejoin::BoxToken],
+    own: &[String],
+) -> Result<Holdings> {
     let key = accounts.key_hash(Role::Receive, index)?;
     let mut coins = Vec::new();
     let mut tokens = Vec::new();
@@ -541,12 +556,13 @@ fn holdings(
             found = Some(row.clone());
         } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty()) && evaluable {
             coins.push((Coin::from_row(row)?, row.clone()));
-        } else if let Some(t) = token
-            && evaluable
-            && own.contains(&row.tx_hash)
-        {
+        } else if !tokens_wanted.is_empty() && evaluable && own.contains(&row.tx_hash) {
             let held = Holding::from_row(row)?;
-            if held_of(&held.tokens, t)? > 0 {
+            let mut wanted = false;
+            for t in tokens_wanted {
+                wanted |= held_of(&held.tokens, t)? > 0;
+            }
+            if wanted {
                 tokens.push((held, row.clone()));
             } else {
                 kept.push(row.clone());
@@ -589,6 +605,39 @@ pub struct PlanOwn {
     pub own: Vec<String>,
 }
 
+/// One pool's part of a return's chain across pools (chunk 34's §6, §7): the
+/// token pool it is, or the classic pool when none; its rows at `mix_box`, as
+/// [`ChainRequest::pool`] has them (a plan reads none); and the most boxes
+/// it may take (what its pool has room for, as the worker read it).
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LegRequest {
+    #[serde(default)]
+    pub pool_ref: Option<PoolRef>,
+    #[serde(default)]
+    pub pool: Vec<UtxoResponse>,
+    #[serde(default)]
+    pub most: Option<usize>,
+}
+
+/// What a return's plan or chain names to go across pools, read on its own as
+/// `poolRef` is ([`PoolNamed`]). `legs`: the pools, the token pools first, so
+/// their boxes are paid for before the ADA's; none, one pool as before.
+/// `fills`: transactions beside the session's own whose UTxOs holding a leg's
+/// token its deposit may spend (a swap's fill, whose proceeds are the user's
+/// though a batcher made them). `params`: one row of Koios's `epoch_params`,
+/// which a plan across pools reads for what a token change needs.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Across {
+    #[serde(default)]
+    pub legs: Vec<LegRequest>,
+    #[serde(default)]
+    pub fills: Vec<String>,
+    #[serde(default)]
+    pub params: Option<serde_json::Value>,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanResult {
@@ -599,6 +648,29 @@ pub struct PlanResult {
     pub mixes: usize,
     /// About what the mixes cost, all boxes together.
     pub mix_fees: String,
+    /// Across pools: each leg's boxes, in the request's order (`boxes` is
+    /// their sum). Absent for one pool.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub legs: Vec<usize>,
+}
+
+/// How many boxes a request's mixes take (chunk 34's D3), read from its JSON
+/// on its own, as `poolRef` is ([`PoolNamed`]): three when it names none, as
+/// every request before it did.
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Wide {
+    #[serde(default)]
+    pub width: Option<usize>,
+}
+
+impl Wide {
+    /// The width named, checked; three when none is.
+    pub fn width(&self) -> Result<usize> {
+        let width = self.width.unwrap_or(3);
+        lovejoin::check_width(width)?;
+        Ok(width)
+    }
 }
 
 /// What session `request.index`'s UTxOs pay for in the classic pool.
@@ -615,6 +687,18 @@ pub fn plan_in(
     pool: Option<&PoolRef>,
     own: &[String],
 ) -> Result<PlanResult> {
+    plan_at(accounts, request, pool, own, 3)
+}
+
+/// [`plan_in`], `width` boxes a mix (chunk 34's D3).
+pub fn plan_at(
+    accounts: &CardanoAccount,
+    request: PlanRequest,
+    pool: Option<&PoolRef>,
+    own: &[String],
+    width: usize,
+) -> Result<PlanResult> {
+    lovejoin::check_width(width)?;
     let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     let held = holdings(
         accounts,
@@ -628,17 +712,152 @@ pub fn plan_in(
     let boxes = if request.again {
         // The mixes pay from one UTxO, the largest ([`chain`]).
         let largest = held.coins.iter().map(|(c, _)| c.lovelace).max();
-        lovejoin::again_affordable(largest.unwrap_or(0), request.depth)
+        lovejoin::again_affordable_in(largest.unwrap_or(0), &protocol, request.depth, width)
     } else {
-        lovejoin::boxes_affordable(spare, request.depth, protocol.denom)
+        lovejoin::boxes_affordable_in(spare, &protocol, request.depth, width)
             .min(token_boxes(&held.tokens, protocol.token.as_ref())?)
     };
-    let mixes = boxes * lovejoin::mixes_per_box(request.depth);
+    let mixes = boxes * lovejoin::mixes_per_box_at(request.depth, width);
     Ok(PlanResult {
         boxes,
         spare: spare.to_string(),
         mixes,
-        mix_fees: (mixes as u64 * lovejoin::MIX_FEE_ESTIMATE).to_string(),
+        mix_fees: (mixes as u64 * lovejoin::mix_fee_estimate(&protocol, width)).to_string(),
+        legs: Vec::new(),
+    })
+}
+
+/// The pools `legs` name, each verified ([`protocol_of`]), and the tokens of
+/// those that hold one. Never one pool twice, nor two of one token: a chain
+/// takes a token into one pool.
+fn protocols_of(network_flag: bool, legs: &[LegRequest]) -> Result<Vec<Protocol>> {
+    let protocols = legs
+        .iter()
+        .map(|leg| protocol_of(network_flag, leg.pool_ref.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+    for (i, p) in protocols.iter().enumerate() {
+        for q in &protocols[..i] {
+            if p.id == q.id {
+                bail!("A chain names one Lovejoin pool twice");
+            }
+            if p.token.is_some()
+                && p.token.as_ref().map(|t| (t.policy, &t.name))
+                    == q.token.as_ref().map(|t| (t.policy, &t.name))
+            {
+                bail!("A chain takes a token into one Lovejoin pool");
+            }
+        }
+    }
+    Ok(protocols)
+}
+
+/// Each leg's boxes for a return across pools: what [`lovejoin::plan_across`]
+/// gives from the session's spare ADA and its own (or `fills`') UTxOs holding
+/// the legs' tokens, each leg at most its `most`.
+fn counts_across(
+    params: &ProtocolParameters,
+    held: &Holdings,
+    protocols: &[Protocol],
+    legs: &[LegRequest],
+    depth: u32,
+    width: usize,
+) -> Result<Vec<usize>> {
+    let address = Address::from_bech32(&held.address)
+        .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
+    let tokens = held
+        .tokens
+        .iter()
+        .try_fold(seedelf_core::assets::Assets::new(), |sum, (h, _)| {
+            sum.merge(h.tokens.clone())
+        })?;
+    let plans = protocols
+        .iter()
+        .zip(legs)
+        .map(|(protocol, leg)| {
+            let held = match &protocol.token {
+                None => 0,
+                Some(t) => held.tokens.iter().try_fold(0u128, |sum, (h, _)| {
+                    held_of(&h.tokens, t).map(|q| sum + u128::from(q))
+                })?,
+            };
+            Ok(lovejoin::LegPlan {
+                protocol,
+                most: leg.most.unwrap_or(usize::MAX),
+                held,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    lovejoin::plan_across(
+        params,
+        &address,
+        held.spare(),
+        &tokens,
+        &plans,
+        depth,
+        width,
+    )
+}
+
+/// The transactions whose UTxOs holding a leg's token a deposit across pools
+/// may spend: the session's own, and `fills`.
+fn own_and_fills(own: &[String], across: &Across) -> Vec<String> {
+    own.iter().chain(&across.fills).cloned().collect()
+}
+
+/// [`plan`] for a return across pools ([`Across`]): each leg's boxes, the
+/// token pools' paid for first. `own` as [`plan_in`]'s; `across.params` must
+/// be given.
+pub fn plan_across_pools(
+    accounts: &CardanoAccount,
+    request: PlanRequest,
+    own: &[String],
+    across: &Across,
+    width: usize,
+) -> Result<PlanResult> {
+    if request.again {
+        bail!("Mixing again goes into one Lovejoin pool");
+    }
+    lovejoin::check_width(width)?;
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(
+        across
+            .params
+            .as_ref()
+            .context("A plan across Lovejoin pools needs the protocol parameters")?,
+    )?;
+    let protocols = protocols_of(network_flag, &across.legs)?;
+    let wanted: Vec<&lovejoin::BoxToken> =
+        protocols.iter().filter_map(|p| p.token.as_ref()).collect();
+    let held = holdings_of(
+        accounts,
+        request.index,
+        &request.utxos,
+        &request.collateral,
+        &wanted,
+        &own_and_fills(own, across),
+    )?;
+    let legs = counts_across(
+        &params,
+        &held,
+        &protocols,
+        &across.legs,
+        request.depth,
+        width,
+    )?;
+    let per_mix = |p: &Protocol| lovejoin::mix_fee_estimate(p, width);
+    let mixes_each = lovejoin::mixes_per_box_at(request.depth, width);
+    let mix_fees: u64 = protocols
+        .iter()
+        .zip(&legs)
+        .map(|(p, n)| (*n * mixes_each) as u64 * per_mix(p))
+        .sum();
+    let boxes = legs.iter().sum::<usize>();
+    Ok(PlanResult {
+        boxes,
+        spare: held.spare().to_string(),
+        mixes: boxes * mixes_each,
+        mix_fees: mix_fees.to_string(),
+        legs,
     })
 }
 
@@ -708,6 +927,10 @@ pub struct ChainResult {
     /// count). The return then comes back directly. Absent when built.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped: Option<String>,
+    /// Across pools: each leg's boxes, in the request's order, a leg's leaves
+    /// as many and in that order among `leaves`. Absent for one pool.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub legs: Vec<usize>,
 }
 
 impl ChainResult {
@@ -724,6 +947,7 @@ impl ChainResult {
             leaves: Vec::new(),
             left_out: Vec::new(),
             skipped: Some(short.to_string()),
+            legs: Vec::new(),
         }
     }
 }
@@ -754,6 +978,18 @@ pub fn chain_in(
     request: ChainRequest,
     pool_ref: Option<&PoolRef>,
 ) -> Result<ChainResult> {
+    chain_at(accounts, sk, request, pool_ref, 3)
+}
+
+/// [`chain_in`], `width` boxes a mix (chunk 34's D3).
+pub fn chain_at(
+    accounts: &CardanoAccount,
+    sk: Scalar,
+    request: ChainRequest,
+    pool_ref: Option<&PoolRef>,
+    width: usize,
+) -> Result<ChainResult> {
+    lovejoin::check_width(width)?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool_ref)?;
@@ -789,7 +1025,9 @@ pub fn chain_in(
         unused.extend(held.tokens.iter().map(|(_, row)| row.clone()));
         let boxes = request
             .boxes
-            .unwrap_or_else(|| lovejoin::again_affordable(fee.lovelace, request.depth))
+            .unwrap_or_else(|| {
+                lovejoin::again_affordable_in(fee.lovelace, &protocol, request.depth, width)
+            })
             .min(ours.len());
         if boxes == 0 {
             bail!("None of this wallet's boxes is in Lovejoin's pool to mix again");
@@ -800,19 +1038,22 @@ pub fn chain_in(
             address,
             signers: 1,
         };
-        lovejoin::again(
+        lovejoin::again_at(
             &params,
             &protocol,
             &payer,
             &ours[..boxes],
             request.depth,
+            width,
             &pool,
         )
         .map(|built| (built, boxes))
     } else {
         let boxes = request
             .boxes
-            .unwrap_or_else(|| lovejoin::boxes_affordable(spare, request.depth, protocol.denom))
+            .unwrap_or_else(|| {
+                lovejoin::boxes_affordable_in(spare, &protocol, request.depth, width)
+            })
             .min(token_boxes(&held.tokens, protocol.token.as_ref())?);
         if boxes == 0 {
             bail!(if protocol.token.is_some() {
@@ -833,16 +1074,13 @@ pub fn chain_in(
             mix_signers: 1,
         };
         let tokens: Vec<lovejoin::Holding> = held.tokens.iter().map(|(h, _)| h.clone()).collect();
-        lovejoin::chain_from(
-            &params,
-            &protocol,
-            &funding,
-            &tokens,
-            &owners,
-            request.depth,
-            &pool,
-        )
-        .map(|built| (built, boxes))
+        let leg = lovejoin::Leg {
+            protocol: &protocol,
+            owners: &owners,
+            pool: &pool,
+        };
+        lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width)
+            .map(|built| (built, boxes))
     };
     let (built, boxes) = match fanned {
         Err(e) => match e.downcast_ref::<PoolShort>() {
@@ -851,7 +1089,156 @@ pub fn chain_in(
         },
         Ok(fanned) => fanned,
     };
+    with_return(
+        accounts,
+        sk,
+        network_flag,
+        &params,
+        &request,
+        &held,
+        Fanned {
+            built,
+            boxes,
+            unused,
+            legs: Vec::new(),
+        },
+    )
+}
 
+/// A return's chain across pools ([`Across`], chunk 34's §6 and §7): one
+/// deposit of each leg's boxes (the token pools' paid for first, from the
+/// session's own UTxOs holding their tokens, or `fills`'), each leg's boxes
+/// mixed in its own pool, then the return, as [`chain_in`]'s. Each leg takes
+/// what [`lovejoin::plan_across`] gives it, at most its `most`; one that
+/// takes none is left out of the chain, and [`ChainResult::legs`] says so.
+pub fn chain_across_pools(
+    accounts: &CardanoAccount,
+    sk: Scalar,
+    request: ChainRequest,
+    across: &Across,
+    width: usize,
+) -> Result<ChainResult> {
+    if request.again {
+        bail!("Mixing again goes into one Lovejoin pool");
+    }
+    lovejoin::check_width(width)?;
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let protocols = protocols_of(network_flag, &across.legs)?;
+    let wanted: Vec<&lovejoin::BoxToken> =
+        protocols.iter().filter_map(|p| p.token.as_ref()).collect();
+    let held = holdings_of(
+        accounts,
+        request.index,
+        &request.utxos,
+        &request.collateral,
+        &wanted,
+        &own_and_fills(&request.own, across),
+    )?;
+    let counts = counts_across(
+        &params,
+        &held,
+        &protocols,
+        &across.legs,
+        request.depth,
+        width,
+    )?;
+    let boxes: usize = counts.iter().sum();
+    if boxes == 0 {
+        bail!("The session's spare ADA doesn't pay for a Lovejoin box");
+    }
+    let address = Address::from_bech32(&held.address)
+        .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
+    let base = Register::create(sk)?;
+    let owners = counts
+        .iter()
+        .map(|n| {
+            (0..*n)
+                .map(|_| base.clone().rerandomize())
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Each pool's boxes a fan-out may draw from: never the wallet's own.
+    let pools: Vec<Vec<PoolBox>> = protocols
+        .iter()
+        .zip(&across.legs)
+        .map(|(protocol, leg)| {
+            leg.pool
+                .iter()
+                .filter_map(|row| PoolBox::from_row(row, protocol))
+                .filter(|b| !b.is_owned(&sk))
+                .collect()
+        })
+        .collect();
+    let legs: Vec<lovejoin::Leg> = protocols
+        .iter()
+        .zip(&owners)
+        .zip(&pools)
+        .filter(|((_, owners), _)| !owners.is_empty())
+        .map(|((protocol, owners), pool)| lovejoin::Leg {
+            protocol,
+            owners,
+            pool,
+        })
+        .collect();
+    let funding = lovejoin::Funding {
+        coins: held.coins.iter().map(|(c, _)| c.clone()).collect(),
+        collateral: Some(Coin::from_row(&held.collateral)?),
+        address,
+        deposit_signers: 1,
+        mix_signers: 1,
+    };
+    let tokens: Vec<lovejoin::Holding> = held.tokens.iter().map(|(h, _)| h.clone()).collect();
+    let built =
+        match lovejoin::chain_across(&params, &funding, &tokens, &legs, request.depth, width) {
+            Err(e) => match e.downcast_ref::<PoolShort>() {
+                Some(short) => return Ok(ChainResult::skipped(request.depth, short)),
+                None => return Err(e),
+            },
+            Ok(built) => built,
+        };
+    with_return(
+        accounts,
+        sk,
+        network_flag,
+        &params,
+        &request,
+        &held,
+        Fanned {
+            built,
+            boxes,
+            unused: Vec::new(),
+            legs: counts,
+        },
+    )
+}
+
+/// A session's chain, built, before its return: how many boxes it put in,
+/// the ADA-only UTxOs it left alone, and, across pools, each leg's boxes.
+struct Fanned {
+    built: lovejoin::Chain,
+    boxes: usize,
+    unused: Vec<UtxoResponse>,
+    legs: Vec<usize>,
+}
+
+/// The return at the end of a session's chain ([`chain_at`], [`chain_across_pools`]),
+/// built after the chain, and the whole chain signed.
+fn with_return(
+    accounts: &CardanoAccount,
+    sk: Scalar,
+    network_flag: bool,
+    params: &ProtocolParameters,
+    request: &ChainRequest,
+    held: &Holdings,
+    fanned: Fanned,
+) -> Result<ChainResult> {
+    let Fanned {
+        built,
+        boxes,
+        unused,
+        legs,
+    } = fanned;
     // The return, last: the chain's change (not on chain yet), the
     // collateral, any ADA UTxOs the chain left alone and any token UTxOs.
     // Merged into the funding's change when it's still there, under the
@@ -882,14 +1269,14 @@ pub fn chain_in(
     // the deposit's token change.
     let mut unsent = vec![built.change.utxo.clone()];
     unsent.extend(built.token_change.iter().map(|h| h.utxo.clone()));
-    let plan = api::plan_return(&params, &rows, &request.merge, &own)?;
+    let plan = api::plan_return(params, &rows, &request.merge, &own)?;
     let ((back, back_fee), plan) = api::built_or_without_strangers(plan, |plan| {
         if !plan.merged {
             let key = accounts.key_hash(Role::Receive, request.index)?;
             let config = get_config(VARIANT, network_flag)?;
             let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
             let base = Register::create(sk)?;
-            let (tx, fee) = build::external_sweep(&params, &plan.taken, &base, &wallet, key)?;
+            let (tx, fee) = build::external_sweep(params, &plan.taken, &base, &wallet, key)?;
             Ok((sign(tx, accounts, request.index)?, fee))
         } else {
             let chain = build::Chain {
@@ -950,6 +1337,7 @@ pub fn chain_in(
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
         left_out: plan.left_out,
         skipped: None,
+        legs,
     })
 }
 
@@ -1012,17 +1400,27 @@ pub fn funding(request: FundingRequest) -> Result<FundingResult> {
 
 /// [`funding`] in the token pool `pool` names, or the classic pool.
 pub fn funding_in(request: FundingRequest, pool: Option<&PoolRef>) -> Result<FundingResult> {
+    funding_at(request, pool, 3)
+}
+
+/// [`funding_in`], `width` boxes a mix (chunk 34's D3).
+pub fn funding_at(
+    request: FundingRequest,
+    pool: Option<&PoolRef>,
+    width: usize,
+) -> Result<FundingResult> {
+    lovejoin::check_width(width)?;
     let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     if request.again {
         check_mix(request.boxes, request.depth)?;
     } else {
         check_deposit(request.boxes, request.depth)?;
     }
-    let mixes = request.boxes * lovejoin::mixes_per_box(request.depth);
+    let mixes = request.boxes * lovejoin::mixes_per_box_at(request.depth, width);
     let lovelace = if request.again {
-        lovejoin::again_funding(request.boxes, request.depth)
+        lovejoin::again_funding_in(request.boxes, &protocol, request.depth, width)
     } else {
-        lovejoin::funding_for(request.boxes, request.depth, protocol.denom)
+        lovejoin::funding_for_in(request.boxes, &protocol, request.depth, width)
     };
     let token = if request.again {
         None
@@ -1035,7 +1433,7 @@ pub fn funding_in(request: FundingRequest, pool: Option<&PoolRef>) -> Result<Fun
     Ok(FundingResult {
         lovelace: lovelace.to_string(),
         mixes,
-        mix_fees: (mixes as u64 * lovejoin::MIX_FEE_ESTIMATE).to_string(),
+        mix_fees: (mixes as u64 * lovejoin::mix_fee_estimate(&protocol, width)).to_string(),
         token,
     })
 }
@@ -1108,6 +1506,18 @@ pub fn chain_from_account_in(
     request: AccountChainRequest,
     pool_ref: Option<&PoolRef>,
 ) -> Result<ChainResult> {
+    chain_from_account_at(account, sk, request, pool_ref, 3)
+}
+
+/// [`chain_from_account_in`], `width` boxes a mix (chunk 34's D3).
+pub fn chain_from_account_at(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: AccountChainRequest,
+    pool_ref: Option<&PoolRef>,
+    width: usize,
+) -> Result<ChainResult> {
+    lovejoin::check_width(width)?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool_ref)?;
@@ -1130,7 +1540,7 @@ pub fn chain_from_account_in(
         collateral_ref.as_ref() != Some(&(p.utxo.tx_hash.clone(), p.utxo.tx_index))
     };
 
-    let mut needed = lovejoin::funding_for(request.boxes, request.depth, protocol.denom);
+    let mut needed = lovejoin::funding_for_in(request.boxes, &protocol, request.depth, width);
     let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
     let mut picked: Vec<&UtxoResponse> = Vec::new();
     let mut total = 0u64;
@@ -1262,15 +1672,12 @@ pub fn chain_from_account_in(
         deposit_signers: deposit_keys.len(),
         mix_signers: mix_keys.len(),
     };
-    let built = lovejoin::chain_from(
-        &params,
-        &protocol,
-        &funding,
-        &tokens,
-        &owners,
-        request.depth,
-        &pool,
-    )?;
+    let leg = lovejoin::Leg {
+        protocol: &protocol,
+        owners: &owners,
+        pool: &pool,
+    };
+    let built = lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width)?;
 
     let sign_with = |tx: BuiltTransaction, keys: &[(Role, u32)]| -> Result<BuiltTransaction> {
         let mut signed = tx;
@@ -1309,6 +1716,7 @@ pub fn chain_from_account_in(
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
         left_out: Vec::new(),
         skipped: None,
+        legs: Vec::new(),
     })
 }
 
@@ -1341,6 +1749,18 @@ pub fn again_from_account_in(
     request: AccountChainRequest,
     pool_ref: Option<&PoolRef>,
 ) -> Result<ChainResult> {
+    again_from_account_at(account, sk, request, pool_ref, 3)
+}
+
+/// [`again_from_account_in`], `width` boxes a mix (chunk 34's D3).
+pub fn again_from_account_at(
+    account: &CardanoAccount,
+    sk: Scalar,
+    request: AccountChainRequest,
+    pool_ref: Option<&PoolRef>,
+    width: usize,
+) -> Result<ChainResult> {
+    lovejoin::check_width(width)?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool_ref)?;
@@ -1366,7 +1786,7 @@ pub fn again_from_account_in(
     }
 
     // One UTxO pays for every mix: the largest of ADA alone.
-    let needed = lovejoin::again_funding(boxes, request.depth);
+    let needed = lovejoin::again_funding_in(boxes, &protocol, request.depth, width);
     let lovelace = |p: &api::PathedUtxo| p.utxo.value.parse::<u64>().unwrap_or(0);
     let paying = request
         .utxos
@@ -1403,12 +1823,13 @@ pub fn again_from_account_in(
         address: account.base_address(network_flag, Role::Receive, 0)?,
         signers: first_keys.len().max(mix_keys.len()),
     };
-    let built = lovejoin::again(
+    let built = lovejoin::again_at(
         &params,
         &protocol,
         &payer,
         &ours[..boxes],
         request.depth,
+        width,
         &pool,
     )?;
 
@@ -1440,6 +1861,7 @@ pub fn again_from_account_in(
         leaves: built.leaves.iter().map(OutRef::of_box).collect(),
         left_out: Vec::new(),
         skipped: None,
+        legs: Vec::new(),
     })
 }
 

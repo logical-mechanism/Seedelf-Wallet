@@ -232,6 +232,8 @@ function getContext(): Promise<Worker> {
         });
         return (await discovery.known(n)).map((p) => p.ref);
       },
+      // What discovery kept, asking nobody: a swap's quote as the user types, and a return's first look.
+      known: async (n) => (await discovery.known(n)).map((p) => p.ref),
       lookForPools: (n) => discovery.look(n),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });

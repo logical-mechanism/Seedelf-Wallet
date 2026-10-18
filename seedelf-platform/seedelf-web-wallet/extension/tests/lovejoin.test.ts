@@ -1195,6 +1195,32 @@ describe("a chain's boxes", CHAINS, () => {
     expect(withdrawn(t).at(-1)).toBe(`${record!.deposit}#3`);
   });
 
+  it("says what three a mix needs when neither width has room to mix the public account's boxes again (chunk 34's 34e review, 7)", async () => {
+    const t = await funded();
+    await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
+    // Seven of the pool's boxes beside the account's own: a box two waves deep needs 8 others three a mix, 15 four.
+    const others = new Set(POOL.slice(7));
+    t.koios.addedToAccounts = t.koios.addedToAccounts.filter((u) => !others.has(u));
+    const D = "d9".repeat(32);
+    const cut = {
+      id: "a9".repeat(32),
+      progress: "seedelf.lovejoin.sending.preprod",
+      deposit: D,
+      mixes: ["a9".repeat(32)],
+      leaves: [{ txHash: "a9".repeat(32), txIndex: 0 }],
+      boxes: 1,
+      total: 2,
+      sent: 1,
+      at: t.clock.now - 2 * HOUR,
+      scheduled: true,
+      stopped: CHAIN_CUT(),
+      ended: t.clock.now - 2 * HOUR,
+    };
+    t.koios.addedToAccounts.push(await ownedBox(t, D, 0));
+    await t.store.set("lovejoin.preprod", { due: [], chains: [cut] });
+    await expect(t.lovejoin.publicAgainBuild("preprod")).rejects.toThrow("has 7 boxes to mix with, and a box 2 waves deep needs 8.");
+  });
+
   it("mixes again from the public account the boxes a mix from it left, which ties nothing new, and keeps the private balance out of it (privacy review §2.10)", async () => {
     const t = await funded();
     await t.deps.preferences.set({ lovejoinDepth: 1 });

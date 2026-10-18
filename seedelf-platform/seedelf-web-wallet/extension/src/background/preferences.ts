@@ -30,6 +30,8 @@
 //                   back directly. A swap's approval records its own.
 // lovejoinDepth,    How deep each box fans out, and the range its wait is
 // lovejoinDelay     drawn from (lovejoin.ts).
+// lovejoinWidth     How many boxes each mix takes: three, or four (chunk 34's
+//                   D3). Where four can't go, the wallet goes three.
 // koiosOnly         Everything goes through Koios, never the wallet's own
 //                   data layer (data-layer.ts). Off by default; read at each
 //                   request, so turning it on needs no restart. Kept when
@@ -48,6 +50,7 @@ import {
   isLockAfter,
   isLovejoinDelay,
   isLovejoinDepth,
+  isLovejoinWidth,
   LOCAL_NETWORK,
   LOCAL_PREFERENCES,
   type Preferences,
@@ -117,6 +120,7 @@ export class PreferencesService {
       lovejoinReturns: typeof kept.lovejoinReturns === "boolean" ? kept.lovejoinReturns : DEFAULT_PREFERENCES.lovejoinReturns,
       lovejoinDepth: isLovejoinDepth(kept.lovejoinDepth) ? kept.lovejoinDepth : DEFAULT_PREFERENCES.lovejoinDepth,
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
+      lovejoinWidth: isLovejoinWidth(kept.lovejoinWidth) ? kept.lovejoinWidth : DEFAULT_PREFERENCES.lovejoinWidth,
       koiosOnly: typeof kept.koiosOnly === "boolean" ? kept.koiosOnly : DEFAULT_PREFERENCES.koiosOnly,
     };
   }
@@ -134,6 +138,7 @@ export class PreferencesService {
     if (typeof change.lovejoinReturns === "boolean") next.lovejoinReturns = change.lovejoinReturns;
     if (isLovejoinDepth(change.lovejoinDepth)) next.lovejoinDepth = change.lovejoinDepth;
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
+    if (isLovejoinWidth(change.lovejoinWidth)) next.lovejoinWidth = change.lovejoinWidth;
     if (typeof change.koiosOnly === "boolean") next.koiosOnly = change.koiosOnly;
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;

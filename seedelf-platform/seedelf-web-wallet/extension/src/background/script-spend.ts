@@ -174,11 +174,13 @@ export function spentHistories(classes: Classes, inputs: OutRef[], mixed: string
  * no other spend of the private balance takes that change meanwhile (final
  * review lovejoin-3). The view itself is left as it is. `classes`: where
  * each of `utxos` came from, from the sealed history alone (Koios is asked
- * nothing), for coin selection.
+ * nothing), for coin selection. `known`: the parameters, when the caller read
+ * them already, so they're read once.
  */
 export async function readContract(
   deps: ScriptSpendDeps,
   network: NetworkName,
+  known?: Record<string, unknown>,
 ): Promise<{
   view: ContractView;
   utxos: KoiosUtxo[];
@@ -188,7 +190,7 @@ export async function readContract(
 }> {
   const [view, params, reserved] = await Promise.all([
     readContractView(deps, network),
-    deps.koios(network).epochParams(),
+    known ?? deps.koios(network).epochParams(),
     deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
   ]);
   const all = spendable(deps, view);

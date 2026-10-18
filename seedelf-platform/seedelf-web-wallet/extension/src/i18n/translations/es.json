@@ -2965,5 +2965,13 @@
   "lj.launch.supply": "De este token existe menos de lo que llenan {{boxes}} cajas. Elige una cantidad menor para cada caja.",
   "lj.launch.tooLittle": "Con las comisiones de red de hoy, cada caja necesita al menos {{least}} ₳: lo suficiente para pagar su propia vuelta y, después, para pagar una parte de lo que volvió sin otro dinero.",
   "lj.launch.tooMuch": "La caja de un pool de token tiene como máximo {{most}} ₳.",
-  "lj.launch.unknownToken": "Koios no conoce el suministro de este token, así que la billetera no puede comprobar que un pool de él pueda llenarse. Inténtalo más tarde."
+  "lj.launch.unknownToken": "Koios no conoce el suministro de este token, así que la billetera no puede comprobar que un pool de él pueda llenarse. Inténtalo más tarde.",
+  "lj.tokens.skip.warn.balance": "después de cubrir el intercambio, tu saldo privado no tiene suficiente ADA para las cajas de ese token",
+  "lj.tokens.skip.warn.failed": "esta vez la billetera no pudo crear las mezclas en el pool de ese token",
+  "lj.tokens.skip.warn.noPool": "ninguno de los pools de ese token puede recibir una caja ahora",
+  "lj.tokens.skip.warn.poolCant": "el pool elegido para ese token no puede recibir una caja ahora",
+  "lj.width.warn.cost": "Mezclar cuatro cajas a la vez costaría más de lo que este ADA alcanza para pagar, así que se mezclan tres a la vez.",
+  "lj.width.warn.long": "Mezclar cuatro cajas a la vez haría esta cadena más larga de lo que la billetera puede enviar de una vez, así que se mezclan tres a la vez.",
+  "lj.width.warn.refused": "Esta vez no se pudo construir una mezcla de cuatro cajas a la vez, así que se mezclan tres a la vez.",
+  "lj.width.warn.short": "El pool de Lovejoin no tiene suficientes cajas disponibles para mezclar cuatro a la vez, así que se mezclan tres a la vez."
 }

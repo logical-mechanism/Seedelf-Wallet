@@ -588,46 +588,82 @@ pub fn deposit_from(
     change_address: &Address,
     signers: usize,
 ) -> Result<Deposit> {
-    if owners.is_empty() {
+    deposit_across(
+        params,
+        &[(protocol, owners)],
+        inputs,
+        change_address,
+        signers,
+    )
+}
+
+/// A box a deposit makes: its datum's `{a, b}`, what it holds, and where.
+type BoxOut = (([u8; 48], [u8; 48]), BoxValue, Address);
+
+/// [`deposit_from`] into several pools at once (chunk 34's §6, a return
+/// whose ADA and tokens go into their own pools): for each `(pool, owners)`,
+/// one box per register at that pool's `mix_box`, holding its box value. The
+/// outputs go each pool's boxes in turn, then the token change, then the ADA
+/// change, last; [`Deposit::boxes`] are in that order. With one pool, it's
+/// [`deposit_from`]'s transaction exactly.
+pub fn deposit_across(
+    params: &ProtocolParameters,
+    legs: &[(&Protocol, &[Register])],
+    inputs: &[Holding],
+    change_address: &Address,
+    signers: usize,
+) -> Result<Deposit> {
+    if legs.iter().all(|(_, owners)| owners.is_empty()) {
         bail!("A deposit needs at least one box");
     }
-    let datums: Vec<([u8; 48], [u8; 48])> = owners
-        .iter()
-        .map(|r| {
-            if !crate::build::is_payable(r) {
-                bail!("A box's register must be a valid, non-identity register");
-            }
-            let a: [u8; 48] = hex::decode(&r.generator)?
-                .try_into()
-                .map_err(|_| anyhow!("a bad generator"))?;
-            let b: [u8; 48] = hex::decode(&r.public_value)?
-                .try_into()
-                .map_err(|_| anyhow!("a bad public value"))?;
-            Ok((a, b))
-        })
-        .collect::<Result<_>>()?;
+    let datum_of = |r: &Register| -> Result<([u8; 48], [u8; 48])> {
+        if !crate::build::is_payable(r) {
+            bail!("A box's register must be a valid, non-identity register");
+        }
+        let a: [u8; 48] = hex::decode(&r.generator)?
+            .try_into()
+            .map_err(|_| anyhow!("a bad generator"))?;
+        let b: [u8; 48] = hex::decode(&r.public_value)?
+            .try_into()
+            .map_err(|_| anyhow!("a bad public value"))?;
+        Ok((a, b))
+    };
+    // Each box: its datum, what it holds, and where.
+    let mut boxed_outputs: Vec<BoxOut> = Vec::new();
+    for (protocol, owners) in legs {
+        let value = protocol.box_value();
+        let address = protocol.mix_box_address();
+        for owner in *owners {
+            boxed_outputs.push((datum_of(owner)?, value.clone(), address.clone()));
+        }
+    }
     let total = inputs
         .iter()
         .try_fold(0u64, |sum, h| sum.checked_add(h.lovelace))
         .context("The inputs' ADA overflows")?;
-    let tokens = inputs
+    let mut kept = inputs
         .iter()
         .try_fold(Assets::new(), |sum, h| sum.merge(h.tokens.clone()))?;
-    let box_value = protocol.box_value();
-    let boxed = box_value
-        .lovelace
-        .checked_mul(owners.len() as u64)
-        .context("Too many boxes")?;
-    let kept = match box_value.token_total(owners.len())? {
-        None => tokens,
-        Some((token, quantity)) => tokens
-            .separate(Assets::new().add(Asset::new(
-                hex::encode(token.policy),
-                hex::encode(&token.name),
-                quantity,
-            )?)?)
-            .context("The UTxOs paying for these boxes don't hold enough of the pool's token")?,
-    };
+    let mut boxed = 0u64;
+    for (protocol, owners) in legs {
+        let box_value = protocol.box_value();
+        boxed = box_value
+            .lovelace
+            .checked_mul(owners.len() as u64)
+            .and_then(|b| boxed.checked_add(b))
+            .context("Too many boxes")?;
+        if let Some((token, quantity)) = box_value.token_total(owners.len())? {
+            kept = kept
+                .separate(Assets::new().add(Asset::new(
+                    hex::encode(token.policy),
+                    hex::encode(&token.name),
+                    quantity,
+                )?)?)
+                .context(
+                    "The UTxOs paying for these boxes don't hold enough of the pool's token",
+                )?;
+        }
+    }
     // The tokens the boxes don't take, each output with exactly its least.
     let kept_lovelace = crate::build::minimum_change(params, change_address, &kept)?;
     let token_outputs =
@@ -642,10 +678,10 @@ pub fn deposit_from(
         for held in inputs {
             tx = tx.input(held.input());
         }
-        for (a, b) in &datums {
+        for ((a, b), value, address) in &boxed_outputs {
             tx = tx.output(
-                box_value
-                    .output(protocol.mix_box_address())?
+                value
+                    .output(address.clone())?
                     .set_inline_datum(mix_datum(a, b)),
             );
         }
@@ -660,14 +696,15 @@ pub fn deposit_from(
         .build_conway_raw()
         .context("Failed To Build The Deposit")?;
     let outputs = eval::resolve_outputs(&tx.tx_bytes.0)?;
-    let token_change = outputs[datums.len()..datums.len() + token_outputs.len()]
+    let made = boxed_outputs.len();
+    let token_change = outputs[made..made + token_outputs.len()]
         .iter()
         .map(Holding::of)
         .collect::<Result<Vec<_>>>()?;
-    let boxes = datums
+    let boxes = boxed_outputs
         .iter()
         .zip(&outputs)
-        .map(|((a, b), utxo)| PoolBox {
+        .map(|(((a, b), _, _), utxo)| PoolBox {
             utxo: utxo.clone(),
             a: *a,
             b: *b,
@@ -1286,7 +1323,28 @@ fn withdraw_with(
 /// every output of a wave is mixed again in the next, so which leaf is ours
 /// stays one of `3^depth` (Lovejoin's `strategy/fanout.ts`).
 pub fn mixes_per_box(depth: u32) -> usize {
-    (3usize.pow(depth) - 1) / 2
+    mixes_per_box_at(depth, 3)
+}
+
+/// How many boxes a mix the wallet makes may take: three, or four (chunk 34's
+/// D3, a Settings option). Four fits a transaction's computation by about 1%
+/// and five never does ([lovejoin-mix-width.md]).
+///
+/// [lovejoin-mix-width.md]: ../../../seedelf-web-wallet/docs/lovejoin-mix-width.md
+pub const WIDTHS: [usize; 2] = [3, 4];
+
+/// Whether `width` is one of [`WIDTHS`], or why not.
+pub fn check_width(width: usize) -> Result<()> {
+    if !WIDTHS.contains(&width) {
+        bail!("A Lovejoin mix is three or four boxes wide");
+    }
+    Ok(())
+}
+
+/// [`mixes_per_box`] at `width` boxes a mix: `(width^depth − 1)/(width − 1)`,
+/// which leaves ours one of `width^depth`.
+pub fn mixes_per_box_at(depth: u32, width: usize) -> usize {
+    (width.pow(depth) - 1) / (width - 1)
 }
 
 /// What the wallet plans on for a 3-box mix before measuring one: preprod's
@@ -1295,6 +1353,31 @@ pub fn mixes_per_box(depth: u32) -> usize {
 /// so the cap Lovejoin puts on a fee a shard pays (1 ₳ on mainnet) doesn't
 /// apply.
 pub const MIX_FEE_ESTIMATE: u64 = 950_000;
+
+/// [`MIX_FEE_ESTIMATE`] for a 4-box mix: 1.214 ₳ measured on mainnet's
+/// classic pool and 1.227 ₳ on a token pool (lovejoin-mix-width.md), and
+/// about a tenth more.
+pub const MIX_FEE_ESTIMATE_FOUR: u64 = 1_350_000;
+
+/// What each mix in a pool no reference carries the scripts of adds: both
+/// scripts in its witnesses, 0.114 ₳ more measured on Lovejoin's preprod
+/// token pool (chunk 34's groundwork), and a margin. A pool the wallet shows
+/// has its scripts at the holder, so this is for a pool read otherwise.
+pub const INLINE_SCRIPTS_ESTIMATE: u64 = 150_000;
+
+/// What the wallet plans on for one of `protocol`'s mixes, `width` boxes wide.
+pub fn mix_fee_estimate(protocol: &Protocol, width: usize) -> u64 {
+    let mix = if width >= 4 {
+        MIX_FEE_ESTIMATE_FOUR
+    } else {
+        MIX_FEE_ESTIMATE
+    };
+    if protocol.inline_scripts.is_empty() {
+        mix
+    } else {
+        mix + INLINE_SCRIPTS_ESTIMATE
+    }
+}
 
 /// What a deposit (when the chain has one) and the change the chain leaves
 /// are planned on.
@@ -1309,6 +1392,134 @@ fn per_box(depth: u32, denom: u64) -> u64 {
 /// its fan-out. It's in the pool already, so there's no box to pay for.
 fn per_box_again(depth: u32) -> u64 {
     mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
+}
+
+/// [`per_box`] in `protocol`'s pool, `width` boxes a mix: its box's ADA, and
+/// every mix of its fan-out at that pool's estimate. The classic pool's at
+/// three is [`per_box`]'s. A token pool's token isn't counted: it's the
+/// token's, not ADA.
+pub fn per_box_in(protocol: &Protocol, depth: u32, width: usize) -> u64 {
+    protocol.denom + per_box_again_in(protocol, depth, width)
+}
+
+/// [`per_box_again`] in `protocol`'s pool, `width` boxes a mix.
+pub fn per_box_again_in(protocol: &Protocol, depth: u32, width: usize) -> u64 {
+    mixes_per_box_at(depth, width) as u64 * mix_fee_estimate(protocol, width)
+}
+
+/// [`boxes_affordable`] in `protocol`'s pool, `width` boxes a mix.
+pub fn boxes_affordable_in(spare: u64, protocol: &Protocol, depth: u32, width: usize) -> usize {
+    (spare.saturating_sub(DEPOSIT_RESERVE) / per_box_in(protocol, depth, width)) as usize
+}
+
+/// [`funding_for`] in `protocol`'s pool, `width` boxes a mix.
+pub fn funding_for_in(boxes: usize, protocol: &Protocol, depth: u32, width: usize) -> u64 {
+    DEPOSIT_RESERVE + boxes as u64 * per_box_in(protocol, depth, width)
+}
+
+/// [`again_affordable`] in `protocol`'s pool, `width` boxes a mix.
+pub fn again_affordable_in(spare: u64, protocol: &Protocol, depth: u32, width: usize) -> usize {
+    let per = per_box_again_in(protocol, depth, width);
+    if per == 0 {
+        return 0;
+    }
+    (spare.saturating_sub(DEPOSIT_RESERVE) / per) as usize
+}
+
+/// [`again_funding`] in `protocol`'s pool, `width` boxes a mix.
+pub fn again_funding_in(boxes: usize, protocol: &Protocol, depth: u32, width: usize) -> u64 {
+    DEPOSIT_RESERVE + boxes as u64 * per_box_again_in(protocol, depth, width)
+}
+
+/// One pool's part of a chain that spans pools, as it's planned: the pool,
+/// the most boxes it may take (what its pool has room for, the chain's and
+/// the deposit's share), and how much of its token the UTxOs paying for the
+/// deposit hold (none for an ADA pool).
+#[derive(Debug, Clone)]
+pub struct LegPlan<'a> {
+    pub protocol: &'a Protocol,
+    pub most: usize,
+    pub held: u128,
+}
+
+/// How many boxes each of `legs` takes, in order, from `spare` lovelace and
+/// `tokens` (what the UTxOs paying for the deposit hold besides ADA), mixed
+/// `depth` waves deep, `width` boxes a mix (chunk 34's §6). Each leg takes as
+/// many boxes as its token makes (`Q` each), its `most`, and the ADA left
+/// allows, each box costing [`per_box_in`]; then the next takes what's left.
+/// The caller lists the token pools first, so ADA boxes come from what token
+/// boxes leave. Besides the deposit's reserve, the ADA keeps back the least
+/// the tokens the boxes don't take need, back at `change_address` in an output
+/// of their own ([`Deposit::token_change`]).
+///
+/// One leg in the classic pool, with no tokens, three wide, is
+/// [`boxes_affordable`] exactly.
+pub fn plan_across(
+    params: &ProtocolParameters,
+    change_address: &Address,
+    spare: u64,
+    tokens: &Assets,
+    legs: &[LegPlan],
+    depth: u32,
+    width: usize,
+) -> Result<Vec<usize>> {
+    check_width(width)?;
+    let counts = |reserve: u64| -> Vec<usize> {
+        let mut left = spare
+            .saturating_sub(DEPOSIT_RESERVE)
+            .saturating_sub(reserve);
+        legs.iter()
+            .map(|leg| {
+                let by_token = match &leg.protocol.token {
+                    None => usize::MAX,
+                    Some(t) => usize::try_from(leg.held / u128::from(t.quantity.max(1)))
+                        .unwrap_or(usize::MAX),
+                };
+                let per = per_box_in(leg.protocol, depth, width);
+                let n = usize::try_from(left / per)
+                    .unwrap_or(usize::MAX)
+                    .min(by_token)
+                    .min(leg.most);
+                left -= n as u64 * per;
+                n
+            })
+            .collect()
+    };
+    // What the boxes leave of `tokens` when each leg takes `boxes`.
+    let kept = |boxes: &[usize]| -> Result<Assets> {
+        let mut kept = tokens.clone();
+        for (leg, n) in legs.iter().zip(boxes) {
+            if let Some((token, quantity)) = leg.protocol.box_value().token_total(*n)? {
+                kept = kept
+                    .separate(Assets::new().add(Asset::new(
+                        hex::encode(token.policy),
+                        hex::encode(&token.name),
+                        quantity,
+                    )?)?)
+                    .context(
+                        "The UTxOs paying for these boxes don't hold enough of a pool's token",
+                    )?;
+            }
+        }
+        Ok(kept)
+    };
+    if tokens.is_empty() {
+        return Ok(counts(0));
+    }
+    // When the boxes take every token, nothing is kept back: asked first, so
+    // a reserve never costs the box that takes the last of them (34e's
+    // review, 8).
+    let unreserved = counts(0);
+    if kept(&unreserved)?.is_empty() {
+        return Ok(unreserved);
+    }
+    // Otherwise kept back for every token they hold, which is at least what
+    // the tokens left need.
+    Ok(counts(crate::build::minimum_change(
+        params,
+        change_address,
+        tokens,
+    )?))
 }
 
 /// How many boxes `spare` lovelace pays for, with every mix of a `depth`-deep
@@ -1460,6 +1671,38 @@ pub fn chain_from(
     depth: u32,
     pool: &[PoolBox],
 ) -> Result<Chain> {
+    let leg = Leg {
+        protocol,
+        owners,
+        pool,
+    };
+    chain_across(params, funding, tokens, &[leg], depth, 3)
+}
+
+/// One pool's part of a chain that spans pools: the pool, a register for each
+/// box it gets, and its boxes a fan-out may draw from.
+#[derive(Debug, Clone, Copy)]
+pub struct Leg<'a> {
+    pub protocol: &'a Protocol,
+    pub owners: &'a [Register],
+    pub pool: &'a [PoolBox],
+}
+
+/// [`chain_from`] across pools, `width` boxes a mix (chunk 34's §6 and D3):
+/// one deposit of every leg's boxes ([`deposit_across`]), then each leg's
+/// boxes fanned out in its own pool, a leg at a time, every mix paid from the
+/// one before's change. [`Chain::leaves`] are in the legs' order: each of a
+/// leg's boxes ends as one leaf, so a leg's leaves are as many as its owners.
+/// One leg three wide is [`chain_from`] exactly.
+pub fn chain_across(
+    params: &ProtocolParameters,
+    funding: &Funding,
+    tokens: &[Holding],
+    legs: &[Leg],
+    depth: u32,
+    width: usize,
+) -> Result<Chain> {
+    check_width(width)?;
     let Funding {
         coins,
         collateral,
@@ -1467,31 +1710,46 @@ pub fn chain_from(
         deposit_signers,
         mix_signers,
     } = funding;
-    let fresh = fresh_for(owners.len(), depth, pool, &[])?;
+    let fresh = legs
+        .iter()
+        .map(|leg| fresh_for(leg.owners.len(), depth, width, leg.pool, &[]))
+        .collect::<Result<Vec<_>>>()?;
     let mut inputs: Vec<Holding> = coins.iter().map(Holding::from).collect();
     inputs.extend(tokens.iter().cloned());
-    let deposit = deposit_from(params, protocol, &inputs, owners, address, *deposit_signers)?;
+    let parts: Vec<(&Protocol, &[Register])> =
+        legs.iter().map(|leg| (leg.protocol, leg.owners)).collect();
+    let deposit = deposit_across(params, &parts, &inputs, address, *deposit_signers)?;
     // A mix needs collateral; a seed makes none, so it may go without.
     if depth > 0 && collateral.is_none() {
         bail!("A chain that mixes needs collateral");
     }
-    let payer = Payer {
-        fee: deposit.change.clone(),
-        collateral: collateral.clone(),
-        address: address.clone(),
-        signers: *mix_signers,
-    };
-    let mut fanned = fan_out(params, protocol, deposit.boxes, &payer, depth, fresh)?;
-    fanned.token_change = deposit.token_change;
-    fanned.txs.insert(
-        0,
-        ChainTx {
-            kind: "deposit",
-            tx: deposit.tx,
-            fee: deposit.fee,
-        },
-    );
-    Ok(fanned)
+    let mut txs = vec![ChainTx {
+        kind: "deposit",
+        tx: deposit.tx,
+        fee: deposit.fee,
+    }];
+    let mut leaves = Vec::new();
+    let mut change = deposit.change;
+    let mut boxes = deposit.boxes.into_iter();
+    for (leg, fresh) in legs.iter().zip(fresh) {
+        let start: Vec<PoolBox> = boxes.by_ref().take(leg.owners.len()).collect();
+        let payer = Payer {
+            fee: change,
+            collateral: collateral.clone(),
+            address: address.clone(),
+            signers: *mix_signers,
+        };
+        let fanned = fan_out(params, leg.protocol, start, &payer, depth, width, fresh)?;
+        txs.extend(fanned.txs);
+        leaves.extend(fanned.leaves);
+        change = fanned.change;
+    }
+    Ok(Chain {
+        txs,
+        leaves,
+        change,
+        token_change: deposit.token_change,
+    })
 }
 
 /// The wallet's own `boxes`, in the pool already, fanned out again `depth`
@@ -1508,11 +1766,25 @@ pub fn again(
     depth: u32,
     pool: &[PoolBox],
 ) -> Result<Chain> {
+    again_at(params, protocol, payer, boxes, depth, 3, pool)
+}
+
+/// [`again`], `width` boxes a mix (chunk 34's D3).
+pub fn again_at(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    payer: &Payer,
+    boxes: &[PoolBox],
+    depth: u32,
+    width: usize,
+    pool: &[PoolBox],
+) -> Result<Chain> {
+    check_width(width)?;
     if boxes.is_empty() {
         bail!("There's no box to mix again");
     }
-    let fresh = fresh_for(boxes.len(), depth, pool, boxes)?;
-    fan_out(params, protocol, boxes.to_vec(), payer, depth, fresh)
+    let fresh = fresh_for(boxes.len(), depth, width, pool, boxes)?;
+    fan_out(params, protocol, boxes.to_vec(), payer, depth, width, fresh)
 }
 
 /// Lovejoin's pool has too few boxes to mix with for a fan-out: `have`
@@ -1536,10 +1808,16 @@ impl std::fmt::Display for PoolShort {
 
 impl std::error::Error for PoolShort {}
 
-/// The pool's boxes a fan-out of `trees` boxes at `depth` draws from, in a
-/// random order, `ours` left out: two for every mix, never one twice. Too
-/// few is a [`PoolShort`].
-fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Result<Vec<PoolBox>> {
+/// The pool's boxes a fan-out of `trees` boxes at `depth`, `width` boxes a
+/// mix, draws from, in a random order, `ours` left out: `width − 1` for every
+/// mix, never one twice. Too few is a [`PoolShort`].
+fn fresh_for(
+    trees: usize,
+    depth: u32,
+    width: usize,
+    pool: &[PoolBox],
+    ours: &[PoolBox],
+) -> Result<Vec<PoolBox>> {
     // Depth 0 is a seed: the deposit alone, with no mixes, so it needs no
     // other boxes and works on an empty pool. It hides nothing of its own;
     // it puts boxes in for other people to mix with, which is the only way a
@@ -1552,7 +1830,7 @@ fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Re
         .filter(|b| !ours.iter().any(|o| o.utxo == b.utxo))
         .cloned()
         .collect();
-    let needed = trees * mixes_per_box(depth) * 2;
+    let needed = trees * mixes_per_box_at(depth, width) * (width - 1);
     if fresh.len() < needed {
         return Err(PoolShort {
             have: fresh.len(),
@@ -1564,16 +1842,17 @@ fn fresh_for(trees: usize, depth: u32, pool: &[PoolBox], ours: &[PoolBox]) -> Re
     Ok(fresh)
 }
 
-/// Fans each of `start` (all ours) out `depth` waves deep, three wide, with
-/// boxes from `fresh`, each wave's mixes in a random order so the order
-/// doesn't point at our branch. The first mix pays from `payer.fee`; each
-/// after from the one before's change.
+/// Fans each of `start` (all ours) out `depth` waves deep, `width` boxes a
+/// mix, with boxes from `fresh`, each wave's mixes in a random order so the
+/// order doesn't point at our branch. The first mix pays from `payer.fee`;
+/// each after from the one before's change.
 fn fan_out(
     params: &ProtocolParameters,
     protocol: &Protocol,
     start: Vec<PoolBox>,
     payer: &Payer,
     depth: u32,
+    width: usize,
     mut fresh: Vec<PoolBox>,
 ) -> Result<Chain> {
     let mut txs = Vec::new();
@@ -1583,14 +1862,13 @@ fn fan_out(
     let mut wave: Vec<PoolBox> = start;
     for _ in 0..depth {
         shuffle(&mut wave);
-        let mut next = Vec::with_capacity(wave.len() * 3);
+        let mut next = Vec::with_capacity(wave.len() * width);
         let mut ours_next = Vec::new();
         for boxed in &wave {
-            let others = [
-                fresh.pop().expect("counted by fresh_for"),
-                fresh.pop().expect("counted by fresh_for"),
-            ];
-            let inputs = vec![boxed.clone(), others[0].clone(), others[1].clone()];
+            let mut inputs = vec![boxed.clone()];
+            for _ in 1..width {
+                inputs.push(fresh.pop().expect("counted by fresh_for"));
+            }
             let paying = Payer {
                 fee: change.clone(),
                 ..payer.clone()

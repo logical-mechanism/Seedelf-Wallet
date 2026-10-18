@@ -1590,7 +1590,19 @@ export interface SwapLovejoin {
    * through Lovejoin, when it's more boxes than the fill's (an ADA→token
    * swap's principal, privacy review §2.8).
    */
-  ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number };
+  ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number; width?: number; fellBack?: string };
+  /**
+   * The token it gets, through a pool of it (chunk 34's 34e), when it buys one a shown pool takes: as many boxes as
+   * the least it asks for makes, in the pool chosen (Change picks another of `pools`, or none). Its boxes' own ADA
+   * and their mixes' fees are funded too (`fund`): the boxes' ADA comes back with each box, the fees don't.
+   */
+  ways?: Array<LovejoinTokenWay & { mixes: number; mixFees: string; withdrawFees: string }>;
+  /** What the funding adds for `ways`' boxes, in lovelace, beside what the swap itself takes (`fund`). */
+  fund?: string;
+  /** Four boxes a mix (chunk 34's D3); none: three. Its approval keeps it, and its return goes no wider. */
+  width?: number;
+  /** Four was asked, and it goes three: why (34e's review, 5). */
+  fellBack?: string;
 }
 
 /** A transaction the wallet built or signed for a session. `confirmed` once the chain has it. */
@@ -1882,6 +1894,17 @@ export interface SessionBackSummary {
     /** The token pool its boxes go into, by its id; none for the classic pool. */
     pool?: string;
     /**
+     * Across pools (chunk 34's 34e): each pool's boxes, the classic pool's with no `pool`. `boxes` is their sum, and
+     * `pool` none.
+     */
+    parts?: Array<{ pool?: string; boxes: number }>;
+    /** Its tokens, and what becomes of each: the pool each goes into, or why it comes back directly. */
+    ways?: LovejoinTokenWay[];
+    /** Four boxes a mix (chunk 34's D3); none: three. */
+    width?: number;
+    /** Four was asked, and it goes three: why. */
+    fellBack?: string;
+    /**
      * The chain's first transaction: the deposit, or the first mix where its own
      * boxes are mixed again. `txHash` is the return, the last of the chain; this
      * is the one the review shows, where the session's money goes in.
@@ -1916,6 +1939,27 @@ export interface LeftOutUtxo {
   reason: "tokens" | "script" | "returning" | "cost" | "size";
 }
 
+/**
+ * A token's way back through Lovejoin on a return (chunk 34's 34e): the token pool it goes into, as many whole boxes
+ * as the return holds of it and pays for, or none. `pools`: its pools that can take a box now, the most used first,
+ * for Change. A session's return reviews it; a swap's approval keeps the pool chosen.
+ */
+export interface LovejoinTokenWay {
+  policyId: string;
+  assetName: string;
+  /** The pool it goes into, by its id; none when it comes back directly. */
+  pool?: string;
+  /** Its boxes there (none until a chain is built: a swap's review says how many it's funded for). */
+  boxes: number;
+  /** How much of it each box holds, in that pool. */
+  quantity?: string;
+  /** The user chose to have it come back directly (Change, then none). */
+  direct?: true;
+  pools: string[];
+  /** Why it comes back directly though a pool was meant to take it: none of its pools can take a box now, or not the one chosen. */
+  skipped?: string;
+}
+
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
 export interface LovejoinFunding {
   boxes: number;
@@ -1948,6 +1992,10 @@ export interface LovejoinFunding {
   depth: number;
   /** Each box's wait before it comes back, in hours ("1-6"). */
   delay: string;
+  /** Four boxes a mix (chunk 34's D3); none: three. */
+  width?: number;
+  /** Four was asked, and it goes three: why. */
+  fellBack?: string;
 }
 
 /** A mix from the public account, built and signed, waiting for Send. Amounts in lovelace. */
@@ -1981,6 +2029,10 @@ export interface LovejoinPublicSummary {
   change: string;
   /** Its own boxes a mix from it put in, mixed again: no deposit (privacy review §2.10). */
   again?: boolean;
+  /** Four boxes a mix (chunk 34's D3); none: three. */
+  width?: number;
+  /** Four was asked, and it goes three: why. */
+  fellBack?: string;
 }
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
@@ -2131,6 +2183,8 @@ export interface LovejoinChainView {
   stopped?: string;
   /** It stopped at a transaction that may have gone through, not seen yet: none from the account is built meanwhile. */
   maybeSent?: true;
+  /** Its mixes took four boxes each (chunk 34's D3); none: three. */
+  width?: 4;
   /**
    * Its transactions in order, while it's being sent and the wallet holds
    * them: what each is, and whether it's on chain, sent and not seen yet,
@@ -2161,8 +2215,8 @@ export interface LovejoinMixView {
   released?: true;
   /** Its boxes in each pool (none: the classic pool), how many are back, and how many a later mix took. */
   shares: Array<{ pool?: string; boxes: number; back: number; moved: number }>;
-  /** Its chain, while the wallet keeps its record: how far it was sent, and how it ended. */
-  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true };
+  /** Its chain, while the wallet keeps its record: how far it was sent, how it ended, and four boxes a mix (`width`). */
+  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };
 }
 
 export interface LovejoinChainTx {
@@ -2456,7 +2510,8 @@ export interface Requests {
   "swap-quote": { payload: SwapAsk; result: SwapQuote };
   /** Builds the payment that funds a new session for `quote`, from the private balance, without sending it. */
   "session-out-build": {
-    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide } };
+    /** `pools`: Change on its review, the pool for the token it gets by the token's unit, null for none (chunk 34's 34e). */
+    payload: { quote: SwapQuote; display?: { in: SwapSide; out: SwapSide }; pools?: Record<string, string | null> };
     /** `lovejoin`: the quote's, checked against Lovejoin's pool as it is now (privacy review §2.7). */
     result: SessionOutSummary & { lovejoin?: SwapLovejoin };
   };
@@ -2477,7 +2532,11 @@ export interface Requests {
   "session-cancel-submit": { payload: { txHash: string }; result: PendingTx };
   /** Builds and signs the return of everything at the session's account into the private balance. */
   /** `direct`: straight back, not through Lovejoin. */
-  "session-back-build": { payload: { index: number; direct?: boolean }; result: SessionBackSummary };
+  /**
+   * `pools`: Change on its review (chunk 34's 34e), the pool for each of its tokens by the token's unit, null for back
+   * directly; a token it doesn't name goes into its most used pool that can take a box.
+   */
+  "session-back-build": { payload: { index: number; direct?: boolean; pools?: Record<string, string | null> }; result: SessionBackSummary };
   "session-back-submit": { payload: { txHash: string }; result: PendingTx };
   /** Forgets a session whose funding never reached the chain. */
   "session-forget": { payload: { index: number }; result: SessionView[] };

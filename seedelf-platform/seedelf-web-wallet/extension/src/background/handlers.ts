@@ -20,7 +20,7 @@ import type { PendingService } from "./pending";
 import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
 import type { SendService } from "./send";
-import { CLASSIC, type LovejoinService } from "./lovejoin";
+import { CLASSIC, poolChoice, type LovejoinService } from "./lovejoin";
 import type { LovejoinLaunchService } from "./lovejoin-launch";
 import type { SessionService } from "./sessions";
 import type { StakingService } from "./staking";
@@ -419,7 +419,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         slippage: message.slippage,
       });
     case "session-out-build":
-      return ctx.sessions.outBuild(ctx.network, message.quote, message.display);
+      return ctx.sessions.outBuild(ctx.network, message.quote, message.display, poolChoice(message.pools));
     case "session-out-submit":
       return ctx.sessions.outSubmit(ctx.network, message.txHash, message.direct);
     case "session-swap-build":
@@ -433,7 +433,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "session-cancel-submit":
       return ctx.sessions.txSubmit(ctx.network, message.txHash, "cancel");
     case "session-back-build":
-      return ctx.sessions.backBuild(ctx.network, message.index, message.direct ?? false);
+      return ctx.sessions.backBuild(ctx.network, message.index, message.direct ?? false, poolChoice(message.pools));
     case "session-back-submit":
       return ctx.sessions.backSubmit(ctx.network, message.txHash);
     case "session-forget":
@@ -473,7 +473,8 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-look-for-pools":
       return ctx.lovejoin.lookForPools(ctx.network).then(() => ({}));
     case "lovejoin-funding":
-      return ctx.lovejoin.funding(ctx.network, message.boxes, false, undefined, message.pool);
+      // A pool's id from the page, or none: never a pool object it made up (its fixes' review, 6).
+      return ctx.lovejoin.funding(ctx.network, message.boxes, false, undefined, typeof message.pool === "string" ? message.pool : undefined);
     case "lovejoin-mix-private-build":
       return ctx.sessions.mixOutBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
     case "lovejoin-again-build":
