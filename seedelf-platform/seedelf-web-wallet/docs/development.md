@@ -158,7 +158,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
 
 ## Web Store release: copy/paste procedure
 
-This is the repeatable release path for a new Web Store version, in two parts. **The version and the refreshed token and DRep lists are committed on the release branch** (`web-wallet/release-<x.y.z>`), with the checks, and reach `main` through its PR. **The package is built after the merge, from the merge commit on `main`** in a clean tree, so the commit the handoff note records gives the same zip. Change `release_version` to the new, higher version for each later release.
+This is the repeatable release path for a new Web Store version, in two parts. **The version, the refreshed token and DRep lists and the Lovejoin pools' head start are committed on the release branch** (`web-wallet/release-<x.y.z>`), with the checks, and reach `main` through its PR. **The package is built after the merge, from the merge commit on `main`** in a clean tree, so the commit the handoff note records gives the same zip. Change part 1's `release_version` to the new, higher version for each later release; part 2 reads it from `package.json`.
 
 **Which number.** The store only demands one strictly higher than the last, so the semantics are for the wallet's own users: a **minor** bump for a release that adds something a user can do (1.1.0, the transaction view), a **patch** for a fix or a listing hotfix on its own (1.0.1). The web wallet's line runs from 1.0.0 and is deliberately apart from the Rust workspace's 0.x.y — see the root [CLAUDE.md](../../../CLAUDE.md).
 
@@ -203,14 +203,14 @@ git pull --ff-only
 git status --porcelain
 cd seedelf-platform/seedelf-web-wallet/extension
 npm ci
-release_version=1.5.0
+release_version=$(node -p "require('./package.json').version")
 npm run package
 npm run e2e
 sha256sum "release/seedelf-wallet-$release_version-mainnet.zip"
 git rev-parse HEAD
 ```
 
-No `npm version`, `npm run tokens` or `npm run dreps` here. On `main` the bump fails ("Version not changed"), and the lists' refresh rewrites bundled files no commit has, so the zip wouldn't be the recorded commit's.
+No `npm version`, `npm run tokens`, `npm run dreps` or `npm run lovejoin-pools` here. On `main` the bump fails ("Version not changed"), and each refresh rewrites a bundled file no commit has, so the zip wouldn't be the recorded commit's. `release_version` is read from `package.json`, which the merge brought: the zip is the version part 1 set.
 
 **If the release changed `seedelf-data/` or the token list (`extension/src/tokens/list.json`, which the API builds in), deploy it before the upload:** Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against.
 
@@ -220,7 +220,7 @@ The package to upload is:
 seedelf-platform/seedelf-web-wallet/extension/release/seedelf-wallet-$release_version-mainnet.zip
 ```
 
-With `package.json` at 1.5.0, that file is `extension/release/seedelf-wallet-1.5.0-mainnet.zip`.
+With `package.json` at 1.6.0, that file is `extension/release/seedelf-wallet-1.6.0-mainnet.zip`.
 
 `npm run package` builds the store's mainnet build (`VITE_ENABLE_MAINNET=true`, `VITE_STORE_BUILD=true`) and refuses one whose manifest lacks `https://api.koios.rest/*`. The second `npm run e2e` runs the whole suite against it, with preprod chosen before the wallet starts (the fakes are preprod's). Then do checklist item 9 by hand on it.
 
@@ -257,7 +257,7 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
    - **And the Lovejoin pools' head start, every release since 1.6.0:** `npm run lovejoin-pools` in `extension/`. It rewrites `src/lovejoin-pools.json` with every shown pool on each network, read from the holder through the real Koios under the release's token list, so a first look on a new install starts there instead of the chain's start. It's a head start, never a gate: a pool launched after it is found live. Its test fails if `src/tokens/list.json` changed since it was written, so run it after `npm run tokens`. The handoff note names the pools it added.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`, and at its `es/` and `ja/`: each screen is shot in all three languages. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*). The Japanese ones need a Japanese font on the machine (Noto Sans CJK JP here), or Chromium draws boxes.
-6. **Commit and merge:** the bump, both lists, the images and any change to the listing's text, in the release branch's PR into `main`.
+6. **Commit and merge:** the bump, both lists and the pools' head start, the images and any change to the listing's text, in the release branch's PR into `main`.
 7. **Deploy the data layer, if the release changed `seedelf-data/` or `extension/src/tokens/list.json`** (step 2's decimals included; the API builds the token list in, and shows a Lovejoin pool only of a listed token, so a token added to the list without a deploy leaves its pools hidden from every mainnet wallet: 1.6.0's release review, DATA-2): Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run and `curl -s https://mainnet.seedelf.logicalmechanism.io/health` ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against: a route the API lacks answers 404, and a request it takes in another shape 400; either holds the wallet's whole public part on Koios for 5 minutes. It goes before the package, so the store build's check on mainnet (step 9) reads it.
 8. **Build the package**, on `main` at the merge commit, with `git status --porcelain` printing nothing: `npm run package` in `extension/`.
    - It builds with `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`: mainnet by default, preprod in Settings, and no dev key.
