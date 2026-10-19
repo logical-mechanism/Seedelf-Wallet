@@ -194,6 +194,8 @@ interface TokenChoice {
   named: string | null | undefined;
   chosen?: LovejoinPool;
   rooms?: Map<string, { others: number; free: number }>;
+  /** The chosen pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's call 34). */
+  stuck?: true;
 }
 /** About what bringing one Lovejoin box back costs, paid from the box: a 1-box withdraw measured 0.2897 ₳ on mainnet. */
 export const LOVEJOIN_WITHDRAW_ESTIMATE = 300_000n;
@@ -1449,7 +1451,8 @@ export class SessionService {
     if (rooms) works.sort((a, b) => (rooms.get(b.id)?.others ?? 0) - (rooms.get(a.id)?.others ?? 0));
     const named = pools?.[unit];
     const chosen = named === null ? undefined : named === undefined ? works[0] : works.find((p) => p.id === named);
-    return { unit, works, named, chosen, rooms };
+    const stuck = pool && chosen && (await lovejoin.stuck(network, chosen, params));
+    return { unit, works, named, chosen, rooms, ...(stuck ? { stuck: true as const } : {}) };
   }
 
   /**
@@ -1462,7 +1465,7 @@ export class SessionService {
   private async tokenAt(
     network: NetworkName,
     quote: SwapQuote,
-    { unit, works, named, chosen, rooms }: TokenChoice,
+    { unit, works, named, chosen, rooms, stuck }: TokenChoice,
     depth: number,
     width: LovejoinWidth,
     short?: string,
@@ -1490,6 +1493,7 @@ export class SessionService {
         ...(named === null ? { direct: true as const } : {}),
         pools: works.map((p) => p.id),
         ...(skipped ? { skipped } : {}),
+        ...(stuck ? { stuck } : {}),
         mixes: funding?.mixes ?? 0,
         mixFees: funding?.mixFees ?? "0",
         withdrawFees: ((funding ? BigInt(boxes) : 0n) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),

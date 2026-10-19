@@ -36,10 +36,12 @@ use pallas_txbuilder::BuiltTransaction;
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
+use seedelf_core::data_structures::create_spend_redeemer;
 use seedelf_core::lovejoin::{self, Coin, Holding, PoolBox, PoolShort, Protocol, Version};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+use seedelf_crypto::schnorr;
+use seedelf_koios::koios::{ProtocolParameters, UtxoResponse, extract_bytes_with_logging};
 use serde::{Deserialize, Serialize};
 
 fn network_flag(network: &str) -> Result<bool> {
@@ -1970,6 +1972,28 @@ pub struct WithdrawResult {
     pub token: Option<api::TokenAmount>,
 }
 
+/// The wallet's box among the pool's `rows` that `box_ref` names, or the
+/// first of the wallet's there when it names none: what a withdraw takes.
+fn our_box(
+    sk: Scalar,
+    rows: &[UtxoResponse],
+    protocol: &Protocol,
+    box_ref: Option<&OutRef>,
+) -> Result<PoolBox> {
+    let mut ours = rows
+        .iter()
+        .filter_map(|row| PoolBox::from_row(row, protocol))
+        .filter(|b| b.is_owned(&sk));
+    match box_ref {
+        Some(r) => ours
+            .find(|b| OutRef::of_box(b) == *r)
+            .context("That box isn't in the pool as this wallet's anymore"),
+        None => ours
+            .next()
+            .context("This wallet has no box in Lovejoin's pool"),
+    }
+}
+
 /// One of our boxes into a fresh register of the Seedelf key.
 pub fn withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
     withdraw_in(sk, request, None)
@@ -1984,22 +2008,7 @@ pub fn withdraw_in(
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool)?;
-    let ours: Vec<PoolBox> = request
-        .pool
-        .iter()
-        .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| b.is_owned(&sk))
-        .collect();
-    let chosen = match &request.box_ref {
-        Some(r) => ours
-            .into_iter()
-            .find(|b| OutRef::of_box(b) == *r)
-            .context("That box isn't in the pool as this wallet's anymore")?,
-        None => ours
-            .into_iter()
-            .next()
-            .context("This wallet has no box in Lovejoin's pool")?,
-    };
+    let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
     let destination = Register::create(sk)?.rerandomize()?;
     let built = lovejoin::withdraw(
         &params,
@@ -2084,22 +2093,7 @@ pub fn withdraw_paid_in(
         .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
         .max_by_key(|p| lovelace(p))
         .context("Your public account holds no UTxO of ADA alone to pay for this box's way back, besides its collateral")?;
-    let ours: Vec<PoolBox> = request
-        .pool
-        .iter()
-        .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| b.is_owned(&sk))
-        .collect();
-    let chosen = match &request.box_ref {
-        Some(r) => ours
-            .into_iter()
-            .find(|b| OutRef::of_box(b) == *r)
-            .context("That box isn't in the pool as this wallet's anymore")?,
-        None => ours
-            .into_iter()
-            .next()
-            .context("This wallet has no box in Lovejoin's pool")?,
-    };
+    let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
     let mut keys = vec![path_of(&paying.utxo)];
     let collateral_key = path_of(&request.collateral.utxo);
@@ -2140,6 +2134,117 @@ pub fn withdraw_paid_in(
         box_ref: OutRef::of_box(&chosen),
         token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
     })
+}
+
+/// What [`withdraw_private_in`] says when none of the private balance's
+/// UTxOs it was given pays for the box's way back. Fixed English the worker
+/// matches, never shown as it is.
+pub const NO_PRIVATE_PAYS: &str =
+    "Your private balance holds no UTxO of ADA alone that pays for this box's way back";
+
+/// One of the wallet's boxes brought back with a UTxO of the private balance
+/// paying its fee (34g's call 36: the private balance pays by default), as
+/// JSON from the extension.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawPrivateRequest {
+    pub network: String,
+    pub params: serde_json::Value,
+    pub pool: Vec<UtxoResponse>,
+    /// The box to take; the first of ours in the pool when absent.
+    pub box_ref: Option<OutRef>,
+    /// The private balance's spendable UTxOs, in the order to try them: the
+    /// first that pays is spent.
+    pub utxos: Vec<UtxoResponse>,
+}
+
+/// A box brought back paid by the private balance, unsigned, as any Seedelf
+/// spend: `signScriptSpend` adds giveme.my's and the one-time key's signatures.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawPrivateResult {
+    pub tx_cbor: String,
+    pub tx_hash: String,
+    /// Its one-time key's seed, for `signScriptSpend`.
+    pub seed: String,
+    pub fee: String,
+    /// Into the new register: the box's ADA and the private UTxO's, less the fee.
+    pub lovelace: String,
+    /// The private UTxO that paid, `txHash#index`.
+    pub spent: String,
+    /// Its ADA.
+    pub spent_lovelace: String,
+    pub box_ref: OutRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
+}
+
+/// One of our boxes into a fresh register of the Seedelf key, its fee paid
+/// by one of `request.utxos` (`lovejoin::withdraw_private`): for a box that
+/// can't pay its own way back. Each is tried in the order given, and the
+/// first that pays is spent; one that isn't the wallet's, holds a token, or
+/// that the wallet's evaluator can't take (`seedelf_core::eval::refusal`) is
+/// passed over, and so is one too small for the output (`PrivateTooSmall`).
+/// None pays: [`NO_PRIVATE_PAYS`]. Spent together, the UTxO and the box are
+/// tied to each other on chain; the worker says so before it's built. Its
+/// proof is bound to a new one-time key, whose seed the answer carries, and
+/// it's finished as any Seedelf spend: giveme.my sees it unsigned, lends the
+/// collateral, then `signScriptSpend` adds both signatures. In the classic
+/// pool, or the token pool `pool` names.
+pub fn withdraw_private_in(
+    sk: Scalar,
+    request: WithdrawPrivateRequest,
+    pool: Option<&PoolRef>,
+) -> Result<WithdrawPrivateResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let protocol = protocol_of(network_flag, pool)?;
+    let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
+    let destination = Register::create(sk)?.rerandomize()?;
+    let seed = api::new_seed();
+    let signer = api::key_hash(&api::one_time_key(&sk, &seed));
+    for utxo in &request.utxos {
+        if utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
+            || seedelf_core::eval::refusal(utxo).is_some()
+        {
+            continue;
+        }
+        let Some(register) = extract_bytes_with_logging(&utxo.inline_datum)
+            .filter(|r| r.is_owned(sk).unwrap_or(false))
+        else {
+            continue;
+        };
+        let (z, g_r) = schnorr::create_proof(register, sk, hex::encode(signer))?;
+        let payer = lovejoin::SeedelfPayer {
+            coin: Coin::from_row(utxo)?,
+            redeemer: create_spend_redeemer(z, g_r, hex::encode(signer))?,
+            signer: *signer,
+        };
+        let built = match lovejoin::withdraw_private(
+            &params,
+            &protocol,
+            std::slice::from_ref(&chosen),
+            &sk,
+            destination.clone(),
+            &payer,
+        ) {
+            Ok(built) => built,
+            Err(e) if e.downcast_ref::<lovejoin::PrivateTooSmall>().is_some() => continue,
+            Err(e) => return Err(e),
+        };
+        return Ok(WithdrawPrivateResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            fee: built.fee.to_string(),
+            lovelace: built.lovelace.to_string(),
+            spent: format!("{}#{}", utxo.tx_hash, utxo.tx_index),
+            spent_lovelace: payer.coin.lovelace.to_string(),
+            box_ref: OutRef::of_box(&chosen),
+            token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
+        });
+    }
+    bail!(NO_PRIVATE_PAYS)
 }
 
 #[derive(Deserialize, Debug)]

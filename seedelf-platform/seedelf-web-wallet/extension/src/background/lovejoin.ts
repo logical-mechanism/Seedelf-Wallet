@@ -106,7 +106,7 @@ import type {
   PendingTx,
   TokenQuantity,
 } from "../shared/rpc";
-import { boxFrom, madePrivate, merged } from "../shared/histories";
+import { boxFrom, isHistoryClass, madePrivate, merged, UNKNOWN, type HistoryClass } from "../shared/histories";
 import { nothingInAccount, readAccount } from "./account";
 import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
@@ -118,7 +118,7 @@ import { IndexDown, type IndexRow, utxoOf } from "./private-index";
 import { settleMaybeSent, watchSent } from "./pending";
 import type { PreferencesService } from "./preferences";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
-import type { ScriptSpendDeps } from "./script-spend";
+import { nothingToSpend, readContract, type ScriptSpendDeps } from "./script-spend";
 import { forgetSent } from "./sent-txs";
 import {
   forgetSpent,
@@ -901,10 +901,17 @@ interface Withdrawing {
   bootstrap?: true;
   /**
    * The public account paid its fee (chunk 34's escape hatch): its box is `box`, since the account's UTxO is an
-   * input too, and which one comes first says nothing.
+   * input too, and which one comes first says nothing. One the private balance paid (the owner's call 36) names its
+   * `box` too, with no `paid`: it spent a Seedelf UTxO beside it.
    */
   paid?: true;
   box?: { txHash: string; txIndex: number };
+  /**
+   * The private balance paid its fee (the owner's call 36): what its history says the private UTxO it makes came
+   * from, the box's way back merged with the UTxO that paid, and any account `ties` names (tiedOrigin), as withdrawOne
+   * wrote it. `lovelace` is then what came in: the output less that UTxO, which was private already.
+   */
+  origin?: HistoryClass;
   /**
    * The public accounts its way back ties to the private UTxO it makes, on chain: the one that paid its fee (`paid`),
    * and the one whose deposit made its box, when no mix moved it since (depositAccountOf). Its history says so
@@ -931,6 +938,12 @@ interface Withdrawing {
    */
   due?: number;
 }
+
+/**
+ * WebAssembly's words when no UTxO of the private balance pays for a box's way back (seedelf-wasm's NO_PRIVATE_PAYS):
+ * told apart from its other errors, and said in the user's language (lj.privatePayNone).
+ */
+const NO_PRIVATE_PAYS = /holds no UTxO of ADA alone that pays for this box's way back/;
 
 /** The box withdraw `w` spends: the one it names, or its one input, a box-paid withdraw's. */
 function withdrawn(w: Withdrawing): OutRef | undefined {
@@ -1922,16 +1935,10 @@ const FOUR_COST = () => t("lj.width.warn.cost");
 
 /**
  * Why a token pool takes no new box, in words (takesNewBoxes): the same keys the pool's page says it in, from its
- * status's `unusable` (1.6.0's release review, MONEY-3).
+ * status's `unusable` (1.6.0's release review, MONEY-3; since the owner's call 34, only what nothing can be built for).
  */
 const unusableReason = (why: LovejoinUnusable["why"]) =>
-  why === "belowMinimum"
-    ? t("lj.unusable.warn.belowMinimum")
-    : why === "cantComeBack"
-      ? t("lj.unusable.warn.cantComeBack")
-      : why === "superseded"
-        ? t("lj.unusable.warn.superseded")
-        : t("lj.unusable.warn.unchecked");
+  why === "belowMinimum" ? t("lj.unusable.warn.belowMinimum") : t("lj.unusable.warn.superseded");
 
 /**
  * The width a chain of `boxes` boxes, `depth` waves deep, goes at (chunk 34's D3): `asked`, unless that's four and
@@ -2012,7 +2019,7 @@ export class LovejoinService {
   private roomsRead = new Map<NetworkName, { at: number; rooms: Map<string, { others: number; free: number }> }>();
   /**
    * Whether each token pool takes a new box under an epoch's parameters, by network and pool (usableNow): measured
-   * once an epoch, since it builds a withdraw. Why not, when it doesn't.
+   * once an epoch, since it builds a box. Why not, when it doesn't.
    */
   private usables = new Map<string, { epoch: string; why?: LovejoinUnusable["why"] }>();
   /** When progress last looked for a public mix's transaction that may have gone through, by network (PUBLIC_LOOK_MS). */
@@ -2319,6 +2326,17 @@ export class LovejoinService {
     // The parameters a swap's review read for its funding, when it has them: one read for both (34e's review, 9).
     const params = known ?? (await this.deps.koios(network).epochParams());
     return pools.filter((p) => !this.usableNow(network, p, params));
+  }
+
+  /**
+   * Whether `pool`'s boxes can't pay their own way back under this epoch's parameters (cantComeBack), `known` or read
+   * now: a swap's review says so beside its token's way into the pool, which it picks as any other (the owner's call
+   * 34, 2026-10-19). The classic pool's always can.
+   */
+  async stuck(network: NetworkName, pool: LovejoinPool, known?: unknown): Promise<boolean> {
+    if (pool.id === CLASSIC || !pool.ref) return false;
+    const params = (known ?? (await this.deps.koios(network).epochParams())) as Record<string, unknown>;
+    return !!this.cantComeBack(network, pool, params);
   }
 
   /**
@@ -2984,6 +3002,8 @@ export class LovejoinService {
           ...(named === null ? { direct: true as const } : {}),
           pools: works.map((p) => p.id),
           ...(skipped ? { skipped } : {}),
+          // Its boxes there can't pay their own way back today: picked as any pool, and said on the review (call 34).
+          ...(chosen && this.cantComeBack(network, chosen, c.params as Record<string, unknown>) ? { stuck: true as const } : {}),
         });
         if (chosen) legs.push({ pool: chosen, split: splits.get(chosen.id)! });
       }
@@ -3158,13 +3178,15 @@ export class LovejoinService {
   }
 
   /**
-   * Why token pool `pool` takes no new box under `params` (WebAssembly's usable: a new box's minimum, and that a box
-   * comes back), or undefined when it does. Measured once an epoch, since it builds a withdraw; a check that can't
-   * be made takes none. The classic pool's always does. A standard pool's credential is registered by its launch (34c),
-   * so only a box's minimum, its way back, or a check that couldn't be made says no. A copy takes none, before
-   * anything: every way a new box goes in asks here, a return's and a swap's choice of pool too (MERGED-1). `again`:
-   * mixing the boxes already there again, which puts no new box in a pool, so a copy is no reason to refuse it; the
-   * others are, as in any pool (round two's review, R2-2).
+   * Why token pool `pool` takes no new box under `params` (WebAssembly's usable), or undefined when it does: only a
+   * box below the network's minimum, which no mix can make (nor a private Bootstrap, which would spend its funding
+   * first). Measured once an epoch. The classic pool's always does. A standard pool's credential is registered by its
+   * launch (34c). A box that couldn't pay its own way back today, or a check that couldn't be made, refuses nothing
+   * (the owner's call 34, 2026-10-19: what the ledger takes goes; the page warns, and Bring one back is the way out),
+   * and every flow picks such a pool as any other (the owner, the same day). A copy takes none, before anything:
+   * every way a new box goes in asks here, a return's and a swap's choice of pool too (MERGED-1). `again`: mixing the
+   * boxes already there again, which puts no new box in a pool, so a copy is no reason to refuse it; a box's minimum
+   * is, as in any pool (round two's review, R2-2).
    */
   private usableNow(network: NetworkName, pool: LovejoinPool, params: unknown, again = false): LovejoinUnusable["why"] | undefined {
     if (pool.copy && !again) return "superseded";
@@ -3176,11 +3198,15 @@ export class LovejoinService {
     let why: LovejoinUnusable["why"] | undefined;
     try {
       const request = { network, params, poolRef: pool.ref, registered: true };
-      const usable = JSON.parse(this.deps.wasm.lovejoinUsable(JSON.stringify(request))) as { usable: boolean; why?: string };
-      if (!usable.usable) why = usable.why === "belowMinimum" || usable.why === "cantComeBack" ? usable.why : "unchecked";
+      const usable = JSON.parse(this.deps.wasm.lovejoinUsable(JSON.stringify(request))) as { usable: boolean; why?: string; has?: string; needs?: string };
+      if (!usable.usable && usable.why === "belowMinimum") why = usable.why;
+      // Past the minimum, it built and measured the same withdraw cantComeBack would: its answer is kept for that
+      // too, so a pool read measures each pool once an epoch, not twice (session 5's review, L4).
+      const back = usable.why === "cantComeBack" && usable.has && usable.needs ? { has: usable.has, needs: usable.needs } : undefined;
+      if ((usable.usable || back) && this.comeBack.get(key)?.epoch !== epoch) this.comeBack.set(key, { epoch, ...(back ? { why: back } : {}) });
     } catch (e) {
+      // A check that couldn't be made: the build says what's wrong, if anything is.
       if (isTrap(e)) throw e;
-      why = "unchecked";
     }
     this.usables.set(key, { epoch, ...(why ? { why } : {}) });
     return why;
@@ -3189,10 +3215,11 @@ export class LovejoinService {
   /**
    * Refuses a new box in pool `pool` when it takes none under this epoch's parameters (usableNow), in words that say
    * why: the tile's mix, a Bootstrap and mixing again, from either side, each ask before anything is built (1.6.0's
-   * release review, MONEY-3). Chunk 34's §2: usable gates new mixes; until then only a return and a swap's review
-   * asked, and a box put in a pool whose boxes can't come back waited for good, or for the escape hatch. `params`: the
-   * caller's, or one read now, the same request any build makes. The classic pool's always takes one, asking nothing.
-   * `again`: mixing again, whose mixes make boxes from the wallet's own there, with no deposit (usableNow).
+   * release review, MONEY-3). Only a box below the network's minimum, or a copy, since the owner's call 34: a pool whose
+   * boxes can't pay their own way back today takes new ones, with the page's warning first, and they wait there for
+   * the fees, or come back by Bring one back. `params`: the caller's, or one read now, the same request any build makes.
+   * The classic pool's always takes one, asking nothing. `again`: mixing again, whose mixes make boxes from the
+   * wallet's own there, with no deposit (usableNow).
    */
   private async takesNewBoxes(network: NetworkName, pool: LovejoinPool, params?: unknown, again = false): Promise<void> {
     if (pool.id === CLASSIC || !pool.ref) return;
@@ -4717,14 +4744,15 @@ export class LovejoinService {
       };
     };
     const [classic, ...tokens] = reads;
-    // A token pool whose boxes can't pay their own way back today, where the wallet has some (chunk 34's escape
-    // hatch): said, so the page can offer the public account to pay. One request for the parameters, made whenever
-    // a token pool is read, the wallet's boxes there or not: asked only by wallets that held one, it told whoever
-    // answers which do (1.6.0's release review, PRIV-4).
+    // A token pool whose boxes can't pay their own way back today (chunk 34's escape hatch): said, so the page offers
+    // Bring one back where the wallet has some, and warns before a new box goes in, where it has some or not (the
+    // owner's call 34). One request for the parameters, made whenever a token pool is read, the wallet's boxes there
+    // or not: asked only by wallets that held one, it told whoever answers which do (1.6.0's release review, PRIV-4).
     const params = tokens.length ? await this.deps.koios(network).epochParams().catch(() => undefined) : undefined;
-    const stuck = (r: PoolRead) => (params && r.owned.length ? this.cantComeBack(network, r.pool, params) : undefined);
+    const stuck = (r: PoolRead) => (params ? this.cantComeBack(network, r.pool, params) : undefined);
     // Whether each takes a new box, the wallet's boxes there or not, from the same parameters: the page turns Mix and
-    // Bootstrap off and says why, before Review (1.6.0's release review, MONEY-3). Measured once an epoch.
+    // Bootstrap off and says why, before Review (1.6.0's release review, MONEY-3): below a box's minimum, or a copy.
+    // Measured once an epoch.
     const unusable = (r: PoolRead): LovejoinUnusable | undefined => {
       // A copy's why needs no parameters (MERGED-1).
       const why = r.pool.copy || params ? this.usableNow(network, r.pool, params) : undefined;
@@ -4761,8 +4789,9 @@ export class LovejoinService {
             pools: tokens.filter(listedHere).map((r) => {
               const v = view(r);
               const token = r.pool.token;
-              const cantComeBack = stuck(r);
+              // Whether it takes a box first: its measure answers whether a box comes back too (L4).
               const notUsable = unusable(r);
+              const cantComeBack = stuck(r);
               const crowd = crowdOf(r.pool.id);
               const launch = facts?.launches.get(r.pool.id);
               return {
@@ -5082,8 +5111,9 @@ export class LovejoinService {
     const read = reads.find((r) => r.pool.id === pool);
     if (!read) return [];
     // A token pool whose boxes can't pay their own way back today (chunk 34's escape hatch): its box waits
-    // STUCK_WAIT_MS and a fresh spread, rather than be built and refused every minute. The page offers the public
-    // account to pay for one (withdrawNow's `paid`). One request, for its parameters, which the withdraw uses too.
+    // STUCK_WAIT_MS and a fresh spread, rather than be built and refused every minute. Nothing pays for it by itself:
+    // the page offers Bring one back, paid from the private balance or the public account (withdrawNow's `paid`, the
+    // owner's call 36). One request, for its parameters, which the withdraw uses too.
     const params = pool === CLASSIC ? undefined : await this.deps.koios(network).epochParams();
     if (params && this.cantComeBack(network, read.pool, params)) {
       await this.update(network, (s) => moveDue(s, time, now + STUCK_WAIT_MS + within(WITHDRAW_SPREAD_MS, random), undefined, pool));
@@ -5206,7 +5236,7 @@ export class LovejoinService {
    * can't say of is refused (independent review M14). `pool`: with no `box`,
    * one of that pool's boxes (a pool's own page, chunk 34's 34f); none, any's.
    */
-  withdrawNow(network: NetworkName, box?: OutRef, anyway = false, paid = false, pool?: string): Promise<PendingTx> {
+  withdrawNow(network: NetworkName, box?: OutRef, anyway = false, paid: boolean | "private" = false, pool?: string): Promise<PendingTx> {
     return this.inTurn(`withdraw.${network}`, () => this.withdrawNowNow(network, box, anyway, paid, pool));
   }
 
@@ -5214,7 +5244,7 @@ export class LovejoinService {
     network: NetworkName,
     box: OutRef | undefined,
     anyway: boolean,
-    paid: boolean,
+    paid: boolean | "private",
     pool?: string,
   ): Promise<PendingTx> {
     if (await this.deps.mixingAgain?.(network)) {
@@ -5306,15 +5336,16 @@ export class LovejoinService {
     const due = back.some((b) => ref(b) === ref(chosen!)) ? "earliest" : undefined;
     const held = bootstrap.some((b) => ref(b) === ref(chosen!));
     const read = reads.find((r) => r.pool.id === poolOf(chosen!))!;
-    // `paid`: the public account pays (chunk 34's escape hatch), the user's call, said on the page with the tie it
-    // makes: a box that can't pay its own way back comes back so.
-    const pending = await this.withdrawOne(network, read, chosen, { due, ...(held ? { bootstrap: true } : {}), ...(paid ? { paid: true } : {}) });
+    // `paid`: the private balance (`"private"`, the page's default since the owner's call 36) or the public account
+    // (`true`) pays (chunk 34's escape hatch), the user's call, said on the page with the tie it makes: a box that can't
+    // pay its own way back comes back so.
+    const pending = await this.withdrawOne(network, read, chosen, { due, ...(held ? { bootstrap: true } : {}), ...(paid ? { paid } : {}) });
     // Home's banner watches it, as it does every send the user makes; the ones due by themselves stay out of it.
     // One the public account paid for spent the account too: its landing reads both sides again (34d's review 9).
     // A token pool's box goes into a Seedelf, as settleWithdrawing looks for it: on the contract's feed, since the classic
     // pool's never lists a token pool's (1.6.0's release review, DATA-1).
     const watch = read.pool.id !== CLASSIC ? { watch: { feed: "contract" as const } } : {};
-    await watchSent(this.deps, pending, { ...(paid ? { toAccount: true as const } : {}), ...watch });
+    await watchSent(this.deps, pending, { ...(paid === true ? { toAccount: true as const } : {}), ...watch });
     return pending;
   }
 
@@ -5389,7 +5420,8 @@ export class LovejoinService {
    * `due`), and gives back if it never went. `read`: the box's pool as the
    * last read found it, which WebAssembly is told of (a token pool's).
    * `bootstrap`: a box a Bootstrap held, brought back by hand (Withdrawing
-   * `bootstrap`).
+   * `bootstrap`). `paid`: the public account (`true`) or the private balance
+   * (`"private"`) pays its fee, for a box that can't pay its own way back.
    */
   private async withdrawOne(
     network: NetworkName,
@@ -5401,7 +5433,7 @@ export class LovejoinService {
       bootstrap,
       params: known,
       paid,
-    }: { unlocked?: number; due?: number | "earliest"; bootstrap?: true; params?: Record<string, unknown>; paid?: true } = {},
+    }: { unlocked?: number; due?: number | "earliest"; bootstrap?: true; params?: Record<string, unknown>; paid?: true | "private" } = {},
   ): Promise<PendingTx> {
     const { wasm, wallet, session, now } = this.deps;
     const koios = this.deps.koios(network);
@@ -5412,7 +5444,9 @@ export class LovejoinService {
     let finished: { txCbor: string; txHash: string };
     // The public account that pays, whose keys sign: tied to the box on chain (Withdrawing `ties`).
     let payer: number | undefined;
-    if (paid) {
+    // The private UTxO that pays, when one does: its ADA, and its history, which the box's way back now carries.
+    let spent: { lovelace: string; class: HistoryClass } | undefined;
+    if (paid === true) {
       // The public account pays its fee and puts up its own collateral, and signs (chunk 34's escape hatch): no
       // giveme.my. Its UTxO and change are in the same transaction as the box, which the page said before.
       const { params, utxos, collateral, held } = await readAccount(this.deps, network);
@@ -5424,6 +5458,35 @@ export class LovejoinService {
         return JSON.parse(wasm.buildLovejoinWithdrawPaid(keys.cardano, keys.seedelf, JSON.stringify(request))) as Built;
       });
       finished = { txCbor: built.txCbor, txHash: built.txHash };
+    } else if (paid === "private") {
+      // The private balance pays (the owner's call 36): one of its UTxOs of ADA alone goes in beside the box, with its
+      // own proof under a one-time key, and comes back with it in one private UTxO, under giveme.my's collateral as any
+      // Seedelf spend. Nothing locked or reserved; first one a box back from Lovejoin made, which ties no account, then
+      // the smallest. WebAssembly takes the first that pays.
+      const { view, params, utxos, classes, returning } = await readContract(this.deps, network, known);
+      const fromLovejoin = (u: KoiosUtxo) => (classes[outpoint(u)]?.origin === "lovejoin" ? 0 : 1);
+      const order = [...utxos].sort((a, b) => fromLovejoin(a) - fromLovejoin(b) || Number(BigInt(a.value) - BigInt(b.value)));
+      const request = { network, params, pool: read.rows, boxRef, utxos: order, ...(pool.ref ? { poolRef: pool.ref } : {}) };
+      type Private = Built & { seed: string; spent: string; spentLovelace: string };
+      let made: Private;
+      try {
+        made = await wallet.withKeys((keys) => JSON.parse(wasm.buildLovejoinWithdrawPrivate(keys.seedelf, JSON.stringify(request))) as Private);
+      } catch (e) {
+        if (!(e instanceof Error && NO_PRIVATE_PAYS.test(e.message))) throw e;
+        // Nothing free at all: what holds it, as any Seedelf spend says it (locked, or waiting for a return being
+        // sent), never "make some ADA private" for a balance that has some (session 5's review, L3).
+        throw utxos.length ? new Error(t("lj.privatePayNone")) : nothingToSpend(this.deps, view, t("lj.privatePayNone"), returning);
+      }
+      built = made;
+      spent = { lovelace: made.spentLovelace, class: classes[made.spent] ?? UNKNOWN };
+      const collateral = await this.deps.collateral(network).witness(built.txCbor);
+      finished = await wallet.withKeys(
+        (keys) =>
+          JSON.parse(wasm.signScriptSpend(keys.seedelf, JSON.stringify({ txCbor: made.txCbor, seed: made.seed, collateral }))) as {
+            txCbor: string;
+            txHash: string;
+          },
+      );
     } else {
       const params = known ?? (await koios.epochParams());
       const request = { network, params, pool: read.rows, boxRef, ...(pool.ref ? { poolRef: pool.ref } : {}) };
@@ -5445,6 +5508,9 @@ export class LovejoinService {
     // sent (independent review M1). Nothing is sent if it can't be kept.
     const at = now();
     let ties: number[] | undefined;
+    // Paid from the private balance, what came in is the box's own: the UTxO that paid was private already.
+    const lovelace = spent ? (BigInt(built.lovelace) - BigInt(spent.lovelace)).toString() : built.lovelace;
+    let origin: HistoryClass | undefined;
     await this.update(network, (s) => {
       const time = takeDue(s, due, pool.id);
       // What its way back ties to the private UTxO it makes, on chain: the account that paid, and the one whose
@@ -5452,15 +5518,18 @@ export class LovejoinService {
       const deposited = depositAccountOf(s, box);
       const tied = [...new Set([payer, deposited].filter((a): a is number => a !== undefined))].sort((a, b) => a - b);
       ties = tied.length ? tied : undefined;
+      // The private UTxO that paid is in the one it comes back into: its history goes with the box's (call 36).
+      origin = spent ? merged([boxFrom(built.txHash), spent.class, ...(ties ?? []).map(madePrivate)]) : undefined;
       s.withdrawing = {
         txHash: built.txHash,
         txCbor: finished.txCbor,
-        lovelace: built.lovelace,
+        lovelace,
         fee: built.fee,
         ...(pool.id !== CLASSIC ? { pool: pool.id } : {}),
         ...(built.token ? { token: built.token } : {}),
         ...(bootstrap ? { bootstrap } : {}),
-        ...(paid ? { paid, box: boxRef } : {}),
+        ...(paid === true ? { paid, box: boxRef } : paid ? { box: boxRef } : {}),
+        ...(origin ? { origin } : {}),
         ...(ties ? { ties } : {}),
         at,
         sentAt: at,
@@ -5500,15 +5569,16 @@ export class LovejoinService {
     // leaves it looked for, and settleWithdrawing writes it once it's seen.
     // The box comes back into the private balance: the next reading reads that side again, and not the
     // account's (independent review M8), unless the account paid for it (stale).
-    await wallet.withKeys(() => stale(session, network, paid)).catch(() => undefined);
+    await wallet.withKeys(() => stale(session, network, paid === true)).catch(() => undefined);
     const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: built.txHash, submittedAt: now(), confirmations: null };
     // A token pool's box brings its token back with its ADA. One the public account paid for paid no fee of its own.
-    // One its way back ties to a public account is that account's money too (tiedOrigin, PRIV-3).
+    // One its way back ties to a public account is that account's money too (tiedOrigin, PRIV-3); one the private
+    // balance paid for carries that UTxO's history too (call 36).
     const back = {
-      lovelace: built.lovelace,
-      ...(paid ? {} : { fee: built.fee }),
+      lovelace,
+      ...(paid === true ? {} : { fee: built.fee }),
       ...(built.token ? { tokens: [built.token] } : {}),
-      ...tiedOrigin(built.txHash, ties),
+      ...(origin ? { origin } : tiedOrigin(built.txHash, ties)),
     };
     await this.deps.activity?.sent(network, pending, back).catch(() => undefined);
     await this.dropWithdrawing(network, built.txHash, false, true).catch(() => undefined);
@@ -5604,12 +5674,15 @@ export class LovejoinService {
     const now = this.deps.now();
     if (seen != null) {
       const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: w.txHash, submittedAt: w.at, confirmations: seen };
-      // As withdrawOne would have written it: what its way back ties, kept on it (PRIV-3).
+      // As withdrawOne would have written it: what its way back ties, kept on it (PRIV-3), and the history of the
+      // private UTxO that paid, where one did (call 36).
       const back = {
         lovelace: w.lovelace,
         ...(w.paid ? {} : { fee: w.fee }),
         ...(w.token ? { tokens: [w.token] } : {}),
-        ...tiedOrigin(w.txHash, Array.isArray(w.ties) ? w.ties.filter((a) => Number.isInteger(a)) : undefined),
+        ...(isHistoryClass(w.origin)
+          ? { origin: w.origin }
+          : tiedOrigin(w.txHash, Array.isArray(w.ties) ? w.ties.filter((a) => Number.isInteger(a)) : undefined)),
       };
       await this.deps.activity?.sent(network, pending, back).catch(() => undefined);
       // Only the private side is read again (independent review M8), unless the account paid for it (stale).

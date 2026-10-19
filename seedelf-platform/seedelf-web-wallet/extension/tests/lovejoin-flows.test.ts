@@ -598,9 +598,8 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(launch.builds).toEqual([]);
   });
 
-  it("starts a pool from the public account, and names its token and pool to Koios only at Send (34d's review 7)", async () => {
+  it("starts a pool from the public account, and names its pool to Koios only at Send (34d's review 7)", async () => {
     const t = await wallet();
-    t.koios.supplies.set(MIN.policy + MIN.name, "1000000000");
     t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
     const launch = launching(t);
     const summary = await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" });
@@ -619,12 +618,13 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const before = t.koios.calls.length;
     const pending = await launch.submit("preprod", summary.txHash);
     expect(pending).toMatchObject({ kind: "lovejoin-launch", txHash: summary.txHash });
-    // Send asked, then sent: the token's supply, and whether something registered the credential.
+    // Send asked, then sent: whether something registered the credential, and nothing of the token (call 35).
     const sentAt = t.koios.calls.findIndex((c, i) => i >= before && c.path === "submittx");
-    const supplyAt = t.koios.calls.findIndex((c, i) => i >= before && c.path === "asset_info");
-    expect(supplyAt).toBeGreaterThanOrEqual(before);
-    expect(supplyAt).toBeLessThan(sentAt);
+    const askedAt = t.koios.calls.findIndex((c, i) => i >= before && c.path === "account_info");
+    expect(askedAt).toBeGreaterThanOrEqual(before);
+    expect(askedAt).toBeLessThan(sentAt);
     expect(askedOf(t, withCert.mixLogicStake)).toHaveLength(1);
+    expect(t.koios.calls.some((c) => c.path === "asset_info")).toBe(false);
     const sent = t.koios.submitted.at(-1)!;
     expect(txIdOf(sent)).toBe(summary.txHash);
     expect(Buffer.from(sent).toString("hex")).toContain(HOLDER);
@@ -633,19 +633,21 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_LAUNCH))).toBeUndefined();
   });
 
-  it("checks the token's supply at Send, and sends nothing when 30 boxes' worth don't exist", async () => {
+  it("starts a pool whatever its token's supply, and asks no one about it (the owner, 2026-10-19, call 35)", async () => {
+    // Decision 14's 30 boxes' worth within the token's supply was a guard against a typo, nothing the contracts need,
+    // and a request naming the token: gone. A box of 2^63 is more than any token's supply holds 30 of, and more than
+    // one output holds 30 of: it's the creator's to read on the review.
     const t = await wallet();
     t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
     const launch = launching(t);
-    // 10^9 holds 30 boxes of 3·10^7, not of 10^8.
-    t.koios.supplies.set(MIN.policy + MIN.name, "1000000000");
-    const short = await launch.build("preprod", { from: "public", token: min, quantity: "100000000", boxLovelace: "4500000" });
-    await expect(launch.submit("preprod", short.txHash)).rejects.toThrow("Fewer than 30 boxes' worth");
-    // Koios knowing no supply is no supply.
-    t.koios.supplies.clear();
-    const unknown = await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" });
-    await expect(launch.submit("preprod", unknown.txHash)).rejects.toThrow("doesn't know this token's supply");
-    expect(t.koios.submitted).toHaveLength(0);
+    const quantity = (2n ** 63n).toString();
+    const summary = await launch.build("preprod", { from: "public", token: min, quantity, boxLovelace: "4500000" });
+    expect(summary.pool.token).toEqual({ ...min, quantity });
+    const pending = await launch.submit("preprod", summary.txHash);
+    expect(pending.txHash).toBe(summary.txHash);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(summary.txHash);
+    // Neither Koios nor anyone else was asked of the token's supply, at review or at Send.
+    expect(t.koios.calls.some((c) => c.path === "asset_info")).toBe(false);
   });
 
   it("sends the start without the certificate when something registered the credential already", async () => {

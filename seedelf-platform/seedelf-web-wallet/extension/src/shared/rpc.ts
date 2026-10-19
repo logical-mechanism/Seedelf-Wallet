@@ -1968,6 +1968,11 @@ export interface LovejoinTokenWay {
   pools: string[];
   /** Why it comes back directly though a pool was meant to take it: none of its pools can take a box now, or not the one chosen. */
   skipped?: string;
+  /**
+   * The pool chosen for it can't have its boxes pay their own way back today: they wait there until the fees allow, or
+   * come back by Bring one back. Chosen as any pool, and said (the owner's call 34, 2026-10-19).
+   */
+  stuck?: true;
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
@@ -2151,14 +2156,15 @@ export interface LovejoinPoolStatus {
   bootstrap?: Array<{ txHash: string; txIndex: number; pool?: string }>;
   /**
    * A box of it can't pay its own way back under today's parameters (chunk 34's escape hatch): what's left after
-   * the withdraw's fee, and what the Seedelf output needs. Its boxes don't come back by themselves meanwhile;
-   * Bring one back with the public account paying does (`lovejoin-withdraw-now`'s `paid`).
+   * the withdraw's fee, and what the Seedelf output needs. Said whether or not the wallet has boxes there: a new box
+   * still goes in, with this said first (the owner's call 34). Its boxes don't come back by themselves meanwhile;
+   * Bring one back, paid from the private balance or the public account, does (`lovejoin-withdraw-now`'s `paid`).
    */
   cantComeBack?: { has: string; needs: string };
   /**
    * It takes no new box under today's parameters, and why (chunk 34's §2, usable): a mix, a Bootstrap and mixing again
    * into it are refused, from either side, whether or not the wallet has boxes there. Measured once an epoch (1.6.0's
-   * release review, MONEY-3).
+   * release review, MONEY-3; since the owner's call 34, only a box below the network's minimum, or a copy).
    */
   unusable?: LovejoinUnusable;
   /** Its crowd, as the data layer last counted it; none on Koios. */
@@ -2171,18 +2177,19 @@ export interface LovejoinPoolStatus {
 
 /**
  * Why a token pool takes no new box (WebAssembly's usable): a box holds less ADA than the network now asks of one
- * (`belowMinimum`), a box couldn't pay its own way back into a Seedelf (`cantComeBack`), or the check couldn't be made
- * (`unchecked`). Or it's a copy (`superseded`): an earlier launch of its values turned up after this device read it,
- * so it's read for the boxes already in it and takes no new one, for good (decision 30; the merged fixes' review,
- * MERGED-1). Words are the screens' to choose; nothing here is translated.
+ * (`belowMinimum`), so nothing can be built. Or it's a copy (`superseded`): an earlier launch of its values turned up
+ * after this device read it, so it's read for the boxes already in it and takes no new one, for good (decision 30; the
+ * merged fixes' review, MERGED-1). A box that couldn't pay its own way back, or a check that couldn't be made, is no
+ * reason since the owner's call 34 (`cantComeBack` on the pool says the first). Words are the screens' to choose;
+ * nothing here is translated.
  */
 export interface LovejoinUnusable {
-  why: "belowMinimum" | "cantComeBack" | "unchecked" | "superseded";
+  why: "belowMinimum" | "superseded";
   /**
    * In a copy (`superseded`), why mixing again its boxes is refused too, if it is: mixing again makes no deposit, so a
-   * copy alone doesn't refuse it, but the pool's other reasons do (fix round two's last review, R3-2).
+   * copy alone doesn't refuse it, but a box's minimum does (fix round two's last review, R3-2).
    */
-  again?: "belowMinimum" | "cantComeBack" | "unchecked";
+  again?: "belowMinimum";
 }
 
 /**
@@ -2722,12 +2729,15 @@ export interface Requests {
   /**
    * Withdraws one of the wallet's boxes now, whatever its wait (`box`, or the
    * one that has waited longest). One not mixed yet only with `anyway`.
-   * `paid`: the public account pays its fee (chunk 34's escape hatch, for a
-   * box that can't pay its own way back), which ties the box to the account.
+   * `paid`, for a box that can't pay its own way back (chunk 34's escape
+   * hatch): `"private"`, one of the private balance's UTxOs of ADA alone pays
+   * its fee and comes back with it, which ties that UTxO to the box (the
+   * owner's call 36, the default on the page); `true`, the public account
+   * pays, which ties the box to the account.
    */
   /** `pool`: with no `box`, the one of this pool's boxes that has waited longest (none: any pool's). */
   "lovejoin-withdraw-now": {
-    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean; pool?: string };
+    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean | "private"; pool?: string };
     result: PendingTx;
   };
   /** Every mix in Lovejoin's list, from the device alone (chunk 34's session 1, 5): the hub's (34f). */

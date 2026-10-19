@@ -10,7 +10,8 @@
 // account may, a switch, never a link, since it shows that link.
 //
 // The worker checks it all again, builds it, and checks the pool it makes
-// from its own bytes (lovejoin-launch.ts); Send checks the token's supply.
+// from its own bytes (lovejoin-launch.ts); Send asks only whether the pool's
+// mix_logic is registered already.
 // The pool shows in the list once a look finds it, as every wallet's does:
 // the launcher's own record never puts it there sooner (§3). Bootstrapping
 // is offered next, from the pool's page, never forced (23).

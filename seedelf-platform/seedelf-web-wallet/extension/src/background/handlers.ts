@@ -510,7 +510,7 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         ctx.network,
         message.box,
         message.anyway ?? false,
-        message.paid ?? false,
+        message.paid === "private" ? "private" : message.paid === true,
         typeof message.pool === "string" ? message.pool : undefined,
       );
     case "lovejoin-mixes":

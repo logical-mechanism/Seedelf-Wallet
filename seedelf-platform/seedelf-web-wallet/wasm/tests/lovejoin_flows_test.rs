@@ -1,21 +1,28 @@
 //! Chunk 34's 34d through the WebAssembly layer: the tile's flows into a
 //! token pool (a mix session's chain, the public account's), a launch from
-//! either side, a box brought back with the public account paying, and what
-//! a launch's box may hold. Lovejoin's own preprod token pool stands in for
+//! either side, a box brought back with the public account paying or the
+//! private balance (34g's call 36), and what a launch's box may hold. Lovejoin's own preprod token pool stands in for
 //! any token pool, named by a `PoolRef` as the worker names one.
 
 use blstrs::Scalar;
+use pallas_crypto::hash::{Hash, Hasher};
+use pallas_crypto::key::ed25519::{PublicKey, SecretKey, Signature};
 use pallas_traverse::MultiEraTx;
+use rand_core::OsRng;
 use seedelf_core::address::wallet_contract;
-use seedelf_core::constants::{VARIANT, get_config};
-use seedelf_core::lovejoin::{self, BoxToken, BoxValue, ReferenceDatum, mix_datum, templates};
+use seedelf_core::build::Budgets;
+use seedelf_core::constants::{COLLATERAL_HASH, VARIANT, get_config};
+use seedelf_core::eval;
+use seedelf_core::lovejoin::{
+    self, BoxToken, BoxValue, PoolBox, ReferenceDatum, mix_datum, templates,
+};
 use seedelf_crypto::cardano::{CardanoAccount, ONE_TIME_ACCOUNT, Role};
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::UtxoResponse;
+use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use seedelf_wasm::api;
 use seedelf_wasm::lovejoin::{
     self as wasm, AccountChainRequest, BoxValueRequest, ChainRequest, FundingRequest, OutRef,
-    PlanRequest, PoolRef, WithdrawPaidRequest,
+    PlanRequest, PoolRef, WithdrawPaidRequest, WithdrawPrivateRequest, WithdrawRequest,
 };
 use serde_json::{Value, json};
 
@@ -65,17 +72,23 @@ fn holder() -> String {
 
 /// The pool as the worker would find it, its scripts at the holder.
 fn pool_ref() -> PoolRef {
+    pool_ref_worth(2_000_000)
+}
+
+/// [`pool_ref`] with boxes of `lovelace` beside the token.
+fn pool_ref_worth(lovelace: u64) -> PoolRef {
     let d = derived();
     let datum = ReferenceDatum {
         box_value: BoxValue {
-            lovelace: 2_000_000,
+            lovelace,
             token: Some(BoxToken {
                 policy: hex::decode(LJTEST).unwrap().try_into().unwrap(),
                 name: b"LJTEST".to_vec(),
                 quantity: Q,
             }),
         },
-        max_fee: 1_500_000,
+        // 1.5 ₳ for the 2 ₳ pool, as Lovejoin's; below the box value, as a pool's datum must be.
+        max_fee: lovelace * 3 / 4,
         mix_box_hash: d.mix_box.hash,
         mix_logic_hash: d.mix_logic.hash,
         fee_hash: d.fee_contract.hash,
@@ -107,6 +120,11 @@ fn pool_ref() -> PoolRef {
 
 /// A box of the pool's at `mix_box`, owned by `sk` when given.
 fn box_row(first: &str, sk: Option<Scalar>) -> UtxoResponse {
+    box_row_worth(first, sk, 2_000_000)
+}
+
+/// [`box_row`] holding `lovelace` beside the token.
+fn box_row_worth(first: &str, sk: Option<Scalar>, lovelace: u64) -> UtxoResponse {
     let d = derived();
     let owner = sk.unwrap_or(Scalar::from(
         99u64 + first.as_bytes()[0] as u64 * 7 + first.as_bytes()[1] as u64,
@@ -118,7 +136,7 @@ fn box_row(first: &str, sk: Option<Scalar>) -> UtxoResponse {
         .unwrap()
         .mix_box_address();
     row(json!({
-        "tx_hash": first.repeat(32), "address": mix_box.to_bech32().unwrap(), "value": "2000000",
+        "tx_hash": first.repeat(32), "address": mix_box.to_bech32().unwrap(), "value": lovelace.to_string(),
         "payment_cred": hex::encode(d.mix_box.hash),
         "inline_datum": { "bytes": hex::encode(datum), "value": {} },
         "asset_list": [ljtest(Q)],
@@ -610,4 +628,286 @@ fn a_large_bootstrap_from_the_public_account_takes_another_utxo_for_its_fee() {
     let change = outputs.last().unwrap().value().coin();
     assert!(change >= 969_750, "{change}");
     assert_eq!(chain.returned, change.to_string());
+}
+
+/// A UTxO of `sk`'s private balance, as Koios lists it, with `extra` fields.
+fn private_row_with(sk: Scalar, tx: u8, lovelace: u64, extra: Value) -> UtxoResponse {
+    let config = get_config(VARIANT, true).unwrap();
+    let register = Register::create(sk).unwrap().rerandomize().unwrap();
+    let mut fields = json!({
+        "tx_hash": hex::encode([tx; 32]), "tx_index": 1,
+        "address": wallet_contract(true, config.contract.wallet_contract_hash).to_bech32().unwrap(),
+        "value": lovelace.to_string(),
+        "payment_cred": hex::encode(config.contract.wallet_contract_hash),
+        "inline_datum": { "bytes": hex::encode(register.to_vec().unwrap()), "value": {} },
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        fields[k] = v.clone();
+    }
+    row(fields)
+}
+
+fn private_row(sk: Scalar, tx: u8, lovelace: u64) -> UtxoResponse {
+    private_row_with(sk, tx, lovelace, json!({}))
+}
+
+/// Bringing back the wallet's box among `pool`, a box of 1.5 ₳ and the token, paid from `utxos`.
+fn bring_back_privately(
+    sk: Scalar,
+    pool: Vec<UtxoResponse>,
+    box_ref: Option<OutRef>,
+    utxos: Vec<UtxoResponse>,
+) -> anyhow::Result<wasm::WithdrawPrivateResult> {
+    wasm::withdraw_private_in(
+        sk,
+        WithdrawPrivateRequest {
+            network: "preprod".into(),
+            params: params(),
+            pool,
+            box_ref,
+            utxos,
+        },
+        Some(&pool_ref_worth(1_500_000)),
+    )
+}
+
+// 34g's call 36: a box that can't pay its own way back comes back paid from
+// the private balance by default, a Seedelf UTxO spent beside it under a new
+// one-time key, as the public account could already pay.
+#[test]
+fn a_box_too_poor_to_come_back_is_paid_from_the_private_balance() {
+    let sk = Scalar::from(6_161u64);
+    let poor = pool_ref_worth(1_500_000);
+    let pool = vec![
+        box_row_worth("c1", Some(sk), 1_500_000),
+        box_row_worth("c2", None, 1_500_000),
+    ];
+    // On its own, it can't come back.
+    let alone = wasm::withdraw_in(
+        sk,
+        WithdrawRequest {
+            network: "preprod".into(),
+            params: params(),
+            pool: pool.clone(),
+            box_ref: None,
+        },
+        Some(&poor),
+    )
+    .unwrap_err();
+    assert!(
+        alone.downcast_ref::<lovejoin::CantPayBack>().is_some(),
+        "{alone}"
+    );
+
+    let paying = private_row(sk, 0xe1, 5_000_000);
+    let back = bring_back_privately(sk, pool.clone(), None, vec![paying.clone()]).unwrap();
+    assert_eq!(back.box_ref.tx_hash, "c1".repeat(32));
+    assert_eq!(back.spent, format!("{}#1", "e1".repeat(32)));
+    assert_eq!(back.spent_lovelace, "5000000");
+    assert_eq!(back.token.as_ref().unwrap().quantity, Q.to_string());
+    let fee: u64 = back.fee.parse().unwrap();
+    let lovelace: u64 = back.lovelace.parse().unwrap();
+    // The box's ADA and the UTxO's come back together, less the fee.
+    assert_eq!(lovelace, 1_500_000 + 5_000_000 - fee);
+    // The worker's names, as the other withdraws answer.
+    let answer = serde_json::to_value(&back).unwrap();
+    for field in [
+        "txCbor",
+        "txHash",
+        "seed",
+        "fee",
+        "lovelace",
+        "spent",
+        "spentLovelace",
+        "boxRef",
+        "token",
+    ] {
+        assert!(answer.get(field).is_some(), "{field}");
+    }
+
+    let bytes = hex::decode(&back.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert_eq!(hex::encode(tx.hash()), back.tx_hash);
+    // One output, at the wallet contract under a fresh register of the wallet's: the token and the ADA.
+    let outputs = tx.outputs();
+    assert_eq!(outputs.len(), 1);
+    let config = get_config(VARIANT, true).unwrap();
+    let wallet = wallet_contract(true, config.contract.wallet_contract_hash);
+    assert_eq!(outputs[0].address().unwrap(), wallet);
+    assert_eq!(outputs[0].value().coin(), lovelace);
+    assert_eq!(holds_ljtest(&outputs[0]), Some(Q));
+    let datum = match outputs[0].datum().unwrap() {
+        pallas_primitives::conway::PseudoDatumOption::Data(d) => {
+            let data: &pallas_primitives::PlutusData = &d.0;
+            pallas_primitives::Fragment::encode_fragment(data).unwrap()
+        }
+        _ => panic!("an inline register"),
+    };
+    let register = seedelf_koios::koios::register_of_datum(&datum).unwrap();
+    assert!(register.is_owned(sk).unwrap());
+    // The box and the private UTxO spent, nothing else.
+    let mut spent: Vec<String> = tx.inputs().iter().map(|i| hex::encode(i.hash())).collect();
+    spent.sort();
+    assert_eq!(spent, ["c1".repeat(32), "e1".repeat(32)]);
+    // Unsigned, as any Seedelf spend giveme.my sees: the seed's one-time key and giveme.my's are its signers.
+    assert_eq!(tx.vkey_witnesses().len(), 0);
+    let seed: [u8; 32] = hex::decode(&back.seed).unwrap().try_into().unwrap();
+    let one_time = api::one_time_key(&sk, &seed).public_key();
+    let one_time_hash = Hasher::<224>::hash(one_time.as_ref());
+    let signers = seedelf_core::build::required_signers(&bytes).unwrap();
+    assert!(signers.contains(&Hash::new(COLLATERAL_HASH)));
+    assert!(signers.contains(&one_time_hash));
+
+    // Both scripts run, measured again here, and what it declares covers them.
+    let protocol = wasm::protocol_of(true, Some(&poor)).unwrap();
+    let mut known = vec![
+        eval::resolve_row(&pool[0]).unwrap(),
+        eval::resolve_row(&paying).unwrap(),
+    ];
+    known.extend(protocol.references.iter().cloned());
+    known.extend(eval::seedelf_references(true).unwrap());
+    let cost_model = ProtocolParameters::from_koios(&params())
+        .unwrap()
+        .cost_model_v3;
+    let measured = eval::evaluate(&bytes, &known, &cost_model, true).unwrap();
+    let budgets = Budgets::from_ogmios(&measured).unwrap();
+    // The box (c1…) is input 0, the private UTxO (e1…) input 1, and mix_logic's withdrawal.
+    assert!(budgets.spend(0).is_some(), "{measured}");
+    assert!(budgets.spend(1).is_some(), "{measured}");
+    assert!(budgets.withdraw(0).is_some(), "{measured}");
+    assert!(eval::declared_covers(&bytes, &measured).unwrap().is_ok());
+
+    // Finished as any Seedelf spend: giveme.my's checked signature, then the one-time key's, added together.
+    let giveme = SecretKey::new(OsRng);
+    let hash = seedelf_core::build::tx_id(&bytes).unwrap();
+    let collateral = json!({
+        "witness": format!("8258{}", hex::encode([0u8; 32])) + &hex::encode(giveme.sign(hash).as_ref())
+    });
+    let signed = api::sign_with_collateral_key(
+        sk,
+        api::SignRequest {
+            tx_cbor: back.tx_cbor.clone(),
+            seed: back.seed.clone(),
+            collateral,
+        },
+        giveme.public_key(),
+    )
+    .unwrap();
+    assert_eq!(signed.tx_hash, back.tx_hash);
+    let signed_bytes = hex::decode(&signed.tx_cbor).unwrap();
+    let signed_tx = MultiEraTx::decode(&signed_bytes).unwrap();
+    assert_eq!(hex::encode(signed_tx.hash()), back.tx_hash);
+    let witnessed = signed_tx.vkey_witnesses();
+    assert_eq!(witnessed.len(), 2);
+    for w in witnessed {
+        let vkey: [u8; 32] = w.vkey.as_slice().try_into().unwrap();
+        let signature: [u8; 64] = w.signature.as_slice().try_into().unwrap();
+        assert!(PublicKey::from(vkey).verify(hash, &Signature::from(signature)));
+    }
+    assert!(
+        witnessed
+            .iter()
+            .any(|w| w.vkey.as_slice() == one_time.as_ref())
+    );
+}
+
+#[test]
+fn the_private_balance_passes_over_what_cant_pay_and_takes_the_next() {
+    let sk = Scalar::from(6_262u64);
+    let pool = vec![box_row_worth("c3", Some(sk), 1_500_000)];
+    let script = derived().mix_logic;
+    let utxos = vec![
+        // A token's.
+        private_row_with(sk, 0xe1, 40_000_000, json!({ "asset_list": [ljtest(5)] })),
+        // Someone else's.
+        private_row(Scalar::from(9_999u64), 0xe2, 40_000_000),
+        // One holding a reference script, which the wallet's evaluator can't take.
+        private_row_with(
+            sk,
+            0xe3,
+            40_000_000,
+            json!({ "reference_script": { "hash": hex::encode(script.hash), "size": script.cbor.len(),
+                                          "type": "plutusV3", "bytes": hex::encode(&script.cbor) } }),
+        ),
+        // Too small to make up what the output needs.
+        private_row(sk, 0xe4, 300_000),
+        // The first that pays.
+        private_row(sk, 0xe5, 3_000_000),
+        private_row(sk, 0xe6, 50_000_000),
+    ];
+    let back = bring_back_privately(sk, pool, None, utxos).unwrap();
+    assert_eq!(back.spent, format!("{}#1", "e5".repeat(32)));
+    assert_eq!(back.spent_lovelace, "3000000");
+    let fee: u64 = back.fee.parse().unwrap();
+    assert_eq!(back.lovelace, (1_500_000 + 3_000_000 - fee).to_string());
+    let bytes = hex::decode(&back.tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    let mut spent: Vec<String> = tx.inputs().iter().map(|i| hex::encode(i.hash())).collect();
+    spent.sort();
+    assert_eq!(spent, ["c3".repeat(32), "e5".repeat(32)]);
+}
+
+#[test]
+fn none_of_the_private_balance_paying_says_so_in_fixed_words() {
+    let sk = Scalar::from(6_363u64);
+    let pool = vec![
+        box_row_worth("c4", Some(sk), 1_500_000),
+        box_row_worth("c5", None, 1_500_000),
+    ];
+    let none_pays = vec![
+        private_row(sk, 0xe4, 300_000),
+        private_row_with(sk, 0xe1, 40_000_000, json!({ "asset_list": [ljtest(5)] })),
+        private_row(Scalar::from(9_999u64), 0xe2, 40_000_000),
+    ];
+    // The too small one alone was tried, and refused as too small.
+    let protocol = wasm::protocol_of(true, Some(&pool_ref_worth(1_500_000))).unwrap();
+    let too_small = lovejoin::withdraw_private(
+        &ProtocolParameters::from_koios(&params()).unwrap(),
+        &protocol,
+        &[PoolBox::from_row(&pool[0], &protocol).unwrap()],
+        &sk,
+        Register::create(sk).unwrap().rerandomize().unwrap(),
+        &seedelf_payer(sk, &none_pays[0]),
+    )
+    .unwrap_err();
+    assert!(
+        too_small
+            .downcast_ref::<lovejoin::PrivateTooSmall>()
+            .is_some(),
+        "{too_small}"
+    );
+    for utxos in [none_pays, Vec::new()] {
+        let e = bring_back_privately(sk, pool.clone(), None, utxos).unwrap_err();
+        assert_eq!(format!("{e:#}"), wasm::NO_PRIVATE_PAYS);
+    }
+    // Any other refusal is said as it is: a box that isn't the wallet's.
+    let theirs = OutRef {
+        tx_hash: "c5".repeat(32),
+        tx_index: 0,
+    };
+    let e = bring_back_privately(
+        sk,
+        pool,
+        Some(theirs),
+        vec![private_row(sk, 0xe5, 3_000_000)],
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "That box isn't in the pool as this wallet's anymore"
+    );
+}
+
+/// What spends `utxo`, one of `sk`'s, beside a withdraw: its proof bound to a one-time key's hash.
+fn seedelf_payer(sk: Scalar, utxo: &UtxoResponse) -> lovejoin::SeedelfPayer {
+    let register = seedelf_koios::koios::extract_bytes_with_logging(&utxo.inline_datum).unwrap();
+    let signer = [0x5e; 28];
+    let (z, g_r) =
+        seedelf_crypto::schnorr::create_proof(register, sk, hex::encode(signer)).unwrap();
+    lovejoin::SeedelfPayer {
+        coin: lovejoin::Coin::from_row(utxo).unwrap(),
+        redeemer: seedelf_core::data_structures::create_spend_redeemer(z, g_r, hex::encode(signer))
+            .unwrap(),
+        signer,
+    }
 }

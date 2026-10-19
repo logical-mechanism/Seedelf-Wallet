@@ -454,12 +454,17 @@ describe("the questions before a Bootstrap's boxes come back (1.6.0's release re
     expect(ask({ fromAccount: true })).toContain(tr("lovejoin.bootstrap.privacy.account").replaceAll("'", "&#x27;"));
   });
 
-  it("names the public account as what pays, in a pool whose boxes can't pay their own way back", () => {
+  it("names who pays, the private balance first, in a pool whose boxes can't pay their own way back", () => {
     const one = ask({});
     expect(one).toMatch(/class="primary"[^>]*>[^<]*Bring one back/);
+    // The owner's call 36: the private balance by default, `danger` as this confirm was, the public account a button
+    // below it.
     const paying = ask({ stuck: true });
-    expect(paying).toMatch(new RegExp(`class="danger"[^>]*>${tr("lovejoin.stuck.confirm")}<`));
-    expect(paying).toContain(tr("lovejoin.stuck.privacy.ties").replaceAll("'", "&#x27;"));
+    expect(paying).toMatch(new RegExp(`class="danger"[^>]*>${tr("lovejoin.stuck.confirmPrivate")}<`));
+    expect(paying).toMatch(new RegExp(`class="secondary"[^>]*>${tr("lovejoin.stuck.confirm")}<`));
+    expect(paying.indexOf(tr("lovejoin.stuck.confirmPrivate"))).toBeLessThan(paying.indexOf(tr("lovejoin.stuck.confirm")));
+    expect(paying).toContain(tr("lovejoin.stuck.privacy.private").replaceAll("'", "&#x27;"));
+    expect(paying).toContain(tr("lovejoin.stuck.privacy.public").replaceAll("'", "&#x27;"));
   });
 });
 

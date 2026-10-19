@@ -2005,7 +2005,8 @@ pub mod api {
         key
     }
 
-    fn key_hash(key: &PrivateKey) -> Hash<28> {
+    /// A key's hash: what a Seedelf proof is bound to, and the transaction's required signer.
+    pub(crate) fn key_hash(key: &PrivateKey) -> Hash<28> {
         Hasher::<224>::hash(key.public_key().as_ref())
     }
 
@@ -2235,7 +2236,7 @@ pub mod api {
     }
 
     /// A new one-time key's seed, for a draft.
-    fn new_seed() -> [u8; 32] {
+    pub(crate) fn new_seed() -> [u8; 32] {
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
         seed
@@ -4584,6 +4585,21 @@ pub fn build_lovejoin_withdraw_paid(
             named.pool_ref.as_ref(),
         )
         .map_err(js_error)?,
+    )
+}
+
+/// One of the wallet's boxes brought back with a UTxO of the private balance
+/// paying its fee, measured in the wallet, unsigned for giveme.my and
+/// `signScriptSpend`, with its one-time key's seed
+/// (`lovejoin::WithdrawPrivateRequest` → `lovejoin::WithdrawPrivateResult`),
+/// from the classic pool or the token pool `poolRef` names. None of the
+/// UTxOs pays: it throws `lovejoin::NO_PRIVATE_PAYS`.
+#[wasm_bindgen(js_name = buildLovejoinWithdrawPrivate)]
+pub fn build_lovejoin_withdraw_private(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let named: lovejoin::PoolNamed = from_json(request)?;
+    to_json(
+        &lovejoin::withdraw_private_in(key.sk, from_json(request)?, named.pool_ref.as_ref())
+            .map_err(js_error)?,
     )
 }
 

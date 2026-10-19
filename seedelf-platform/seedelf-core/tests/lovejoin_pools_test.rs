@@ -916,6 +916,166 @@ fn a_box_too_poor_to_come_back_says_so_and_an_account_can_pay() {
     assert_eq!(paid.change.unwrap().lovelace, 20_000_000 - paid.fee);
 }
 
+/// A box worth less than the withdraw's fee itself (session 5's review, L1):
+/// it's a box that can't pay its own way back, as one short of its output's
+/// minimum is, so the wallet says so and offers a payer, never a plain error
+/// read as a check that couldn't be made. Paid from the private balance, a
+/// UTxO too small with it is `PrivateTooSmall`, so the next one is tried.
+#[test]
+fn a_box_worth_less_than_the_fee_cant_pay_its_way_back() {
+    let sk = Scalar::from(777u64);
+    let owner = Register::create(sk).unwrap();
+    let pool = lj_pool();
+    let boxes = vec![made_up_box(&pool, Some(&sk), 0x30)];
+    // A fixed fee over what the box holds.
+    let dear = ProtocolParameters {
+        min_fee_b: pool.denom + 1_000_000,
+        ..params()
+    };
+    let err = lovejoin::withdraw(
+        &dear,
+        &pool,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        err.downcast_ref::<lovejoin::CantPayBack>().is_some(),
+        "{err}"
+    );
+    let err = lovejoin::withdraw_private(
+        &dear,
+        &pool,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &seedelf_payer(sk, 0xf2, 1_000_000),
+    )
+    .unwrap_err();
+    assert!(
+        err.downcast_ref::<lovejoin::PrivateTooSmall>().is_some(),
+        "{err}"
+    );
+    // A UTxO that covers the fee and the output pays.
+    let back = lovejoin::withdraw_private(
+        &dear,
+        &pool,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &seedelf_payer(sk, 0xf2, 20_000_000),
+    )
+    .unwrap();
+    assert_eq!(back.lovelace, pool.denom + 20_000_000 - back.fee);
+}
+
+/// One of `sk`'s Seedelf UTxOs, ADA alone, and what spends it beside a
+/// withdraw: its proof bound to a one-time key's hash.
+fn seedelf_payer(sk: Scalar, first: u8, lovelace: u64) -> lovejoin::SeedelfPayer {
+    let config =
+        seedelf_core::constants::get_config(seedelf_core::constants::VARIANT, true).unwrap();
+    let to = seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash);
+    let register = Register::create(sk).unwrap().rerandomize().unwrap();
+    let signer = [0x5e; 28];
+    let (z, g_r) =
+        seedelf_crypto::schnorr::create_proof(register.clone(), sk, hex::encode(signer)).unwrap();
+    lovejoin::SeedelfPayer {
+        coin: Coin {
+            utxo: Resolved {
+                tx_hash: [first; 32],
+                index: 0,
+                output: Output::new(to, lovelace)
+                    .set_inline_datum(register.to_vec().unwrap())
+                    .build_babbage_raw()
+                    .unwrap()
+                    .encode_fragment()
+                    .unwrap(),
+            },
+            lovelace,
+        },
+        redeemer: seedelf_core::data_structures::create_spend_redeemer(z, g_r, hex::encode(signer))
+            .unwrap(),
+        signer,
+    }
+}
+
+// 34g's last review: a box that can't pay its own way back comes back paid
+// from the private balance, a Seedelf UTxO spent beside it, as the public
+// account could already pay. Built, proven and run through both scripts.
+#[test]
+fn a_box_too_poor_to_come_back_is_paid_for_from_the_private_balance() {
+    let sk = Scalar::from(777u64);
+    let owner = Register::create(sk).unwrap();
+    let poor = Protocol {
+        denom: 1_500_000,
+        token: Some(BoxToken {
+            policy: [0xab; 28],
+            name: vec![0xcd; 32],
+            quantity: u64::MAX,
+        }),
+        ..lj_pool()
+    };
+    let boxes = vec![made_up_box(&poor, Some(&sk), 0x30)];
+    let payer = seedelf_payer(sk, 0xf2, 20_000_000);
+    let back = lovejoin::withdraw_private(
+        &params(),
+        &poor,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &payer,
+    )
+    .unwrap();
+    // The box and the UTxO come back together, in one output holding the token, less the fee.
+    assert_eq!(back.lovelace, 1_500_000 + 20_000_000 - back.fee);
+    assert!(back.change.is_none());
+    let token = poor.token.clone().unwrap();
+    assert_eq!(back.token, Some((token.clone(), token.quantity)));
+    let tx = MultiEraTx::decode(&back.tx.tx_bytes.0).unwrap();
+    assert_eq!(tx.outputs().len(), 1);
+    assert_eq!(tx.outputs()[0].value().coin(), back.lovelace);
+    let spent: Vec<[u8; 32]> = tx.inputs().iter().map(|i| **i.hash()).collect();
+    assert!(spent.contains(&[0xf2; 32]));
+    // giveme.my's collateral, and the one-time key signs beside its key.
+    let signers: Vec<[u8; 28]> = tx
+        .required_signers()
+        .collect::<Vec<_>>()
+        .iter()
+        .map(|h| ***h)
+        .collect();
+    assert!(signers.contains(&[0x5e; 28]));
+    assert!(signers.contains(&seedelf_core::constants::COLLATERAL_HASH));
+    // A UTxO too small for what the output needs, with the box, after the fee: said apart.
+    let small = seedelf_payer(sk, 0xf3, 300_000);
+    let err = lovejoin::withdraw_private(
+        &params(),
+        &poor,
+        &boxes,
+        &sk,
+        owner.clone().rerandomize().unwrap(),
+        &small,
+    )
+    .unwrap_err();
+    assert!(
+        err.downcast_ref::<lovejoin::PrivateTooSmall>().is_some(),
+        "{err}"
+    );
+    // The classic pool's box too.
+    let classic = Protocol::of(true).unwrap();
+    let boxes = vec![made_up_box(&classic, Some(&sk), 0x31)];
+    let back = lovejoin::withdraw_private(
+        &params(),
+        &classic,
+        &boxes,
+        &sk,
+        owner.rerandomize().unwrap(),
+        &seedelf_payer(sk, 0xf4, 5_000_000),
+    )
+    .unwrap();
+    assert_eq!(back.lovelace, 10_000_000 + 5_000_000 - back.fee);
+}
+
 #[test]
 fn a_classic_box_comes_back_paid_by_an_account_too() {
     let classic = Protocol::of(true).unwrap();

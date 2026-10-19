@@ -23,22 +23,23 @@
 // once registering mix_logic's credential, once without the certificate.
 //
 // Checked at Send, before anything is sent, so only a start the user sends
-// names its token and its pool to the Cardano server (34d's review 7; ours on
-// mainnet, Koios on preprod or where ours can't answer):
-// - 30 boxes' worth fit in the token's total supply (asset_info; on mainnet
-//   our server's `select=total_supply`, 1.6.0's release review, PRIV-2);
-// - whether something registered mix_logic's credential already (whoever
-//   reads the seed can; account_info): the build without the certificate is
-//   sent then, and is still standard (34c). Built without the deposit, it may
-//   have picked another seed, so another pool: that one is sent only if its
-//   credential is registered too, never as a pool no wallet would show (34d's
-//   review 4).
+// names its pool to the Cardano server (34d's review 7; ours on mainnet,
+// Koios on preprod or where ours can't answer): whether something registered
+// mix_logic's credential already (whoever reads the seed can; account_info).
+// The build without the certificate is sent then, and is still standard
+// (34c). Built without the deposit, it may have picked another seed, so
+// another pool: that one is sent only if its credential is registered too,
+// never as a pool no wallet would show (34d's review 4).
+//
+// A token's supply isn't asked: a box of more than exists of it is the
+// creator's to read on the review, nothing the contracts refuse, and the
+// request would name the token (the owner, 2026-10-19).
 //
 // Koios requests: the protocol parameters and the contract or the account,
 // as any spend reads them, and the holder, as every wallet's look reads it;
-// at Send, asset_info for a token pool's supply, and one account_info, or
-// two. Sent as any spend from its side is: a Seedelf spend with giveme.my's
-// collateral, or the account's, signed at review.
+// at Send, one account_info, or two. Sent as any spend from its side is: a
+// Seedelf spend with giveme.my's collateral, or the account's, signed at
+// review.
 
 import { t } from "../i18n";
 import { lovejoinOn, type NetworkName } from "../networks";
@@ -66,9 +67,6 @@ import { isTrap } from "./wasm";
 
 /** chrome.storage.session: the pool's start built last, until it's sent or replaced. */
 export const SESSION_LOVEJOIN_LAUNCH = "seedelf.lovejoin.launch";
-
-/** How many boxes' worth of its token a token's total supply must hold (session 1, 14). */
-export const LAUNCH_SUPPLY_BOXES = 30n;
 
 /** The most a fee shard may pay a mix, as the datum names it: under the box's ADA, as one_shot_mint requires. */
 const MAX_FEE = 1_500_000n;
@@ -132,8 +130,6 @@ type KeptLaunch = Omit<LovejoinLaunchSummary, "locked" | "fee" | "change" | "poo
     reviewed: string;
     /** Built without the certificate: sent instead when something registered L already. Gone once Send chose. */
     bare?: Sendable;
-    /** A token pool's token and Q, whose supply Send checks. Gone once Send checked it. */
-    supply?: TokenQuantity;
     invalidHereafter?: number;
     builtAt: number;
     account?: number;
@@ -228,9 +224,8 @@ export class LovejoinLaunchService {
     let tokenQuantity: TokenQuantity | undefined;
     if (token) {
       const q = whole(quantity, () => t("lj.launch.quantity"));
+      // A box of them must fit what an output may hold: the ledger's limit, the only one on Q.
       if (q < 1n || q > MAX_QUANTITY) throw new Error(t("lj.launch.quantity"));
-      // A box of them must fit what an output may hold, and so must thirty boxes' worth; Send checks they exist.
-      if (q * LAUNCH_SUPPLY_BOXES > MAX_QUANTITY) throw new Error(t("lj.launch.quantity"));
       tokenQuantity = { ...token, quantity: q.toString() };
     } else if (box === CLASSIC_LOVELACE) {
       throw new Error(t("lj.launch.classicCopy"));
@@ -269,7 +264,6 @@ export class LovejoinLaunchService {
       ...sendable(built, origins?.built),
       reviewed: built.txHash,
       bare: sendable(bare, origins?.bare),
-      ...(tokenQuantity ? { supply: tokenQuantity } : {}),
       ...(invalidHereafter !== undefined ? { invalidHereafter } : {}),
     };
     await keep(this.deps, SESSION_LOVEJOIN_LAUNCH, kept);
@@ -350,7 +344,7 @@ export class LovejoinLaunchService {
     const ours = kept?.network === network && (kept.txHash === txHash || kept.reviewed === txHash);
     // Not for a review too old to send, which Send refuses as it is (send).
     const fresh = !!kept && this.deps.now() - kept.builtAt <= BUILT_TTL_MS;
-    if (kept && ours && fresh && kept.sentCbor === undefined && (kept.bare || kept.supply)) kept = await this.choose(network, kept);
+    if (kept && ours && fresh && kept.sentCbor === undefined && kept.bare) kept = await this.choose(network, kept);
     const sending = kept && ours ? kept.txHash : txHash;
     const pending = await send(this.deps, network, sending, SESSION_LOVEJOIN_LAUNCH, "lovejoin-launch", "launch");
     if (kept && ours) {
@@ -367,20 +361,12 @@ export class LovejoinLaunchService {
   }
 
   /**
-   * Send's checks on the start `kept`: its token's supply, and which build goes. Kept again as it will be sent, the
-   * checks' fields gone, so Send again sends it as it is. Nothing is sent when one refuses.
+   * Send's check on the start `kept`: which build goes. Kept again as it will be sent, the other build gone, so Send
+   * again sends it as it is. Nothing is sent when it refuses.
    */
   private async choose(network: NetworkName, kept: KeptLaunch): Promise<KeptLaunch> {
     const koios = this.deps.koios(network);
-    const { bare, supply, ...rest } = kept;
-    // Thirty boxes' worth must exist (session 1, 14).
-    if (supply) {
-      const total = await koios.assetSupply(supply.policyId, supply.assetName);
-      if (total === undefined) throw new Error(t("lj.launch.unknownToken"));
-      if (BigInt(supply.quantity) * LAUNCH_SUPPLY_BOXES > total) {
-        throw new Error(t("lj.launch.supply", { boxes: Number(LAUNCH_SUPPLY_BOXES) }));
-      }
-    }
+    const { bare, ...rest } = kept;
     let chosen: KeptLaunch = rest;
     // A read that fails keeps the certificate: a start whose credential was registered meanwhile is refused at
     // submit, and built again.

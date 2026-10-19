@@ -7,13 +7,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  Network,
   SeedelfKey,
+  buildLovejoinWithdrawPrivate,
+  decodeTx,
   lovejoinBoxValue,
   lovejoinCandidate,
   lovejoinLaunchCheck,
   lovejoinOwned,
   lovejoinUsable,
   lovejoinVerifyPool,
+  rerandomize,
 } from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
@@ -21,6 +25,10 @@ const params = json("../../../seedelf-core/tests/fixtures/epoch_params.json")[0]
 const found = json("./fixtures/lovejoin-token-pool-preprod.json");
 const classicPool = json("../../extension/tests/fixtures/lovejoin-pool-preprod.json").pool;
 const poolRef = { reference: found.reference, seed: found.seed, scripts: found.scripts };
+// The 12-word phrase's private balance: 25 ₳ of ADA alone, then two UTxOs holding a token.
+const vectors = json("../../../seedelf-crypto/tests/vectors/cardano_account.json").vectors;
+const phrase12 = vectors.find((v) => v.account === 0 && v.phrase.split(" ").length === 12).phrase;
+const owned = json("../../extension/tests/fixtures/owned-utxos.json").owned_utxos;
 
 test("Lovejoin's preprod token pool, as Koios lists it, is verified", () => {
   const view = JSON.parse(lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: poolRef })));
@@ -139,4 +147,37 @@ test("a box of one token has a value, and none of it is refused in words, the mo
   assert.deepEqual(of("1"), { least: "3620000", suggested: "4000000", most: "9000000" });
   assert.throws(() => of("0"), /at least one of its token/);
   assert.equal(of("2").most, "9000000");
+});
+
+test("a box comes back paid from the private balance, the first UTxO of ADA alone paying (34g's call 36)", () => {
+  const key = SeedelfKey.fromPhrase(phrase12, 0);
+  // One of the classic pool's boxes, made the wallet's: its datum `{a, b}` a fresh register of the key.
+  const { generator, publicValue } = rerandomize(key.baseRegister());
+  const ours = { ...classicPool[0], datum_hash: null, inline_datum: { bytes: `d879825830${generator}5830${publicValue}`, value: {} } };
+  const request = (utxos) => JSON.stringify({ network: "preprod", params, pool: [ours, ...classicPool.slice(1)], utxos });
+  const back = JSON.parse(buildLovejoinWithdrawPrivate(key, request([...owned].reverse())));
+  // The two holding a token are passed over.
+  assert.equal(back.spent, `${owned[0].tx_hash}#${owned[0].tx_index}`);
+  assert.equal(back.spentLovelace, "25000000");
+  assert.equal(BigInt(back.lovelace), 10_000_000n + 25_000_000n - BigInt(back.fee));
+  assert.deepEqual(back.boxRef, { txHash: ours.tx_hash, txIndex: Number(ours.tx_index) });
+  assert.equal(back.token, undefined);
+  // Unsigned, with its one-time key's seed, as any Seedelf spend for giveme.my and signScriptSpend: giveme.my's key
+  // and the one-time key are its signers, and the two spends and mix_logic's withdrawal its redeemers.
+  assert.match(back.seed, /^[0-9a-f]{64}$/);
+  const tx = JSON.parse(decodeTx(Network.Preprod, back.txCbor));
+  assert.equal(tx.txHash, back.txHash);
+  assert.deepEqual(tx.signatures, []);
+  assert.equal(tx.requiredSigners.length, 2);
+  assert.ok(tx.requiredSigners.includes("1108b97f2e199d58a0c0697d25412d0fb14d354dcd39654b9eb0dec8"));
+  assert.equal(tx.redeemers.length, 3);
+  // None pays: fixed words the worker tells apart. A bad request is refused in words. The module stays whole.
+  const none = "Your private balance holds no UTxO of ADA alone that pays for this box's way back";
+  assert.throws(() => buildLovejoinWithdrawPrivate(key, request(owned.slice(1))), { message: none });
+  assert.throws(() => buildLovejoinWithdrawPrivate(key, request([])), { message: none });
+  assert.throws(() => buildLovejoinWithdrawPrivate(key, JSON.stringify({ network: "preprod" })), /bad request/);
+  const theirs = JSON.stringify({ network: "preprod", params, pool: classicPool, utxos: owned });
+  assert.throws(() => buildLovejoinWithdrawPrivate(key, theirs), /no box in Lovejoin's pool/);
+  assert.equal(JSON.parse(buildLovejoinWithdrawPrivate(key, request(owned))).spent, back.spent);
+  key.free();
 });

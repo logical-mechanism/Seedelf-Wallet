@@ -95,9 +95,11 @@ describe("Bring them all back, where the pool's boxes can't pay their own way ba
     expect(stuck).toContain(t("lovejoin.bootstrap.bringAll"));
     // A pool whose boxes pay their way: the question as it was.
     expect(ask({})).not.toContain(t("lovejoin.bootstrap.warn.allStuck"));
-    // Bring one back's question in a stuck pool says who pays, as before, and nothing of the others waiting.
+    // Bring one back's question in a stuck pool says who pays, either payer (the owner's call 36), and nothing of the
+    // others waiting.
     const one = ask({ all: false, stuck: true });
-    expect(one).toContain(t("lovejoin.stuck.privacy.ties"));
+    expect(one).toContain(t("lovejoin.stuck.privacy.private"));
+    expect(one).toContain(t("lovejoin.stuck.privacy.public"));
     expect(one).not.toContain(t("lovejoin.bootstrap.warn.allStuck"));
   });
 });
@@ -154,17 +156,17 @@ describe("Mix again, on a pool's page and the hub (MERGED-4)", () => {
 
   it("flags a pool that takes no new box on the hub's row, in the page's words", () => {
     const rows = (pool: ShownPool) => text(shown(createElement(PoolGroupList, { group: groupPools([pool], [])[0]!, onOpen: nothing })));
-    expect(rows(poolOf({ unusable: { why: "cantComeBack" } }))).toContain(t("lj.unusable.warn.cantComeBack"));
-    expect(rows(poolOf())).not.toContain(t("lj.unusable.warn.cantComeBack"));
+    expect(rows(poolOf({ unusable: { why: "belowMinimum" } }))).toContain(t("lj.unusable.warn.belowMinimum"));
+    expect(rows(poolOf())).not.toContain(t("lj.unusable.warn.belowMinimum"));
   });
 });
 
 describe("a copy pool's words (MERGED-1, the screens' side)", () => {
-  it("says a copy pool takes no new box, apart from a check that couldn't be made", () => {
+  it("says a copy pool takes no new box, apart from a box below the network's minimum", () => {
     // The key the worker refuses a new box with, added beside the others (BRIEF's contract).
     expect(t("lj.unusable.warn.superseded")).not.toBe("lj.unusable.warn.superseded");
     expect(unusableText({ why: "superseded" })).toBe(t("lj.unusable.warn.superseded"));
-    expect(unusableText({ why: "superseded" })).not.toBe(t("lj.unusable.warn.unchecked"));
+    expect(unusableText({ why: "belowMinimum" })).toBe(t("lj.unusable.warn.belowMinimum"));
   });
 
   it("lists a copy on the hub only while the wallet has boxes in it, flagged, and never offers it to join", () => {
@@ -172,7 +174,8 @@ describe("a copy pool's words (MERGED-1, the screens' side)", () => {
     expect(Pools.shownOnHub(copy)).toBe(false);
     expect(Pools.shownOnHub({ ...copy, boxes: [at(1)] })).toBe(true);
     expect(Pools.shownOnHub({ ...copy, bootstrap: [at(1)] })).toBe(true);
-    expect(Pools.shownOnHub(poolOf({ unusable: { why: "cantComeBack" } }))).toBe(true);
+    expect(Pools.shownOnHub(poolOf({ unusable: { why: "belowMinimum" } }))).toBe(true);
+    expect(Pools.shownOnHub(poolOf({ cantComeBack: { has: "1589324", needs: "1723200" } }))).toBe(true);
     expect(Pools.shownOnHub(poolOf())).toBe(true);
     const rows = text(shown(createElement(PoolGroupList, { group: groupPools([{ ...copy, boxes: [at(1)] }], [])[0]!, onOpen: nothing })));
     expect(rows).toContain(t("lj.unusable.warn.superseded"));
@@ -396,10 +399,17 @@ describe("a copy pool's page offers Mix again, which makes no deposit, and nothi
     expect(open(unmixed({ others: 3, free: 3 }))).toContain('data-testid="lovejoin-bootstrap-lead"');
   });
 
-  it("keeps Mix again off, saying why, where its boxes couldn't pay their own way back", () => {
-    const page = open(unmixed({ unusable: { why: "cantComeBack" } }));
+  it("keeps Mix again on where its boxes couldn't pay their own way back, and off, saying why, below the minimum", () => {
+    // The owner's call 34: a pool whose boxes can't pay their own way back takes new boxes, said in its callout.
+    const stuck = open(unmixed({ cantComeBack: { has: "1589324", needs: "1723200" } }));
+    expect(button(stuck, "lovejoin-again")).not.toContain("disabled");
+    expect(stuck).not.toContain('data-testid="lovejoin-again-why"');
+    expect(stuck).toContain('data-testid="lovejoin-stuck"');
+    expect(words(stuck)).toContain("Mix my boxes again takes them first");
+    // A box below the network's minimum: nothing can be built, so off, saying why (MONEY-3).
+    const page = open(unmixed({ unusable: { why: "belowMinimum" } }));
     expect(button(page, "lovejoin-again")).toContain('disabled=""');
-    expect(words(page)).toContain(t("lj.unusable.warn.cantComeBack"));
+    expect(words(page)).toContain(t("lj.unusable.warn.belowMinimum"));
     expect(page).toContain('data-testid="lovejoin-again-why"');
     // Its Bootstrap is offered, and off, as any pool that takes no new box today (MONEY-3).
     expect(page).toContain('data-testid="lovejoin-bootstrap-open"');
@@ -436,9 +446,9 @@ describe("a copy's Mix again, where the pool's other reasons refuse it too (the 
     expect(words(page.match(/data-testid="lovejoin-again-why"[^>]*>[^<]*/)?.[0] ?? "")).toContain(t("lj.unusable.warn.belowMinimum"));
     // Mix, which makes a deposit, still says the copy's reason, and the hub's flag too.
     expect(words(page.match(/data-testid="lovejoin-mix-why"[^>]*>[^<]*/)?.[0] ?? "")).toContain(t("lj.unusable.warn.superseded"));
-    const row = text(shown(createElement(PoolGroupList, { group: groupPools([copyOf({ why: "superseded", again: "cantComeBack" } as ShownPool["unusable"])], [])[0]!, onOpen: nothing })));
+    const row = text(shown(createElement(PoolGroupList, { group: groupPools([copyOf({ why: "superseded", again: "belowMinimum" })], [])[0]!, onOpen: nothing })));
     expect(row).toContain(t("lj.unusable.warn.superseded"));
-    expect(row).not.toContain(t("lj.unusable.warn.cantComeBack"));
+    expect(row).not.toContain(t("lj.unusable.warn.belowMinimum"));
     // Bringing a box back makes none: on.
     expect(button(page, "lovejoin-now")).not.toContain("disabled");
   });
@@ -488,18 +498,21 @@ describe("a pool's page where mixing again is refused (34g's last review, SCREEN
         }),
       ),
     );
-  // A token pool whose box can't pay its own way back today, as status says it (the escape hatch's case).
-  const stuck = (extra: Partial<ShownPool>) =>
-    poolOf({ unusable: { why: "cantComeBack" }, cantComeBack: { has: "1589324", needs: "1723200" }, ...extra });
+  // A token pool whose box can't pay its own way back today, as status says it (the escape hatch's case). Since the
+  // owner's call 34 it takes new boxes, so status names no reason it doesn't.
+  const stuck = (extra: Partial<ShownPool>) => poolOf({ cantComeBack: { has: "1589324", needs: "1723200" }, ...extra });
 
-  it("brings a box not mixed yet back with the public account paying, saying so first, where nothing else can (SCREENS-1)", () => {
+  it("brings a box not mixed yet back paid in a stuck pool, saying who pays first (SCREENS-1; the owner's call 36)", () => {
     const pool = stuck({ boxes: [at(1)], notMixed: [at(1)] });
     expect(LovejoinScreen.anywayRequest(pool, true)).toEqual({ box: at(1), anyway: true, paid: true });
-    expect(LovejoinScreen.anywayRequest(pool, false)).toEqual({ box: at(1), anyway: true });
+    expect(LovejoinScreen.anywayRequest(pool, "private")).toEqual({ box: at(1), anyway: true, paid: "private" });
+    expect(LovejoinScreen.anywayRequest(pool)).toEqual({ box: at(1), anyway: true });
     const ask = (paying: boolean) => text(createElement(LovejoinScreen.AnywayQuestion, { pool, stuck: paying, onKeep: nothing, onConfirm: nothing }));
-    expect(ask(true)).toContain(t("lovejoin.stuck.privacy.ties"));
+    expect(ask(true)).toContain(t("lovejoin.stuck.privacy.private"));
+    expect(ask(true)).toContain(t("lovejoin.stuck.privacy.public"));
+    expect(ask(true)).toContain(t("lovejoin.stuck.confirmPrivate"));
     expect(ask(true)).toContain(t("lovejoin.stuck.confirm"));
-    expect(ask(false)).not.toContain(t("lovejoin.stuck.privacy.ties"));
+    expect(ask(false)).not.toContain(t("lovejoin.stuck.privacy.public"));
     expect(ask(false)).toContain(t("lovejoin.anyway.confirm"));
     // The escape hatch takes a box known to be mixed: with none, it's not offered only to be refused.
     const page = open(pool);
@@ -521,7 +534,7 @@ describe("a pool's page where mixing again is refused (34g's last review, SCREEN
 
   it("never sends the user to Mix again where it's refused (SCREENS-3)", () => {
     const takes = t("lovejoin.warn.notMixed.takes.private", { count: 2 });
-    const off = open(poolOf({ boxes: [at(1), at(2)], notMixed: [at(1), at(2)], unusable: { why: "unchecked" } }));
+    const off = open(poolOf({ boxes: [at(1), at(2)], notMixed: [at(1), at(2)], unusable: { why: "belowMinimum" } }));
     expect(words(off)).not.toContain(takes);
     // Bring one back now would be refused with "Mix them again first": not offered. Bring one back anyway stays.
     expect(off).not.toContain('data-testid="lovejoin-now"');

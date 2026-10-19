@@ -8,7 +8,8 @@
 // The review says what each return leaves at its account (a token that
 // comes with the next return, a UTxO no return takes: launch review H6),
 // why a return leaves Lovejoin out (another's chain may have taken the
-// pool's boxes: #23), and warns before an ADA Handle comes into the private
+// pool's boxes: #23), which token goes into a pool whose boxes can't pay
+// their own way back today (chunk 34's call 34), and warns before an ADA Handle comes into the private
 // balance (#57), and that another browser may still use a session a
 // restore's scan found (C18). Returns that go through Lovejoin can all be
 // built again to come back directly instead, by a switch first on the
@@ -32,6 +33,7 @@ import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda } from "../format";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
+import { tokenText } from "../tokens";
 import { chainGoing, pairOf } from "./Swaps";
 
 /**
@@ -262,6 +264,18 @@ export function ClaimReview({
   // Why four boxes a mix went three, where it did: each reason once, however many returns it's true of (D3; 1.6.0's
   // release review, UI-4).
   const fellBack = [...new Set(picked.flatMap((r) => (r.lovejoin?.fellBack ? [r.lovejoin.fellBack] : [])))];
+  // A token a pick's return puts into a pool whose boxes can't pay their own way back today: the wallet picked that
+  // pool as any other, and the review says so (the owner's call 34), by the token's name, once however many returns
+  // take it there. A return's own review says it under its token's row (TokenWays); this one said nothing (session
+  // 5's cross-area review, M2).
+  const stuckTokens = [
+    ...new Map(
+      picked
+        .flatMap((r) => r.lovejoin?.ways ?? [])
+        .filter((w) => w.stuck && w.pool && w.boxes > 0)
+        .map((w) => [`${w.policyId}${w.assetName}`, tokenText(network, w).label] as const),
+    ).values(),
+  ];
 
   return (
     <>
@@ -348,6 +362,15 @@ export function ClaimReview({
                 </li>
               ))}
           </ul>
+        </Callout>
+      )}
+      {stuckTokens.length > 0 && (
+        <Callout tone="warn" testId="claim-lovejoin-stuck">
+          <div className="stack-tight">
+            {stuckTokens.map((name) => (
+              <span key={name}>{t("claim.warn.skippedItem", { name, why: withoutStop(t("lovejoin.ways.warn.stuck")) })}</span>
+            ))}
+          </div>
         </Callout>
       )}
       {/* Found by a restore's scan: the browser that started it may still be running it, as its own page warns

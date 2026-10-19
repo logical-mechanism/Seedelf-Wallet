@@ -1054,7 +1054,7 @@ pub fn withdraw(
     owner: &Scalar,
     destination: Register,
 ) -> Result<Withdraw> {
-    withdraw_with(params, protocol, boxes, owner, destination, None)
+    withdraw_with(params, protocol, boxes, owner, destination, Paying::Boxes)
 }
 
 /// [`withdraw`] with the fee paid by `payer`, a key account, which puts up
@@ -1072,7 +1072,85 @@ pub fn withdraw_paid(
     destination: Register,
     payer: &Payer,
 ) -> Result<Withdraw> {
-    withdraw_with(params, protocol, boxes, owner, destination, Some(payer))
+    withdraw_with(
+        params,
+        protocol,
+        boxes,
+        owner,
+        destination,
+        Paying::Account(payer),
+    )
+}
+
+/// A Seedelf UTxO that pays a withdraw's fee and makes up what its boxes are
+/// short of ([`withdraw_private`]): ADA alone at the wallet contract, spent
+/// beside the boxes with its own proof, bound to the one-time key `signer`,
+/// which signs. giveme.my puts up the collateral, as for any Seedelf spend.
+#[derive(Debug, Clone)]
+pub struct SeedelfPayer {
+    pub coin: Coin,
+    /// Its spend redeemer: the Schnorr proof of its register, bound to `signer`.
+    pub redeemer: Vec<u8>,
+    /// The one-time key's hash.
+    pub signer: [u8; 28],
+}
+
+/// [`withdraw`] with the fee paid by `payer`, a Seedelf UTxO of the private
+/// balance (34g's last review: the escape hatch paid from the private
+/// balance by default, as the owner's decision 10 has a pool's start paid):
+/// the boxes and the UTxO come back together, in one output under
+/// `destination`. For a box that can't pay its own way back
+/// ([`CantPayBack`]). Spent together, the UTxO and the box are tied to each
+/// other on chain: the caller says so before it's signed. A UTxO too small
+/// for what the output needs is refused as [`PrivateTooSmall`].
+pub fn withdraw_private(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    owner: &Scalar,
+    destination: Register,
+    payer: &SeedelfPayer,
+) -> Result<Withdraw> {
+    withdraw_with(
+        params,
+        protocol,
+        boxes,
+        owner,
+        destination,
+        Paying::Seedelf(payer),
+    )
+}
+
+/// [`withdraw_private`]'s UTxO, with the boxes, falls short of what the
+/// Seedelf output needs after the fee. Its own type, so a caller can tell it
+/// apart (`downcast_ref`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateTooSmall {
+    pub has: u64,
+    pub needs: u64,
+}
+
+impl std::fmt::Display for PrivateTooSmall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The private UTxO and the boxes hold {} lovelace after the fee, and the Seedelf output they come back in needs {}",
+            self.has, self.needs
+        )
+    }
+}
+
+impl std::error::Error for PrivateTooSmall {}
+
+/// Who pays a withdraw's fee.
+#[derive(Clone, Copy)]
+enum Paying<'a> {
+    /// The boxes, from their own ADA ([`withdraw`]).
+    Boxes,
+    /// A key account, with its own collateral ([`withdraw_paid`]).
+    Account(&'a Payer),
+    /// A Seedelf UTxO, with giveme.my's collateral ([`withdraw_private`]).
+    Seedelf(&'a SeedelfPayer),
 }
 
 fn withdraw_with(
@@ -1081,8 +1159,16 @@ fn withdraw_with(
     boxes: &[PoolBox],
     owner: &Scalar,
     destination: Register,
-    payer: Option<&Payer>,
+    paying: Paying<'_>,
 ) -> Result<Withdraw> {
+    let payer = match paying {
+        Paying::Account(p) => Some(p),
+        _ => None,
+    };
+    let seedelf = match paying {
+        Paying::Seedelf(s) => Some(s),
+        _ => None,
+    };
     if boxes.is_empty() {
         bail!("A withdraw needs a box");
     }
@@ -1115,6 +1201,7 @@ fn withdraw_with(
     // Every input in the ledger's order, which the spend redeemers point into.
     let mut all_inputs: Vec<Input> = sorted.iter().map(|b| b.input()).collect();
     all_inputs.extend(payer.map(|p| p.fee.input()));
+    all_inputs.extend(seedelf.map(|s| s.coin.input()));
     all_inputs.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
     let positions: Vec<u64> = sorted
         .iter()
@@ -1125,6 +1212,13 @@ fn withdraw_with(
                 .expect("sorted in") as u64
         })
         .collect();
+    // The Seedelf UTxO's place among them, which its redeemer points at.
+    let seedelf_position = seedelf.map(|s| {
+        all_inputs
+            .iter()
+            .position(|i| *i == s.coin.input())
+            .expect("sorted in") as u64
+    });
     let back = |lovelace: u64| -> Result<Output> {
         let output = Output::new(to.clone(), lovelace).set_inline_datum(datum.clone());
         match &token {
@@ -1146,15 +1240,20 @@ fn withdraw_with(
         }
     };
     let topped = paid_back.saturating_sub(total);
+    // What the register gets: a Seedelf UTxO's ADA comes back with the boxes, less the fee. Less than the fee
+    // itself is nothing, which the output's minimum then refuses as CantPayBack (or PrivateTooSmall), as it does
+    // a little more: a plain error here read as a check that couldn't be made (session 5's review, L1).
+    let into_register = |fee: u64| -> Result<u64> {
+        Ok(match (payer, seedelf) {
+            (Some(_), _) => paid_back,
+            (None, Some(s)) => (total + s.coin.lovelace).saturating_sub(fee),
+            (None, None) => total.saturating_sub(fee),
+        })
+    };
 
     let stage =
         |fee: u64, budgets: Option<&Budgets>, redeemer: &[u8]| -> Result<BuiltTransaction> {
-            let lovelace = match payer {
-                None => total
-                    .checked_sub(fee)
-                    .context("The boxes can't pay the fee")?,
-                Some(_) => paid_back,
-            };
+            let lovelace = into_register(fee)?;
             let mut tx = StagingTransaction::new();
             for (boxed, index) in sorted.iter().zip(&positions) {
                 let budget = budgets
@@ -1168,6 +1267,14 @@ fn withdraw_with(
             }
             if let Some(p) = payer {
                 tx = tx.input(p.fee.input());
+            }
+            if let (Some(s), Some(index)) = (seedelf, seedelf_position) {
+                let budget = budgets.and_then(|b| b.spend(index)).unwrap_or(DRAFT_BUDGET);
+                tx = tx.input(s.coin.input()).add_spend_redeemer(
+                    s.coin.input(),
+                    s.redeemer.clone(),
+                    Some(staged_units(budget)),
+                );
             }
             tx = tx.output(back(lovelace)?);
             if let Some(p) = payer {
@@ -1183,6 +1290,12 @@ fn withdraw_with(
             }
             for reference in protocol.reference_inputs() {
                 tx = tx.reference_input(reference);
+            }
+            // The wallet contract's script, for the Seedelf UTxO.
+            if seedelf.is_some() {
+                tx = tx.reference_input(crate::transaction::reference_utxo(
+                    config.reference.wallet_reference_utxo,
+                ));
             }
             tx = protocol.with_scripts(tx);
             tx = match (payer, collateral) {
@@ -1206,6 +1319,10 @@ fn withdraw_with(
                     .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone())
                     .disclosed_signer(Hash::new(COLLATERAL_HASH)),
             };
+            // The one-time key every Seedelf proof is bound to signs too.
+            if let Some(s) = seedelf {
+                tx = tx.disclosed_signer(Hash::new(s.signer));
+            }
             let built = tx
                 .build_conway_raw()
                 .context("Failed To Build The Withdraw")?;
@@ -1234,6 +1351,10 @@ fn withdraw_with(
         known.push(p.fee.utxo.clone());
         known.push(c.utxo.clone());
     }
+    if let Some(s) = seedelf {
+        known.push(s.coin.utxo.clone());
+        known.extend(eval::seedelf_references(protocol.network_flag)?);
+    }
     known.extend(protocol.references.iter().cloned());
     let measure = |tx: &BuiltTransaction| -> Result<Budgets> {
         let answer = eval::evaluate(
@@ -1245,6 +1366,11 @@ fn withdraw_with(
         let budgets = Budgets::from_ogmios(&answer)?;
         for index in &positions {
             budgets.spend(*index).context("No budget for a box")?;
+        }
+        if let Some(index) = seedelf_position {
+            budgets
+                .spend(index)
+                .context("No budget for the private UTxO")?;
         }
         budgets.withdraw(0).context("No budget for mix_logic")?;
         Ok(budgets)
@@ -1258,12 +1384,20 @@ fn withdraw_with(
             .encode_fragment()
             .map_err(|e| anyhow!("{e}"))?
     };
-    let signers = payer.map_or(1, |p| p.signers);
+    // giveme.my signs, and a Seedelf UTxO's one-time key too; an account's keys sign for it.
+    let signers = match paying {
+        Paying::Boxes => 1,
+        Paying::Account(p) => p.signers,
+        Paying::Seedelf(_) => 2,
+    };
 
     // Each round's proof is new, and its scalars' sizes move the budget by a
     // hair, so the transaction declares 1% over what was measured, and is
-    // priced on what it declares (which the ledger charges).
-    let script_fee = reference_script_fee(params, protocol.script_bytes)?;
+    // priced on what it declares (which the ledger charges). A Seedelf UTxO
+    // spent reads the wallet contract's script by reference too.
+    let script_bytes =
+        protocol.script_bytes + seedelf.map_or(0, |_| config.contract.wallet_contract_size);
+    let script_fee = reference_script_fee(params, script_bytes)?;
     let mut fee = 500_000;
     let mut declared: Option<Budgets> = None;
     for _ in 0..8 {
@@ -1273,19 +1407,25 @@ fn withdraw_with(
         let measured = measure(&tx)?;
         match &declared {
             Some(d) if d.covers(&measured) => {
-                let mut charged = Vec::with_capacity(sorted.len() + 1);
+                let mut charged = Vec::with_capacity(sorted.len() + 2);
                 for index in &positions {
                     charged.push(d.spend(*index).context("No budget for a box")?);
+                }
+                if let Some(index) = seedelf_position {
+                    charged.push(d.spend(index).context("No budget for the private UTxO")?);
                 }
                 charged.push(d.withdraw(0).context("No budget for mix_logic")?);
                 let needed = price(params, signed_size(&tx, signers)?, &charged, script_fee);
                 if needed <= fee && fee - needed < 5_000 {
-                    let lovelace = match payer {
-                        None => total - fee,
-                        Some(_) => paid_back,
-                    };
+                    let lovelace = into_register(fee)?;
                     let needs = minimum(lovelace)?;
                     if lovelace < needs {
+                        if seedelf.is_some() {
+                            bail!(PrivateTooSmall {
+                                has: lovelace,
+                                needs,
+                            });
+                        }
                         bail!(CantPayBack {
                             has: lovelace,
                             needs,

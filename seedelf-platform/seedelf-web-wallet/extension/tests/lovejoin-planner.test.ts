@@ -198,6 +198,9 @@ async function siteSession(t: T): Promise<void> {
   });
 }
 
+/** A price of a byte at which a 4.5 ₳ MIN box still meets its minimum (3.87 ₳ at 11,000) but can't pay its own way back. */
+const STUCK_MIN = "12300";
+
 type Kept = { chain?: Array<{ kind: string; txCbor: string; txHash: string }> };
 const kept = async (t: T) => (await t.wallet.withKeys(() => t.session.get<Kept>(SESSION_BACK)))!;
 
@@ -398,6 +401,48 @@ async function minPool(t: T, boxLovelace = "4500000", account: [string, string] 
   };
   return { ref, id: made!.pool.id, mixBox: made!.pool.mixBoxHash };
 }
+
+// The owner's call 34 (2026-10-19, asked in session 5): where the wallet picks a token's pool itself, a pool whose boxes
+// can't pay their own way back under today's fees is picked as any pool, and the review says so beside the token.
+describe("a token's pool whose boxes can't pay their own way back, picked as any (the owner's call 34)", SLOW, () => {
+  it("is a return's token's pool, and its way says the boxes wait", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    // A byte dearer than preprod's: a 2 ₳ LJTEST box still meets its minimum, but can't pay its own way back.
+    t.koios.params = { coins_per_utxo_size: "4800" };
+    const lj = pooled(t, [TOKEN_POOL]);
+    const sessions = runner(t, lj);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(
+      atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]),
+      atSession(OUT, 1, "40000000"),
+      atSession(OUT, 2, "5000000"),
+      ...POOL,
+      ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+    );
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin?.ways?.[0]).toMatchObject({ pool: TOKEN, boxes: 2, stuck: true });
+  });
+
+  it("is a swap's token's pool, and its way says the boxes wait", async () => {
+    const t = await wallet();
+    const min = await minPool(t);
+    t.koios.params = { coins_per_utxo_size: STUCK_MIN };
+    const lj = pooled(t, [min.ref]);
+    const sessions = runner(t, lj);
+    const wasm = loadTestWasm();
+    const datum = await t.wallet.withKeys((keys) => Buffer.from(wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister()))).toString("hex"));
+    t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: "100000000", inline_datum: { bytes: datum, value: {} } } as KoiosUtxo);
+    t.koios.addedToAccounts.push(...POOL, ...strangers(t, min.mixBox, 8, 0x80, "4500000", asset(MIN_UNIT, MIN_Q)));
+    const quote = await sessions.quote("preprod", minswapEstimate.ask);
+    const out = await sessions.outBuild("preprod", quote);
+    expect(out.lovejoin!.ways![0]).toMatchObject({ pool: min.id, boxes: 1, stuck: true });
+    // Under preprod's own fees, the same pool's way says nothing of it.
+    t.koios.params = undefined;
+    const fine = await runner(t, pooled(t, [min.ref])).outBuild("preprod", quote);
+    expect(fine.lovejoin!.ways![0]!.stuck).toBeUndefined();
+  });
+});
 
 describe("a swap that gets a token with a pool (chunk 34's 34e, the owner's call, 2026-10-18)", SLOW, () => {
   it("funds its token's boxes beside the swap, and keeps the pool its review showed", async () => {

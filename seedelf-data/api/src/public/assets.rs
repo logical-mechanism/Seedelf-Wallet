@@ -1,7 +1,6 @@
 //! `asset_nft_address` and `asset_info`: who holds an NFT (an ADA Handle's
-//! address), and a token's metadata (an NFT's image) or its total supply (a
-//! Lovejoin pool's start). Each names what one user is looking at, so neither
-//! is cached.
+//! address), and a token's metadata (an NFT's image). Each names what one
+//! user is looking at, so neither is cached.
 //!
 //! Koios answers both from its asset cache (a token's supply, its latest
 //! mint); here they're read from `ma_tx_mint` per request, which db-sync
@@ -140,32 +139,8 @@ const REFERENCE: &str = "select d.value::text from multi_asset m \
      join tx_out o on o.id = last.id join datum d on d.hash = o.data_hash \
      where m.policy = $1::bytea and m.name = $2::bytea";
 
-/// A token's total supply, as Koios's asset cache keeps it: every mint less
-/// every burn, from `ma_tx_mint`, which db-sync indexes by token (as `HOLDER`
-/// sums it for an NFT). A token db-sync doesn't know has no row, as in Koios.
-const SUPPLY: &str = "select coalesce((select sum(mtm.quantity) from ma_tx_mint mtm \
-       where mtm.ident = m.id), 0)::text \
-     from multi_asset m where m.policy = $1::bytea and m.name = $2::bytea";
-
-#[derive(Serialize)]
-struct SupplyRow {
-    /// Text, as Koios gives it: it can pass what a JSON number holds exactly.
-    total_supply: String,
-}
-
-/// What `asset_info` is asked for: the wallet's two shapes, by `select`.
-enum Asked {
-    /// An NFT's image: its CIP-25 and CIP-68 metadata (chunk 20).
-    Metadata,
-    /// A token's total supply: a Lovejoin pool's start checks 30 boxes' worth
-    /// exist, at Send. Asked here first, so Koios doesn't hear which token a
-    /// pool is being started for (1.6.0's release review, PRIV-2).
-    Supply,
-}
-
 /// A token's metadata for its image: CIP-25's from its minting transaction,
-/// CIP-68's from its reference token's datum, keyed by the token's label. Or
-/// its total supply.
+/// CIP-68's from its reference token's datum, keyed by the token's label.
 pub async fn asset_info(
     State(state): State<Arc<AppState>>,
     RawQuery(raw): RawQuery,
@@ -173,11 +148,7 @@ pub async fn asset_info(
     bytes: Bytes,
 ) -> Result<Response, ApiError> {
     let mut q = Query::parse(raw.as_deref())?;
-    let asked = match q.value("select")?.as_str() {
-        "minting_tx_metadata,cip68_metadata" => Asked::Metadata,
-        "total_supply" => Asked::Supply,
-        _ => return Err(NOT_ASKED),
-    };
+    q.exactly("select", "minting_tx_metadata,cip68_metadata")?;
     q.end()?;
     let request: AssetsBody = body(&headers, &bytes)?;
     let [[policy, name]] = request._asset_list.as_slice() else {
@@ -187,19 +158,6 @@ pub async fn asset_info(
     state.fresh_tip()?;
     let client = state.chain.public().await?;
     let read = |error: tokio_postgres::Error| ApiError::from(anyhow::Error::from(error));
-    if let Asked::Supply = asked {
-        let rows = client
-            .query_opt(SUPPLY, &[&policy, &name])
-            .await
-            .map_err(read)?
-            .map(|row| {
-                Ok::<_, ApiError>(SupplyRow {
-                    total_supply: row.try_get(0).map_err(read)?,
-                })
-            })
-            .transpose()?;
-        return Ok(json(array(rows.as_slice())?));
-    }
     let row = client
         .query_one(MINTED, &[&policy, &name])
         .await

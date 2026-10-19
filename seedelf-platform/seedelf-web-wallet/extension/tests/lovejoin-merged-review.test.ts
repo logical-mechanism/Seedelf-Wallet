@@ -23,11 +23,12 @@ import { privateIndexClient } from "../src/background/private-index";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
 import { SessionService } from "../src/background/sessions";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import { boxFrom, merged, UNKNOWN, type HistoryClass } from "../src/shared/histories";
 import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
 import type { Message } from "../src/shared/rpc";
 import { poolsOf } from "../src/ui/lovejoin-pools";
-import { anywayBox, anywayRequest } from "../src/ui/screens/Lovejoin";
+import { anywayBox } from "../src/ui/screens/Lovejoin";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { fakeIndex, indexRowOf } from "./fake-index";
@@ -891,11 +892,11 @@ describe("a copy's status and its sealed read, at the end (fix round two's last 
 });
 
 // 34g's last review, SCREENS-1: in a token pool whose boxes can't pay their own way back, a box not mixed yet (a chain
-// cut after its deposit) had no way out the page offered. The escape hatch leaves such a box out, mixing again is
-// refused there (MONEY-3), Bring one back now is hidden, and Bring one back anyway built a withdraw the box pays, which
-// core refuses. The page's anyway asks the public account to pay there now (anywayRequest), and the worker takes it.
+// cut after its deposit) had no way out the page offered. The owner's calls 34 and 36 (2026-10-19) since: mixing again
+// is allowed there, as any mix the ledger takes, and a box comes back paid from the private balance by default, or from
+// the public account where the user picks it.
 describe("a box not mixed yet in a pool whose boxes can't pay their own way back (34g's last review, SCREENS-1)", SLOW, () => {
-  it("comes back with the public account paying, as the page now asks, where nothing else it offers can", async () => {
+  it("is mixed again, or comes back paid from the public account, as the page asks", async () => {
     const t = await wallet();
     // A byte dearer than preprod's: a 2 ₳ LJTEST box still meets its minimum, but can't pay its own way back.
     t.koios.params = { coins_per_utxo_size: "4800" };
@@ -904,19 +905,253 @@ describe("a box not mixed yet in a pool whose boxes can't pay their own way back
     t.koios.addedToAccounts.push(atAccount("e1", "20000000"), atAccount("e5", "5000000"), ...POOL, box, ...(await strangers(t)));
     await t.store.set("lovejoin.preprod", { due: [], chains: [cutInto(t, box.tx_hash, { session: 0 })] });
     const pool = poolsOf(await lj.status("preprod")).find((p) => p.id === TOKEN)!;
-    expect(pool).toMatchObject({ unusable: { why: "cantComeBack" }, notMixed: [{ txHash: box.tx_hash, txIndex: 0 }] });
+    expect(pool.unusable).toBeUndefined();
+    expect(pool).toMatchObject({ notMixed: [{ txHash: box.tx_hash, txIndex: 0 }] });
     expect(pool.cantComeBack).toBeDefined();
     await t.balances.get("preprod");
-    // Every other way the page offers: refused.
-    await expect(lj.againBoxes("preprod", false, TOKEN)).rejects.toThrow(tr("lj.unusable.warn.cantComeBack"));
+    // Mixing it again is a mix the ledger takes: allowed (call 34).
+    await expect(lj.againBoxes("preprod", false, TOKEN)).resolves.toMatchObject({ boxes: 1 });
     await expect(lj.withdrawNow("preprod", undefined, false, true, TOKEN)).rejects.toThrow(tr("lj.privacy.allUnmixed"));
-    // What the page's anyway asked before: the box as it is, which its own value can't bring back.
+    // The box as it is, which its own value can't bring back.
     await expect(lj.withdrawNow("preprod", anywayBox(pool), true, false)).rejects.toThrow();
-    // What it asks now.
-    const request = anywayRequest(pool, true)!;
-    expect(request).toMatchObject({ anyway: true, paid: true });
-    const pending = await lj.withdrawNow("preprod", request.box, request.anyway, request.paid);
+    // The public account pays, where the user picks it.
+    const pending = await lj.withdrawNow("preprod", anywayBox(pool), true, true);
     expect(pending.kind).toBe("lovejoin-withdraw");
+  });
+});
+
+// The owner's call 34 (2026-10-19): the release review's MONEY-3 refused every new box in a token pool whose boxes
+// can't pay their own way back today, or where the check couldn't be made. Those transactions build and the network
+// takes them; the boxes then wait for the fees, or come back by Bring one back. Only a box below the network's minimum
+// (nothing can be built) and a copy still refuse, and where the wallet picks a pool itself it picks such a pool as any.
+describe("a token pool whose boxes can't pay their own way back today (the owner's call 34)", SLOW, () => {
+  const STUCK = { coins_per_utxo_size: "4800" };
+
+  it("takes new boxes, from either side, and says on its status why they wait, whether or not the wallet has boxes there", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(
+      atAccount("e1", "40000000", [ljtest(3n * Q)]),
+      atAccount("e2", "30000000"),
+      atAccount("e5", "5000000"),
+      ...POOL,
+      ...(await strangers(t)),
+    );
+    t.koios.params = STUCK;
+    const lj = pooled(t, [TOKEN_POOL]);
+    const pool = poolsOf(await lj.status("preprod")).find((p) => p.id === TOKEN)!;
+    expect(pool.boxes).toEqual([]);
+    expect(pool.unusable).toBeUndefined();
+    expect(pool.cantComeBack).toMatchObject({ has: expect.any(String), needs: expect.any(String) });
+    await lj.fits("preprod", 1, TOKEN);
+    await expect(lj.publicBuild("preprod", 1, { pool: TOKEN })).resolves.toMatchObject({ pool: TOKEN, boxes: 1 });
+    await expect(lj.publicBuild("preprod", 3, { pool: TOKEN, bootstrap: true })).resolves.toMatchObject({ bootstrap: true, boxes: 3 });
+    // A Bootstrap from the private balance asks the same gate first (session 5's review, L7).
+    expect(await lj.privateBootstrapMost("preprod", TOKEN)).toBeGreaterThan(0);
+    // A box below the network's minimum still refuses, before anything is built (MONEY-3's other half).
+    t.koios.params = { coins_per_utxo_size: "12930" };
+    const dear = pooled(t, [TOKEN_POOL]);
+    await expect(dear.fits("preprod", 1, TOKEN)).rejects.toThrow(tr("lj.unusable.warn.belowMinimum"));
+    expect(poolsOf(await dear.status("preprod")).find((p) => p.id === TOKEN)!.unusable).toEqual({ why: "belowMinimum" });
+  });
+
+  it("measures each token pool once an epoch at a pool read, for both what it takes and whether a box comes back (L4)", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
+    t.koios.params = STUCK;
+    const wasm = loadTestWasm();
+    let measured = 0;
+    const lj = pooled(t, [TOKEN_POOL], {
+      wasm: {
+        ...wasm,
+        lovejoinUsable: (request: string) => {
+          measured++;
+          return wasm.lovejoinUsable(request);
+        },
+      } as typeof wasm,
+    });
+    const pool = poolsOf(await lj.status("preprod")).find((p) => p.id === TOKEN)!;
+    expect(pool.cantComeBack).toMatchObject({ has: expect.any(String), needs: expect.any(String) });
+    expect(measured).toBe(1);
+    // And not again within the epoch.
+    await lj.status("preprod");
+    expect(measured).toBe(1);
+  });
+
+  it("refuses nothing where the check couldn't be made: the build says what's wrong, if anything is", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
+    const wasm = loadTestWasm();
+    const lj = pooled(t, [TOKEN_POOL], {
+      wasm: {
+        ...wasm,
+        lovejoinUsable: () => {
+          throw new Error("couldn't measure");
+        },
+      } as typeof wasm,
+    });
+    await lj.fits("preprod", 1, TOKEN);
+    expect(poolsOf(await lj.status("preprod")).find((p) => p.id === TOKEN)!.unusable).toBeUndefined();
+  });
+
+  it("is picked for a return's token as any pool is, and the way says its boxes wait", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
+    t.koios.params = STUCK;
+    const lj = pooled(t, [TOKEN_POOL]);
+    // What a swap's review asks of a token's pools: this one, whose boxes can't come back today, still takes a box.
+    await lj.status("preprod");
+    const pools = await lj.poolsOf("preprod", LJTEST);
+    expect(pools.map((p) => p.id)).toEqual([TOKEN]);
+    expect((await lj.usable("preprod", pools)).map((p) => p.id)).toEqual([TOKEN]);
+    expect(await lj.stuck("preprod", pools[0]!)).toBe(true);
+    t.koios.params = undefined;
+    const fresh = pooled(t, [TOKEN_POOL]);
+    await fresh.status("preprod");
+    expect(await fresh.stuck("preprod", (await fresh.poolsOf("preprod", LJTEST))[0]!)).toBe(false);
+  });
+});
+
+// The owner's call 36 (2026-10-19): Bring one back was paid by the public account alone (Claude's §2 choice). Nothing
+// stops the private balance paying: Lovejoin's withdraw counts only its own box inputs, and the Seedelf validator only
+// its proof and the one-time key's signature. So a Seedelf UTxO of ADA alone goes in beside the box and comes back with
+// it, under giveme.my's collateral, as any Seedelf spend; the page asks for it by default.
+describe("a box brought back paid from the private balance (the owner's call 36)", SLOW, () => {
+  /** A Seedelf UTxO of the wallet's at the contract: `value` lovelace, and `assets`. */
+  async function privateUtxo(t: T, tx: string, value: string, assets: Array<ReturnType<typeof ljtest>> = []): Promise<KoiosUtxo> {
+    return {
+      ...ownedUtxos[0]!,
+      tx_hash: tx.repeat(32),
+      tx_index: 0,
+      value,
+      inline_datum: { bytes: await datum(t, true), value: {} },
+      asset_list: assets.map((a) => ({ ...a, decimals: 0, fingerprint: "asset1ljtest" })) as never,
+    } as KoiosUtxo;
+  }
+
+  /** The stuck pool, the wallet's mixed box in it, the private UTxOs; giveme.my and the one-time key's signing stood in for. */
+  async function stuckWith(utxos: (t: T) => Promise<KoiosUtxo[]>, classes: Map<string, HistoryClass> = new Map()) {
+    // None of the fixture's own contract UTxOs: the private balance holds what the test gives it, and nothing else.
+    const t = testBalances({ owned: false });
+    await t.wallet.create(PHRASE, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.koios.tip = 110_000_000;
+    t.koios.params = { coins_per_utxo_size: "4800" };
+    const box = await tokenBox(t, "f1", true, 7);
+    t.koios.addedToAccounts.push(...POOL, box, ...(await strangers(t)));
+    t.koios.added.push(...(await utxos(t)));
+    const signed: Array<{ txCbor: string; seed: string; collateral: unknown }> = [];
+    const written: Array<Record<string, unknown>> = [];
+    const wasm = loadTestWasm();
+    const lj = pooled(t, [TOKEN_POOL], {
+      wasm: {
+        ...wasm,
+        signScriptSpend: (_key: unknown, request: string) => {
+          const asked = JSON.parse(request) as { txCbor: string; seed: string; collateral: unknown };
+          signed.push(asked);
+          return JSON.stringify({ txCbor: asked.txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(asked.txCbor, "hex"))) });
+        },
+      } as typeof wasm,
+      activity: {
+        classes: async () => classes,
+        sent: async (_n: unknown, _p: unknown, summary: Record<string, unknown>) => {
+          written.push(summary);
+        },
+      } as unknown as Deps["activity"],
+    });
+    return { t, lj, box, signed, written };
+  }
+
+  it("spends the smallest UTxO of ADA alone that pays, beside the box, under giveme.my, signed with a one-time key", async () => {
+    const { t, lj, box, signed, written } = await stuckWith(async (t) => [
+      await privateUtxo(t, "d1", "50000000"),
+      await privateUtxo(t, "d2", "3000000"),
+      await privateUtxo(t, "d3", "2500000", [ljtest(Q)]),
+    ]);
+    const before = t.collateral.asked.length;
+    const pending = await lj.withdrawNow("preprod", { txHash: box.tx_hash, txIndex: 0, pool: TOKEN }, false, "private");
+    expect(pending.kind).toBe("lovejoin-withdraw");
+    const sent = t.koios.submitted.at(-1)!;
+    expect(txInputs(sent).sort()).toEqual([`${box.tx_hash}#0`, `${"d2".repeat(32)}#0`].sort());
+    // giveme.my witnessed it, and the one-time key signed it after, as every Seedelf spend.
+    expect(t.collateral.asked.length).toBe(before + 1);
+    expect(signed).toHaveLength(1);
+    expect(signed[0]!.seed).toMatch(/^[0-9a-f]{64}$/);
+    // Its history: the box's ADA less the fee came in (the UTxO that paid was private already), with the fee, and the
+    // box's way back merged with the UTxO's history (unknown here).
+    expect(written).toHaveLength(1);
+    const entry = written[0]! as { lovelace: string; fee: string; origin: HistoryClass; tokens: unknown[] };
+    expect(BigInt(entry.lovelace) + BigInt(entry.fee)).toBe(2_000_000n);
+    expect(entry.tokens).toEqual([{ policyId: VIEW.token.policyId, assetName: VIEW.token.assetName, quantity: Q.toString() }]);
+    expect(entry.origin).toEqual(merged([boxFrom(pending.txHash), UNKNOWN]));
+    // The public account wasn't asked to pay, nor read again.
+    expect(txInputs(sent).some((o) => o.startsWith("e1"))).toBe(false);
+  });
+
+  it("takes a UTxO a box back from Lovejoin made first, which ties no account", async () => {
+    const { t, lj, box, written } = await stuckWith(
+      async (t) => [await privateUtxo(t, "d1", "50000000"), await privateUtxo(t, "d2", "3000000")],
+      new Map([[`${"d1".repeat(32)}#0`, boxFrom("b0".repeat(32))]]),
+    );
+    const pending = await lj.withdrawNow("preprod", { txHash: box.tx_hash, txIndex: 0, pool: TOKEN }, false, "private");
+    expect(txInputs(t.koios.submitted.at(-1)!)).toContain(`${"d1".repeat(32)}#0`);
+    expect((written[0] as { origin: HistoryClass }).origin).toEqual(merged([boxFrom(pending.txHash), boxFrom("b0".repeat(32))]));
+  });
+
+  it("says so in words when no UTxO of the private balance pays, and sends nothing", async () => {
+    const { t, lj, box } = await stuckWith(async (t) => [await privateUtxo(t, "d3", "2500000", [ljtest(Q)])]);
+    await expect(lj.withdrawNow("preprod", { txHash: box.tx_hash, txIndex: 0, pool: TOKEN }, false, "private")).rejects.toThrow(
+      tr("lj.privatePayNone"),
+    );
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  it("says what holds the private balance's UTxOs when none is free, rather than to make some ADA private (L3)", async () => {
+    const { t, lj, box } = await stuckWith(async (t) => [await privateUtxo(t, "d2", "3000000")]);
+    await t.balances.get("preprod");
+    await t.coins.setLocked("preprod", "seedelf", `${"d2".repeat(32)}#0`, true);
+    await expect(lj.withdrawNow("preprod", { txHash: box.tx_hash, txIndex: 0, pool: TOKEN }, false, "private")).rejects.toThrow(
+      tr("worker.spend.allLocked"),
+    );
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  it("is asked for through the handler, which passes the private balance on and nothing else", async () => {
+    const asked: unknown[] = [];
+    const lj = { withdrawNow: async (...args: unknown[]) => asked.push(args.slice(1)) } as unknown as LovejoinService;
+    const ctx = { lovejoin: lj, network: "preprod" } as unknown as Context;
+    const box = { txHash: "f1".repeat(32), txIndex: 0 };
+    await handle({ type: "lovejoin-withdraw-now", box, paid: "private" } as Message, ctx);
+    await handle({ type: "lovejoin-withdraw-now", box, paid: true } as Message, ctx);
+    await handle({ type: "lovejoin-withdraw-now", box, paid: "account" } as unknown as Message, ctx);
+    await handle({ type: "lovejoin-withdraw-now", box } as Message, ctx);
+    expect(asked.map((a) => (a as unknown[])[2])).toEqual(["private", true, false, false]);
+  });
+
+  it("writes the same history once it's seen, after Koios didn't answer its submit", async () => {
+    const { t, lj, box, written } = await stuckWith(async (t) => [await privateUtxo(t, "d2", "3000000")]);
+    // Koios takes the transaction and never answers.
+    const answers = t.koios.fetch;
+    t.koios.fetch = async (url, init) => {
+      if (String(url).endsWith("/submittx")) {
+        await answers(url, init);
+        throw new TypeError("network error");
+      }
+      return answers(url, init);
+    };
+    await expect(lj.withdrawNow("preprod", { txHash: box.tx_hash, txIndex: 0, pool: TOKEN }, false, "private")).rejects.toThrow();
+    t.koios.fetch = answers;
+    type Kept = { withdrawing?: { txHash: string; box?: unknown; origin?: HistoryClass; paid?: unknown; lovelace: string; fee: string } };
+    const kept = (await t.store.get<Kept>("lovejoin.preprod"))!.withdrawing!;
+    expect(kept.box).toEqual({ txHash: box.tx_hash, txIndex: 0 });
+    expect(kept.paid).toBeUndefined();
+    expect(kept.origin).toEqual(merged([boxFrom(kept.txHash), UNKNOWN]));
+    expect(BigInt(kept.lovelace) + BigInt(kept.fee)).toBe(2_000_000n);
+    expect(written).toHaveLength(0);
+    // Seen on chain at the next run: its history, as the send would have written it.
+    t.koios.confirmations = 1;
+    await lj.withdrawDue("preprod");
+    expect(written).toEqual([expect.objectContaining({ lovelace: kept.lovelace, fee: kept.fee, origin: kept.origin })]);
+    expect((await t.store.get<Kept>("lovejoin.preprod"))!.withdrawing).toBeUndefined();
   });
 });
 

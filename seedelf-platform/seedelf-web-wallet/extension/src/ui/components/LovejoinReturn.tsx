@@ -205,7 +205,8 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
 
 /**
  * A return's or a swap's tokens on their way back (chunk 34's 34e and 34f): each through its own pool, its boxes
- * and what a box holds there, or back directly and why. Change, where there's a choice, picks another of its pools
+ * and what a box holds there, or back directly and why; a pool whose boxes can't pay their own way back today, under
+ * its row (`stuck`, the owner's call 34). Change, where there's a choice, picks another of its pools
  * that can take a box now, or back directly (`onChange`, by the token's unit, null for directly), and the review is
  * built again. `values`: what a box holds in each pool, by id. `funded`: a swap's, whose boxes are as many as the
  * least it asks for makes, funded at Send.
@@ -263,6 +264,13 @@ export function TokenWays({
                 </button>
               )}
               <span className={`token-row__sub wrap${!into && !w.direct ? " token-row__sub--warn" : ""}`}>{text}</span>
+              {/* Its pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's
+                  call 34). */}
+              {into && w.stuck && (
+                <span className="token-row__sub wrap token-row__sub--warn" data-testid="lovejoin-token-way-stuck">
+                  {tr("lovejoin.ways.warn.stuck")}
+                </span>
+              )}
             </li>
           );
         })}

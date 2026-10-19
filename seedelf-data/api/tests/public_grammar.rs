@@ -534,22 +534,4 @@ async fn asset_routes() {
         .0,
         BAD
     );
-    // A token's total supply, which a Lovejoin pool's start reads at Send: here, not Koios (1.6.0's release
-    // review, PRIV-2). One token, that column alone.
-    let supply = "/api/v1/asset_info?select=total_supply";
-    assert_eq!(post(supply, json!({ "_asset_list": [token] })).await.0, OK);
-    for (path, body) in [
-        (supply, json!({ "_asset_list": [token, token] })),
-        (supply, json!({ "_asset_list": [] })),
-        (
-            "/api/v1/asset_info?select=total_supply,minting_tx_metadata",
-            json!({ "_asset_list": [token] }),
-        ),
-        (
-            "/api/v1/asset_info?select=total_supply&limit=1",
-            json!({ "_asset_list": [token] }),
-        ),
-    ] {
-        assert_eq!(post(path, body.clone()).await.0, BAD, "{path} {body}");
-    }
 }
