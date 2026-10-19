@@ -56,6 +56,7 @@ import type {
   LovejoinChainView,
   LovejoinFunding,
   LovejoinMixView,
+  LovejoinPoolStatus,
   LovejoinPublicSummary,
   LovejoinStatus,
   LovejoinUnusable,
@@ -509,6 +510,65 @@ export function anywayWarning(status?: Pick<LovejoinStatus, "notMixed" | "unsure
 }
 
 /**
+ * What Bring one back anyway asks the worker for: the box anywayBox takes, as it is. In a pool whose boxes can't pay
+ * their own way back (`stuck`), with the public account paying, as the escape hatch does: there a box not mixed yet
+ * has no other way out (the hatch leaves it out, mixing again is refused, Bring one back now is hidden), and a
+ * box-paid withdraw is one core refuses (34g's last review, SCREENS-1).
+ */
+export function anywayRequest(status: Pick<LovejoinStatus, "notMixed" | "unsure">, stuck: boolean) {
+  const box = anywayBox(status);
+  return box ? { box, anyway: true as const, ...(stuck ? { paid: true as const } : {}) } : undefined;
+}
+
+/**
+ * Bring one back anyway's question: what the box it takes shows (anywayWarning), and in a stuck pool, that the public
+ * account pays, with the escape hatch's words and button (anywayRequest). Exported for its test.
+ */
+export function AnywayQuestion({
+  pool,
+  stuck,
+  onKeep,
+  onConfirm,
+}: {
+  pool: Pick<LovejoinStatus, "notMixed" | "unsure" | "deposits" | "fromPublic">;
+  stuck: boolean;
+  onKeep: () => void;
+  onConfirm: () => void;
+}) {
+  const tr = useT();
+  const taken = anywayBox(pool);
+  const unsure = !!taken && !!pool.unsure?.some((b) => b.txHash === taken.txHash && b.txIndex === taken.txIndex);
+  return (
+    <Modal
+      title={tr(unsure ? "lovejoin.anyway.titleUnsure" : "lovejoin.anyway.title")}
+      titleId="lovejoin-anyway-title"
+      onClose={onKeep}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={onKeep}>
+            {tr("lovejoin.anyway.keep")}
+          </button>
+          <button type="button" className="danger" onClick={onConfirm} data-testid="lovejoin-anyway-confirm">
+            {tr(stuck ? "lovejoin.stuck.confirm" : "lovejoin.anyway.confirm")}
+          </button>
+        </>
+      }
+    >
+      <p className="note">{joinSentences([anywayWarning(pool), stuck && tr("lovejoin.stuck.privacy.ties")])}</p>
+    </Modal>
+  );
+}
+
+/**
+ * Why mixing the wallet's boxes again in `pool` is refused now, if it is: a pool that takes no new box refuses it
+ * (MONEY-3), but a copy, where it deposits nothing, only for its own other reasons (`again`; R2-2, R3-2). What turns
+ * the page's ways of mixing again off, and what the words around them follow (34g's last review, SCREENS-3).
+ */
+export function againRefused(pool: Pick<LovejoinPoolStatus, "unusable">): LovejoinUnusable["why"] | undefined {
+  return pool.unusable?.why === "superseded" ? pool.unusable.again : pool.unusable?.why;
+}
+
+/**
  * The wallet's boxes that a chain of its made and didn't finish mixing, or,
  * after a restore, that a deposit made (`deposits` of them): they never
  * come back by themselves. Those a deposit made are said as Koios said it,
@@ -528,6 +588,7 @@ export function NotMixed({
   elsewhere = 0,
   unsure = 0,
   deposits = 0,
+  againOff = false,
   busy,
   onAnyway,
 }: {
@@ -536,6 +597,8 @@ export function NotMixed({
   elsewhere?: number;
   unsure?: number;
   deposits?: number;
+  /** Mixing again is refused in the pool now (againRefused): no word sends the user to it (SCREENS-3). */
+  againOff?: boolean;
   busy: boolean;
   onAnyway: () => void;
 }) {
@@ -564,7 +627,7 @@ export function NotMixed({
   // Of those, the ones this account's buttons take: another account's mix's are that account's to mix again.
   const here = known - Math.min(elsewhere, known);
   const agreeHere = amounts.hidden || here > 1 ? 2 : 1;
-  const takes = !here
+  const takes = !here || againOff
     ? undefined
     : fromPublic >= here
       ? tr("lovejoin.warn.notMixed.takes.public", { count: agreeHere })
@@ -761,7 +824,7 @@ export function AgainActions({
   const owned = pool.boxes.length;
   if (!owned) return null;
   const notMixed = pool.notMixed.length;
-  const { all: theirs, mine: ownPublic, accounts: otherAccounts } = publicBoxesOf(pool);
+  const { all: theirs, mine: ownPublic } = publicBoxesOf(pool);
   const key = (b: { txHash: string; txIndex: number }) => `${b.txHash}#${b.txIndex}`;
   const notMixedOf = (set: Set<string>) => pool.notMixed.filter((b) => set.has(key(b))).length;
   const publicNotMixed = notMixedOf(theirs);
@@ -769,6 +832,9 @@ export function AgainActions({
   const held = pool.bootstrap?.length ?? 0;
   // What each way of mixing again takes: never a box a Bootstrap holds, as the worker leaves those out (MERGED-4).
   const holds = new Set((pool.bootstrap ?? []).map(key));
+  // The other accounts to switch to: only those with a box mixing again takes. A public Bootstrap's held boxes are the
+  // account's too, and none of its buttons takes them (34g's last review, SCREENS-2).
+  const otherAccounts = [...new Set((pool.otherAccounts ?? []).filter((b) => !holds.has(key(b))).map((b) => b.account))].sort((a, b) => a - b);
   const unheld = (set: Set<string>) => [...set].filter((k) => !holds.has(k)).length;
   const fromAccount = unheld(ownPublic);
   const anyAccount = unheld(theirs);
@@ -779,9 +845,14 @@ export function AgainActions({
   // while the callout above said Mix my boxes again takes it first (round two's review, R2-2). Where the pool's other
   // reasons refuse it in a copy too (`again`), off, in that reason's words: the page kept it on, and the worker refused
   // it on the press, where the same pool not a copy said so before (the last review, R3-2).
-  const why = pool.unusable?.why === "superseded" ? pool.unusable.again : pool.unusable?.why;
+  const why = againRefused(pool);
   const unusable = why ? unusableText({ why }) : undefined;
   const stuck = !!pool.cantComeBack;
+  // Bring one back now takes only a box known to be mixed: with every unheld box not mixed yet, the worker refuses it
+  // with "Mix them again first", which is no way while mixing again is refused too (SCREENS-3). Bring one back anyway,
+  // in the callout above, stays.
+  const unmixed = new Set([...pool.notMixed, ...(pool.unsure ?? [])].map(key));
+  const nowRefused = !!why && pool.boxes.every((b) => holds.has(key(b)) || unmixed.has(key(b)));
   return (
     <div className="stack">
       <OtherAccounts accounts={otherAccounts} />
@@ -815,7 +886,7 @@ export function AgainActions({
         </p>
       )}
       {/* Only with a box no Bootstrap holds: those come back by hand, from the callout above (UI-5). */}
-      {!stuck && owned > held && (
+      {!stuck && owned > held && !nowRefused && (
         <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={onNow} data-testid="lovejoin-now">
           {pressed === "now" ? tr("lovejoin.working") : tr("lovejoin.bringBackNow")}
         </button>
@@ -1754,13 +1825,16 @@ export function PoolPage({
       await onRefresh();
     }, "now");
 
-  /** Brings back a box not mixed yet, as it is: it shows where it went in (anywayBox, anywayWarning). */
+  /**
+   * Brings back a box not mixed yet, as it is: it shows where it went in (anywayBox, anywayWarning). In a pool whose
+   * boxes can't pay their own way back, the public account pays, as its question said (anywayRequest, SCREENS-1).
+   */
   const anyway = () => {
-    const taken = anywayBox(pool);
+    const request = anywayRequest(pool, stuck);
     setAsking(undefined);
-    if (!taken) return;
+    if (!request) return;
     void act(async () => {
-      onPending(await call("lovejoin-withdraw-now", { box: taken, anyway: true }));
+      onPending(await call("lovejoin-withdraw-now", request));
       await onRefresh();
     }, "anyway");
   };
@@ -2000,12 +2074,13 @@ export function PoolPage({
   const ownNotMixed = notMixedOf(ownPublic);
   // After a restore, those whose making Koios hasn't said of yet (independent review M14).
   const unsure = new Set((pool.unsure ?? []).map((b) => `${b.txHash}#${b.txIndex}`));
-  // The box Bring one back anyway takes, which its warning is about.
-  const taken = anywayBox(pool);
-  const firstUnsure = !!taken && unsure.has(`${taken.txHash}#${taken.txIndex}`);
   const next = pool.due[0];
   // A token pool whose boxes can't pay their own way back today (chunk 34's escape hatch).
   const stuck = !!pool.cantComeBack && owned > 0;
+  // The escape hatch takes a box known to be mixed that no Bootstrap holds, as the worker picks one: with none, it
+  // was offered and refused, pointing at buttons that can't work there (SCREENS-1). Those boxes have their own.
+  const hatchless = new Set([...pool.notMixed, ...(pool.unsure ?? []), ...(pool.bootstrap ?? [])].map((b) => `${b.txHash}#${b.txIndex}`));
+  const hatchTakes = pool.boxes.some((b) => !hatchless.has(`${b.txHash}#${b.txIndex}`));
   // The pool can't be mixed in yet: a Bootstrap is the only thing that starts one. It's offered whatever the pool
   // holds (chunk 34's D2: "Bootstrap a pool, any time"), and leads the page while the pool is short. Never in a copy,
   // which takes no new box for good: there Mix says why, and nothing says to help start it (round two's review, R2-2).
@@ -2393,8 +2468,9 @@ export function PoolPage({
       )}
       {pool.launch && (
         <div className="stack-tight">
-          {/* One this wallet started: opening it tells Cardanoscan, and the browser's history, it's of interest here. */}
-          <ExplorerLink network={network} tx={pool.launch} private={!!pool.mine} className="link align-start">
+          {/* One this wallet started, or a copy, listed only while the wallet has something in it (34g's last review,
+              PRIVACY-3): opening it tells Cardanoscan, and the browser's history, it's of interest here. */}
+          <ExplorerLink network={network} tx={pool.launch} private={!!pool.mine || copy} className="link align-start">
             {tr("lovejoin.pool.launch")}
           </ExplorerLink>
           {pool.mine && <p className="note">{tr("lovejoin.pool.mine")}</p>}
@@ -2410,9 +2486,11 @@ export function PoolPage({
                 needs: formatAda(pool.cantComeBack!.needs),
               })}
             </span>
-            <button type="button" className="link align-start" disabled={busy || mixingAgain} onClick={() => setAsking({ paid: true })} data-testid="lovejoin-paid">
-              {pressed === "paid" ? tr("lovejoin.working") : tr("lovejoin.stuck.bring")}
-            </button>
+            {hatchTakes && (
+              <button type="button" className="link align-start" disabled={busy || mixingAgain} onClick={() => setAsking({ paid: true })} data-testid="lovejoin-paid">
+                {pressed === "paid" ? tr("lovejoin.working") : tr("lovejoin.stuck.bring")}
+              </button>
+            )}
           </div>
         </Callout>
       )}
@@ -2422,6 +2500,7 @@ export function PoolPage({
         elsewhere={publicNotMixed - ownNotMixed}
         unsure={unsure.size}
         deposits={pool.deposits?.length ?? 0}
+        againOff={!!againRefused(pool)}
         busy={busy || mixingAgain}
         onAnyway={() => setAsking({ anyway: true })}
       />
@@ -2477,25 +2556,7 @@ export function PoolPage({
       {!short && bootstrapOpen && !copy && bootstrapForm}
 
       <WayBack />
-      {asking && "anyway" in asking && (
-        <Modal
-          title={tr(firstUnsure ? "lovejoin.anyway.titleUnsure" : "lovejoin.anyway.title")}
-          titleId="lovejoin-anyway-title"
-          onClose={() => setAsking(undefined)}
-          foot={
-            <>
-              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                {tr("lovejoin.anyway.keep")}
-              </button>
-              <button type="button" className="danger" onClick={anyway} data-testid="lovejoin-anyway-confirm">
-                {tr("lovejoin.anyway.confirm")}
-              </button>
-            </>
-          }
-        >
-          <p className="note">{anywayWarning(pool)}</p>
-        </Modal>
-      )}
+      {asking && "anyway" in asking && <AnywayQuestion pool={pool} stuck={stuck} onKeep={() => setAsking(undefined)} onConfirm={anyway} />}
       {asking && "privateAnyway" in asking && (
         <Modal
           title={tr("lovejoin.privateAnyway.title")}

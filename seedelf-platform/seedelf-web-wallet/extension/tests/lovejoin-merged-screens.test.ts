@@ -449,3 +449,95 @@ describe("a copy's Mix again, where the pool's other reasons refuse it too (the 
     expect(page).not.toContain('data-testid="lovejoin-again-why"');
   });
 });
+
+// 34g's last review: a box not mixed yet in a token pool whose boxes can't pay their own way back had no way out the
+// page offered (SCREENS-1); boxes another account's Bootstrap holds named that account as the one to mix them again
+// (SCREENS-2); and where mixing again is refused, the words around it still sent the user there (SCREENS-3).
+describe("a pool's page where mixing again is refused (34g's last review, SCREENS-1 to 3)", () => {
+  const PoolPage = (LovejoinScreen as unknown as { PoolPage: (props: Record<string, unknown>) => ReactElement }).PoolPage;
+  const open = (pool: ShownPool) =>
+    html(
+      shown(
+        createElement(PoolPage, {
+          pool,
+          seedelf: { lovelace: "500000000", tokens: [], utxos: 3, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } },
+          reading: false,
+          readFailed: false,
+          mixingAgain: false,
+          sending: null,
+          onSendingPublic: nothing,
+          onSending: nothing,
+          onRefresh: async () => undefined,
+          onBack: nothing,
+          onPending: nothing,
+        }),
+      ),
+    );
+  const again = (pool: ShownPool) =>
+    html(
+      shown(
+        createElement(AgainActions, {
+          pool,
+          busy: false,
+          mixingAgain: false,
+          publicSending: false,
+          onAgain: nothing,
+          onAgainPublic: nothing,
+          onNow: nothing,
+          onAnyway: nothing,
+        }),
+      ),
+    );
+  // A token pool whose box can't pay its own way back today, as status says it (the escape hatch's case).
+  const stuck = (extra: Partial<ShownPool>) =>
+    poolOf({ unusable: { why: "cantComeBack" }, cantComeBack: { has: "1589324", needs: "1723200" }, ...extra });
+
+  it("brings a box not mixed yet back with the public account paying, saying so first, where nothing else can (SCREENS-1)", () => {
+    const pool = stuck({ boxes: [at(1)], notMixed: [at(1)] });
+    expect(LovejoinScreen.anywayRequest(pool, true)).toEqual({ box: at(1), anyway: true, paid: true });
+    expect(LovejoinScreen.anywayRequest(pool, false)).toEqual({ box: at(1), anyway: true });
+    const ask = (paying: boolean) => text(createElement(LovejoinScreen.AnywayQuestion, { pool, stuck: paying, onKeep: nothing, onConfirm: nothing }));
+    expect(ask(true)).toContain(t("lovejoin.stuck.privacy.ties"));
+    expect(ask(true)).toContain(t("lovejoin.stuck.confirm"));
+    expect(ask(false)).not.toContain(t("lovejoin.stuck.privacy.ties"));
+    expect(ask(false)).toContain(t("lovejoin.anyway.confirm"));
+    // The escape hatch takes a box known to be mixed: with none, it's not offered only to be refused.
+    const page = open(pool);
+    expect(page).toContain('data-testid="lovejoin-stuck"');
+    expect(page).not.toContain('data-testid="lovejoin-paid"');
+    expect(page).toContain('data-testid="lovejoin-anyway"');
+    expect(open(stuck({ boxes: [at(1), at(2)], notMixed: [at(1)] }))).toContain('data-testid="lovejoin-paid"');
+    // Nor where a Bootstrap holds every box: its own Bring one back pays there.
+    expect(open(stuck({ boxes: [at(1)], bootstrap: [at(1)] }))).not.toContain('data-testid="lovejoin-paid"');
+  });
+
+  it("names no other account to switch to for boxes its Bootstrap holds (SCREENS-2)", () => {
+    const theirs = [at(1), at(2)];
+    const pool = poolOf({ boxes: theirs, fromPublic: theirs, otherAccounts: theirs.map((b) => ({ ...b, account: 1 })), bootstrap: theirs });
+    expect(again(pool)).not.toContain('data-testid="lovejoin-other-account"');
+    // One of that account's boxes no Bootstrap holds: named, as before.
+    expect(again({ ...pool, bootstrap: [at(1)] })).toContain('data-testid="lovejoin-other-account"');
+  });
+
+  it("never sends the user to Mix again where it's refused (SCREENS-3)", () => {
+    const takes = t("lovejoin.warn.notMixed.takes.private", { count: 2 });
+    const off = open(poolOf({ boxes: [at(1), at(2)], notMixed: [at(1), at(2)], unusable: { why: "unchecked" } }));
+    expect(words(off)).not.toContain(takes);
+    // Bring one back now would be refused with "Mix them again first": not offered. Bring one back anyway stays.
+    expect(off).not.toContain('data-testid="lovejoin-now"');
+    expect(off).toContain('data-testid="lovejoin-anyway"');
+    // Where mixing again is on, as before.
+    const on = open(poolOf({ boxes: [at(1), at(2)], notMixed: [at(1), at(2)] }));
+    expect(words(on)).toContain(takes);
+    expect(on).toContain('data-testid="lovejoin-now"');
+  });
+
+  it("warns before a copy's launch link, as for a pool the wallet started (PRIVACY-3)", () => {
+    // A copy is listed only while the wallet has something in it: its launch is of interest here, as a started pool's.
+    const launch = "1a".repeat(32);
+    const copy = open(poolOf({ id: B, launch, boxes: [at(1)], unusable: { why: "superseded" } }));
+    expect(copy).toContain('data-testid="explorer-note"');
+    // A shown pool's, which anyone browses: plain, as before.
+    expect(open(poolOf({ launch, boxes: [at(1)] }))).not.toContain('data-testid="explorer-note"');
+  });
+});

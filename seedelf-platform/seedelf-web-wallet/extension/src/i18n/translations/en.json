@@ -2972,7 +2972,7 @@
   "lj.launch.supply": "Fewer than {{boxes}} boxes' worth of this token exist. Choose a smaller amount for each box.",
   "lj.launch.tooLittle": "Each box needs at least {{least}} ₳ under today's network fees: enough to pay its own way back, and then to pay out part of what came back without other money.",
   "lj.launch.tooMuch": "A token pool's box holds at most {{most}} ₳.",
-  "lj.launch.unknownToken": "Koios doesn't know this token's supply, so the wallet can't check that a pool of it can fill. Try again later.",
+  "lj.launch.unknownToken": "The server doesn't know this token's supply, so the wallet can't check that a pool of it can fill. Try again later.",
   "lj.tokens.skip.warn.balance": "your private balance covers the swap, but not its boxes as well",
   "lj.tokens.skip.warn.failed": "the wallet couldn't build the mixes in its pool this time",
   "lj.tokens.skip.warn.noPool": "none of its pools can take a box now",

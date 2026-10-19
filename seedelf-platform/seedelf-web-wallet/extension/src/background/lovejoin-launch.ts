@@ -23,8 +23,10 @@
 // once registering mix_logic's credential, once without the certificate.
 //
 // Checked at Send, before anything is sent, so only a start the user sends
-// names its token and its pool to Koios (34d's review 7):
-// - 30 boxes' worth fit in the token's total supply (Koios's asset_info);
+// names its token and its pool to the Cardano server (34d's review 7; ours on
+// mainnet, Koios on preprod or where ours can't answer):
+// - 30 boxes' worth fit in the token's total supply (asset_info; on mainnet
+//   our server's `select=total_supply`, 1.6.0's release review, PRIV-2);
 // - whether something registered mix_logic's credential already (whoever
 //   reads the seed can; account_info): the build without the certificate is
 //   sent then, and is still standard (34c). Built without the deposit, it may

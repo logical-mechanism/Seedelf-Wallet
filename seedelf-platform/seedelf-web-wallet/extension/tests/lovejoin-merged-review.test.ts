@@ -26,10 +26,12 @@ import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
 import type { Message } from "../src/shared/rpc";
+import { poolsOf } from "../src/ui/lovejoin-pools";
+import { anywayBox, anywayRequest } from "../src/ui/screens/Lovejoin";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { fakeIndex, indexRowOf } from "./fake-index";
-import { koiosPreprod, loadTestWasm, madeByMix, memoryArea, sessionSwap, testBalances, vectors } from "./fakes";
+import { koiosPreprod, loadTestWasm, madeByMix, memoryArea, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -569,6 +571,52 @@ describe("a Bootstrap whose deposit a watch saw land (the merged fixes' review, 
     expect((await lj.status("preprod")).bootstrap).toEqual([{ txHash: "f1".repeat(32), txIndex: 0 }]);
     expect(spentBy(t)).not.toContain(`${"f1".repeat(32)}#0`);
   });
+
+  // 34g's last review, WORKER-1: the older rule for a chain that stopped before any of it was known sent closed the
+  // entry as its record went, `found` or not, so a deposit a watch saw land lost its hold when the record said `sent: 0`
+  // (every send retry gave up, or a lock before chainSent wrote it), once other people's mixes had moved its boxes.
+  it("keeps holding when its chain's record says nothing of it was sent (34g's last review, WORKER-1)", async () => {
+    for (const sent of [1, 0]) {
+      const t = await wallet();
+      const lj = pooled(t, []);
+      const [deposit, back] = ["d0".repeat(32), "b0".repeat(32)];
+      const at = t.clock.now - HOUR;
+      // A private Bootstrap of one classic box, [deposit, return], its send stopped.
+      await t.store.set("lovejoin.preprod", {
+        due: [],
+        chains: [
+          {
+            id: back,
+            session: 0,
+            progress: "test.p",
+            deposit,
+            mixes: [],
+            leaves: [{ txHash: deposit, txIndex: 0 }],
+            boxes: 1,
+            bootstrap: true,
+            total: 2,
+            sent,
+            at,
+            stopped: "stopped",
+            ended: at,
+          },
+        ],
+        mixes: [{ id: back, deposit, at, session: 0, bootstrap: true, shares: [{ boxes: 1 }] }],
+      });
+      // The session's watch saw the deposit land; before any pool read, someone else's mix moved its box.
+      await lj.landedDeposit("preprod", deposit);
+      t.koios.addedToAccounts.push(...POOL, await classicBox(t, "f1"));
+      for (const h of [4, 8, 24, 48]) {
+        t.clock.now += h * HOUR;
+        await t.wallet.unlock(PASSWORD);
+        await unlockedAnHourAgo(t);
+        await lj.status("preprod");
+        await lj.withdrawDue("preprod");
+      }
+      expect((await lj.status("preprod")).bootstrap, `sent ${sent}`).toEqual([{ txHash: "f1".repeat(32), txIndex: 0 }]);
+      expect(spentBy(t), `sent ${sent}`).not.toContain(`${"f1".repeat(32)}#0`);
+    }
+  });
 });
 
 // 1.6.0's rehearsal, R12: a wallet restored on a fresh profile found its 8 boxes in a token pool at the hub's first pool
@@ -839,5 +887,92 @@ describe("a copy's status and its sealed read, at the end (fix round two's last 
     t.koios.spent.add(`${f1.tx_hash}#0`);
     await lj.status("preprod");
     expect(((await t.store.get<{ copies?: unknown[] }>("lovejoin.preprod"))?.copies ?? []).length).toBe(1);
+  });
+});
+
+// 34g's last review, SCREENS-1: in a token pool whose boxes can't pay their own way back, a box not mixed yet (a chain
+// cut after its deposit) had no way out the page offered. The escape hatch leaves such a box out, mixing again is
+// refused there (MONEY-3), Bring one back now is hidden, and Bring one back anyway built a withdraw the box pays, which
+// core refuses. The page's anyway asks the public account to pay there now (anywayRequest), and the worker takes it.
+describe("a box not mixed yet in a pool whose boxes can't pay their own way back (34g's last review, SCREENS-1)", SLOW, () => {
+  it("comes back with the public account paying, as the page now asks, where nothing else it offers can", async () => {
+    const t = await wallet();
+    // A byte dearer than preprod's: a 2 ₳ LJTEST box still meets its minimum, but can't pay its own way back.
+    t.koios.params = { coins_per_utxo_size: "4800" };
+    const lj = pooled(t, [TOKEN_POOL]);
+    const box = await tokenBox(t, "d1", true, 3);
+    t.koios.addedToAccounts.push(atAccount("e1", "20000000"), atAccount("e5", "5000000"), ...POOL, box, ...(await strangers(t)));
+    await t.store.set("lovejoin.preprod", { due: [], chains: [cutInto(t, box.tx_hash, { session: 0 })] });
+    const pool = poolsOf(await lj.status("preprod")).find((p) => p.id === TOKEN)!;
+    expect(pool).toMatchObject({ unusable: { why: "cantComeBack" }, notMixed: [{ txHash: box.tx_hash, txIndex: 0 }] });
+    expect(pool.cantComeBack).toBeDefined();
+    await t.balances.get("preprod");
+    // Every other way the page offers: refused.
+    await expect(lj.againBoxes("preprod", false, TOKEN)).rejects.toThrow(tr("lj.unusable.warn.cantComeBack"));
+    await expect(lj.withdrawNow("preprod", undefined, false, true, TOKEN)).rejects.toThrow(tr("lj.privacy.allUnmixed"));
+    // What the page's anyway asked before: the box as it is, which its own value can't bring back.
+    await expect(lj.withdrawNow("preprod", anywayBox(pool), true, false)).rejects.toThrow();
+    // What it asks now.
+    const request = anywayRequest(pool, true)!;
+    expect(request).toMatchObject({ anyway: true, paid: true });
+    const pending = await lj.withdrawNow("preprod", request.box, request.anyway, request.paid);
+    expect(pending.kind).toBe("lovejoin-withdraw");
+  });
+});
+
+// 34g's last review, CROSS-1: a mix or a Bootstrap from the private balance is checked for its pool at review, and its
+// chain is built once the funding lands, maybe at the next unlock. A pool that turned into a copy meanwhile (an earlier
+// launch of its values found) still took the session's boxes: the chain's build never looked at the pool again.
+describe("a mix session whose pool takes no new box by the time its chain is built (34g's last review, CROSS-1)", SLOW, () => {
+  /** A mix session funded into the token pool from the private balance, its funding on chain, its chain not built. */
+  async function funded(bootstrap: boolean) {
+    const t = await wallet();
+    const pools = { now: [TOKEN_POOL] as Array<PoolRef | CopyRef> };
+    const lj = pooled(t, [], { pools: async () => pools.now });
+    const sessions = runner(t, lj);
+    const boxes = bootstrap ? 2 : 1;
+    t.koios.added.push({
+      ...ownedUtxos[0]!,
+      tx_hash: "d1".repeat(32),
+      tx_index: 0,
+      value: "30000000",
+      inline_datum: { bytes: await datum(t, true), value: {} },
+      asset_list: [{ ...ljtest(4n * Q), decimals: 0, fingerprint: "asset1ljtest" } as never],
+    } as KoiosUtxo);
+    t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
+    const out = await sessions.mixOutBuild("preprod", boxes, { pool: TOKEN, ...(bootstrap ? { bootstrap: true } : {}) });
+    await sessions.mixOutSubmit("preprod", out.txHash);
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace, [ljtest(BigInt(boxes) * Q)]), atSession(out.txHash, 1, "5000000"));
+    t.koios.confirmations = 1;
+    return { t, sessions, pools };
+  }
+  const intoToken = async (t: T) =>
+    ((await t.store.get<Sealed>("lovejoin.preprod"))?.chains ?? []).some((c) => (c as { pools?: Record<string, number> }).pools?.[TOKEN]);
+  const skipped = async (t: T) => (await t.store.get<{ sessions: Array<{ mix?: { skipped?: string } }> }>("sessions.preprod"))?.sessions[0]?.mix?.skipped;
+
+  for (const bootstrap of [false, true]) {
+    it(`comes back directly, saying why, never into the copy (${bootstrap ? "a Bootstrap" : "a mix"})`, async () => {
+      // The pool as it was: the chain goes into it.
+      const stays = await funded(bootstrap);
+      await stays.sessions.advance("preprod", 0, true);
+      expect(await intoToken(stays.t)).toBe(true);
+      // An earlier launch of the same values turns up before the chain is built: the pool is a copy now.
+      const copied = await funded(bootstrap);
+      copied.pools.now = [COPY];
+      await copied.sessions.advance("preprod", 0, true);
+      expect(await intoToken(copied.t)).toBe(false);
+      expect(await skipped(copied.t)).toBe(tr("lj.unusable.warn.superseded"));
+    });
+  }
+
+  it("refuses a public mix's Send into a pool that turned into a copy since its review", async () => {
+    const t = await wallet();
+    const pools = { now: [TOKEN_POOL] as Array<PoolRef | CopyRef> };
+    const lj = pooled(t, [], { pools: async () => pools.now });
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000", [ljtest(3n * Q)]), atAccount("e2", "30000000"), atAccount("e5", "5000000"), ...POOL, ...(await strangers(t)));
+    const summary = await lj.publicBuild("preprod", 1, { pool: TOKEN });
+    pools.now = [COPY];
+    await expect(lj.publicSubmit("preprod", summary.txHash)).rejects.toThrow(tr("lj.unusable.warn.superseded"));
+    expect(t.koios.submitted).toHaveLength(0);
   });
 });

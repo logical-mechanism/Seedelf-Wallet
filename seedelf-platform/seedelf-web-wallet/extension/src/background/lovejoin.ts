@@ -2734,6 +2734,18 @@ export class LovejoinService {
     if (!this.available(network) || !collateral) return undefined;
     // The pool its mix session was funded for (chunk 34's 34d); a return's ADA goes to the classic pool.
     const into = await this.poolNamed(network, pool);
+    // Checked at its review, that pool may take no new box by the time the funding lands and this builds (an earlier
+    // pool of its values found since makes it a copy; an epoch it can't pay its way back under): the session comes
+    // back directly, saying why, never into it (34g's last review, CROSS-1). Mixing again puts no new box in; a
+    // return's tokens' pools are checked in acrossOf.
+    if (!again) {
+      try {
+        await this.takesNewBoxes(network, into, params);
+      } catch (e) {
+        if (isTrap(e)) throw e;
+        throw new LovejoinSkipped(e instanceof Error ? e.message : String(e));
+      }
+    }
     const set = await this.settings();
     const asked = way.width ?? set.width;
     const depth = fixed ?? set.depth;
@@ -3614,6 +3626,12 @@ export class LovejoinService {
     const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
     if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY());
     if (now() - built.builtAt > BUILT_TTL_MS) throw new Error(t("lj.mixTooOld"));
+    // Its pool may have turned into a copy since the review (an earlier pool of its values found meanwhile): no new
+    // box goes there (34g's last review, CROSS-1). Asking nobody: the read set as discovery last kept it. Mixing again
+    // puts none in, and an epoch's other reasons wait for the next review, at most BUILT_TTL_MS away.
+    if (built.pool && !built.again && (await this.readSet(network, true)).find((p) => p.id === built.pool)?.copy) {
+      throw new Error(unusableReason("superseded"));
+    }
     // A payment may have gone maybe sent since the review: nothing of the mix goes, or is kept for it, meanwhile.
     await settleMaybeSent(this.deps, network);
     const before = await this.sendingOf(network);
@@ -4323,6 +4341,9 @@ export class LovejoinService {
       // box in: its mix is over. Not sooner: a deposit Koios didn't answer may have gone in all the same, and a
       // listing that's behind may not show it yet, while a Bootstrap's would be let go (bootstrapOf).
       for (const e of entries(s)) {
+        // A Bootstrap's is the rule below's: it knows a deposit a watch saw land (`found`), which a record saying
+        // nothing was sent can't, and waits for every pool it put boxes in to be read (34g's last review, WORKER-1).
+        if (e.bootstrap) continue;
         const c = s.chains.find((r) => r.id === e.id);
         if (!c?.ended || c.sent !== 0 || c.maybe || keep(c)) continue;
         const its = new Set([...(c.deposit ? [c.deposit] : []), ...c.mixes]);

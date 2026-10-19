@@ -37,7 +37,8 @@ describe("the bundled head start", () => {
     }
   });
 
-  it("was written under the token list it's bundled with", () => {
+  // Not while writing: `npm run lovejoin-pools` is how a stale one is fixed, and it would fail on the file it replaces.
+  it.skipIf(process.env.LOVEJOIN_POOLS_WRITE === "1")("was written under the token list it's bundled with", () => {
     // A device whose list changed looks again from the head start's height, so the head start must hold every pool of
     // this list below it (1.6.0's release review, STATE-4). One written before the list was recorded passes.
     const file = read();
