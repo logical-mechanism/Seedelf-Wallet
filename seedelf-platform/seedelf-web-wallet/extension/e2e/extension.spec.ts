@@ -2945,6 +2945,9 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   const review = page.getByTestId("lovejoin-public-review");
   await expect(review).toContainText("Into Lovejoin1 box of 10 ₳");
   await expect(review).toContainText("Transactions5");
+  // The classic pool's review reads as 1.5.x's: "Public account after" is the new pools' only (the plan's backward
+  // compatibility 7; fix round two, R9).
+  await expect(review.getByTestId("review-after-public")).toHaveCount(0);
   await snap(page, "lovejoin-public-review");
   await page.getByTestId("lovejoin-send").click();
   await expect(page.getByRole("heading", { name: "Lovejoin", level: 1 })).toBeVisible();

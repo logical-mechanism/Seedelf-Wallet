@@ -6,7 +6,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { SeedelfKey, lovejoinCandidate, lovejoinLaunchCheck, lovejoinOwned, lovejoinUsable, lovejoinVerifyPool } from "./wasm.mjs";
+import {
+  SeedelfKey,
+  lovejoinBoxValue,
+  lovejoinCandidate,
+  lovejoinLaunchCheck,
+  lovejoinOwned,
+  lovejoinUsable,
+  lovejoinVerifyPool,
+} from "./wasm.mjs";
 
 const json = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const params = json("../../../seedelf-core/tests/fixtures/epoch_params.json")[0];
@@ -122,4 +130,13 @@ test("a script at the holder named by its hash alone is read with the bytes deri
   // A hash that isn't one of the pool's, or bytes that aren't the script's, read as no reference at all.
   assert.equal(verify([atHolder(1, "11".repeat(28)), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
   assert.equal(verify([atHolder(1, MIX_BOX, bytes[MIX_LOGIC]), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
+});
+
+test("a box of one token has a value, and none of it is refused in words, the module whole (1.6.0's release review, MONEY-2)", () => {
+  // The launch form asks as the creator types: "1" trapped, which locked the wallet.
+  const token = { policyId: "1a".repeat(28), assetName: Buffer.from("SNEK").toString("hex") };
+  const of = (quantity) => JSON.parse(lovejoinBoxValue(JSON.stringify({ network: "mainnet", params, token: { ...token, quantity } })));
+  assert.deepEqual(of("1"), { least: "3620000", suggested: "4000000", most: "9000000" });
+  assert.throws(() => of("0"), /at least one of its token/);
+  assert.equal(of("2").most, "9000000");
 });

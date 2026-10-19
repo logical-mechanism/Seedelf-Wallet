@@ -197,10 +197,14 @@ export class LovejoinLaunchService {
   async terms(network: NetworkName, token?: Token, quantity?: string): Promise<LovejoinLaunchTerms> {
     this.check(network, token);
     const q = quantity === undefined ? undefined : whole(quantity, () => t("lj.launch.quantity"));
+    // None of the token is refused here as Review refuses it, before WebAssembly (1.6.0's release review, MONEY-2).
+    if (q !== undefined && q < 1n) throw new Error(t("lj.launch.quantity"));
     const params = await this.deps.koios(network).epochParams();
     const value = await this.boxValue(network, params, token, q);
+    // Never a copy, which takes no new box, to join: only the earliest launch of its values (the merged fixes' review,
+    // MERGED-1).
     const pools = (await this.deps.discovery.known(network))
-      .filter((p) => sameToken(p.token, token))
+      .filter((p) => !p.copy && sameToken(p.token, token))
       .map((p) => ({ id: p.id, boxLovelace: p.boxLovelace, ...(p.token ? { token: p.token } : {}) }));
     return { ...value, pools };
   }
@@ -230,7 +234,8 @@ export class LovejoinLaunchService {
       throw new Error(t("lj.launch.classicCopy"));
     }
     // A copy of a shown pool's values is never shown: the form lists the pools there are to join instead (11, 14).
-    // Read once discovery has looked for pools launched since (34d's review 5): the request every wallet makes.
+    // Read once discovery has looked for pools launched since (34d's review 5): the request every wallet makes. A copy
+    // handed over has a shown pool's values too, so either refuses it (MERGED-1).
     await this.deps.discovery.look(network);
     const copy = (await this.deps.discovery.known(network)).find(
       (p) => BigInt(p.boxLovelace) === box && sameToken(p.token, token) && (!p.token || p.token.quantity === tokenQuantity?.quantity),

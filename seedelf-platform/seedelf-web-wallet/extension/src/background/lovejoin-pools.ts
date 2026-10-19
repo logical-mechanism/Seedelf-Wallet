@@ -13,6 +13,20 @@
 // (the owner, 2026-10-17). None of it can change once it's on chain, so a pool
 // shown stays shown, and a copy never is.
 //
+// A device can still learn of an earlier launch late: the data layer left it
+// out, or Koios didn't know its launch yet. So a pool `known` has handed over
+// stays in it for good on that device, beside the earlier one, and the
+// wallet's boxes in it never drop out of view: the read set only grows
+// (session 1, 11; 1.6.0's release review, STATE-2). Such a pool is a copy
+// from then on: read for the boxes already in it, taking no new box, for good
+// (decision 30). Every other copy a device keeps, standard but left out by the
+// rule, is read once for the wallet's boxes, the first pool read after it's
+// found: so a restore, whose record Remove wallet deleted, finds what the
+// wallet put in one before (the merged fixes' review, MERGED-1). Which copy
+// holds them is the wallet's to know: the Lovejoin service keeps it sealed,
+// and reads it from then on. Here, only that each copy was read, as on every
+// device that found it (round two's review, R2-4).
+//
 // Where they're found:
 // - **The data layer** (mainnet), at most every REFRESH_MS: its list of every
 //   shown pool, each verified here again. It can leave a pool out, never make
@@ -21,20 +35,27 @@
 //   Lovejoin page opens: the holder's outputs since the last look, each
 //   candidate's launch transaction, read in batches.
 // - **The bundled head start** (`src/lovejoin-pools.json`, written at each
-//   release by `npm run lovejoin-pools`): every pool shown then, and the
-//   height looked to, so a new device's first look starts there.
+//   release by `npm run lovejoin-pools`, from the holder's start under that
+//   release's token list): every pool shown then, and the height looked to,
+//   so a new device's first look starts there. So does the next look of a
+//   device whose token list changed with an update: a pool refused as
+//   unlisted is looked at again (STATE-4).
 //
 // Kept on the device, unsealed (`seedelf.lovejoinPools.<network>`): every
-// standard pool found and the height Koios was read to. The same for every
-// wallet, but its time shows when the wallet last looked. Deleted with the
+// standard pool found, those handed over, the copies read once, the height
+// Koios was read to and the token list it was read under. The same for every wallet with the same
+// history, but its time shows when the wallet last looked. Deleted with the
 // wallet (wallet.ts's reset clears local storage but for what it keeps).
+
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 
 import tokenList from "../tokens/list.json";
 import bundled from "../lovejoin-pools.json";
 import type { NetworkName } from "../networks";
 import type { TokenQuantity } from "../shared/rpc";
 import type { Koios, KoiosUtxo } from "./koios";
-import type { PoolRef } from "./lovejoin";
+import type { LovejoinDeps, PoolRef } from "./lovejoin";
 import { IndexDown, type IndexCrowd, type IndexPools, type PrivateIndex, utxoOf } from "./private-index";
 import type { Area } from "./storage";
 import { isTrap } from "./wasm";
@@ -76,10 +97,47 @@ export interface FoundPool extends PoolValues {
   launch: { block: number; index: number; tx: string };
 }
 
+/**
+ * A pool `known` hands over: `copy`, one the rule leaves out, as an earlier launch of its values is kept too. It's read
+ * for the boxes already in it and takes no new box, for good (decision 30; the merged fixes' review, MERGED-1). Never
+ * kept with the flag: it's the rule's to say at each hand-over.
+ */
+export interface HandedPool extends FoundPool {
+  copy?: true;
+}
+
 export interface Kept {
   /** Koios's holder read to this block. */
   height: number;
   pools: FoundPool[];
+  /**
+   * The token list `height` was read under (`listFingerprint`). A head start's is checked against the list it's
+   * bundled with; a device's sends its next look back to the head start when they differ (STATE-4).
+   */
+  listed?: string;
+}
+
+/** What a device keeps on a network beside the head start. */
+interface Stored extends Kept {
+  /** Each pool `known` has handed over, by reference UTxO: in the read set for good (STATE-2). */
+  shown?: string[];
+  /**
+   * Each copy a pool read has read once for the wallet's boxes, by reference UTxO (`copiesRead`): never read so again
+   * on this device, unless Remove wallet deletes the record (MERGED-1). Never which held them (R2-4).
+   */
+  checked?: string[];
+}
+
+/** What's kept, the head start's and the device's together. */
+interface Merged extends Kept {
+  /** Handed over on this device. */
+  shown: ReadonlySet<string>;
+  /** The copies read once on this device. */
+  checked: ReadonlySet<string>;
+  /** The token list in force (`listFingerprint`). */
+  listed: string;
+  /** The device's own record, as it is: none before its first look, or once Remove wallet deleted it. */
+  stored?: Stored;
 }
 
 /** Where the pools found on a network are kept: wallet.ts's LOCAL_CACHES, which Remove wallet deletes, names each. */
@@ -119,6 +177,31 @@ const LISTED: Record<NetworkName, ReadonlySet<string>> = {
 
 /** Whether a token (its policy and name, hex) is in the wallet's list on `network`: only such a token has pools. */
 export const isListed = (network: NetworkName, policyId: string, assetName: string) => LISTED[network].has(policyId + assetName);
+
+/**
+ * A token list's fingerprint: SHA-256 of its units, sorted, cut to 16 hex. A
+ * look's height holds only under the list it was read under, as a candidate
+ * of a token not listed then was looked past (STATE-4).
+ */
+export function listFingerprint(network: NetworkName, listed: ReadonlySet<string> = LISTED[network]): string {
+  return bytesToHex(sha256(new TextEncoder().encode([...listed].sort().join("\n")))).slice(0, 16);
+}
+
+/**
+ * Of `pools`, those shown on a device: the rule's (`shown`), and those it handed over already, in launch order. One of
+ * those the rule leaves out is a copy now: an earlier launch of its values turned up after it was handed over.
+ */
+function handedOf(pools: FoundPool[], handed: ReadonlySet<string>): HandedPool[] {
+  const rule = shown(pools);
+  const copies = pools.filter((p) => handed.has(refOf(p.ref.reference)) && !rule.includes(p)).map((p) => ({ ...p, copy: true as const }));
+  return [...rule, ...copies].sort((a, b) => (earlier(a, b) ? -1 : earlier(b, a) ? 1 : 0));
+}
+
+/** What a write of the device's record keeps of it as it was: the pools handed over, the copies read, and its list. */
+const keptOf = (was: Merged) => ({
+  shown: [...was.shown],
+  ...(was.checked.size ? { checked: [...was.checked] } : {}),
+});
 
 /** What WebAssembly answers about a pool (`lovejoin::PoolView`), as discovery reads it. */
 interface PoolView {
@@ -175,13 +258,83 @@ export class PoolDiscovery {
   private crowds = new Map<NetworkName, Map<string, IndexCrowd>>();
   /** A look at Koios under way, by network: the page opening twice looks once. */
   private looking = new Map<NetworkName, Promise<void>>();
+  /**
+   * The last write of what's kept, by network: each reads what's kept and writes it again, so they go one at a time.
+   * A refresh and a look finishing together would each write over the other's pools or height (1.6.0's release
+   * review, state.md's notes).
+   */
+  private writing = new Map<NetworkName, Promise<unknown>>();
 
   constructor(private readonly deps: DiscoveryDeps) {}
 
-  /** Every pool shown on `network` that the wallet knows of, in launch order: no request. */
-  async known(network: NetworkName): Promise<FoundPool[]> {
-    const { pools } = await this.kept(network);
-    return shown(pools);
+  /**
+   * Every pool shown on `network` that the wallet knows of, in launch order: no request. The rule's, and every pool
+   * handed over before, which is kept as handed over before it's returned: an earlier launch of its values found
+   * later never takes it out of the read set, where the wallet may hold boxes (STATE-2).
+   */
+  async known(network: NetworkName): Promise<HandedPool[]> {
+    const was = await this.kept(network);
+    const pools = handedOf(was.pools, was.shown);
+    if (pools.every((p) => was.shown.has(refOf(p.ref.reference)))) return pools;
+    return this.serially(network, async () => {
+      const now = await this.kept(network);
+      const handed = handedOf(now.pools, now.shown);
+      // The head start's pools go into the device's record too, so a later release's head start can't take one away.
+      // The look's height and list stay as they were: handing over isn't looking.
+      const stored: Stored = {
+        height: now.stored?.height ?? 0,
+        ...(now.stored?.listed !== undefined ? { listed: now.stored.listed } : {}),
+        pools: now.pools.map(slim),
+        ...keptOf(now),
+        shown: [...new Set([...now.shown, ...handed.map((p) => refOf(p.ref.reference))])],
+      };
+      await this.deps.local.set(key(network), stored);
+      return handed;
+    });
+  }
+
+  /**
+   * The copies kept on `network` that this device hasn't read for the wallet's boxes yet: every standard pool found
+   * that the rule leaves out, as an earlier launch of its values is kept too, and that's neither handed over nor read
+   * once. The same for every device that found the same pools, so reading them names no pool of the wallet's. The next
+   * pool read lists them once beside the pools it reads, and says what it found (`copiesRead`). No request (MERGED-1).
+   */
+  async copiesUnread(network: NetworkName): Promise<FoundPool[]> {
+    const was = await this.kept(network);
+    const rule = shown(was.pools);
+    return was.pools.filter((p) => !rule.includes(p) && !was.shown.has(refOf(p.ref.reference)) && !was.checked.has(refOf(p.ref.reference)));
+  }
+
+  /**
+   * A pool read read the copies of `read` (each by reference UTxO) once: none of them is read so again (MERGED-1).
+   * Those it found the wallet's boxes in are the service's to keep, sealed, and read (lovejoin.ts `copies`): this
+   * record says only that each was read, the same for every device that found them (round two's review, R2-4).
+   */
+  copiesRead(network: NetworkName, read: string[]): Promise<void> {
+    if (!read.length) return Promise.resolve();
+    return this.serially(network, async () => {
+      const now = await this.kept(network);
+      const stored: Stored = {
+        height: now.stored?.height ?? 0,
+        ...(now.stored?.listed !== undefined ? { listed: now.stored.listed } : {}),
+        pools: now.pools.map(slim),
+        ...keptOf(now),
+        checked: [...new Set([...now.checked, ...read])],
+      };
+      await this.deps.local.set(key(network), stored);
+    });
+  }
+
+  /** Each pool kept on `network`'s launch transaction, by pool id: the hub's link, a copy's too. No request. */
+  async launches(network: NetworkName): Promise<Map<string, string>> {
+    return new Map((await this.kept(network)).pools.map((p) => [p.id, p.launch.tx]));
+  }
+
+  /** `work`, once every write of `network`'s record before it is done. */
+  private serially<T>(network: NetworkName, work: () => Promise<T>): Promise<T> {
+    const run = (this.writing.get(network) ?? Promise.resolve()).catch(() => undefined).then(work);
+    this.writing.set(network, run);
+    return run;
   }
 
   /** The data layer's crowds, as its last list counted them; none on Koios. */
@@ -189,20 +342,42 @@ export class PoolDiscovery {
     return this.crowds.get(network);
   }
 
-  private async kept(network: NetworkName): Promise<Kept> {
+  private async kept(network: NetworkName): Promise<Merged> {
     const head = this.deps.headStart?.(network) ?? (bundled as unknown as Record<NetworkName, Kept>)[network] ?? { height: 0, pools: [] };
-    const stored = await this.deps.local.get<Kept>(key(network));
+    const stored = await this.deps.local.get<Stored>(key(network));
     const pools = new Map<string, FoundPool>();
     for (const p of [...head.pools, ...(stored?.pools ?? [])]) pools.set(refOf(p.ref.reference), p);
-    return { height: Math.max(head.height, stored?.height ?? 0), pools: [...pools.values()] };
+    const listed = listFingerprint(network, this.deps.listed?.(network));
+    // The device's height holds under the list it was read under. An update that lists another token sends the next
+    // look back to the head start, which that release wrote from the holder's start under its own list: a candidate
+    // refused as unlisted was looked past, and is looked at again (STATE-4).
+    const height = stored?.listed === listed ? Math.max(head.height, stored.height) : head.height;
+    // A copy both handed over and read once was handed over for the wallet's boxes by this round's earlier code, and
+    // says, unsealed, where they are. It's taken as never read, so the next pool read reads it once again and the
+    // service keeps it sealed, as now (round two's review, R2-4); the next write leaves it out of both. A pool STATE-2
+    // handed over while it was the rule's was never read once, and stays handed over.
+    const rule = new Set(shown([...pools.values()]).map((p) => refOf(p.ref.reference)));
+    const earlierCode = new Set((stored?.shown ?? []).filter((r) => (stored?.checked ?? []).includes(r) && !rule.has(r)));
+    return {
+      height,
+      pools: [...pools.values()],
+      shown: new Set((stored?.shown ?? []).filter((r) => !earlierCode.has(r))),
+      checked: new Set((stored?.checked ?? []).filter((r) => !earlierCode.has(r))),
+      listed,
+      ...(stored ? { stored } : {}),
+    };
   }
 
-  private async keep(network: NetworkName, found: FoundPool[], height?: number): Promise<void> {
-    const was = await this.kept(network);
-    const known = new Set(was.pools.map((p) => refOf(p.ref.reference)));
-    const fresh = found.filter((p) => !known.has(refOf(p.ref.reference)));
-    if (!fresh.length && (height === undefined || height <= was.height)) return;
-    await this.deps.local.set(key(network), { height: Math.max(was.height, height ?? 0), pools: [...was.pools, ...fresh.map(slim)] });
+  private keep(network: NetworkName, found: FoundPool[], height?: number): Promise<void> {
+    return this.serially(network, async () => {
+      const was = await this.kept(network);
+      const known = new Set(was.pools.map((p) => refOf(p.ref.reference)));
+      const fresh = found.filter((p) => !known.has(refOf(p.ref.reference)));
+      const to = Math.max(was.height, height ?? 0);
+      if (!fresh.length && to === was.height && was.stored?.listed === was.listed) return;
+      const stored: Stored = { height: to, listed: was.listed, pools: [...was.pools, ...fresh.map(slim)], ...keptOf(was) };
+      await this.deps.local.set(key(network), stored);
+    });
   }
 
   /**
@@ -224,9 +399,19 @@ export class PoolDiscovery {
    * layer, or it can't answer.
    */
   async refresh(network: NetworkName): Promise<void> {
+    // The data layer's crowds go with it: with Settings' Koios-only on, or the data layer marked down, the hub showed
+    // its last counts until the worker restarted, where Koios's crowd line is boxes alone. Asks no one, and holds at
+    // the next pool read, the five minutes or not (1.6.0's release review, UI-9).
+    if (!(await this.deps.index?.(network))) this.crowds.delete(network);
     const at = this.deps.now();
     const last = this.asked.get(network);
-    if (last !== undefined && at >= last && at - last < REFRESH_MS) return;
+    if (last !== undefined && at >= last && at - last < REFRESH_MS) {
+      // An answer is always kept with the list it was read under (keep's first write), so a record without one since is
+      // Remove wallet's (or `known`'s, after it): a wallet restored at once reads its token pools now, not five minutes
+      // later (1.6.0's release review, state.md's notes). A refusal keeps nothing, so the five minutes hold for it.
+      if (!this.answered.has(network) || (await this.deps.local.get<Stored>(key(network)))?.listed !== undefined) return;
+      this.answered.delete(network);
+    }
     this.asked.set(network, at);
     const index = await this.deps.index?.(network);
     if (!index) return;
@@ -234,7 +419,11 @@ export class PoolDiscovery {
     try {
       answer = await index.pools();
     } catch (e) {
-      if (e instanceof IndexDown) return;
+      // Its list refused or unread: its crowds aren't the pools' now (UI-9).
+      if (e instanceof IndexDown) {
+        this.crowds.delete(network);
+        return;
+      }
       throw e;
     }
     this.answered.set(network, at);
@@ -338,6 +527,33 @@ export class PoolDiscovery {
     const standard = found.filter((f) => f.registers || (first.get(f.stake) ?? Infinity) < f.time).map((f) => f.pool);
     await this.keep(network, standard, upTo);
   }
+}
+
+/**
+ * What the Lovejoin service reads of discovery (sw.ts; here so the tests wire it as the worker does). The pools handed
+ * over, each copy named one (`{ copy }`, apart from its PoolRef, which goes to WebAssembly as it is): at a pool read
+ * after the data layer's list, asking nobody otherwise. And the copies a pool read reads once, and that it read them
+ * (MERGED-1; which held the wallet's boxes the service keeps sealed, R2-4).
+ */
+export function serviceDeps(discovery: PoolDiscovery): Required<Pick<LovejoinDeps, "pools" | "known" | "copies" | "copiesRead">> {
+  const handed = async (network: NetworkName) => (await discovery.known(network)).map((p) => (p.copy ? { copy: p.ref } : p.ref));
+  return {
+    // The data layer's list failing is no pool gone: what was found before is read. A trap isn't swallowed.
+    pools: async (network) => {
+      await discovery.refresh(network).catch((e: unknown) => {
+        if (isTrap(e)) throw e;
+      });
+      return handed(network);
+    },
+    // What discovery kept, asking nobody: a swap's quote as the user types, and a return's first look.
+    known: handed,
+    copies: async (network) => (await discovery.copiesUnread(network)).map((p) => p.ref),
+    copiesRead: (network, read) =>
+      discovery.copiesRead(
+        network,
+        read.map((r) => refOf(r.reference)),
+      ),
+  };
 }
 
 /** Whether a row at the holder holds one token named `lovejoin`, and ADA: a candidate. */

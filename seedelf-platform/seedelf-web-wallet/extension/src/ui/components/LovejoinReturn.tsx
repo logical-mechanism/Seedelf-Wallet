@@ -365,12 +365,16 @@ export function LovejoinSwitch({
 }) {
   const tr = useT();
   if (!back.lovejoin && through) return null;
+  // A return whose boxes are all a token pool's mixes no spare ADA (the token legs are paid first, and its ADA may pay
+  // for none of the classic pool's): it says its tokens go into their pools instead (1.6.0's release review, UI-12).
+  const l = back.lovejoin;
+  const classic = !l || (l.parts?.length ? l.parts.some((p) => p.pool === undefined && p.boxes > 0) : l.pool === undefined);
   return (
     <div className="setting-row" data-testid="lovejoin-way">
       <span className="stack-tight">
         <span id="lovejoin-way-label">{tr("swaps.lovejoin.label")}</span>
         <span className="note" id="lovejoin-way-note">
-          {tr(through ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.off")}
+          {tr(!through ? "swaps.lovejoin.privacy.off" : classic ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.onTokens")}
         </span>
       </span>
       <button
@@ -388,7 +392,11 @@ export function LovejoinSwitch({
   );
 }
 
-/** What going through Lovejoin takes and hides, under a return's rows (LovejoinSwitch chooses it). Or why it was left out this time. */
+/**
+ * What going through Lovejoin takes and hides, under a return's rows (LovejoinSwitch chooses it), and why four boxes a
+ * mix went three where it did (D3: "the review says so"; it was said on every mix's review but a return's: 1.6.0's
+ * release review, UI-4). Or why it was left out this time.
+ */
 export function LovejoinNote({ back }: { back: SessionBackSummary }) {
   const tr = useT();
   const l = back.lovejoin;
@@ -411,6 +419,7 @@ export function LovejoinNote({ back }: { back: SessionBackSummary }) {
           delay: delayText(l.delay),
         })}
       </Callout>
+      <WidthNote fellBack={l.fellBack} />
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
       </p>

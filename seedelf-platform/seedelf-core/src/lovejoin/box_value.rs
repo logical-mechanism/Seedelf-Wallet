@@ -13,7 +13,8 @@
 //! 1. the withdraw, its fee and its Seedelf output (a register, and the
 //!    token in a token pool);
 //! 2. from what came back alone, a payment of part of it (half the token, or
-//!    in an ADA pool the least a payment may be), to a Seedelf or to an
+//!    in an ADA pool the least a payment may be; one of a token, which can't
+//!    be halved, whole or left in the change), to a Seedelf or to an
 //!    address, with the change and the fee;
 //! 3. or all of it, to a Seedelf or to an address.
 //!
@@ -183,6 +184,31 @@ fn assets_of(token: &BoxToken, quantity: u64) -> Result<Assets> {
     )?)
 }
 
+/// A token pool's box holds at least one of its token (`one_shot_mint`
+/// takes `0 < Q`). A box of 0 would reach pallas as an output of 0 of a
+/// token, which it doesn't refuse but panics on, a trap in WebAssembly that
+/// locks the wallet (1.6.0's release review, MONEY-2).
+fn check_token(token: Option<&BoxToken>) -> Result<(), String> {
+    match token {
+        Some(t) if t.quantity == 0 => {
+            Err("A token pool's box must hold at least one of its token".to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// What a payment of part of what came back may hold of `token`: half of it.
+/// One can't be halved (MONEY-2: half of it was none, which trapped), so a
+/// pool of one a box pays it whole beside ADA change, or ADA alone with the
+/// token in the change, as an ADA pool's least payment does: both are built.
+fn parts_of(token: Option<&BoxToken>) -> Result<Vec<Assets>> {
+    Ok(match token {
+        Some(t) if t.quantity >= 2 => vec![assets_of(t, t.quantity / 2)?],
+        Some(t) => vec![assets_of(t, t.quantity)?, Assets::new()],
+        None => vec![Assets::new()],
+    })
+}
+
 /// What came back, as the wallet reads it from Koios: a row at the wallet
 /// contract under the withdraw's register.
 fn came_back(
@@ -242,8 +268,9 @@ pub fn way_back(
     value: &BoxValue,
 ) -> Result<WayBack, String> {
     let network_flag = probe.network_flag;
-    let pool = probe.pool(value).map_err(|e| format!("the pool: {e}"))?;
     let token = value.token.as_ref();
+    check_token(token)?;
+    let pool = probe.pool(value).map_err(|e| format!("the pool: {e}"))?;
     let sk = Scalar::from(4_242_424u64);
     let owner = Register::create(sk).map_err(|e| format!("a register: {e}"))?;
     let destination = owner
@@ -266,12 +293,10 @@ pub fn way_back(
     let mut address_bytes = vec![if network_flag { 0x60 } else { 0x61 }];
     address_bytes.extend([0x44; 28]);
     let address = Address::from_bytes(&address_bytes).map_err(|e| format!("{e}"))?;
-    let (part, all) = match token {
-        Some(t) => (
-            assets_of(t, t.quantity / 2).map_err(|e| format!("{e}"))?,
-            assets_of(t, t.quantity).map_err(|e| format!("{e}"))?,
-        ),
-        None => (Assets::new(), Assets::new()),
+    let parts = parts_of(token).map_err(|e| format!("{e}"))?;
+    let all = match token {
+        Some(t) => assets_of(t, t.quantity).map_err(|e| format!("{e}"))?,
+        None => Assets::new(),
     };
     let measured = |what: &str, spend: Result<build::ScriptSpend>| -> Result<(), String> {
         spend
@@ -285,35 +310,30 @@ pub fn way_back(
             .map_err(|e| format!("{what}: {e}"))
     };
     let inputs = std::slice::from_ref(&row);
-    let seedelf_part = build::minimum_seedelf_payment(params, &part).map_err(|e| format!("{e}"))?;
-    measured(
-        "part of it to a Seedelf",
-        build::transfer_from(
-            &chain,
-            inputs,
-            &[Payment {
-                register: other.clone(),
-                lovelace: seedelf_part,
-                tokens: part.clone(),
-            }],
-            &owner,
-            signer,
-        ),
-    )?;
-    let address_part =
-        build::minimum_address_payment(params, &address, &part).map_err(|e| format!("{e}"))?;
-    measured(
-        "part of it to an address",
-        build::sweep_from(
-            &chain,
-            inputs,
-            &address,
-            address_part,
-            &part,
-            &owner,
-            signer,
-        ),
-    )?;
+    for part in &parts {
+        let seedelf_part =
+            build::minimum_seedelf_payment(params, part).map_err(|e| format!("{e}"))?;
+        measured(
+            "part of it to a Seedelf",
+            build::transfer_from(
+                &chain,
+                inputs,
+                &[Payment {
+                    register: other.clone(),
+                    lovelace: seedelf_part,
+                    tokens: part.clone(),
+                }],
+                &owner,
+                signer,
+            ),
+        )?;
+        let address_part =
+            build::minimum_address_payment(params, &address, part).map_err(|e| format!("{e}"))?;
+        measured(
+            "part of it to an address",
+            build::sweep_from(&chain, inputs, &address, address_part, part, &owner, signer),
+        )?;
+    }
     measured(
         "all of it to a Seedelf",
         build::transfer_most(&chain, inputs, &other, &all, &owner, signer),
@@ -336,6 +356,8 @@ pub fn least_box_lovelace(
     params: &ProtocolParameters,
     token: Option<&BoxToken>,
 ) -> Result<u64> {
+    // Said as itself, before a search would call it a box no value brings back.
+    check_token(token).map_err(|why| anyhow!(why))?;
     let at = |lovelace: u64| {
         way_back(
             probe,

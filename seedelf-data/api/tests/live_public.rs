@@ -863,6 +863,24 @@ async fn an_nfts_metadata_is_koioss() {
     .await;
     assert_eq!(rows, bud["answer"]);
 
+    // Its total supply, as a Lovejoin pool's start reads a token's (1.6.0's release review, PRIV-2): minted once,
+    // never burned, so 1, as text as Koios gives it. A token no one minted has no row, as in Koios.
+    let supply = "/api/v1/asset_info?select=total_supply";
+    let rows = post(
+        &app,
+        supply,
+        json!({ "_asset_list": [[bud["policy_id"], bud["asset_name"]]] }),
+    )
+    .await;
+    assert_eq!(rows, json!([{ "total_supply": "1" }]));
+    let none = post(
+        &app,
+        supply,
+        json!({ "_asset_list": [[bud["policy_id"], "00"]] }),
+    )
+    .await;
+    assert_eq!(none, json!([]));
+
     // A handle's holder: one address, where the handle sits.
     let handle = "/api/v1/asset_nft_address?_asset_policy=f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a\
         &_asset_name=000de14061746c61736d6f6f6e";

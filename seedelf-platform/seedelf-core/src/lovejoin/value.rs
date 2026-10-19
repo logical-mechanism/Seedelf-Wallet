@@ -97,11 +97,17 @@ impl BoxValue {
         }
     }
 
-    /// An output at `address` holding exactly this.
+    /// An output at `address` holding exactly this. A token box holds at least
+    /// one of its token: pallas takes an output of none, then panics building
+    /// it, a trap in WebAssembly that locks the wallet (1.6.0's release
+    /// review, MONEY-2), so it's refused here, in words.
     pub fn output(&self, address: Address) -> Result<Output> {
         let output = Output::new(address, self.lovelace);
         match &self.token {
             None => Ok(output),
+            Some(token) if token.quantity == 0 => {
+                bail!("A token pool's box must hold at least one of its token")
+            }
             Some(token) => output
                 .add_asset(Hash::new(token.policy), token.name.clone(), token.quantity)
                 .context("A box's token can't be added to its output"),

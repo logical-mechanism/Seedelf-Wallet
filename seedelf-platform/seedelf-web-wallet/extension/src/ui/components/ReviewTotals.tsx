@@ -30,8 +30,24 @@ export type Side = "public" | "private";
  * and 2 tokens"): a total of the ADA alone read as everything that leaves,
  * while 100 LINK and a billion VEGA went with it (chunk 23's second review,
  * PY-5). Each recipient's rows name them.
+ *
+ * `named`: the one token leaving, by its amount and name ("200 MIN"), said in place of the count where the review
+ * names it above: a Lovejoin token pool's boxes take one token, and "15.85 ₳ and 1 token" under "200 MIN" read as
+ * something else leaving (1.6.0's preprod rehearsal, R3).
  */
-export function TotalRows({ side, leaving, before, tokens = 0 }: { side: Side; leaving: bigint; before?: string; tokens?: number }) {
+export function TotalRows({
+  side,
+  leaving,
+  before,
+  tokens = 0,
+  named,
+}: {
+  side: Side;
+  leaving: bigint;
+  before?: string;
+  tokens?: number;
+  named?: string;
+}) {
   const t = useT();
   const account = useNamedAccount(side);
   return (
@@ -40,7 +56,7 @@ export function TotalRows({ side, leaving, before, tokens = 0 }: { side: Side; l
         label={
           account ? t("review.total.publicNamed", { account }) : t(side === "public" ? "review.total.public" : "review.total.private")
         }
-        value={adaWithTokens(leaving.toString(), tokens)}
+        value={named ? t("lovejoin.adaAndToken", { ada: adaText(leaving.toString()), token: named }) : adaWithTokens(leaving.toString(), tokens)}
         strong
         testId="review-total"
       />

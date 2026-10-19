@@ -1610,11 +1610,10 @@ pub fn chain_from_account_at(
         .filter(not_collateral)
         .collect();
     ada.sort_by_key(|p| std::cmp::Reverse(lovelace(p)));
+    let mut rest = ada.into_iter();
     let mut coin_rows: Vec<&UtxoResponse> = Vec::new();
-    for p in ada {
-        if total >= needed {
-            break;
-        }
+    while total < needed {
+        let Some(p) = rest.next() else { break };
         total += lovelace(p);
         coin_rows.push(&p.utxo);
     }
@@ -1632,15 +1631,7 @@ pub fn chain_from_account_at(
                 .div_ceil(1_000_000)
         );
     }
-    let coins = coin_rows
-        .iter()
-        .map(|u| Coin::from_row(u))
-        .collect::<Result<Vec<_>>>()?;
-    picked.extend(coin_rows);
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
-    let mut deposit_keys: Vec<(Role, u32)> = picked.iter().map(|u| path_of(u)).collect();
-    deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
-    deposit_keys.dedup();
     let change_key = (Role::Receive, 0);
     let mut mix_keys = vec![change_key];
     if let Some(c) = &request.collateral {
@@ -1660,24 +1651,50 @@ pub fn chain_from_account_at(
         .filter_map(|row| PoolBox::from_row(row, &protocol))
         .filter(|b| !b.is_owned(&sk))
         .collect();
-    let funding = lovejoin::Funding {
-        coins,
-        // None only at depth 0, where `chain` makes no mixes and so never
-        // reads it: `fan_out`'s loop doesn't run, and only `mix` puts it up.
-        collateral: match &request.collateral {
-            Some(c) => Some(Coin::from_row(&c.utxo)?),
-            None => None,
-        },
-        address,
-        deposit_signers: deposit_keys.len(),
-        mix_signers: mix_keys.len(),
-    };
     let leg = lovejoin::Leg {
         protocol: &protocol,
         owners: &owners,
         pool: &pool,
     };
-    let built = lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width)?;
+    // `needed` plans the deposit's fee and its change on a 1.5 ₳ reserve,
+    // which a large deposit outgrows: 64 token boxes' fee is about 0.8 ₳, and
+    // an ADA change at a base address takes about 0.97 ₳. So when what was
+    // picked falls short of that, the next largest UTxO is picked too and the
+    // chain built again, while the account has one (1.6.0's release review,
+    // MONEY-5); only then is it short.
+    let (built, deposit_keys) = loop {
+        let coins = coin_rows
+            .iter()
+            .map(|u| Coin::from_row(u))
+            .collect::<Result<Vec<_>>>()?;
+        let mut deposit_keys: Vec<(Role, u32)> = picked
+            .iter()
+            .chain(&coin_rows)
+            .map(|u| path_of(u))
+            .collect();
+        deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
+        deposit_keys.dedup();
+        let funding = lovejoin::Funding {
+            coins,
+            // None only at depth 0, where `chain` makes no mixes and so never
+            // reads it: `fan_out`'s loop doesn't run, and only `mix` puts it up.
+            collateral: match &request.collateral {
+                Some(c) => Some(Coin::from_row(&c.utxo)?),
+                None => None,
+            },
+            address: address.clone(),
+            deposit_signers: deposit_keys.len(),
+            mix_signers: mix_keys.len(),
+        };
+        match lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width) {
+            Ok(built) => break (built, deposit_keys),
+            Err(short) if build::is_short(&short) => match rest.next() {
+                Some(p) => coin_rows.push(&p.utxo),
+                None => return Err(short),
+            },
+            Err(e) => return Err(e),
+        }
+    };
 
     let sign_with = |tx: BuiltTransaction, keys: &[(Role, u32)]| -> Result<BuiltTransaction> {
         let mut signed = tx;

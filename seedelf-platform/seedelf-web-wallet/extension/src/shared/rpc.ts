@@ -2155,12 +2155,34 @@ export interface LovejoinPoolStatus {
    * Bring one back with the public account paying does (`lovejoin-withdraw-now`'s `paid`).
    */
   cantComeBack?: { has: string; needs: string };
+  /**
+   * It takes no new box under today's parameters, and why (chunk 34's §2, usable): a mix, a Bootstrap and mixing again
+   * into it are refused, from either side, whether or not the wallet has boxes there. Measured once an epoch (1.6.0's
+   * release review, MONEY-3).
+   */
+  unusable?: LovejoinUnusable;
   /** Its crowd, as the data layer last counted it; none on Koios. */
   crowd?: LovejoinCrowd;
   /** Its launch transaction, as discovery found it. */
   launch?: string;
   /** This wallet started it (the device's own record). */
   mine?: true;
+}
+
+/**
+ * Why a token pool takes no new box (WebAssembly's usable): a box holds less ADA than the network now asks of one
+ * (`belowMinimum`), a box couldn't pay its own way back into a Seedelf (`cantComeBack`), or the check couldn't be made
+ * (`unchecked`). Or it's a copy (`superseded`): an earlier launch of its values turned up after this device read it,
+ * so it's read for the boxes already in it and takes no new one, for good (decision 30; the merged fixes' review,
+ * MERGED-1). Words are the screens' to choose; nothing here is translated.
+ */
+export interface LovejoinUnusable {
+  why: "belowMinimum" | "cantComeBack" | "unchecked" | "superseded";
+  /**
+   * In a copy (`superseded`), why mixing again its boxes is refused too, if it is: mixing again makes no deposit, so a
+   * copy alone doesn't refuse it, but the pool's other reasons do (fix round two's last review, R3-2).
+   */
+  again?: "belowMinimum" | "cantComeBack" | "unchecked";
 }
 
 /**
@@ -2280,6 +2302,12 @@ export interface LovejoinHeld {
   unsure?: number;
   stopped: number;
   /**
+   * How many of the wallet's boxes its open Bootstraps hold in the pool (chunk 34's D2: Home shows them apart): they
+   * have no due time, and stay until brought back by hand. From the list of mixes alone; none when none (1.6.0's
+   * release review, MONEY-4).
+   */
+  bootstrap?: number;
+  /**
    * Each token pool's own figures, as the fields above are the classic
    * pool's (chunk 34): its boxes on their way back, their ADA and token, and
    * its boxes not mixed yet. Only pools with something there.
@@ -2292,6 +2320,8 @@ export interface LovejoinHeld {
     next: number | null;
     notMixed: number;
     unsure?: number;
+    /** Its boxes a Bootstrap holds, as `bootstrap` is the classic pool's. */
+    bootstrap?: number;
     /** What each of its boxes holds, as the read set has it; none when the pool isn't read this time (34f). */
     box?: LovejoinBoxValue;
   }>;
@@ -2637,9 +2667,11 @@ export interface Requests {
   /**
    * Looks for Lovejoin token pools launched since the wallet last did, as the
    * Lovejoin page opens (chunk 34's 34c): the data layer's list, or Koios's
-   * holder where there's none. The next pool read reads what's found.
+   * holder where there's none. The next pool read reads what's found. `grew`: the pools the wallet reads changed
+   * with this look, so a page that read them before it ended reads them again (1.6.0's rehearsal: a wallet restored
+   * opened the hub to no pools and "None" of its boxes until Refresh).
    */
-  "lovejoin-look-for-pools": { payload: None; result: None };
+  "lovejoin-look-for-pools": { payload: None; result: { grew: boolean } };
   /**
    * What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. `width`: three, where
    * the form says four falls back (34f); none, Settings'.
@@ -2705,6 +2737,12 @@ export interface Requests {
    * themselves from here, one a run, at random delays (chunk 34's round three, 24).
    */
   "lovejoin-bootstrap-release": { payload: { pool?: string }; result: None };
+  /**
+   * The most boxes a Bootstrap paid from the private balance puts into pool `pool` (none: the classic pool) at once:
+   * what its funding's reserve pays the deposit for, as the worker holds it (privateBootstrapMost), for the form's
+   * bound (1.6.0's release review, MONEY-6). It reads the parameters, as any build does.
+   */
+  "lovejoin-bootstrap-most": { payload: { pool?: string }; result: { most: number } };
   /** What a pool of `token` (none: an ADA pool) may hold a box, and the pools of its kind already shown. */
   /** `quantity`: Q, raw, once chosen; without it the least holds for any. */
   "lovejoin-launch-terms": {
@@ -2885,6 +2923,7 @@ const REQUEST_LIST = [
   "lovejoin-mix-public-progress",
   "lovejoin-mixes",
   "lovejoin-bootstrap-release",
+  "lovejoin-bootstrap-most",
   "lovejoin-launch-terms",
   "lovejoin-launch-build",
   "lovejoin-launch-submit",

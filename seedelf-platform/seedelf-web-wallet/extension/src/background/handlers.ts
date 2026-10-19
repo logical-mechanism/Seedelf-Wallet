@@ -477,7 +477,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-chains":
       return ctx.lovejoin.chains(ctx.network);
     case "lovejoin-look-for-pools":
-      return ctx.lovejoin.lookForPools(ctx.network).then(() => ({}));
+      // Whether what a pool read reads changed with the look: the hub, which read the pools meanwhile, reads them again
+      // (1.6.0's rehearsal, R10).
+      return ctx.lovejoin.lookForPools(ctx.network);
     case "lovejoin-funding":
       // A pool's id from the page, or none: never a pool object it made up (its fixes' review, 6).
       return ctx.lovejoin.funding(
@@ -515,6 +517,11 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.lovejoin.mixes(ctx.network);
     case "lovejoin-bootstrap-release":
       return ctx.lovejoin.releaseBootstrap(ctx.network, message.pool ?? CLASSIC).then(() => ({}));
+    // The Bootstrap form's bound from the private balance: the worker's own (1.6.0's release review, MONEY-6).
+    case "lovejoin-bootstrap-most":
+      return ctx.lovejoin
+        .privateBootstrapMost(ctx.network, typeof message.pool === "string" ? message.pool : undefined)
+        .then((most) => ({ most }));
     case "lovejoin-launch-terms":
       return ctx.launch.terms(ctx.network, message.token, message.quantity);
     case "lovejoin-launch-build":

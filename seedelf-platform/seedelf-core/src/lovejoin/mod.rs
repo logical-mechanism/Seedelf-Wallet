@@ -670,10 +670,12 @@ pub fn deposit_across(
         crate::build::change_outputs(params, change_address, kept_lovelace, &kept, DEPOSIT_SHORT)?;
     let least = least_change(params, change_address)?;
     let (fee, staged) = settle_fee(params, signers, |fee| {
+        // Core's typed shortfall (`build::is_short`), so a caller can pick
+        // another UTxO and build again (1.6.0's release review, MONEY-5).
         let change = total
             .checked_sub(boxed + kept_lovelace + fee)
             .filter(|c| *c >= least)
-            .context("There isn't enough ADA for these boxes, the fee and the change")?;
+            .ok_or(DEPOSIT_SHORT)?;
         let mut tx = StagingTransaction::new();
         for held in inputs {
             tx = tx.input(held.input());

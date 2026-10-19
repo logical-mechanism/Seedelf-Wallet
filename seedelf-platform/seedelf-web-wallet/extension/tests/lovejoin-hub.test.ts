@@ -361,16 +361,16 @@ describe("a swap that funds its token's boxes, on its approval (34e's fixes' rev
     expect(approval(lovejoin)).toContain("If you stop it or the order is refunded, its 83.9 ₳ come back through Lovejoin instead");
   });
 
-  it("says what of the token is less than a box comes back directly, beside its boxes (34f's review, 3)", () => {
+  it("says what of the token goes into no box comes back directly, beside its boxes (34f's review, 3; 1.6.0's UI-3)", () => {
     // 906.5941 MIN expected, 8 boxes of 100: about 106.5941 MIN isn't a box.
-    expect(approval(lovejoin)).toContain("About 106.5941 MIN, less than a box, stays out of the pool: it comes back directly with the session's other money, tied to this session.");
+    expect(approval(lovejoin)).toContain("About 106.5941 MIN isn't put in a box, so it stays out of the pool: it comes back directly with the session's other money, tied to this session.");
     // A whole number of boxes: nothing more said.
     const exact = text(
       shown(
         createElement(SwapApproval, { summary, quote: { ...quote, amountOut: "800000000" }, lovejoin, pay, get, through: true, onThrough: () => undefined, busy: false }),
       ),
     );
-    expect(exact).not.toContain("less than a box");
+    expect(exact).not.toContain("isn't put in a box");
   });
 
   it("prices a token swap's stop on its boxes' share alone, as the worker does (34f's review, 8)", () => {
@@ -449,7 +449,8 @@ describe("a mix's reviews in a token pool, and four boxes a mix", () => {
     expect(review).toContain("Into Lovejoin 1 box of 100 MIN + 4.5 ₳");
     expect(review).toContain("Mixed 2 waves deep, 5 mixes, about 6.75 ₳, four boxes a mix");
     expect(review).toContain("Yours is one of up to 16 boxes at 2 waves deep");
-    expect(review).toContain("and 1 token");
+    // The token named in the total, as the row above names it (1.6.0's preprod rehearsal, R3).
+    expect(review).toContain("Total leaving your private balance 15.1 ₳ and 100 MIN");
     // The classic pool's, as it said before.
     const classic = text(shown(createElement(PrivateReview, { summary: { ...summary, payments: [{ ...summary.payments[0]!, tokens: [] }, summary.payments[1]!], mix: { boxes: 1, lovelace: "12450000", mixes: 4, mixFees: "3800000", depth: 2, delay: "1-6" } } as never })));
     expect(classic).toContain("Into Lovejoin 1 box of 10 ₳");
@@ -475,7 +476,7 @@ describe("a mix's reviews in a token pool, and four boxes a mix", () => {
     } as never;
     const review = text(shown(createElement(PublicReview, { summary, box: MIN_100 })));
     expect(review).toContain("Into Lovejoin 2 boxes of 100 MIN + 4.5 ₳");
-    expect(review).toContain("11 ₳ and 1 token");
+    expect(review).toContain("11 ₳ and 200 MIN");
     expect(review).toContain(t("lj.width.warn.short"));
   });
 });

@@ -72,6 +72,16 @@ export function poolsOf(status: LovejoinStatus | undefined): ShownPool[] {
 /** The pool named `id` (none: the classic pool) among those read. */
 export const poolNamed = (pools: ShownPool[], id: string | undefined) => pools.find((p) => p.id === id);
 
+/** A copy of an earlier pool's values (`superseded`): read for the boxes already in it, and taking no new one, for good. */
+export const isCopy = (p: Pick<ShownPool, "unusable">) => p.unusable?.why === "superseded";
+
+/**
+ * Whether the hub lists pool `p` to open: every pool the wallet reads, but a copy while the wallet has nothing in it.
+ * There it only stood beside the earlier pool of its values, a second row of the same box with nothing to do on its
+ * page; while the wallet's boxes are in it, it's listed, flagged, for them (the merged fixes' review, MERGED-1).
+ */
+export const shownOnHub = (p: ShownPool) => !isCopy(p) || p.boxes.length > 0 || (p.bootstrap?.length ?? 0) > 0;
+
 /** A pool's token's unit, policy then name, as a balance's token key; none for an ADA pool. */
 const unitOf = (box: BoxValue) => (box.token ? tokenKey(box.token) : undefined);
 

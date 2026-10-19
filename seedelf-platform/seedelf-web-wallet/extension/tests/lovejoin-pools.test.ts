@@ -390,7 +390,8 @@ describe("the list of mixes, followed until each box is back (session 1, 5)", SL
     await t.store.set("lovejoin.preprod", { due: [t.clock.now - 60_000], chains: [chain], unlock: t.clock.now - HOUR });
     t.koios.addedToAccounts.push(...POOL, box);
     await lj.status("preprod");
-    expect((await sealed(t)).mixes).toEqual([{ id: chain.id, at: chain.at, account: 0, shares: [{ boxes: 1 }] }]);
+    // With its chain's deposit, where a Bootstrap's held boxes are looked for (34g's rehearsal).
+    expect((await sealed(t)).mixes).toEqual([{ id: chain.id, deposit: chain.deposit, at: chain.at, account: 0, shares: [{ boxes: 1 }] }]);
     // Its box comes back, and its mix is over, while the chain's record is still kept: no entry is made of it again.
     await unlockedAnHourAgo(t);
     expect(await lj.withdrawDue("preprod")).toHaveLength(1);
@@ -682,8 +683,9 @@ describe("what the Lovejoin hub reads of each pool (chunk 34's 34f)", SLOW, () =
     const status = await lj.status("preprod");
     expect(status.notMixed).toEqual([{ txHash: "c1".repeat(32), txIndex: 0 }]);
     await unlockedAnHourAgo(t);
-    // The token pool's page: none of its boxes comes back now, said as its own, never the classic pool's unmixed one.
-    await expect(lj.withdrawNow("preprod", undefined, false, false, TOKEN)).rejects.toThrow(t_("lj.noneInPool"));
+    // The token pool's page: none of its boxes comes back now, said as its own, never the classic pool's unmixed one:
+    // a Bootstrap holds its only box, which "none of your boxes" denied (1.6.0's release review, UI-5).
+    await expect(lj.withdrawNow("preprod", undefined, false, false, TOKEN)).rejects.toThrow(t_("lj.bootstrapHolds"));
   });
 
   it("says a start no look has found for a day no more (34f's review, 11)", async () => {

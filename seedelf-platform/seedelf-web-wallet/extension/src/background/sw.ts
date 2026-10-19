@@ -36,7 +36,7 @@ import { TransferService } from "./transfer";
 import { WithdrawService } from "./withdraw";
 import { LovejoinService } from "./lovejoin";
 import { LovejoinLaunchService } from "./lovejoin-launch";
-import { PoolDiscovery } from "./lovejoin-pools";
+import { PoolDiscovery, serviceDeps } from "./lovejoin-pools";
 import { chromeArea } from "./storage";
 import { guardedConnector, keepStorageFromSites } from "./storage-access";
 import { serveUi } from "./ui-port";
@@ -206,13 +206,28 @@ function getContext(): Promise<Worker> {
       // So paying your own public account from Seedelf is flagged whichever
       // account it is, not only the active one (destination.ts).
       knownAccounts: () => accounts.known().then((all) => all.map((a) => a.index)),
+      // A maybe-sent mix from the public account can be settled by whichever flow looks first (settleMaybeSent), not
+      // only Home's watch: each tells Lovejoin it landed (the merged fixes' review, MERGED-5).
+      depositLanded: (n: keyof typeof NETWORKS, txHash: string) => lovejoin.landedDeposit(n, txHash),
     };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
     const withdraw = new WithdrawService(spends);
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
-    const pending = new PendingService({ wallet, session, koios, index, now: Date.now, activity, store, alarm: sessionsAlarm });
+    // Home's watch tells Lovejoin a mix from the public account it saw land: a Bootstrap's then never counts as never
+    // landed (the merged fixes' review, MERGED-5).
+    const pending = new PendingService({
+      wallet,
+      session,
+      koios,
+      index,
+      now: Date.now,
+      activity,
+      store,
+      alarm: sessionsAlarm,
+      depositLanded: (n, txHash) => lovejoin.landedDeposit(n, txHash),
+    });
     const minswap = (network: keyof typeof NETWORKS) =>
       new Minswap(NETWORKS[network].swaps, undefined, excludedProtocols(network));
     // Lovejoin's token pools: the data layer's list at each pool read, Koios's holder as the Lovejoin page opens
@@ -225,19 +240,14 @@ function getContext(): Promise<Worker> {
       preferences,
       mixingAgain: (n) => sessions.mixingAgain(n),
       alarm: sessionsAlarm,
-      // The data layer's list failing is no pool gone: what was found before is read. A trap isn't swallowed.
-      pools: async (n) => {
-        await discovery.refresh(n).catch((e: unknown) => {
-          if (isTrap(e)) throw e;
-        });
-        return (await discovery.known(n)).map((p) => p.ref);
-      },
-      // What discovery kept, asking nobody: a swap's quote as the user types, and a return's first look.
-      known: async (n) => (await discovery.known(n)).map((p) => p.ref),
+      // The pools handed over, each copy named one, and the copies a pool read reads once (lovejoin-pools.ts; the
+      // merged fixes' review, MERGED-1).
+      ...serviceDeps(discovery),
       lookForPools: (n) => discovery.look(n),
       // The hub's facts of each pool (chunk 34's 34f): its launch, and the data layer's crowds. No request.
+      // Every kept pool's launch: a copy the sealed schedule reads is no pool discovery hands over (R2-4).
       facts: async (n) => ({
-        launches: new Map((await discovery.known(n)).map((p) => [p.id, p.launch.tx])),
+        launches: await discovery.launches(n),
         crowds: discovery.crowdsOf(n),
       }),
     });

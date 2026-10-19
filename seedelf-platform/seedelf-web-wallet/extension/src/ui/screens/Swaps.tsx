@@ -1251,7 +1251,9 @@ export function SwapApproval({
   // so the switch stays, to turn back on (34f's review, 4).
   const any =
     !!l && ((turnedOff && !through) || l.boxes > 0 || !!l.of || !!l.ifStopped || !!l.ways?.some((w) => w.boxes > 0 || w.direct));
-  // What of the token it gets is less than a box, which comes back directly beside its boxes (34f's review, 3).
+  // What of the token it gets goes into no box, which comes back directly beside its boxes (34f's review, 3). Less
+  // than a box, or more: the boxes are counted on the least it asks for and capped by the pool's room and a chain, so
+  // the note never calls it less than a box (1.6.0's release review, UI-3).
   const rest =
     way?.pool && way.boxes > 0 && way.quantity ? BigInt(quote.amountOut) - BigInt(way.boxes) * BigInt(way.quantity) : 0n;
   // What a stop brings back through Lovejoin instead: the funding's ADA for an ADA swap, and the token's boxes' (34f's
@@ -2902,6 +2904,24 @@ export function retryReason({ error, reason }: Retry): string {
 type StepState = "done" | "now" | "paused" | "failed" | "todo" | "skipped";
 
 /**
+ * Where a swap's last step takes what's at its account: directly, as chosen or with Lovejoin left out; through
+ * Lovejoin, what goes into its boxes coming back later, each by itself, and the rest at once, as its approval's plan
+ * said, once its return goes that way, or before it's built when the swap was approved to; and where its chain was
+ * cut short or stopped, the chain's own words. It said "Everything at the account, under fresh registers" whichever
+ * way it went, while a swap's spare ADA, and since 34e its proceeds' boxes, went into Lovejoin's pools for hours
+ * (1.6.0's rehearsal, step 4). Those words stay for a return that went directly with nothing for a box, and for a swap
+ * from before the switch whose return isn't built, which goes as Settings has it.
+ */
+function backStepText(s: SessionView): string {
+  const auto = s.auto!;
+  if (s.lovejoinSkipped) return t("swaps.step.directLeftOut");
+  if (auto.direct) return t("swaps.step.directChosen");
+  if (s.chain) return s.chain.cut || s.chain.stopped ? chainText(s.chain) : t("swaps.step.throughLovejoin");
+  const returned = s.txs.some((x) => x.kind === "back");
+  return !returned && auto.direct === false ? t("swaps.step.throughLovejoin") : t("swaps.step.freshRegisters");
+}
+
+/**
  * A swap that runs itself, as four steps: funded, the order placed, filled
  * (or cancelled), and back in the private balance. Each is waiting, done
  * (with its transaction), or paused; the whole card turns the success colour
@@ -2995,13 +3015,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     },
     {
       title: tr("swaps.plan.back"),
-      sub: tr(
-        s.lovejoinSkipped
-          ? "swaps.step.directLeftOut"
-          : auto.direct
-            ? "swaps.step.directChosen"
-            : "swaps.step.freshRegisters",
-      ),
+      sub: backStepText(s),
       tx: tx("back"),
     },
   ];

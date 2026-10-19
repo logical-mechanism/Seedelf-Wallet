@@ -358,9 +358,13 @@ export class DataLayerKoios extends Koios {
     return this.read((k) => k.assetInfo(policyId, assetName), () => super.assetInfo(policyId, assetName));
   }
 
-  /** A Lovejoin pool's launch's, on Koios alone, as the privacy policy says (chunk 34's 34d): a launch is public anyway. */
+  /**
+   * A Lovejoin pool's start's, at Send: on the data layer, and Koios only when it can't answer, as every read is. On
+   * Koios alone it named the token to Koios seconds before the start reached our server (1.6.0's release review,
+   * PRIV-2).
+   */
   override assetSupply(policyId: string, assetName: string) {
-    return super.assetSupply(policyId, assetName);
+    return this.read((k) => k.assetSupply(policyId, assetName), () => super.assetSupply(policyId, assetName));
   }
 
   override tipSlot() {

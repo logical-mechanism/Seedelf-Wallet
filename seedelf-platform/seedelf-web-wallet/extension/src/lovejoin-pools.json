@@ -1,11 +1,191 @@
 {
-  "//": "Lovejoin's token pools shown on each network when this was written, and the block Koios's holder was read to: a new device's head start (chunk 34's 34c). Written at each release by `npm run lovejoin-pools`; never a gate, as the wallet verifies every pool and looks on from the height.",
+  "//": "Lovejoin's token pools shown on each network when this was written, the block Koios's holder was read to from its start, and the token list it was read under (`listed`): a new device's head start, and where a device looks from again when an update changes its list (chunk 34's 34c). Written at each release by `npm run lovejoin-pools`; never a gate, as the wallet verifies every pool and looks on from the height.",
   "preprod": {
-    "height": 5299707,
-    "pools": []
+    "height": 5308081,
+    "pools": [
+      {
+        "id": "dfa1f845875b627fff04fbd37b4545f3a07caf5214e03a3f4557911d",
+        "boxLovelace": "4500000",
+        "token": {
+          "policyId": "e16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72",
+          "assetName": "4d494e",
+          "quantity": "100000000"
+        },
+        "ref": {
+          "reference": {
+            "tx_hash": "5ef638917a4f3ad7c6300ef18153fff77dccf97a7c5a51a639e0b42e48cb5cf2",
+            "tx_index": 0,
+            "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+            "value": "1689520",
+            "stake_address": null,
+            "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+            "epoch_no": 320,
+            "block_height": 5307966,
+            "block_time": 1792356567,
+            "datum_hash": "e37cb592342e050a7e51ec2090636a7a512c9eddfaf572663086052dc9283fd2",
+            "inline_datum": {
+              "bytes": "d8799f1a0044aa20581ce16c2dc8ae937e8d3790c7fd7168d7b994621ba14ca11415f39fed72434d494e1a05f5e1001a0016e360581cdf18f03acc559131a5d54c76e66727ed1f7dc9a36187f544d3ad3eb4581c89c6c6f4df1a5405fc3d68c37426015805f3775f394b0aaca87bb2a9581c1f2da6975d699f6a1a8296ff44a8b8a6f819bdbe5499d7ec20a74995ff",
+              "value": null
+            },
+            "reference_script": null,
+            "asset_list": [
+              {
+                "decimals": 0,
+                "quantity": "1",
+                "policy_id": "dfa1f845875b627fff04fbd37b4545f3a07caf5214e03a3f4557911d",
+                "asset_name": "6c6f76656a6f696e",
+                "fingerprint": "asset1grxhdqz0t55efq2mruh8a0fqtanguayqqtsy7d"
+              }
+            ],
+            "is_spent": false
+          },
+          "seed": {
+            "txHash": "3892a4a6cfe13a2b633f7842851905aca61d7c56806316c86ab262f0665d6aae",
+            "txIndex": 0
+          },
+          "scripts": [
+            {
+              "tx_hash": "5ef638917a4f3ad7c6300ef18153fff77dccf97a7c5a51a639e0b42e48cb5cf2",
+              "tx_index": 1,
+              "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+              "value": "3616090",
+              "stake_address": null,
+              "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+              "epoch_no": 320,
+              "block_height": 5307966,
+              "block_time": 1792356567,
+              "datum_hash": null,
+              "inline_datum": null,
+              "reference_script": {
+                "hash": "df18f03acc559131a5d54c76e66727ed1f7dc9a36187f544d3ad3eb4",
+                "size": 629,
+                "type": "plutusV3",
+                "bytes": null
+              },
+              "asset_list": [],
+              "is_spent": false
+            },
+            {
+              "tx_hash": "5ef638917a4f3ad7c6300ef18153fff77dccf97a7c5a51a639e0b42e48cb5cf2",
+              "tx_index": 2,
+              "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+              "value": "15809080",
+              "stake_address": null,
+              "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+              "epoch_no": 320,
+              "block_height": 5307966,
+              "block_time": 1792356567,
+              "datum_hash": null,
+              "inline_datum": null,
+              "reference_script": {
+                "hash": "89c6c6f4df1a5405fc3d68c37426015805f3775f394b0aaca87bb2a9",
+                "size": 3458,
+                "type": "plutusV3",
+                "bytes": null
+              },
+              "asset_list": [],
+              "is_spent": false
+            }
+          ]
+        },
+        "launch": {
+          "block": 5307966,
+          "index": 11,
+          "tx": "5ef638917a4f3ad7c6300ef18153fff77dccf97a7c5a51a639e0b42e48cb5cf2"
+        }
+      },
+      {
+        "id": "18c4df7733af269d30354df99544697dae3311cebacd48d751b89fed",
+        "boxLovelace": "5000000",
+        "ref": {
+          "reference": {
+            "tx_hash": "2a8029dc6469a7b9f99b0a14640b2695c2f265015ac32fd076d5d737c765b393",
+            "tx_index": 0,
+            "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+            "value": "1534360",
+            "stake_address": null,
+            "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+            "epoch_no": 320,
+            "block_height": 5308081,
+            "block_time": 1792359270,
+            "datum_hash": "d7c79e57a5e6353d59ae3826b50faea74e4b2a5bc8238bcd995b58c6f5714292",
+            "inline_datum": {
+              "bytes": "d8799f1a004c4b404040001a0016e360581c7962202a7b25bf20974e3ef55eda7b12d5ae8f9ea36e1492bb339308581cda0ac3783cdd08b824edcaea515910218e28f1f97c34b8c4ced7dcf5581cbd24a2a62332f16d96270a3232cc9eeb19b9ee090f408cebdecdbcf1ff",
+              "value": null
+            },
+            "reference_script": null,
+            "asset_list": [
+              {
+                "decimals": 0,
+                "quantity": "1",
+                "policy_id": "18c4df7733af269d30354df99544697dae3311cebacd48d751b89fed",
+                "asset_name": "6c6f76656a6f696e",
+                "fingerprint": "asset1rv4fr3ddytqsechmnvm7fdtv9c7egfau0t9sh3"
+              }
+            ],
+            "is_spent": false
+          },
+          "seed": {
+            "txHash": "57373e1abfdf5828f79e3c98f7d7f296ada08a44bc246fa0efd43ea5ad1e51d7",
+            "txIndex": 3
+          },
+          "scripts": [
+            {
+              "tx_hash": "2a8029dc6469a7b9f99b0a14640b2695c2f265015ac32fd076d5d737c765b393",
+              "tx_index": 1,
+              "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+              "value": "3616090",
+              "stake_address": null,
+              "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+              "epoch_no": 320,
+              "block_height": 5308081,
+              "block_time": 1792359270,
+              "datum_hash": null,
+              "inline_datum": null,
+              "reference_script": {
+                "hash": "7962202a7b25bf20974e3ef55eda7b12d5ae8f9ea36e1492bb339308",
+                "size": 629,
+                "type": "plutusV3",
+                "bytes": null
+              },
+              "asset_list": [],
+              "is_spent": false
+            },
+            {
+              "tx_hash": "2a8029dc6469a7b9f99b0a14640b2695c2f265015ac32fd076d5d737c765b393",
+              "tx_index": 2,
+              "address": "addr_test1wq5gl6nh5rm8f3sgp2ka3mfu5skdt2fqhu0spsxnucesdeqxrttf6",
+              "value": "15809080",
+              "stake_address": null,
+              "payment_cred": "288fea77a0f674c6080aadd8ed3ca42cd5a920bf1f00c0d3e63306e4",
+              "epoch_no": 320,
+              "block_height": 5308081,
+              "block_time": 1792359270,
+              "datum_hash": null,
+              "inline_datum": null,
+              "reference_script": {
+                "hash": "da0ac3783cdd08b824edcaea515910218e28f1f97c34b8c4ced7dcf5",
+                "size": 3458,
+                "type": "plutusV3",
+                "bytes": null
+              },
+              "asset_list": [],
+              "is_spent": false
+            }
+          ]
+        },
+        "launch": {
+          "block": 5308081,
+          "index": 12,
+          "tx": "2a8029dc6469a7b9f99b0a14640b2695c2f265015ac32fd076d5d737c765b393"
+        }
+      }
+    ],
+    "listed": "8c98ec06d172357e"
   },
   "mainnet": {
-    "height": 14080490,
-    "pools": []
+    "height": 14086717,
+    "pools": [],
+    "listed": "7cff1d91507cb596"
   }
 }

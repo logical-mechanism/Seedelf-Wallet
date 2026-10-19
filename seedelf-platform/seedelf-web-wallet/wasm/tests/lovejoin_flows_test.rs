@@ -535,3 +535,79 @@ fn a_launchs_box_value_is_its_way_backs() {
     assert_eq!(ada.least, "3450000");
     assert!(ada.most.is_none());
 }
+
+/// A pool of one of its token a box (1.6.0's release review, MONEY-2): the
+/// launch form asks for its box value as the creator types, and "1" trapped,
+/// which locked the wallet. It has one now, and none of the token is refused
+/// in words, the module whole.
+#[test]
+fn a_box_of_one_token_has_a_box_value_and_none_is_refused() {
+    let of = |quantity: &str| {
+        wasm::box_value(BoxValueRequest {
+            network: "mainnet".into(),
+            params: params(),
+            token: Some(api::TokenAmount {
+                policy_id: "1a".repeat(28),
+                asset_name: hex::encode("SNEK"),
+                quantity: quantity.into(),
+            }),
+        })
+    };
+    let one = of("1").unwrap();
+    assert_eq!(one.least, "3620000");
+    assert_eq!(one.suggested, "4000000");
+    assert_eq!(one.most.as_deref(), Some("9000000"));
+    let none = of("0").unwrap_err().to_string();
+    assert!(none.contains("at least one of its token"), "{none}");
+}
+
+/// A large Bootstrap from the public account (1.6.0's release review,
+/// MONEY-5): its UTxOs were picked only until they covered the boxes and the
+/// deposit's 1.5 ₳ reserve, which 64 token boxes' fee (about 0.8 ₳) and an
+/// ADA change at a base address (about 0.97 ₳) outgrow. So an account of
+/// hundreds of ₳ was refused as short whenever the UTxOs picked happened to
+/// land near that. Now another is picked, and the deposit built again.
+#[test]
+fn a_large_bootstrap_from_the_public_account_takes_another_utxo_for_its_fee() {
+    let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    let boxes = 64;
+    // The boxes take 128 ₳ and the reserve 1.5 ₳: these three cover it by 0.1 ₳, largest first.
+    let mut utxos = vec![
+        public(0x60, Role::Receive, 1, 2_000_000, vec![ljtest(64 * Q)]),
+        public(0x61, Role::Change, 0, 100_000_000, vec![]),
+        public(0x62, Role::Change, 1, 27_600_000, vec![]),
+    ];
+    utxos.extend((0..5).map(|i| public(0x70 + i, Role::Receive, 2, 2_000_000, vec![])));
+    let chain = wasm::chain_from_account_in(
+        &account,
+        Scalar::from(1_357u64),
+        AccountChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos,
+            collateral: None,
+            pool: Vec::new(),
+            depth: 0,
+            boxes,
+        },
+        Some(&pool_ref()),
+    )
+    .unwrap();
+    assert_eq!(chain.txs.len(), 1);
+    let bytes = hex::decode(&chain.txs[0].tx_cbor).unwrap();
+    let deposit = MultiEraTx::decode(&bytes).unwrap();
+    // One more UTxO than `needed` asked for, and no more.
+    assert_eq!(deposit.inputs().len(), 4);
+    let outputs = deposit.outputs();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|o| holds_ljtest(o) == Some(Q))
+            .count(),
+        boxes
+    );
+    // Its change is the least an output holds, at least.
+    let change = outputs.last().unwrap().value().coin();
+    assert!(change >= 969_750, "{change}");
+    assert_eq!(chain.returned, change.to_string());
+}

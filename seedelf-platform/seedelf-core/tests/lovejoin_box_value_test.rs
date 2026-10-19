@@ -199,3 +199,44 @@ fn a_token_pools_box_value_is_proven() {
         }
     }
 }
+
+/// A pool of one of its token a box (1.6.0's release review, MONEY-2): one
+/// can't be halved, so "part of it" is the token whole beside ADA change, or
+/// ADA alone with the token in the change. Its box value is worked out like
+/// any other's, and never traps: a trap in WebAssembly locks the wallet. A
+/// box holding none of its token isn't a pool's, and is refused in words.
+#[test]
+fn a_pool_of_one_token_a_box_has_a_box_value() {
+    let token = |quantity: u64| BoxToken {
+        policy: [0x1a; 28],
+        name: b"SNEK".to_vec(),
+        quantity,
+    };
+    for network_flag in [true, false] {
+        let params = params(network_flag);
+        let probe = Probe::new(network_flag, true).unwrap();
+        let least = least_box_lovelace(&probe, &params, Some(&token(1))).unwrap();
+        println!("one a box | least box value {}", ada(least));
+        let at = |lovelace: u64, quantity: u64| BoxValue {
+            lovelace,
+            token: Some(token(quantity)),
+        };
+        way_back(&probe, &params, &at(least, 1)).unwrap();
+        let short = way_back(&probe, &params, &at(least - 10_000, 1)).unwrap_err();
+        assert!(short.starts_with("part of it to a"), "{short}");
+        // Below a typical token's 3.83 ₳ (measured 2026-10-18, the same on both networks): its
+        // quantity is shorter, and one output fewer holds it. So 4 ₳ is suggested.
+        assert_eq!(least, 3_620_000);
+        assert_eq!(suggested_box_lovelace(least), 4_000_000);
+        // Two a box are halved as ever.
+        least_box_lovelace(&probe, &params, Some(&token(2))).unwrap();
+
+        // None of it isn't a box of a token pool's.
+        let why = least_box_lovelace(&probe, &params, Some(&token(0)))
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("at least one of its token"), "{why}");
+        let why = way_back(&probe, &params, &at(5_000_000, 0)).unwrap_err();
+        assert!(why.contains("at least one of its token"), "{why}");
+    }
+}

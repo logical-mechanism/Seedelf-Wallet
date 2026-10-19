@@ -9,10 +9,10 @@ import { describe, expect, it } from "vitest";
 
 import { DataParts } from "../src/background/data-layer";
 import { Koios, type KoiosLaunch, type KoiosUtxo } from "../src/background/koios";
-import { HOLDER, PoolDiscovery, REFRESH_MS, SETTLE_MS, shown, type FoundPool } from "../src/background/lovejoin-pools";
+import { HOLDER, PoolDiscovery, REFRESH_MS, SETTLE_MS, shown, type FoundPool, type Kept } from "../src/background/lovejoin-pools";
 import { privateIndexClient } from "../src/background/private-index";
 import { fakeIndex, indexRowOf } from "./fake-index";
-import { loadTestWasm, memoryArea } from "./fakes";
+import { loadTestWasm, memoryArea, type MemoryArea } from "./fakes";
 
 /** PR #163's token pool on preprod, as Koios lists it: its scripts at a key address. */
 const FOUND = JSON.parse(readFileSync(new URL("../../wasm/tests/fixtures/lovejoin-token-pool-preprod.json", import.meta.url), "utf8")) as {
@@ -92,8 +92,15 @@ function koiosOf(holder: KoiosUtxo[], launches: KoiosLaunch[], registrations: Ar
   return fake;
 }
 
-function discovery(k: ReturnType<typeof koiosOf>, { listed = new Set([LJTEST]), index }: { listed?: ReadonlySet<string>; index?: ReturnType<typeof onIndex> } = {}) {
-  const local = memoryArea();
+function discovery(
+  k: ReturnType<typeof koiosOf>,
+  {
+    listed = new Set([LJTEST]),
+    index,
+    head = () => ({ height: 0, pools: [] }),
+    local = memoryArea(),
+  }: { listed?: ReadonlySet<string>; index?: ReturnType<typeof onIndex>; head?: () => Kept; local?: MemoryArea } = {},
+) {
   const clock = { now: 1_800_000_000_000 };
   const found = new PoolDiscovery({
     local,
@@ -103,7 +110,7 @@ function discovery(k: ReturnType<typeof koiosOf>, { listed = new Set([LJTEST]), 
     now: () => clock.now,
     listed: () => listed,
     // From the holder's start: the bundled head start moves at each release.
-    headStart: () => ({ height: 0, pools: [] }),
+    headStart: head,
   });
   return { found, local, clock };
 }
@@ -328,5 +335,100 @@ describe("the data layer's list", () => {
     await koiosOnly.found.look("preprod");
     expect(asked(alone, "credential_utxos")).toHaveLength(1);
     expect((await koiosOnly.found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+  });
+});
+
+describe("what a device keeps of what it found (1.6.0's release review)", () => {
+  const KEY = "seedelf.lovejoinPools.preprod";
+  /** A pool of LJTEST's values, launched at `block`, named by `tx`. */
+  const poolAt = (tx: string, block: number, of?: FoundPool): FoundPool => ({
+    id: tx.repeat(28),
+    boxLovelace: of?.boxLovelace ?? "4500000",
+    token: of?.token ?? { policyId: LJTEST.slice(0, 56), assetName: LJTEST.slice(56), quantity: "100" },
+    ref: { reference: { ...FOUND.reference, tx_hash: tx.repeat(32) }, seed: FOUND.seed },
+    launch: { block, index: 0, tx: tx.repeat(32) },
+  });
+  /** An output at the holder that's no candidate, in a later block: a look's height moves past the pool's. */
+  const LATER: KoiosUtxo = { ...SCRIPTS[0]!, tx_hash: "cc".repeat(32), tx_index: 0, block_height: BLOCK + 100 };
+
+  it("never takes a pool it handed over out of the read set when an earlier launch of its values turns up (STATE-2)", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    const { found, local } = discovery(koiosOf([], []), { index: on });
+    await found.refresh("preprod");
+    const [read] = await found.known("preprod");
+    expect(read!.id).toBe(ID);
+    // A later look keeps an earlier launch of the same values: one the data layer had left out, or whose launch
+    // Koios didn't know yet. The wallet may hold boxes in the pool it read: that one stays, beside the rule's.
+    const was = (await local.get<Kept>(KEY))!;
+    await local.set(KEY, { ...was, pools: [...was.pools, poolAt("aa", BLOCK - 10, read)] });
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["aa".repeat(28), ID]);
+  });
+
+  it("keeps a pool a head start showed when a later release's head start names an earlier launch of its values instead", async () => {
+    let head: Kept = { height: 0, pools: [poolAt("bb", 20)] };
+    const { found } = discovery(koiosOf([], []), { head: () => head });
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["bb".repeat(28)]);
+    head = { height: 0, pools: [poolAt("aa", 10)] };
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["aa".repeat(28), "bb".repeat(28)]);
+  });
+
+  it("looks at the holder again from the head start once the token list lists more (STATE-4)", async () => {
+    const k = koiosOf([FOUND.reference, ...SCRIPTS, LATER], [launch()]);
+    const list = new Set<string>();
+    const { found, local } = discovery(k, { listed: list });
+    await found.scan("preprod");
+    expect(await found.known("preprod")).toEqual([]);
+    expect((await local.get<Kept>(KEY))!.height).toBe(BLOCK + 100);
+    // A release lists the token: its pool, refused before and looked past, is found from the head start's height.
+    list.add(LJTEST);
+    await found.scan("preprod");
+    expect(asked(k, "credential_utxos")[1]!.query).toContain("block_height=gt.0");
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+    // Then each look reads on from where the last stopped, as before.
+    await found.scan("preprod");
+    expect(asked(k, "credential_utxos")[2]!.query).toContain(`block_height=gt.${BLOCK + 80}`);
+    expect(asked(k, "tx_info")).toHaveLength(1);
+  });
+
+  it("asks the data layer again once Remove wallet has deleted what it kept, not five minutes later", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    // A head start's pool beside the data layer's: a quiet read hands it over, and keeps that.
+    const { found, local } = discovery(koiosOf([], []), { index: on, head: () => ({ height: 0, pools: [poolAt("bb", 20)] }) });
+    await found.refresh("preprod");
+    // wallet.ts' reset deletes LOCAL_CACHES; the wallet is restored at once, and a quiet read (a swap's quote) may
+    // come first.
+    await local.remove(KEY);
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["bb".repeat(28)]);
+    expect(await local.get(KEY)).toBeDefined();
+    await found.refresh("preprod");
+    expect(on.index.calls).toEqual(["lovejoin/pools", "lovejoin/pools"]);
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual(["bb".repeat(28), ID]);
+    // While the routes refuse, the five minutes hold as before: one request, however many reads.
+    const down = onIndex();
+    down.index.tokensFail = Response.json({ error: "behind" }, { status: 503 });
+    const d = discovery(koiosOf([], []), { index: down });
+    await d.found.refresh("preprod");
+    await d.found.refresh("preprod");
+    expect(down.index.calls).toEqual(["lovejoin/pools"]);
+  });
+
+  it("keeps what a refresh and a look found at the same time, neither writing over the other", async () => {
+    const on = onIndex();
+    on.index.poolList = listed();
+    const area = memoryArea();
+    // A write that takes a while, as chrome.storage's can: the other's read lands in between.
+    const slow: MemoryArea = {
+      ...area,
+      set: async (key, value) => {
+        await new Promise((r) => setTimeout(r, 20));
+        await area.set(key, value);
+      },
+    };
+    const { found } = discovery(koiosOf([LATER], []), { index: on, local: slow });
+    await Promise.all([found.refresh("preprod"), found.scan("preprod")]);
+    expect((await found.known("preprod")).map((p) => p.id)).toEqual([ID]);
+    expect((await slow.get<Kept>(KEY))!.height).toBe(BLOCK + 100);
   });
 });

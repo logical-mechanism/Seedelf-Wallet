@@ -264,6 +264,26 @@ describe("the data layer's client", () => {
     expect(later.calls.filter((c) => c.path === "pool_history").map((c) => c.host)).toEqual([DATA, KOIOS]);
   });
 
+  it("reads a token's supply for a pool's start on the data layer, or on Koios when it fails (1.6.0's release review, PRIV-2)", async () => {
+    const [POLICY, NAME] = ["ab".repeat(28), "4e49474854"];
+    const s = servers();
+    s.data.set("asset_info", Response.json([{ total_supply: "24000000000000000" }]));
+    const { make } = client(s);
+    expect(await make("mainnet").assetSupply(POLICY, NAME)).toBe(24_000_000_000_000_000n);
+    const asked = s.calls.filter((c) => c.path === "asset_info");
+    // Koios never hears which token a pool is being started for while ours answers.
+    expect(asked.map((c) => c.host)).toEqual([DATA]);
+    expect([...new URLSearchParams(asked[0]!.query)]).toEqual([["select", "total_supply"]]);
+    expect(dataCost("asset_info")).toBe(4);
+
+    const later = servers();
+    later.data.set("asset_info", "unreachable");
+    later.koios.set("asset_info", Response.json([{ total_supply: "5" }]));
+    const { make: again } = client(later);
+    expect(await again("mainnet").assetSupply(POLICY, NAME)).toBe(5n);
+    expect(later.calls.filter((c) => c.path === "asset_info").map((c) => c.host)).toEqual([DATA, KOIOS]);
+  });
+
   it("keeps each part apart, and a part's hold across a worker's restart", async () => {
     const s = servers();
     s.data.set("tip", "unreachable");

@@ -147,7 +147,7 @@ import {
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
-import { chainStatus, type Feed } from "./feed";
+import { chainStatus, type Feed, type Watching } from "./feed";
 import {
   changeHistory,
   keep,
@@ -4241,13 +4241,15 @@ export class SessionService {
         pending,
         {
           send: (i, maybeSent) => this.sendStep(network, pending, i, maybeSent),
-          // A return through Lovejoin: its deposit and mixes pay or spend boxes, so they're on the pool's feed
-          // (feed.ts). Its last transaction pays the private balance and spends no box: never asked here, since
-          // pumpChain is done once it's sent, and `landed` watches it on the contract's feed (the release review).
+          // A return through Lovejoin: its deposit and mixes pay or spend boxes, so they're on its pools' feeds
+          // (feed.ts), a token pool's on the token pools' feed, as its record names them (watchOf, 1.6.0's release
+          // review, DATA-1). Its last transaction pays the private balance and spends no box: never asked here,
+          // since pumpChain is done once it's sent, and `landed` watches it on the contract's feed (the release review).
           onChain: async (hashes) => {
             const tried = firstTries(pending, hashes);
             const at = tried?.length ? Math.min(...tried) : undefined;
-            const watched = hashes.map((txHash) => ({ txHash, feed: "lovejoin" as const, ...(at !== undefined ? { sentAt: at } : {}) }));
+            const how = await this.watchOf(network, hashes);
+            const watched = hashes.map((txHash) => ({ txHash, ...how.get(txHash), ...(at !== undefined ? { sentAt: at } : {}) }));
             const { statuses } = await chainStatus(this.deps, network, watched);
             const on = new Set(hashes.filter((h) => statuses.get(h) != null));
             if (on.size) {
@@ -4259,6 +4261,10 @@ export class SessionService {
                   delete t.sending;
                 }
               });
+            }
+            // Marked so here, its deposit never reaches `landed`: told here instead (MERGED-5).
+            for (const t of pending.txs) {
+              if (t.kind === "deposit" && on.has(t.txHash)) await this.deps.lovejoin?.landedDeposit(network, t.txHash).catch(() => undefined);
             }
             return on;
           },
@@ -4787,11 +4793,28 @@ export class SessionService {
    * key and the DEX, through tx_status (feed.ts).
    */
   private async landed(network: NetworkName, txs: Array<Pick<SessionTx, "kind" | "txHash" | "at">>): Promise<Map<string, number | null>> {
+    // A deposit's and a mix's feeds are their pools' (watchOf): a token pool's never shows in the classic pool's (DATA-1).
+    const how = await this.watchOf(network, txs.filter((t) => sessionFeed(t.kind) === "lovejoin").map((t) => t.txHash));
     const watched = txs.map((t) => {
       const feed = sessionFeed(t.kind);
-      return { txHash: t.txHash, sentAt: t.at, ...(feed ? { feed } : {}) };
+      return { txHash: t.txHash, sentAt: t.at, ...(feed ? { feed } : {}), ...how.get(t.txHash) };
     });
-    return (await chainStatus(this.deps, network, watched)).statuses;
+    const { statuses } = await chainStatus(this.deps, network, watched);
+    // A deposit on chain went in: a private Bootstrap's then never counts as never landed, whatever a later pool read
+    // lists there (lovejoin.ts landedDeposit; the merged fixes' review, MERGED-5). Telling it is never the read's failure.
+    for (const t of txs) {
+      if (t.kind === "deposit" && statuses.get(t.txHash) != null) await this.deps.lovejoin?.landedDeposit(network, t.txHash).catch(() => undefined);
+    }
+    return statuses;
+  }
+
+  /**
+   * How each of `hashes`, a chain's deposits and mixes, is looked for: on the feeds of the pools its chain's
+   * record names (lovejoin.ts watchOf); the classic pool's where there's no Lovejoin to ask, as before.
+   */
+  private async watchOf(network: NetworkName, hashes: string[]): Promise<Map<string, Pick<Watching, "feed" | "pools">>> {
+    if (!hashes.length || !this.deps.lovejoin) return new Map(hashes.map((h) => [h, { feed: "lovejoin" as const }]));
+    return this.deps.lovejoin.watchOf(network, hashes);
   }
 
   /**

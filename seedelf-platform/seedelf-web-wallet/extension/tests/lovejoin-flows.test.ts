@@ -263,6 +263,35 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(chain.seed).toBeUndefined();
     expect(s.due).toHaveLength(0);
     expect(s.mixes!.at(-1)).toMatchObject({ id: chain.id, bootstrap: true, session: index, shares: [{ boxes: 1 }] });
+
+    // A session's chain ends with its return, so its id is the return's, not the deposit's (34g's rehearsal: a private
+    // Bootstrap's 40 boxes were each given a due time at the next pool read, the hold matching none of them). Its box is
+    // listed, and held through an unlock's read, and once the chain's record has gone.
+    const depositHash = txIdOf(deposit!);
+    if (chain.id === depositHash) {
+      const record = (await t.store.get<Sealed & Record<string, unknown>>("lovejoin.preprod"))!;
+      record.chains.at(-1)!.id = record.mixes!.at(-1)!.id = "be".repeat(32);
+      await t.store.set("lovejoin.preprod", record);
+    }
+    const box = {
+      ...POOL[0]!,
+      tx_hash: depositHash,
+      tx_index: 0,
+      block_time: Math.floor(t.clock.now / 1000) - 60,
+      inline_datum: { bytes: await datum(t, true), value: {} },
+    } as KoiosUtxo;
+    t.koios.addedToAccounts.push(box);
+    const heldAfterRead = async () => {
+      await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, t.clock.now - HOUR));
+      await lj.withdrawDue("preprod", true);
+      return { due: (await sealed(t)).due, held: (await lj.status("preprod")).bootstrap };
+    };
+    expect(await heldAfterRead()).toEqual({ due: [], held: [{ txHash: depositHash, txIndex: 0 }] });
+    t.clock.now += 3 * 24 * HOUR;
+    box.block_time = Math.floor(t.clock.now / 1000) - 60;
+    await t.wallet.unlock(PASSWORD);
+    expect(await heldAfterRead()).toEqual({ due: [], held: [{ txHash: depositHash, txIndex: 0 }] });
+    expect((await sealed(t)).chains.find((c) => c.bootstrap)).toBeUndefined();
   });
 
   it("caps a Bootstrap from the private balance at what its funding's reserve pays the deposit for (34d's review 3)", async () => {
@@ -501,6 +530,15 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const ada = await launching(t, [shown]).terms("preprod");
     expect(ada.most).toBeUndefined();
     expect(ada.pools).toEqual([]);
+  });
+
+  it("says what a box of one token may hold, and refuses none before WebAssembly (1.6.0's release review, MONEY-2)", async () => {
+    const t = await wallet();
+    // "1" as the creator types it (SNEK and HOSKY have no decimals): it trapped, which locked the wallet.
+    const one = await launching(t).terms("preprod", min, "1");
+    expect(BigInt(one.least)).toBeLessThan(3_830_000n);
+    expect(one.suggested).toBe("4000000");
+    await expect(launching(t).terms("preprod", min, "0")).rejects.toThrow("whole number above zero");
   });
 
   it("refuses what isn't a pool to start, before anything is built", async () => {

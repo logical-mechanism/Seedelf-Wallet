@@ -23,7 +23,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
-import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED, partsText } from "../components/LovejoinReturn";
+import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED, partsText, WidthNote } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
@@ -259,6 +259,9 @@ export function ClaimReview({
   const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
+  // Why four boxes a mix went three, where it did: each reason once, however many returns it's true of (D3; 1.6.0's
+  // release review, UI-4).
+  const fellBack = [...new Set(picked.flatMap((r) => (r.lovejoin?.fellBack ? [r.lovejoin.fellBack] : [])))];
 
   return (
     <>
@@ -375,6 +378,9 @@ export function ClaimReview({
         <Row label={t("claim.fees")} value={`${formatAda(fees.toString())}\u00a0₳`} />
         <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>
+      {fellBack.map((why) => (
+        <WidthNote key={why} fellBack={why} testId="claim-width-fell-back" />
+      ))}
       {/* Each session comes back in its own transaction, so each is its own
           view — and where one goes through Lovejoin, the one shown is its
           chain's first, not the return it ends with. */}

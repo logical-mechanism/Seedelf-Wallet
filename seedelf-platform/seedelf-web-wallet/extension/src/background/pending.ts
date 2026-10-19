@@ -116,8 +116,10 @@ interface Watched extends PendingTx {
   restored?: boolean;
   /** A private spend that pays the public account (`paysAccount`): its landing reads the account again too. */
   toAccount?: boolean;
-  /** One that pays a Seedelf or a Lovejoin box: the feed it's watched on (feed.ts `feedOfTx`). */
+  /** One that pays a Seedelf or a Lovejoin box: the feed it's watched on (feed.ts `feedOfTx`), or Lovejoin's own as its pools say (watchSent). */
   feed?: Feed;
+  /** Lovejoin's own in a token pool: those pools' `mix_box` hashes, looked for on their feed (feed.ts `Watching`, 1.6.0's release review, DATA-1). */
+  pools?: string[];
   /**
    * The public account active when it was sent: kept with what it spends (sent-txs.ts), so only that account's
    * Public activity lists it as its own on its way (blind test §9.3, the fix round's review).
@@ -186,6 +188,11 @@ export interface PendingDeps {
   alarm?: { start(): Promise<void> };
   /** The private index, whose feed watches a private transaction instead of tx_status (feed.ts). */
   index?: (network: NetworkName) => Promise<PrivateIndex | undefined>;
+  /**
+   * A mix from the public account the watch saw on chain, by its first transaction, its deposit (lovejoin.ts
+   * landedDeposit): a Bootstrap's then never counts as never landed (the merged fixes' review, MERGED-5).
+   */
+  depositLanded?: (network: NetworkName, txHash: string) => Promise<void>;
 }
 
 /** A kept, signed transaction on its way: what Send hands `submitWatched`. */
@@ -345,10 +352,18 @@ async function take(deps: PendingDeps, record: Watched, alongside?: () => Promis
  * withdraw brought back now, its mix from the public account), unless a
  * payment on that network may still go through: that one's watch stays.
  * `toAccount`: it spends or pays the public account too (a box the account
- * paid to bring back), so its landing reads both sides again.
+ * paid to bring back), so its landing reads both sides again. `watch`: the
+ * feed it shows in, and its token pools (lovejoin.ts watchOf): the classic
+ * pool's lists no token pool's box (1.6.0's release review, DATA-1). None:
+ * the classic pool's, as Lovejoin's own were.
  */
-export async function watchSent(deps: PendingDeps, pending: PendingTx, { toAccount }: { toAccount?: true } = {}): Promise<void> {
-  await take(deps, { ...pending, ...(toAccount ? { toAccount } : {}) });
+export async function watchSent(
+  deps: PendingDeps,
+  pending: PendingTx,
+  { toAccount, watch }: { toAccount?: true; watch?: { feed?: Feed; pools?: string[] } } = {},
+): Promise<void> {
+  const on = { ...(watch?.feed ? { feed: watch.feed } : {}), ...(watch?.pools?.length ? { pools: watch.pools } : {}) };
+  await take(deps, { ...pending, ...(toAccount ? { toAccount } : {}), ...on });
 }
 
 /** The watched transaction as Home is shown it. */
@@ -364,6 +379,7 @@ function shown(watched: Watched): PendingTx {
     toAccount: _toAccount,
     account: _account,
     feed: _feed,
+    pools: _pools,
     ...pending
   } = watched;
   return pending;
@@ -379,18 +395,20 @@ const LOVEJOIN_KINDS = new Set<PendingTx["kind"]>(["lovejoin-withdraw", "lovejoi
  */
 function feedOf(w: Pick<Watched, "contract" | "kind" | "feed">): Feed | undefined {
   if (w.contract) return "contract";
-  if (LOVEJOIN_KINDS.has(w.kind)) return "lovejoin";
+  // Lovejoin's own name theirs where its pools aren't the classic pool alone (watchSent, DATA-1).
+  if (LOVEJOIN_KINDS.has(w.kind)) return w.feed ?? "lovejoin";
   return w.feed;
 }
 
 /** Whether `w` is on chain (tx_status's answer, or the feed's), and the tip when the feed gave it. */
 async function lookFor(
   deps: PendingDeps,
-  w: Pick<Watched, "network" | "txHash" | "submittedAt" | "triedAt" | "contract" | "kind" | "feed">,
+  w: Pick<Watched, "network" | "txHash" | "submittedAt" | "triedAt" | "contract" | "kind" | "feed" | "pools">,
 ) {
   const feed = feedOf(w);
-  const status = await chainStatus(deps, w.network, [{ txHash: w.txHash, sentAt: w.triedAt ?? w.submittedAt, ...(feed ? { feed } : {}) }]);
-  return { confirmations: status.statuses.get(w.txHash) ?? null, tip: status.tip, fed: status.fed && feed !== undefined };
+  const pools = w.pools?.length ? { pools: w.pools } : {};
+  const status = await chainStatus(deps, w.network, [{ txHash: w.txHash, sentAt: w.triedAt ?? w.submittedAt, ...(feed ? { feed } : {}), ...pools }]);
+  return { confirmations: status.statuses.get(w.txHash) ?? null, tip: status.tip, fed: status.fed && (feed !== undefined || !!w.pools?.length) };
 }
 
 /**
@@ -701,6 +719,9 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
       await unseal(deps, w);
     });
     if (w.summary) await deps.activity?.sent(w.network, shown(seen), w.summary).catch(() => undefined);
+    // A Bootstrap from the public account is its deposit alone: seen here, it went in, whatever a later pool read
+    // lists there (MERGED-5). Telling it is never the watch's failure.
+    if (w.kind === "lovejoin-mix") await deps.depositLanded?.(w.network, w.txHash).catch(() => undefined);
     return seen;
   }
 

@@ -6,6 +6,10 @@
 // row made and spent after it, everyone's, with the transaction that did
 // each. That answer is the same for every wallet that holds the cursor, and
 // kept for a block, so the server learns only that someone is watching.
+// Lovejoin's token pools have a feed of their own (`lovejoin/tokens/since`,
+// chunk 34): the classic pool's lists none of their boxes, so a chain step in
+// a token pool is looked for there, never named to tx_status while it can
+// say (1.6.0's release review, DATA-1).
 //
 // What touches only key addresses (account sends, staking and DRep
 // transactions, collateral, swap legs, a session's funding, a public mix's
@@ -30,8 +34,15 @@ import { CursorRefused, IndexDown, type IndexSince, type PrivateIndex } from "./
 import type { PrivateStore, RecordName } from "./private-store";
 import type { Area } from "./storage";
 
-/** The two feeds: the Seedelf contract's, and Lovejoin's pool's. */
-export type Feed = "contract" | "lovejoin";
+/**
+ * The feeds: the Seedelf contract's, Lovejoin's classic pool's, and every
+ * shown token pool's (`lovejoin/tokens/since`), which the classic pool's
+ * never lists (chunk 34; 1.6.0's release review, DATA-1).
+ */
+export type Feed = "contract" | "lovejoin" | "tokens";
+
+/** Every feed, in the order a watch reads them. */
+const FEEDS: readonly Feed[] = ["contract", "lovejoin", "tokens"];
 
 /** chrome.storage.session, per network: the cursors the private index handed out lately, by feed (`seedelf.feed.mainnet`). */
 export const SESSION_FEED_PREFIX = "seedelf.feed.";
@@ -169,9 +180,19 @@ export interface Watching {
   /**
    * The feed it shows in once it's on chain: the contract's for one that
    * spends or pays a Seedelf, the pool's for one that spends or pays a
-   * Lovejoin box. None: it touches only key addresses, and tx_status is asked.
+   * Lovejoin box, the token pools' for one in a token pool alone. None, and
+   * no `pools`: it touches only key addresses, and tx_status is asked.
    */
   feed?: Feed;
+  /**
+   * The token pools it may spend or pay a box of, by their `mix_box` hashes:
+   * it's looked for on the token pools' feed too (a chain across pools, on
+   * the classic pool's as well), and seen on either, it's on chain. That feed
+   * says it isn't only while its answer covers every one of them: a pool
+   * shown after the cursor isn't, and tx_status is asked instead (1.6.0's
+   * release review, DATA-1).
+   */
+  pools?: string[];
   /**
    * When it was first tried, stamped before its submit and never moved by a
    * retry or a resend; the oldest cursor kept stands in when it isn't known.
@@ -207,39 +228,58 @@ export interface ChainStatus {
  */
 export async function chainStatus(deps: FeedDeps, network: NetworkName, txs: Watching[]): Promise<ChainStatus> {
   const statuses = new Map<string, number | null>();
-  const ask = new Set(txs.filter((t) => !t.feed).map((t) => t.txHash));
   let tip: number | undefined;
-  let fed = true;
-  const index = txs.some((t) => t.feed) ? await deps.index?.(network) : undefined;
-  for (const feed of ["contract", "lovejoin"] as const) {
-    const on = txs.filter((t) => t.feed === feed);
+  // What a feed showed on chain, and what one of its feeds couldn't say of: one seen on any is on chain.
+  const seen = new Set<string>();
+  const unsaid = new Set<string>();
+  const index = txs.some((t) => feedsOf(t).length) ? await deps.index?.(network) : undefined;
+  for (const feed of FEEDS) {
+    const on = txs.filter((t) => feedsOf(t).includes(feed));
     if (!on.length) continue;
     const { cursor, covered } = index ? cover(await cursorsOf(deps, network, feed), on) : { covered: [] };
     const read = index && cursor && (await fromFeed(deps.session, network, index, feed, cursor));
-    const answered = read ? covered : [];
-    if (answered.length < on.length) fed = false;
-    for (const t of on) if (!answered.includes(t)) ask.add(t.txHash);
-    if (!read) continue;
-    tip = Math.max(tip ?? 0, read.tip);
-    for (const t of answered) statuses.set(t.txHash, read.seen.has(t.txHash) ? 1 : null);
+    if (read) tip = Math.max(tip ?? 0, read.tip);
+    for (const t of on) {
+      if (read && covered.includes(t) && read.seen.has(t.txHash)) seen.add(t.txHash);
+      // The token pools' feed says one isn't there only for one whose every pool it covers (DATA-1).
+      else if (!read || !covered.includes(t) || (read.pools && !(t.pools?.length && t.pools.every((p) => read.pools!.has(p))))) {
+        unsaid.add(t.txHash);
+      }
+    }
   }
-  if (ask.size) for (const [h, n] of await deps.koios(network).txStatus([...ask])) statuses.set(h, n);
+  // Seen on a feed: on chain. Not, where each of its feeds could say: not yet. Otherwise tx_status, as with no feed.
+  const ask = txs.filter((t) => !seen.has(t.txHash) && (!feedsOf(t).length || unsaid.has(t.txHash))).map((t) => t.txHash);
+  const fed = !txs.some((t) => feedsOf(t).length && ask.includes(t.txHash));
+  for (const t of txs) if (!ask.includes(t.txHash)) statuses.set(t.txHash, seen.has(t.txHash) ? 1 : null);
+  if (ask.length) for (const [h, n] of await deps.koios(network).txStatus([...new Set(ask)])) statuses.set(h, n);
   return { statuses, fed, ...(tip !== undefined ? { tip } : {}) };
 }
 
-/** What `feed` shows since `cursor`; undefined when it can't say. */
+/** The feeds `t` shows in: its `feed`, and the token pools' with any `pools`. */
+function feedsOf(t: Watching): Feed[] {
+  const feeds = t.feed ? [t.feed] : [];
+  return t.pools?.length && t.feed !== "tokens" ? [...feeds, "tokens"] : feeds;
+}
+
+/** What `feed` shows since `cursor`, and for the token pools', the pools it covers; undefined when it can't say. */
 async function fromFeed(
   session: Area,
   network: NetworkName,
   index: PrivateIndex,
   feed: Feed,
   cursor: string,
-): Promise<{ seen: Set<string>; tip: number } | undefined> {
+): Promise<{ seen: Set<string>; tip: number; pools?: Set<string> } | undefined> {
   try {
-    // A kept cursor the index refuses now is IndexDown too (CursorRefused), leaving the part up.
+    // A kept cursor the index refuses now is IndexDown too (CursorRefused), leaving the part up; the token
+    // pools' routes failing are TokensDown, which leaves it up too.
     const kept = { kept: true };
+    if (feed === "tokens") {
+      const answer = await index.tokensSince(cursor, kept);
+      // Rolled back under a kept cursor: tx_status this once; the next read keeps newer ones.
+      if (answer.reset) return undefined;
+      return { seen: seenIn(answer), tip: answer.tip.slot, pools: new Set(answer.pools) };
+    }
     const answer = await (feed === "contract" ? index.since(cursor, kept) : index.poolSince(cursor, kept));
-    // Rolled back under a kept cursor: tx_status this once; the next read keeps newer ones.
     if (answer.reset) return undefined;
     return { seen: seenIn(answer), tip: answer.tip.slot };
   } catch (e) {

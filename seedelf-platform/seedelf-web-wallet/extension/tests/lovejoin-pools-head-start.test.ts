@@ -3,7 +3,8 @@
 // written, and the block Koios's holder was read to. Checked here on every
 // run: each pool verifies from the bundled templates, with its scripts at the
 // holder, and none is a copy. Written at each release, with the very look the
-// wallet makes, against the real Koios:
+// wallet makes, from the holder's start, against the real Koios, and after
+// any change to `src/tokens/list.json` (the check below fails until it is):
 //   npm run lovejoin-pools          (LOVEJOIN_POOLS_WRITE=1 npx vitest run tests/lovejoin-pools-head-start.test.ts)
 // Koios's answers to discovery's own requests, against the real preprod Koios:
 //   LIVE_KOIOS=1 npx vitest run tests/lovejoin-pools-head-start.test.ts
@@ -12,13 +13,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { Koios, type KoiosUtxo } from "../src/background/koios";
-import { HOLDER, PoolDiscovery, shown, type FoundPool } from "../src/background/lovejoin-pools";
+import { HOLDER, PoolDiscovery, listFingerprint, shown, type Kept } from "../src/background/lovejoin-pools";
 import { NETWORKS, type NetworkName } from "../src/networks";
 import { loadTestWasm, memoryArea } from "./fakes";
 
 const FILE = new URL("../src/lovejoin-pools.json", import.meta.url);
 const NETS: NetworkName[] = ["preprod", "mainnet"];
-type HeadStart = Record<NetworkName, { height: number; pools: FoundPool[] }> & { "//": string };
+type HeadStart = Record<NetworkName, Kept> & { "//": string };
 const read = () => JSON.parse(readFileSync(FILE, "utf8")) as HeadStart;
 
 describe("the bundled head start", () => {
@@ -35,20 +36,39 @@ describe("the bundled head start", () => {
       }
     }
   });
+
+  it("was written under the token list it's bundled with", () => {
+    // A device whose list changed looks again from the head start's height, so the head start must hold every pool of
+    // this list below it (1.6.0's release review, STATE-4). One written before the list was recorded passes.
+    const file = read();
+    for (const network of NETS) {
+      if (file[network].listed !== undefined) expect(file[network].listed, `${network}: run npm run lovejoin-pools`).toBe(listFingerprint(network));
+    }
+  });
 });
 
 describe.skipIf(process.env.LOVEJOIN_POOLS_WRITE !== "1")("writing the head start", () => {
   it(
-    "looks at each network's holder from where the last head start stopped, and writes what it found",
+    "looks at each network's whole holder under this release's token list, and writes what it found",
     async () => {
       const file = read();
       for (const network of NETS) {
         const local = memoryArea();
-        const found = new PoolDiscovery({ local, wasm: loadTestWasm(), koios: () => new Koios(NETWORKS[network].koios), now: Date.now });
+        // From the holder's start, not the last head start's height: a token listed since may have pools below it,
+        // which every look before refused (STATE-4). Each pool is found and verified again.
+        const found = new PoolDiscovery({
+          local,
+          wasm: loadTestWasm(),
+          koios: () => new Koios(NETWORKS[network].koios),
+          now: Date.now,
+          headStart: () => ({ height: 0, pools: [] }),
+        });
         await found.scan(network);
         const kept = await local.get<{ height: number }>(`seedelf.lovejoinPools.${network}`);
-        file[network] = { height: kept?.height ?? file[network].height, pools: await found.known(network) };
+        file[network] = { height: kept?.height ?? 0, pools: await found.known(network), listed: listFingerprint(network) };
       }
+      file["//"] =
+        "Lovejoin's token pools shown on each network when this was written, the block Koios's holder was read to from its start, and the token list it was read under (`listed`): a new device's head start, and where a device looks from again when an update changes its list (chunk 34's 34c). Written at each release by `npm run lovejoin-pools`; never a gate, as the wallet verifies every pool and looks on from the height.";
       writeFileSync(FILE, `${JSON.stringify(file, null, 2)}\n`);
     },
     300_000,

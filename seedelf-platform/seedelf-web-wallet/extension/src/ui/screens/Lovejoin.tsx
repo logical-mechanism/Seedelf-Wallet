@@ -58,6 +58,7 @@ import type {
   LovejoinMixView,
   LovejoinPublicSummary,
   LovejoinStatus,
+  LovejoinUnusable,
   PendingTx,
   Requests,
   SessionOutSummary,
@@ -100,9 +101,11 @@ import {
   CLASSIC_ID,
   crowdText,
   groupPools,
+  isCopy,
   poolNamed,
   poolsOf,
   searchGroups,
+  shownOnHub,
   type BoxValue,
   type PoolGroup,
   type ShownPool,
@@ -118,6 +121,8 @@ import { SwapTag, type SwapTone } from "./Swaps";
 
 /** The most boxes one mix takes (the worker's MAX_MIX_BOXES). */
 const MAX_BOXES = 10;
+/** The most mixes one chain makes (the worker's MAX_CHAIN_MIXES): ten boxes three waves deep, three a mix. */
+const MAX_CHAIN_MIXES = MAX_BOXES * mixesPerBox(3);
 /**
  * The most boxes one Bootstrap of the classic pool puts in (the worker's
  * MAX_DEPOSIT_BOXES): a Bootstrap is a single deposit with no mixes, so the
@@ -165,6 +170,32 @@ export function poolRoom(status: Pick<LovejoinStatus, "others" | "free" | "floor
     fits: Math.floor(have / perBox),
     shallower: depth > 1 && have >= boxes * mixesPerBox(1, width) * (width - 1),
   };
+}
+
+/** The pool's room for a mix at one width (poolRoom). */
+type Room = ReturnType<typeof poolRoom>;
+
+/**
+ * Which reading of the public account Home handed down, in a word: a new one once a payment to it lands (its outputs
+ * at the account, not on their way), the same one however often Home renders it again. A pool's page reads its
+ * collateral again at each new one (1.6.0's preprod rehearsal, R6).
+ */
+export const readingOf = (cardano?: Pick<Balances["cardano"], "lovelace" | "utxos" | "incoming">): string =>
+  cardano ? [cardano.lovelace, cardano.utxos, cardano.incoming?.lovelace ?? "", cardano.incoming?.utxos ?? ""].join(".") : "";
+
+/**
+ * The width the Mix form prices `boxes` boxes at, `depth` waves deep, from Settings' `asked`: `wide` is the pool's
+ * room at that width, `three` at three. As the build decides it (lovejoin.ts widthFor): four only when its chain is
+ * no longer than one goes (MAX_CHAIN_MIXES) and the pool has room for every box at four; three otherwise. The form
+ * went by the pool's room alone, so seven boxes three waves deep were priced four wide and the review said three
+ * (`long`); and with neither width fitting it quoted four's need, where the build refuses with three's (1.6.0's
+ * release review, UI-7). `why`: the form's word on four going three, said only where three takes the boxes.
+ */
+export function formWidth(asked: number, boxes: number, depth: number, wide?: Room, three?: Room): { width: number; why?: "short" | "long" } {
+  if (asked !== 4 || depth < 1 || boxes < 1 || !wide || wide.floorShort) return { width: asked };
+  const long = boxes * mixesPerBox(depth, 4) > MAX_CHAIN_MIXES;
+  if (!long && wide.fits >= boxes) return { width: 4 };
+  return !!three && three.fits >= boxes ? { width: 3, why: long ? "long" : "short" } : { width: 3 };
 }
 
 /**
@@ -606,6 +637,65 @@ export function BootstrapHeld({
 }
 
 /**
+ * The question before a Bootstrap's boxes come back (1.6.0's release review, PRIV-5): one by hand (`all` false), or
+ * all of them let go to come back by themselves (`all`), which asked nothing though each such box makes the link
+ * bringing one back asks about. A box nobody has mixed since shows its way in and back out; one a public account's
+ * Bootstrap put in ties that account too (`fromAccount`). In a pool whose boxes can't pay their own way back (`stuck`),
+ * one comes back with the public account paying, and the button says who pays, as the escape hatch's does; and all of
+ * them, let go, wait in the pool until the fees allow, as the worker puts each off meanwhile (STUCK_WAIT_MS), which
+ * the question says: it said only that each then comes back by itself, and nothing came back, with nothing saying why
+ * (the merged fixes' review, MERGED-2). Letting them go stays offered: they then come back by themselves once the fees
+ * allow, with no one bringing them back by hand.
+ */
+export function HeldQuestion({
+  all,
+  stuck,
+  fromAccount,
+  onKeep,
+  onConfirm,
+}: {
+  all: boolean;
+  stuck: boolean;
+  fromAccount: boolean;
+  onKeep: () => void;
+  onConfirm: () => void;
+}) {
+  const tr = useT();
+  const paying = stuck && !all;
+  return (
+    <Modal
+      title={tr(all ? "lovejoin.bootstrap.allTitle" : "lovejoin.bootstrap.oneTitle")}
+      titleId="lovejoin-held-title"
+      onClose={onKeep}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={onKeep}>
+            {tr(all ? "lovejoin.bootstrap.keepAll" : "lovejoin.bootstrap.keep")}
+          </button>
+          <button
+            type="button"
+            className={paying ? "danger" : "primary"}
+            onClick={onConfirm}
+            data-testid={all ? "lovejoin-held-all-confirm" : "lovejoin-held-confirm"}
+          >
+            {tr(paying ? "lovejoin.stuck.confirm" : all ? "lovejoin.bootstrap.bringAll" : "lovejoin.bootstrap.bringOne")}
+          </button>
+        </>
+      }
+    >
+      <p className="note">
+        {joinSentences([
+          tr(all ? "lovejoin.bootstrap.privacy.all" : "lovejoin.bootstrap.privacy.one"),
+          fromAccount && tr("lovejoin.bootstrap.privacy.account"),
+          paying && tr("lovejoin.stuck.privacy.ties"),
+          all && stuck && tr("lovejoin.bootstrap.warn.allStuck"),
+        ])}
+      </p>
+    </Modal>
+  );
+}
+
+/**
  * The wallet's boxes in the pool that a mix from a public account put in (privacy review §2.10), by
  * `txHash#txIndex`: every account's (`all`), which the private balance leaves out; the active account's (`mine`),
  * which Mix again from my public account takes; and the other accounts (`accounts`, by index), each the one to
@@ -635,6 +725,122 @@ export function OtherAccounts({ accounts }: { accounts: number[] }) {
 }
 
 /**
+ * A pool page's buttons for the wallet's boxes in it, under its callouts: Mix again from my public account (the active
+ * account's boxes, paid by it), Mix my boxes again (the rest, from the private balance), Bring one back now, and Pay
+ * from my private balance anyway. Each way of mixing again counts the boxes it would take as the worker takes them,
+ * leaving out those a Bootstrap holds (split), a public Bootstrap's among the account's: counted, they offered Mix
+ * again where a Bootstrap held every box, and the worker answered that none was in the pool. In a pool that takes no
+ * new box (`unusable`), every one is off, saying why under them as Mix says it, before the worker refuses it (the
+ * merged fixes' review, MERGED-4). Exported for its test.
+ */
+export function AgainActions({
+  pool,
+  busy,
+  mixingAgain,
+  publicSending,
+  pressed,
+  onAgain,
+  onAgainPublic,
+  onNow,
+  onAnyway,
+}: {
+  pool: ShownPool;
+  busy: boolean;
+  /** The wallet's boxes are being mixed again: nothing else mixes them, and none comes back, meanwhile. */
+  mixingAgain: boolean;
+  /** A public mix's chain is being sent: Mix again from my public account waits for it. */
+  publicSending: boolean;
+  /** Which of the page's buttons is working. */
+  pressed?: string;
+  onAgain: () => void;
+  onAgainPublic: () => void;
+  onNow: () => void;
+  onAnyway: () => void;
+}) {
+  const tr = useT();
+  const owned = pool.boxes.length;
+  if (!owned) return null;
+  const notMixed = pool.notMixed.length;
+  const { all: theirs, mine: ownPublic, accounts: otherAccounts } = publicBoxesOf(pool);
+  const key = (b: { txHash: string; txIndex: number }) => `${b.txHash}#${b.txIndex}`;
+  const notMixedOf = (set: Set<string>) => pool.notMixed.filter((b) => set.has(key(b))).length;
+  const publicNotMixed = notMixedOf(theirs);
+  const ownNotMixed = notMixedOf(ownPublic);
+  const held = pool.bootstrap?.length ?? 0;
+  // What each way of mixing again takes: never a box a Bootstrap holds, as the worker leaves those out (MERGED-4).
+  const holds = new Set((pool.bootstrap ?? []).map(key));
+  const unheld = (set: Set<string>) => [...set].filter((k) => !holds.has(k)).length;
+  const fromAccount = unheld(ownPublic);
+  const anyAccount = unheld(theirs);
+  const privately = pool.boxes.filter((b) => !theirs.has(key(b)) && !holds.has(key(b))).length;
+  // A pool that takes no new box: mixing again makes new boxes there too, so the worker refuses it (MONEY-3). But not
+  // in a copy: mixing again the boxes already in it makes no deposit, so nothing new goes in, and the worker takes it
+  // there, under the floor and the other reasons as anywhere. Off there too, a box not mixed yet had no private way out,
+  // while the callout above said Mix my boxes again takes it first (round two's review, R2-2). Where the pool's other
+  // reasons refuse it in a copy too (`again`), off, in that reason's words: the page kept it on, and the worker refused
+  // it on the press, where the same pool not a copy said so before (the last review, R3-2).
+  const why = pool.unusable?.why === "superseded" ? pool.unusable.again : pool.unusable?.why;
+  const unusable = why ? unusableText({ why }) : undefined;
+  const stuck = !!pool.cantComeBack;
+  return (
+    <div className="stack">
+      <OtherAccounts accounts={otherAccounts} />
+      {/* The active account's boxes alone: paying for another's mixes would tie the two accounts (§2.10). */}
+      {fromAccount > 0 && (
+        <button
+          type="button"
+          className={ownNotMixed ? "primary" : "secondary"}
+          disabled={busy || mixingAgain || publicSending || !!unusable}
+          onClick={onAgainPublic}
+          data-testid="lovejoin-again-public"
+        >
+          {pressed === "again-public" ? tr("common.building") : tr("lovejoin.againPublic")}
+        </button>
+      )}
+      {privately > 0 && (
+        <button
+          type="button"
+          className={notMixed > publicNotMixed ? "primary" : "secondary"}
+          disabled={busy || mixingAgain || !!unusable}
+          onClick={onAgain}
+          data-testid="lovejoin-again"
+        >
+          {pressed === "again" ? tr("common.building") : tr("lovejoin.again")}
+        </button>
+      )}
+      {/* Why no way of mixing again can be pressed, under them, as Mix says it under Review (MERGED-4). */}
+      {unusable && (fromAccount > 0 || privately > 0 || anyAccount > 0) && (
+        <p className="field-note" data-testid="lovejoin-again-why">
+          {unusable}
+        </p>
+      )}
+      {/* Only with a box no Bootstrap holds: those come back by hand, from the callout above (UI-5). */}
+      {!stuck && owned > held && (
+        <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={onNow} data-testid="lovejoin-now">
+          {pressed === "now" ? tr("lovejoin.working") : tr("lovejoin.bringBackNow")}
+        </button>
+      )}
+      {anyAccount > 0 && (
+        <button
+          type="button"
+          className="link align-start"
+          disabled={busy || mixingAgain || !!unusable}
+          onClick={onAnyway}
+          data-testid="lovejoin-again-anyway"
+        >
+          {tr("lovejoin.payPrivateAnyway")}
+        </button>
+      )}
+      {mixingAgain && (
+        <p className="note" data-testid="lovejoin-again-running">
+          {tr("lovejoin.againRunning")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * Lovejoin's hub (chunk 34's session 1, 4, 5 and 13): the wallet's boxes in
  * every pool, the chains being sent, every mix followed until its last box is
  * back, then the pools grouped by token, each opening its own page (PoolPage),
@@ -644,6 +850,7 @@ export function OtherAccounts({ accounts }: { accounts: number[] }) {
 export function Lovejoin({
   seedelf,
   cardano,
+  publicTotal,
   banner,
   onBack,
   onPending,
@@ -652,6 +859,12 @@ export function Lovejoin({
   seedelf: Balances["seedelf"];
   /** The public account, for the tokens the wallet holds there (the hub's order) and a public mix's token. */
   cardano?: Balances["cardano"];
+  /**
+   * The public account as Home shows it (Home's reviewTotals: its UTxOs, rewards and what's on its way back), for a
+   * public review's "Public account after", as Send and Make private say it. Not worked out from `cardano`: Home hands
+   * that down spendable, with the rewards a payment spends already in it (1.6.0's rehearsal, R9). None: no after line.
+   */
+  publicTotal?: string;
   /** Home's banner for the transaction it's watching: a withdraw or a mix sent from here shows in it. */
   banner?: ReactNode;
   onBack: () => void;
@@ -685,11 +898,17 @@ export function Lovejoin({
   // One pool read on open, and on Refresh; the mixes from the device's record.
   const load = useCallback(async () => {
     setReading(true);
+    // The mix sessions, from the device's record, apart from the pool read: one that failed left Your mixes without
+    // them, so a private mix read as a return of its session and lost its Stop and Try now (1.6.0's release review,
+    // UI-6).
+    const sessions = call("sessions", {}).then(
+      (all) => setMixes(all.filter((x) => x.mix)),
+      () => undefined,
+    );
     try {
-      const [s, all] = await Promise.all([call("lovejoin-status", {}), call("sessions", {})]);
+      const s = await call("lovejoin-status", {});
       setStatus(s);
       setRows(s.chains);
-      setMixes(all.filter((x) => x.mix));
       setUpdatedAt(Date.now());
       setError(undefined);
       setReadFailed(false);
@@ -701,19 +920,21 @@ export function Lovejoin({
     } finally {
       // So do the mixes in the list.
       void lookEntries();
+      await sessions;
       setReading(false);
     }
   }, [lookChains, lookEntries]);
 
+  // The first read, and beside it the look for token pools launched since the wallet last looked (chunk 34's 34c),
+  // once as the page opens: what it finds is read again at once, after the first read (lookForPools, R10).
   useEffect(() => {
-    void load();
+    let live = true;
+    const first = load();
+    void lookForPools(first, () => (live ? load() : Promise.resolve()));
+    return () => {
+      live = false;
+    };
   }, [load]);
-
-  // Token pools launched since the wallet last looked (chunk 34's 34c), once as the page opens: read from the next
-  // pool read on.
-  useEffect(() => {
-    void call("lovejoin-look-for-pools", {}).catch(() => undefined);
-  }, []);
 
   // A mix that runs takes its next step while the page is open, as the alarm would: keyed on which mixes run, not on
   // the list the watch below reads afresh every 2 s (runningKey).
@@ -811,6 +1032,7 @@ export function Lovejoin({
     return (
       <LovejoinLaunch
         seedelf={seedelf}
+        publicTotal={publicTotal}
         pools={pools}
         holdings={holdings}
         banner={banner}
@@ -832,6 +1054,7 @@ export function Lovejoin({
         pool={page}
         seedelf={seedelf}
         cardano={cardano}
+        publicTotal={publicTotal}
         banner={banner}
         reading={reading}
         updatedAt={updatedAt}
@@ -849,7 +1072,8 @@ export function Lovejoin({
 
   // The public mix being sent shows its own progress below: the list takes the others.
   const chains = rows.filter((c) => !(sending && c.session === undefined));
-  const groups = groupPools(pools, holdings);
+  // A copy pool the wallet has nothing in isn't listed (MERGED-1): one with its boxes is, flagged.
+  const groups = groupPools(pools.filter(shownOnHub), holdings);
   const listed = searchGroups(network, groups, query);
   const tokenPools = pools.some((p) => p.id !== undefined);
   return (
@@ -973,6 +1197,22 @@ export function Lovejoin({
   );
 }
 
+/**
+ * The hub's look for token pools launched since the wallet last looked (chunk 34's 34c), once as it opens, beside its
+ * first read (`first`). When the look changed the pools the wallet reads (`grew`), they're read again (`read`), once,
+ * and only after that first read, so the first can't land over it. It was fire and forget: a wallet restored on a
+ * fresh profile opened the hub while the look was still asking Koios, and the hub said "None" of its boxes, with the
+ * classic pool alone, until Refresh, though the look then found two token pools and the worker read 8 of the
+ * wallet's boxes in one (1.6.0's rehearsal, R10). Nothing more when it changed nothing, or failed. Exported for its
+ * test.
+ */
+export async function lookForPools(first: Promise<unknown>, read: () => Promise<unknown>): Promise<void> {
+  const looked = await call("lovejoin-look-for-pools", {}).catch(() => undefined);
+  if (!looked?.grew) return;
+  await first.catch(() => undefined);
+  await read();
+}
+
 /** How far the public account's mix being sent has got (`lovejoin-mix-public-progress`). */
 type PublicProgress = NonNullable<Requests["lovejoin-mix-public-progress"]["result"]>;
 
@@ -1064,7 +1304,8 @@ export function PoolGroupList({ group, onOpen }: { group: PoolGroup; onOpen: (id
       </h3>
       <ul className="list">
         {group.pools.map((p) => {
-          const progress = bootstrapProgress(p);
+          // A copy takes no box to start it with: never said to be being started beside the line saying so (MERGED-1).
+          const progress = isCopy(p) ? undefined : bootstrapProgress(p);
           const flags = [
             progress && tr("lovejoin.pools.starting", { have: progress.have, floor: progress.floor }),
             p.notMixed.length > 0 && tr("lovejoin.pools.flag.notMixed", { n: amounts.hidden ? tr("home.lovejoin.some") : p.notMixed.length }),
@@ -1090,6 +1331,14 @@ export function PoolGroupList({ group, onOpen }: { group: PoolGroup; onOpen: (id
                     data-testid="lovejoin-pool-flags"
                   >
                     {flags.join(tr("lovejoin.pools.flagJoin"))}
+                  </span>
+                )}
+                {/* A pool that takes no new box, in the words its page says it in: only the page said it, and both
+                    Mix again stayed on (the merged fixes' review, MERGED-4). A sentence of its own, so a line of its
+                    own, never run into the flags. */}
+                {p.unusable && (
+                  <span className="token-row__detail" data-testid="lovejoin-pool-unusable">
+                    {unusableText(p.unusable)}
                   </span>
                 )}
                 {progress && (
@@ -1214,13 +1463,16 @@ function MixCard({
   const network = useNetwork();
   const { accounts } = useAccounts();
   const { entry: e, session: s } = item;
-  // What a share's box holds: its pool's, as read; a pool not read this time by its id alone.
-  const boxOf = (pool?: string) => poolNamed(pools, pool)?.box;
-  const shareText = (share: LovejoinMixView["shares"][number]) => {
-    const box = boxOf(share.pool);
-    const boxes = amounts.count(share.boxes, "amount.boxes");
-    return box ? tr("lovejoin.mixes.boxesOf", { boxes, box: boxText(network, box) }) : tr("lovejoin.mixes.boxesIn", { boxes, pool: shortHex(share.pool ?? "", 8, 4) });
+  // What a share's box holds: the classic pool's 10 ₳ whether it was read or not (none named is the classic pool); a
+  // token pool's as read, and one not read this time by its id alone. After a pool read that failed, a classic mix
+  // read "2 boxes in pool " and a token pool's mix session "2 boxes of 10 ₳" (1.6.0's release review, UI-6).
+  const boxOf = (pool?: string) => (pool === undefined ? CLASSIC_BOX : poolNamed(pools, pool)?.box);
+  const boxesIn = (pool: string | undefined, count: number) => {
+    const box = boxOf(pool);
+    const boxes = amounts.count(count, "amount.boxes");
+    return box ? tr("lovejoin.mixes.boxesOf", { boxes, box: boxText(network, box) }) : tr("lovejoin.mixes.boxesIn", { boxes, pool: shortHex(pool ?? "", 8, 4) });
   };
+  const shareText = (share: LovejoinMixView["shares"][number]) => boxesIn(share.pool, share.boxes);
   let label: string;
   let sub: string;
   let tag: { tone: SwapTone; label: string };
@@ -1269,10 +1521,9 @@ function MixCard({
         !chain && e.chain?.stopped && !e.chain.done ? tr("lovejoin.detail.whyStopped", { why: withoutStop(e.chain.stopped) }) : undefined,
       ]) || undefined;
   } else {
-    label = tr(s!.mix!.again ? "lovejoin.mixes.again" : "lovejoin.mixes.boxesOf", {
-      boxes: amounts.count(s!.mix!.boxes, "amount.boxes"),
-      box: boxText(network, boxOf(s!.mix!.pool) ?? CLASSIC_BOX),
-    });
+    label = s!.mix!.again
+      ? tr("lovejoin.mixes.again", { boxes: amounts.count(s!.mix!.boxes, "amount.boxes") })
+      : boxesIn(s!.mix!.pool, s!.mix!.boxes);
     tag = tagOf(s!);
     sub = subOf(s!, Date.now());
     detail = detailOf(s!);
@@ -1320,10 +1571,11 @@ function MixCard({
  * going. The classic pool's page says what Lovejoin's page said before, word
  * for word (backward compatibility 7).
  */
-function PoolPage({
+export function PoolPage({
   pool,
   seedelf,
   cardano,
+  publicTotal,
   banner,
   reading,
   updatedAt,
@@ -1339,6 +1591,8 @@ function PoolPage({
   pool: ShownPool;
   seedelf: Balances["seedelf"];
   cardano?: Balances["cardano"];
+  /** The public account as Home shows it, for a public review's after line (R9). */
+  publicTotal?: string;
   banner?: ReactNode;
   reading: boolean;
   updatedAt?: number;
@@ -1359,7 +1613,8 @@ function PoolPage({
   const network = useNetwork();
   // Asked first: bringing back a box not mixed yet, mixing a public mix's boxes again from the private balance,
   // bringing back a box a Bootstrap holds, or one the public account pays to bring back.
-  const [asking, setAsking] = useState<{ anyway: true } | { privateAnyway: true } | { held: true } | { paid: true }>();
+  // `heldAll`: Bring them all back asks first too (1.6.0's release review, PRIV-5).
+  const [asking, setAsking] = useState<{ anyway: true } | { privateAnyway: true } | { held: true } | { heldAll: true } | { paid: true }>();
   const [busy, setBusy] = useState(false);
   /** Which of the page's buttons is working. */
   const [pressed, setPressed] = useState<"now" | "again" | "again-public" | "anyway" | "held" | "release" | "paid">();
@@ -1377,6 +1632,24 @@ function PoolPage({
   // Bootstrapping, behind its own link under Mix while the pool holds enough: it gives whoever puts it in nothing
   // (LJ-6; chunk 34: it replaces the seed). Below the floor it leads the page.
   const [bootstrapOpen, setBootstrapOpen] = useState(false);
+  // The most a Bootstrap from the private balance puts in at once, as the worker holds it (its funding's reserve pays
+  // the deposit for no more): asked once the form shows with that side chosen, a read of the parameters as any build
+  // makes (1.6.0's release review, MONEY-6). None in a pool that takes no new box, which says so itself.
+  const [privateMost, setPrivateMost] = useState<number>();
+  // A copy takes no new box for good (MERGED-1): no Bootstrap is offered there, so nothing asks its most (R2-2).
+  const copy = isCopy(pool);
+  const bootstrapShown = !copy && (bootstrapOpen || (pool.floor > 0 && pool.others < pool.floor));
+  useEffect(() => {
+    if (!bootstrapShown || source !== "private") return;
+    let live = true;
+    call("lovejoin-bootstrap-most", pool.id ? { pool: pool.id } : {}).then(
+      ({ most }) => live && setPrivateMost(most),
+      () => live && setPrivateMost(undefined),
+    );
+    return () => {
+      live = false;
+    };
+  }, [bootstrapShown, source, pool.id]);
   // The public account's collateral, which a mix from it puts up, and its page, opened here while it isn't set.
   const [collateral, setCollateral] = useState<CollateralStatus>();
   const [collateralOpen, setCollateralOpen] = useState(false);
@@ -1385,15 +1658,24 @@ function PoolPage({
   const token = pool.box.token;
 
   // Read when the public side is chosen, from the last reading (no request), and every 15 s while its payment is on
-  // its way: Home's watch reads the balances again once it lands, wherever the user is, and this follows.
+  // its way: Home's watch reads the balances again once it lands, wherever the user is, and this follows. At once,
+  // from each new reading Home hands down, as Home's Public tab does: the page said the collateral was on its way for
+  // up to 15 s after the banner said "Collateral set" (1.6.0's preprod rehearsal, R6).
   const collateralComing = source === "public" && collateral?.state === "waiting";
+  const accountReading = readingOf(cardano);
   useEffect(() => {
     if (source !== "public") return;
     void readCollateral();
     if (!collateralComing) return;
     const timer = setInterval(() => void readCollateral(), COLLATERAL_EVERY_MS);
     return () => clearInterval(timer);
-  }, [source, collateralComing, readCollateral]);
+  }, [source, collateralComing, readCollateral, accountReading]);
+
+  /** Refresh: the pool, and from the public side its collateral again, from the last reading (R6: it didn't). */
+  const refresh = async () => {
+    if (source === "public") void readCollateral();
+    await onRefresh();
+  };
 
   // What the chosen number of boxes takes in this pool: WebAssembly and the settings, no Koios.
   useEffect(() => {
@@ -1409,16 +1691,18 @@ function PoolPage({
 
   // What a mix can take now, said before Review (chunk 23's second review, LJ-1, LJ-3): no more boxes than the
   // pool has others for at the set depth, nor, from the private balance, than it pays for, its token too. From the
-  // last pool read and WebAssembly's price of the boxes: no request of its own. Four boxes a mix goes four when the
-  // pool has room for all the boxes asked, and three where three takes more, as the build decides it (widthFor): the
-  // stepper offers what either takes, and the form says when it mixes three at a time, priced at three.
+  // last pool read and WebAssembly's price of the boxes: no request of its own. Four boxes a mix goes four when its
+  // chain is no longer than one goes and the pool has room for all the boxes asked, and three otherwise, as the build
+  // decides it (formWidth, widthFor): the stepper offers what either takes, and the form says when it mixes three at a
+  // time, priced at three.
   const askedWidth = asked?.width ?? 3;
   const roomAt = (w: number) => (asked ? poolRoom(pool, boxes, asked.depth, w) : undefined);
   const wide = roomAt(askedWidth);
   const three = askedWidth === 4 ? roomAt(3) : undefined;
-  const fallsBack = !!wide && !!three && !wide.floorShort && wide.fits < boxes && three.fits > wide.fits;
+  const formWay = formWidth(askedWidth, boxes, asked?.depth ?? 0, wide, three);
+  const fallsBack = formWay.width < askedWidth;
   const room = fallsBack ? three : wide;
-  const roomWidth = fallsBack ? 3 : askedWidth;
+  const roomWidth = formWay.width;
   useEffect(() => {
     if (!fallsBack) return;
     let live = true;
@@ -1496,12 +1780,17 @@ function PoolPage({
     }, "held");
   };
 
-  /** Bring them all back: the Bootstraps' boxes come back by themselves from here, one at a time (round three, 24). */
-  const releaseHeld = () =>
-    act(async () => {
+  /**
+   * Bring them all back: the Bootstraps' boxes come back by themselves from here, one at a time (round three, 24).
+   * After its question, as Bring one back's (PRIV-5).
+   */
+  const releaseHeld = () => {
+    setAsking(undefined);
+    void act(async () => {
       await call("lovejoin-bootstrap-release", named);
       await onRefresh();
     }, "release");
+  };
 
   /**
    * The escape hatch (chunk 34's §2): one of this pool's boxes back with the public account paying its fee, which
@@ -1679,7 +1968,9 @@ function PoolPage({
         {review.source === "private" ? (
           <PrivateReview summary={review.summary} before={homeBalance(seedelf)} box={pool.box} />
         ) : (
-          <PublicReview summary={review.summary} box={pool.box} />
+          // "Public account after" in the pools new in 1.6.0 only: the classic pool's screens read byte for byte as
+          // 1.5.x's (the plan's backward compatibility 7; fix round two, R9).
+          <PublicReview summary={review.summary} box={pool.box} before={pool.id ? publicTotal : undefined} />
         )}
         {/* The chain's first transaction, not the one Send names: the account's
             money goes in there, and every mix after it only moves what that put
@@ -1703,8 +1994,7 @@ function PoolPage({
   const notMixed = pool.notMixed.length;
   // The boxes a mix from a public account put in, and how many of those aren't mixed yet (§2.10): the private balance
   // leaves every account's out, and Mix again from my public account takes the active account's alone.
-  const { all: theirs, mine: ownPublic, accounts: otherAccounts } = publicBoxesOf(pool);
-  const publicBoxes = theirs.size;
+  const { all: theirs, mine: ownPublic } = publicBoxesOf(pool);
   const notMixedOf = (set: Set<string>) => pool.notMixed.filter((b) => set.has(`${b.txHash}#${b.txIndex}`)).length;
   const publicNotMixed = notMixedOf(theirs);
   const ownNotMixed = notMixedOf(ownPublic);
@@ -1717,21 +2007,24 @@ function PoolPage({
   // A token pool whose boxes can't pay their own way back today (chunk 34's escape hatch).
   const stuck = !!pool.cantComeBack && owned > 0;
   // The pool can't be mixed in yet: a Bootstrap is the only thing that starts one. It's offered whatever the pool
-  // holds (chunk 34's D2: "Bootstrap a pool, any time"), and leads the page while the pool is short.
-  const short = pool.floor > 0 && pool.others < pool.floor;
+  // holds (chunk 34's D2: "Bootstrap a pool, any time"), and leads the page while the pool is short. Never in a copy,
+  // which takes no new box for good: there Mix says why, and nothing says to help start it (round two's review, R2-2).
+  const short = !copy && pool.floor > 0 && pool.others < pool.floor;
   const progress = bootstrapProgress(pool);
-  const bootstrapMost = token ? MAX_TOKEN_BOOTSTRAP_BOXES : MAX_BOOTSTRAP_BOXES;
-  // What it still needs, which is what a Bootstrap defaults to: one transaction's
-  // worth at most, and the user can type any of it.
-  const needed = short ? Math.min(pool.floor - pool.others, bootstrapMost) : 1;
-  const putting = Math.min(Math.max(bootstrapBoxes ?? needed, 1), bootstrapMost);
-  // Bootstrapping from the private balance: the boxes, the collateral and the fee are more than it holds, or its
-  // token than it holds of it.
-  const bootstrapShort =
-    source === "private" &&
-    (BigInt(putting) * box + COLLATERAL + FEE_ROOM > BigInt(seedelf.lovelace) || (!!token && tokenBoxes(seedelf.tokens, token) < putting));
+  // What a Bootstrap may put in, as the worker holds it: one deposit's worth at most, from the private balance what
+  // its reserve pays the deposit for; what it still needs is the default, and the user can type any of it. And from
+  // the private balance, whether it holds too little for the boxes, the reserve, the collateral and the fee, or for
+  // the token (bootstrapLimits, MONEY-6).
+  const { most: bootstrapMost, needed, putting, short: bootstrapShort, tokenShort } = bootstrapLimits(pool, source, seedelf, privateMost, bootstrapBoxes);
+  // A token pool that takes no new box under today's parameters: Mix and Bootstrap are off, and say why before Review
+  // (1.6.0's release review, MONEY-3). The worker refuses them too.
+  const unusable = pool.unusable ? unusableText(pool.unusable) : undefined;
   // The wallet's boxes a Bootstrap holds in this pool: they never come back by themselves (chunk 34).
   const held = pool.bootstrap?.length ?? 0;
+  // Of those, the ones a public account's Bootstrap put in that no mix has moved since: bringing one back ties that
+  // account to the private balance, which both of their questions say (PRIV-5).
+  const heldPublic = (pool.bootstrap ?? []).filter((b) => theirs.has(`${b.txHash}#${b.txIndex}`));
+  const lastHeld = pool.bootstrap?.at(-1);
   // A box's share of the funding (its ADA and its mixes), and the first box's, which carries the rest (LJ-3).
   const perBox = funding ? box + BigInt(funding.mixFees) / BigInt(funding.boxes) : 0n;
   const firstBox = funding ? BigInt(funding.lovelace) - perBox * BigInt(funding.boxes - 1) : 0n;
@@ -1761,6 +2054,8 @@ function PoolPage({
   // at this depth (and whether one wave deep would do), the token not held, or a private balance short of one box.
   const notNow = readFailed
     ? tr("lovejoin.status.unread")
+    : unusable
+    ? unusable
     : room?.floorShort
     ? joinSentences([t("lj.floorShortSentence", { count: pool.others, floor: pool.floor }), tr("lovejoin.pool.seedAbove")])
     : room && room.fits < 1
@@ -1839,10 +2134,11 @@ function PoolPage({
             {stuckForm}
           </p>
         )}
-        {/* Four boxes a mix where the pool has room for three (chunk 34's D3): said before Review. */}
-        {fallsBack && (
+        {/* Four boxes a mix going three, said before Review in the words its review uses (chunk 34's D3): the pool
+            has room for three and not four, or four's chain would be longer than one goes (UI-7). */}
+        {formWay.why && (
           <p className="note" data-testid="lovejoin-width-short">
-            {t("lj.width.warn.short")}
+            {t(formWay.why === "long" ? "lj.width.warn.long" : "lj.width.warn.short")}
           </p>
         )}
       </div>
@@ -1936,7 +2232,7 @@ function PoolPage({
             </>
           ) : (
             <>
-              <Row label={tr("lovejoin.mix.fromPublic")} value={tr("lovejoin.mix.publicNeeds", { ada: formatAda(funding.lovelace) })} stack />
+              <Row label={tr("lovejoin.mix.fromPublic")} value={publicNeedsText(network, funding)} stack />
               <Row
                 label={tr("lovejoin.mix.totalPublic")}
                 value={withToken(network, adaText(toCents(costs.leaving)), funding.token)}
@@ -2029,25 +2325,30 @@ function PoolPage({
               value: boxesValue(network, pool.box, putting, false),
             }),
             short && tr("lovejoin.bootstrap.needs", { count: needed }),
-            tr("lovejoin.bootstrap.atMost", { most: bootstrapMost }),
+            // From the private balance, the most its funding's reserve pays the deposit for, once the worker said.
+            source === "private" && privateMost !== undefined
+              ? tr("lovejoin.bootstrap.atMostPrivate", { most: bootstrapMost })
+              : tr("lovejoin.bootstrap.atMost", { most: bootstrapMost }),
           ])}
         </p>
       </div>
       <button
         type="button"
         className={short ? "primary" : "secondary"}
-        disabled={busy || bootstrapShort}
+        disabled={busy || bootstrapShort || !!unusable}
         onClick={() => void bootstrap()}
         data-testid="lovejoin-bootstrap"
       >
         {tr("lovejoin.bootstrap.button", { count: putting })}
       </button>
-      {/* From the private balance, the obvious shortfall is said here, in its words, before a build (LJ-6). */}
-      {bootstrapShort && (
+      {/* A pool that takes no new box (MONEY-3); from the private balance, the obvious shortfall: said here, in its
+          words, before a build (LJ-6). */}
+      {(unusable || bootstrapShort) && (
         <p className="field-note" data-testid="lovejoin-bootstrap-why">
-          {token && tokenBoxes(seedelf.tokens, token) < putting
-            ? tr("lovejoin.bootstrap.cantAffordToken", { token: tokenName })
-            : tr("lovejoin.bootstrap.cantAfford", { held: amounts.ada(seedelf.lovelace) })}
+          {unusable ??
+            (tokenShort
+              ? tr("lovejoin.bootstrap.cantAffordToken", { token: tokenName })
+              : tr("lovejoin.bootstrap.cantAfford", { held: amounts.ada(seedelf.lovelace) }))}
         </p>
       )}
     </div>
@@ -2063,7 +2364,7 @@ function PoolPage({
       error={error}
     >
       {banner}
-      <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void onRefresh()} />
+      <RefreshRow reading={reading} updatedAt={updatedAt} onRefresh={() => void refresh()} />
       {readFailed && !reading && (
         <p className="note" data-testid="lovejoin-status-unread">
           {tr("lovejoin.status.unread")}
@@ -2130,57 +2431,19 @@ function PoolPage({
         mixingAgain={mixingAgain}
         pressed={pressed}
         onOne={() => setAsking({ held: true })}
-        onAll={() => void releaseHeld()}
+        onAll={() => setAsking({ heldAll: true })}
       />
-      {owned > 0 && (
-        <div className="stack">
-          <OtherAccounts accounts={otherAccounts} />
-          {/* The active account's boxes alone: paying for another's mixes would tie the two accounts (§2.10). */}
-          {ownPublic.size > 0 && (
-            <button
-              type="button"
-              className={ownNotMixed ? "primary" : "secondary"}
-              disabled={busy || mixingAgain || !!sending && !sending.stopped}
-              onClick={() => void againPublic()}
-              data-testid="lovejoin-again-public"
-            >
-              {pressed === "again-public" ? tr("common.building") : tr("lovejoin.againPublic")}
-            </button>
-          )}
-          {owned > publicBoxes && (
-            <button
-              type="button"
-              className={notMixed > publicNotMixed ? "primary" : "secondary"}
-              disabled={busy || mixingAgain}
-              onClick={() => void again()}
-              data-testid="lovejoin-again"
-            >
-              {pressed === "again" ? tr("common.building") : tr("lovejoin.again")}
-            </button>
-          )}
-          {!stuck && (
-            <button type="button" className="secondary" disabled={busy || mixingAgain} onClick={() => void now()} data-testid="lovejoin-now">
-              {pressed === "now" ? tr("lovejoin.working") : tr("lovejoin.bringBackNow")}
-            </button>
-          )}
-          {publicBoxes > 0 && (
-            <button
-              type="button"
-              className="link align-start"
-              disabled={busy || mixingAgain}
-              onClick={() => setAsking({ privateAnyway: true })}
-              data-testid="lovejoin-again-anyway"
-            >
-              {tr("lovejoin.payPrivateAnyway")}
-            </button>
-          )}
-          {mixingAgain && (
-            <p className="note" data-testid="lovejoin-again-running">
-              {tr("lovejoin.againRunning")}
-            </p>
-          )}
-        </div>
-      )}
+      <AgainActions
+        pool={pool}
+        busy={busy}
+        mixingAgain={mixingAgain}
+        publicSending={!!sending && !sending.stopped}
+        pressed={pressed}
+        onAgain={() => void again()}
+        onAgainPublic={() => void againPublic()}
+        onNow={() => void now()}
+        onAnyway={() => setAsking({ privateAnyway: true })}
+      />
 
       {/* Below its floor the pool needs boxes put in before anyone can mix: Bootstrap leads, with how it's going
           (session 1, 16). Above it, Bootstrap is offered behind its link, under Mix (D2: any time). */}
@@ -2199,7 +2462,9 @@ function PoolPage({
         </section>
       )}
       {mixForm}
-      {!short && !bootstrapOpen && (
+      {/* Not in a copy, which takes no new box for good: off with its reason, Bootstrap pointed to a way the worker
+          never takes there (R2-2). Mix, above, says why once. */}
+      {!short && !bootstrapOpen && !copy && (
         <div className="stack-tight">
           <button type="button" className="link align-start" onClick={() => setBootstrapOpen(true)} data-testid="lovejoin-bootstrap-open">
             {tr("lovejoin.bootstrap.open")}
@@ -2209,7 +2474,7 @@ function PoolPage({
           </p>
         </div>
       )}
-      {!short && bootstrapOpen && bootstrapForm}
+      {!short && bootstrapOpen && !copy && bootstrapForm}
 
       <WayBack />
       {asking && "anyway" in asking && (
@@ -2251,24 +2516,16 @@ function PoolPage({
         </Modal>
       )}
       {/* Bringing back a Bootstrap's box: what one nobody has mixed shows, said first (chunk 34's 34a′, for 34d). */}
-      {asking && "held" in asking && (
-        <Modal
-          title={tr("lovejoin.bootstrap.oneTitle")}
-          titleId="lovejoin-held-title"
-          onClose={() => setAsking(undefined)}
-          foot={
-            <>
-              <button type="button" className="secondary" onClick={() => setAsking(undefined)}>
-                {tr("lovejoin.bootstrap.keep")}
-              </button>
-              <button type="button" className="primary" onClick={bringHeld} data-testid="lovejoin-held-confirm">
-                {tr("lovejoin.bootstrap.bringOne")}
-              </button>
-            </>
-          }
-        >
-          <p className="note">{joinSentences([tr("lovejoin.bootstrap.privacy.one"), stuck && tr("lovejoin.stuck.privacy.ties")])}</p>
-        </Modal>
+      {/* Bringing back a Bootstrap's boxes, one or all: what one nobody has mixed shows, said first, with the public
+          account's part, and who pays where the pool's boxes can't pay their own way back (PRIV-5). */}
+      {asking && ("held" in asking || "heldAll" in asking) && (
+        <HeldQuestion
+          all={"heldAll" in asking}
+          stuck={stuck}
+          fromAccount={"heldAll" in asking ? heldPublic.length > 0 : heldPublic.some((b) => b === lastHeld)}
+          onKeep={() => setAsking(undefined)}
+          onConfirm={"heldAll" in asking ? releaseHeld : bringHeld}
+        />
       )}
       {/* The escape hatch's question: the public account pays, and that ties the box to it (chunk 34's §2). */}
       {asking && "paid" in asking && (
@@ -2294,13 +2551,64 @@ function PoolPage({
   );
 }
 
-/** The most boxes one Bootstrap of a token pool puts in (the worker's MAX_TOKEN_DEPOSIT_BOXES). */
+/**
+ * The most boxes one Bootstrap of any pool but the classic puts in (the worker's mostBootstrap: MAX_TOKEN_DEPOSIT_BOXES
+ * for every pool on the new scripts, an ADA pool's too).
+ */
 const MAX_TOKEN_BOOTSTRAP_BOXES = 64;
+
+/** The reserve a Bootstrap's funding from the private balance carries beside its boxes (seedelf-core's DEPOSIT_RESERVE). */
+const BOOTSTRAP_RESERVE = 1_500_000n;
+
+/**
+ * Why a token pool takes no new box, in the words the worker refuses one with (lovejoin.ts unusableReason): the pool's
+ * page says it under Mix, Bootstrap and Mix again before Review, and the hub on its row (1.6.0's release review,
+ * MONEY-3; the merged fixes' review, MERGED-4). A copy (`superseded`) is read for the boxes already in it and takes no
+ * new one, for good: said as that, never as a check that couldn't be made (MERGED-1). Keys, not words: a reason the
+ * screens don't know yet reads as the check's.
+ */
+const UNUSABLE: Record<LovejoinUnusable["why"], I18nKey> = {
+  belowMinimum: "lj.unusable.warn.belowMinimum",
+  cantComeBack: "lj.unusable.warn.cantComeBack",
+  unchecked: "lj.unusable.warn.unchecked",
+  superseded: "lj.unusable.warn.superseded",
+};
+export const unusableText = (u: LovejoinUnusable): string => t(UNUSABLE[u.why] ?? "lj.unusable.warn.unchecked");
 
 /** How many boxes of `token` (each `token.quantity` of it) a balance's tokens hold; none known, none. */
 export function tokenBoxes(tokens: TokenAmount[] | undefined, token: TokenQuantity): number {
   const held = tokens?.find((t) => t.policyId === token.policyId && t.assetName === token.assetName);
   return held ? Number(BigInt(held.quantity) / BigInt(token.quantity)) : 0;
+}
+
+/**
+ * What the Bootstrap form offers in pool `pool`, paid from `source`, held to the worker's own bounds (1.6.0's release
+ * review, MONEY-6 = UI-10): the form offered 96 for any pool without a token where the worker takes 64 in every pool
+ * but the classic, 96 from the private balance where its funding's reserve pays the deposit for fewer, and left that
+ * reserve out of what the balance must hold, so Review was refused after it was pressed.
+ * - `most`: one deposit's (mostBootstrap), and from the private balance what its reserve pays for (`privateMost`, the
+ *   worker's privateBootstrapMost) once known.
+ * - `needed`: what the pool lacks of its floor, the form's default; `putting`: `asked` (or `needed`), 1 to `most`.
+ * - `short`: the private balance holds too little for them: the boxes, the funding's 1.5 ₳ reserve, the one-time
+ *   account's 5 ₳ collateral and the fee's room; or too little of the pool's token (`tokenShort`).
+ */
+export function bootstrapLimits(
+  pool: Pick<ShownPool, "id" | "box"> & Partial<Pick<ShownPool, "floor" | "others">>,
+  source: Source,
+  seedelf: { lovelace: string; tokens?: TokenAmount[] },
+  privateMost?: number,
+  asked?: number,
+): { most: number; needed: number; putting: number; short: boolean; tokenShort: boolean } {
+  const deposit = pool.id ? MAX_TOKEN_BOOTSTRAP_BOXES : MAX_BOOTSTRAP_BOXES;
+  const most = source === "private" && privateMost !== undefined ? Math.max(1, Math.min(deposit, privateMost)) : deposit;
+  const floor = pool.floor ?? 0;
+  const others = pool.others ?? 0;
+  const needed = floor > 0 && others < floor ? Math.min(floor - others, most) : 1;
+  const putting = Math.min(Math.max(asked ?? needed, 1), most);
+  const token = pool.box.token;
+  const tokenShort = source === "private" && !!token && tokenBoxes(seedelf.tokens, token) < putting;
+  const costs = BigInt(putting) * BigInt(pool.box.lovelace) + BOOTSTRAP_RESERVE + COLLATERAL + FEE_ROOM;
+  return { most, needed, putting, short: source === "private" && (costs > BigInt(seedelf.lovelace) || tokenShort), tokenShort };
 }
 
 /**
@@ -2318,6 +2626,18 @@ function boxesValue(network: NetworkName, box: BoxValue, count: number, counted 
 /** An amount of ADA, and a token pool's token beside it: "15.3 ₳ and 200 NIGHT". */
 function withToken(network: NetworkName, ada: string, token?: TokenQuantity): string {
   return token ? t("lovejoin.adaAndToken", { ada, token: tokenAmountText(network, token) }) : ada;
+}
+
+/**
+ * What a mix from the public account needs it to hold, in a line: the Mix form's *From your public account*. The
+ * classic pool's chain spends ADA alone; a token pool's spends the account's UTxOs holding its token first, their
+ * ADA counted, and needs the token too, so it names the token and not "ADA alone" (1.6.0's release review, UI-11).
+ */
+export function publicNeedsText(network: NetworkName, funding: Pick<LovejoinFunding, "lovelace" | "token">): string {
+  const ada = formatAda(funding.lovelace);
+  return funding.token
+    ? t("lovejoin.mix.publicNeedsToken", { ada, token: tokenAmountText(network, funding.token) })
+    : t("lovejoin.mix.publicNeeds", { ada });
 }
 
 /**
@@ -2349,10 +2669,17 @@ const PUBLIC_MIX_WAY_BACK = () => t("lovejoin.privacy.publicWayBack");
  * (blind test §9.8). `before`: the private balance as Home shows it.
  */
 function FundingTotals({ summary, before }: { summary: SessionOutSummary; before?: string }) {
+  const network = useNetwork();
   const leaving = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(summary.fee.total));
-  // A token pool's token leaves with the boxes' ADA, said with it.
-  const tokens = new Set(summary.payments.flatMap((p) => p.tokens.map((t) => `${t.policyId}.${t.assetName}`))).size;
-  return <TotalRows side="private" leaving={leaving} before={before} tokens={tokens} />;
+  // A token pool's token leaves with the boxes' ADA, said with it, by its amount and name as the row above says it,
+  // not counted (1.6.0's preprod rehearsal, R3): "186.74 ₳ and 4,000 MIN", not "and 1 token".
+  const sent = summary.payments.flatMap((p) => p.tokens);
+  const tokens = new Set(sent.map((t) => `${t.policyId}.${t.assetName}`)).size;
+  const named =
+    tokens === 1
+      ? tokenAmountText(network, { ...sent[0]!, quantity: sent.reduce((sum, t) => sum + BigInt(t.quantity), 0n).toString() })
+      : undefined;
+  return <TotalRows side="private" leaving={leaving} before={before} tokens={tokens} named={named} />;
 }
 
 /**
@@ -2391,8 +2718,9 @@ export function PrivateReview({
       <ReviewRows testId="lovejoin-private-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
+        {/* A Bootstrap has no mixes: its funding pays for the boxes and the fees alone (1.6.0's rehearsal, R4). */}
         <Row
-          label={tr("lovejoin.review.forBoxes")}
+          label={tr(mix.bootstrap ? "lovejoin.review.forBoxesBootstrap" : "lovejoin.review.forBoxes")}
           value={withToken(network, `${formatAda(boxesPart!.lovelace)}\u00a0₳`, boxesPart!.tokens[0])}
         />
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
@@ -2480,18 +2808,24 @@ function AgainReview({ summary, before }: { summary: SessionOutSummary & { mix: 
 const publicLeaving = (summary: LovejoinPublicSummary, box: BoxValue) =>
   (summary.again ? 0n : BigInt(summary.boxes) * BigInt(box.lovelace)) + BigInt(summary.fees);
 
-/** Whether a mix from the public account takes a token pool's token from it too: its deposit's, none mixing again. */
-const publicTokens = (summary: LovejoinPublicSummary) => (summary.token && !summary.again ? 1 : 0);
+/**
+ * The token pool's token a mix from the public account takes from it too, by its amount and name: its deposit's,
+ * none mixing again. Said in the total, as the row above names it (1.6.0's preprod rehearsal, R3).
+ */
+const publicToken = (network: NetworkName, summary: LovejoinPublicSummary) =>
+  summary.token && !summary.again ? tokenAmountText(network, summary.token) : undefined;
 
 /**
  * A mix from the public account: the deposit and every mix, sent now. `box`: what each box in its pool holds (the
- * classic pool's 10 ₳ when none is given).
+ * classic pool's 10 ₳ when none is given). `before`: the public account as Home shows it, for "Public account after",
+ * on a mix, a Bootstrap and a mix again alike, as the private side's reviews and Send say it: none of the three said
+ * it (1.6.0's rehearsal, R9). None, no after line.
  */
-export function PublicReview({ summary, box = CLASSIC_BOX }: { summary: LovejoinPublicSummary; box?: BoxValue }) {
+export function PublicReview({ summary, box = CLASSIC_BOX, before }: { summary: LovejoinPublicSummary; box?: BoxValue; before?: string }) {
   const tr = useT();
   const network = useNetwork();
-  if (summary.again) return <PublicAgainReview summary={summary} box={box} />;
-  if (summary.bootstrap) return <PublicBootstrapReview summary={summary} box={box} />;
+  if (summary.again) return <PublicAgainReview summary={summary} box={box} before={before} />;
+  if (summary.bootstrap) return <PublicBootstrapReview summary={summary} box={box} before={before} />;
   return (
     <>
       <ReviewRows testId="lovejoin-public-review">
@@ -2499,7 +2833,7 @@ export function PublicReview({ summary, box = CLASSIC_BOX }: { summary: Lovejoin
         <Row label={tr("lovejoin.mixedLabel")} value={mixedValue(summary)} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <TotalRows side="public" leaving={publicLeaving(summary, box)} tokens={publicTokens(summary)} />
+        <TotalRows side="public" leaving={publicLeaving(summary, box)} before={before} named={publicToken(network, summary)} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfter", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <WidthNote fellBack={summary.fellBack} />
@@ -2513,7 +2847,7 @@ export function PublicReview({ summary, box = CLASSIC_BOX }: { summary: Lovejoin
  * brought back by hand. It buys whoever puts it in nothing, so the review
  * says that plainly rather than borrowing the mix's words.
  */
-function PublicBootstrapReview({ summary, box }: { summary: LovejoinPublicSummary; box: BoxValue }) {
+function PublicBootstrapReview({ summary, box, before }: { summary: LovejoinPublicSummary; box: BoxValue; before?: string }) {
   const tr = useT();
   const network = useNetwork();
   return (
@@ -2523,7 +2857,7 @@ function PublicBootstrapReview({ summary, box }: { summary: LovejoinPublicSummar
         <Row label={tr("lovejoin.mixedLabel")} value={tr("lovejoin.review.notAtAll")} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <TotalRows side="public" leaving={publicLeaving(summary, box)} tokens={publicTokens(summary)} />
+        <TotalRows side="public" leaving={publicLeaving(summary, box)} before={before} named={publicToken(network, summary)} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.review.bootstrapBack")} stack />
       </ReviewRows>
       <Callout tone="warn" testId="lovejoin-bootstrap-warning">
@@ -2534,7 +2868,7 @@ function PublicBootstrapReview({ summary, box }: { summary: LovejoinPublicSummar
 }
 
 /** Mix again from my public account: the boxes a mix from it put in, each mix paid by it, sent now (§2.10). */
-function PublicAgainReview({ summary, box }: { summary: LovejoinPublicSummary; box: BoxValue }) {
+function PublicAgainReview({ summary, box, before }: { summary: LovejoinPublicSummary; box: BoxValue; before?: string }) {
   const tr = useT();
   return (
     <>
@@ -2543,7 +2877,7 @@ function PublicAgainReview({ summary, box }: { summary: LovejoinPublicSummary; b
         <Row label={tr("lovejoin.mixedLabel")} value={mixedValue(summary)} />
         <Row label={tr("lovejoin.review.fees")} value={`${formatAda(summary.fees)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.transactions")} value={String(summary.txs)} />
-        <TotalRows side="public" leaving={publicLeaving(summary, box)} />
+        <TotalRows side="public" leaving={publicLeaving(summary, box)} before={before} />
         <Row label={tr("lovejoin.backLater")} value={tr("lovejoin.eachBoxAfterMixes", { delay: delayText(summary.delay) })} stack />
       </ReviewRows>
       <WidthNote fellBack={summary.fellBack} />
