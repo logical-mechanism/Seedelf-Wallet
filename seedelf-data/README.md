@@ -75,7 +75,7 @@ cargo fmt --check
   - every `tx_info` balances: inputs and withdrawals against outputs, fee, deposit and donation;
   - an account's payment keys' `credential_txs` lists only transactions under them, and every one of its stake key's newest that is; its next page and its answer from a block carry on from it;
   - the pool list's pages make one sorted list;
-  - an NFT's `asset_info` equals Koios's recorded answer;
+  - an NFT's `asset_info` equals Koios's recorded answer, and its total supply is 1 (none for a token no one minted);
   - a rewards history's pages make one list in its order, for reward accounts many pools pay (six pages) and one the reserves and the treasury paid too, and what's been paid by now is `account_info`'s rewards available plus withdrawals;
   - a delegation history's pages make one list in its order, no row twice and no withdrawal, each row's time and epoch its slot's, and Koios's recorded answer is its start, row for row (`tests/fixtures/account-update-history.json`): for a key that registered and delegated in one transaction then delegated its vote, one that stopped and registered again four times, one delegated twice in one transaction, mainnet's busiest re-delegator (two pages), and a key never registered.
   - a pool's history is newest first, 18 epochs at most, two epochs ago at most, every epoch paid (none with no blocks paid anything), and where the windows meet Koios's recorded answer, the same epochs, stake and blocks, and what it paid one of the values Koios's servers gave (`tests/fixtures/pool-history.json`, `record-pool-history.py`): for the pool with the most delegators, OctasPool and a pool of about 100; a pool db-sync doesn't know has none.
@@ -169,7 +169,7 @@ The code is `src/lovejoin/`. Its checks are a copy of the wallet's: this workspa
 - its launch transaction itself put `mix_box` and `mix_logic` at the holder, and registered L, unless an earlier block did (the owner, 2026-10-17).
 
 None of it changes once it's on chain, so each candidate is checked once and its verdict kept in memory (`discovery.rs`, at most 200,000; past that, a candidate is checked again at each request, and still shown when it's standard), and a pool shown stays shown. Everything at the holder is locked for good, so spam there is burned, and costs this server one check.
-- **The holder is read on, not again:** each read asks only for outputs above the highest id read so far (a later block's outputs have higher ids), and all of them again every hour, so a block rolled back under the stable cursor is forgotten within it. What's refused is dropped from what's kept.
+- **The holder is read on, not again:** each read gathers only the outputs above the highest id read so far (a later block's outputs have higher ids), and all of them again every hour, so a block rolled back under the stable cursor is forgotten within it. A read on joins only the read it went on from: one that finds it replaced meanwhile by an hourly read, perhaps of an older block, reads on again from that, so nothing between the two is missed (1.6.0's release review, DATA-3). What's refused is dropped from what's kept.
 - **A launch's inputs are tried once each,** however many candidates it made.
 
 **A pool's crowd** (`crowd.rs`): its boxes, the deposits they could have come from, and how many a mix made. A transaction that pays a pool's `mix_box` without spending from it is a deposit; one that spends from it is a mix, and each box it makes could have come from any deposit behind any of its inputs. The deposits counted are those some box in the pool now could have come from, worked backwards from the boxes through each mix. A box is an output of exactly the box value with a box's datum (two 48-byte points, `a ≠ b`: whether they're on the curve is the wallet's to check).
@@ -209,7 +209,7 @@ Koios's paths and JSON, so a wallet falls back by changing its base URL. The cod
 | `proposal_list` | the live governance actions | 5 minutes, within its epoch |
 | `vote_list` | one DRep's votes on up to 40 actions | never |
 | `asset_nft_address` | the address holding one NFT (an ADA Handle) | never |
-| `asset_info` | one token's CIP-25 and CIP-68 metadata | never |
+| `asset_info` | one token's CIP-25 and CIP-68 metadata, or its total supply (`total_supply`, which a Lovejoin pool's start reads at Send: web wallet chunk 34) | never |
 
 **What one request may cost is bounded.** Any credential, address or stake key may be asked about, and some on mainnet hold hundreds of thousands of outputs: one listing of a credential with 220,000 read 2.4 GB from disk for every page. So a listing gathers at most 20,000 unspent outputs, and `account_txs` and `credential_txs` at most 200,000 outputs, with a page starting at most 10,000 transactions in. Past any of these, the answer is a 503, `{"error":"too large for this server"}`, with no `Retry-After`: it would be as large again, so the wallet reads Koios, for that request alone. No wallet comes near any of them. Requests are also held to the wallet's own sizes (one account's standing, 20 keys probed).
 

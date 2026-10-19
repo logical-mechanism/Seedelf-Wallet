@@ -171,11 +171,12 @@ cd seedelf-platform
 cargo test --workspace --locked
 cd seedelf-web-wallet/extension
 npm ci
-release_version=1.5.0
+release_version=1.6.0
 npm version "$release_version" --no-git-tag-version
 npm run tokens
 npm run dreps
-git diff -- package.json package-lock.json src/tokens src/dreps
+npm run lovejoin-pools
+git diff -- package.json package-lock.json src/tokens src/dreps src/lovejoin-pools.json
 ```
 
 Read those diffs (steps 2 and 3 of [Releasing to the Web Store](#releasing-to-the-web-store) say what to look for), and commit them together. Then the checks:
@@ -211,7 +212,7 @@ git rev-parse HEAD
 
 No `npm version`, `npm run tokens` or `npm run dreps` here. On `main` the bump fails ("Version not changed"), and the lists' refresh rewrites bundled files no commit has, so the zip wouldn't be the recorded commit's.
 
-**If the release changed `seedelf-data/`, deploy it before the upload:** Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against.
+**If the release changed `seedelf-data/` or the token list (`extension/src/tokens/list.json`, which the API builds in), deploy it before the upload:** Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against.
 
 The package to upload is:
 
@@ -253,10 +254,11 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 2. **Refresh the token list, every release** (the owner, 2026-10-08): `npm run tokens` in `extension/`. Read the diff of `src/tokens/registry.*.json`, and any "also claimed by" warning, before committing it. To add a token, vet its unit and put it in `src/tokens/list.json` first; `node scripts/tokens.mjs find <network> <TICKER>` shows the registry's entries for a ticker. The handoff note says what changed, or that nothing did.
    - **And the data layer's decimals** (1.4.0's release review): the API gives a token's decimals from the registry as it was when the API was built (`seedelf-data/api/data/token-decimals.json`), and a private row keeps what it was given until it's spent. So refresh it too, by `seedelf-data/scripts/token-decimals.py`'s two lines, and if the file changed, commit it: step 7's deploy carries it.
 3. **Refresh the DRep list, every release:** `npm run dreps` in `extension/`. It rewrites `src/dreps/<network>.json` with every registered DRep that has a name. **Koios's servers disagree about DRep metadata** (1.3.0's prep had three single-pass runs name 371, 407 and 406 mainnet DReps against the committed 449, each missing a different set), so the script asks again for the DReps still unnamed, in up to three passes. A DRep the committed list names that's still registered but that no pass names keeps its committed name, and a list that would still lose more than 5% of the committed one is refused with nothing written: run it again later. Its line for each network says how many passes it took, how many names it kept as committed, and how many committed DReps are no longer registered. Skim the diff for anything odd before committing it; the handoff note says what changed.
+   - **And the Lovejoin pools' head start, every release since 1.6.0:** `npm run lovejoin-pools` in `extension/`. It rewrites `src/lovejoin-pools.json` with every shown pool on each network, read from the holder through the real Koios under the release's token list, so a first look on a new install starts there instead of the chain's start. It's a head start, never a gate: a pool launched after it is found live. Its test fails if `src/tokens/list.json` changed since it was written, so run it after `npm run tokens`. The handoff note names the pools it added.
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`, and at its `es/` and `ja/`: each screen is shot in all three languages. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*). The Japanese ones need a Japanese font on the machine (Noto Sans CJK JP here), or Chromium draws boxes.
 6. **Commit and merge:** the bump, both lists, the images and any change to the listing's text, in the release branch's PR into `main`.
-7. **Deploy the data layer, if the release changed `seedelf-data/`** (step 2's decimals included): Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run and `curl -s https://mainnet.seedelf.logicalmechanism.io/health` ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against: a route the API lacks answers 404, and a request it takes in another shape 400; either holds the wallet's whole public part on Koios for 5 minutes. It goes before the package, so the store build's check on mainnet (step 9) reads it.
+7. **Deploy the data layer, if the release changed `seedelf-data/` or `extension/src/tokens/list.json`** (step 2's decimals included; the API builds the token list in, and shows a Lovejoin pool only of a listed token, so a token added to the list without a deploy leaves its pools hidden from every mainnet wallet: 1.6.0's release review, DATA-2): Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run and `curl -s https://mainnet.seedelf.logicalmechanism.io/health` ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against: a route the API lacks answers 404, and a request it takes in another shape 400; either holds the wallet's whole public part on Koios for 5 minutes. It goes before the package, so the store build's check on mainnet (step 9) reads it.
 8. **Build the package**, on `main` at the merge commit, with `git status --porcelain` printing nothing: `npm run package` in `extension/`.
    - It builds with `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`: mainnet by default, preprod in Settings, and no dev key.
    - It refuses a `dist/` with a key, one whose version doesn't match `package.json`, and one whose manifest lacks `https://api.koios.rest/*` (a preprod-only build).
