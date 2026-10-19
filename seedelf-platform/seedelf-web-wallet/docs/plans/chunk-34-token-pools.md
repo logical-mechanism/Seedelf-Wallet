@@ -76,7 +76,7 @@ Claude's second proposal, with the owner's answers.
     - Search by ticker or policy. Only the token list's tokens have pools (20).
 14. **The creator sets Q, and may change the box's ADA within limits.**
     - **Q** is entered in display units.
-    - **Thirty boxes' worth (30 × Q)** must fit within the token's total supply.
+    - ~~**Thirty boxes' worth (30 × Q)** must fit within the token's total supply.~~ Dropped by the owner's call 35 (2026-10-19): a typo guard nothing on chain needs, which cost a request naming the token. Q's only bound is the ledger's.
     - **The form lists the token's existing pools** with their crowds, so a creator can join one rather than split it.
     - **A copy of a shown pool's values is refused.**
     - **Mixing's cost per box is said plainly.** The wallet prices only ADA (`prices.ts`), so no bound is in money.
@@ -288,14 +288,14 @@ Cheap checks first, offline before network:
 
 **Verified and usable aren't the same thing.**
 - **Verified pools are always read**, for ownership, a restore and boxes coming back. A pool's boxes must never vanish from view because the parameters changed.
-- **Usable gates only new mixes**, checked at each read:
+- **Usable gates only new mixes**, checked at each read (since the owner's call 34, 2026-10-19, only the first check gates: a box below the minimum, or a copy; a pool whose boxes can't come back takes new boxes, with a warning first):
   - L's credential is registered (one `account_info` for all pools);
   - a mix box meets min-UTxO under the live parameters;
   - `box_lovelace − withdraw fee` covers the **real** destination: an enterprise Seedelf output with a register datum and Q.
 - `minimum_seedelf_payment` sizes that destination against `dummy_base_address`, which is 120k too high, so add an exact enterprise sizing.
-- At Lovejoin's 2 ₳ bootstrap default, a box fails for long names and large Q. At 4310 a byte the destination needs 1.66 ₳, and the fee is 0.30 with reference scripts or 0.42 inline. Such pools show as **not usable**, and say why.
+- At Lovejoin's 2 ₳ bootstrap default, a box fails for long names and large Q. At 4310 a byte the destination needs 1.66 ₳, and the fee is 0.30 with reference scripts or 0.42 inline. Such pools show as **not usable**, and say why. Since call 34 they take new boxes all the same, and the page says why the boxes wait.
 
-**An escape hatch** for a pool that turns unreturnable: bring a box back with the fee paid from the public account, saying that it ties the box to the account. The withdraw builder has no fee input today (`lovejoin.rs:795-833`).
+**An escape hatch** for a pool that turns unreturnable: bring a box back with the fee paid from the public account, saying that it ties the box to the account. The withdraw builder has no fee input today (`lovejoin.rs:795-833`). Since the owner's call 36 (2026-10-19), the private balance pays by default (`lovejoin::withdraw_private`: a Seedelf UTxO of ADA alone beside the box, tied to it on chain), and the public account is the user's visible choice.
 
 ### 3. Finding pools and reading them
 
@@ -338,7 +338,7 @@ Cheap checks first, offline before network:
 
 **Large integers**
 - `crossCheck` sends Ogmios's UTxOs through `JSON.parse` and `stringify` (`lovejoin.ts:1832`, `koios.ts:1111`, `data-layer.ts:355`), which rounds any Q above 2^53. Pass the raw JSON through, and test 2^53+1 and 2^64−1.
-- Sums such as 30 × Q go in u128 or BigInt, and Q is capped so that k × Q fits a u64 (`assets.rs:62-69`).
+- Sums such as k × Q go in u128 or BigInt, and core refuses a k × Q that doesn't fit a u64 (`assets.rs:62-69`), in words ("bring them back fewer at a time"). The wallet's own 30 × Q cap went with call 35.
 
 ### 5. Starting a pool
 
@@ -366,7 +366,7 @@ It's about 6.6 KB, and atomic: no half-launched pool, no stranded deposit.
 - **The token is in the wallet's token list** for this network ([session 1](#design-session-1-2026-10-17), 20), which already vets it. The creator needn't hold it (21). An ADA pool names no token.
 - **Refused:**
   - a token outside the token list, and Seedelf identifier tokens;
-  - a total supply (`asset_info`) below 30 × Q;
+  - ~~a total supply (`asset_info`) below 30 × Q;~~ (dropped, call 35)
   - a copy of a shown pool's values (the form links to it), and a 10 ₳ ADA pool.
 - **Shown:** the token's pools, with their crowds, so a creator can join one rather than split it.
 - **Q** is entered in display units, with the token's decimals. The creator sets it ([session 1](#design-session-1-2026-10-17), 14).
@@ -462,7 +462,7 @@ A record with no `pool` is the classic pool's. Each of these gains a pool:
 
 **Docs**
 - architecture, flows, privacy, and keys-and-accounts.
-- A dated entry under the privacy policy's *Changes*, for the new reads: the holder, `account_info`, and `asset_info` at a launch.
+- A dated entry under the privacy policy's *Changes*, for the new reads: the holder and `account_info` at a launch (`asset_info` went with call 35).
 
 ### 10. The data layer (mainnet; deployed before the wallet's upload)
 
@@ -683,7 +683,7 @@ Branch `web-wallet/token-pools-flows`, from main 87e83cb. The step's row as buil
 - **A pool's start** (`lovejoin-launch.ts`):
   - `terms`: what a box may hold (least, suggested, a token pool's most) and the token's shown pools, to join instead (14). Worked out in WebAssembly once an epoch per token and Q.
   - `build` checks first: the token in the list (20); Q a whole number; not a copy of a shown pool's values (11), once discovery has looked; an ADA pool not 10 ₳ (17); the box at least its least and, for a token, at most 9 ₳ (27). The fee cap is 1.5 ₳, under the box's ADA.
-  - It's built twice, registering L and without the certificate, and the review shows the first. Send checks 30 boxes' worth in the token's supply (`asset_info`, Koios alone) and asks `account_info` whether something registered L already: then the build without the certificate goes, still standard (34c), if it makes the same pool or its own L is registered too (review 4 and 7 below).
+  - It's built twice, registering L and without the certificate, and the review shows the first. Send asks `account_info` whether something registered L already (it checked 30 boxes' worth in the token's supply too, `asset_info`, until call 35): then the build without the certificate goes, still standard (34c), if it makes the same pool or its own L is registered too (review 4 and 7 below).
   - Sent as any spend from its side: the private balance's with giveme.my's collateral (the default, session 1, 10); the public account's signed at review.
   - Kept, sealed, in the schedule (`launches`): no rule reads it, and the pool is read from once discovery finds it, as every wallet's is (§3).
 - **The escape hatch** (§2):
@@ -726,7 +726,7 @@ The two new strings (`lj.launch.from`, `lj.launch.otherPool`) are machine drafts
   - the tile's pool picker;
   - the escape hatch's offer (`status.pools[].cantComeBack`, then `lovejoin-withdraw-now` with `paid`);
   - Bootstrap per pool, with its progress below the floor.
-- **34g:** the policy's *Changes* entry names a launch's `asset_info` and `account_info`, the account-paid launch and the escape hatch; and the launch's first real submit on preprod (S0c).
+- **34g:** the policy's *Changes* entry names a launch's `account_info` (and named `asset_info` until call 35), the account-paid launch and the escape hatch; and the launch's first real submit on preprod (S0c).
 
 ## 34e · The planner, returns through token pools, and four boxes a mix (2026-10-18)
 
@@ -908,9 +908,42 @@ Branch `web-wallet/token-pools-screens`, from main 6ca8016 (after #319 merged). 
 
 ## 34g · The preprod rehearsal and the release (2026-10-18, in progress)
 
-Branch `web-wallet/release-1.6.0`, from main e6b5dae (after #320 merged); sessions 1 to 3 committed as 8cc0044 (code) and 030fdcf (docs), and the last review's fixes on top (*The last review* below) (the owner: "start 34g", then "get a handoff going right now so we can continue this into a new context window"). The step's row: Claude's preprod rehearsal in dev mode, the release review across everything since 1.5.0, its fixes, the policy's *Changes* entry, the lists and the version; then the owner's rehearsal by hand, the PR, the deploy and the upload.
+Branch `web-wallet/release-1.6.0`, from main e6b5dae (after #320 merged); sessions 1 to 3 committed as 8cc0044 (code) and 030fdcf (docs), the last review's fixes on top (*The last review* below), and session 5's three owner calls on top of those (the owner: "start 34g", then "get a handoff going right now so we can continue this into a new context window"). The step's row: Claude's preprod rehearsal in dev mode, the release review across everything since 1.5.0, its fixes, the policy's *Changes* entry, the lists and the version; then the owner's rehearsal by hand, the PR, the deploy and the upload.
 
 ### Start here (the next session)
+
+**Next:** the owner's items (item 4 under *Before session 5*, as it now reads), then item 5: PR, CI, the API deployed first, then the package. Session 5 is committed and pushed (*Session 5* below).
+
+#### Session 5: the owner's three calls of 2026-10-19, built
+
+After the last review (below) the owner went through its open calls and made three, each reversing a rule Claude had added on top of the contracts (memory *no-paternalistic-guards*: the wallet refuses only what the ledger or the contracts refuse, a user's mistake is the user's, and the private balance pays by default wherever the public account could). Session 4 started them (core's `withdraw_private`) and stopped for a new context; session 5 (2026-10-19) built the rest, with agents by area in the one tree (supply, WebAssembly, screens, docs), then two read-only reviewers by lens, a blind back-translation round, and mutation proofs.
+
+**Asked and decided this session:** where the wallet picks a pool itself (a return's tokens, `acrossOf`; a swap's token pool, `tokenPool`; Change's list), Claude proposed it keep avoiding a pool whose boxes can't come back. The owner: **"Treat it like any pool"**, with the review saying so. Built as `LovejoinTokenWay.stuck` (`lovejoin.ways.warn.stuck` under the token's row).
+
+**Call 34 · A mix that passes the logic is allowed.** `usableNow` (`lovejoin.ts`) refuses only a box below the network's minimum (`belowMinimum`) and a copy (`superseded`, not for mixing again); a pool whose boxes can't come back (`cantComeBack`), or where the check couldn't be made, takes new boxes from every flow, either side. `LovejoinUnusable` is narrowed to those two; `lj.unusable.warn.cantComeBack` and `.unchecked` are gone. The status measures `cantComeBack` for every token pool, the wallet's boxes there or not, and the pool page shows the stuck callout (`lovejoin.stuck.warn.lead`) before Review whenever it's set; its *Bring one back* only where the wallet has a box the hatch takes. The hub's row flags every stuck pool. `stuck()` and `acrossOf`/`tokenAt` flag a token's way. The due-time withdraws are unchanged: a stuck pool's due box waits `STUCK_WAIT_MS`, and nothing pays for it by itself. The anyway question's "Mix my boxes again hides it first" is its own key now (`lovejoin.anyway.privacy.hides`, `.hidesPublic`), said only where that button works.
+
+**Call 35 · No supply check at a pool's start.** Gone from the wallet (`lovejoin-launch.ts`' `choose()`, `LAUNCH_SUPPLY_BOXES`, `assetSupply` in `koios.ts` and `data-layer.ts`, `lj.launch.supply`, `lj.launch.unknownToken`, the 30 × Q cap at build: Q's only bound is the ledger's, and core refuses a k × Q past a u64 in words) and from the server (`assets.rs`, its tests and README: byte-identical to e6b5dae, `asset_info` takes the one `select` again). A start asks only `account_info`. Docs: the policy, privacy.md, the listing's per-host Koios row; this plan's decision 14 and §5 struck through.
+
+**Call 36 · Bring one back paid from the private balance, by default.** Core `lovejoin::withdraw_private` (one Seedelf UTxO of ADA alone beside the box, its own proof bound to a one-time key, giveme.my's collateral, the wallet contract's reference script; `PrivateTooSmall`). WebAssembly `buildLovejoinWithdrawPrivate(key, { network, params, pool, boxRef?, utxos, poolRef? })` tries the UTxOs in the worker's order, skipping a token's, another wallet's, one with a reference script, or one too small, and answers the transaction **unsigned** with the one-time key's `seed`, as every Seedelf spend (`{ txCbor, txHash, seed, fee, lovelace, spent, spentLovelace, boxRef, token? }`); none pays: `NO_PRIVATE_PAYS`'s fixed words. The worker (`withdrawOne`, `paid: true | "private"`): `readContract`'s UTxOs (nothing locked or reserved), one a box back from Lovejoin made first, then the smallest; giveme.my's witness, then `signScriptSpend`; `Withdrawing` names its `box` and keeps the history's `origin` (the box's way back merged with the paying UTxO's class and any account ties), and `lovelace` is what came in, net of the UTxO that was private already; `settleWithdrawing` writes the same history. None pays: `lj.privatePayNone`. The handler passes `"private"` or `true`, nothing else. Screens: the escape hatch's question (`PaidQuestion`), a held box's (`HeldQuestion`) and a not-mixed box's (`AnywayQuestion`) in a stuck pool each offer *Pay from my private balance* (primary, first) and *Pay from my public account* (a button), each with what it ties (`lovejoin.stuck.privacy.private`, `.public`); the callout's link says *Bring one back*.
+
+**The cross-area review** (two read-only reviewers by lens, MONEY/WORKER/RUST and SCREENS/I18N/DOCS, over the uncommitted diff): nothing high. Fixed, each with a test that fails without it:
+- **Screens M1:** in a stuck pool, now reachable, the pool page's own reviews and form still promised each box back after its wait. The reviews open with the stuck callout and drop the "Back later" rows and the mix's hint (`reviewHint`); the form's each-box-back row goes (`EachBoxBackRow`). The classic pool's markup is byte-identical, captured before and after.
+- **Screens M2:** Bring everything back (`ClaimAll`) never said a token's pool was stuck: a warn callout names each such token (`claim.warn.skippedItem` with `lovejoin.ways.warn.stuck`). The other return reviews show `TokenWays` already.
+- **Worker M1:** nothing tested that a return's or a swap's way carries `stuck`: `lovejoin-planner.test.ts`, a return through LJTEST at 4,800 a byte and a swap's MIN box at 12,300 (a 4.5 ₳ box is stuck only in a narrow band, about 11,950–12,780).
+- **Lows fixed:** a box worth less than the withdraw fee itself was a plain error, read as a check that couldn't be made (no warning, no payer, the due run building it every minute): core now calls it `CantPayBack` (`PrivateTooSmall` paid from the private balance, so the next UTxO is tried), test `a_box_worth_less_than_the_fee_cant_pay_its_way_back`; `lj.privatePayNone` said "make some ADA private" when every UTxO was locked or waiting for a return (now `nothingToSpend`'s words); a pool read measured each token pool twice an epoch (usable's measure now answers whether a box comes back too); the payer buttons lost the `danger` the questions had (the private payer is `danger`, still first); "Next one back" and the Bootstrap's "come back by themselves from then on" hidden in a stuck pool; the shared `isHistoryClass`; the private Bootstrap's gate tested in a stuck pool; flows.md's "beside it"; the listing's character count (2,538).
+- **Left, for the owner** (below): L5, a return reviewed before its pool turned stuck goes in anyway, with the warning only on the session page after (follows the owner's call); the policy's date; Change's list doesn't mark a stuck pool until it's chosen; the stuck callout doesn't tell a user with no boxes there that Bring one back comes with a box.
+
+**Checks on the final tree** (after the review's fixes): Rust fmt and clippy `-D warnings` clean, 626 + 115 tests over both workspaces; WebAssembly 205 native and `node --test` 55 of 55; `tsc` clean; Vitest 2,430 passed + 4 skipped on both builds; e2e 100 of 100 on the dev build and on the store build (`build:store`, not `package`, so no release zip was written), and the data layer's 3 of 3. Every worker fix's test fails with that fix reverted in a copy of the extension (thirteen mutations), and the core and screens fixes' tests failed before their fixes. The paid question and a stuck pool's page, with and without the wallet's boxes, looked at in the screens harness. The blind round: three rounds each language (`verified-critical-*.json`'s note); most fixes were the English's own.
+
+**For the owner, from session 5:**
+- **giveme.my sees a private-paid withdraw as any Seedelf spend** (unsigned, then the one-time key signs), but nobody has sent one: preprod has no stuck pool, and giveme.my won't sign a synthetic transaction (memory *preprod-ogmios-probe*). The core test runs both scripts with real proofs, and the WebAssembly test signs with a stand-in for giveme.my's key. A preprod pool launched with too little ADA a box would make one reachable, if wanted.
+- **Two "Bring one back" links** show on a stuck pool's page where the wallet has both a mixed box and a Bootstrap's held box, each in its own callout (the hatch's and the hold's). Left as they are.
+- **Older than this session, not changed:** for a box another account's public mix put in, the anyway question still says "Mix again from my public account hides it first", which the active account's button doesn't take (the page's other-account note says to switch).
+- **The privacy policy's date:** its 18 October entry (not shipped) now carries calls 35 and 36, made on the 19th. Keep "Effective 18 October 2026", or re-date it?
+- **A return reviewed before its pool turned stuck** (a new epoch's fees between the review and the chain's build) goes into it all the same, as call 34 has it; the warning then shows on the session's page, after. Say so at review, or accept?
+- **In a stuck pool, a mix's review drops its whole hint**, since the sentence promising each box back shares one key with the rest ("Once funded … what isn't used comes back with the 5 ₳ kept aside"); its rows say the rest. Bring everything back's total row still says "back after {{delay}}" under the new warning, as it sums every pool's boxes.
+
+#### Before session 5
 
 Session 3 (2026-10-18/19, a new context; same branch; committed at its end as 8cc0044 and 030fdcf) did steps 1 to 3 of the first handoff, and fix round two with its two reviews (*Fix round two* below). Session 4 (2026-10-19) ran a last review of all of 34g and fixed what it found (*The last review* below), committed on top and pushed. Where it stands:
 
@@ -918,8 +951,8 @@ Session 3 (2026-10-18/19, a new context; same branch; committed at its end as 8c
 2. **Checks on the final tree** (session 4, after the last review's fixes): `tsc` clean; Vitest 2,400 passed + 4 skipped on both builds (`npm test`, `VITE_ENABLE_MAINNET=false npm test`); e2e 100 of 100 on the dev build and on the store build, and the data layer's 3 of 3 (`npm run e2e:data`); Rust on 030fdcf, which the last round didn't touch: 736 tests over both workspaces, fmt and clippy `-D warnings` clean.
 3. **The rehearsal's wallets** (A, B, C on 47001–47003) run on, so B's last boxes come back by themselves; A holds 39 Bootstrap boxes in the MIN pool for the owner's run.
 
-4. **The owner's** (ask, don't do): the live db-sync tests (`cd seedelf-data && cargo test --test live_lovejoin -- --ignored --test-threads=1 --nocapture`, and `live_public an_nfts_metadata_is_koioss` for PRIV-2's new `total_supply`, whose expected "1" is unrecorded), with the last review's `SUPPLY` timing (*For the owner*); their own rehearsal by hand (decision 29), perhaps on Claude's MIN pool, which holds 39 of A's Bootstrap boxes; a look at the store listing's new Lovejoin text (below); the calls under *For the owner*.
-5. **Then:** (committed and pushed) PR into main (`gh api -X PATCH` for body edits, memory *gh-pr-edit-workaround*), CI; after the merge, **deploy the API first** (34c's token routes, PRIV-2's `asset_info`, DATA-3/4: a 1.6.0 wallet against the old API gets a 400 on `asset_info` and holds its public reads on Koios for 5 minutes), check `lovejoin/pools`, `lovejoin/tokens` and `asset_info?select=total_supply` answer 200 by hand (the deploy's `/health` says nothing of them), then package from the merge commit, upload, and the record PR with the zip's hash (memory *web-wallet-branching*).
+4. **The owner's** (ask, don't do): the live db-sync tests (`cd seedelf-data && cargo test --test live_lovejoin -- --ignored --test-threads=1 --nocapture`; `live_public`'s `total_supply` part and the `SUPPLY` timing went with call 35); their own rehearsal by hand (decision 29), perhaps on Claude's MIN pool, which holds 39 of A's Bootstrap boxes; a look at the store listing's new Lovejoin text (below); the calls under *For the owner*.
+5. **Then:** (committed and pushed) PR into main (`gh api -X PATCH` for body edits, memory *gh-pr-edit-workaround*), CI; after the merge, **deploy the API first** (34c's token routes, DATA-3/4; PRIV-2's `asset_info` route went with call 35, so the wallet asks `asset_info` only as 1.5.0 did), check `lovejoin/pools` and `lovejoin/tokens` answer 200 by hand (the deploy's `/health` says nothing of them), then package from the merge commit, upload, and the record PR with the zip's hash (memory *web-wallet-branching*).
 
 ### The rehearsal (Claude's, dev mode)
 
@@ -1018,8 +1051,8 @@ The owner, 2026-10-19: "review chunk 34g … fix any findings and commit and pus
 - **R2:** preprod's floor stays 0, so Bootstrap leading below the floor shows on mainnet only. A dev-only override to rehearse it on preprod is possible, if wanted.
 - **What a classic-only user now sees differently:** nothing on the Lovejoin screens; on a swap's page, step 4's corrected words.
 - **The dApps tile still says "Mix ADA in 10 ₳ boxes"** (`dapps.lovejoin.what`), where the hub now says "A mixer for ADA and tokens" once a token pool is read. The tile reads no pools, so it can't switch as the hub does without a read of its own. Rewording it ("Mix ADA and tokens") changes a classic-only user's screen (backward compatibility 7), and mainnet has no token pool yet. Leave, reword, or switch it on what discovery has kept (no request)?
-- **From the last review:** (1) whether mixing again should be allowed in a pool whose boxes can't pay their own way back (`cantComeBack` alone; `belowMinimum` can't build a mix): it moves only the wallet's own boxes, and would give a box not mixed yet there a private way out, where today Bring one back anyway, with the public account paying, is its only one; until then the anyway question still says "Mix my boxes again hides it first" (critical keys, left as they are) beside a Mix again that's off, saying why. (2) The live run: `SUPPLY` (`seedelf-data/api/src/public/assets.rs`) sums every mint of a token, uncapped; `HOLDER` runs the same sum in production, but nobody has timed it on a token minted and burned often (DJED, say): an `explain analyze` of it there, with the live tests. A read near the 10 s statement timeout would send a pool's start to Koios. (3) The listing's per-host Koios row grew; the merged text the dashboard takes didn't change.
-- The calls the first round's fixers made, each in their `fixed-*.md`: RULES refuses a new box in a pool that can't take one, with the reason on the page; Bring them all back asks first; a held box's Bring one back in a stuck pool names the public account on its button.
+- **From the last review:** (1) whether mixing again should be allowed in a pool whose boxes can't pay their own way back: settled by call 34 (*Session 5* above), and the anyway question's "Mix my boxes again hides it first" is said only where that button works. (2) `SUPPLY`'s timing: gone with call 35. (3) The listing's per-host Koios row is one item shorter again (call 35).
+- The calls the first round's fixers made, each in their `fixed-*.md`: RULES refuses a new box in a pool that can't take one, with the reason on the page (since call 34, only below the minimum or a copy); Bring them all back asks first; a held box's Bring one back in a stuck pool named the public account on its button (since call 36, both payers, the private balance first).
 
 ## Open for discussion
 
