@@ -3390,58 +3390,131 @@ pub mod api {
         Ok(())
     }
 
-    /// One payment of `owed` lovelace in parts, when one transaction can't spend enough UTxOs (`too_many`, the
-    /// first try's refusal): while what's left needs more than one spends, the next pays all the largest of the rest
-    /// hold but its fee (`most`, Max on those alone), or, where that would leave the last less than it carries
-    /// (`last_least`), as much as leaves that (`amount`); the UTxOs holding the tokens sent stay for the last
-    /// (`hold`), which pays what's left with them (`last`). Each part spends its own, so none waits on another.
+    /// How much of `token` `utxo` holds.
+    fn quantity_of(utxo: &UtxoResponse, token: &TokenAmount) -> u128 {
+        utxo.asset_list
+            .iter()
+            .flatten()
+            .filter(|a| a.policy_id == token.policy_id && a.asset_name == token.asset_name)
+            .map(|a| a.quantity.parse::<u128>().unwrap_or(0))
+            .sum()
+    }
+
+    /// The UTxOs of `rest` holding any of `tokens`, those holding the most of them first, [`MAX_WITHDRAW_UTXOS`] at
+    /// most: a part's, where the tokens sent are in more UTxOs than one transaction spends (the owner's test of
+    /// 1.6.0: a pool's boxes brought back, a few of its token in each).
+    fn token_group(rest: &[UtxoResponse], tokens: &[TokenAmount]) -> Vec<UtxoResponse> {
+        let mut holders: Vec<UtxoResponse> = rest
+            .iter()
+            .filter(|u| holds_any(u, tokens))
+            .cloned()
+            .collect();
+        holders.sort_by_key(|u| {
+            std::cmp::Reverse(tokens.iter().map(|t| quantity_of(u, t)).sum::<u128>())
+        });
+        holders.truncate(MAX_WITHDRAW_UTXOS);
+        holders
+    }
+
+    /// Of the tokens `owed`, what `group` holds: each one's, up to what's owed.
+    fn share_of(group: &[UtxoResponse], owed: &[TokenAmount]) -> Vec<TokenAmount> {
+        owed.iter()
+            .filter_map(|t| {
+                let held: u128 = group.iter().map(|u| quantity_of(u, t)).sum();
+                let take = held.min(t.quantity.parse::<u128>().unwrap_or(0));
+                (take > 0).then(|| TokenAmount {
+                    quantity: take.to_string(),
+                    ..t.clone()
+                })
+            })
+            .collect()
+    }
+
+    /// The tokens `owed` less those `sent`, each one's; one all sent goes.
+    fn less(owed: &[TokenAmount], sent: &[TokenAmount]) -> Vec<TokenAmount> {
+        owed.iter()
+            .filter_map(|t| {
+                let gone: u128 = sent
+                    .iter()
+                    .filter(|s| s.policy_id == t.policy_id && s.asset_name == t.asset_name)
+                    .map(|s| s.quantity.parse::<u128>().unwrap_or(0))
+                    .sum();
+                let left = t.quantity.parse::<u128>().unwrap_or(0).saturating_sub(gone);
+                (left > 0).then(|| TokenAmount {
+                    quantity: left.to_string(),
+                    ..t.clone()
+                })
+            })
+            .collect()
+    }
+
+    /// One payment of `owed` lovelace and `tokens` in parts, when one transaction can't spend enough UTxOs
+    /// (`too_many`, the first try's refusal). While the tokens sent are in more UTxOs than one spends, the next sends
+    /// what those holding the most of them hold, with the least ADA that carries them (`least`), their other ADA
+    /// staying as change (`amount`). Then, while what's left needs more than one spends, the next pays all the
+    /// largest of the rest that hold none of the tokens hold but its fee (`most`), or, where that would leave the last
+    /// less than it carries, as much as leaves that; the last pays what's left, with the tokens (`amount`). Each part
+    /// spends its own, so none waits on another.
     #[allow(clippy::too_many_arguments)]
     fn in_parts<R>(
         too_many: anyhow::Error,
         utxos: &[UtxoResponse],
         mut owed: u64,
-        last_least: u64,
-        part_least: u64,
-        hold: &[TokenAmount],
+        mut tokens: Vec<TokenAmount>,
+        least: impl Fn(&[TokenAmount]) -> Result<u64>,
         inputs_of: impl Fn(&R) -> &[OutRef],
         paid_of: impl Fn(&R) -> Result<u64>,
         mut most: impl FnMut(Vec<UtxoResponse>) -> Result<R>,
-        mut amount: impl FnMut(Vec<UtxoResponse>, u64) -> Result<R>,
-        mut last: impl FnMut(Vec<UtxoResponse>, u64) -> Result<R>,
+        mut amount: impl FnMut(Vec<UtxoResponse>, u64, Vec<TokenAmount>) -> Result<R>,
     ) -> Result<Vec<R>> {
         holding_enough(utxos, owed)?;
+        let part_least = least(&[])?;
         let mut rest = utxos.to_vec();
         let mut parts = Vec::new();
         loop {
             if parts.len() + 1 >= MAX_PARTS {
                 return Err(too_many);
             }
-            // The largest of the rest that hold none of the tokens sent: those are the last one's.
-            let free: Vec<UtxoResponse> = rest
-                .iter()
-                .filter(|u| !holds_any(u, hold))
-                .cloned()
-                .collect();
-            let (group, _) = build::max_inputs(&free, &Assets::new(), MAX_WITHDRAW_UTXOS)?;
-            if group.is_empty() {
-                return Err(too_many);
-            }
-            let all = most(group.clone())?;
-            let part = if paid_of(&all)? + last_least > owed {
-                let some = owed.saturating_sub(last_least);
-                if some < part_least {
+            let holders = rest.iter().filter(|u| holds_any(u, &tokens)).count();
+            let part = if holders > MAX_WITHDRAW_UTXOS {
+                let group = token_group(&rest, &tokens);
+                let share = share_of(&group, &tokens);
+                let part = amount(group, least(&share)?, share.clone())?;
+                tokens = less(&tokens, &share);
+                part
+            } else {
+                // The largest of the rest that hold none of the tokens sent: those are the last one's.
+                let last_least = least(&tokens)?;
+                let free: Vec<UtxoResponse> = rest
+                    .iter()
+                    .filter(|u| !holds_any(u, &tokens))
+                    .cloned()
+                    .collect();
+                let (group, _) = build::max_inputs(&free, &Assets::new(), MAX_WITHDRAW_UTXOS)?;
+                if group.is_empty() {
                     return Err(too_many);
                 }
-                amount(group, some)?
-            } else {
-                all
+                let all = most(group.clone())?;
+                if paid_of(&all)? + last_least > owed {
+                    let some = owed.saturating_sub(last_least);
+                    if some < part_least {
+                        return Err(too_many);
+                    }
+                    amount(group, some, Vec::new())?
+                } else {
+                    all
+                }
             };
-            owed -= paid_of(&part)?;
+            owed = owed.saturating_sub(paid_of(&part)?);
             rest = without(&rest, inputs_of(&part));
             parts.push(part);
-            match last(rest.clone(), owed) {
-                Ok(final_part) => {
-                    parts.push(final_part);
+            // All of it sent: the tokens' parts carried the ADA owed as well.
+            if tokens.is_empty() && owed == 0 {
+                return Ok(parts);
+            }
+            match amount(rest.clone(), owed.max(least(&tokens)?), tokens.clone()) {
+                Ok(last) => {
+                    parts.push(last);
                     return Ok(parts);
                 }
                 Err(e) if build::is_too_many(&e) => continue,
@@ -3450,24 +3523,36 @@ pub mod api {
         }
     }
 
-    /// Max in parts: every UTxO, [`MAX_PARTS`] transactions at most, each the most of the largest of the rest
-    /// (`part`, given the rest and whether it's the first); the last says how many it left, as one transaction's
-    /// Max does. A part after the first that can't be built (what's left pays less than a payment carries) ends it.
+    /// Max in parts: every UTxO, [`MAX_PARTS`] transactions at most, each the most of what it spends (`part`, given
+    /// the rest it picks from and the tokens it sends). The tokens sent go first: with those, the part picks from all
+    /// the rest; where they're in more UTxOs than one spends, from those holding the most of them, sending what they
+    /// hold. The last says how many it left, as one transaction's Max does. A part after the first that can't be
+    /// built (what's left pays less than a payment carries) ends it.
     fn max_in_parts<R>(
         utxos: &[UtxoResponse],
+        mut tokens: Vec<TokenAmount>,
         left_of: impl Fn(&mut R) -> &mut usize,
         inputs_of: impl Fn(&R) -> &[OutRef],
-        mut part: impl FnMut(Vec<UtxoResponse>, bool) -> Result<R>,
+        mut part: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
     ) -> Result<Vec<R>> {
         let mut rest = utxos.to_vec();
         let mut parts: Vec<R> = Vec::new();
         loop {
             let first = parts.is_empty();
-            let mut built = match part(rest.clone(), first) {
+            let holders = rest.iter().filter(|u| holds_any(u, &tokens)).count();
+            let (from, share) = if holders > MAX_WITHDRAW_UTXOS {
+                let group = token_group(&rest, &tokens);
+                let share = share_of(&group, &tokens);
+                (group, share)
+            } else {
+                (rest.clone(), tokens.clone())
+            };
+            let mut built = match part(from, share.clone()) {
                 Ok(built) => built,
                 Err(e) if first => return Err(e),
                 Err(_) => break,
             };
+            tokens = less(&tokens, &share);
             let taken = inputs_of(&built).len();
             rest = without(&rest, inputs_of(&built));
             *left_of(&mut built) = 0;
@@ -3484,9 +3569,10 @@ pub mod api {
 
     /// Paying a Seedelf from the Seedelf balance as several transactions when one can't spend enough UTxOs (the
     /// owner's test of 1.6.0, after a pool's boxes came back, a UTxO each: "spending more than the max amount of
-    /// utxos does not create two healthy tx"). One transaction when it does, as [`build_transfer`] builds it. An
-    /// amount to one Seedelf goes in parts ([`in_parts`]); Max takes every UTxO ([`max_in_parts`]), the tokens it
-    /// sends in the first. Several Seedelfs at once go in one transaction, as before.
+    /// utxos does not create two healthy tx"; then "attempting to send all my min to myself": its token in more UTxOs
+    /// than one spends). One transaction when it does, as [`build_transfer`] builds it. An amount to one Seedelf goes
+    /// in parts ([`in_parts`]); Max takes every UTxO ([`max_in_parts`]). Several Seedelfs at once go in one
+    /// transaction, as before.
     pub fn build_transfer_parts(
         sk: Scalar,
         request: TransferRequest,
@@ -3506,19 +3592,10 @@ pub mod api {
         {
             return max_in_parts(
                 &request.utxos,
+                only.tokens.clone(),
                 |r: &mut TransferResult| &mut r.left,
                 |r| &r.inputs,
-                |rest, first| {
-                    with(
-                        rest,
-                        None,
-                        if first {
-                            only.tokens.clone()
-                        } else {
-                            Vec::new()
-                        },
-                    )
-                },
+                |from, share| with(from, None, share),
             );
         }
         let too_many = match build_transfer(sk, request.clone()) {
@@ -3528,23 +3605,20 @@ pub mod api {
         };
         let chain = chain_of(&request.network, &request.params)?;
         let pay = &request.payments[0];
-        let tokens = assets_of(&pay.tokens)?;
-        let last_least = build::minimum_seedelf_payment(&chain.params, &tokens)?;
-        let part_least = build::minimum_seedelf_payment(&chain.params, &Assets::new())?;
-        let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(last_least);
-        let paid = |r: &TransferResult| lovelace_of(&r.payments[0].lovelace);
+        let least = |tokens: &[TokenAmount]| {
+            build::minimum_seedelf_payment(&chain.params, &assets_of(tokens)?)
+        };
+        let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(least(&pay.tokens)?);
         in_parts(
             too_many,
             &request.utxos,
             owed,
-            last_least,
-            part_least,
-            &pay.tokens,
+            pay.tokens.clone(),
+            least,
             |r: &TransferResult| &r.inputs,
-            paid,
+            |r| lovelace_of(&r.payments[0].lovelace),
             |group| with(group, None, Vec::new()),
-            |group, some| with(group, Some(some), Vec::new()),
-            |rest, owed| with(rest, Some(owed), pay.tokens.clone()),
+            |from, lovelace, tokens| with(from, Some(lovelace), tokens),
         )
     }
 
@@ -3559,10 +3633,13 @@ pub mod api {
         if request.funding.is_some() || request.most {
             return build_withdraw(sk, request).map(|one| vec![one]);
         }
-        let with = |utxos: Vec<UtxoResponse>, lovelace: Option<u64>, tokens: Vec<TokenAmount>| {
+        let with = |utxos: Vec<UtxoResponse>,
+                    lovelace: Option<u64>,
+                    tokens: Vec<TokenAmount>,
+                    most: bool| {
             let mut sub = request.clone();
             sub.utxos = utxos;
-            sub.most = false;
+            sub.most = most;
             sub.payments = vec![WithdrawPayment {
                 lovelace: lovelace.map(|l| l.to_string()),
                 tokens,
@@ -3575,9 +3652,10 @@ pub mod api {
         {
             return max_in_parts(
                 &request.utxos,
+                Vec::new(),
                 |r: &mut WithdrawResult| &mut r.left,
                 |r| &r.inputs,
-                |rest, _| with(rest, None, Vec::new()),
+                |from, _| with(from, None, Vec::new(), false),
             );
         }
         let too_many = match build_withdraw(sk, request.clone()) {
@@ -3588,36 +3666,22 @@ pub mod api {
         let chain = chain_of(&request.network, &request.params)?;
         let pay = &request.payments[0];
         let to = payable_address(chain.network_flag, &pay.to)?;
-        let tokens = assets_of(&pay.tokens)?;
-        let last_least = build::minimum_address_payment(&chain.params, &to, &tokens)?;
-        let part_least = build::minimum_address_payment(&chain.params, &to, &Assets::new())?;
-        let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(last_least);
+        let least = |tokens: &[TokenAmount]| {
+            build::minimum_address_payment(&chain.params, &to, &assets_of(tokens)?)
+        };
+        let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(least(&pay.tokens)?);
         // A part of an amount pays the most of its UTxOs' ADA, every token staying in the Seedelf balance with the
         // least ADA it needs (`most`): Everything would pay their tokens too, which weren't asked for.
-        let most = |group: Vec<UtxoResponse>| {
-            let mut sub = request.clone();
-            sub.utxos = group;
-            sub.most = true;
-            sub.payments = vec![WithdrawPayment {
-                lovelace: None,
-                tokens: Vec::new(),
-                ..request.payments[0].clone()
-            }];
-            build_withdraw(sk, sub)
-        };
-        let paid = |r: &WithdrawResult| lovelace_of(&r.payments[0].lovelace);
         in_parts(
             too_many,
             &request.utxos,
             owed,
-            last_least,
-            part_least,
-            &pay.tokens,
+            pay.tokens.clone(),
+            least,
             |r: &WithdrawResult| &r.inputs,
-            paid,
-            most,
-            |group, some| with(group, Some(some), Vec::new()),
-            |rest, owed| with(rest, Some(owed), pay.tokens.clone()),
+            |r| lovelace_of(&r.payments[0].lovelace),
+            |group| with(group, None, Vec::new(), true),
+            |from, lovelace, tokens| with(from, Some(lovelace), tokens, false),
         )
     }
 

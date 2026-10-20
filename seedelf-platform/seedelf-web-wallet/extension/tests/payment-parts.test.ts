@@ -108,6 +108,22 @@ describe("a payment more UTxOs pay than one transaction spends (the owner's test
     expect(await t.session.get(partKey(SESSION_TRANSFER, 0))).toBeUndefined();
   });
 
+  it("sends all of a token held in more UTxOs than one transaction spends, in parts (\"send all my min to myself\")", async () => {
+    const t = await unlocked();
+    // Thirty of its UTxO holding tUSDM, as a pool's boxes brought back each hold a little of its token.
+    const holder = ownedUtxos[1]!;
+    t.koios.added.push(...Array.from({ length: 30 }, (_, i) => ({ ...holder, tx_hash: (i + 1).toString(16).padStart(64, "0") })));
+    const token = holder.asset_list![0]!;
+    // The 30 copies and the fixture's own.
+    const all = (BigInt(token.quantity) * 31n).toString();
+    const { withdraw } = services(t);
+    const summary = await withdraw.build("preprod", [
+      { to: OWN, lovelace: "0", tokens: [{ policyId: token.policy_id, assetName: token.asset_name, quantity: all }] },
+    ]);
+    expect(summary.parts?.map((p) => p.inputs)).toEqual([20, 11]);
+    expect(summary.payments[0]!.tokens).toEqual([expect.objectContaining({ policyId: token.policy_id, assetName: token.asset_name, quantity: all })]);
+  });
+
   it("takes every UTxO with Max, in parts of 20, and leaves none", async () => {
     const t = await unlocked(30);
     const { withdraw } = services(t);

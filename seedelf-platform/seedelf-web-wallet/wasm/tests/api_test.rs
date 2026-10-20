@@ -1439,6 +1439,48 @@ mod transfer {
     }
 
     #[test]
+    fn all_of_a_token_in_more_utxos_than_one_transaction_spends_goes_to_a_seedelf_in_parts() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let token = owned().into_iter().nth(1).unwrap();
+        let held = token.asset_list.clone().unwrap()[0].clone();
+        let mut r = request();
+        r.utxos = (0..30u64)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                ..token.clone()
+            })
+            .collect();
+        let all = (held.quantity.parse::<u128>().unwrap() * 30).to_string();
+        r.payments[0].lovelace = Some("0".into());
+        r.payments[0].tokens = vec![TokenAmount {
+            policy_id: held.policy_id.clone(),
+            asset_name: held.asset_name.clone(),
+            quantity: all.clone(),
+        }];
+        let parts = api::build_transfer_parts(sk, r.clone()).unwrap();
+        assert_eq!(
+            parts.iter().map(|p| p.inputs.len()).collect::<Vec<_>>(),
+            vec![20, 10]
+        );
+        let sent: u128 = parts
+            .iter()
+            .flat_map(|p| p.payments[0].tokens.iter())
+            .map(|t| t.quantity.parse::<u128>().unwrap())
+            .sum();
+        assert_eq!(sent.to_string(), all);
+        // Max with it too: every UTxO, the token in the parts that hold it.
+        r.payments[0].lovelace = None;
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        assert_eq!(parts.iter().map(|p| p.inputs.len()).sum::<usize>(), 30);
+        let sent: u128 = parts
+            .iter()
+            .flat_map(|p| p.payments[0].tokens.iter())
+            .map(|t| t.quantity.parse::<u128>().unwrap())
+            .sum();
+        assert_eq!(sent.to_string(), all);
+    }
+
+    #[test]
     fn max_to_a_seedelf_takes_every_utxo_in_parts_the_tokens_in_the_first() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let base = owned().into_iter().next().unwrap();
@@ -2399,6 +2441,57 @@ mod withdraw {
         // The first pays all of the largest 20 but its fee; the last what's left, with change.
         assert_eq!(parts[0].inputs.len(), 20);
         assert_eq!(parts[0].change_lovelace, "0");
+    }
+
+    /// `n` of the phrase's UTxO holding tUSDM, each its own outpoint, as a pool's boxes brought back each hold a
+    /// little of its token; and the token, all of it.
+    fn spread(n: u64) -> (Vec<UtxoResponse>, api::TokenAmount) {
+        let token = owned().into_iter().nth(1).unwrap();
+        let held = token.asset_list.clone().unwrap()[0].clone();
+        let utxos = (0..n)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                ..token.clone()
+            })
+            .collect();
+        let all = held.quantity.parse::<u128>().unwrap() * n as u128;
+        let amount = api::TokenAmount {
+            policy_id: held.policy_id,
+            asset_name: held.asset_name,
+            quantity: all.to_string(),
+        };
+        (utxos, amount)
+    }
+
+    #[test]
+    fn all_of_a_token_in_more_utxos_than_one_transaction_spends_goes_in_parts() {
+        // The owner's test of 1.6.0: "attempting to send all my min to myself".
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (utxos, all) = spread(30);
+        let mut r = request("max");
+        r.utxos = utxos;
+        r.payments[0].lovelace = Some("0".into());
+        r.payments[0].tokens = vec![all.clone()];
+        let e = api::build_withdraw(sk, r.clone()).err().unwrap();
+        assert!(seedelf_core::build::is_too_many(&e), "{e}");
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert_eq!(parts.len(), 2);
+        // Every token between them, each part what its UTxOs hold; each spends its own.
+        let sent: u128 = parts
+            .iter()
+            .flat_map(|p| p.payments[0].tokens.iter())
+            .map(|t| t.quantity.parse::<u128>().unwrap())
+            .sum();
+        assert_eq!(sent.to_string(), all.quantity);
+        assert_eq!(
+            parts.iter().map(|p| p.inputs.len()).collect::<Vec<_>>(),
+            vec![20, 10]
+        );
+        assert!(disjoint(
+            &parts.iter().map(|p| p.inputs.clone()).collect::<Vec<_>>()
+        ));
+        // Their other ADA stays private: each carries the least its tokens need, the rest is change.
+        assert!(parts.iter().all(|p| p.change_lovelace != "0"));
     }
 
     #[test]
