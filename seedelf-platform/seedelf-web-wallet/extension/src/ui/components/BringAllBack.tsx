@@ -160,6 +160,9 @@ export function BringAllBackView({
       : tr(pool ? "lovejoin.bring.going" : "settings.lovejoin.bringingPool", boxes(b.back));
   // A bar, as Bootstrap's progress has: how far through what was there it is, once a run has counted it.
   const total = going && going.left !== undefined ? going.back + going.left : 0;
+  // All sent, and the chain not done with them yet: said, then Done once it is (the owner: "when it hits zero it
+  // becomes a, confirming on chain then the final done update"). Nothing to stop.
+  const confirming = !!going && going.left === 0 && going.back > 0;
   const progress = going && (
     <Callout tone="info" testId="lovejoin-bringing">
       <div className="stack-tight">
@@ -168,14 +171,20 @@ export function BringAllBackView({
             <span className="meter__fill" style={{ width: `${Math.round((100 * going.back) / total)}%` }} />
           </span>
         )}
-        <span>{joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}</span>
+        <span>
+          {confirming
+            ? tr("settings.lovejoin.bringConfirming", boxes(going.back))
+            : joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}
+        </span>
         <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
         {going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: going.why })}</span>}
-        <span>
-          <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
-            {tr("lovejoin.mixes.stop")}
-          </button>
-        </span>
+        {!confirming && (
+          <span>
+            <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
+              {tr("lovejoin.mixes.stop")}
+            </button>
+          </span>
+        )}
       </div>
     </Callout>
   );
@@ -212,8 +221,9 @@ export function BringAllBackView({
     <div className="stack-tight" data-testid="lovejoin-bring">
       {progress}
       {before}
-      {asks && (pool ? button("link align-start") : <span>{button("secondary")}</span>)}
+      {/* Settings: its line above its button, setting it apart from the wait's selector above (the owner). */}
       {asks && !pool && <p className="note">{tr("settings.lovejoin.bringNote")}</p>}
+      {asks && (pool ? button("link align-start") : <span>{button("secondary")}</span>)}
     </div>
   );
 }

@@ -3182,5 +3182,8 @@
   "settings.lovejoin.bringingPool_one": "machine",
   "settings.lovejoin.bringingPool_other": "machine",
   "lj.bringOtherPool": "machine",
-  "settings.lovejoin.bringConfirm": "machine"
+  "settings.lovejoin.bringConfirm": "machine",
+  "settings.lovejoin.bringConfirming_many": "machine",
+  "settings.lovejoin.bringConfirming_one": "machine",
+  "settings.lovejoin.bringConfirming_other": "machine"
 }

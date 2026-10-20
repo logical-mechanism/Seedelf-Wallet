@@ -166,7 +166,13 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     expect(t.koios.submitted).toHaveLength(4);
     expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 4, left: 0 });
 
-    // The next run finds nothing left: it's over, and Home's figures say so at once.
+    // The next run finds none left to send, but the pools still list them: their withdraws aren't on chain yet.
+    expect(await lj.withdrawDue("preprod")).toEqual([]);
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 4, left: 0, confirming: 4 });
+    expect((await lj.held("preprod")).bringing).toEqual({ back: 4, left: 0, confirming: 4 });
+    expect(await lj.returning("preprod")).toBe(true);
+    // On chain: it's over, and Home's figures say so at once.
+    for (const box of withdrawn(t)) t.koios.spent.add(box);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     const after = await sealed(t);
     expect(after.bringing).toBeUndefined();
@@ -261,7 +267,9 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     expect(await lj.withdrawDue("preprod")).toHaveLength(1);
     expect(withdrawn(t)).toEqual([`${"f1".repeat(32)}#0`]);
     expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 1, pool: TOKEN, left: 0 });
-    // Over: the token pool's figures go, the classic pool's box keeps its due time, hours away.
+    // On chain, and over: the token pool's figures go, the classic pool's box keeps its due time, hours away. The
+    // classic pool's box, listed and unspent, isn't this run's to wait for.
+    for (const box of withdrawn(t)) t.koios.spent.add(box);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     const after = await sealed(t);
     expect(after.bringing).toBeUndefined();

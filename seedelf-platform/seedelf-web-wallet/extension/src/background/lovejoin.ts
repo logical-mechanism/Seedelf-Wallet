@@ -794,6 +794,11 @@ interface Bringing {
   back: number;
   /** How many of the wallet's boxes the last run left, a chain's included: none before its first run. */
   left?: number;
+  /**
+   * None left to send, and this many it sent still listed in their pool: their withdraws aren't on chain yet. It's over
+   * once none is (the owner's test: "when it hits zero it becomes a, confirming on chain then the final done update").
+   */
+  confirming?: number;
   /** Why the last box that didn't go didn't, and how many runs in a row sent nothing. */
   why?: string;
   fails?: number;
@@ -1771,6 +1776,7 @@ const bringingView = (b: Bringing): NonNullable<LovejoinHeld["bringing"]> => ({
   back: b.back,
   ...(b.pool !== undefined ? { pool: b.pool } : {}),
   ...(b.left !== undefined ? { left: b.left } : {}),
+  ...(b.confirming ? { confirming: b.confirming } : {}),
   ...(b.why !== undefined ? (b.stopped ? { stopped: b.why } : { why: b.why }) : {}),
 });
 
@@ -5510,11 +5516,24 @@ export class LovejoinService {
       if (!(await locked())) await this.bringNoted(network, 0, undefined, e instanceof Error ? e.message : String(e));
       return [];
     }
-    const { reads, owned } = found;
+    const { reads, owned, listed } = found;
     // One pool's, when it's asked from that pool's page.
-    const ours = scope === undefined ? owned : inPool(owned, scope);
+    const inScope = (boxes: OutRef[]) => (scope === undefined ? boxes : inPool(boxes, scope));
+    const ours = inScope(owned);
     const takes = free(ours, reserved);
     const held = new Set(bootstrapOf(await this.read(network), owned).map(ref));
+    // Its pools still list a box a withdraw of the wallet's spent: not on chain yet. Done means back. Only once it sent
+    // one: another spend of the wallet's on its way says nothing of a run that sent none.
+    const unspentByUs = new Set(owned.map(ref));
+    const confirming = inScope(listed).filter((b) => !unspentByUs.has(ref(b))).length;
+    if (!takes.length && confirming && ((await this.read(network)).bringing?.back ?? 0) > 0) {
+      await this.update(network, (s) => {
+        if (!s.bringing) return;
+        s.bringing.left = 0;
+        s.bringing.confirming = confirming;
+      });
+      return [];
+    }
     if (!takes.length) {
       await this.update(network, (s) => {
         for (const { pool } of reads.filter((r) => scope === undefined || r.pool.id === scope)) {
@@ -5541,7 +5560,9 @@ export class LovejoinService {
     // What's left, said from the start, and each box counted as it goes, so Settings and the pool's page follow it box
     // by box: counted only at the run's end, a run that took them all showed none sent, then done (the owner's test).
     await this.update(network, (s) => {
-      if (s.bringing) s.bringing.left = takes.length;
+      if (!s.bringing) return;
+      s.bringing.left = takes.length;
+      delete s.bringing.confirming;
     });
     // The classic pool's first, as the runs take them.
     for (const box of [...inPool(takes, CLASSIC), ...takes.filter((b) => poolOf(b) !== CLASSIC)]) {

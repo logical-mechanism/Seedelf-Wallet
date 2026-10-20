@@ -2344,11 +2344,12 @@ export interface LovejoinHeld {
   }>;
   /**
    * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0), while asked: one pool's alone, asked
-   * from its page (`pool`, `classic` for the classic pool's), or every pool's; the withdraws it sent,
+   * from its page (`pool`, `classic` for the classic pool's), or every pool's; the withdraws it sent, how many of
+   * them aren't on chain yet once none is left to send (`confirming`),
    * the boxes its last run left (none before its first), why the last box that didn't go didn't (`why`), and, once
    * it stopped for that, the reason (`stopped`). None once it's over.
    */
-  bringing?: { back: number; pool?: string; left?: number; why?: string; stopped?: string };
+  bringing?: { back: number; pool?: string; left?: number; confirming?: number; why?: string; stopped?: string };
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */

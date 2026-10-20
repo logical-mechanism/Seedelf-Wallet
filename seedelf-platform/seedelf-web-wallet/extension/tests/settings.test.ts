@@ -339,8 +339,13 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
     expect(stopped).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer. The rest come back by themselves, each after its wait, unless you press Try again.");
     expect(stopped).toContain("Try again");
     expect(stopped).not.toContain("Stop ");
-    expect(view({ done: 4 })).toContain("Done: 4 boxes are on their way back to your private balance.");
-    expect(view({ done: 1 })).toContain("Done: 1 box is on its way back to your private balance.");
+    expect(view({ done: 4 })).toContain("Done: 4 boxes back in your private balance.");
+    expect(view({ done: 1 })).toContain("Done: 1 box back in your private balance.");
+    // All sent, the chain not done with them yet: said so, with nothing to stop (the owner: "confirming on chain then the final done").
+    const confirming = view({ bringing: { back: 8, left: 0, confirming: 8 } });
+    expect(confirming).toContain("8 boxes sent. Waiting for the chain to confirm.");
+    expect(confirming).not.toContain("0 boxes left");
+    expect(confirming).not.toContain("Stop");
     expect(view({ done: 0 })).toContain("Nothing of yours was left in Lovejoin.");
   });
 });
@@ -370,7 +375,7 @@ describe("a pool's page's Bring every box in this pool back now (the owner's tes
     expect(markup(false)).toMatch(/<button[^>]*class="secondary"[^>]*data-testid="lovejoin-bring-ask"/);
     // The link alone on a pool's page; a button and one short line in Settings, no more (the owner: "the rest is text").
     expect(text(markup(true)).trim()).toBe("Bring every box in this pool back now");
-    expect(text(markup(false)).trim()).toBe("Bring every box back now Every box in every pool, without the waits.");
+    expect(text(markup(false)).trim()).toBe("Every box in every pool, without the waits. Bring every box back now");
   });
 
   it("speaks of this pool alone, and asks first with the same warning", () => {
