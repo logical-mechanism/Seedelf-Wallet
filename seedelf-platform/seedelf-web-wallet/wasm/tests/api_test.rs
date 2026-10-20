@@ -1398,6 +1398,66 @@ mod transfer {
         request().payments[0].recipient.clone()
     }
 
+    #[test]
+    fn an_amount_too_many_utxos_pay_goes_in_parts_the_tokens_in_the_last() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        let token = owned().into_iter().nth(1).unwrap();
+        let mut utxos: Vec<UtxoResponse> = (0..40u64)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                ..base.clone()
+            })
+            .collect();
+        utxos.push(token.clone());
+        let mut r = request();
+        r.utxos = utxos;
+        r.payments[0].lovelace = Some("600000000".into());
+        let e = api::build_transfer(sk, r.clone()).err().unwrap();
+        assert!(build::is_too_many(&e), "{e}");
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(paid, 600_000_000);
+        // The token goes in the last alone, from the UTxO holding it; the others pay ADA.
+        let last = parts.last().unwrap();
+        assert_eq!(last.payments[0].tokens, request().payments[0].tokens);
+        assert!(last.inputs.iter().any(|i| i.tx_hash == token.tx_hash));
+        assert!(
+            parts[..parts.len() - 1]
+                .iter()
+                .all(|p| p.payments[0].tokens.is_empty())
+        );
+        assert!(
+            parts
+                .iter()
+                .all(|p| p.inputs.len() <= api::MAX_WITHDRAW_UTXOS)
+        );
+    }
+
+    #[test]
+    fn max_to_a_seedelf_takes_every_utxo_in_parts_the_tokens_in_the_first() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        let mut r = request();
+        r.utxos = (0..25u64)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                ..base.clone()
+            })
+            .chain(owned().into_iter().nth(1))
+            .collect();
+        r.payments[0].lovelace = None;
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        assert_eq!(parts.iter().map(|p| p.inputs.len()).sum::<usize>(), 26);
+        assert_eq!(parts.last().unwrap().left, 0);
+        assert_eq!(parts[0].payments[0].tokens, request().payments[0].tokens);
+        assert!(parts[1..].iter().all(|p| p.payments[0].tokens.is_empty()));
+    }
+
     /// The recorded recipient's UTxO, but under `register`.
     fn under(register: &Register) -> UtxoResponse {
         let mut utxo = their_utxo();
@@ -2283,6 +2343,89 @@ mod withdraw {
         funding.funding = Some(Default::default());
         let e = api::build_withdraw(sk, funding).unwrap_err().to_string();
         assert!(e.contains("Not enough ADA in the Seedelf balance"), "{e}");
+    }
+
+    /// `n` of the phrase's 25 ADA UTxO, each its own outpoint.
+    fn many(n: u64) -> Vec<UtxoResponse> {
+        let base = owned().into_iter().next().unwrap();
+        (0..n)
+            .map(|i| UtxoResponse {
+                tx_hash: format!("{:064x}", i + 1),
+                ..base.clone()
+            })
+            .collect()
+    }
+
+    /// Each part's inputs, all of them: none spent by two.
+    fn disjoint(parts: &[Vec<api::OutRef>]) -> bool {
+        let mut all: Vec<(String, u64)> = parts
+            .iter()
+            .flatten()
+            .map(|i| (i.tx_hash.clone(), i.tx_index))
+            .collect();
+        let n = all.len();
+        all.sort();
+        all.dedup();
+        all.len() == n
+    }
+
+    #[test]
+    fn an_amount_more_utxos_pay_than_one_transaction_spends_goes_in_parts_each_spending_its_own() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let mut r = request("max");
+        r.utxos = many(40);
+        r.payments[0].lovelace = Some("600000000".into());
+        // 600 ADA from 25 ADA UTxOs needs 24 of them: more than one transaction spends (the owner's test of 1.6.0).
+        let e = api::build_withdraw(sk, r.clone()).err().unwrap();
+        assert!(seedelf_core::build::is_too_many(&e), "{e}");
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert_eq!(parts.len(), 2);
+        // All of it, between them; each spends its own, under its own one-time key.
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(paid, 600_000_000);
+        assert!(
+            parts
+                .iter()
+                .all(|p| p.inputs.len() <= api::MAX_WITHDRAW_UTXOS)
+        );
+        assert!(disjoint(
+            &parts.iter().map(|p| p.inputs.clone()).collect::<Vec<_>>()
+        ));
+        assert_ne!(parts[0].tx_hash, parts[1].tx_hash);
+        assert_ne!(parts[0].seed, parts[1].seed);
+        // The first pays all of the largest 20 but its fee; the last what's left, with change.
+        assert_eq!(parts[0].inputs.len(), 20);
+        assert_eq!(parts[0].change_lovelace, "0");
+    }
+
+    #[test]
+    fn everything_takes_every_utxo_in_parts_of_twenty() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let mut r = request("max");
+        r.utxos = many(45);
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert_eq!(
+            parts.iter().map(|p| p.inputs.len()).collect::<Vec<_>>(),
+            vec![20, 20, 5]
+        );
+        assert_eq!(
+            parts.iter().map(|p| p.left).collect::<Vec<_>>(),
+            vec![0, 0, 0]
+        );
+        assert!(disjoint(
+            &parts.iter().map(|p| p.inputs.clone()).collect::<Vec<_>>()
+        ));
+    }
+
+    #[test]
+    fn a_withdrawal_one_transaction_spends_is_one_part() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let parts = api::build_withdraw_parts(sk, request("max")).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].left, 0);
     }
 
     #[test]

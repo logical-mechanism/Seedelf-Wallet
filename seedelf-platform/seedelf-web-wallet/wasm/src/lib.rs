@@ -2119,7 +2119,7 @@ pub mod api {
         pub evaluation: Option<serde_json::Value>,
     }
 
-    #[derive(Serialize, Debug, PartialEq)]
+    #[derive(Serialize, Debug, PartialEq, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct OutRef {
         pub tx_hash: String,
@@ -2749,7 +2749,7 @@ pub mod api {
     }
 
     /// Paying Seedelfs from the Seedelf balance, as JSON from the extension.
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct TransferRequest {
         pub network: String,
@@ -3106,7 +3106,7 @@ pub mod api {
     }
 
     /// Paying addresses from the Seedelf balance, as JSON from the extension.
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct WithdrawRequest {
         pub network: String,
@@ -3348,6 +3348,277 @@ pub mod api {
             Err(e) => return Err(e),
         };
         withdraw_result(&request, &chain, &spend, left, what, &built, &seed)
+    }
+
+    /// The most transactions one payment goes out as ([`build_transfer_parts`], [`build_withdraw_parts`]): each
+    /// spends at most [`MAX_WITHDRAW_UTXOS`], so these spend 500 UTxOs, the boxes of pools brought back all at once
+    /// (the owner's test of 1.6.0). Past it, Max says how many it left, as one transaction's does.
+    pub const MAX_PARTS: usize = 25;
+
+    /// `utxos` but those `inputs` spends.
+    fn without(utxos: &[UtxoResponse], inputs: &[OutRef]) -> Vec<UtxoResponse> {
+        utxos
+            .iter()
+            .filter(|u| {
+                !inputs
+                    .iter()
+                    .any(|i| i.tx_hash == u.tx_hash && i.tx_index == u.tx_index)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Whether `utxo` holds any of `tokens`.
+    fn holds_any(utxo: &UtxoResponse, tokens: &[TokenAmount]) -> bool {
+        utxo.asset_list.iter().flatten().any(|a| {
+            tokens
+                .iter()
+                .any(|t| t.policy_id == a.policy_id && t.asset_name == a.asset_name)
+        })
+    }
+
+    /// Whether `utxos` together hold `lovelace`: an amount more than they do can't go in any number of parts, and
+    /// is refused at once, as core's shortfall (the worker says it in the user's words, `privateShortOf`).
+    fn holding_enough(utxos: &[UtxoResponse], lovelace: u64) -> Result<()> {
+        let held: u64 = utxos
+            .iter()
+            .map(|u| u.value.parse::<u64>().unwrap_or(0))
+            .sum();
+        if held < lovelace {
+            bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
+        }
+        Ok(())
+    }
+
+    /// One payment of `owed` lovelace in parts, when one transaction can't spend enough UTxOs (`too_many`, the
+    /// first try's refusal): while what's left needs more than one spends, the next pays all the largest of the rest
+    /// hold but its fee (`most`, Max on those alone), or, where that would leave the last less than it carries
+    /// (`last_least`), as much as leaves that (`amount`); the UTxOs holding the tokens sent stay for the last
+    /// (`hold`), which pays what's left with them (`last`). Each part spends its own, so none waits on another.
+    #[allow(clippy::too_many_arguments)]
+    fn in_parts<R>(
+        too_many: anyhow::Error,
+        utxos: &[UtxoResponse],
+        mut owed: u64,
+        last_least: u64,
+        part_least: u64,
+        hold: &[TokenAmount],
+        inputs_of: impl Fn(&R) -> &[OutRef],
+        paid_of: impl Fn(&R) -> Result<u64>,
+        mut most: impl FnMut(Vec<UtxoResponse>) -> Result<R>,
+        mut amount: impl FnMut(Vec<UtxoResponse>, u64) -> Result<R>,
+        mut last: impl FnMut(Vec<UtxoResponse>, u64) -> Result<R>,
+    ) -> Result<Vec<R>> {
+        holding_enough(utxos, owed)?;
+        let mut rest = utxos.to_vec();
+        let mut parts = Vec::new();
+        loop {
+            if parts.len() + 1 >= MAX_PARTS {
+                return Err(too_many);
+            }
+            // The largest of the rest that hold none of the tokens sent: those are the last one's.
+            let free: Vec<UtxoResponse> = rest
+                .iter()
+                .filter(|u| !holds_any(u, hold))
+                .cloned()
+                .collect();
+            let (group, _) = build::max_inputs(&free, &Assets::new(), MAX_WITHDRAW_UTXOS)?;
+            if group.is_empty() {
+                return Err(too_many);
+            }
+            let all = most(group.clone())?;
+            let part = if paid_of(&all)? + last_least > owed {
+                let some = owed.saturating_sub(last_least);
+                if some < part_least {
+                    return Err(too_many);
+                }
+                amount(group, some)?
+            } else {
+                all
+            };
+            owed -= paid_of(&part)?;
+            rest = without(&rest, inputs_of(&part));
+            parts.push(part);
+            match last(rest.clone(), owed) {
+                Ok(final_part) => {
+                    parts.push(final_part);
+                    return Ok(parts);
+                }
+                Err(e) if build::is_too_many(&e) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Max in parts: every UTxO, [`MAX_PARTS`] transactions at most, each the most of the largest of the rest
+    /// (`part`, given the rest and whether it's the first); the last says how many it left, as one transaction's
+    /// Max does. A part after the first that can't be built (what's left pays less than a payment carries) ends it.
+    fn max_in_parts<R>(
+        utxos: &[UtxoResponse],
+        left_of: impl Fn(&mut R) -> &mut usize,
+        inputs_of: impl Fn(&R) -> &[OutRef],
+        mut part: impl FnMut(Vec<UtxoResponse>, bool) -> Result<R>,
+    ) -> Result<Vec<R>> {
+        let mut rest = utxos.to_vec();
+        let mut parts: Vec<R> = Vec::new();
+        loop {
+            let first = parts.is_empty();
+            let mut built = match part(rest.clone(), first) {
+                Ok(built) => built,
+                Err(e) if first => return Err(e),
+                Err(_) => break,
+            };
+            let taken = inputs_of(&built).len();
+            rest = without(&rest, inputs_of(&built));
+            *left_of(&mut built) = 0;
+            parts.push(built);
+            if rest.is_empty() || taken == 0 || parts.len() == MAX_PARTS {
+                break;
+            }
+        }
+        if let Some(last) = parts.last_mut() {
+            *left_of(last) = rest.len();
+        }
+        Ok(parts)
+    }
+
+    /// Paying a Seedelf from the Seedelf balance as several transactions when one can't spend enough UTxOs (the
+    /// owner's test of 1.6.0, after a pool's boxes came back, a UTxO each: "spending more than the max amount of
+    /// utxos does not create two healthy tx"). One transaction when it does, as [`build_transfer`] builds it. An
+    /// amount to one Seedelf goes in parts ([`in_parts`]); Max takes every UTxO ([`max_in_parts`]), the tokens it
+    /// sends in the first. Several Seedelfs at once go in one transaction, as before.
+    pub fn build_transfer_parts(
+        sk: Scalar,
+        request: TransferRequest,
+    ) -> Result<Vec<TransferResult>> {
+        let with = |utxos: Vec<UtxoResponse>, lovelace: Option<u64>, tokens: Vec<TokenAmount>| {
+            let mut sub = request.clone();
+            sub.utxos = utxos;
+            sub.payments = vec![SeedelfPayment {
+                lovelace: lovelace.map(|l| l.to_string()),
+                tokens,
+                ..request.payments[0].clone()
+            }];
+            build_transfer(sk, sub)
+        };
+        if let [only] = request.payments.as_slice()
+            && only.lovelace.is_none()
+        {
+            return max_in_parts(
+                &request.utxos,
+                |r: &mut TransferResult| &mut r.left,
+                |r| &r.inputs,
+                |rest, first| {
+                    with(
+                        rest,
+                        None,
+                        if first {
+                            only.tokens.clone()
+                        } else {
+                            Vec::new()
+                        },
+                    )
+                },
+            );
+        }
+        let too_many = match build_transfer(sk, request.clone()) {
+            Ok(one) => return Ok(vec![one]),
+            Err(e) if build::is_too_many(&e) && request.payments.len() == 1 => e,
+            Err(e) => return Err(e),
+        };
+        let chain = chain_of(&request.network, &request.params)?;
+        let pay = &request.payments[0];
+        let tokens = assets_of(&pay.tokens)?;
+        let last_least = build::minimum_seedelf_payment(&chain.params, &tokens)?;
+        let part_least = build::minimum_seedelf_payment(&chain.params, &Assets::new())?;
+        let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(last_least);
+        let paid = |r: &TransferResult| lovelace_of(&r.payments[0].lovelace);
+        in_parts(
+            too_many,
+            &request.utxos,
+            owed,
+            last_least,
+            part_least,
+            &pay.tokens,
+            |r: &TransferResult| &r.inputs,
+            paid,
+            |group| with(group, None, Vec::new()),
+            |group, some| with(group, Some(some), Vec::new()),
+            |rest, owed| with(rest, Some(owed), pay.tokens.clone()),
+        )
+    }
+
+    /// Paying an address from the Seedelf balance (Make public, Send to an address) as several transactions when one
+    /// can't spend enough UTxOs, as [`build_transfer_parts`] pays a Seedelf: an amount to one address in parts,
+    /// Everything (Max) every UTxO. Never a session's funding, nor `most` (a shortfall's measure), nor several
+    /// addresses at once: those are one transaction, as before.
+    pub fn build_withdraw_parts(
+        sk: Scalar,
+        request: WithdrawRequest,
+    ) -> Result<Vec<WithdrawResult>> {
+        if request.funding.is_some() || request.most {
+            return build_withdraw(sk, request).map(|one| vec![one]);
+        }
+        let with = |utxos: Vec<UtxoResponse>, lovelace: Option<u64>, tokens: Vec<TokenAmount>| {
+            let mut sub = request.clone();
+            sub.utxos = utxos;
+            sub.most = false;
+            sub.payments = vec![WithdrawPayment {
+                lovelace: lovelace.map(|l| l.to_string()),
+                tokens,
+                ..request.payments[0].clone()
+            }];
+            build_withdraw(sk, sub)
+        };
+        if let [only] = request.payments.as_slice()
+            && only.lovelace.is_none()
+        {
+            return max_in_parts(
+                &request.utxos,
+                |r: &mut WithdrawResult| &mut r.left,
+                |r| &r.inputs,
+                |rest, _| with(rest, None, Vec::new()),
+            );
+        }
+        let too_many = match build_withdraw(sk, request.clone()) {
+            Ok(one) => return Ok(vec![one]),
+            Err(e) if build::is_too_many(&e) && request.payments.len() == 1 => e,
+            Err(e) => return Err(e),
+        };
+        let chain = chain_of(&request.network, &request.params)?;
+        let pay = &request.payments[0];
+        let to = payable_address(chain.network_flag, &pay.to)?;
+        let tokens = assets_of(&pay.tokens)?;
+        let last_least = build::minimum_address_payment(&chain.params, &to, &tokens)?;
+        let part_least = build::minimum_address_payment(&chain.params, &to, &Assets::new())?;
+        let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(last_least);
+        // A part of an amount pays the most of its UTxOs' ADA, every token staying in the Seedelf balance with the
+        // least ADA it needs (`most`): Everything would pay their tokens too, which weren't asked for.
+        let most = |group: Vec<UtxoResponse>| {
+            let mut sub = request.clone();
+            sub.utxos = group;
+            sub.most = true;
+            sub.payments = vec![WithdrawPayment {
+                lovelace: None,
+                tokens: Vec::new(),
+                ..request.payments[0].clone()
+            }];
+            build_withdraw(sk, sub)
+        };
+        let paid = |r: &WithdrawResult| lovelace_of(&r.payments[0].lovelace);
+        in_parts(
+            too_many,
+            &request.utxos,
+            owed,
+            last_least,
+            part_least,
+            &pay.tokens,
+            |r: &WithdrawResult| &r.inputs,
+            paid,
+            most,
+            |group, some| with(group, Some(some), Vec::new()),
+            |rest, owed| with(rest, Some(owed), pay.tokens.clone()),
+        )
     }
 
     fn withdraw_result(
@@ -4841,6 +5112,17 @@ pub fn build_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Paying seedelfs as [`build_transfer`] does, in as many transactions as the UTxOs it spends need
+/// (`api::build_transfer_parts`): one when one does. Returns JSON, `{ parts: [api::TransferResult] }`.
+#[wasm_bindgen(js_name = buildTransferParts)]
+pub fn build_transfer_parts(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::TransferRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
+    let parts = api::build_transfer_parts(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&serde_json::json!({ "parts": parts }))
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Creating a seedelf paid by the Cardano account, step 1 (`build::account_mint`).
 /// `request` is JSON (`api::AccountMintRequest`): the account's UTxOs, each
 /// with its `role/index`, and the label. Returns JSON (`api::AccountMintDraft`):
@@ -4882,6 +5164,17 @@ pub fn build_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError
         .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
     let result = api::build_withdraw(key.sk, request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// A withdrawal as [`build_withdraw`] builds it, in as many transactions as the UTxOs it spends need
+/// (`api::build_withdraw_parts`): one when one does. Returns JSON, `{ parts: [api::WithdrawResult] }`.
+#[wasm_bindgen(js_name = buildWithdrawParts)]
+pub fn build_withdraw_parts(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
+    let request: api::WithdrawRequest = serde_json::from_str(request)
+        .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
+    let parts = api::build_withdraw_parts(key.sk, request).map_err(js_error)?;
+    serde_json::to_string(&serde_json::json!({ "parts": parts }))
+        .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Checks a withdrawal's or a send's destination: a normal key address on

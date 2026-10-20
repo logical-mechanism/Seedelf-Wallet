@@ -235,6 +235,8 @@ export interface KoiosFake {
   accountTxs: Map<string, Array<{ tx_hash: string; block_height: number; block_time: number }>>;
   /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
+  /** More wallet-contract UTxOs: a private balance of many, as boxes brought back from Lovejoin leave it. */
+  addedToContract: Array<{ tx_hash: string; tx_index: number; block_height?: number } & Record<string, unknown>>;
   /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
   spent: Set<string>;
   /**
@@ -434,6 +436,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
         ...ownedUtxos,
         ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: unknown[] }>).flatMap((a) => a.account_utxos),
         ...koios.addedToAccounts,
+        ...koios.addedToContract,
       ] as Array<{ tx_hash: string; tx_index: number }>;
       const spent = (r: string) => koios.spent.has(r) || (koios.unlistedSpent && !known.some((u) => ref(u) === r));
       const found = known.filter((u) => refs.includes(ref(u))).map((u) => ({ ...u, is_spent: spent(ref(u)) }));
@@ -460,7 +463,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const rows =
       path === "credential_utxos"
         ? credentials.includes(koiosPreprod.wallet_contract)
-          ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
+          ? [...koiosPreprod.contract_utxos, ...ownedUtxos, ...koios.addedToContract].filter((u) => (u.block_height ?? 0) > after)
           : byKey
         : path === "account_addresses"
           ? // A row for every stake address asked about that some address used, as Koios answers a batch of them.
@@ -562,6 +565,7 @@ export const test = base.extend<{
       stakesAsked: [],
       accountTxs: new Map(),
       addedToAccounts: [],
+      addedToContract: [],
       spent: new Set(),
       unlistedSpent: false,
       txSpends: new Map(),

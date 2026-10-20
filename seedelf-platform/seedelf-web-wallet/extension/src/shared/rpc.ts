@@ -761,6 +761,12 @@ export interface TransferSummary {
   leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
   histories?: HistoryClass[];
+  /**
+   * More UTxOs than one transaction spends (the owner's test of 1.6.0): it goes as these transactions, each spending
+   * its own, sent one after another; `txHash` is the first's, and the figures above are theirs added up. None when
+   * it's one.
+   */
+  parts?: Array<{ txHash: string; fee: string; inputs: number }>;
 }
 
 /** Where a withdrawal goes, as the wallet read it. */
@@ -811,6 +817,12 @@ export interface WithdrawSummary {
   leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
   histories?: HistoryClass[];
+  /**
+   * More UTxOs than one transaction spends (the owner's test of 1.6.0): it goes as these transactions, each spending
+   * its own, sent one after another; `txHash` is the first's, and the figures above are theirs added up. None when
+   * it's one.
+   */
+  parts?: Array<{ txHash: string; fee: string; inputs: number }>;
 }
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */

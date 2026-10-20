@@ -394,6 +394,29 @@ impl fmt::Display for NotEnough {
 
 impl std::error::Error for NotEnough {}
 
+/// The inputs together need more computation than a transaction may use
+/// ([`MAX_TX_BUDGET`]): fewer at once might go, so a payment can go as
+/// several transactions, each spending its own ([`is_too_many`]).
+#[derive(Debug, Clone, Copy)]
+pub struct TooMany(pub usize);
+
+impl fmt::Display for TooMany {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Spending {} UTxOs at once needs more computation than a transaction may use",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for TooMany {}
+
+/// Whether `e` is [`TooMany`]: more UTxOs than one transaction can spend.
+pub fn is_too_many(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<TooMany>().is_some()
+}
+
 /// The amount asked for is below what the outputs must carry.
 #[derive(Debug)]
 struct TooLittle {
@@ -1838,10 +1861,7 @@ impl ScriptSpend {
                 steps: a.steps + b.steps,
             });
         if total.mem > MAX_TX_BUDGET.mem || total.steps > MAX_TX_BUDGET.steps {
-            bail!(
-                "Spending {} UTxOs at once needs more computation than a transaction may use",
-                self.inputs.len()
-            );
+            return Err(TooMany(self.inputs.len()).into());
         }
 
         let compute: u64 = used

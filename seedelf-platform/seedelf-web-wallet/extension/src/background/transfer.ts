@@ -30,16 +30,17 @@ import { seedelfLabel } from "./chain";
 import { keptContractView, readContractView, type ContractView } from "./contract-scan";
 import type { KoiosUtxo } from "./koios";
 import { settleMaybeSent } from "./pending";
-import { privateShortOf } from "./short";
+import { privateShortOf, tooMany } from "./short";
 import {
   changeHistory,
-  keep,
+  keepParts,
   measureLocally,
   nothingToSpend,
   readContract,
-  send,
+  sendParts,
   spentHistories,
   unspendable,
+  whole,
   type OutRef,
   type ScriptSpendDeps,
 } from "./script-spend";
@@ -107,42 +108,54 @@ export class TransferService {
     }
 
     progress?.("measuring");
+    // In as many transactions as the UTxOs it spends need, each spending its own (the owner's test of 1.6.0): one
+    // when one does.
     const measured = (r: typeof request) =>
-      measureLocally<TransferResult>(this.deps, r, (keys, json) => wasm.buildTransfer(keys.seedelf, json));
+      measureLocally<{ parts: TransferResult[] }>(this.deps, r, (keys, json) => wasm.buildTransferParts(keys.seedelf, json)).then(
+        (built) => built.parts,
+      );
     // Core's shortfall in the user's words, with what has to stay and the most that can go: Max's, built again on
-    // the same UTxOs (blind test §4.4, T05; chunk 23's second review, PY-10).
-    const finished = await measured(request).catch(async (e: unknown) => {
+    // the same UTxOs (blind test §4.4, T05; chunk 23's second review, PY-10), every part of it.
+    const parts = await measured(request).catch(async (e: unknown) => {
       const available = utxos.reduce((sum, u) => sum + BigInt(u.value), 0n);
-      const most = () => measured({ ...request, payments: [{ ...request.payments[0]!, lovelace: null }] });
-      throw await privateShortOf(e, request.payments.map((p) => p.lovelace), most, available);
+      const most = async () => whole(await measured({ ...request, payments: [{ ...request.payments[0]!, lovelace: null }] }));
+      throw tooMany(await privateShortOf(e, request.payments.map((p) => p.lovelace), most, available));
     });
-    const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
-    const histories = spentHistories(classes, inputs, classesMixed);
-    // Max says what no Seedelf spend can take, and what a return through Lovejoin being sent will spend, as Make
-    // public's does (withdraw.ts).
-    const leftOut: LeftOutUtxo[] = finished.max
-      ? [
-          ...unspendable(this.deps, view).map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })),
-          ...returning.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "returning" as const })),
-        ]
-      : [];
-    const summary: TransferSummary = {
-      ...rest,
-      network,
-      payments: paid.map((p) => {
-        const label = seedelfLabel(p.to);
-        return label ? { ...p, label } : p;
-      }),
-      inputs: inputs.length,
-      ...(leftOut.length ? { leftOut } : {}),
-      ...(histories ? { histories } : {}),
+    const summaryOf = (finished: TransferResult): TransferSummary => {
+      const { txCbor: _txCbor, seed: _seed, inputs, payments: paid, classesMixed, ...rest } = finished;
+      const histories = spentHistories(classes, inputs, classesMixed);
+      // Max says what no Seedelf spend can take, and what a return through Lovejoin being sent will spend, as Make
+      // public's does (withdraw.ts).
+      const leftOut: LeftOutUtxo[] = finished.max
+        ? [
+            ...unspendable(this.deps, view).map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })),
+            ...returning.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "returning" as const })),
+          ]
+        : [];
+      return {
+        ...rest,
+        network,
+        payments: paid.map((p) => {
+          const label = seedelfLabel(p.to);
+          return label ? { ...p, label } : p;
+        }),
+        inputs: inputs.length,
+        ...(leftOut.length ? { leftOut } : {}),
+        ...(histories ? { histories } : {}),
+      };
     };
-    await keep(this.deps, SESSION_TRANSFER, { ...summary, txCbor, seed, origin: changeHistory(classes, inputs) });
-    return summary;
+    // Each part kept with its own figures, for the Seedelf history once it's sent; the review shows them added up.
+    await keepParts(
+      this.deps,
+      SESSION_TRANSFER,
+      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(classes, p.inputs) })),
+    );
+    const summary = summaryOf(whole(parts));
+    return parts.length > 1 ? { ...summary, parts: parts.map((p) => ({ txHash: p.txHash, fee: p.fee.total, inputs: p.inputs.length })) } : summary;
   }
 
   submit(network: NetworkName, txHash: string): Promise<PendingTx> {
-    return send(this.deps, network, txHash, SESSION_TRANSFER, "transfer", "payment");
+    return sendParts(this.deps, network, txHash, SESSION_TRANSFER, "transfer", "payment");
   }
 
 }

@@ -2875,5 +2875,10 @@
   "settings.lovejoin.bringingPool_other": "machine",
   "lj.bringOtherPool": "machine",
   "settings.lovejoin.bringConfirm": "machine",
-  "settings.lovejoin.bringConfirming_other": "machine"
+  "settings.lovejoin.bringConfirming_other": "machine",
+  "worker.parts.partly": "machine",
+  "worker.parts.partlyMaybe": "machine",
+  "worker.parts.tooMany": "machine",
+  "review.parts": "machine",
+  "review.partsNote_other": "machine"
 }

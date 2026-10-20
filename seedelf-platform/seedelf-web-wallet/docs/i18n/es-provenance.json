@@ -3185,5 +3185,12 @@
   "settings.lovejoin.bringConfirm": "machine",
   "settings.lovejoin.bringConfirming_many": "machine",
   "settings.lovejoin.bringConfirming_one": "machine",
-  "settings.lovejoin.bringConfirming_other": "machine"
+  "settings.lovejoin.bringConfirming_other": "machine",
+  "worker.parts.partly": "machine",
+  "worker.parts.partlyMaybe": "machine",
+  "worker.parts.tooMany": "machine",
+  "review.parts": "machine",
+  "review.partsNote_many": "machine",
+  "review.partsNote_one": "machine",
+  "review.partsNote_other": "machine"
 }

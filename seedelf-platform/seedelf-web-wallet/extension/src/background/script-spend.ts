@@ -27,7 +27,7 @@ import type * as Wasm from "@seedelf/wasm";
 
 import type { NetworkName } from "../networks";
 import { merged, UNKNOWN, type HistoryClass } from "../shared/histories";
-import type { PendingTx } from "../shared/rpc";
+import type { PendingTx, TokenQuantity } from "../shared/rpc";
 import { CONTRACT_V1, type ContractConfig } from "./balances";
 import { txInputs } from "./cbor";
 import { seedelfTokenOf } from "./chain";
@@ -43,6 +43,7 @@ import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
 import { outpoint, reservedSet, spentSet } from "./spent";
 import type { Keys, Wallet } from "./wallet";
+import { isTrap } from "./wasm";
 
 /** A built transaction is only sent within this long; after that, build again. */
 export const BUILT_TTL_MS = 10 * 60_000;
@@ -129,6 +130,8 @@ export interface Kept {
   origin?: HistoryClass;
   /** The public account active when it was built: the one a payment from the account spends (pending.ts `Sending`). */
   account?: number;
+  /** A payment in several transactions: every part's hash, in order, kept with the first (keepParts). */
+  partHashes?: string[];
 }
 
 /**
@@ -311,6 +314,7 @@ export async function send(
   key: string,
   kind: PendingTx["kind"],
   what: SpendWhat,
+  { chain }: { chain?: PendingTx["chain"] } = {},
 ): Promise<PendingTx> {
   const { wasm, wallet, session, now } = deps;
   const built = await wallet.withKeys(() => session.get<Kept>(key));
@@ -371,7 +375,115 @@ export async function send(
     invalidHereafter: built.invalidHereafter,
     again,
     ...(built.account !== undefined ? { account: built.account } : {}),
+    ...(chain ? { chain } : {}),
   });
+}
+
+/**
+ * The most transactions one payment goes out as (WebAssembly's `MAX_PARTS`): 20 UTxOs each, 500 in all, the boxes
+ * of pools brought back all at once (the owner's test of 1.6.0).
+ */
+export const MAX_PARTS = 25;
+
+/** One part of a payment WebAssembly built as several transactions (`buildTransferParts`, `buildWithdrawParts`). */
+export interface PartBuilt {
+  txHash: string;
+  max: boolean;
+  payments: Array<{ lovelace: string; minimum: string | null; tokens: TokenQuantity[] }>;
+  fee: { size: string; compute: string; scriptReference: string; total: string };
+  changeLovelace: string;
+  changeTokens: number;
+  changeOutputs: number;
+  changeMinimum: string;
+  inputs: OutRef[];
+  left: number;
+  classesMixed: string[];
+}
+
+/**
+ * A payment's parts as one, for its review (the owner's test of 1.6.0: "spending more than the max amount of utxos
+ * does not create two healthy tx"): one recipient, paid what they all pay, with the tokens of each; their fees and
+ * change added up; every UTxO they spend; Max only where every part is (an amount's parts but its last pay all their
+ * UTxOs hold); what Max left, the last's. One part is itself.
+ */
+export function whole<P extends PartBuilt>(parts: P[]): P {
+  const [first] = parts;
+  if (parts.length === 1) return first!;
+  const last = parts.at(-1)!;
+  const sum = (of: (p: P) => string) => parts.reduce((n, p) => n + BigInt(of(p)), 0n).toString();
+  const tokens = new Map<string, TokenQuantity>();
+  for (const token of parts.flatMap((p) => p.payments[0]!.tokens)) {
+    const key = `${token.policyId}.${token.assetName}`;
+    const had = tokens.get(key);
+    tokens.set(key, had ? { ...had, quantity: (BigInt(had.quantity) + BigInt(token.quantity)).toString() } : token);
+  }
+  return {
+    ...first!,
+    max: parts.every((p) => p.max),
+    payments: [{ ...last.payments[0]!, lovelace: sum((p) => p.payments[0]!.lovelace), tokens: [...tokens.values()] }],
+    fee: {
+      size: sum((p) => p.fee.size),
+      compute: sum((p) => p.fee.compute),
+      scriptReference: sum((p) => p.fee.scriptReference),
+      total: sum((p) => p.fee.total),
+    },
+    changeLovelace: sum((p) => p.changeLovelace),
+    changeTokens: parts.reduce((n, p) => n + p.changeTokens, 0),
+    changeOutputs: parts.reduce((n, p) => n + p.changeOutputs, 0),
+    changeMinimum: last.changeMinimum,
+    inputs: parts.flatMap((p) => p.inputs),
+    left: last.left,
+    classesMixed: [...new Set(parts.flatMap((p) => p.classesMixed))],
+  };
+}
+
+/** Where part `i` of a payment is kept: the first where a single transaction is, so Send finds it as ever. */
+export const partKey = (key: string, i: number) => (i === 0 ? key : `${key}.${i}`);
+
+/**
+ * Keeps each part of a payment for Send, under its own key (`partKey`), the first with every part's hash; and forgets
+ * the parts an earlier review kept past these. One part is kept as a single transaction always was.
+ */
+export async function keepParts(deps: ScriptSpendDeps, key: string, parts: Array<Omit<Kept, "builtAt" | "account">>): Promise<void> {
+  const hashes = parts.map((p) => p.txHash);
+  for (const [i, part] of parts.entries()) {
+    await keep(deps, partKey(key, i), i === 0 && parts.length > 1 ? { ...part, partHashes: hashes } : part);
+  }
+  await deps.wallet.withKeys(async () => {
+    for (let i = Math.max(1, parts.length); i < MAX_PARTS; i++) await deps.session.remove(partKey(key, i));
+  });
+}
+
+/**
+ * Sends a payment kept in parts (keepParts), one after another, each as `send` sends one (written ahead, watched),
+ * none waiting on another, since each spends its own UTxOs; the last named in Home's banner by the first, as a chain
+ * is (`PendingTx.chain`). One part is sent as one always was. Where one after the first doesn't go, or Koios doesn't
+ * answer one before the last (nothing more goes while it may still go through), it says how many went, and why the
+ * rest didn't: those that went stay watched, in Home's banner and Activity.
+ */
+export async function sendParts(
+  deps: ScriptSpendDeps,
+  network: NetworkName,
+  txHash: string,
+  key: string,
+  kind: PendingTx["kind"],
+  what: SpendWhat,
+): Promise<PendingTx> {
+  const first = await deps.wallet.withKeys(() => deps.session.get<Kept>(key));
+  const hashes = first?.txHash === txHash && first.network === network && first.partHashes?.length ? first.partHashes : [txHash];
+  const total = hashes.length;
+  let sent: PendingTx | undefined;
+  for (const [i, hash] of hashes.entries()) {
+    const chain = total > 1 && i === total - 1 ? { chain: { first: hashes[0]!, total } } : {};
+    try {
+      sent = await send(deps, network, hash, partKey(key, i), kind, what, chain);
+    } catch (e) {
+      if (i === 0 || isTrap(e)) throw e;
+      throw new Error(t("worker.parts.partly", { sent: i, total, why: e instanceof Error ? e.message : String(e) }));
+    }
+    if (sent.maybeSent && i < total - 1) throw new Error(t("worker.parts.partlyMaybe", { sent: i + 1, total }));
+  }
+  return sent!;
 }
 
 /**

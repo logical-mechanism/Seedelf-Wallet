@@ -217,6 +217,8 @@ export interface Sending {
    * active by the time it's sent. None kept, the active one.
    */
   account?: number;
+  /** The last part of a payment sent as several transactions: its first, and how many (script-spend.ts `sendParts`). */
+  chain?: PendingTx["chain"];
 }
 
 const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
@@ -459,7 +461,15 @@ export async function submitWatched(deps: PendingDeps, s: Sending): Promise<Pend
     throw new KoiosBusyError(t("worker.pending.otherTxId", { id: submitted }), true);
   }
 
-  const pending: PendingTx = { kind: s.kind, network: s.network, txHash: s.txHash, submittedAt: now(), confirmations, ...slot(s) };
+  const pending: PendingTx = {
+    kind: s.kind,
+    network: s.network,
+    txHash: s.txHash,
+    submittedAt: now(),
+    confirmations,
+    ...slot(s),
+    ...(s.chain ? { chain: s.chain } : {}),
+  };
   // The inputs of one that can expire, to free them if it does; a private one to the account says so; one that
   // pays a Seedelf or a box, the feed it's watched on.
   const watched: Watched = {
@@ -539,6 +549,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
     contract: s.contract,
     summary: s.summary,
     kept: s.key,
+    ...(s.chain ? { chain: s.chain } : {}),
   };
   return inTurn(deps, s.network, async () => {
     await restoreNow(deps, s.network);

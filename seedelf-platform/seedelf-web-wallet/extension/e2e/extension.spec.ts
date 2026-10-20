@@ -646,8 +646,8 @@ test("Send from the private balance has a Max: all but the fee and what the toke
   await page.getByLabel("Seedelf name").fill(transferPreprod.to);
   await expect(page.getByTestId("transfer-to-note")).toContainText("Found: This is a test.");
   await page.getByRole("button", { name: "Max", exact: true }).click();
-  await expect(page.getByTestId("transfer-max-note")).toContainText("up to 20 private UTxOs");
-  await expect(page.getByTestId("transfer-max-note")).toContainText("Anyone can see UTxOs spent together are one owner's.");
+  await expect(page.getByTestId("transfer-max-note")).toContainText("Max sends the ADA of all your private UTxOs");
+  await expect(page.getByTestId("transfer-max-note")).toContainText("Anyone can see the UTxOs it spends are one owner's.");
   await page.getByRole("button", { name: "Review" }).click();
   // The 1,234.56 tUSDM stays, with the least ADA the network accepts with it; everything else goes.
   await expect(page.getByTestId("transfer-max-kept")).toHaveText(
@@ -2603,6 +2603,26 @@ test("send to a Seedelf: paste its name, see it found, review, and nothing sent 
   expect(koios.submitted).toHaveLength(0);
 });
 
+test("withdraw: more UTxOs than one transaction spends go as several, said on the review (the owner's test of 1.6.0)", async ({
+  context,
+  koios,
+}) => {
+  // Forty more of the phrase's 25 ₳ Seedelf UTxO, as boxes brought back from Lovejoin leave a private balance.
+  koios.addedToContract.push(...Array.from({ length: 40 }, (_, i) => ({ ...ownedUtxos[0], tx_hash: (i + 1).toString(16).padStart(64, "0") })));
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("1,028 ₳");
+  await page.getByRole("button", { name: "Make public" }).click();
+  await page.getByLabel("To", { exact: true }).fill(vector(12).preprod.receive_0);
+  await page.getByLabel("Amount", { exact: true }).fill("600");
+  await page.getByRole("button", { name: "Review" }).click();
+  const review = page.getByTestId("withdraw-review");
+  await expect(review).toContainText("Amount600 ₳", { timeout: 30_000 });
+  await expect(review).toContainText("Transactions2");
+  await expect(page.getByTestId("withdraw-parts")).toHaveText("More UTxOs than one transaction can spend, so it goes as 2, one after another.");
+  expect(koios.collateralAsked).toBe(0);
+});
+
 test("withdraw: a handle or an address, own-account warning, review, and nothing sent without giveme.my's real signature", async ({ context, koios }) => {
   koios.evaluation = withdrawPreprod.amount.evaluation;
   const theirs: string = vector(15).preprod.receive_0;
@@ -2629,7 +2649,7 @@ test("withdraw: a handle or an address, own-account warning, review, and nothing
   // Max hides the token amounts; an amount brings them back.
   await addTokens(page, [PRIVATE_TUSDM]);
   await page.getByRole("button", { name: "Max" }).click();
-  await expect(page.getByTestId("withdraw-max-note")).toContainText("up to 20 UTxOs");
+  await expect(page.getByTestId("withdraw-max-note")).toContainText("in as many transactions as that takes");
   await expect(page.getByLabel(`Amount of ${PRIVATE_TUSDM}`)).toHaveCount(0);
   await page.getByRole("button", { name: "Max" }).click();
   await page.getByLabel("Amount", { exact: true }).fill("5");

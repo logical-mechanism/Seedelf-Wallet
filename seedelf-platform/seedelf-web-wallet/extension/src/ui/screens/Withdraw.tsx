@@ -48,6 +48,8 @@ import { tokenQuantity } from "../tokens";
 
 /** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
 const MAX_UTXOS = 20;
+/** The most transactions one payment goes out as, 20 UTxOs each (script-spend.ts `MAX_PARTS`). */
+const MAX_PARTS = 25;
 
 export function Withdraw({
   seedelf,
@@ -216,9 +218,16 @@ export function Withdraw({
       >
         <ReviewRecipients testId="withdraw-review" payments={summary.payments} rows={recipientRows}>
           <Row label={t("review.fee")} value={adaText(summary.fee.total)} />
+          {/* More UTxOs than one transaction spends: it goes as several (the owner's test of 1.6.0). */}
+          {summary.parts && <Row label={t("review.parts")} value={String(summary.parts.length)} />}
           <TotalRows side="private" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="withdraw-tx" />
+        {summary.parts && (
+          <p className="note" data-testid="withdraw-parts">
+            {t("review.partsNote", { count: summary.parts.length })}
+          </p>
+        )}
         <HistoriesNote histories={summary.histories} max={summary.max} testId="withdraw-histories" />
         {summary.payments.map((p, i) => (
           <MinimumNote
@@ -235,9 +244,9 @@ export function Withdraw({
             {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
             {joinSentences([
               t("withdraw.left", { count: summary.left }),
-              summary.inputs < MAX_UTXOS
+              summary.inputs < MAX_UTXOS * (summary.parts ? MAX_PARTS : 1)
                 ? t("withdraw.leftTokens", { count: summary.left })
-                : t("withdraw.leftLimit", { max: MAX_UTXOS }),
+                : t("withdraw.leftLimit", { max: MAX_UTXOS * (summary.parts ? MAX_PARTS : 1) }),
             ])}
           </p>
         )}
@@ -334,7 +343,7 @@ export function Withdraw({
                 {/* What Max does, in a sentence of its own, then what spending UTxOs together shows: "Everything …,
                     less the fee. Spending them together ties them to each other." said neither plainly, and a blind
                     back-translation found it ambiguous (the blind test's fix round). A privacy note, so `.privacy.`. */}
-                {t(seedelf.locked.utxos ? "withdraw.privacy.maxLocked" : "withdraw.privacy.max", { max: MAX_UTXOS })}
+                {t(seedelf.locked.utxos ? "withdraw.privacy.maxLocked" : "withdraw.privacy.max")}
               </p>
             ) : (
               <>
