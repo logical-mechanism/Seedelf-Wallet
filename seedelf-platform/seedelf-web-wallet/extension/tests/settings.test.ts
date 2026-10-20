@@ -346,6 +346,22 @@ describe("a pool's page's Bring every box in this pool back now (the owner's tes
       ),
     );
 
+  it("is a link on a pool's page, as Help start the pool is, and a button in Settings", () => {
+    const markup = (pool: boolean) =>
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+          createElement(Bring.BringAllBackView, { bringing: undefined, pool, busy: false, onAsk: () => undefined, onStop: () => undefined }),
+        ),
+      );
+    expect(markup(true)).toMatch(/<button[^>]*class="link align-start"[^>]*data-testid="lovejoin-bring-ask"/);
+    expect(markup(false)).toMatch(/<button[^>]*class="secondary"[^>]*data-testid="lovejoin-bring-ask"/);
+    // The link first, its line under it.
+    const shown = text(markup(true));
+    expect(shown.indexOf("Bring every box in this pool back now")).toBeLessThan(shown.indexOf("Your boxes in other pools stay where they are."));
+  });
+
   it("speaks of this pool alone, and asks first with the same warning", () => {
     const shown = view({ pool: true });
     expect(shown).toContain("Bring every box in this pool back now");

@@ -158,58 +158,74 @@ export function BringAllBackView({
     b.pool === undefined
       ? tr("settings.lovejoin.bringing", boxes(b.back))
       : tr(pool ? "lovejoin.bring.going" : "settings.lovejoin.bringingPool", boxes(b.back));
-  return (
-    <div className="field" data-testid="lovejoin-bring">
-      <span id="lovejoin-bring-label">{label}</span>
-      <p className="note">{tr(pool ? "lovejoin.bring.note" : "settings.lovejoin.bringNote")}</p>
-      {going && (
-        <Callout tone="info" testId="lovejoin-bringing">
-          <div className="stack-tight">
-            <span>
-              {joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}
-            </span>
-            <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
-            {going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: going.why })}</span>}
-            <span>
-              <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
-                {tr("lovejoin.mixes.stop")}
-              </button>
-            </span>
-          </div>
-        </Callout>
-      )}
+  const note = tr(pool ? "lovejoin.bring.note" : "settings.lovejoin.bringNote");
+  const progress = going && (
+    <Callout tone="info" testId="lovejoin-bringing">
+      <div className="stack-tight">
+        <span>{joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}</span>
+        <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
+        {going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: going.why })}</span>}
+        <span>
+          <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
+            {tr("lovejoin.mixes.stop")}
+          </button>
+        </span>
+      </div>
+    </Callout>
+  );
+  // Settings keeps its button while one pool's goes: pressed, it's every pool's.
+  const asks = !going || (!pool && going.pool !== undefined);
+  const before = asks && (
+    <>
       {other && (
         <p className="note" data-testid="lovejoin-bring-other">
           {tr("lovejoin.bring.other")}
         </p>
       )}
-      {/* Settings keeps its button while one pool's goes: pressed, it's every pool's. */}
-      {(!going || (!pool && going.pool !== undefined)) && (
-        <>
-          {stopped !== undefined && (
-            <Callout tone="warn" testId="lovejoin-bring-stopped">
-              {tr("settings.lovejoin.warn.bringStopped", { why: stopped })}
-            </Callout>
-          )}
-          {done !== undefined && (
-            <p className="note" data-testid="lovejoin-bring-done">
-              {done ? tr("settings.lovejoin.bringDone", boxes(done)) : tr(pool ? "lovejoin.bring.none" : "settings.lovejoin.bringNone")}
-            </p>
-          )}
-          <span>
-            <button
-              type="button"
-              className="secondary"
-              onClick={onAsk}
-              disabled={busy || other}
-              aria-describedby="lovejoin-bring-label"
-              data-testid="lovejoin-bring-ask"
-            >
-              {stopped !== undefined ? tr("common.tryAgain") : label}
-            </button>
-          </span>
-        </>
+      {stopped !== undefined && (
+        <Callout tone="warn" testId="lovejoin-bring-stopped">
+          {tr("settings.lovejoin.warn.bringStopped", { why: stopped })}
+        </Callout>
       )}
+      {done !== undefined && (
+        <p className="note" data-testid="lovejoin-bring-done">
+          {done ? tr("settings.lovejoin.bringDone", boxes(done)) : tr(pool ? "lovejoin.bring.none" : "settings.lovejoin.bringNone")}
+        </p>
+      )}
+    </>
+  );
+  const button = (className: string) => (
+    <button type="button" className={className} onClick={onAsk} disabled={busy || other} aria-describedby="lovejoin-bring-note" data-testid="lovejoin-bring-ask">
+      {stopped !== undefined ? tr("common.tryAgain") : label}
+    </button>
+  );
+  // A pool's page: a link with its line under it, as Help start the pool is (the owner, 2026-10-20: rare, it costs
+  // privacy, and its question guards it), its progress where it goes. Settings: the lever, a button, its note above.
+  if (pool) {
+    return (
+      <div className="stack-tight" data-testid="lovejoin-bring">
+        {progress}
+        {before}
+        {asks && (
+          <>
+            {button("link align-start")}
+            <p className="note" id="lovejoin-bring-note">
+              {note}
+            </p>
+          </>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="field" data-testid="lovejoin-bring">
+      <span>{label}</span>
+      <p className="note" id="lovejoin-bring-note">
+        {note}
+      </p>
+      {progress}
+      {before}
+      {asks && <span>{button("secondary")}</span>}
     </div>
   );
 }
