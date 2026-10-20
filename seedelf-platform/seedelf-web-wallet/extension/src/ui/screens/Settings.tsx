@@ -37,7 +37,7 @@ import {
   type LovejoinDelay,
   type LovejoinDepth,
 } from "../../shared/preferences";
-import type { AtStake, DappSite, DataHolds, DataPart, KnownAccount, Status } from "../../shared/rpc";
+import type { AtStake, DappSite, DataHolds, DataPart, KnownAccount, LovejoinHeld, Status } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
@@ -64,12 +64,14 @@ import { HintButton, HintText, Hinted, useHint } from "../components/Hint";
 import { NETWORK_NOTE } from "../components/NetworkPicker";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
+import { Modal } from "../components/Modal";
 import { SetPassword } from "../components/SetPassword";
-import {  } from "../format";
+import { adaText } from "../format";
 import { accountName, nextInOrder, restoreFinds, useAccounts } from "../accounts";
 import { confirmsDelete, deletePhrase } from "../delete-phrase";
-import { usePreferences } from "../preferences";
+import { useAmounts, usePreferences } from "../preferences";
 import { asSentence } from "../sentence";
+import { BOX_BACK_ESTIMATE } from "../swap";
 import { connectorBlockedText, useConnectorSwitch } from "../sites";
 import { switchOpenIn, useWindowId, view } from "../view";
 import { Collateral } from "./Collateral";
@@ -890,12 +892,195 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
           ))}
         </select>
       </div>
+      <BringAllBack network={network} />
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
     </section>
+  );
+}
+
+/** How often Bring every box back now's progress is read, from the device alone (lovejoin-held, as Home reads it). */
+const BRING_READ_MS = 4_000;
+
+/**
+ * Bring every box back now (the owner's test of 1.6.0, 2026-10-20: "a user has no way to do an emergency like get
+ * everything out of lovejoin"), here in Settings, behind its question (BringAllBackQuestion). The worker then brings
+ * every box back, one after another, while the wallet is unlocked (lovejoin.ts bringAllBackNow), and this says how it
+ * goes. A run this page saw go on until it was over says so once, with how many it sent.
+ */
+function BringAllBack({ network }: { network: NetworkName }) {
+  const [bringing, setBringing] = useState<LovejoinHeld["bringing"]>();
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [done, setDone] = useState<number>();
+  const last = useRef<LovejoinHeld["bringing"]>(undefined);
+  // A read sent before the last press answers for before it: it's dropped, or one sent just before Bring every box
+  // back now would say it was over before its first run.
+  const presses = useRef(0);
+  useEffect(() => {
+    let live = true;
+    const read = () => {
+      const sent = presses.current;
+      void call("lovejoin-held", {}).then(
+        (held) => {
+          if (!live || sent !== presses.current) return;
+          // Over since the last read, not stopped: every box it found went.
+          if (last.current && !last.current.stopped && !held.bringing) setDone(last.current.back);
+          last.current = held.bringing;
+          setBringing(held.bringing);
+        },
+        () => undefined,
+      );
+    };
+    read();
+    const timer = setInterval(read, BRING_READ_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [network]);
+  const ask = async (name: "lovejoin-bring-all-back" | "lovejoin-bring-all-back-stop") => {
+    presses.current++;
+    setBusy(true);
+    setError(undefined);
+    setDone(undefined);
+    try {
+      await call(name, {});
+      const now = name === "lovejoin-bring-all-back" ? { back: 0 } : undefined;
+      last.current = now;
+      setBringing(now);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <BringAllBackView
+        bringing={bringing}
+        done={done}
+        busy={busy}
+        onAsk={() => setAsking(true)}
+        onStop={() => void ask("lovejoin-bring-all-back-stop")}
+      />
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {asking && (
+        <BringAllBackQuestion
+          onKeep={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false);
+            void ask("lovejoin-bring-all-back");
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Bring every box back now's part of Settings: the button and what it does, or, while it goes, how many went and are
+ * left, to keep the wallet unlocked, why the last box that didn't go didn't, and Stop; once it stopped, why, and Try
+ * again. Every count hides with the balances (privacy review §2.16).
+ */
+export function BringAllBackView({
+  bringing,
+  done,
+  busy,
+  onAsk,
+  onStop,
+}: {
+  bringing: LovejoinHeld["bringing"];
+  done?: number;
+  busy: boolean;
+  onAsk: () => void;
+  onStop: () => void;
+}) {
+  const tr = useT();
+  const amounts = useAmounts();
+  const boxes = (n: number) => ({ count: amounts.hidden ? 2 : n, boxes: amounts.count(n, "amount.boxes") });
+  const going = bringing && !bringing.stopped ? bringing : undefined;
+  return (
+    <div className="field" data-testid="lovejoin-bring">
+      <span id="lovejoin-bring-label">{tr("settings.lovejoin.bring")}</span>
+      <p className="note">{tr("settings.lovejoin.bringNote")}</p>
+      {going ? (
+        <Callout tone="info" testId="lovejoin-bringing">
+          <div className="stack-tight">
+            <span>
+              {joinSentences([
+                tr("settings.lovejoin.bringing", boxes(going.back)),
+                going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left)),
+              ])}
+            </span>
+            <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
+            {going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: going.why })}</span>}
+            <span>
+              <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
+                {tr("lovejoin.mixes.stop")}
+              </button>
+            </span>
+          </div>
+        </Callout>
+      ) : (
+        <>
+          {bringing?.stopped && (
+            <Callout tone="warn" testId="lovejoin-bring-stopped">
+              {tr("settings.lovejoin.warn.bringStopped", { why: bringing.stopped })}
+            </Callout>
+          )}
+          {done !== undefined && (
+            <p className="note" data-testid="lovejoin-bring-done">
+              {done ? tr("settings.lovejoin.bringDone", boxes(done)) : tr("settings.lovejoin.bringNone")}
+            </p>
+          )}
+          <span>
+            <button type="button" className="secondary" onClick={onAsk} disabled={busy} aria-describedby="lovejoin-bring-label" data-testid="lovejoin-bring-ask">
+              {tr(bringing?.stopped ? "common.tryAgain" : "settings.lovejoin.bring")}
+            </button>
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The question before everything comes back: what each box's way back ties when they all go one after another (the
+ * timing says they're one person's, and when each went in; a box nobody mixed since shows its way in and out), what
+ * it costs, and that it goes only while the wallet is unlocked.
+ */
+export function BringAllBackQuestion({ onKeep, onConfirm }: { onKeep: () => void; onConfirm: () => void }) {
+  const tr = useT();
+  return (
+    <Modal
+      title={tr("settings.lovejoin.bringTitle")}
+      titleId="lovejoin-bring-title"
+      onClose={onKeep}
+      foot={
+        <>
+          <button type="button" className="secondary" onClick={onKeep} data-testid="lovejoin-bring-keep">
+            {tr("settings.lovejoin.bringKeep")}
+          </button>
+          <button type="button" className="primary" onClick={onConfirm} data-testid="lovejoin-bring-confirm">
+            {tr("settings.lovejoin.bring")}
+          </button>
+        </>
+      }
+    >
+      <p className="note">
+        {joinSentences([tr("settings.lovejoin.privacy.bring"), tr("settings.lovejoin.privacy.bringCost", { ada: adaText(BOX_BACK_ESTIMATE.toString()) })])}
+      </p>
+      <p className="note">{tr("settings.lovejoin.bringUnlocked")}</p>
+    </Modal>
   );
 }
 

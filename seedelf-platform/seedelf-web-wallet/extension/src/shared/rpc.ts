@@ -2342,6 +2342,12 @@ export interface LovejoinHeld {
     /** What each of its boxes holds, as the read set has it; none when the pool isn't read this time (34f). */
     box?: LovejoinBoxValue;
   }>;
+  /**
+   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0), while asked: the withdraws it sent,
+   * the boxes its last run left (none before its first), why the last box that didn't go didn't (`why`), and, once
+   * it stopped for that, the reason (`stopped`). None once it's over.
+   */
+  bringing?: { back: number; left?: number; why?: string; stopped?: string };
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */
@@ -2759,6 +2765,13 @@ export interface Requests {
    */
   "lovejoin-bootstrap-release": { payload: { pool?: string }; result: None };
   /**
+   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0): every box of the wallet's in every
+   * pool comes back, one withdraw after another, with none of its waits, from a run started at once (lovejoin.ts
+   * bringAllBackNow). `-stop` stops it, or forgets that it stopped.
+   */
+  "lovejoin-bring-all-back": { payload: None; result: None };
+  "lovejoin-bring-all-back-stop": { payload: None; result: None };
+  /**
    * Clears mixes from Lovejoin's Your mixes (the owner's test of 1.6.0): `entries`, the list's by id, and `sessions`,
    * mix sessions by index. Only what's no longer in flight: a chain being sent, or a mix session still running or
    * whose funding may land, stays. Activity keeps every transaction.
@@ -2950,6 +2963,8 @@ const REQUEST_LIST = [
   "lovejoin-mix-public-progress",
   "lovejoin-mixes",
   "lovejoin-bootstrap-release",
+  "lovejoin-bring-all-back",
+  "lovejoin-bring-all-back-stop",
   "lovejoin-mixes-clear",
   "lovejoin-bootstrap-most",
   "lovejoin-launch-terms",

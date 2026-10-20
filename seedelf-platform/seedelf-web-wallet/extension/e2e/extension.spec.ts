@@ -2839,6 +2839,32 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   expect(paths).not.toContain("cancel-tx");
 });
 
+test("Settings' Bring every box back now asks first, then goes, and says so when nothing of yours was left (the owner's test of 1.6.0)", async ({
+  context,
+  koios,
+}) => {
+  koios.addedToAccounts.push(...lovejoinPool);
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await expect(page.getByTestId("seedelf-lovelace")).toHaveText("28 ₳");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Lovejoin/ }).click();
+  const bring = page.getByTestId("lovejoin-bring");
+  await expect(bring).toContainText("every box of yours, in every pool, comes back to your private balance straight away");
+  // Kept: nothing asked.
+  await bring.getByRole("button", { name: "Bring every box back now" }).click();
+  const question = page.getByRole("dialog", { name: "Bring every box back now?" });
+  await expect(question).toContainText("Anyone can then tell these boxes are one person's");
+  await question.getByRole("button", { name: "Keep them in Lovejoin" }).click();
+  await expect(question).toHaveCount(0);
+  await expect(bring.getByTestId("lovejoin-bringing")).toHaveCount(0);
+  // Asked: the worker's run reads the pools, finds none of the wallet's boxes, and it's over.
+  await bring.getByRole("button", { name: "Bring every box back now" }).click();
+  await question.getByRole("button", { name: "Bring every box back now" }).click();
+  await expect(bring.getByTestId("lovejoin-bring-done")).toHaveText("Nothing of yours was left in Lovejoin.", { timeout: 30_000 });
+  await expect(bring.getByRole("button", { name: "Bring every box back now" })).toBeEnabled();
+});
+
 test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a public mix is sent, and Home shows the box on its way", async ({
   context,
   koios,

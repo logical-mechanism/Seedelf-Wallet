@@ -277,3 +277,57 @@ describe("Settings' Connected sites (launch review H7)", () => {
     expect(ending).toContain("The wallet misses anything it pays or leaves on the account later.");
   });
 });
+
+describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () => {
+  const view = (props: Partial<Parameters<typeof Settings.BringAllBackView>[0]>, hideBalances = false) =>
+    text(
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances }, loaded: true, set: async () => undefined } },
+          createElement(Settings.BringAllBackView, { bringing: undefined, busy: false, onAsk: () => undefined, onStop: () => undefined, ...props }),
+        ),
+      ),
+    );
+
+  it("is in Lovejoin's settings, on each network it's on, saying what it does", () => {
+    for (const network of ["mainnet", "preprod"] as const) {
+      const shown = text(renderToStaticMarkup(createElement(Settings.LovejoinSettings, { network })));
+      expect(shown).toContain("Bring every box back now");
+      expect(shown).toContain("every box of yours, in every pool, comes back to your private balance straight away, one after another");
+    }
+  });
+
+  it("asks first, saying what bringing them all back at once ties, what it costs, and to stay unlocked", () => {
+    const shown = text(renderToStaticMarkup(createElement(Settings.BringAllBackQuestion, { onKeep: () => undefined, onConfirm: () => undefined })));
+    expect(shown).toContain("Bring every box back now?");
+    expect(shown).toContain("Anyone can then tell these boxes are one person's, which makes them easier to match to the deposits that put them in.");
+    expect(shown).toContain("A box nobody has mixed since its deposit shows its way in and back out, which ties that deposit to your private balance; where your public account paid for the deposit, it ties the account to your private balance too.");
+    expect(shown).toContain("Each box pays its own way back, about 0.3 ₳ a box.");
+    expect(shown).toContain("Keep Seedelf Wallet unlocked until every box is on its way back");
+    expect(shown).toContain("Keep them in Lovejoin");
+  });
+
+  it("says how it goes while it runs, with Stop in place of the button, its counts hidden with the balances", () => {
+    const going = { bringing: { back: 3, left: 2, why: "giveme.my didn't answer." } };
+    const shown = view(going);
+    expect(shown).toContain("Bringing every box back: 3 boxes sent back so far. 2 boxes left.");
+    expect(shown).toContain("The last box that didn't go: giveme.my didn't answer.");
+    expect(shown).toContain("Stop");
+    expect(shown).not.toContain("Bring every box back now Bring every box back now");
+    const hidden = view(going, true);
+    expect(hidden).not.toMatch(/\b[23] boxes/);
+    // Before its first run it says nothing of what's left.
+    expect(view({ bringing: { back: 0 } })).not.toContain("left.");
+  });
+
+  it("says why once it stopped by itself, offering it again; and once it's over, how many went", () => {
+    const stopped = view({ bringing: { back: 1, left: 1, stopped: "giveme.my didn't answer." } });
+    expect(stopped).toContain("Bringing every box back stopped, as its last few tries in a row sent nothing. The latest reason: giveme.my didn't answer.");
+    expect(stopped).toContain("Try again");
+    expect(stopped).not.toContain("Stop ");
+    expect(view({ done: 4 })).toContain("Done: 4 boxes are on their way back to your private balance.");
+    expect(view({ done: 1 })).toContain("Done: 1 box is on its way back to your private balance.");
+    expect(view({ done: 0 })).toContain("Nothing of yours was left in Lovejoin.");
+  });
+});

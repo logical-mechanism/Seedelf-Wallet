@@ -775,6 +775,28 @@ interface Schedule {
    * review, R2-4).
    */
   copies?: PoolRef[];
+  /** Bring every box back now, from Settings (the owner's test of 1.6.0): asked, and not over yet. */
+  bringing?: Bringing;
+}
+
+/**
+ * Bring every box back now (the owner's test of 1.6.0, 2026-10-20: "an emergency … get everything out of lovejoin"):
+ * every box of the wallet's in every pool comes back, one withdraw after another, each sent as soon as the last was
+ * taken, with none of a box's waits (bringAllBackNow). Only what's there: nothing else stops meanwhile (the owner).
+ * It goes until a run finds nothing of the wallet's left, or stops after EMPTY_FAILED_RUNS runs in a row sent nothing.
+ */
+interface Bringing {
+  /** When it was asked (ms). */
+  at: number;
+  /** How many withdraws it sent. */
+  back: number;
+  /** How many of the wallet's boxes the last run left, a chain's included: none before its first run. */
+  left?: number;
+  /** Why the last box that didn't go didn't, and how many runs in a row sent nothing. */
+  why?: string;
+  fails?: number;
+  /** It stopped there, for `why`: Settings says so until it's asked again. */
+  stopped?: true;
 }
 
 /** A pool the wallet started: its id, its launch, and who paid (the public account's index when it did). */
@@ -1207,6 +1229,15 @@ export const UNLOCK_WAIT_MS: [number, number] = [2 * 60_000, 20 * 60_000];
  * QUIET_PUSHES times, and then goes anyway, so none waits for good.
  */
 export const QUIET_AFTER_SEND_MS = 5 * 60_000;
+
+/**
+ * Bring every box back now's run sends for this long at most, then leaves the rest to the next run (the alarm's,
+ * a minute on): the sessions' and payments' work in between, and no single event the browser cuts short.
+ */
+export const BRING_RUN_MS = 2 * 60_000;
+
+/** Bring every box back now stops after this many runs in a row that sent nothing, saying the last reason. */
+export const BRING_FAILED_RUNS = 3;
 
 /**
  * A due box of a pool whose boxes can't pay their own way back under today's
@@ -1730,7 +1761,15 @@ const empty = (s: Schedule) =>
   !Object.keys(s.pools ?? {}).length &&
   !s.mixes?.length &&
   !s.launches?.length &&
-  !s.copies?.length;
+  !s.copies?.length &&
+  !s.bringing;
+
+/** What Settings shows of Bring every box back now (LovejoinHeld `bringing`): the reason it stopped, once it did. */
+const bringingView = (b: Bringing): NonNullable<LovejoinHeld["bringing"]> => ({
+  back: b.back,
+  ...(b.left !== undefined ? { left: b.left } : {}),
+  ...(b.why !== undefined ? (b.stopped ? { stopped: b.why } : { why: b.why }) : {}),
+});
 
 /** How many of entry `e`'s boxes in pool `p` are still out: neither back nor taken into a later mix. */
 function outIn(e: MixEntry, p: string): number {
@@ -5068,6 +5107,7 @@ export class LovejoinService {
       stopped: chains.filter((c) => c.stopped && shown(c)).length,
       ...(classicHeld ? { bootstrap: classicHeld } : {}),
       ...(pools.length ? { pools } : {}),
+      ...(schedule.bringing ? { bringing: bringingView(schedule.bringing) } : {}),
     };
   }
 
@@ -5081,7 +5121,7 @@ export class LovejoinService {
     if (!this.available(network)) return false;
     await this.cuts(network);
     const schedule = await this.read(network);
-    return everyDue(schedule).length > 0 || !!schedule.withdrawing;
+    return everyDue(schedule).length > 0 || !!schedule.withdrawing || (!!schedule.bringing && !schedule.bringing.stopped);
   }
 
   /**
@@ -5102,6 +5142,9 @@ export class LovejoinService {
   private async withdrawDueNow(network: NetworkName, unlock: boolean, since: number | undefined): Promise<PendingTx[]> {
     // A withdraw a lock kept although it never went goes first, its due time back, so the unlock's draw takes that too.
     await this.dropRefused(network);
+    // Bring every box back now, asked in Settings: none of the waits below, from the unlock's run on.
+    const asked = (await this.read(network)).bringing;
+    if (asked && !asked.stopped) return this.bringAllBackNow(network);
     // The unlock's fresh draws come first, before any Koios read: a read that
     // fails can't leave a box due to go at the next run (independent review L10).
     const unlocked = await this.unlockDraws(network);
@@ -5401,6 +5444,133 @@ export class LovejoinService {
     const watch = read.pool.id !== CLASSIC ? { watch: { feed: "contract" as const } } : {};
     await watchSent(this.deps, pending, { ...(paid === true ? { toAccount: true as const } : {}), ...watch });
     return pending;
+  }
+
+  /**
+   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0): every box of the wallet's in every
+   * pool comes back from the next run on (bringAllBackNow), which the alarm keeps going until it's over. Asked while
+   * it goes, nothing changes; asked after it stopped, it starts afresh.
+   */
+  async bringAllBack(network: NetworkName): Promise<void> {
+    if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
+    await this.update(network, (s) => {
+      if (s.bringing && !s.bringing.stopped) return;
+      s.bringing = { at: this.deps.now(), back: 0 };
+    });
+    await this.deps.alarm?.start().catch(() => undefined);
+  }
+
+  /** Stops Bring every box back now, or forgets that it stopped: the boxes left come back as before, each after its own wait. */
+  async stopBringingAllBack(network: NetworkName): Promise<void> {
+    if (!this.available(network)) return;
+    await this.update(network, (s) => {
+      delete s.bringing;
+    });
+  }
+
+  /**
+   * One run of Bring every box back now: every box of the wallet's in every pool it reads, mixed or not, a
+   * Bootstrap's held ones and those Koios hasn't said the making of too, each withdrawn as soon as the last was taken
+   * (withdrawOne, as Bring one back now sends one), for BRING_RUN_MS at most. None of a box's waits: its due time, an
+   * unlock's fresh draw, one a run, the quiet after the wallet's own send. A box of a pool whose boxes can't pay their
+   * own way back is paid from the private balance (the owner's call 36). It waits as Bring one back now does: while a
+   * chain is being sent or mixes boxes again, while a withdraw that may have gone through is looked for (sent again
+   * at once, once due), and while a payment may still go through; and leaves a box a chain of the wallet's will spend
+   * to that chain. A box that doesn't go is passed over and its reason kept; a run that sent nothing counts towards
+   * BRING_FAILED_RUNS. A lock stops the run, and the unlock's goes on. Over once a run finds no box it can take: its
+   * pools' due times and counts go then, as the next pool read would have them, so Home says so at once.
+   */
+  private async bringAllBackNow(network: NetworkName): Promise<PendingTx[]> {
+    const { wallet, now } = this.deps;
+    if (await this.deps.mixingAgain?.(network)) return [];
+    if (await this.chainsSending(network)) return [];
+    if (await this.settleWithdrawing(network)) return [];
+    await settleMaybeSent(this.deps, network);
+    const unlocked = await wallet.unlockedAt();
+    const locked = async () => (await wallet.unlockedAt().catch(() => undefined)) !== unlocked;
+    let found: Awaited<ReturnType<LovejoinService["ours"]>>;
+    let reserved: Set<string>;
+    try {
+      found = await this.ours(network);
+      reserved = await this.reservedBoxes(network);
+    } catch (e) {
+      // A pool read that failed is a run that sent nothing, and says why; a lock ends the run as it is.
+      if (!(await locked())) await this.bringNoted(network, 0, undefined, e instanceof Error ? e.message : String(e));
+      return [];
+    }
+    const { reads, owned } = found;
+    const takes = free(owned, reserved);
+    const held = new Set(bootstrapOf(await this.read(network), owned).map(ref));
+    if (!takes.length) {
+      await this.update(network, (s) => {
+        for (const { pool } of reads) {
+          setDue(s, pool.id, []);
+          const counts: Pick<PoolSchedule, "notMixed" | "unsure"> | undefined = pool.id === CLASSIC ? s : s.pools?.[pool.id];
+          delete counts?.notMixed;
+          delete counts?.unsure;
+        }
+        delete s.bringing;
+      });
+      return [];
+    }
+    // One request for every withdraw's fees, and for which pools' boxes can't pay their own way back.
+    let params: Awaited<ReturnType<ReturnType<LovejoinDeps["koios"]>["epochParams"]>>;
+    try {
+      params = await this.deps.koios(network).epochParams();
+    } catch (e) {
+      if (!(await locked())) await this.bringNoted(network, 0, takes.length, e instanceof Error ? e.message : String(e));
+      return [];
+    }
+    const until = now() + BRING_RUN_MS;
+    const sent: PendingTx[] = [];
+    let why: string | undefined;
+    // The classic pool's first, as the runs take them.
+    for (const box of [...inPool(takes, CLASSIC), ...takes.filter((b) => poolOf(b) !== CLASSIC)]) {
+      // Stopped from Settings meanwhile, or out of time: the next run, if any, goes on.
+      if (now() >= until || !(await this.read(network)).bringing) break;
+      const read = reads.find((r) => r.pool.id === poolOf(box));
+      if (!read) continue;
+      const stuck = read.pool.id !== CLASSIC && !!this.cantComeBack(network, read.pool, params);
+      try {
+        const pending = await this.withdrawOne(network, read, box, {
+          unlocked,
+          // A box that had a due time takes its pool's earliest, as Bring one back now's does; a Bootstrap's held one
+          // had none, and counts against its Bootstrap (countBack).
+          ...(held.has(ref(box)) ? { bootstrap: true as const } : { due: "earliest" as const }),
+          params,
+          ...(stuck ? { paid: "private" as const } : {}),
+        });
+        sent.push(pending);
+      } catch (e) {
+        // One that may have gone through is looked for first (settleWithdrawing), and a lock ends the run: the next goes on.
+        if (e instanceof WithdrawMaybeSent || (await locked())) break;
+        why = e instanceof Error ? e.message : String(e);
+      }
+    }
+    await this.bringNoted(network, sent.length, takes.length - sent.length, why);
+    return sent;
+  }
+
+  /**
+   * What a run of Bring every box back now did: `sent` withdraws, `left` boxes it could take still there (none: it
+   * couldn't read them), and `why` the last that didn't go didn't. One that sent nothing for a reason counts towards
+   * BRING_FAILED_RUNS, and the last of them stops it; one that sent anything starts the count again.
+   */
+  private bringNoted(network: NetworkName, sent: number, left: number | undefined, why: string | undefined): Promise<void> {
+    return this.update(network, (s) => {
+      const b = s.bringing;
+      if (!b) return;
+      b.back += sent;
+      if (left !== undefined) b.left = Math.max(0, left);
+      if (sent) {
+        delete b.why;
+        delete b.fails;
+      } else if (why !== undefined) {
+        b.why = why;
+        b.fails = (b.fails ?? 0) + 1;
+        if (b.fails >= BRING_FAILED_RUNS) b.stopped = true;
+      }
+    });
   }
 
   /**
@@ -5864,6 +6034,10 @@ export class LovejoinService {
               (e) => record(e) && typeof e.id === "string" && typeof e.at === "number" && Array.isArray(e.shares) && e.shares.every((x) => record(x) && typeof x.boxes === "number"),
             ),
           }
+        : {}),
+      // Kept before Bring every box back now: none. One that doesn't read as one is none too.
+      ...(record(kept?.bringing) && typeof kept!.bringing!.at === "number" && typeof kept!.bringing!.back === "number"
+        ? { bringing: { ...kept!.bringing! } }
         : {}),
     };
   }

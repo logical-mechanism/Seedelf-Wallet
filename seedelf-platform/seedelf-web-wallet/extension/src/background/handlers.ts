@@ -537,6 +537,13 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return {};
     case "lovejoin-bootstrap-release":
       return ctx.lovejoin.releaseBootstrap(ctx.network, message.pool ?? CLASSIC).then(() => ({}));
+    // Bring every box back now (Settings): asked, then its first run started now, not at the alarm's next minute.
+    case "lovejoin-bring-all-back":
+      await ctx.lovejoin.bringAllBack(ctx.network);
+      void ctx.lovejoin.withdrawDue(ctx.network).catch(() => undefined);
+      return {};
+    case "lovejoin-bring-all-back-stop":
+      return ctx.lovejoin.stopBringingAllBack(ctx.network).then(() => ({}));
     // The Bootstrap form's bound from the private balance: the worker's own (1.6.0's release review, MONEY-6).
     case "lovejoin-bootstrap-most":
       return ctx.lovejoin
