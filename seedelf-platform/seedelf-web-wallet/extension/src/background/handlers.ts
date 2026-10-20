@@ -29,6 +29,13 @@ import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
 import { SESSION_RESTORED, WalletLocked, type Wallet } from "./wallet";
+import { isLovejoinWidth, type LovejoinWidth } from "../shared/preferences";
+
+/**
+ * A mix's Four boxes a mix switch as a page sent it: three or four, nothing else; none, Settings' width (the owner's
+ * test of 1.6.0).
+ */
+const widthOf = (width: unknown): LovejoinWidth | undefined => (isLovejoinWidth(width) ? width : undefined);
 
 export interface Context {
   wasm: typeof Wasm;
@@ -488,19 +495,27 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         false,
         undefined,
         typeof message.pool === "string" ? message.pool : undefined,
-        // Three where the form says four falls back; never wider than Settings' (34f's review, 5).
-        message.width === 3 ? 3 : undefined,
+        // The form's Four boxes a mix switch, either way (the owner's test of 1.6.0); none, Settings'.
+        widthOf(message.width),
       );
     case "lovejoin-mix-private-build":
-      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
+      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, {
+        pool: message.pool,
+        bootstrap: message.bootstrap ?? false,
+        width: widthOf(message.width),
+      });
     case "lovejoin-again-build":
-      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false, message.pool);
+      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false, message.pool, widthOf(message.width));
     case "lovejoin-again-public-build":
-      return ctx.lovejoin.publicAgainBuild(ctx.network, message.pool);
+      return ctx.lovejoin.publicAgainBuild(ctx.network, message.pool, widthOf(message.width));
     case "lovejoin-mix-private-submit":
       return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-build":
-      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
+      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, {
+        pool: message.pool,
+        bootstrap: message.bootstrap ?? false,
+        width: widthOf(message.width),
+      });
     case "lovejoin-mix-public-submit":
       return ctx.lovejoin.publicSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-progress":
@@ -515,6 +530,11 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       );
     case "lovejoin-mixes":
       return ctx.lovejoin.mixes(ctx.network);
+    // Your mixes' Clear and Clear all (the owner's test of 1.6.0): ids and indexes as the page sent them, nothing else.
+    case "lovejoin-mixes-clear":
+      await ctx.lovejoin.clearMixes(ctx.network, (message.entries ?? []).filter((e): e is string => typeof e === "string"));
+      await ctx.sessions.clearMixes(ctx.network, (message.sessions ?? []).filter((i): i is number => Number.isInteger(i)));
+      return {};
     case "lovejoin-bootstrap-release":
       return ctx.lovejoin.releaseBootstrap(ctx.network, message.pool ?? CLASSIC).then(() => ({}));
     // The Bootstrap form's bound from the private balance: the worker's own (1.6.0's release review, MONEY-6).

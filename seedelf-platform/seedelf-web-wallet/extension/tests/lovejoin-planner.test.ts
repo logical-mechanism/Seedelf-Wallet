@@ -617,6 +617,27 @@ describe("four boxes a mix (chunk 34's D3)", SLOW, () => {
     expect(txInputs(mix).filter((o) => CLASSIC_BOXES.has(o))).toHaveLength(3);
   });
 
+  it("follows the form's Four boxes a mix switch over Settings, either way (the owner's test of 1.6.0)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinWidth: 3, lovejoinDepth: 1 });
+    const lj = pooled(t, []);
+    const sessions = runner(t, lj);
+    account(t);
+    // Settings at three, the switch on: four.
+    expect(await lj.fits("preprod", 1, undefined, 4)).toEqual({ width: 4 });
+    expect((await sessions.mixOutBuild("preprod", 1, { width: 4 })).mix.width).toBe(4);
+    expect((await lj.publicBuild("preprod", 1, { width: 4 })).width).toBe(4);
+    // Settings at four, the switch off: three, with nothing to say of four.
+    await t.deps.preferences.set({ lovejoinWidth: 4 });
+    expect(await lj.fits("preprod", 1, undefined, 3)).toBeUndefined();
+    const three = await lj.publicBuild("preprod", 1, { width: 3 });
+    expect(three.width).toBeUndefined();
+    expect(three.fellBack).toBeUndefined();
+    // And the form's funding, priced at the switch's width, not capped at Settings'.
+    await t.deps.preferences.set({ lovejoinWidth: 3 });
+    expect((await lj.funding("preprod", 1, false, 1, undefined, 4)).width).toBe(4);
+  });
+
   it("refuses no tile mix for the width: what four can't take, three does", async () => {
     const t = await wallet();
     await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
@@ -765,14 +786,31 @@ describe("34e's review findings, each with a test", SLOW, () => {
     expect(book.sessions[0]!.auto.lovejoin?.tokens).toEqual({ [MIN_UNIT]: null });
   });
 
-  it("funds Mix my boxes again at three when four fell back, whatever Settings says (4)", async () => {
+  it("mixes again four a mix with the boxes that fit at four, the rest for the next press (the owner's test of 1.6.0)", async () => {
     const t = await wallet();
     await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
     const sessions = runner(t, pooled(t, []));
     t.koios.addedToAccounts.push(...POOL, await ownBox(t, "d6"), await ownBox(t, "d7"));
     // Two boxes two waves deep: four a mix takes 15 of the pool's 20 for each, so one; three takes 8 each, so both.
+    // Four went three, both boxes; four now goes, with one, and says three would take two.
     const out = await sessions.againBuild("preprod");
-    expect(out.mix).toMatchObject({ boxes: 2, again: true, depth: 2, mixes: 8, lovelace: "9100000", fellBack: tr("lj.width.warn.short") });
+    expect(out.mix).toMatchObject({ boxes: 1, owned: 2, again: true, depth: 2, mixes: 5, width: 4, atThree: 2 });
+    expect(out.mix.fellBack).toBeUndefined();
+    // The review's switch turned to three: both, three a mix, as Settings' three would.
+    const three = await sessions.againBuild("preprod", false, undefined, 3);
+    expect(three.mix).toMatchObject({ boxes: 2, owned: 2, mixes: 8, lovelace: "9100000" });
+    expect(three.mix.width).toBeUndefined();
+    expect(three.mix.atThree).toBeUndefined();
+  });
+
+  it("funds Mix my boxes again at three where four takes none, whatever Settings says (4)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
+    const sessions = runner(t, pooled(t, []));
+    // Twelve in the pool: four a mix needs 15 for a box, three 8.
+    t.koios.addedToAccounts.push(...POOL.slice(0, 12), await ownBox(t, "d6"), await ownBox(t, "d7"));
+    const out = await sessions.againBuild("preprod");
+    expect(out.mix).toMatchObject({ boxes: 1, owned: 2, again: true, depth: 2, mixes: 4, fellBack: tr("lj.width.warn.short") });
     expect(out.mix.width).toBeUndefined();
   });
 

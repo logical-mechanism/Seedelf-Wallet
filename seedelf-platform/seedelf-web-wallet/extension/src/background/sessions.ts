@@ -453,6 +453,8 @@ interface SessionRecord {
     skipped?: string;
     /** Funded for four boxes a mix (chunk 34's D3): its chain goes four wide, or three if four can't. None: three. */
     width?: 4;
+    /** Cleared from Lovejoin's Your mixes (the owner's test of 1.6.0): the hub's list alone reads it. */
+    cleared?: true;
   };
   /**
    * The latest return through Lovejoin: how many transactions its chain has,
@@ -1722,7 +1724,7 @@ export class SessionService {
   async mixOutBuild(
     network: NetworkName,
     boxes: number,
-    { pool, bootstrap = false }: { pool?: string; bootstrap?: boolean } = {},
+    { pool, bootstrap = false, width }: { pool?: string; bootstrap?: boolean; width?: LovejoinWidth } = {},
   ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
@@ -1734,8 +1736,9 @@ export class SessionService {
     // giveme.my's collateral as any is.
     checkBoxes(boxes, bootstrap ? mostBootstrap(pool) : MAX_MIX_BOXES);
     if (bootstrap) checkBoxes(boxes, await lovejoin.privateBootstrapMost(network, pool), true);
-    // Four boxes a mix where Settings has it and the pool has room for it, funded for that (chunk 34's D3).
-    const way = bootstrap ? undefined : await lovejoin.fits(network, boxes, pool);
+    // Four boxes a mix where the form's switch (else Settings) has it and the pool has room for it, funded for that
+    // (chunk 34's D3; the switch since the owner's test of 1.6.0).
+    const way = bootstrap ? undefined : await lovejoin.fits(network, boxes, pool, width);
     // None to say is three: the width fits chose, never Settings read again (34e's review, 4).
     const { seed: _seed, ...funding } = await lovejoin.funding(network, boxes, false, bootstrap ? 0 : undefined, pool, way?.width ?? 3);
     // No mixes is a Bootstrap since chunk 34's 34d: its boxes are held in the pool until brought back by hand.
@@ -1751,15 +1754,26 @@ export class SessionService {
    * account put in only when asked `anyway`: paid from here, they tie the
    * private balance to the account (lovejoin.ts againBoxes).
    */
-  async againBuild(network: NetworkName, anyway = false, pool?: string): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+  async againBuild(
+    network: NetworkName,
+    anyway = false,
+    pool?: string,
+    asked?: LovejoinWidth,
+  ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
     if (await this.mixingAgain(network)) throw new Error(t("sess.mixingAgain"));
-    const { boxes, owned, width, fellBack } = await lovejoin.againBoxes(network, anyway, pool);
+    const { boxes, owned, width, fellBack, atThree } = await lovejoin.againBoxes(network, anyway, pool, asked);
     // At the width againBoxes chose, three when it names none: never Settings' read again, which a fallback to three
     // would over-fund (34e's review, 4).
     const funding = await lovejoin.funding(network, boxes, true, undefined, pool, width ?? 3);
-    return this.mixFunding(network, { ...funding, owned, ...(anyway ? { publicToo: true } : {}), ...(fellBack ? { fellBack } : {}) });
+    return this.mixFunding(network, {
+      ...funding,
+      owned,
+      ...(anyway ? { publicToo: true } : {}),
+      ...(fellBack ? { fellBack } : {}),
+      ...(atThree ? { atThree } : {}),
+    });
   }
 
   /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
@@ -4952,6 +4966,26 @@ export class SessionService {
         ...(s.site ? { origin: s.site.origin } : {}),
         ...(s.closedAt ? { leftBehind: true } : {}),
       }));
+  }
+
+  /**
+   * Clears mix sessions `indexes` from Lovejoin's Your mixes (the owner's test of 1.6.0): a mark on each record, which
+   * the hub's list alone reads. Only one that's over, closed or its funding turned away: one still running, or whose
+   * funding may yet land, keeps its card.
+   */
+  clearMixes(network: NetworkName, indexes: number[]): Promise<void> {
+    return this.serial(async () => {
+      if (!indexes.length) return;
+      const asked = new Set(indexes);
+      const book = await this.book(network);
+      let changed = false;
+      for (const s of book.sessions) {
+        if (!s.mix || s.mix.cleared || !asked.has(s.index) || !(s.closedAt || s.txs[0]?.unsent)) continue;
+        s.mix = { ...s.mix, cleared: true };
+        changed = true;
+      }
+      if (changed) await this.save(network, book);
+    });
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {

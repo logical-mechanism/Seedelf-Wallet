@@ -463,6 +463,65 @@ label,
   gap: var(--s2);
 }
 
+/* Lovejoin's pools as a grid of tokens, once there's more than ADA's (the owner's test of 1.6.0): a tile a token,
+   its logo, its ticker, and the wallet's boxes there or how many pools it has. */
+.pool-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: var(--s2);
+}
+
+.pool-tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s3) var(--s2);
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--r-md);
+  text-align: center;
+}
+
+button.pool-tile:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.pool-tile .avatar {
+  width: 40px;
+  height: 40px;
+}
+
+.pool-tile__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.pool-tile__sub {
+  min-height: 1.3em;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* What the side that pays holds, at the right of a field's label, as a swap card's held amount. */
+.field-held {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 /* Layout: the side panel's narrow column, as wide as Chrome makes it, or a
    centered column in a full tab. */
 

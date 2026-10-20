@@ -1729,7 +1729,7 @@ export interface SessionView {
    * the wallet's boxes in the pool mixed again, with no deposit. `skipped`:
    * why Lovejoin was left out, when it was.
    */
-  mix?: { boxes: number; again?: boolean; skipped?: string; bootstrap?: boolean; pool?: string };
+  mix?: { boxes: number; again?: boolean; skipped?: string; bootstrap?: boolean; pool?: string; cleared?: true };
   /**
    * A return through Lovejoin: its chain's transactions (the return last),
    * how many are sent and how many are on chain, as the runner last read
@@ -2011,6 +2011,11 @@ export interface LovejoinFunding {
   width?: number;
   /** Four was asked, and it goes three: why. */
   fellBack?: string;
+  /**
+   * Mixing again four a mix, where four takes fewer of the wallet's boxes than three would: how many three would
+   * take (the review's switch says so; the owner's test of 1.6.0).
+   */
+  atThree?: number;
 }
 
 /** A mix from the public account, built and signed, waiting for Send. Amounts in lovelace. */
@@ -2044,10 +2049,14 @@ export interface LovejoinPublicSummary {
   change: string;
   /** Its own boxes a mix from it put in, mixed again: no deposit (privacy review §2.10). */
   again?: boolean;
+  /** Mixing again: how many of the account's boxes are in the pool (`boxes` is how many go this time). */
+  owned?: number;
   /** Four boxes a mix (chunk 34's D3); none: three. */
   width?: number;
   /** Four was asked, and it goes three: why. */
   fellBack?: string;
+  /** Mixing again four a mix, where four takes fewer of the account's boxes than three would: how many three would. */
+  atThree?: number;
 }
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
@@ -2278,7 +2287,8 @@ export interface LovejoinMixView {
   /** Its boxes in each pool (none: the classic pool), how many are back, and how many a later mix took. */
   shares: Array<{ pool?: string; boxes: number; back: number; moved: number }>;
   /** Its chain, while the wallet keeps its record: how far it was sent, how it ended, and four boxes a mix (`width`). */
-  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };
+  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };  /** Cleared from Your mixes (the owner's test of 1.6.0): the hub's list leaves it out. */
+  cleared?: true;
 }
 
 export interface LovejoinChainTx {
@@ -2680,17 +2690,18 @@ export interface Requests {
    */
   "lovejoin-look-for-pools": { payload: None; result: { grew: boolean } };
   /**
-   * What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. `width`: three, where
-   * the form says four falls back (34f); none, Settings'.
+   * What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. `width`: the form's
+   * Four boxes a mix switch (the owner's test of 1.6.0); none, Settings'.
    */
-  "lovejoin-funding": { payload: { boxes: number; pool?: string; width?: 3 }; result: LovejoinFunding };
+  "lovejoin-funding": { payload: { boxes: number; pool?: string; width?: 3 | 4 }; result: LovejoinFunding };
   /**
    * Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself
    * once sent. `pool`: a token pool's id (none: the classic pool), whose boxes take its token too. `bootstrap`: boxes
-   * in with no mixes, held in the pool until brought back by hand (chunk 34: it replaces the seed).
+   * in with no mixes, held in the pool until brought back by hand (chunk 34: it replaces the seed). `width`: the form's
+   * Four boxes a mix switch, as on every mix and Mix my boxes again since the owner's test of 1.6.0; none, Settings'.
    */
   "lovejoin-mix-private-build": {
-    payload: { boxes: number; pool?: string; bootstrap?: boolean };
+    payload: { boxes: number; pool?: string; bootstrap?: boolean; width?: 3 | 4 };
     result: SessionOutSummary & { mix: LovejoinFunding };
   };
   /**
@@ -2699,9 +2710,9 @@ export interface Requests {
    * deposit, and runs itself once sent. Sent with lovejoin-mix-private-submit.
    */
   /** `anyway`: the boxes a mix from the public account put in too, paid from the private balance (privacy review §2.10). */
-  "lovejoin-again-build": { payload: { anyway?: boolean; pool?: string }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  "lovejoin-again-build": { payload: { anyway?: boolean; pool?: string; width?: 3 | 4 }; result: SessionOutSummary & { mix: LovejoinFunding } };
   /** Builds the mixes of the boxes a mix from the public account put in, paid by the account: sent as a mix from it is. */
-  "lovejoin-again-public-build": { payload: { pool?: string }; result: LovejoinPublicSummary };
+  "lovejoin-again-public-build": { payload: { pool?: string; width?: 3 | 4 }; result: LovejoinPublicSummary };
   /** Records the mix session, then sends its funding. */
   "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
   /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
@@ -2710,7 +2721,7 @@ export interface Requests {
    * empty pool takes, held there until brought back by hand (chunk 34: it replaces the seed). It hides nothing of its
    * own; it gives other people boxes to mix with. `pool`: a token pool's id; none for the classic pool.
    */
-  "lovejoin-mix-public-build": { payload: { boxes: number; pool?: string; bootstrap?: boolean }; result: LovejoinPublicSummary };
+  "lovejoin-mix-public-build": { payload: { boxes: number; pool?: string; bootstrap?: boolean; width?: 3 | 4 }; result: LovejoinPublicSummary };
   /** Sends the public mix built last, in order. */
   "lovejoin-mix-public-submit": { payload: { txHash: string }; result: PendingTx };
   /**
@@ -2747,6 +2758,12 @@ export interface Requests {
    * themselves from here, one a run, at random delays (chunk 34's round three, 24).
    */
   "lovejoin-bootstrap-release": { payload: { pool?: string }; result: None };
+  /**
+   * Clears mixes from Lovejoin's Your mixes (the owner's test of 1.6.0): `entries`, the list's by id, and `sessions`,
+   * mix sessions by index. Only what's no longer in flight: a chain being sent, or a mix session still running or
+   * whose funding may land, stays. Activity keeps every transaction.
+   */
+  "lovejoin-mixes-clear": { payload: { entries?: string[]; sessions?: number[] }; result: None };
   /**
    * The most boxes a Bootstrap paid from the private balance puts into pool `pool` (none: the classic pool) at once:
    * what its funding's reserve pays the deposit for, as the worker holds it (privateBootstrapMost), for the form's
@@ -2933,6 +2950,7 @@ const REQUEST_LIST = [
   "lovejoin-mix-public-progress",
   "lovejoin-mixes",
   "lovejoin-bootstrap-release",
+  "lovejoin-mixes-clear",
   "lovejoin-bootstrap-most",
   "lovejoin-launch-terms",
   "lovejoin-launch-build",

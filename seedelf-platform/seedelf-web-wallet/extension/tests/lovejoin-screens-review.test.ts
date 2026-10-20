@@ -23,7 +23,7 @@ import { SwapApproval } from "../src/ui/screens/Swaps";
 import { fakeIndex } from "./fake-index";
 import { memoryArea } from "./fakes";
 
-const { MixList, PrivateReview, PublicReview, formWidth, poolRoom, publicNeedsText } = LovejoinScreen;
+const { MixList, PrivateReview, PublicReview, formRoom, poolRoom, publicNeedsText } = LovejoinScreen;
 
 /** A page's text, as a person reads it, on `network`. */
 function text(element: ReactElement, network: "preprod" | "mainnet" = "preprod"): string {
@@ -256,23 +256,66 @@ describe("Your mixes when the pool read failed (UI-6)", () => {
   });
 });
 
-describe("the Mix form's four boxes a mix falls back as the build does (UI-7)", () => {
+describe("the Mix form's Four boxes a mix switch: four takes what fits at four, and says what three would (the owner's test of 1.6.0)", () => {
   const pool = (free: number) => ({ others: free, free, floor: 0 });
-  const way = (boxes: number, depth: number, free: number) =>
-    formWidth(4, boxes, depth, poolRoom(pool(free), boxes, depth, 4), poolRoom(pool(free), boxes, depth, 3));
+  const room = (width: number, depth: number, free: number) =>
+    formRoom(width, depth, poolRoom(pool(free), 1, depth, width), width === 4 ? poolRoom(pool(free), 1, depth, 3) : undefined);
 
-  it("goes three where four would make the chain longer than one goes, with room for four", () => {
-    // Seven boxes three waves deep: 147 mixes four wide, over the 130 a chain makes (widthFor's FOUR_LONG).
-    expect(way(7, 3, 10_000)).toEqual({ width: 3, why: "long" });
-    expect(way(6, 3, 10_000)).toEqual({ width: 4 });
+  it("stops at four's room where the pool is short for four, and names three's", () => {
+    // The MIN pool as the owner tested it: 39 boxes not theirs, two waves deep. Four a mix needs 15 a box, three 8.
+    expect(room(4, 2, 39)).toEqual({ most: 2, three: 4 });
+    // None at four: the stepper offers none, and three's room is said.
+    expect(room(4, 2, 10)).toEqual({ most: 0, three: 1 });
+    // Three a mix: its own room, nothing more to say.
+    expect(room(3, 2, 39)).toEqual({ most: 4 });
   });
 
-  it("goes three where the pool is short for four, and quotes three's need where neither fits", () => {
-    expect(way(1, 2, 10)).toEqual({ width: 3, why: "short" });
-    // Five free: four needs 15 and three 8 for one box at two waves deep. The build refuses at three, so the form
-    // says three's need, with no word of four going three.
-    expect(way(1, 2, 5)).toEqual({ width: 3 });
-    expect(formWidth(3, 7, 3, poolRoom(pool(10_000), 7, 3, 3))).toEqual({ width: 3 });
+  it("stops at one chain's length at four, and at ten either way", () => {
+    // Three waves deep, a box is 21 mixes four wide: six boxes make 126 of a chain's 130; three wide, ten make 130.
+    expect(room(4, 3, 10_000)).toEqual({ most: 6, three: 10 });
+    expect(room(4, 1, 10_000)).toEqual({ most: 10 });
+    expect(room(3, 3, 10_000)).toEqual({ most: 10 });
+  });
+
+  it("says the switch in Settings' words, with what three would take on a review that went four, and starts as Settings has it", () => {
+    const { FourSwitch } = LovejoinScreen;
+    const PoolPage = (LovejoinScreen as unknown as { PoolPage: (props: Record<string, unknown>) => ReactElement }).PoolPage;
+    const nothing = () => undefined;
+    const off = text(shown(createElement(FourSwitch, { four: false, busy: false, onFour: nothing, testId: "x" })));
+    expect(off).toBe(`${t("settings.lovejoin.four")} ${t("settings.lovejoin.privacy.fourOff")}`);
+    const on = text(shown(createElement(FourSwitch, { four: true, busy: false, onFour: nothing, atThree: 2, testId: "x" })));
+    expect(on).toContain(t("settings.lovejoin.privacy.fourOn"));
+    expect(on).toContain("Three boxes a mix would take 2 of your boxes now.");
+    // The Mix form's, from Settings until it's turned.
+    const form = (width: 3 | 4) =>
+      renderToStaticMarkup(
+        createElement(
+          NetworkContext.Provider,
+          { value: "preprod" },
+          shown(
+            createElement(PoolPage, {
+              pool: { id: A, box: MIN_100, others: 40, free: 40, floor: 0, boxes: [], lovelace: "0", due: [], notMixed: [], fromPublic: [] },
+              seedelf: { lovelace: "500000000", tokens: [], utxos: 1, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } },
+              reading: false,
+              readFailed: false,
+              mixingAgain: false,
+              sending: null,
+              onSendingPublic: nothing,
+              onSending: nothing,
+              onRefresh: async () => undefined,
+              onBack: nothing,
+              onPending: nothing,
+            }),
+            { lovejoinWidth: width },
+          ),
+        ),
+      );
+    expect(form(4)).toMatch(/aria-checked="true"[^>]*data-testid="lovejoin-mix-four-switch"/);
+    expect(form(3)).toMatch(/aria-checked="false"[^>]*data-testid="lovejoin-mix-four-switch"/);
+  });
+
+  it("holds nothing back below the floor, which Review says itself", () => {
+    expect(formRoom(4, 2, { ...poolRoom(pool(5), 1, 2, 4), floorShort: true }, { ...poolRoom(pool(5), 1, 2, 3), floorShort: true })).toEqual({ most: 10 });
   });
 });
 

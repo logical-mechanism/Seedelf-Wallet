@@ -826,6 +826,8 @@ interface MixEntry {
   found?: true;
   /** Its boxes in each pool (`pool` none: the classic pool's), how many came back, and how many a later mix took. */
   shares: Array<{ pool?: string; boxes: number; back?: number; moved?: number }>;
+  /** Cleared from Your mixes (the owner's test of 1.6.0): the hub's list alone reads it; nothing it does changes. */
+  cleared?: true;
 }
 
 /**
@@ -1974,14 +1976,20 @@ export function wayOver(four: Array<{ pays: number; fits: number; room: number }
 
 /**
  * The width Mix my boxes again goes at, from either side (againBoxes, publicAgainBuild), `count` boxes at a width and
- * `most` in one chain, of `mine`: four where asked and it takes a box and as many as three would; three otherwise,
- * and why.
+ * `most` in one chain, of `mine`: four where asked and it takes a box, with as many as fit at four, the rest left for
+ * the next Mix my boxes again; three where four takes none, and why. Four went three wherever three took more boxes,
+ * so with four asked a pool short of room for them all mixed every box three a mix (the owner's test of 1.6.0,
+ * 2026-10-19: "Four now, rest next press"). The review says how many of the wallet's go, and what three would take.
  */
-function againWay(asked: LovejoinWidth, count: (w: LovejoinWidth) => number, most: (w: LovejoinWidth) => number, mine: number): Way {
+export function againWay(asked: LovejoinWidth, count: (w: LovejoinWidth) => number, most: (w: LovejoinWidth) => number, mine: number): Way {
   if (asked !== 4) return { width: 3 };
-  if (count(4) >= 1 && count(4) >= count(3)) return { width: 4 };
+  if (count(4) >= 1) return { width: 4 };
   return { width: 3, fellBack: most(4) < Math.min(mine, count(3)) ? FOUR_LONG() : FOUR_SHORT() };
 }
+
+/** How many boxes three a mix would take where four takes fewer (`way` at four), for the review's switch; none else. */
+const atThreeOf = (way: Way, count: (w: LovejoinWidth) => number): { atThree?: number } =>
+  way.width === 4 && count(3) > count(4) ? { atThree: count(3) } : {};
 
 /**
  * Whether a chain built four boxes a mix that failed may be built three a mix instead (FOUR_REFUSED): anything of
@@ -2541,7 +2549,7 @@ export class LovejoinService {
    * depth with (a pool read), or why not: checked before a mix is funded.
    * The wallet's own boxes don't count: a mix never takes two of them.
    */
-  async fits(network: NetworkName, boxes: number, pool?: string): Promise<Way | undefined> {
+  async fits(network: NetworkName, boxes: number, pool?: string, asked?: LovejoinWidth): Promise<Way | undefined> {
     const into = await this.poolNamed(network, pool);
     // A pool that takes no new box is refused one before it's read (1.6.0's release review, MONEY-3).
     await this.takesNewBoxes(network, into);
@@ -2550,10 +2558,11 @@ export class LovejoinService {
     // short pool here can say the public account could seed it instead. A
     // session's return never comes through here: it falls back to direct.
     this.floor(network, others.length, true);
-    // Four boxes a mix where Settings has it and the pool has room for it; three otherwise, which it must have.
+    // Four boxes a mix where the form's switch has it (Settings' where none came: the owner's test of 1.6.0) and the
+    // pool has room for it; three otherwise, which it must have.
     const { depth, width } = await this.settings();
     const room = free(others, reserved).length;
-    const way = widthFor(width, boxes, depth, room);
+    const way = widthFor(asked ?? width, boxes, depth, room);
     await this.enough(room, boxes, way.width);
     // Nothing to say of three, as before four was offered.
     return way.width === 3 && !way.fellBack ? undefined : way;
@@ -2597,8 +2606,15 @@ export class LovejoinService {
    * ties the two. It asks Koios first what made each box no record accounts
    * for, and refuses while Koios can't say (made, independent review M14).
    */
-  async againBoxes(network: NetworkName, publicToo = false, pool?: string): Promise<{ boxes: number; owned: number } & Partial<Way>> {
-    const { depth, width: asked } = await this.settings();
+  async againBoxes(
+    network: NetworkName,
+    publicToo = false,
+    pool?: string,
+    width?: LovejoinWidth,
+  ): Promise<{ boxes: number; owned: number; atThree?: number } & Partial<Way>> {
+    // The review's switch where it was turned (the owner's test of 1.6.0), else Settings'.
+    const { depth, width: setting } = await this.settings();
+    const asked = width ?? setting;
     const into = await this.poolNamed(network, pool);
     // Mixing again makes new boxes there too: not in a pool that takes none (1.6.0's release review, MONEY-3). A copy
     // isn't such a pool for it: no deposit puts a box in, and a box not mixed yet there has no other private way out
@@ -2623,15 +2639,20 @@ export class LovejoinService {
     this.floor(network, split.others.length);
     const others = free(split.others, reserved).length;
     const mine = free(owned, reserved).length;
-    // As many as the pool has others for and one chain goes, at a width: four only when it takes as many as three
-    // would (chunk 34's D3), never fewer boxes for the width.
+    // As many as the pool has others for and one chain goes, at a width: four with as many as fit at four (againWay).
     const most = (w: LovejoinWidth) => Math.floor(MAX_CHAIN_MIXES / mixesPerBox(depth, w));
     const count = (w: LovejoinWidth) => Math.min(mine, Math.floor(others / (mixesPerBox(depth, w) * (w - 1))), most(w));
     const way = againWay(asked, count, most, mine);
     const boxes = count(way.width);
     // None fits: say what the pool has.
     if (boxes < 1) await this.enough(others, 1, way.width);
-    return { boxes, owned: owned.length, ...(way.width === 4 ? { width: 4 as const } : {}), ...(way.fellBack ? { fellBack: way.fellBack } : {}) };
+    return {
+      boxes,
+      owned: owned.length,
+      ...(way.width === 4 ? { width: 4 as const } : {}),
+      ...(way.fellBack ? { fellBack: way.fellBack } : {}),
+      ...atThreeOf(way, count),
+    };
   }
 
   /** `boxes` less those a mix from any public account put in: what the private balance mixes again without tying itself to one. */
@@ -3389,7 +3410,11 @@ export class LovejoinService {
    * other people boxes to mix with. Its boxes stay in the pool with no due
    * time, held for its entry (bootstrapOf), until brought back by hand.
    */
-  async publicBuild(network: NetworkName, boxes: number, { pool, bootstrap = false }: { pool?: string; bootstrap?: boolean } = {}): Promise<LovejoinPublicSummary> {
+  async publicBuild(
+    network: NetworkName,
+    boxes: number,
+    { pool, bootstrap = false, width }: { pool?: string; bootstrap?: boolean; width?: LovejoinWidth } = {},
+  ): Promise<LovejoinPublicSummary> {
     if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
     // A Bootstrap is one deposit with no mixes, so it takes as many boxes as
     // the transaction holds, not the handful a mix chain can send.
@@ -3410,7 +3435,9 @@ export class LovejoinService {
     if (!utxos.length) {
       throw nothingInAccount(held, bootstrap ? t("lj.accountEmptyPutIn") : t("lj.accountEmptyMix"));
     }
-    const { depth: chosen, delay, width: asked } = await this.settings();
+    const { depth: chosen, delay, width: setting } = await this.settings();
+    // The form's switch where it came (the owner's test of 1.6.0), else Settings'.
+    const asked = width ?? setting;
     // A Bootstrap makes no mixes, so it draws nothing from the pool and the
     // floor doesn't apply: that's the point of it.
     const depth = bootstrap ? 0 : chosen;
@@ -3539,7 +3566,7 @@ export class LovejoinService {
    * Send as a mix from it is (publicSubmit); no deposit, and the change stays
    * in the account. The boxes not mixed yet go first.
    */
-  async publicAgainBuild(network: NetworkName, pool?: string): Promise<PublicAgain> {
+  async publicAgainBuild(network: NetworkName, pool?: string, width?: LovejoinWidth): Promise<PublicAgain> {
     if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
     const into = await this.poolNamed(network, pool);
     await this.publicReady(network);
@@ -3556,7 +3583,12 @@ export class LovejoinService {
       throw new Error(t("lj.needCollateral"));
     }
     if (!utxos.length) throw nothingInAccount(held, t("lj.accountEmptyPay"));
-    const { depth, delay, width: asked } = await this.settings();
+    const { depth, delay, width: setting } = await this.settings();
+    // The review's switch where it was turned (the owner's test of 1.6.0), else Settings'.
+    const asked = width ?? setting;
+    // The account's boxes in the pool, and what three a mix would take where four takes fewer: the review says both.
+    let owned = 0;
+    let three: { atThree?: number } = {};
     const chain = await this.unstale(async (avoid) => {
       const split = await this.split(network, chainOwner(), avoid, into);
       this.floor(network, split.others.length);
@@ -3570,12 +3602,13 @@ export class LovejoinService {
         throw new Error(other === undefined ? t("lj.noneFromAccount") : t("lj.privacy.otherAccount", { number: other + 1 }));
       }
       const others = free(split.others, split.reserved).length;
-      // As many as the pool has others for and one chain goes, at a width: four only when it takes as many as three
-      // would (chunk 34's D3).
+      // As many as the pool has others for and one chain goes, at a width: four with as many as fit at four (againWay).
       const most = (w: LovejoinWidth) => Math.floor(MAX_CHAIN_MIXES / mixesPerBox(depth, w));
       const count = (w: LovejoinWidth) => Math.min(theirs.length, Math.floor(others / (mixesPerBox(depth, w) * (w - 1))), most(w));
       const way = againWay(asked, count, most, theirs.length);
       const boxes = count(way.width);
+      owned = theirs.length;
+      three = atThreeOf(way, count);
       if (boxes < 1) await this.enough(others, 1, way.width);
       // Only the account's own boxes are the wallet's in what it's given, the ones not mixed yet first.
       const mine = new Set(split.owned.map(ref));
@@ -3619,7 +3652,8 @@ export class LovejoinService {
       fees: chain.fees,
       change: chain.returned,
       again: true,
-      ...(chain.width ? { width: chain.width } : {}),
+      owned,
+      ...(chain.width ? { width: chain.width, ...three } : {}),
       ...(chain.fellBack ? { fellBack: chain.fellBack } : {}),
     };
     await this.keep(network, { ...summary, chain: chain.txs, leaves: chain.leaves.map(inThe(into.id)), builtAt: now(), account }, chain.reserved);
@@ -4875,6 +4909,26 @@ export class LovejoinService {
   async launches(network: NetworkName): Promise<LaunchRecord[]> {
     if (!this.available(network)) return [];
     return [...((await this.read(network)).launches ?? [])].sort((a, b) => a.at - b.at);
+  }
+
+  /**
+   * Clears mixes `ids` from the hub's Your mixes (the owner's test of 1.6.0: "a clear button … or clear all that
+   * clears all not in flight mixes"): a mark on each entry, which the list alone reads. Its boxes, due times, hold and
+   * chain go on as before, and Activity keeps its transactions. One whose chain is still being sent isn't cleared.
+   */
+  async clearMixes(network: NetworkName, ids: string[]): Promise<void> {
+    if (!this.available(network) || !ids.length) return;
+    // A chain a lock or a restart cut reads as stopped first, as the list read it (mixes).
+    await this.cuts(network);
+    const asked = new Set(ids);
+    await this.update(network, (s) => {
+      for (const e of entries(s)) {
+        if (!asked.has(e.id)) continue;
+        const chain = s.chains.find((c) => c.id === e.id);
+        if (chain && !chain.done && !chain.stopped) continue;
+        e.cleared = true;
+      }
+    });
   }
 
   /**

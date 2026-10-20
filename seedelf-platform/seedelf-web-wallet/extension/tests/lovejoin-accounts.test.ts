@@ -122,7 +122,7 @@ describe("a mix from one public account, and Mix again from my public account on
     await t.accounts.use(0, ["preprod"]);
     expect((await t.lovejoin.status("preprod")).otherAccounts).toBeUndefined();
     const again = await t.lovejoin.publicAgainBuild("preprod");
-    expect(again).toMatchObject({ again: true, boxes: 4 });
+    expect(again).toMatchObject({ again: true, boxes: 4, owned: 4 });
     const spent = (await keptInputs(t)).flat();
     // Account 1's two UTxOs by their outpoints: a box's own hash may start "f5" or "f6" (fundAccount).
     const account1 = [`${"f5".repeat(32)}#0`, `${"f6".repeat(32)}#0`];

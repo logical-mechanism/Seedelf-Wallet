@@ -28,7 +28,7 @@ import { bootstrapProgress, boxText, crowdText, groupPools, poolsOf, searchGroup
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { InLovejoin, inLovejoinShown } from "../src/ui/screens/Home";
-import { MixList, mixItems, PoolGroupList, PrivateReview, PublicReview, YourBoxes } from "../src/ui/screens/Lovejoin";
+import { clearable, clearKeys, MixList, mixItems, PoolGrid, PoolGroupList, PrivateReview, PublicReview, tileOpens, YourBoxes } from "../src/ui/screens/Lovejoin";
 import { Plan, SwapApproval } from "../src/ui/screens/Swaps";
 import { t } from "../src/i18n";
 
@@ -145,6 +145,37 @@ describe("the hub's pools, grouped by token (session 1, 13)", () => {
     expect(groupPools(pools, []).map((g) => g.key)).toEqual(["ada", `${USDM.policyId}.${USDM.assetName}`, `${MIN.policyId}.${MIN.assetName}`]);
   });
 
+  it("shows the tokens as a grid, a tile each, with the wallet's boxes or how many pools (the owner's test of 1.6.0)", () => {
+    const groups = groupPools(pools, held);
+    const grid = (hidden = false) =>
+      renderToStaticMarkup(
+        createElement(
+          NetworkContext.Provider,
+          { value: "preprod" },
+          shown(createElement(PoolGrid, { groups, onToken: () => undefined, onPool: () => undefined }), { hideBalances: hidden }),
+        ),
+      );
+    const tiles = [...grid().matchAll(/aria-label="([^"]*)"[^>]*data-testid="(lovejoin-token-[^"]*)"/g)].map((m) => [m[2], m[1]]);
+    // groupPools' order: ADA's, the token held, then the busiest. ADA's two pools hold the wallet's 3 boxes; tUSDM's
+    // one, 1; MIN's two, 2.
+    expect(tiles).toEqual([
+      ["lovejoin-token-ada", "ADA, 3 boxes"],
+      [`lovejoin-token-${USDM.policyId}.${USDM.assetName}`, "tUSDM, 1 box"],
+      [`lovejoin-token-${MIN.policyId}.${MIN.assetName}`, "MIN, 2 boxes"],
+    ]);
+    // Each with its logo or two letters, and ADA's with ₳.
+    expect(grid()).toContain("avatar--ada");
+    // While balances are hidden, how many boxes is hidden too: no count of them on a tile.
+    expect(text(createElement(PoolGrid, { groups, onToken: () => undefined, onPool: () => undefined }))).not.toMatch(/\d boxes?/);
+    // None of the wallet's there: how many pools.
+    const none = groupPools(pools.map((p) => ({ ...p, boxes: [] })), held);
+    expect(text(shown(createElement(PoolGrid, { groups: none, onToken: () => undefined, onPool: () => undefined })))).toContain("MIN 2 pools");
+    // A token with one pool opens its page; with more, its list.
+    expect(tileOpens(groups[1]!)).toEqual({ pool: U });
+    expect(tileOpens(groups[2]!)).toEqual({ token: `${MIN.policyId}.${MIN.assetName}` });
+    expect(tileOpens(groups[0]!)).toEqual({ token: "ada" });
+  });
+
   it("finds a token's pools by ticker, by policy ID from four characters, and ADA's by its name", () => {
     const groups = groupPools(pools, held);
     expect(searchGroups("preprod", groups, "min").map((g) => g.key)).toEqual([`${MIN.policyId}.${MIN.assetName}`]);
@@ -221,17 +252,25 @@ describe("Your mixes: every mix, followed until its last box is back (session 1,
     expect(items[1]!.session?.index).toBe(2);
   });
 
-  it("says what went in and where, who paid, how many are back, and Bootstrap's hold", () => {
+  it("says what went in and where, who paid, how its transactions went, and Bootstrap's hold; not how many are back", () => {
     const list = text(shown(createElement(MixList, { entries, sessions: [], chains: [], pools: poolsOf(withPools), busy: false, onRetry: () => undefined, onStop: () => undefined })));
-    expect(list).toContain("2 boxes of 100 MIN + 4.5 ₳ Coming back Return of private session 3, 0 of 2 back");
-    expect(list).toContain("3 boxes of 10 ₳ Coming back From your public account, 1 of 3 back, four boxes a mix");
-    expect(list).toContain("2 boxes of 10 ₳, 1 box of 100 MIN + 4.5 ₳ Coming back Return of private session 1, 1 of 3 back");
+    expect(list).toContain("2 boxes of 100 MIN + 4.5 ₳ Done Return of private session 3 · 4 of 4 transactions sent");
+    expect(list).toContain("3 boxes of 10 ₳ Done From your public account, four boxes a mix · 5 of 5 transactions sent");
+    // Its chain's record gone (kept a while only): who paid, and nothing made up.
+    expect(list).toContain("2 boxes of 10 ₳, 1 box of 100 MIN + 4.5 ₳ Done Return of private session 1 ");
     expect(list).toContain("Bootstrap: 12 boxes of 1,000 MIN + 4.5 ₳ Held From your public account, held until you bring them back");
-    expect(list).toContain("Bootstrap: 2 boxes of 10 ₳ Coming back From your public account, coming back by themselves");
-    // How many are back is a count of boxes too: hidden with the balances.
+    expect(list).toContain("Bootstrap: 2 boxes of 10 ₳ Done From your public account, coming back by themselves");
+    // The owner's test of 1.6.0: how many are back is the pool page's to say, not a mix's card.
+    expect(list).not.toMatch(/of \d+ back/);
+    expect(list).not.toContain("Coming back");
     const hidden = text(createElement(MixList, { entries, sessions: [], chains: [], pools: poolsOf(withPools), busy: false, onRetry: () => undefined, onStop: () => undefined }));
-    expect(hidden).not.toContain("of 2 back");
     expect(hidden).not.toContain("12 boxes");
+  });
+
+  it("says a chain being sent from the public account, how far", () => {
+    const sending: LovejoinMixView = { id: "p1", at: now, account: 0, shares: [{ boxes: 2, back: 0, moved: 0 }], chain: { total: 9, sent: 3 } };
+    const list = text(shown(createElement(MixList, { entries: [sending], sessions: [], chains: [], pools: poolsOf(classicOnly), busy: false, onRetry: () => undefined, onStop: () => undefined })));
+    expect(list).toContain("2 boxes of 10 ₳ Sending From your public account · 3 of 9 transactions sent");
   });
 
   it("names a private mix by its session, with its stage and Stop while it runs", () => {
@@ -241,7 +280,80 @@ describe("Your mixes: every mix, followed until its last box is back (session 1,
     const named = text(
       shown(createElement(MixList, { entries: [entries[0]!], sessions: [session(2, now - 1500, "closed", { mix: { boxes: 2, pool: A } })], chains: [], pools: poolsOf(withPools), busy: false, onRetry: () => undefined, onStop: () => undefined })),
     );
-    expect(named).toContain("Private session 3, 0 of 2 back");
+    expect(named).toMatch(/2 boxes of 100 MIN \+ 4\.5 ₳ Done Private session 3 · In Lovejoin since /);
+  });
+
+  it("keeps a private mix's own stage once its chain is sent: its transactions on chain, a retry and why (the owner's test of 1.6.0)", () => {
+    // Private session 20's mix of four MIN boxes: its chain all sent, not all on chain, as the owner saw it.
+    const entry: LovejoinMixView = { id: "m20", at: now, session: 19, shares: [{ pool: A, boxes: 4, back: 0, moved: 0 }], chain: { total: 6, sent: 6, done: true } };
+    const mix = (extra: Partial<SessionView>) =>
+      session(19, now - 60_000, "returning", { mix: { boxes: 4, pool: A }, auto: {} as never, chain: { total: 6, sent: 6, confirmed: 4, cut: false }, ...extra });
+    const card = (s: SessionView) =>
+      text(shown(createElement(MixList, { entries: [entry], sessions: [s], chains: [], pools: poolsOf(withPools), busy: false, onRetry: () => undefined, onStop: () => undefined })));
+    expect(card(mix({}))).toContain("4 boxes of 100 MIN + 4.5 ₳ Running Private session 20 · 4 of 6 transactions on chain");
+    expect(card(mix({ chain: { total: 6, sent: 3, confirmed: 2, cut: false } }))).toContain("Running Private session 20 · Sending 3 of 6 transactions");
+    // Something went wrong: its tag says so, its line keeps how far the chain got, and under it when it tries again and
+    // why, with Try now.
+    const retrying = card(mix({ auto: { retry: { at: now + 60_000, error: "Koios didn't answer" } } as never }));
+    expect(retrying).toContain("Retrying Private session 20 · 4 of 6 transactions on chain");
+    expect(retrying).toContain("What went wrong: Koios didn't answer.");
+    expect(retrying).toContain(t("lovejoin.mixes.tryNow"));
+    expect(card(mix({}))).not.toMatch(/of \d+ back|Coming back/);
+  });
+
+  /** Your mixes' markup, with the balances shown. */
+  const listMarkup = (list: LovejoinMixView[], sessions: SessionView[], onClear?: (keys: unknown) => void) =>
+    renderToStaticMarkup(
+      createElement(
+        NetworkContext.Provider,
+        { value: "preprod" },
+        shown(createElement(MixList, { entries: list, sessions, chains: [], pools: poolsOf(withPools), busy: false, onRetry: () => undefined, onStop: () => undefined, onClear })),
+      ),
+    );
+  const count = (markup: string, testId: string) => markup.split(`data-testid="${testId}"`).length - 1;
+
+  it("leaves cleared mixes out, a cleared entry's session with it, and brings no older ones in for those cleared (the owner's test of 1.6.0)", () => {
+    const list = [{ ...entries[0]!, cleared: true as const }, ...entries.slice(1)];
+    const mine = session(2, now - 1500, "closed", { mix: { boxes: 2, pool: A, cleared: true } });
+    const keys = mixItems(list, [mine]).map((i) => i.key);
+    expect(keys).not.toContain("e1");
+    expect(keys).not.toContain("session.2");
+    expect(keys).toContain("e2");
+    // Six over with their boxes back: the newest five show; all five cleared, the sixth stays where Activity has it.
+    const over = Array.from({ length: 6 }, (_, i) => session(10 + i, now - 100_000 - i, "closed"));
+    expect(mixItems([], over)).toHaveLength(5);
+    const cleared = over.map((s, i) => (i < 5 ? { ...s, mix: { ...s.mix!, cleared: true as const } } : s));
+    expect(mixItems([], cleared)).toEqual([]);
+  });
+
+  it("offers Clear on each mix not in flight, and Clear all for them, never on one running or being sent", () => {
+    const running = session(4, now, "funding", { auto: {} as never });
+    const sending: LovejoinMixView = { id: "p1", at: now, account: 0, shares: [{ boxes: 2, back: 0, moved: 0 }], chain: { total: 9, sent: 3 } };
+    const turnedAway = session(6, now - 10, "failed", { unsent: true });
+    const mayLand = session(7, now - 20, "failed");
+    const items = mixItems([sending, entries[1]!], [running, turnedAway, mayLand]);
+    expect(Object.fromEntries(items.map((i) => [i.key, clearable(i)]))).toEqual({
+      "session.4": false,
+      p1: false,
+      "session.6": true,
+      "session.7": false,
+      e2: true,
+    });
+    expect(clearKeys(items.filter(clearable))).toEqual({ entries: ["e2"], sessions: [6] });
+    const markup = listMarkup([sending, entries[1]!], [running, turnedAway, mayLand], () => undefined);
+    expect(count(markup, "lovejoin-mix-clear")).toBe(2);
+    expect(count(markup, "lovejoin-mixes-clear-all")).toBe(1);
+    // Nothing to clear: no Clear all. And none at all where the page offers no clearing.
+    expect(count(listMarkup([sending], [running], () => undefined), "lovejoin-mixes-clear-all")).toBe(0);
+    expect(count(listMarkup([entries[1]!], []), "lovejoin-mix-clear")).toBe(0);
+  });
+
+  it("shows ten at a time, and Show more for the rest", () => {
+    const many: LovejoinMixView[] = Array.from({ length: 23 }, (_, i) => ({ id: `m${i}`, at: now - i, account: 0, shares: [{ boxes: 1, back: 0, moved: 0 }] }));
+    const markup = listMarkup(many, [], () => undefined);
+    expect(count(markup, "lovejoin-mix-card")).toBe(10);
+    expect(markup).toContain(">Show 10 more<");
+    expect(count(listMarkup(many.slice(0, 10), [], () => undefined), "lovejoin-mixes-more")).toBe(0);
   });
 
   it("says a chain stopped, and why, once it's gone from Chains", () => {

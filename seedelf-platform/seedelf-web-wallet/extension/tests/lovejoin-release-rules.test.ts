@@ -486,3 +486,45 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
     expect(bootstrapLimits(box, "public", ada(0n), undefined, 30).short).toBe(false);
   });
 });
+
+describe("Your mixes' Clear and Clear all (the owner's test of 1.6.0)", SLOW, () => {
+  it("marks a mix cleared on the device, never one whose chain is still being sent", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    // A Bootstrap, all sent: its boxes stay held in the pool, and its card may go.
+    await bootstrapped(lj, "c0".repeat(32), 2);
+    // A public mix's chain with its first transaction sent and the rest to send, its progress where it waits.
+    const txs = [
+      { kind: "deposit" as const, txCbor: "", txHash: "c1".repeat(32), fee: "0" },
+      { kind: "mix" as const, txCbor: "", txHash: "c2".repeat(32), fee: "0" },
+    ];
+    await lj.recordChain("preprod", { progress: "test.c1c1", txs, leaves: [{ txHash: "c2".repeat(32), txIndex: 0 }], boxes: 1, account: 0 });
+    await t.wallet.withKeys(() => t.session.set("test.c1c1", { txs, next: 1, flying: [txs[0]!.txHash] }));
+    await lj.chainSent("preprod", "c2".repeat(32), 0);
+    const mixes = await lj.mixes("preprod");
+    expect(mixes.map((m) => m.id).sort()).toEqual(["c0".repeat(32), "c2".repeat(32)]);
+    await lj.clearMixes("preprod", mixes.map((m) => m.id));
+    const after = await lj.mixes("preprod");
+    expect(after.find((m) => m.id === "c0".repeat(32))?.cleared).toBe(true);
+    expect(after.find((m) => m.id === "c2".repeat(32))?.cleared).toBeUndefined();
+    // Nothing else of it changed: still held, as Home counts it.
+    expect((await lj.held("preprod")).bootstrap).toBe(2);
+  });
+
+  it("marks a mix session cleared only once it's over", async () => {
+    const t = await wallet();
+    const sessions = runner(t, pooled(t));
+    const book = (s: Array<Record<string, unknown>>) => t.store.set("sessions.preprod", { next: s.length, sessions: s });
+    const out = (h: string, extra: object = {}) => [{ kind: "out", txHash: h.repeat(32), at: 1, ...extra }];
+    await book([
+      { index: 0, createdAt: 1, txs: out("a0"), mix: { boxes: 1 }, closedAt: 2 },
+      { index: 1, createdAt: 1, txs: out("a1", { unsent: true }), mix: { boxes: 1 } },
+      { index: 2, createdAt: 1, txs: out("a2"), mix: { boxes: 1 } },
+      { index: 3, createdAt: 1, txs: out("a3"), closedAt: 2 },
+    ]);
+    await sessions.clearMixes("preprod", [0, 1, 2, 3]);
+    const kept = (await t.store.get<{ sessions: Array<{ index: number; mix?: { cleared?: true } }> }>("sessions.preprod"))!.sessions;
+    // Closed, and turned away: cleared. Still running: kept. A swap's session isn't a mix's to clear.
+    expect(kept.map((s) => s.mix?.cleared)).toEqual([true, true, undefined, undefined]);
+  });
+});
