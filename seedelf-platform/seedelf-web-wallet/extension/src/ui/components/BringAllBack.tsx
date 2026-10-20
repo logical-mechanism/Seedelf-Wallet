@@ -17,7 +17,7 @@ import { Callout } from "./Callout";
 import { Modal } from "./Modal";
 
 /** How often its progress is read, from the device alone (lovejoin-held, as Home reads it). */
-const BRING_READ_MS = 4_000;
+const BRING_READ_MS = 2_000;
 
 type Bringing = LovejoinHeld["bringing"];
 
@@ -158,10 +158,16 @@ export function BringAllBackView({
     b.pool === undefined
       ? tr("settings.lovejoin.bringing", boxes(b.back))
       : tr(pool ? "lovejoin.bring.going" : "settings.lovejoin.bringingPool", boxes(b.back));
-  const note = tr(pool ? "lovejoin.bring.note" : "settings.lovejoin.bringNote");
+  // A bar, as Bootstrap's progress has: how far through what was there it is, once a run has counted it.
+  const total = going && going.left !== undefined ? going.back + going.left : 0;
   const progress = going && (
     <Callout tone="info" testId="lovejoin-bringing">
       <div className="stack-tight">
+        {total > 0 && (
+          <span className="meter" aria-hidden="true" data-testid="lovejoin-bring-meter">
+            <span className="meter__fill" style={{ width: `${Math.round((100 * going.back) / total)}%` }} />
+          </span>
+        )}
         <span>{joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}</span>
         <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
         {going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: going.why })}</span>}
@@ -195,37 +201,19 @@ export function BringAllBackView({
     </>
   );
   const button = (className: string) => (
-    <button type="button" className={className} onClick={onAsk} disabled={busy || other} aria-describedby="lovejoin-bring-note" data-testid="lovejoin-bring-ask">
+    <button type="button" className={className} onClick={onAsk} disabled={busy || other} data-testid="lovejoin-bring-ask">
       {stopped !== undefined ? tr("common.tryAgain") : label}
     </button>
   );
-  // A pool's page: a link with its line under it, as Help start the pool is (the owner, 2026-10-20: rare, it costs
-  // privacy, and its question guards it), its progress where it goes. Settings: the lever, a button, its note above.
-  if (pool) {
-    return (
-      <div className="stack-tight" data-testid="lovejoin-bring">
-        {progress}
-        {before}
-        {asks && (
-          <>
-            {button("link align-start")}
-            <p className="note" id="lovejoin-bring-note">
-              {note}
-            </p>
-          </>
-        )}
-      </div>
-    );
-  }
+  // A pool's page: a link, as Help start the pool is (the owner, 2026-10-20: rare, it costs privacy, and its question
+  // guards it), its words saying what it does. Settings: the lever, a button, one short line under it. No more: the
+  // owner, the same day, "the button take up a fraction of the screen and the rest is text".
   return (
-    <div className="field" data-testid="lovejoin-bring">
-      <span>{label}</span>
-      <p className="note" id="lovejoin-bring-note">
-        {note}
-      </p>
+    <div className="stack-tight" data-testid="lovejoin-bring">
       {progress}
       {before}
-      {asks && <span>{button("secondary")}</span>}
+      {asks && (pool ? button("link align-start") : <span>{button("secondary")}</span>)}
+      {asks && !pool && <p className="note">{tr("settings.lovejoin.bringNote")}</p>}
     </div>
   );
 }
@@ -249,15 +237,15 @@ export function BringAllBackQuestion({ pool = false, onKeep, onConfirm }: { pool
             {tr("settings.lovejoin.bringKeep")}
           </button>
           <button type="button" className="primary" onClick={onConfirm} data-testid="lovejoin-bring-confirm">
-            {tr(pool ? "lovejoin.bring.button" : "settings.lovejoin.bring")}
+            {tr("settings.lovejoin.bringConfirm")}
           </button>
         </>
       }
     >
+      <p className="note">{tr("settings.lovejoin.privacy.bring")}</p>
       <p className="note">
-        {joinSentences([tr("settings.lovejoin.privacy.bring"), tr("settings.lovejoin.privacy.bringCost", { ada: adaText(BOX_BACK_ESTIMATE.toString()) })])}
+        {joinSentences([tr("settings.lovejoin.privacy.bringCost", { ada: adaText(BOX_BACK_ESTIMATE.toString()) }), tr("settings.lovejoin.bringUnlocked")])}
       </p>
-      <p className="note">{tr("settings.lovejoin.bringUnlocked")}</p>
     </Modal>
   );
 }

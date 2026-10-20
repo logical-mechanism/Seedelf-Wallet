@@ -148,8 +148,18 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     await lj.bringAllBack("preprod");
     expect(await lj.returning("preprod")).toBe(true);
     expect((await lj.held("preprod")).bringing).toEqual({ back: 0 });
+    // Counted box by box as it goes, what's left said from the start: Settings and the pool's page follow it.
+    const counts: Array<[number, number | undefined]> = [];
+    const set = t.store.set.bind(t.store);
+    t.store.set = (async (key: string, value: unknown) => {
+      const b = key === "lovejoin.preprod" ? (value as Sealed).bringing : undefined;
+      if (b) counts.push([b.back, b.left]);
+      return set(key as never, value as never);
+    }) as typeof t.store.set;
     const sent = await lj.withdrawDue("preprod", true);
+    t.store.set = set;
     expect(sent).toHaveLength(4);
+    expect(counts.filter(([, left]) => left !== undefined)).toEqual(expect.arrayContaining([[0, 4], [1, 3], [2, 2], [3, 1], [4, 0]]));
     // The classic pool's first, then the token pool's: the mixed box and the Bootstrap's two, which it never mixed.
     expect(withdrawn(t)[0]).toBe(`${"c1".repeat(32)}#0`);
     expect(new Set(withdrawn(t))).toEqual(new Set([`${"c1".repeat(32)}#0`, `${"f1".repeat(32)}#0`, ...held]));
@@ -264,7 +274,7 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     const t = await wallet();
     const lj = pooled(t);
     await lj.bringAllBack("preprod", TOKEN);
-    await expect(lj.bringAllBack("preprod", "classic")).rejects.toThrow("Every box in another pool is being brought back.");
+    await expect(lj.bringAllBack("preprod", "classic")).rejects.toThrow("Another pool's boxes are coming back now.");
     // The same pool's again changes nothing.
     await lj.bringAllBack("preprod", TOKEN);
     expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0, pool: TOKEN });

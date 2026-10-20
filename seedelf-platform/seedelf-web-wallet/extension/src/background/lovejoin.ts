@@ -5538,6 +5538,11 @@ export class LovejoinService {
     const until = now() + BRING_RUN_MS;
     const sent: PendingTx[] = [];
     let why: string | undefined;
+    // What's left, said from the start, and each box counted as it goes, so Settings and the pool's page follow it box
+    // by box: counted only at the run's end, a run that took them all showed none sent, then done (the owner's test).
+    await this.update(network, (s) => {
+      if (s.bringing) s.bringing.left = takes.length;
+    });
     // The classic pool's first, as the runs take them.
     for (const box of [...inPool(takes, CLASSIC), ...takes.filter((b) => poolOf(b) !== CLASSIC)]) {
       // Stopped from Settings meanwhile, or out of time: the next run, if any, goes on.
@@ -5555,13 +5560,22 @@ export class LovejoinService {
           ...(stuck ? { paid: "private" as const } : {}),
         });
         sent.push(pending);
+        await this.update(network, (s) => {
+          const b = s.bringing;
+          if (!b) return;
+          b.back += 1;
+          b.left = Math.max(0, takes.length - sent.length);
+          delete b.why;
+          delete b.fails;
+        });
       } catch (e) {
         // One that may have gone through is looked for first (settleWithdrawing), and a lock ends the run: the next goes on.
         if (e instanceof WithdrawMaybeSent || (await locked())) break;
         why = e instanceof Error ? e.message : String(e);
       }
     }
-    await this.bringNoted(network, sent.length, takes.length - sent.length, why);
+    // Each sent was counted as it went: what's left now counts the run that sent nothing towards its stop.
+    await this.bringNoted(network, 0, takes.length - sent.length, sent.length ? undefined : why);
     return sent;
   }
 

@@ -296,18 +296,20 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
     for (const network of ["mainnet", "preprod"] as const) {
       const shown = text(renderToStaticMarkup(createElement(Settings.LovejoinSettings, { network })));
       expect(shown).toContain("Bring every box back now");
-      expect(shown).toContain("every box of yours, in every pool, comes back to your private balance straight away, one after another");
+      expect(shown).toContain("Every box in every pool, without the waits.");
     }
   });
 
   it("asks first, saying what bringing them all back at once ties, what it costs, and to stay unlocked", () => {
     const shown = text(renderToStaticMarkup(createElement(Bring.BringAllBackQuestion, { onKeep: () => undefined, onConfirm: () => undefined })));
     expect(shown).toContain("Bring every box back now?");
-    expect(shown).toContain("Anyone can then tell these boxes are one person's, which makes them easier to match to the deposits that put them in.");
-    expect(shown).toContain("A box nobody has mixed since its deposit shows its way in and back out, which ties that deposit to your private balance; where your public account paid for the deposit, it ties the account to your private balance too.");
-    expect(shown).toContain("Each box pays its own way back, about 0.3 ₳ a box.");
-    expect(shown).toContain("Keep Seedelf Wallet unlocked until every box is on its way back");
+    expect(shown).toContain("Sent back to back, they show they're one person's and are easier to match to their deposits.");
+    expect(shown).toContain("A box not mixed since its deposit ties that deposit, and the public account if it paid, to your private balance.");
+    expect(shown).toContain("Each box pays about 0.3 ₳ to come back. Where it can't, your private balance pays, tying the UTxO it pays with to the box.");
+    expect(shown).toContain("Keep Seedelf Wallet unlocked: if it locks, this pauses until you unlock.");
     expect(shown).toContain("Keep them in Lovejoin");
+    // A confirm that fits one line (the owner, 2026-10-20).
+    expect(shown).toContain("Bring them back");
   });
 
   it("says how it goes while it runs, with Stop in place of the button, its counts hidden with the balances", () => {
@@ -319,13 +321,22 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
     expect(shown).not.toContain("Bring every box back now Bring every box back now");
     const hidden = view(going, true);
     expect(hidden).not.toMatch(/\b[23] boxes/);
+    // A bar, as Bootstrap's progress has: 3 of 5.
+    const bar = renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(Bring.BringAllBackView, { ...going, busy: false, onAsk: () => undefined, onStop: () => undefined }),
+      ),
+    );
+    expect(bar).toMatch(/data-testid="lovejoin-bring-meter"[^]*?width:60%/);
     // Before its first run it says nothing of what's left.
     expect(view({ bringing: { back: 0 } })).not.toContain("left.");
   });
 
   it("says why once it stopped by itself, offering it again; and once it's over, how many went", () => {
     const stopped = view({ bringing: { back: 1, left: 1, stopped: "giveme.my didn't answer." } });
-    expect(stopped).toContain("Bringing every box back stopped, as its last few tries in a row sent nothing. The latest reason: giveme.my didn't answer.");
+    expect(stopped).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer. The rest come back by themselves, each after its wait, unless you press Try again.");
     expect(stopped).toContain("Try again");
     expect(stopped).not.toContain("Stop ");
     expect(view({ done: 4 })).toContain("Done: 4 boxes are on their way back to your private balance.");
@@ -357,19 +368,18 @@ describe("a pool's page's Bring every box in this pool back now (the owner's tes
       );
     expect(markup(true)).toMatch(/<button[^>]*class="link align-start"[^>]*data-testid="lovejoin-bring-ask"/);
     expect(markup(false)).toMatch(/<button[^>]*class="secondary"[^>]*data-testid="lovejoin-bring-ask"/);
-    // The link first, its line under it.
-    const shown = text(markup(true));
-    expect(shown.indexOf("Bring every box in this pool back now")).toBeLessThan(shown.indexOf("Your boxes in other pools stay where they are."));
+    // The link alone on a pool's page; a button and one short line in Settings, no more (the owner: "the rest is text").
+    expect(text(markup(true)).trim()).toBe("Bring every box in this pool back now");
+    expect(text(markup(false)).trim()).toBe("Bring every box back now Every box in every pool, without the waits.");
   });
 
   it("speaks of this pool alone, and asks first with the same warning", () => {
     const shown = view({ pool: true });
     expect(shown).toContain("Bring every box in this pool back now");
-    expect(shown).toContain("Your boxes in other pools stay where they are.");
     const question = text(renderToStaticMarkup(createElement(Bring.BringAllBackQuestion, { pool: true, onKeep: () => undefined, onConfirm: () => undefined })));
-    expect(question).toContain("Bring every box in this pool back now?");
-    expect(question).toContain("Anyone can then tell these boxes are one person's");
-    expect(question).toContain("Keep Seedelf Wallet unlocked until every box is on its way back");
+    expect(question).toContain("Bring this pool's boxes back now?");
+    expect(question).toContain("Sent back to back, they show they're one person's");
+    expect(question).toContain("Bring them back");
   });
 
   it("says how its own run goes, or every pool's, and that another pool's goes, which it can't join", () => {
@@ -382,7 +392,7 @@ describe("a pool's page's Bring every box in this pool back now (the owner's tes
         createElement(Bring.BringAllBackView, { bringing: undefined, pool: true, other: true, busy: false, onAsk: () => undefined, onStop: () => undefined }),
       ),
     );
-    expect(text(other)).toContain("Every box in another pool is being brought back. Stop that first, or bring back every pool's from Settings.");
+    expect(text(other)).toContain("Another pool's boxes are coming back now. Stop that first, or use Settings for every pool.");
     expect(other).toMatch(/data-testid="lovejoin-bring-ask"[^>]*disabled|disabled[^>]*data-testid="lovejoin-bring-ask"/);
     expect(view({ pool: true, done: 0 })).toContain("Nothing of yours was left in this pool.");
   });
@@ -391,8 +401,8 @@ describe("a pool's page's Bring every box in this pool back now (the owner's tes
     const one = view({ bringing: { back: 2, pool: "abc", left: 3 } });
     expect(one).toContain("Bringing every box in one pool back: 2 boxes sent back so far. 3 boxes left.");
     expect(one).toContain("Stop");
-    expect(one.match(/Bring every box back now/g)?.length).toBe(2);
+    expect(one.match(/Bring every box back now/g)?.length).toBe(1);
     expect(view({ bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).not.toContain("giveme.my didn't answer.");
-    expect(view({ pool: true, bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).toContain("The latest reason: giveme.my didn't answer.");
+    expect(view({ pool: true, bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer.");
   });
 });

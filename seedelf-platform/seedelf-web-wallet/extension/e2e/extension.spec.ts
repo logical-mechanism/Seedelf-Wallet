@@ -1788,6 +1788,30 @@ test("move in: Max, and an amount that's too big", async ({ context, koios }) =>
   expect(koios.submitted).toHaveLength(0);
 });
 
+test("UTxOs: a long list shows 20 at a time, then 20 more (the owner's test of 1.6.0: hundreds after a pool's boxes come back)", async ({
+  context,
+  koios,
+}) => {
+  const [rich] = (Object.values(koiosPreprod.accounts)[0] as { account_utxos: Array<Record<string, any>> }).account_utxos.filter(
+    (u) => BigInt(u.value) > 1_000_000_000n,
+  );
+  koios.addedToAccounts.push(
+    ...Array.from({ length: 20 }, (_, i) => ({ ...rich!, tx_hash: (0xa0 + i).toString(16).repeat(32), tx_index: 0, value: String(2_000_000 + i), asset_list: [] }) as never),
+  );
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+  await cardanoTab(page);
+  await page.getByRole("button", { name: "UTxOs", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Public UTxOs" })).toBeVisible();
+  const total = Number((await page.getByText(/^\d+ UTxOs/).first().textContent())!.match(/^(\d+)/)![1]);
+  expect(total).toBeGreaterThan(20);
+  const rows = page.getByTestId("utxos").getByRole("listitem");
+  await expect(rows).toHaveCount(20);
+  await page.getByRole("button", { name: `Show ${Math.min(20, total - 20)} more` }).click();
+  await expect(rows).toHaveCount(Math.min(40, total));
+  await expect(page.getByTestId("utxos-more")).toHaveCount(total > 40 ? 1 : 0);
+});
+
 test("UTxOs: each balance's from the last reading, and a locked one kept out of its payments", async ({ context, koios }) => {
   const page = await openApp(context);
   await restore(page, vector(12).phrase);
@@ -2850,17 +2874,17 @@ test("Settings' Bring every box back now asks first, then goes, and says so when
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: /^Lovejoin/ }).click();
   const bring = page.getByTestId("lovejoin-bring");
-  await expect(bring).toContainText("every box of yours, in every pool, comes back to your private balance straight away");
+  await expect(bring).toContainText("Every box in every pool, without the waits.");
   // Kept: nothing asked.
   await bring.getByRole("button", { name: "Bring every box back now" }).click();
   const question = page.getByRole("dialog", { name: "Bring every box back now?" });
-  await expect(question).toContainText("Anyone can then tell these boxes are one person's");
+  await expect(question).toContainText("Sent back to back, they show they're one person's");
   await question.getByRole("button", { name: "Keep them in Lovejoin" }).click();
   await expect(question).toHaveCount(0);
   await expect(bring.getByTestId("lovejoin-bringing")).toHaveCount(0);
   // Asked: the worker's run reads the pools, finds none of the wallet's boxes, and it's over.
   await bring.getByRole("button", { name: "Bring every box back now" }).click();
-  await question.getByRole("button", { name: "Bring every box back now" }).click();
+  await question.getByRole("button", { name: "Bring them back" }).click();
   await expect(bring.getByTestId("lovejoin-bring-done")).toHaveText("Nothing of yours was left in Lovejoin.", { timeout: 30_000 });
   await expect(bring.getByRole("button", { name: "Bring every box back now" })).toBeEnabled();
 });

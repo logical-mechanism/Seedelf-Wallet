@@ -103,6 +103,12 @@ export function unspendableWhy(of: UtxoSide): string {
   return t(of === "seedelf" ? "utxos.warn.unspendablePrivate" : "utxos.warn.unspendablePublic");
 }
 
+/**
+ * How many rows show at first, and how many more each Show more adds: boxes brought back from Lovejoin all at once are
+ * a UTxO each, hundreds after a pool's (the owner's test of 1.6.0, 2026-10-20).
+ */
+const UTXOS_PAGE = 20;
+
 /** Kept ones first, so they're found among hundreds; each group largest first, as the worker sends them. */
 const arrange = (all: UtxoInfo[]) => [...all.filter((u) => tag(u)), ...all.filter((u) => !tag(u))].map(ref);
 
@@ -127,6 +133,7 @@ export function Utxos({
   // The order is set when the list is read, so a row stays put while it's locked and unlocked.
   const [order, setOrder] = useState<string[]>([]);
   const [open, setOpen] = useState<string>();
+  const [count, setCount] = useState(UTXOS_PAGE);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState<string>();
   const [error, setError] = useState<string>();
@@ -217,7 +224,7 @@ export function Utxos({
       ) : (
         <section className="section" aria-label={t("utxos.listLabel")}>
           <ul className="list" data-testid="utxos">
-            {list.map((u) => {
+            {list.slice(0, count).map((u) => {
               const name = joinList([`${amounts.ada(u.lovelace)}\u00a0₳`, `${shortHex(u.txHash)}#${u.index}`]);
               const history = historyOf(u, accounts.length);
               return (
@@ -265,6 +272,11 @@ export function Utxos({
               );
             })}
           </ul>
+          {list.length > count && (
+            <button type="button" className="secondary" onClick={() => setCount((n) => n + UTXOS_PAGE)} data-testid="utxos-more">
+              {t("tokens.showMore", { number: Math.min(UTXOS_PAGE, list.length - count) })}
+            </button>
+          )}
         </section>
       )}
       {shown && (
