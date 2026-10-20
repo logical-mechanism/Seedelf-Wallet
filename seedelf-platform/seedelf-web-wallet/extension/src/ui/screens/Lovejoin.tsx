@@ -70,6 +70,7 @@ import type {
 } from "../../shared/rpc";
 import { publicAccountName, useAccounts } from "../accounts";
 import { call } from "../background";
+import { BringAllBack } from "../components/BringAllBack";
 import { Callout } from "../components/Callout";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GivemeNote } from "../components/GivemeNote";
@@ -3034,6 +3035,10 @@ export function PoolPage({
         </div>
       )}
       {!short && bootstrapOpen && !copy && bootstrapForm}
+
+      {/* Every box of the wallet's in this pool back now, behind its question (the owner's test of 1.6.0: "on that pool
+          mix page, something that allows that pool specific"); Settings' brings back every pool's. */}
+      <BringAllBack network={network} pool={pool.id ?? CLASSIC_ID} shown={owned > 0 || held > 0 || notMixed > 0} onOver={() => void onRefresh()} />
 
       <WayBack />
       {asking && "anyway" in asking && (

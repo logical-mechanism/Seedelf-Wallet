@@ -13,11 +13,13 @@ import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadg
 import { PreferencesContext } from "../src/ui/preferences";
 
 let Settings: typeof import("../src/ui/screens/Settings");
+let Bring: typeof import("../src/ui/components/BringAllBack");
 
 beforeAll(async () => {
   // The page's view (ui/view.ts) is read from its URL when the module loads.
   vi.stubGlobal("location", { search: "?view=tab", hash: "" });
   Settings = await import("../src/ui/screens/Settings");
+  Bring = await import("../src/ui/components/BringAllBack");
 });
 
 /** The text a person reads, without the markup. */
@@ -279,13 +281,13 @@ describe("Settings' Connected sites (launch review H7)", () => {
 });
 
 describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () => {
-  const view = (props: Partial<Parameters<typeof Settings.BringAllBackView>[0]>, hideBalances = false) =>
+  const view = (props: Partial<Parameters<typeof Bring.BringAllBackView>[0]>, hideBalances = false) =>
     text(
       renderToStaticMarkup(
         createElement(
           PreferencesContext.Provider,
           { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances }, loaded: true, set: async () => undefined } },
-          createElement(Settings.BringAllBackView, { bringing: undefined, busy: false, onAsk: () => undefined, onStop: () => undefined, ...props }),
+          createElement(Bring.BringAllBackView, { bringing: undefined, busy: false, onAsk: () => undefined, onStop: () => undefined, ...props }),
         ),
       ),
     );
@@ -299,7 +301,7 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
   });
 
   it("asks first, saying what bringing them all back at once ties, what it costs, and to stay unlocked", () => {
-    const shown = text(renderToStaticMarkup(createElement(Settings.BringAllBackQuestion, { onKeep: () => undefined, onConfirm: () => undefined })));
+    const shown = text(renderToStaticMarkup(createElement(Bring.BringAllBackQuestion, { onKeep: () => undefined, onConfirm: () => undefined })));
     expect(shown).toContain("Bring every box back now?");
     expect(shown).toContain("Anyone can then tell these boxes are one person's, which makes them easier to match to the deposits that put them in.");
     expect(shown).toContain("A box nobody has mixed since its deposit shows its way in and back out, which ties that deposit to your private balance; where your public account paid for the deposit, it ties the account to your private balance too.");
@@ -329,5 +331,52 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
     expect(view({ done: 4 })).toContain("Done: 4 boxes are on their way back to your private balance.");
     expect(view({ done: 1 })).toContain("Done: 1 box is on its way back to your private balance.");
     expect(view({ done: 0 })).toContain("Nothing of yours was left in Lovejoin.");
+  });
+});
+
+describe("a pool's page's Bring every box in this pool back now (the owner's test of 1.6.0)", () => {
+  const view = (props: Partial<Parameters<typeof Bring.BringAllBackView>[0]>) =>
+    text(
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+          createElement(Bring.BringAllBackView, { bringing: undefined, busy: false, onAsk: () => undefined, onStop: () => undefined, ...props }),
+        ),
+      ),
+    );
+
+  it("speaks of this pool alone, and asks first with the same warning", () => {
+    const shown = view({ pool: true });
+    expect(shown).toContain("Bring every box in this pool back now");
+    expect(shown).toContain("Your boxes in other pools stay where they are.");
+    const question = text(renderToStaticMarkup(createElement(Bring.BringAllBackQuestion, { pool: true, onKeep: () => undefined, onConfirm: () => undefined })));
+    expect(question).toContain("Bring every box in this pool back now?");
+    expect(question).toContain("Anyone can then tell these boxes are one person's");
+    expect(question).toContain("Keep Seedelf Wallet unlocked until every box is on its way back");
+  });
+
+  it("says how its own run goes, or every pool's, and that another pool's goes, which it can't join", () => {
+    expect(view({ pool: true, bringing: { back: 2, pool: "abc", left: 1 } })).toContain("Bringing every box in this pool back: 2 boxes sent back so far. 1 box left.");
+    expect(view({ pool: true, bringing: { back: 2, left: 1 } })).toContain("Bringing every box back: 2 boxes sent back so far.");
+    const other = renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(Bring.BringAllBackView, { bringing: undefined, pool: true, other: true, busy: false, onAsk: () => undefined, onStop: () => undefined }),
+      ),
+    );
+    expect(text(other)).toContain("Every box in another pool is being brought back. Stop that first, or bring back every pool's from Settings.");
+    expect(other).toMatch(/data-testid="lovejoin-bring-ask"[^>]*disabled|disabled[^>]*data-testid="lovejoin-bring-ask"/);
+    expect(view({ pool: true, done: 0 })).toContain("Nothing of yours was left in this pool.");
+  });
+
+  it("in Settings, says one pool's goes and keeps the button to make it every pool's; a pool's stop is its page's to say", () => {
+    const one = view({ bringing: { back: 2, pool: "abc", left: 3 } });
+    expect(one).toContain("Bringing every box in one pool back: 2 boxes sent back so far. 3 boxes left.");
+    expect(one).toContain("Stop");
+    expect(one.match(/Bring every box back now/g)?.length).toBe(2);
+    expect(view({ bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).not.toContain("giveme.my didn't answer.");
+    expect(view({ pool: true, bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).toContain("The latest reason: giveme.my didn't answer.");
   });
 });

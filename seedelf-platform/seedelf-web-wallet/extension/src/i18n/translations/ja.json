@@ -1785,6 +1785,13 @@
   "settings.lovejoin.warn.bringStopped": "続けて数回試しても何も送信できなかったため、すべてのボックスを戻す処理は止まりました。直近の理由: {{why}}Lovejoin に残っているボックスは、「もう一度試す」を押さない限り、これまでどおりそれぞれの待ち時間のあとに戻ります。",
   "settings.lovejoin.bringDone_other": "完了: {{boxes}}がプライベート残高へ戻る途中です。",
   "settings.lovejoin.bringNone": "Lovejoin にあなたのものは残っていませんでした。",
+  "lovejoin.bring.button": "このプールのすべてのボックスを今すぐ戻す",
+  "lovejoin.bring.note": "このプールからすべてを今すぐ出す必要があるときに。このプールにあるあなたのボックスが、それぞれの待ち時間を待たずに、1 件ずつ続けてすぐにプライベート残高へ戻ります。ほかのプールのボックスはそのままです。",
+  "lovejoin.bring.title": "このプールのすべてのボックスを今すぐ戻しますか？",
+  "lovejoin.bring.going_other": "このプールのすべてのボックスを戻しています: これまでに{{boxes}}を送り返しました。",
+  "lovejoin.bring.none": "このプールにあなたのものは残っていませんでした。",
+  "lovejoin.bring.other": "ほかのプールのすべてのボックスを戻す処理が進行中です。先にそれを停止するか、設定からすべてのプールのボックスを戻してください。",
+  "settings.lovejoin.bringingPool_other": "1 つのプールのすべてのボックスを戻しています: これまでに{{boxes}}を送り返しました。",
   "settings.lovejoin.depth": "各ボックスのミックス",
   "settings.lovejoin.depthCost_other": "{{count}} 回のミックス、約 {{ada}} ₳",
   "settings.lovejoin.depthOption_other": "深さ {{count}} 段: {{cost}}",
@@ -2866,5 +2873,6 @@
   "lj.width.warn.long": "ボックスを一度に 4 件ずつミックスすると、このチェーンがウォレットの一度に送れる長さを超えるため、一度に 3 件ずつミックスします。",
   "lj.width.warn.refused": "今回は一度にボックス 4 件ずつのミックスを作成できないため、一度に 3 件ずつミックスします。",
   "lj.width.warn.short": "Lovejoin のプールには、ボックスを一度に 4 件ずつミックスできるだけの利用できるボックスがないため、一度に 3 件ずつミックスします。",
-  "lj.privatePayNone": "プライベート残高に、このボックスが戻る費用を払える ADA だけの UTxO がありません。公開アカウントで支払うか、先に ADA をプライベートにしてください。"
+  "lj.privatePayNone": "プライベート残高に、このボックスが戻る費用を払える ADA だけの UTxO がありません。公開アカウントで支払うか、先に ADA をプライベートにしてください。",
+  "lj.bringOtherPool": "ほかのプールのすべてのボックスを戻す処理が進行中です。先にそれを停止するか、設定からすべてのプールのボックスを戻してください。"
 }

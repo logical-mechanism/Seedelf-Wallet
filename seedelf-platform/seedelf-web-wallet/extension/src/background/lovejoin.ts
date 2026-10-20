@@ -788,6 +788,8 @@ interface Schedule {
 interface Bringing {
   /** When it was asked (ms). */
   at: number;
+  /** One pool's alone, from its page (its id, `classic` for the classic pool's); none: every pool's, from Settings. */
+  pool?: string;
   /** How many withdraws it sent. */
   back: number;
   /** How many of the wallet's boxes the last run left, a chain's included: none before its first run. */
@@ -1767,6 +1769,7 @@ const empty = (s: Schedule) =>
 /** What Settings shows of Bring every box back now (LovejoinHeld `bringing`): the reason it stopped, once it did. */
 const bringingView = (b: Bringing): NonNullable<LovejoinHeld["bringing"]> => ({
   back: b.back,
+  ...(b.pool !== undefined ? { pool: b.pool } : {}),
   ...(b.left !== undefined ? { left: b.left } : {}),
   ...(b.why !== undefined ? (b.stopped ? { stopped: b.why } : { why: b.why }) : {}),
 });
@@ -5144,7 +5147,7 @@ export class LovejoinService {
     await this.dropRefused(network);
     // Bring every box back now, asked in Settings: none of the waits below, from the unlock's run on.
     const asked = (await this.read(network)).bringing;
-    if (asked && !asked.stopped) return this.bringAllBackNow(network);
+    if (asked && !asked.stopped) return this.bringAllBackNow(network, asked.pool);
     // The unlock's fresh draws come first, before any Koios read: a read that
     // fails can't leave a box due to go at the next run (independent review L10).
     const unlocked = await this.unlockDraws(network);
@@ -5448,14 +5451,23 @@ export class LovejoinService {
 
   /**
    * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0): every box of the wallet's in every
-   * pool comes back from the next run on (bringAllBackNow), which the alarm keeps going until it's over. Asked while
-   * it goes, nothing changes; asked after it stopped, it starts afresh.
+   * pool comes back from the next run on (bringAllBackNow), which the alarm keeps going until it's over; or, from a
+   * pool's page, every box in `pool` alone (the owner, after: "on that pool mix page, something that allows that pool
+   * specific"). Asked while one goes: every pool's widens a pool's, and a pool's is in every pool's already; another
+   * pool's is refused, in words. Asked after it stopped, it starts afresh.
    */
-  async bringAllBack(network: NetworkName): Promise<void> {
+  async bringAllBack(network: NetworkName, pool?: string): Promise<void> {
     if (!this.available(network)) throw new Error(t("lj.notOnNetwork"));
+    const going = (b?: Bringing) => (b && !b.stopped ? b : undefined);
+    const other = (b?: Bringing) => pool !== undefined && going(b)?.pool !== undefined && going(b)!.pool !== pool;
+    if (other((await this.read(network)).bringing)) throw new Error(t("lj.bringOtherPool"));
     await this.update(network, (s) => {
-      if (s.bringing && !s.bringing.stopped) return;
-      s.bringing = { at: this.deps.now(), back: 0 };
+      const b = going(s.bringing);
+      if (b) {
+        if (pool === undefined) delete b.pool;
+        return;
+      }
+      s.bringing = { at: this.deps.now(), back: 0, ...(pool !== undefined ? { pool } : {}) };
     });
     await this.deps.alarm?.start().catch(() => undefined);
   }
@@ -5480,7 +5492,7 @@ export class LovejoinService {
    * BRING_FAILED_RUNS. A lock stops the run, and the unlock's goes on. Over once a run finds no box it can take: its
    * pools' due times and counts go then, as the next pool read would have them, so Home says so at once.
    */
-  private async bringAllBackNow(network: NetworkName): Promise<PendingTx[]> {
+  private async bringAllBackNow(network: NetworkName, scope?: string): Promise<PendingTx[]> {
     const { wallet, now } = this.deps;
     if (await this.deps.mixingAgain?.(network)) return [];
     if (await this.chainsSending(network)) return [];
@@ -5499,11 +5511,13 @@ export class LovejoinService {
       return [];
     }
     const { reads, owned } = found;
-    const takes = free(owned, reserved);
+    // One pool's, when it's asked from that pool's page.
+    const ours = scope === undefined ? owned : inPool(owned, scope);
+    const takes = free(ours, reserved);
     const held = new Set(bootstrapOf(await this.read(network), owned).map(ref));
     if (!takes.length) {
       await this.update(network, (s) => {
-        for (const { pool } of reads) {
+        for (const { pool } of reads.filter((r) => scope === undefined || r.pool.id === scope)) {
           setDue(s, pool.id, []);
           const counts: Pick<PoolSchedule, "notMixed" | "unsure"> | undefined = pool.id === CLASSIC ? s : s.pools?.[pool.id];
           delete counts?.notMixed;

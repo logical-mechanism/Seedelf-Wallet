@@ -1900,6 +1900,15 @@
   "settings.lovejoin.bringDone_one": "Done: {{boxes}} is on its way back to your private balance.",
   "settings.lovejoin.bringDone_other": "Done: {{boxes}} are on their way back to your private balance.",
   "settings.lovejoin.bringNone": "Nothing of yours was left in Lovejoin.",
+  "lovejoin.bring.button": "Bring every box in this pool back now",
+  "lovejoin.bring.note": "For when you need everything out of this pool now: every box of yours in it comes back to your private balance straight away, one after another, rather than each after its own wait. Your boxes in other pools stay where they are.",
+  "lovejoin.bring.title": "Bring every box in this pool back now?",
+  "lovejoin.bring.going_one": "Bringing every box in this pool back: {{boxes}} sent back so far.",
+  "lovejoin.bring.going_other": "Bringing every box in this pool back: {{boxes}} sent back so far.",
+  "lovejoin.bring.none": "Nothing of yours was left in this pool.",
+  "lovejoin.bring.other": "Every box in another pool is being brought back. Stop that first, or bring back every pool's from Settings.",
+  "settings.lovejoin.bringingPool_one": "Bringing every box in one pool back: {{boxes}} sent back so far.",
+  "settings.lovejoin.bringingPool_other": "Bringing every box in one pool back: {{boxes}} sent back so far.",
   "settings.lovejoin.depth": "Mixing, for each box",
   "settings.lovejoin.depthCost_one": "{{count}} mix, about {{ada}} ₳",
   "settings.lovejoin.depthCost_other": "{{count}} mixes, about {{ada}} ₳",
@@ -3018,5 +3027,6 @@
   "lj.width.warn.long": "Four boxes at a time would make this chain longer than the wallet sends at once, so it mixes three at a time.",
   "lj.width.warn.refused": "Four boxes at a time couldn't be built this time, so it mixes three at a time.",
   "lj.width.warn.short": "Lovejoin's pool hasn't enough boxes free to mix four at a time, so this mixes three at a time.",
-  "lj.privatePayNone": "Your private balance has no UTxO of ADA alone that can pay for this box's way back. Pay from your public account, or make some ADA private first."
+  "lj.privatePayNone": "Your private balance has no UTxO of ADA alone that can pay for this box's way back. Pay from your public account, or make some ADA private first.",
+  "lj.bringOtherPool": "Every box in another pool is being brought back. Stop that first, or bring back every pool's from Settings."
 }

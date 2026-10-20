@@ -241,6 +241,40 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 1, left: 0 });
   });
 
+  it("from a pool's page brings back that pool's boxes alone: the other pools' keep their waits", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1"), await tokenBox(t, "f1"), ...(await strangers(t)));
+    await lj.status("preprod");
+    await lj.bringAllBack("preprod", TOKEN);
+    expect((await lj.held("preprod")).bringing).toEqual({ back: 0, pool: TOKEN });
+    expect(await lj.withdrawDue("preprod")).toHaveLength(1);
+    expect(withdrawn(t)).toEqual([`${"f1".repeat(32)}#0`]);
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 1, pool: TOKEN, left: 0 });
+    // Over: the token pool's figures go, the classic pool's box keeps its due time, hours away.
+    expect(await lj.withdrawDue("preprod")).toEqual([]);
+    const after = await sealed(t);
+    expect(after.bringing).toBeUndefined();
+    expect(after.pools?.[TOKEN]).toBeUndefined();
+    expect(after.due).toHaveLength(1);
+    expect(withdrawn(t)).toHaveLength(1);
+  });
+
+  it("widens one pool's to every pool's when Settings asks, and refuses another pool's while one goes", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    await lj.bringAllBack("preprod", TOKEN);
+    await expect(lj.bringAllBack("preprod", "classic")).rejects.toThrow("Every box in another pool is being brought back.");
+    // The same pool's again changes nothing.
+    await lj.bringAllBack("preprod", TOKEN);
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0, pool: TOKEN });
+    // Every pool's, from Settings: the same run, for every pool; a pool's is in it already.
+    await lj.bringAllBack("preprod");
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0 });
+    await lj.bringAllBack("preprod", "classic");
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0 });
+  });
+
   it("stops when asked from Settings: the boxes left come back as before, each after its own wait", async () => {
     const t = await wallet();
     const lj = pooled(t);

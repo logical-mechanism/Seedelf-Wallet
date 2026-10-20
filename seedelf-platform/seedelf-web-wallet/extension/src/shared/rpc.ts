@@ -2343,11 +2343,12 @@ export interface LovejoinHeld {
     box?: LovejoinBoxValue;
   }>;
   /**
-   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0), while asked: the withdraws it sent,
+   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0), while asked: one pool's alone, asked
+   * from its page (`pool`, `classic` for the classic pool's), or every pool's; the withdraws it sent,
    * the boxes its last run left (none before its first), why the last box that didn't go didn't (`why`), and, once
    * it stopped for that, the reason (`stopped`). None once it's over.
    */
-  bringing?: { back: number; left?: number; why?: string; stopped?: string };
+  bringing?: { back: number; pool?: string; left?: number; why?: string; stopped?: string };
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */
@@ -2767,9 +2768,10 @@ export interface Requests {
   /**
    * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0): every box of the wallet's in every
    * pool comes back, one withdraw after another, with none of its waits, from a run started at once (lovejoin.ts
-   * bringAllBackNow). `-stop` stops it, or forgets that it stopped.
+   * bringAllBackNow); `pool`, from a pool's page, that pool's alone (`classic` for the classic pool's). `-stop` stops
+   * it, or forgets that it stopped.
    */
-  "lovejoin-bring-all-back": { payload: None; result: None };
+  "lovejoin-bring-all-back": { payload: { pool?: string }; result: None };
   "lovejoin-bring-all-back-stop": { payload: None; result: None };
   /**
    * Clears mixes from Lovejoin's Your mixes (the owner's test of 1.6.0): `entries`, the list's by id, and `sessions`,

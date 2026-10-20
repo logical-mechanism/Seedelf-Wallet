@@ -3170,5 +3170,17 @@
   "settings.lovejoin.bringDone_many": "machine",
   "settings.lovejoin.bringDone_one": "machine",
   "settings.lovejoin.bringDone_other": "machine",
-  "settings.lovejoin.bringNone": "machine"
+  "settings.lovejoin.bringNone": "machine",
+  "lovejoin.bring.button": "machine",
+  "lovejoin.bring.note": "machine",
+  "lovejoin.bring.title": "machine",
+  "lovejoin.bring.going_many": "machine",
+  "lovejoin.bring.going_one": "machine",
+  "lovejoin.bring.going_other": "machine",
+  "lovejoin.bring.none": "machine",
+  "lovejoin.bring.other": "machine",
+  "settings.lovejoin.bringingPool_many": "machine",
+  "settings.lovejoin.bringingPool_one": "machine",
+  "settings.lovejoin.bringingPool_other": "machine",
+  "lj.bringOtherPool": "machine"
 }

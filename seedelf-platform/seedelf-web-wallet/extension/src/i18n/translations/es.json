@@ -2015,6 +2015,17 @@
   "settings.lovejoin.bringDone_one": "Hecho: {{boxes}} está de camino a tu saldo privado.",
   "settings.lovejoin.bringDone_other": "Hecho: {{boxes}} están de camino a tu saldo privado.",
   "settings.lovejoin.bringNone": "No quedaba nada tuyo en Lovejoin.",
+  "lovejoin.bring.button": "Traer todas las cajas de este pool de vuelta ahora",
+  "lovejoin.bring.note": "Para cuando necesites sacar todo de este pool: cada caja tuya en él vuelve a tu saldo privado enseguida, una tras otra, en lugar de cada una tras su propia espera. Tus cajas en otros pools se quedan donde están.",
+  "lovejoin.bring.title": "¿Traer todas las cajas de este pool de vuelta ahora?",
+  "lovejoin.bring.going_many": "Trayendo todas las cajas de este pool de vuelta: {{boxes}} enviadas de vuelta hasta ahora.",
+  "lovejoin.bring.going_one": "Trayendo todas las cajas de este pool de vuelta: {{boxes}} enviada de vuelta hasta ahora.",
+  "lovejoin.bring.going_other": "Trayendo todas las cajas de este pool de vuelta: {{boxes}} enviadas de vuelta hasta ahora.",
+  "lovejoin.bring.none": "No quedaba nada tuyo en este pool.",
+  "lovejoin.bring.other": "Se están trayendo de vuelta todas las cajas de otro pool. Detén eso primero, o trae de vuelta las de todos los pools desde Configuración.",
+  "settings.lovejoin.bringingPool_many": "Trayendo todas las cajas de un pool de vuelta: {{boxes}} enviadas de vuelta hasta ahora.",
+  "settings.lovejoin.bringingPool_one": "Trayendo todas las cajas de un pool de vuelta: {{boxes}} enviada de vuelta hasta ahora.",
+  "settings.lovejoin.bringingPool_other": "Trayendo todas las cajas de un pool de vuelta: {{boxes}} enviadas de vuelta hasta ahora.",
   "settings.lovejoin.depth": "Mezcla, para cada caja",
   "settings.lovejoin.depthCost_many": "{{count}} mezclas, unos {{ada}} ₳",
   "settings.lovejoin.depthCost_one": "{{count}} mezcla, unos {{ada}} ₳",
@@ -3170,5 +3181,6 @@
   "lj.width.warn.long": "Mezclar cuatro cajas a la vez haría esta cadena más larga de lo que la billetera puede enviar de una vez, así que se mezclan tres a la vez.",
   "lj.width.warn.refused": "Esta vez no se pudo construir una mezcla de cuatro cajas a la vez, así que se mezclan tres a la vez.",
   "lj.width.warn.short": "El pool de Lovejoin no tiene suficientes cajas disponibles para mezclar cuatro a la vez, así que se mezclan tres a la vez.",
-  "lj.privatePayNone": "Tu saldo privado no tiene ningún UTxO solo de ADA que pueda pagar el regreso de esta caja. Paga con tu cuenta pública, o haz privado algo de ADA primero."
+  "lj.privatePayNone": "Tu saldo privado no tiene ningún UTxO solo de ADA que pueda pagar el regreso de esta caja. Paga con tu cuenta pública, o haz privado algo de ADA primero.",
+  "lj.bringOtherPool": "Se están trayendo de vuelta todas las cajas de otro pool. Detén eso primero, o trae de vuelta las de todos los pools desde Configuración."
 }
