@@ -22,6 +22,7 @@ import { privateIndexClient } from "./private-index";
 import { excludedProtocols, Minswap } from "./minswap";
 import { MintService } from "./mint";
 import { MoveInService } from "./move-in";
+import { PartsService } from "./parts";
 import { PendingService } from "./pending";
 import { AccountsService, activeAccount } from "./accounts";
 import { LOCAL_NETWORK, NetworkChoice, PreferencesService } from "./preferences";
@@ -252,6 +253,8 @@ function getContext(): Promise<Worker> {
       }),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
+    // A payment's parts that wait for the one before to be in a block; a session's funding is told when they won't all go.
+    const parts = new PartsService({ ...spends, stopped: (n, w) => sessions.partsStopped(n, w) });
     // Starting a pool, from either side (chunk 34's 34d): what's shown already is discovery's.
     const launch = new LovejoinLaunchService({ ...spends, lovejoin, discovery });
     dapp = new DappService({
@@ -275,6 +278,7 @@ function getContext(): Promise<Worker> {
       withdraw,
       send,
       pending,
+      parts,
       contacts,
       activity,
       coins,

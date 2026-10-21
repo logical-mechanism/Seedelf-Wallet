@@ -16,6 +16,7 @@ import type { DataParts } from "./data-layer";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { NftImageService } from "./nft-image";
+import type { PartsService } from "./parts";
 import type { PendingService } from "./pending";
 import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
@@ -49,6 +50,8 @@ export interface Context {
   withdraw: WithdrawService;
   send: SendService;
   pending: PendingService;
+  /** A payment's parts that wait for the part before to be in a block (parts.ts): Home's poll and the runs send them. */
+  parts?: PartsService;
   contacts: ContactsService;
   activity: ActivityService;
   coins: CoinControlService;
@@ -210,8 +213,16 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.send.build(ctx.network, message.payments, message.note, ctx.progress);
     case "send-submit":
       return ctx.send.submit(ctx.network, message.txHash);
-    case "pending-tx":
-      return ctx.pending.pending(ctx.network);
+    case "pending-tx": {
+      // Parts waiting for the one before go as Home asks too, between the sessions alarm's runs; not waited for.
+      void ctx.parts?.pump(ctx.network).catch(() => undefined);
+      const pending = await ctx.pending.pending(ctx.network);
+      // The watch lets a part go once it's seen: what's still to go is said by the parts' own record.
+      if (!pending) return (await ctx.parts?.shown(ctx.network).catch(() => undefined)) ?? null;
+      const first = pending.chain?.first;
+      const parts = first ? await ctx.parts?.of(ctx.network, first) : undefined;
+      return parts ? { ...pending, parts } : pending;
+    }
     case "reset-check":
       return atStake(ctx);
     case "reset-wallet":

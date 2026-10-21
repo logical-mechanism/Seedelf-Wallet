@@ -1384,6 +1384,7 @@ mod transfer {
                 tokens: serde_json::from_value(r["tokens"].clone()).unwrap(),
             }],
             classes: Default::default(),
+            carry: false,
             seed: None,
             evaluation: None,
         }
@@ -3878,6 +3879,7 @@ mod parts_of_any_shape {
                 tokens,
             }],
             classes: Default::default(),
+            carry: false,
             seed: None,
             evaluation: None,
         }
@@ -3900,6 +3902,7 @@ mod parts_of_any_shape {
             classes: Default::default(),
             funding: None,
             most: false,
+            carry: false,
             seed: None,
             evaluation: None,
         }
@@ -4112,7 +4115,7 @@ mod parts_of_any_shape {
             .map(|(i, extra)| utxo(200 + i as u64, *extra, &[]))
             .collect();
         utxos.extend(ada.clone());
-        let parts = api::build_transfer_parts(sk, transfer(utxos, None, vec![])).unwrap();
+        let parts = api::build_transfer_parts(sk, transfer(utxos.clone(), None, vec![])).unwrap();
         sound(
             &parts
                 .iter()
@@ -4127,11 +4130,261 @@ mod parts_of_any_shape {
                 u.value
             );
         }
-        // All of it in one payment, as one transaction's Max pays: what's left holds only its tokens' least.
-        assert_eq!(parts.len(), 1);
+        // Then every bundle too (the owner, 2026-10-21: "grab all utxos"), the part of those alone paying its fee from
+        // what the part before carried forward; all the ADA paid, the tokens back with their least.
+        for u in &utxos {
+            assert!(
+                spent.iter().any(|i| i.tx_hash == u.tx_hash),
+                "left a bundle"
+            );
+        }
+        assert_eq!(parts.last().unwrap().left, 0);
         let held: u64 = ada.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
-        let paid: u64 = parts[0].payments[0].lovelace.parse().unwrap();
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
         assert!(paid > held - 3_000_000, "{paid} of {held}");
+    }
+
+    /// Each part's inputs that an earlier part made: the carry it spends, and which part made it.
+    fn carries(parts: &[(String, Vec<api::OutRef>)]) -> Vec<Vec<usize>> {
+        let hashes: Vec<String> = parts
+            .iter()
+            .map(|(cbor, _)| {
+                hex::encode(
+                    MultiEraTx::decode(&hex::decode(cbor).unwrap())
+                        .unwrap()
+                        .hash()
+                        .as_ref(),
+                )
+            })
+            .collect();
+        parts
+            .iter()
+            .map(|(_, inputs)| {
+                inputs
+                    .iter()
+                    .filter_map(|i| hashes.iter().position(|h| *h == i.tx_hash))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// What `cbor`'s output `index` holds: ADA, and how many kinds of token; and whether the wallet's key owns it.
+    fn output_of(cbor: &str, index: u64, sk: blstrs::Scalar) -> (u64, usize, bool) {
+        let bytes = hex::decode(cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        let output = tx.outputs()[index as usize].clone();
+        let owned = match output.datum() {
+            Some(pallas_primitives::conway::PseudoDatumOption::Data(d)) => {
+                seedelf_koios::koios::register_of_datum(d.raw_cbor())
+                    .is_some_and(|r| r.is_owned(sk).unwrap_or(false))
+            }
+            _ => false,
+        };
+        let kinds = output
+            .value()
+            .assets()
+            .iter()
+            .map(|p| p.assets().len())
+            .sum();
+        (output.value().coin(), kinds, owned)
+    }
+
+    #[test]
+    fn a_part_of_tokens_with_no_ada_left_spends_what_the_part_before_carried() {
+        // Test wallet A (1.6.0, item 10): all 240 tokens of a move-in's 12 bundles, each at exactly its least, and one
+        // big UTxO of ADA. Three parts by size; the first took the big UTxO and kept its ADA as change no other part
+        // could spend, so the rest couldn't pay their fees and it was refused with 409 ADA in the balance. Now the
+        // parts after the first chain: each spends the ADA the one before carried forward to the wallet's own
+        // register, as an output of ADA alone.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.extend(ada(100, 1, 409_000_000));
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos.clone(), Some(0), all.clone())).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        assert_eq!(sound(&built), utxos.len() + parts.len() - 1);
+        let carried = carries(&built);
+        assert!(carried[0].is_empty());
+        for (n, from) in carried.iter().enumerate().skip(1) {
+            assert_eq!(
+                from,
+                &vec![n - 1],
+                "part {n} spends the carry of the part right before it"
+            );
+            let carry = parts[n]
+                .inputs
+                .iter()
+                .find(|i| i.tx_hash == parts[n - 1].tx_hash)
+                .unwrap();
+            let (lovelace, kinds, owned) = output_of(&parts[n - 1].tx_cbor, carry.tx_index, sk);
+            assert_eq!(
+                (kinds, owned),
+                (0, true),
+                "an output of ADA alone at the wallet's own register"
+            );
+            assert!(
+                lovelace > 300_000_000,
+                "the big UTxO's ADA goes forward: {lovelace}"
+            );
+        }
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&all)
+        );
+        // Each part but the last pays its tokens with the least ADA they need, the last what's still owed.
+        let pp = ProtocolParameters::from_koios(&params()).unwrap();
+        for p in &parts[..parts.len() - 1] {
+            let tokens = p.payments[0].tokens.iter().fold(Assets::new(), |all, t| {
+                all.add(
+                    Asset::new(
+                        t.policy_id.clone(),
+                        t.asset_name.clone(),
+                        t.quantity.parse().unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            });
+            assert_eq!(
+                p.payments[0].lovelace,
+                seedelf_core::build::minimum_seedelf_payment(&pp, &tokens)
+                    .unwrap()
+                    .to_string()
+            );
+        }
+        // Max over the same: every UTxO, the last paying all the ADA.
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos.clone(), None, all.clone())).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert_eq!(sound(&built), utxos.len() + parts.len() - 1);
+        assert!(carries(&built).iter().skip(1).all(|from| from.len() == 1));
+        assert_eq!(parts.last().unwrap().left, 0);
+        assert!(parts.iter().all(|p| p.max));
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&all)
+        );
+    }
+
+    #[test]
+    fn a_chain_starts_at_the_first_part_when_the_ada_sits_with_the_tokens() {
+        // Test wallet A as it really was (1.6.0, item 10b, found live): its 2,621 ADA in a UTxO holding 19 of the 400
+        // tokens sent, behind 19 bundles of 20 at exactly their least. The parts took the holders of the most tokens
+        // first, so no part could pay its fee and none could start a chain: refused. Now the part that couldn't go
+        // starts it, the holders adding the most ADA first.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let all: Vec<TokenAmount> = (0..400).map(|i| token(i, 1_000_000)).collect();
+        let mut utxos: Vec<UtxoResponse> = all[..380]
+            .chunks(20)
+            .enumerate()
+            .map(|(i, c)| utxo(i as u64 + 1, 0, c))
+            .collect();
+        let mut rich = all[380..399].to_vec();
+        rich.push(token(1_000, 1_000_000));
+        utxos.push(utxo(50, 2_616_000_000, &rich));
+        utxos.push(utxo(51, 300_000, &all[399..]));
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos.clone(), Some(0), all.clone())).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        sound(&built);
+        assert!(
+            carries(&built).iter().any(|from| !from.is_empty()),
+            "some part spends a carry"
+        );
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&all)
+        );
+        // Max over the same: every UTxO.
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos.clone(), None, all.clone())).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert_eq!(sound(&built), utxos.len() + parts.len() - 1);
+        assert_eq!(parts.last().unwrap().left, 0);
+    }
+
+    #[test]
+    fn parts_that_can_each_pay_their_own_fee_stay_apart() {
+        // Chains only where needed (the owner, 2026-10-21): a part waits for the one before to be on chain, so where
+        // each part has ADA of its own, none spends another's output.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.extend(ada(100, 4, 30_000_000));
+        let parts = api::build_transfer_parts(sk, transfer(utxos, Some(0), all)).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert!(carries(&built).iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn a_withdrawal_carried_forward_pays_its_tokens_with_their_least_and_carries_the_rest() {
+        // WithdrawRequest's carry, as a chain's part asks it: exactly the UTxOs given, the payment's tokens with
+        // their least, a funding's collateral beside it, and the rest in one output of ADA alone to the wallet.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(2, 20);
+        utxos.extend(ada(100, 1, 100_000_000));
+        let mut r = withdraw(utxos.clone(), Some(0), all[..20].to_vec());
+        r.payments.push(WithdrawPayment {
+            to: theirs(),
+            lovelace: Some("5000000".into()),
+            tokens: vec![],
+        });
+        r.funding = Some(Default::default());
+        r.carry = true;
+        let part = api::build_withdraw(sk, r).unwrap();
+        assert_eq!(part.inputs.len(), utxos.len(), "exactly the UTxOs given");
+        let pp = ProtocolParameters::from_koios(&params()).unwrap();
+        let to = pallas_addresses::Address::from_bech32(&theirs()).unwrap();
+        let tokens = all[..20].iter().fold(Assets::new(), |a, t| {
+            a.add(
+                Asset::new(
+                    t.policy_id.clone(),
+                    t.asset_name.clone(),
+                    t.quantity.parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            part.payments[0].lovelace,
+            seedelf_core::build::minimum_address_payment(&pp, &to, &tokens)
+                .unwrap()
+                .to_string()
+        );
+        assert_eq!(part.payments[1].lovelace, "5000000");
+        // The other bundle's 20 tokens stay as change with their least; everything else is the carry.
+        assert_eq!(part.change_tokens, 20);
+        let tx = MultiEraTx::decode(&hex::decode(&part.tx_cbor).unwrap())
+            .unwrap()
+            .outputs()
+            .len();
+        let carried: Vec<(u64, usize, bool)> = (0..tx as u64)
+            .map(|i| output_of(&part.tx_cbor, i, sk))
+            .filter(|(_, kinds, owned)| *owned && *kinds == 0)
+            .collect();
+        assert_eq!(carried.len(), 1, "one output of ADA alone to the wallet");
+        assert!(carried[0].0 > 90_000_000, "{}", carried[0].0);
     }
 
     #[test]

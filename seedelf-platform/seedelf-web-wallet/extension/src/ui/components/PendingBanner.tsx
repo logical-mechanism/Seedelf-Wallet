@@ -234,7 +234,17 @@ export function PendingBanner({
     testId: "pending-tx",
     private: privateBanner(pending),
   };
-  if (pending.confirmations !== null) {
+  // A payment in parts some of which wait for the part before to be in a block (background/parts.ts): how many are
+  // still to go, or how many didn't once they won't. While some wait, it's still on its way, landed or not.
+  const parts = pending.parts;
+  const left = parts ? parts.total - parts.sent : 0;
+  const partsLine =
+    parts && left > 0
+      ? parts.stopped
+        ? tr("pending.partsStopped", { count: left, total: parts.total })
+        : tr("pending.partsWaiting", { count: left })
+      : undefined;
+  if (pending.confirmations !== null && !(partsLine && !parts?.stopped)) {
     return (
       <TxBanner
         {...shared}
@@ -242,6 +252,7 @@ export function PendingBanner({
         firstOf={undefined}
         state="done"
         title={tr(CONFIRMED[pending.kind])}
+        detail={partsLine}
         onDismiss={watching ? undefined : onDismiss}
       />
     );
@@ -267,9 +278,9 @@ export function PendingBanner({
       state={watching ? "waiting" : "stale"}
       title={watching ? tr("pending.sentWaiting", { what }) : tr("pending.notConfirmed", { what })}
       detail={
-        !watching && until
+        partsLine ?? (!watching && until
           ? tr("pending.notShownYet", { until })
-          : undefined
+          : undefined)
       }
       onDismiss={watching ? undefined : onDismiss}
     />

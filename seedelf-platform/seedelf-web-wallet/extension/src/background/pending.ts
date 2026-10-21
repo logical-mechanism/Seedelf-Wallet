@@ -258,6 +258,11 @@ async function wake(deps: PendingDeps): Promise<void> {
   await (deps.alarm ?? alarms.get(deps.session))?.start().catch(() => undefined);
 }
 
+/** Starts the sessions alarm PendingService keeps for this worker's session storage: a payment's parts that wait (parts.ts). */
+export async function startRuns(session: Area): Promise<void> {
+  await alarms.get(session)?.start().catch(() => undefined);
+}
+
 const sealedName = (network: NetworkName) => `maybeSent.${network}` as const;
 
 /** The sealed copy of the maybe-sent transaction on `network`, if there's one. Throws if locked. */

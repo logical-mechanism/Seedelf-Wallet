@@ -3291,7 +3291,10 @@ export function PrivateReview({
       <WidthNote fellBack={mix.fellBack} />
       {summary.parts && (
         <p className="note" data-testid="lovejoin-private-parts">
-          {tr("review.fundingPartsNote", { count: summary.parts.length })}
+          {joinSentences([
+            tr("review.fundingPartsNote", { count: summary.parts.length }),
+            summary.parts.some((p) => p.waits) && tr("review.partsWait", { count: summary.parts.filter((p) => p.waits).length }),
+          ])}
         </p>
       )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
@@ -3356,7 +3359,10 @@ function AgainReview({
       </Callout>
       {summary.parts && (
         <p className="note" data-testid="lovejoin-again-parts">
-          {tr("review.fundingPartsNote", { count: summary.parts.length })}
+          {joinSentences([
+            tr("review.fundingPartsNote", { count: summary.parts.length }),
+            summary.parts.some((p) => p.waits) && tr("review.partsWait", { count: summary.parts.filter((p) => p.waits).length }),
+          ])}
         </p>
       )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />

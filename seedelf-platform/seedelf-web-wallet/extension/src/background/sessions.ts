@@ -144,6 +144,7 @@ import {
   type LovejoinPool,
   type LovejoinService,
 } from "./lovejoin";
+import { holdWaiting, reviewParts, splitParts, unsplit, type Waiting } from "./parts";
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
@@ -2613,7 +2614,7 @@ export class SessionService {
     const all = whole(parts);
     const summary = summaryOf(parts.length > 1 ? { ...all, payments: [...all.payments, ...first!.payments.slice(1)] } : all);
     return {
-      summary: parts.length > 1 ? { ...summary, parts: parts.map((p) => ({ txHash: p.txHash, fee: p.fee.total, inputs: p.inputs.length })) } : summary,
+      summary: parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary,
       txCbor: first!.txCbor,
       seed: first!.seed,
       // Each later part kept with its own figures, for the Seedelf history once it's sent; the first's are the review's
@@ -5006,7 +5007,8 @@ export class SessionService {
    * so is every part after it, which never goes: before the first went, the session never started, as one
    * transaction's funding; after, what went may land, and the runner finds the funding short, for the user to bring
    * back (the owner's call, 2026-10-21). One Koios didn't answer may have gone: the rest wait for nothing, and go
-   * unsent too.
+   * unsent too. A part that spends what the one before carried forward, and every part after it, goes once that one
+   * is in a block (parts.ts); one of those that won't go is marked unsent then (`partsStopped`).
    */
   private async sendFunding(network: NetworkName, record: SessionRecord, key: string, what: SpendWhat): Promise<PendingTx> {
     const hashes = fundingOf(record).map((t) => t.txHash);
@@ -5017,23 +5019,43 @@ export class SessionService {
             for (const t of fundingOf(s)) if (rest.includes(t.txHash)) t.unsent = true;
           })
         : undefined;
+    const split = await splitParts(this.deps, network, key, hashes);
+    const { goNow } = split;
     let sent: PendingTx | undefined;
-    for (const [i, hash] of hashes.entries()) {
-      const chain = total > 1 && i === total - 1 ? { chain: { first: hashes[0]!, total } } : {};
+    for (const [i, hash] of hashes.slice(0, goNow).entries()) {
+      const chain = total > 1 && i === goNow - 1 ? { chain: { first: hashes[0]!, total } } : {};
       try {
         sent = await send(this.deps, network, hash, partKey(key, i), "session-out", what, chain);
       } catch (e) {
+        await unsplit(this.deps, network, split);
         await this.markUnsent(network, record.index, hash, e);
         await notSent(hashes.slice(i + 1));
         if (i === 0 || isTrap(e)) throw e;
         throw new Error(t("worker.parts.fundingPartly", { sent: i, total, why: e instanceof Error ? e.message : String(e) }));
       }
-      if (sent.maybeSent && i < total - 1) {
+      // The last that goes now may be maybe sent: what waits for it waits for the chain to show it anyway.
+      if (sent.maybeSent && i < goNow - 1) {
+        await unsplit(this.deps, network, split);
         await notSent(hashes.slice(i + 1));
         throw new Error(t("worker.parts.fundingPartlyMaybe", { sent: i + 1, total }));
       }
     }
-    return sent!;
+    if (goNow === total) return sent!;
+    await holdWaiting(this.deps, network, key, split, "session-out", what, record.index);
+    return { ...sent!, parts: { sent: goNow, total } };
+  }
+
+  /**
+   * A session's funding whose parts that waited for the one before won't all go (parts.ts: one turned away, or the
+   * one before never showed): those not sent are marked unsent, so its funding is short at once (fundingState) and its
+   * page offers to bring back what came, rather than once the runner misses them.
+   */
+  async partsStopped(network: NetworkName, w: Waiting): Promise<void> {
+    if (w.session === undefined) return;
+    const rest = w.hashes.slice(w.sent);
+    await this.update(network, w.session, (s) => {
+      for (const t of fundingOf(s)) if (rest.includes(t.txHash)) t.unsent = true;
+    });
   }
 
   /**

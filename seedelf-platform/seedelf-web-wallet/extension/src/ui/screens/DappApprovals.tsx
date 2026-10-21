@@ -749,7 +749,10 @@ export function ConnectRequest({
           </Callout>
           {review.parts && (
             <p className="note" data-testid="dapp-funding-parts">
-              {tr("review.fundingPartsNote", { count: review.parts.length })}
+              {joinSentences([
+                tr("review.fundingPartsNote", { count: review.parts.length }),
+                review.parts.some((p) => p.waits) && tr("review.partsWait", { count: review.parts.filter((p) => p.waits).length }),
+              ])}
             </p>
           )}
           <HistoriesNote histories={review.histories} session={review.index} testId="dapp-funding-histories" />

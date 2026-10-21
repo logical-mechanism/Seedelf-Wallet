@@ -1333,7 +1333,10 @@ export function SwapApproval({
       </ReviewRows>
       {summary.parts && (
         <p className="note" data-testid="swap-fund-parts">
-          {tr("review.fundingPartsNote", { count: summary.parts.length })}
+          {joinSentences([
+            tr("review.fundingPartsNote", { count: summary.parts.length }),
+            summary.parts.some((p) => p.waits) && tr("review.partsWait", { count: summary.parts.filter((p) => p.waits).length }),
+          ])}
         </p>
       )}
       <SwapCosts quote={quote} get={get} costs={costs} />

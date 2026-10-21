@@ -43,7 +43,6 @@ import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
 import { outpoint, reservedSet, spentSet } from "./spent";
 import type { Keys, Wallet } from "./wallet";
-import { isTrap } from "./wasm";
 
 /** A built transaction is only sent within this long; after that, build again. */
 export const BUILT_TTL_MS = 10 * 60_000;
@@ -305,7 +304,10 @@ export function keep(deps: ScriptSpendDeps, key: string, built: Omit<Kept, "buil
  * didn't answer comes back maybe sent (pending.ts), and stays kept: Send
  * again sends the same bytes, however old, and asks giveme.my nothing. One
  * sent already isn't kept any more, and says so (pending.ts `refuseSent`),
- * never that its review is stale.
+ * never that its review is stale. `waited`: a part of a payment that waited
+ * for the part before it to be in a block (parts.ts), sent after Send was
+ * pressed for the whole however long ago it was built, and spending what its
+ * own reservation, so named, holds.
  */
 export async function send(
   deps: ScriptSpendDeps,
@@ -314,7 +316,7 @@ export async function send(
   key: string,
   kind: PendingTx["kind"],
   what: SpendWhat,
-  { chain }: { chain?: PendingTx["chain"] } = {},
+  { chain, waited }: { chain?: PendingTx["chain"]; waited?: string } = {},
 ): Promise<PendingTx> {
   const { wasm, wallet, session, now } = deps;
   const built = await wallet.withKeys(() => session.get<Kept>(key));
@@ -324,7 +326,7 @@ export async function send(
   }
   const again = built.sentCbor !== undefined;
   if (!again) {
-    if (now() - built.builtAt > BUILT_TTL_MS) {
+    if (waited === undefined && now() - built.builtAt > BUILT_TTL_MS) {
       throw new StaleReviewError(t(TOO_OLD[what]));
     }
     await settleMaybeSent(deps, network);
@@ -360,7 +362,7 @@ export async function send(
   // Reviewed before a return through Lovejoin started being sent, it may take what that chain spends: the
   // funding change its last transaction merges into. Only one of the two could land, so this one waits for a
   // review that leaves it out (independent review L18). Checked last, just before it goes.
-  if (!again) await refuseReserved(deps, network, built.txCbor, what);
+  if (!again) await refuseReserved(deps, network, built.txCbor, what, waited);
   const { txCbor: _txCbor, seed: _seed, sentCbor: _sentCbor, builtAt: _builtAt, account: _account, ...summary } = built;
   return submitWatched(deps, {
     network,
@@ -457,38 +459,6 @@ export async function keepParts(deps: ScriptSpendDeps, key: string, parts: Array
 }
 
 /**
- * Sends a payment kept in parts (keepParts), one after another, each as `send` sends one (written ahead, watched),
- * none waiting on another, since each spends its own UTxOs; the last named in Home's banner by the first, as a chain
- * is (`PendingTx.chain`). One part is sent as one always was. Where one after the first doesn't go, or Koios doesn't
- * answer one before the last (nothing more goes while it may still go through), it says how many went, and why the
- * rest didn't: those that went stay watched, in Home's banner and Activity.
- */
-export async function sendParts(
-  deps: ScriptSpendDeps,
-  network: NetworkName,
-  txHash: string,
-  key: string,
-  kind: PendingTx["kind"],
-  what: SpendWhat,
-): Promise<PendingTx> {
-  const first = await deps.wallet.withKeys(() => deps.session.get<Kept>(key));
-  const hashes = first?.txHash === txHash && first.network === network && first.partHashes?.length ? first.partHashes : [txHash];
-  const total = hashes.length;
-  let sent: PendingTx | undefined;
-  for (const [i, hash] of hashes.entries()) {
-    const chain = total > 1 && i === total - 1 ? { chain: { first: hashes[0]!, total } } : {};
-    try {
-      sent = await send(deps, network, hash, partKey(key, i), kind, what, chain);
-    } catch (e) {
-      if (i === 0 || isTrap(e)) throw e;
-      throw new Error(t("worker.parts.partly", { sent: i, total, why: e instanceof Error ? e.message : String(e) }));
-    }
-    if (sent.maybeSent && i < total - 1) throw new Error(t("worker.parts.partlyMaybe", { sent: i + 1, total }));
-  }
-  return sent!;
-}
-
-/**
  * Refuses, as a stale review, a kept transaction that spends what this wallet
  * has spent since it was built (spent.ts: what it submitted lately, kept
  * until a refusal takes it back). The build leaves out what was spent then,
@@ -521,9 +491,17 @@ async function refuseSpentSince(
  * account): readContract leaves those out, but only of what's built after
  * the chain started.
  */
-async function refuseReserved(deps: ScriptSpendDeps, network: NetworkName, txCbor: string, what: SpendWhat): Promise<void> {
+async function refuseReserved(
+  deps: ScriptSpendDeps,
+  network: NetworkName,
+  txCbor: string,
+  what: SpendWhat,
+  except?: string,
+): Promise<void> {
   const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
-  const reserved = await deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true, now: deps.now() }));
+  const reserved = await deps.wallet.withKeys(() =>
+    reservedSet(deps.session, network, { sending: true, now: deps.now(), ...(except !== undefined ? { except } : {}) }),
+  );
   if (inputs.some((o) => reserved.inputs.has(o))) {
     throw new StaleReviewError(t(CHAIN_CONFLICT[what]));
   }

@@ -2763,6 +2763,11 @@ pub mod api {
         /// Each UTxO's history: a payment takes own money first, a box last.
         #[serde(default)]
         pub classes: Classes,
+        /// A part of a payment in a chain ([`build_transfer_parts`]): it spends exactly `utxos`, pays its one payment's
+        /// tokens with the least ADA they need (Max's too), and carries the rest forward to the wallet's own register
+        /// (`ScriptSpend::carry`) for the next part, which has no ADA of its own to pay with.
+        #[serde(default)]
+        pub carry: bool,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -2831,6 +2836,10 @@ pub mod api {
         pub left: usize,
         /// The classes of money it spends together, when they're more than one.
         pub classes_mixed: Vec<String>,
+        /// What it carries forward, a part of a payment in a chain ([`TransferRequest::carry`]): the row the next part
+        /// spends. The worker reads which part waits for which off `inputs`.
+        #[serde(skip)]
+        pub carry: Option<UtxoResponse>,
     }
 
     /// The least ADA what stays in the Seedelf balance after `built` needs:
@@ -2906,6 +2915,8 @@ pub mod api {
             let minimum = build::minimum_seedelf_payment(&chain.params, &tokens)?;
             let lovelace = match &p.lovelace {
                 Some(l) => lovelace_of(l)?.max(minimum),
+                // Carried forward, Max's part pays its tokens with their least, and the rest goes on.
+                None if max && request.carry && !tokens.is_empty() => minimum,
                 None if max => 0,
                 None => bail!("Max pays a single recipient: give each of several an amount"),
             };
@@ -2953,6 +2964,21 @@ pub mod api {
             signer,
             ..
         } = plan;
+        if request.carry {
+            let only = &payments[0];
+            let spend = if only.lovelace == 0 {
+                ScriptSpend::new(chain, &request.utxos, owner, *signer)?
+            } else {
+                build::transfer_from(
+                    chain,
+                    &request.utxos,
+                    std::slice::from_ref(only),
+                    owner,
+                    *signer,
+                )?
+            };
+            return Ok((prove_with(sk, spend.carry()?)?, 0));
+        }
         if plan.max {
             let only = &payments[0];
             let (inputs, left) =
@@ -3012,7 +3038,7 @@ pub mod api {
                 let built = measured(&spend)?;
                 (spend, left, built)
             }
-            Err(short) if build::is_short(&short) => {
+            Err(short) if build::is_short(&short) && !request.carry => {
                 let needed = plan
                     .payments
                     .iter()
@@ -3064,12 +3090,20 @@ pub mod api {
         seed: &[u8; 32],
     ) -> Result<TransferResult> {
         let mut payments = plan.paid;
-        // Max's one payment is everything but the fee and what the tokens that stay need.
-        if let (true, Some(paid), Some(lovelace)) =
-            (plan.max, payments.first_mut(), built.rest_lovelace)
-        {
+        // Max's one payment is everything but the fee and what the tokens that stay need; carried forward, its tokens'
+        // least, as planned.
+        if let (true, false, Some(paid), Some(lovelace)) = (
+            plan.max,
+            request.carry,
+            payments.first_mut(),
+            built.rest_lovelace,
+        ) {
             paid.lovelace = lovelace.to_string();
         }
+        let carry = request
+            .carry
+            .then(|| build::carried(&plan.chain, built))
+            .transpose()?;
         Ok(TransferResult {
             tx_cbor: hex::encode(&built.tx.tx_bytes.0),
             tx_hash: hex::encode(built.tx.tx_hash.0),
@@ -3084,6 +3118,7 @@ pub mod api {
             inputs: out_refs(spend),
             left,
             classes_mixed: classes_mixed(&request.classes, spend)?,
+            carry,
         })
     }
 
@@ -3132,6 +3167,11 @@ pub mod api {
         /// too much could be (blind test T05).
         #[serde(default)]
         pub most: bool,
+        /// A part of a payment in a chain ([`build_withdraw_parts`]), as [`TransferRequest::carry`]: exactly `utxos`,
+        /// its payments (Everything's: every token they hold; `most`'s: its tokens) with the least ADA they need, and
+        /// the rest carried forward to the wallet's own register.
+        #[serde(default)]
+        pub carry: bool,
         /// The one-time key's seed from the draft (hex). The draft draws it.
         pub seed: Option<String>,
         /// Ogmios's answer to evaluating the draft.
@@ -3189,6 +3229,9 @@ pub mod api {
         pub left: usize,
         /// The classes of money it spends together, when they're more than one.
         pub classes_mixed: Vec<String>,
+        /// What it carries forward, as [`TransferResult::carry`].
+        #[serde(skip)]
+        pub carry: Option<UtxoResponse>,
     }
 
     /// What a withdrawal pays: amounts, everything (Max), or the most a
@@ -3261,6 +3304,28 @@ pub mod api {
         Ok((paid, to_pay))
     }
 
+    /// What a part carried forward ([`WithdrawRequest::carry`]) pays `to` for Everything or the most: the tokens it
+    /// sends (Everything's, every token `utxos` hold), with the least ADA they need; none without a token.
+    fn carried_payment(
+        chain: &Chain,
+        request: &WithdrawRequest,
+        what: &Withdrawing,
+    ) -> Result<Option<AddressPayment>> {
+        let (to, tokens) = match what {
+            Withdrawing::Amounts(..) => return Ok(None),
+            Withdrawing::Everything(to) => (to, utxo_assets(request.utxos.clone())?.1),
+            Withdrawing::Most(to, tokens, ..) => (to, tokens.clone()),
+        };
+        if tokens.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(AddressPayment {
+            to: to.clone(),
+            lovelace: build::minimum_address_payment(&chain.params, to, &tokens)?,
+            tokens,
+        }))
+    }
+
     /// The withdrawal, proven, and how many UTxOs Max left out.
     fn withdraw_spend(
         sk: Scalar,
@@ -3270,6 +3335,25 @@ pub mod api {
         signer: Hash<28>,
     ) -> Result<(ScriptSpend, usize)> {
         let owner = Register::create(sk)?;
+        if request.carry {
+            // A part of a payment in a chain: exactly the UTxOs given, its payments with their least, the rest carried.
+            let payments: Vec<AddressPayment> = match what {
+                Withdrawing::Amounts(_, to_pay) => to_pay.clone(),
+                Withdrawing::Everything(_) => {
+                    carried_payment(chain, request, what)?.into_iter().collect()
+                }
+                Withdrawing::Most(_, _, _, extra) => carried_payment(chain, request, what)?
+                    .into_iter()
+                    .chain(extra.iter().cloned())
+                    .collect(),
+            };
+            let spend = if payments.is_empty() {
+                ScriptSpend::new(chain, &request.utxos, &owner, signer)?
+            } else {
+                build::sweep_many_from(chain, &request.utxos, &payments, &owner, signer)?
+            };
+            return Ok((prove_with(sk, spend.carry()?)?, 0));
+        }
         let (spend, left) = match what {
             Withdrawing::Everything(to) => {
                 // Of those whose tokens add up, the largest first, as many as fit.
@@ -3349,7 +3433,9 @@ pub mod api {
                 let built = measured(&spend)?;
                 (spend, left, built)
             }
-            Err(short) if build::is_short(&short) && request.funding.is_none() => {
+            Err(short)
+                if build::is_short(&short) && request.funding.is_none() && !request.carry =>
+            {
                 let Withdrawing::Amounts(_, to_pay) = &what else {
                     return Err(short);
                 };
@@ -3420,11 +3506,14 @@ pub mod api {
 
     /// The UTxOs of `rest` holding any of `tokens`, those holding the most of them first, `at_most` of them: a part's,
     /// where the tokens sent are in more UTxOs than one transaction spends (the owner's test of 1.6.0: a pool's boxes
-    /// brought back, a few of its token in each), or hold more than one output can.
+    /// brought back, a few of its token in each), or hold more than one output can. `rich`: those adding the most ADA
+    /// first ([`Worth`]), a chain's, which takes the ADA forward (test wallet A, 1.6.0: its 2,621 ADA sat with 19 of
+    /// the 400 tokens it sent, behind bundles of 20 holding only their least, and no part could pay its fee).
     fn token_group(
         rest: &[UtxoResponse],
         tokens: &[TokenAmount],
         at_most: usize,
+        rich: Option<&Worth>,
     ) -> Vec<UtxoResponse> {
         let mut holders: Vec<UtxoResponse> = rest
             .iter()
@@ -3432,7 +3521,10 @@ pub mod api {
             .cloned()
             .collect();
         holders.sort_by_key(|u| {
-            std::cmp::Reverse(tokens.iter().map(|t| quantity_of(u, t)).sum::<u128>())
+            std::cmp::Reverse((
+                rich.map(|w| w.of_utxo(u)),
+                tokens.iter().map(|t| quantity_of(u, t)).sum::<u128>(),
+            ))
         });
         holders.truncate(at_most);
         holders
@@ -3502,6 +3594,15 @@ pub mod api {
             Room {
                 k: MAX_WITHDRAW_UTXOS,
                 h: MAX_WITHDRAW_UTXOS,
+                ada: 0,
+            }
+        }
+
+        /// Beside the part before's carry, in a chain: one UTxO fewer of its own.
+        fn beside() -> Self {
+            Room {
+                k: MAX_WITHDRAW_UTXOS - 1,
+                h: MAX_WITHDRAW_UTXOS - 1,
                 ada: 0,
             }
         }
@@ -3607,6 +3708,69 @@ pub mod api {
             .collect()
     }
 
+    /// One part of a payment: of `rest`, the UTxOs holding the `tokens` still owed that its room takes
+    /// ([`token_group`]), and those holding none that add the most beside them ([`Worth`]), built by `build` (given
+    /// the UTxOs, the share of the tokens they send, and whether parts of tokens follow it). A part one transaction
+    /// can't take, or one that can't pay its fee, tries less room or more ADA ([`Room`]); returns it and its share.
+    ///
+    /// In a chain (`chained`) the part before's carry (`carried`) is spent beside them, the rest of the room theirs,
+    /// and no UTxO of ADA alone is kept back for the parts after it: the carry takes the ADA forward.
+    fn fit_part<R>(
+        rest: &[UtxoResponse],
+        tokens: &[TokenAmount],
+        chained: bool,
+        carried: Option<&UtxoResponse>,
+        worth: &Worth,
+        mut build: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>, bool) -> Result<R>,
+    ) -> Result<(R, Vec<TokenAmount>)> {
+        // Holding none of the tokens owed: spending one sends none, and keeps none a later part sends.
+        let free: Vec<UtxoResponse> = rest
+            .iter()
+            .filter(|u| !holds_any(u, tokens))
+            .cloned()
+            .collect();
+        let mut room = if carried.is_some() {
+            Room::beside()
+        } else {
+            Room::new()
+        };
+        loop {
+            let group = token_group(rest, tokens, room.h, chained.then_some(worth));
+            let share = share_of(&group, tokens);
+            let more = !less(tokens, &share).is_empty();
+            let keep_ada = more && !chained;
+            let mut picks = room.picks(&group, &free, &share, keep_ada, worth)?;
+            if let Some(carried) = carried {
+                picks.insert(0, carried.clone());
+            }
+            if picks.is_empty() {
+                bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
+            }
+            let built = build(picks, share.clone(), more);
+            let next = match &built {
+                Ok(_) => None,
+                Err(e) if too_much(e) => room.after(e, group.len()),
+                Err(e) if build::is_short(e) && !share.is_empty() && !free.is_empty() => {
+                    room.for_ada(group.len(), free.len(), keep_ada)
+                }
+                Err(e) if build::is_short(e) && share.is_empty() => room.fewer(),
+                Err(_) => None,
+            };
+            match (built, next) {
+                (Ok(part), _) => return Ok((part, share)),
+                (Err(_), Some(less_room)) => room = less_room,
+                (Err(e), None) => return Err(e),
+            }
+        }
+    }
+
+    /// What was still owed before a part of a payment, and what was left to pay it with: where a chain starts again.
+    struct Owed {
+        lovelace: u64,
+        tokens: Vec<TokenAmount>,
+        rest: Vec<UtxoResponse>,
+    }
+
     /// One payment of `owed` lovelace and `tokens` in parts, when one transaction can't take it (`too_many`, the first
     /// try's refusal: too many UTxOs, or too large). Each part spends its own, so none waits on another; after each,
     /// what's left is tried as the last (`amount`).
@@ -3618,10 +3782,15 @@ pub mod api {
     /// ADA). Where that's more than is owed, it pays as much as leaves the rest what it must carry: the least the
     /// tokens still owed need, or an output of ADA alone (`least`), so what it keeps is valid change; or exactly
     /// what's owed, when it sends the last of the tokens and what stays is valid change. A part one transaction
-    /// can't take tries less ([`Room`]).
+    /// can't take tries less ([`fit_part`]).
     ///
-    /// `most` and `amount` are told whether they build the first part, which pays `beside` too, apart from the
-    /// payment: a session's funding's collateral for its one-time account, an output of its own (`paid_of` counts
+    /// Where a part of tokens has no ADA left to pay its fee with (a move-in's bundles hold exactly their least, and
+    /// one big UTxO of ADA can't be shared by parts that each spend their own), the parts from the last one that has
+    /// ADA on go as a chain ([`chained`]), each carrying its ADA forward to the next (`carry`, read back by
+    /// `carried`); from the part before it when its ADA can't carry them, back to the first.
+    ///
+    /// `most`, `amount` and `carry` are told whether they build the first part, which pays `beside` too, apart from
+    /// the payment: a session's funding's collateral for its one-time account, an output of its own (`paid_of` counts
     /// the payment alone).
     #[allow(clippy::too_many_arguments)]
     fn in_parts<R>(
@@ -3634,34 +3803,28 @@ pub mod api {
         worth: &Worth,
         inputs_of: impl Fn(&R) -> &[OutRef],
         paid_of: impl Fn(&R) -> Result<u64>,
+        carried: impl Fn(&R) -> Option<UtxoResponse>,
         mut most: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>, bool) -> Result<R>,
         mut amount: impl FnMut(Vec<UtxoResponse>, u64, Vec<TokenAmount>, bool) -> Result<R>,
+        mut carry: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>, bool) -> Result<R>,
     ) -> Result<Vec<R>> {
         holding_enough(utxos, owed.saturating_add(beside))?;
         let mut rest = utxos.to_vec();
         let mut parts = Vec::new();
-        loop {
+        let mut before: Vec<Owed> = Vec::new();
+        let short = loop {
             if parts.len() + 1 >= MAX_PARTS {
                 return Err(too_many);
             }
             let first = parts.is_empty();
-            // Holding none of the tokens owed: spending one sends none, and keeps none a later part sends.
-            let free: Vec<UtxoResponse> = rest
-                .iter()
-                .filter(|u| !holds_any(u, &tokens))
-                .cloned()
-                .collect();
-            let mut room = Room::new();
-            let (part, share) = loop {
-                let group = token_group(&rest, &tokens, room.h);
-                let share = share_of(&group, &tokens);
+            before.push(Owed {
+                lovelace: owed,
+                tokens: tokens.clone(),
+                rest: rest.clone(),
+            });
+            let fitted = fit_part(&rest, &tokens, false, None, worth, |picks, share, _| {
                 let later = less(&tokens, &share);
-                let more = !later.is_empty();
-                let picks = room.picks(&group, &free, &share, more, worth)?;
-                if picks.is_empty() {
-                    bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
-                }
-                let built = most(picks.clone(), share.clone(), first).and_then(|all| {
+                most(picks.clone(), share.clone(), first).and_then(|all| {
                     let paid = paid_of(&all)?;
                     if later.is_empty() && paid >= owed {
                         match amount(
@@ -3684,21 +3847,12 @@ pub mod api {
                         share.clone(),
                         first,
                     )
-                });
-                let next = match &built {
-                    Ok(_) => None,
-                    Err(e) if too_much(e) => room.after(e, group.len()),
-                    Err(e) if build::is_short(e) && !share.is_empty() && !free.is_empty() => {
-                        room.for_ada(group.len(), free.len(), more)
-                    }
-                    Err(e) if build::is_short(e) && share.is_empty() => room.fewer(),
-                    Err(_) => None,
-                };
-                match (built, next) {
-                    (Ok(part), _) => break (part, share),
-                    (Err(_), Some(less_room)) => room = less_room,
-                    (Err(e), None) => return Err(e),
-                }
+                })
+            });
+            let (part, share) = match fitted {
+                Ok(fitted) => fitted,
+                Err(e) if build::is_short(&e) => break e,
+                Err(e) => return Err(e),
             };
             owed = owed.saturating_sub(paid_of(&part)?);
             tokens = less(&tokens, &share);
@@ -3718,9 +3872,114 @@ pub mod api {
                     return Ok(parts);
                 }
                 Err(e) if too_much(&e) => continue,
+                Err(e) if build::is_short(&e) => {
+                    before.push(Owed {
+                        lovelace: owed,
+                        tokens: tokens.clone(),
+                        rest: rest.clone(),
+                    });
+                    break e;
+                }
                 Err(e) => return Err(e),
             }
+        };
+        // Parts that each pay their own fee can't go: one has no ADA to pay its fee with. A chain from the part that
+        // couldn't go, taking the ADA there is forward, or from the one before it, back to the first (the owner's call,
+        // 2026-10-21: chain where needed). `before` holds what was owed before each part, and before the one that
+        // couldn't go.
+        for anchor in (0..before.len()).rev() {
+            match chained(
+                &before[anchor],
+                anchor == 0,
+                MAX_PARTS - 1 - anchor,
+                &least,
+                worth,
+                &inputs_of,
+                &paid_of,
+                &carried,
+                &mut amount,
+                &mut carry,
+            ) {
+                Ok(chain) => {
+                    parts.truncate(anchor);
+                    parts.extend(chain);
+                    return Ok(parts);
+                }
+                Err(e) if build::is_short(&e) => {}
+                Err(_) => break,
+            }
         }
+        Err(short)
+    }
+
+    /// A payment's parts from one on (`from`, what was owed before it) as a chain, where parts that each pay their own
+    /// fee can't go. Each part but the last pays the tokens it sends with their least ADA, and carries the rest
+    /// forward to the wallet's own register (`carry`, read back by `carried`): the next spends that beside its own
+    /// UTxOs, so it waits for the one before to be on chain (giveme.my witnesses only what's on the ledger). After
+    /// each, what's left is tried beside its carry as the last, which pays what's still owed (`amount`). `first`:
+    /// the chain starts at the payment's first part, which pays a funding's collateral too; `room`: how many parts it
+    /// may be. Short when the ADA it starts with can't carry it to the end.
+    #[allow(clippy::too_many_arguments)]
+    fn chained<R>(
+        from: &Owed,
+        first: bool,
+        room: usize,
+        least: &impl Fn(&[TokenAmount]) -> Result<u64>,
+        worth: &Worth,
+        inputs_of: &impl Fn(&R) -> &[OutRef],
+        paid_of: &impl Fn(&R) -> Result<u64>,
+        carried: &impl Fn(&R) -> Option<UtxoResponse>,
+        amount: &mut impl FnMut(Vec<UtxoResponse>, u64, Vec<TokenAmount>, bool) -> Result<R>,
+        carry: &mut impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>, bool) -> Result<R>,
+    ) -> Result<Vec<R>> {
+        let (mut owed, mut tokens, mut rest) =
+            (from.lovelace, from.tokens.clone(), from.rest.clone());
+        let mut parts: Vec<R> = Vec::new();
+        let mut forward: Option<UtxoResponse> = None;
+        while parts.len() < room {
+            let starts = first && parts.is_empty();
+            if let Some(carried) = &forward {
+                let all = std::iter::once(carried.clone())
+                    .chain(rest.iter().cloned())
+                    .collect();
+                match amount(all, owed.max(least(&tokens)?), tokens.clone(), false) {
+                    Ok(last) => {
+                        parts.push(last);
+                        return Ok(parts);
+                    }
+                    Err(e) if too_much(&e) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            let (part, share) = fit_part(
+                &rest,
+                &tokens,
+                true,
+                forward.as_ref(),
+                worth,
+                |picks, share, _| carry(picks, share, starts),
+            )?;
+            forward = Some(next_of(&part, &forward, inputs_of, carried)?);
+            owed = owed.saturating_sub(paid_of(&part)?);
+            tokens = less(&tokens, &share);
+            rest = without(&rest, inputs_of(&part));
+            parts.push(part);
+        }
+        bail!("A chain of parts would be more transactions than one payment goes out as")
+    }
+
+    /// What `part` of a chain carries forward, once it spent something besides what the part before carried
+    /// (`forward`): a part spending its carry alone would go round for nothing.
+    fn next_of<R>(
+        part: &R,
+        forward: &Option<UtxoResponse>,
+        inputs_of: &impl Fn(&R) -> &[OutRef],
+        carried: &impl Fn(&R) -> Option<UtxoResponse>,
+    ) -> Result<UtxoResponse> {
+        if inputs_of(part).len() <= usize::from(forward.is_some()) {
+            bail!("A part of the chain spends nothing new");
+        }
+        carried(part).ok_or_else(|| anyhow!("A part of the chain carries nothing forward"))
     }
 
     /// Max in parts: every UTxO, [`MAX_PARTS`] transactions at most, each the most of what it spends (`part`, given
@@ -3728,62 +3987,136 @@ pub mod api {
     /// enough, or those holding the most of them ([`token_group`]), with the UTxOs holding none of them that add the
     /// most ([`Worth`]); then the rest, those adding the most first, so a UTxO of ADA alone goes before a bundle of
     /// tokens holding only their least. A part one transaction can't take, or one of ADA alone that can't pay its
-    /// fee, tries less ([`Room`]). The last says how many it left, as one transaction's Max does: what's left then
-    /// adds nothing a payment can carry (a bundle holding its least).
+    /// fee, tries less ([`fit_part`]).
+    ///
+    /// Where what's left has no ADA to pay a part's fee with (bundles of tokens holding only their least), the parts
+    /// from the last one that has ADA on go as a chain ([`max_chained`], `carry`), so Max leaves nothing it could
+    /// spend (the owner, 2026-10-21: "grab all utxos, split the tokens off with their min ada going back as change
+    /// then send all the ada minus the fee out"). The last says how many it left, as one transaction's Max does.
+    #[allow(clippy::too_many_arguments)]
     fn max_in_parts<R>(
         utxos: &[UtxoResponse],
         mut tokens: Vec<TokenAmount>,
         worth: &Worth,
         left_of: impl Fn(&mut R) -> &mut usize,
         inputs_of: impl Fn(&R) -> &[OutRef],
+        carried: impl Fn(&R) -> Option<UtxoResponse>,
         mut part: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
+        mut carry: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
     ) -> Result<Vec<R>> {
         let mut rest = utxos.to_vec();
         let mut parts: Vec<R> = Vec::new();
-        'parts: while !rest.is_empty() && parts.len() < MAX_PARTS {
-            let free: Vec<UtxoResponse> = rest
-                .iter()
-                .filter(|u| !holds_any(u, &tokens))
-                .cloned()
-                .collect();
-            let mut room = Room::new();
-            let (mut built, share) = loop {
-                let group = token_group(&rest, &tokens, room.h);
-                let share = share_of(&group, &tokens);
-                let more = !less(&tokens, &share).is_empty();
-                let built = part(
-                    room.picks(&group, &free, &share, more, worth)?,
-                    share.clone(),
-                );
-                let next = match &built {
-                    Ok(_) => None,
-                    Err(e) if too_much(e) => room.after(e, group.len()),
-                    Err(e) if build::is_short(e) && !share.is_empty() && !free.is_empty() => {
-                        room.for_ada(group.len(), free.len(), more)
+        let mut before: Vec<(Vec<TokenAmount>, Vec<UtxoResponse>)> = Vec::new();
+        let mut failed: Option<anyhow::Error> = None;
+        while !rest.is_empty() && parts.len() < MAX_PARTS {
+            before.push((tokens.clone(), rest.clone()));
+            let (built, share) =
+                match fit_part(&rest, &tokens, false, None, worth, |picks, share, _| {
+                    part(picks, share)
+                }) {
+                    Ok(fitted) => fitted,
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
                     }
-                    Err(e) if build::is_short(e) && share.is_empty() => room.fewer(),
-                    Err(_) => None,
                 };
-                match (built, next) {
-                    (Ok(built), _) => break (built, share),
-                    (Err(_), Some(less_room)) => room = less_room,
-                    (Err(e), None) if parts.is_empty() => return Err(e),
-                    (Err(_), None) => break 'parts,
-                }
-            };
             tokens = less(&tokens, &share);
             let taken = inputs_of(&built).len();
             rest = without(&rest, inputs_of(&built));
-            *left_of(&mut built) = 0;
             parts.push(built);
             if taken == 0 {
                 break;
             }
         }
+        // A part couldn't pay its fee: from it, taking the ADA there is forward, or from the one before it, back to
+        // the first, a chain. With none, Max sends what went, and says how many it left; refused only with nothing.
+        if let Some(e) = failed {
+            let mut went = false;
+            if build::is_short(&e) {
+                for anchor in (0..before.len()).rev() {
+                    match max_chained(
+                        &before[anchor],
+                        MAX_PARTS - anchor,
+                        worth,
+                        &inputs_of,
+                        &carried,
+                        &mut part,
+                        &mut carry,
+                    ) {
+                        Ok(chain) => {
+                            parts.truncate(anchor);
+                            parts.extend(chain);
+                            went = true;
+                            break;
+                        }
+                        Err(e) if build::is_short(&e) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+            if !went && parts.is_empty() {
+                return Err(e);
+            }
+        }
+        let spent: Vec<OutRef> = parts
+            .iter()
+            .flat_map(|p| inputs_of(p).iter().cloned())
+            .collect();
+        let left = without(utxos, &spent).len();
+        for p in parts.iter_mut() {
+            *left_of(p) = 0;
+        }
         if let Some(last) = parts.last_mut() {
-            *left_of(last) = rest.len();
+            *left_of(last) = left;
         }
         Ok(parts)
+    }
+
+    /// Max's parts from one on (`from`: the tokens still sent and what was left before it) as a chain, as
+    /// [`chained`] pays an amount: each but the last sends its tokens with their least ADA and carries the rest
+    /// forward (`carry`); once what's left fits one transaction beside the carry, the last pays all of it (`part`).
+    fn max_chained<R>(
+        from: &(Vec<TokenAmount>, Vec<UtxoResponse>),
+        room: usize,
+        worth: &Worth,
+        inputs_of: &impl Fn(&R) -> &[OutRef],
+        carried: &impl Fn(&R) -> Option<UtxoResponse>,
+        part: &mut impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
+        carry: &mut impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
+    ) -> Result<Vec<R>> {
+        let (mut tokens, mut rest) = from.clone();
+        let mut parts: Vec<R> = Vec::new();
+        let mut forward: Option<UtxoResponse> = None;
+        while parts.len() < room {
+            if let Some(carried) = &forward
+                && rest.len() < MAX_WITHDRAW_UTXOS
+            {
+                let all = std::iter::once(carried.clone())
+                    .chain(rest.iter().cloned())
+                    .collect();
+                match part(all, tokens.clone()) {
+                    Ok(last) => {
+                        parts.push(last);
+                        return Ok(parts);
+                    }
+                    Err(e) if too_much(&e) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            let (built, share) = fit_part(
+                &rest,
+                &tokens,
+                true,
+                forward.as_ref(),
+                worth,
+                |picks, share, _| carry(picks, share),
+            )?;
+            forward = Some(next_of(&built, &forward, inputs_of, carried)?);
+            tokens = less(&tokens, &share);
+            rest = without(&rest, inputs_of(&built));
+            parts.push(built);
+        }
+        bail!("A chain of parts would be more transactions than one payment goes out as")
     }
 
     /// Paying a Seedelf from the Seedelf balance as several transactions when one can't spend enough UTxOs (the
@@ -3796,9 +4129,13 @@ pub mod api {
         sk: Scalar,
         request: TransferRequest,
     ) -> Result<Vec<TransferResult>> {
-        let with = |utxos: Vec<UtxoResponse>, lovelace: Option<u64>, tokens: Vec<TokenAmount>| {
+        let with = |utxos: Vec<UtxoResponse>,
+                    lovelace: Option<u64>,
+                    tokens: Vec<TokenAmount>,
+                    carry: bool| {
             let mut sub = request.clone();
             sub.utxos = utxos;
+            sub.carry = carry;
             sub.payments = vec![SeedelfPayment {
                 lovelace: lovelace.map(|l| l.to_string()),
                 tokens,
@@ -3817,7 +4154,9 @@ pub mod api {
                 &worth,
                 |r: &mut TransferResult| &mut r.left,
                 |r| &r.inputs,
-                |from, share| with(from, None, share),
+                |r| r.carry.clone(),
+                |from, share| with(from, None, share, false),
+                |from, share| with(from, None, share, true),
             );
         }
         let too_many = match build_transfer(sk, request.clone()) {
@@ -3840,8 +4179,11 @@ pub mod api {
             &worth,
             |r: &TransferResult| &r.inputs,
             |r| lovelace_of(&r.payments[0].lovelace),
-            |picks, share, _| with(picks, None, share),
-            |from, lovelace, tokens, _| with(from, Some(lovelace), tokens),
+            |r| r.carry.clone(),
+            |picks, share, _| with(picks, None, share, false),
+            |from, lovelace, tokens, _| with(from, Some(lovelace), tokens, false),
+            // Carried forward: its tokens with their least ADA (an amount of 0 is raised to it).
+            |picks, share, _| with(picks, Some(0), share, true),
         )
     }
 
@@ -3863,10 +4205,12 @@ pub mod api {
                     lovelace: Option<u64>,
                     tokens: Vec<TokenAmount>,
                     most: bool,
-                    first: bool| {
+                    first: bool,
+                    carry: bool| {
             let mut sub = request.clone();
             sub.utxos = utxos;
             sub.most = most;
+            sub.carry = carry;
             let beside = if first && funding {
                 &request.payments[1..]
             } else {
@@ -3903,7 +4247,9 @@ pub mod api {
                 &worth,
                 |r: &mut WithdrawResult| &mut r.left,
                 |r| &r.inputs,
-                |from, share| with(from, None, share, most, false),
+                |r| r.carry.clone(),
+                |from, share| with(from, None, share, most, false, false),
+                |from, share| with(from, None, share, most, false, true),
             );
         }
         let too_many = match build_withdraw(sk, request.clone()) {
@@ -3949,8 +4295,11 @@ pub mod api {
             &worth,
             |r: &WithdrawResult| &r.inputs,
             |r| lovelace_of(&r.payments[0].lovelace),
-            |picks, share, first| with(picks, None, share, true, first),
-            |from, lovelace, tokens, first| with(from, Some(lovelace), tokens, false, first),
+            |r| r.carry.clone(),
+            |picks, share, first| with(picks, None, share, true, first, false),
+            |from, lovelace, tokens, first| with(from, Some(lovelace), tokens, false, first, false),
+            // Carried forward: its tokens with their least ADA (an amount of 0 is raised to it).
+            |picks, share, first| with(picks, Some(0), share, false, first, true),
         )
     }
 
@@ -3964,8 +4313,28 @@ pub mod api {
         seed: &[u8; 32],
     ) -> Result<WithdrawResult> {
         let to = || request.payments[0].to.trim().to_string();
+        // Carried forward, Everything and the most pay their tokens with their least (`carried_payment`).
+        let carried = if request.carry {
+            carried_payment(chain, request, &what)?
+        } else {
+            None
+        };
+        let carried_paid = || Paid {
+            to: to(),
+            lovelace: carried.as_ref().map_or(0, |p| p.lovelace).to_string(),
+            minimum: None,
+            tokens: carried.as_ref().map_or_else(Vec::new, |p| {
+                p.tokens.items.iter().map(token_amount).collect()
+            }),
+        };
         let (payments, max, change) = match what {
             Withdrawing::Amounts(paid, _) => (paid, false, true),
+            Withdrawing::Everything(_) if request.carry => (vec![carried_paid()], true, true),
+            Withdrawing::Most(_, _, extra, _) if request.carry => (
+                std::iter::once(carried_paid()).chain(extra).collect(),
+                true,
+                true,
+            ),
             // Max's one payment is everything the inputs held, less the fee.
             Withdrawing::Everything(_) => (
                 vec![Paid {
@@ -4018,6 +4387,10 @@ pub mod api {
             inputs: out_refs(spend),
             left,
             classes_mixed: classes_mixed(&request.classes, spend)?,
+            carry: request
+                .carry
+                .then(|| build::carried(chain, built))
+                .transpose()?,
         })
     }
 

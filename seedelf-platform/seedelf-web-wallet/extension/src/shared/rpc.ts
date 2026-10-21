@@ -764,9 +764,10 @@ export interface TransferSummary {
   /**
    * More UTxOs than one transaction spends (the owner's test of 1.6.0): it goes as these transactions, each spending
    * its own, sent one after another; `txHash` is the first's, and the figures above are theirs added up. None when
-   * it's one.
+   * it's one. `waits`: it spends what the part before carried forward (a part of tokens with no ADA of its own to pay
+   * its fee), so it goes once that one is in a block (background/parts.ts).
    */
-  parts?: Array<{ txHash: string; fee: string; inputs: number }>;
+  parts?: Array<{ txHash: string; fee: string; inputs: number; waits?: true }>;
 }
 
 /** Where a withdrawal goes, as the wallet read it. */
@@ -820,9 +821,10 @@ export interface WithdrawSummary {
   /**
    * More UTxOs than one transaction spends (the owner's test of 1.6.0): it goes as these transactions, each spending
    * its own, sent one after another; `txHash` is the first's, and the figures above are theirs added up. None when
-   * it's one.
+   * it's one. `waits`: it spends what the part before carried forward (a part of tokens with no ADA of its own to pay
+   * its fee), so it goes once that one is in a block (background/parts.ts).
    */
-  parts?: Array<{ txHash: string; fee: string; inputs: number }>;
+  parts?: Array<{ txHash: string; fee: string; inputs: number; waits?: true }>;
 }
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */
@@ -899,6 +901,11 @@ export interface PendingTx {
   submittedAt: number;
   /** Null until it's on chain. */
   confirmations: number | null;
+  /**
+   * A payment in parts some of which wait for the part before to be in a block (background/parts.ts): how many went
+   * of how many, and why the rest didn't once they won't (a part turned away, or the part before never showed).
+   */
+  parts?: { sent: number; total: number; stopped?: "refused" | "unseen" };
   /**
    * Koios didn't answer its submit, so it may or may not have gone through.
    * The wallet holds its UTxOs back, sends it again now and then (the network

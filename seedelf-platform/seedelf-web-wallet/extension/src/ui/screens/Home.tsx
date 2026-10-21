@@ -1413,7 +1413,9 @@ function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index:
 }
 
 /** A transaction the chain hasn't shown, and the worker hasn't let go. */
-const unsettled = (p: PendingTx) => p.confirmations === null && !p.dropped;
+/** On its way: not on chain yet, or a payment some of whose parts still wait for the part before (background/parts.ts). */
+const unsettled = (p: PendingTx) =>
+  (p.confirmations === null && !p.dropped) || (!!p.parts && p.parts.sent < p.parts.total && !p.parts.stopped);
 
 type MixProgress = { total: number; sent: number; stopped?: string } | null;
 

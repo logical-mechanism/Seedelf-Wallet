@@ -28,6 +28,7 @@ import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { seedelfLabel } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
+import { reviewParts, sendParts } from "./parts";
 import { settleMaybeSent } from "./pending";
 import { privateShort, privateShortOf, tooMany } from "./short";
 import {
@@ -39,7 +40,6 @@ import {
   nothingToSpend,
   readContract,
   send,
-  sendParts,
   spentHistories,
   unspendable,
   whole,
@@ -139,7 +139,7 @@ export class WithdrawService {
       parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(classes, p.inputs) })),
     );
     const summary = summaryOf(whole(parts));
-    return parts.length > 1 ? { ...summary, parts: parts.map((p) => ({ txHash: p.txHash, fee: p.fee.total, inputs: p.inputs.length })) } : summary;
+    return parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary;
   }
 
   submit(network: NetworkName, txHash: string): Promise<PendingTx> {

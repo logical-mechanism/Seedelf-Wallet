@@ -1672,6 +1672,15 @@ impl ScriptSpend {
         Ok(self)
     }
 
+    /// Carries what's left after the outputs and the fee forward, in one output of ADA alone under a fresh
+    /// re-randomization of the change's owner ([`Self::pay_rest`] to the wallet itself, with no token): a payment in
+    /// parts whose next part has no ADA of its own to pay with spends it ([`carried`]). The tokens it doesn't send stay
+    /// as change with the least ADA they need. Short when what's left can't make an output of ADA alone.
+    pub fn carry(self) -> Result<Self> {
+        let owner = self.change_owner.clone();
+        self.pay_rest(RestTo::Seedelf(owner), &Assets::new())
+    }
+
     /// Adds an output. `tokens` must be what the output holds.
     pub fn output(mut self, output: Output, tokens: &Assets) -> Result<Self> {
         self.paid_lovelace = self
@@ -2218,6 +2227,56 @@ impl ScriptSpend {
         }
         Ok(tx)
     }
+}
+
+/// What [`ScriptSpend::carry`] carried in `built`, as Koios will list it once that transaction is on chain: its output
+/// at the wallet contract holding `built.rest_lovelace` and no token, under the register it was given. The next part
+/// of a payment spends it before it's on chain, measured in the wallet ([`ScriptSpend::measure_locally`] reads its
+/// row). Refused when no output is it, or more than one could be.
+pub fn carried(chain: &Chain, built: &FinalSpend) -> Result<UtxoResponse> {
+    let lovelace = built
+        .rest_lovelace
+        .context("The transaction carries nothing forward")?;
+    let tx = pallas_traverse::MultiEraTx::decode(&built.tx.tx_bytes.0)
+        .map_err(|e| anyhow::anyhow!("The transaction can't be read: {e}"))?;
+    let hash = chain.config.contract.wallet_contract_hash;
+    let wallet = wallet_contract(chain.network_flag, hash);
+    let outputs = tx.outputs();
+    let mut carries = outputs.iter().enumerate().filter(|(_, o)| {
+        o.address().is_ok_and(|a| a.to_vec() == wallet.to_vec())
+            && o.value().coin() == lovelace
+            && o.value().assets().is_empty()
+    });
+    let (index, output) = carries
+        .next()
+        .context("The transaction has no output carrying its ADA forward")?;
+    if carries.next().is_some() {
+        bail!("The transaction has two outputs that could carry its ADA forward");
+    }
+    let Some(conway::PseudoDatumOption::Data(datum)) = output.datum() else {
+        bail!("The output carrying the ADA forward holds no register");
+    };
+    Ok(UtxoResponse {
+        tx_hash: hex::encode(tx.hash()),
+        tx_index: index as u64,
+        address: wallet
+            .to_bech32()
+            .map_err(|e| anyhow::anyhow!("The wallet contract's address: {e}"))?,
+        value: lovelace.to_string(),
+        stake_address: None,
+        payment_cred: hex::encode(hash),
+        epoch_no: 0,
+        block_height: 0,
+        block_time: 0,
+        datum_hash: None,
+        inline_datum: Some(seedelf_koios::koios::InlineDatum {
+            bytes: hex::encode(datum.raw_cbor()),
+            value: Value::Null,
+        }),
+        reference_script: None,
+        asset_list: Some(Vec::new()),
+        is_spent: false,
+    })
 }
 
 fn policy_hash(config: &Config) -> Result<Hash<28>> {

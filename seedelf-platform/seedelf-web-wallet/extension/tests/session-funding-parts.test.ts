@@ -177,6 +177,35 @@ describe("a session's funding more UTxOs pay than one transaction spends (the ow
     expect(view.auto!.paused).toMatchObject({ why: "short" });
   });
 
+  it("parts that waited for the one before and won't go (parts.ts) leave it short at once, for the user to bring back", async () => {
+    // 1.6.0, item 10b: a part of a funding that spends what the part before carried forward goes once that one is in
+    // a block. Turned away then (or its parent never showing), the rest never go: the session hears it at once, rather
+    // than once the runner misses them 20 minutes on.
+    const t = await spread();
+    const sessions = signing(t);
+    const { parts } = await fundedInParts(sessions);
+    t.koios.confirmations = 1;
+    for (const p of parts.slice(1)) t.koios.missing.add(p);
+    t.koios.addedToAccounts.push(...paidTheAccount(t, parts[0]!));
+    await sessions.partsStopped("preprod", {
+      hashes: parts,
+      after: parts.map((_, i) => (i === 0 ? null : parts[i - 1]!)),
+      sent: 1,
+      at: t.clock.now,
+      kind: "session-out",
+      what: "payment",
+      stopped: "refused",
+      session: 0,
+    });
+    const book = await bookOf(t);
+    expect(book.sessions[0]!.txs.map((x) => !!x.unsent)).toEqual(parts.map((_, i) => i > 0));
+    await busy(t, 3 * 60_000);
+    const view = await sessions.advance("preprod", 0, true);
+    expect(view.parts).toEqual({ landed: 1, total: parts.length, short: true });
+    expect(view.auto!.paused).toMatchObject({ why: "short" });
+    expect(t.minswap.calls.filter((c) => c.path === "build-tx")).toHaveLength(0);
+  });
+
   it("the first part refused: nothing went, and the session never started, as one transaction's funding", async () => {
     const t = await spread();
     const sessions = signing(t);

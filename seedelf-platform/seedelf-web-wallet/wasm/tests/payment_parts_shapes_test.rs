@@ -4,7 +4,9 @@
 //! of utxo with arbitrary amount of tokens"). Every part built is decoded and checked as the ledger would: its size,
 //! each output's value, value conserved, no UTxO spent twice, exactly the tokens asked. A refusal is printed with the
 //! most an amount could pay with the tokens that stay (fees aside), so one well under it stands out; Max is never
-//! refused. About a minute in release:
+//! refused. A part may spend what the part right before it carried forward (a chain, where a part of tokens has no
+//! ADA of its own): only then, only an output of ADA alone at the wallet's own register, and only once. About a minute
+//! in release:
 //! `cargo test --release -p seedelf-wasm --test payment_parts_shapes_test -- --ignored --nocapture`.
 
 use pallas_codec::minicbor;
@@ -321,6 +323,64 @@ fn shapes(pp: &ProtocolParameters) -> Vec<Shape> {
             utxos,
         });
     }
+    // 11. Test wallet A's live shape (1.6.0, item 10): a move-in's 20 bundles of 20 tokens at exactly their least, and
+    // one big UTxO of ADA, which parts that each spend their own can't share.
+    for (n, big) in [(20u64, 409_000_000u64), (20, 30_000_000), (12, 409_000_000)] {
+        let mut i = 0;
+        let mut next = 0u64;
+        let mut utxos = Vec::new();
+        let mut all = Vec::new();
+        for _ in 0..n {
+            let assets: Vec<(Tok, u64)> = (0..20)
+                .map(|_| {
+                    next += 1;
+                    let t = (policy(90_000 + next), name(next, true));
+                    all.push(t.clone());
+                    (t, rng.range(1, 1_000))
+                })
+                .collect();
+            utxos.push(make(&mut i, 0, &assets, pp));
+        }
+        utxos.push(make(&mut i, big, &[], pp));
+        out.push(Shape {
+            label: format!("A: bundles x{n} of 20 + one ada of {}", big / 1_000_000),
+            token: Some(all[0].clone()),
+            several: all,
+            utxos,
+        });
+    }
+    // 12. Test wallet A as it really was (1.6.0, item 10b): its ADA, 2,621, in a UTxO holding 19 of the tokens sent and
+    // one other, behind 19 bundles of 20 at exactly their least; one more holding the last token sent, and a UTxO of
+    // another token with a little ADA. No part paying its own way could start.
+    {
+        let mut i = 0;
+        let mut next = 0u64;
+        let mut tok = || {
+            next += 1;
+            (policy(95_000 + next), name(next, true))
+        };
+        let mut utxos = Vec::new();
+        let mut all = Vec::new();
+        for _ in 0..19 {
+            let assets: Vec<(Tok, u64)> = (0..20).map(|_| (tok(), 1_000_000)).collect();
+            all.extend(assets.iter().map(|(t, _)| t.clone()));
+            utxos.push(make(&mut i, 0, &assets, pp));
+        }
+        let mut rich: Vec<(Tok, u64)> = (0..19).map(|_| (tok(), 1_000_000)).collect();
+        all.extend(rich.iter().map(|(t, _)| t.clone()));
+        rich.push((tok(), 1_000_000));
+        utxos.push(make(&mut i, 2_616_000_000, &rich, pp));
+        let last = tok();
+        all.push(last.clone());
+        utxos.push(make(&mut i, 300_000, &[(last, 1_000_000)], pp));
+        utxos.push(make(&mut i, 400_000, &[(tok(), 120_000_000)], pp));
+        out.push(Shape {
+            label: "A live: ada with 19 of the tokens, 19 bundles of 20".into(),
+            token: Some(all[0].clone()),
+            several: all,
+            utxos,
+        });
+    }
     // 8. Mixed: a bit of everything, shuffled.
     {
         let mut i = 0;
@@ -392,6 +452,8 @@ struct Part {
     size: usize,
     biggest_value: usize,
     inputs: Vec<(String, u64)>,
+    /// Its outputs at the wallet's own register, as rows a later part could spend.
+    made: Vec<UtxoResponse>,
     paid_lovelace: u64,
     paid: BTreeMap<Tok, u128>,
     kept: BTreeMap<Tok, u128>,
@@ -437,7 +499,33 @@ fn inspect(
     }
     let mut out_lovelace = 0u64;
     let mut out_tokens: BTreeMap<Tok, u128> = BTreeMap::new();
-    for o in tx.outputs() {
+    let id = hex::encode(tx.hash().as_ref());
+    for (index, o) in tx.outputs().iter().enumerate() {
+        if let Some(d) = o.datum()
+            && register_from(d.into()).is_owned(sk).unwrap_or(false)
+        {
+            let v = o.value();
+            part.made.push(UtxoResponse {
+                tx_hash: id.clone(),
+                tx_index: index as u64,
+                value: v.coin().to_string(),
+                asset_list: Some(
+                    v.assets()
+                        .iter()
+                        .flat_map(|p| {
+                            p.assets().into_iter().map(|a| KAsset {
+                                decimals: 0,
+                                quantity: a.output_coin().unwrap().to_string(),
+                                policy_id: hex::encode(p.policy().as_ref()),
+                                asset_name: hex::encode(a.name()),
+                                fingerprint: String::new(),
+                            })
+                        })
+                        .collect(),
+                ),
+                ..base()
+            });
+        }
         let v = o.value();
         let size = minicbor::to_vec(v.into_conway()).unwrap().len();
         part.biggest_value = part.biggest_value.max(size);
@@ -552,15 +640,41 @@ fn check_parts(
     let mut paid: BTreeMap<Tok, u128> = BTreeMap::new();
     let mut sizes = Vec::new();
     let mut left = 0;
+    // The wallet's UTxOs, and what each part made at the wallet's own register: a chained part spends the last.
+    let mut known: Vec<UtxoResponse> = utxos.to_vec();
+    let mut made_before: Vec<UtxoResponse> = Vec::new();
+    let mut chained = 0;
     for (cbor, l) in &cbors {
-        let part = inspect(cbor, utxos, sk, to_address);
+        let part = inspect(cbor, &known, sk, to_address);
         problems.extend(part.problems.iter().cloned());
+        let mut carried = 0;
         for i in &part.inputs {
             if seen.contains(i) {
                 problems.push(format!("input {}#{} in two parts", i.0, i.1));
             }
             seen.push(i.clone());
+            if utxos.iter().any(|u| u.tx_hash == i.0 && u.tx_index == i.1) {
+                continue;
+            }
+            carried += 1;
+            match made_before
+                .iter()
+                .find(|u| u.tx_hash == i.0 && u.tx_index == i.1)
+            {
+                Some(u) if u.asset_list.iter().flatten().next().is_none() => {}
+                Some(_) => problems.push("a chained part spends a carry holding tokens".into()),
+                None => problems.push(format!(
+                    "input {}#{} is no carry of the part right before",
+                    i.0, i.1
+                )),
+            }
         }
+        if carried > 1 {
+            problems.push(format!("a part spends {carried} carries"));
+        }
+        chained += carried;
+        known.extend(part.made.iter().cloned());
+        made_before = part.made.clone();
         paid_lovelace += part.paid_lovelace;
         for (t, q) in part.paid {
             *paid.entry(t).or_default() += q;
@@ -619,18 +733,26 @@ fn check_parts(
             if unspent_ada > 0 {
                 problems.push(format!("max left {unspent_ada} UTxOs of ADA alone"));
             }
-            if left == 0 && seen.len() != utxos.len() {
+            let spent = utxos
+                .iter()
+                .filter(|u| seen.contains(&(u.tx_hash.clone(), u.tx_index)))
+                .count();
+            if left == 0 && spent != utxos.len() {
                 problems.push(format!(
-                    "max spent {} of {} but says none left",
-                    seen.len(),
+                    "max spent {spent} of {} but says none left",
                     utxos.len()
                 ));
             }
         }
     }
     let line = format!(
-        "{} part(s) [{}] paid {:.2} ADA, {} token kinds{}",
+        "{} part(s){} [{}] paid {:.2} ADA, {} token kinds{}",
         cbors.len(),
+        if chained > 0 {
+            format!(", {chained} chained")
+        } else {
+            String::new()
+        },
         sizes.join(" "),
         paid_lovelace as f64 / 1e6,
         paid.len(),
@@ -730,6 +852,7 @@ fn run(shape: &Shape, ask: &Ask, sk: blstrs::Scalar, withdraw: bool, recorded: &
             classes: Default::default(),
             funding: None,
             most: false,
+            carry: false,
             seed: None,
             evaluation: None,
         };
@@ -778,6 +901,7 @@ fn run(shape: &Shape, ask: &Ask, sk: blstrs::Scalar, withdraw: bool, recorded: &
                 tokens: tokens.clone(),
             }],
             classes: Default::default(),
+            carry: false,
             seed: None,
             evaluation: None,
         };

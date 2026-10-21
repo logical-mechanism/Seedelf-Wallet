@@ -225,7 +225,10 @@ export function Withdraw({
         <TxDetailButton txHash={summary.txHash} testId="withdraw-tx" />
         {summary.parts && (
           <p className="note" data-testid="withdraw-parts">
-            {t("review.partsNote", { count: summary.parts.length })}
+            {joinSentences([
+              t("review.partsNote", { count: summary.parts.length }),
+              summary.parts.some((p) => p.waits) && t("review.partsWait", { count: summary.parts.filter((p) => p.waits).length }),
+            ])}
           </p>
         )}
         <HistoriesNote histories={summary.histories} max={summary.max} testId="withdraw-histories" />
