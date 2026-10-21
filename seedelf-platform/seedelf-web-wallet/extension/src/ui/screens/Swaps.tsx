@@ -261,6 +261,7 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
 const PAUSED: Record<SessionPause["why"], I18nKey> = {
   price: "swaps.paused.price",
   refused: "swaps.paused.refused",
+  short: "swaps.paused.short",
 };
 
 /** A session's second line: what it's doing while it runs (its tag says if it's stopping), or when it ran. */
@@ -1324,10 +1325,17 @@ export function SwapApproval({
         )}
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        {/* More UTxOs than one transaction spends: funded as several, every one needed (the owner's call, 2026-10-21). */}
+        {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
         {/* What leaves, and the balance after, as every other review says them. The change isn't a row, as it isn't
             on theirs: beside the balance, "back to your private balance" read as what would be left (ReviewTotals). */}
         <TotalRows side="private" leaving={costs.leaving} before={before} tokens={tokensOut} />
       </ReviewRows>
+      {summary.parts && (
+        <p className="note" data-testid="swap-fund-parts">
+          {tr("review.fundingPartsNote", { count: summary.parts.length })}
+        </p>
+      )}
       <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
       <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} tokenBoxes={tokenBoxes > 0} />
@@ -2381,6 +2389,14 @@ export function Session({
               <span data-testid="session-paused-why">
                 {pauseText(auto.paused, auto.approvedMinOut, sides?.get, auto.stopping, !!auto.againstPools || !!auto.approvedPools)}
               </span>
+              {/* Short of a part, the one way on is to bring back what came: Stop's dialog, the approval's way set. */}
+              {auto.paused.why === "short" ? (
+                <span className="row-links">
+                  <button type="button" className="link" disabled={busy} onClick={openStop} data-testid="session-bring-back">
+                    {tr("swaps.foot.bringBack")}
+                  </button>
+                </span>
+              ) : (
               <span className="row-links">
                 <button
                   type="button"
@@ -2401,6 +2417,7 @@ export function Session({
                   </button>
                 )}
               </span>
+              )}
             </div>
           </Callout>
         )}
@@ -2858,6 +2875,8 @@ function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): strin
  * `.warn.`: the name is what keeps them checked.
  */
 export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick, cancelling = false, pools = false): string {
+  // Its funding went in parts and fell short: nothing of it is swapped (the owner's call, 2026-10-21).
+  if (p.why === "short") return t("swaps.pause.warn.short", { landed: p.landed, total: p.total });
   if (p.why === "refused") {
     return cancelling
       ? t("swaps.pause.warn.cancelRefused", { detail: withStop(p.detail) })
@@ -2949,8 +2968,11 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const cancelRefused = cancelled && !tx("cancel") && auto.paused?.why === "refused";
   // Its words: a swap against a DEX's pools once one has gone out, or before, approved so (release review C13).
   const pools = !!auto.againstPools || !!auto.approvedPools;
+  // Its funding went in parts and fell short: the funding step failed, and what came waits to be brought back.
+  const short = !!s.parts?.short;
   const state = (i: number): StepState => {
     if (failed) return i === 0 ? "failed" : "skipped";
+    if (short && i === 0) return "failed";
     if ((i === 1 || i === 2) && unordered) return "skipped";
     if (i < at) return "done";
     if (i > at) return "todo";
@@ -2960,11 +2982,13 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const least = sides ? amountOf((tx("swap") && auto.placedMinOut) || auto.approvedMinOut, sides.get) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
     {
-      title: tr(failed ? "swaps.step.notFunded" : "swaps.plan.funded"),
-      // Only one turned away is known never to have gone out: one unseen may still land.
+      title: tr(failed ? "swaps.step.notFunded" : short ? "swaps.step.fundingShort" : "swaps.plan.funded"),
+      // Only one turned away is known never to have gone out: one unseen may still land. In parts, how many are in.
       sub: failed
         ? tr(s.unsent ? "swaps.step.neverReached" : "swaps.step.notShownYet")
-        : tr("swaps.plan.fundedSub"),
+        : s.parts && (short || s.stage === "funding")
+          ? tr("swaps.step.partsIn", { landed: s.parts.landed, total: s.parts.total })
+          : tr("swaps.plan.fundedSub"),
       tx: tx("out"),
     },
     {

@@ -940,13 +940,13 @@ describe("34e's fixes' review, each with a test", SLOW, () => {
     const wasm = loadTestWasm();
     let why = "Spending 30 UTxOs at once needs more computation than a transaction may use";
     const sessions = runner(t, pooled(t, [min.ref]), {
-      // The funding with the token's boxes beside the swap takes more of the private balance's UTxOs than one
-      // transaction can spend; the swap's own fits.
-      buildWithdraw: (key: Parameters<typeof wasm.buildWithdraw>[0], request: string) => {
+      // The funding with the token's boxes beside the swap takes more of the private balance's UTxOs than its parts
+      // can spend (a funding goes in parts since the owner's test of 1.6.0); the swap's own fits.
+      buildWithdrawParts: (key: Parameters<typeof wasm.buildWithdrawParts>[0], request: string) => {
         const amount = (JSON.parse(request) as { payments: Array<{ lovelace: string }> }).payments[0]!.lovelace;
         amounts.add(amount);
         if (why.startsWith("Not enough") || BigInt(amount) > BigInt(swap)) throw new Error(why);
-        return wasm.buildWithdraw(key, request);
+        return wasm.buildWithdrawParts(key, request);
       },
     });
     await privately(t, "100000000");

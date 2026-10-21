@@ -1397,8 +1397,16 @@ export class DappService {
         const rows = await sessions.accountUtxos(network, keyHash).catch(() => []);
         if (rows.length) {
           // Seen landed, and recorded so: no read behind it later takes it for one never sent (final review F13).
-          void sessions.fundingSeen(network, index, rows).catch(() => undefined);
-          return done(() => w.resolve(true));
+          // A funding in parts has landed only once every part has; short of one, the site isn't given it (the
+          // owner's call, 2026-10-21): what came waits on the dApps page to be brought back.
+          const state = await sessions.fundingSeen(network, index, rows).catch(() => "funding" as const);
+          if (state === "landed") return done(() => w.resolve(true));
+          if (state === "short") {
+            // Nor kept connected to it: its next enable() would hand it what came. That waits on the dApps page.
+            await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
+            return done(() => w.reject(refused((lng) => t("dapp.fundingShort", { lng }))));
+          }
+          if (state === "never") return done(() => w.reject(refused((lng) => t("dapp.fundingNeverLanded", { lng }))));
         }
         if (now() - started > FUNDING_WAIT_MS) {
           return done(() => w.reject(refused((lng) => t("dapp.fundingNeverLanded", { lng }))));

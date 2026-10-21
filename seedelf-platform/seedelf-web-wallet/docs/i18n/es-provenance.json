@@ -3192,5 +3192,19 @@
   "review.parts": "machine",
   "review.partsNote_many": "machine",
   "review.partsNote_one": "machine",
-  "review.partsNote_other": "machine"
+  "review.partsNote_other": "machine",
+  "dapp.fundingShort": "machine",
+  "lovejoin.detail.short": "machine",
+  "lovejoin.sub.fundingShort": "machine",
+  "lovejoin.tag.short": "machine",
+  "review.fundingPartsNote_many": "machine",
+  "review.fundingPartsNote_one": "machine",
+  "review.fundingPartsNote_other": "machine",
+  "sites.warn.short": "mtpe",
+  "swaps.pause.warn.short": "mtpe",
+  "swaps.paused.short": "machine",
+  "swaps.step.fundingShort": "machine",
+  "swaps.step.partsIn": "machine",
+  "worker.parts.fundingPartly": "machine",
+  "worker.parts.fundingPartlyMaybe": "machine"
 }

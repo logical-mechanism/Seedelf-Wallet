@@ -505,11 +505,15 @@ const stoppable = (s: SessionView) => !isOver(s) && !s.chain && !s.auto?.stoppin
 /** A mix whose next try can be had now: one waiting to retry, or a funding to look for again. */
 const retryable = (s: SessionView) => (!!s.auto?.retry && !isOver(s) && !s.chain?.stopped) || unseen(s);
 
+/** A mix whose funding went in parts and fell short: nothing of it goes into Lovejoin, and Stop brings back what came. */
+const short = (s: SessionView) => !!s.parts?.short && !s.auto?.stopping && !isOver(s);
+
 /** A mix's tag. */
 function tagOf(s: SessionView): { tone: SwapTone; label: string } {
   if (s.stage === "failed") {
     return unseen(s) ? { tone: "wait", label: t("lovejoin.tag.notSeen") } : { tone: "bad", label: t("lovejoin.tag.notFunded") };
   }
+  if (short(s)) return { tone: "wait", label: t("lovejoin.tag.short") };
   if (s.stage === "closed") {
     return s.mix?.skipped ? { tone: "off", label: t("lovejoin.tag.notMixed") } : { tone: "done", label: t("lovejoin.tag.done") };
   }
@@ -522,6 +526,7 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
 export function subOf(s: SessionView, now: number): string {
   if (s.stage === "failed") return t(unseen(s) ? "lovejoin.sub.fundingUnseen" : "lovejoin.sub.fundingFailed");
   if (s.stage === "funding") return t("lovejoin.sub.funding");
+  if (short(s)) return t("lovejoin.sub.fundingShort", { landed: s.parts!.landed, total: s.parts!.total });
   if (s.mix?.skipped) return t("lovejoin.sub.skipped");
   // Its chain stopped before any of it went (a lock before its first send, a deposit turned away): nothing of it went
   // in, so while it isn't over the runner builds it again, through Lovejoin (buildBack's `started`), and nothing comes
@@ -554,6 +559,7 @@ export function detailOf(s: SessionView): string | undefined {
     lines.push(t("lovejoin.detail.triesAgain", { at, error: withoutStop(s.auto.retry.error) }));
   }
   if (unseen(s)) lines.push(t("lovejoin.detail.mayLand"));
+  if (short(s)) lines.push(t("lovejoin.detail.short"));
   // Turned away: why, when the worker knew (chunk 23's second review, DX-5).
   const why = s.stage === "failed" && s.unsent ? unsentWhyText(s.unsentWhy) : undefined;
   if (why) lines.push(why);
@@ -3258,6 +3264,8 @@ export function PrivateReview({
         />
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
+        {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
         <FundingTotals summary={summary} before={before} />
       </ReviewRows>
       <h2>{tr("lovejoin.review.thenItself")}</h2>
@@ -3281,6 +3289,11 @@ export function PrivateReview({
         <Callout tone="privacy">{joinSentences([tr("lovejoin.review.privacy.private"), lovejoinHides(mix.depth, mix.width)])}</Callout>
       )}
       <WidthNote fellBack={mix.fellBack} />
+      {summary.parts && (
+        <p className="note" data-testid="lovejoin-private-parts">
+          {tr("review.fundingPartsNote", { count: summary.parts.length })}
+        </p>
+      )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <GivemeNote funding />
     </>
@@ -3310,6 +3323,8 @@ function AgainReview({
         <Row label={tr("lovejoin.review.forMixes")} value={`${formatAda(mixesPart!.lovelace)}\u00a0₳`} />
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
+        {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
         <FundingTotals summary={summary} before={before} />
       </ReviewRows>
       <h2>{tr("lovejoin.review.thenItself")}</h2>
@@ -3339,6 +3354,11 @@ function AgainReview({
           mix.publicToo && tr("lovejoin.review.privacy.publicToo"),
         ])}
       </Callout>
+      {summary.parts && (
+        <p className="note" data-testid="lovejoin-again-parts">
+          {tr("review.fundingPartsNote", { count: summary.parts.length })}
+        </p>
+      )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />
       <GivemeNote funding />
     </>

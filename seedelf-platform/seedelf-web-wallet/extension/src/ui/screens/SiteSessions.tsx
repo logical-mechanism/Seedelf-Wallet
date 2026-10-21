@@ -120,6 +120,8 @@ export function disconnectWait(s: SessionView, { canRefresh = true }: { canRefre
 function tagOf(s: SessionView, attached?: boolean): { tone: SwapTone; label: string } {
   if (s.stage === "failed") return { tone: "bad", label: t("swaps.step.notFunded") };
   if (s.stage === "funding") return { tone: "live", label: t("sites.tag.funding") };
+  // Funded in parts, and short of one: the site isn't given it, and what came waits to be brought back.
+  if (s.parts?.short && s.stage === "open") return { tone: "wait", label: t("swaps.step.fundingShort") };
   if (s.stage === "returning") return { tone: "live", label: t("swaps.stage.returning") };
   if (attached === false) return { tone: "wait", label: t("sites.tag.notConnected") };
   return { tone: "done", label: t("sites.tag.connected") };
@@ -398,8 +400,13 @@ export function SiteSession({
       {detached && (
         <Callout tone="warn" testId="site-session-detached">
           <div className="stack-tight">
-            {/* Connected to nothing, after a cancelled connect, say: no other request connected it (CW-6). */}
-            <span>{tr(connected === false ? "sites.warn.notConnected" : "sites.warn.detached", { host: hostOf(s) })}</span>
+            {/* Connected to nothing, after a cancelled connect, say: no other request connected it (CW-6). Or its
+                funding fell short of a part, and the site wasn't given it (the owner's call, 2026-10-21). */}
+            <span>
+              {s.parts?.short
+                ? tr("sites.warn.short", { host: hostOf(s), landed: s.parts.landed, total: s.parts.total })
+                : tr(connected === false ? "sites.warn.notConnected" : "sites.warn.detached", { host: hostOf(s) })}
+            </span>
             {!empty && holding && (
               <button type="button" className="link align-start" onClick={bringBack} disabled={busy}>
                 {tr("swaps.foot.bringBack")}

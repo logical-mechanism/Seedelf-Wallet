@@ -1638,7 +1638,13 @@ export type SessionPause =
   /** The fresh quote expects `amountOut`, less than the least the user approved: the order couldn't fill. */
   | { at: number; why: "price"; amountOut: string }
   /** What Minswap built, or the wallet's own cancel after Stop, failed a check (`detail` says which), so the wallet didn't sign it. */
-  | { at: number; why: "refused"; detail: string };
+  | { at: number; why: "refused"; detail: string }
+  /**
+   * Its funding went in parts, and only `landed` of the `total` reached its account: it's not funded, so nothing of
+   * it is swapped or mixed, and what came waits there until the user brings it back (the owner's call, 2026-10-21).
+   * A missing part that lands after all lifts it.
+   */
+  | { at: number; why: "short"; landed: number; total: number };
 
 /**
  * Why a swap's step failed, as a code the page words (Swaps.tsx): Minswap or
@@ -1727,6 +1733,12 @@ export interface SessionView {
   createdAt: number;
   stage: "funding" | "open" | "returning" | "closed" | "failed";
   txs: SessionTx[];
+  /**
+   * Its funding went in parts: how many of them landed, of `total`. `short`: the rest never will, so it isn't
+   * funded, nothing of it runs, and what came waits at its account to be brought back (the owner's call,
+   * 2026-10-21). None on a funding in one transaction.
+   */
+  parts?: { landed: number; total: number; short?: true };
   /** The swap it's for, as last quoted, and how its two sides are shown. */
   swap?: SwapAsk & { amountOut: string; minAmountOut: string; display?: { in: SwapSide; out: SwapSide } };
   /** What its account holds, from Koios; null when it wasn't read. */

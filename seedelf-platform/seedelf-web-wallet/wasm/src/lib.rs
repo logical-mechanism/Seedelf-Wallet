@@ -3192,35 +3192,53 @@ pub mod api {
     }
 
     /// What a withdrawal pays: amounts, everything (Max), or the most a
-    /// payment of some tokens can be ([`WithdrawRequest::most`]).
+    /// payment of some tokens can be ([`WithdrawRequest::most`]), with the
+    /// amounts after it paid too (a session's funding in parts: its first part
+    /// carries the one-time account's collateral).
     enum Withdrawing {
         /// What each address is paid.
         Amounts(Vec<Paid>, Vec<AddressPayment>),
         Everything(Address),
-        Most(Address, Assets),
+        Most(Address, Assets, Vec<Paid>, Vec<AddressPayment>),
     }
 
     /// What a withdrawal asks for, checked.
     fn withdrawal_of(chain: &Chain, request: &WithdrawRequest) -> Result<Withdrawing> {
         check_recipients(request.payments.len())?;
-        if let [only] = request.payments.as_slice()
-            && only.lovelace.is_none()
+        if let [first, extra @ ..] = request.payments.as_slice()
+            && first.lovelace.is_none()
+            && (extra.is_empty() || request.most)
         {
-            let to = payable_address(chain.network_flag, &only.to)?;
+            let to = payable_address(chain.network_flag, &first.to)?;
             if request.utxos.is_empty() {
                 bail!("There's nothing in the Seedelf balance to withdraw");
             }
             if request.most {
-                return Ok(Withdrawing::Most(to, assets_of(&only.tokens)?));
+                let (paid, extra) = amounts_of(chain, extra)?;
+                return Ok(Withdrawing::Most(
+                    to,
+                    assets_of(&first.tokens)?,
+                    paid,
+                    extra,
+                ));
             }
-            if !only.tokens.is_empty() {
+            if !first.tokens.is_empty() {
                 bail!("Max sends every token, so it takes no token amounts");
             }
             return Ok(Withdrawing::Everything(to));
         }
-        let mut to_pay = Vec::with_capacity(request.payments.len());
-        let mut paid = Vec::with_capacity(request.payments.len());
-        for p in &request.payments {
+        let (paid, to_pay) = amounts_of(chain, &request.payments)?;
+        Ok(Withdrawing::Amounts(paid, to_pay))
+    }
+
+    /// Each of `payments`, an amount to an address, checked and raised to the least it needs.
+    fn amounts_of(
+        chain: &Chain,
+        payments: &[WithdrawPayment],
+    ) -> Result<(Vec<Paid>, Vec<AddressPayment>)> {
+        let mut to_pay = Vec::with_capacity(payments.len());
+        let mut paid = Vec::with_capacity(payments.len());
+        for p in payments {
             let Some(l) = &p.lovelace else {
                 bail!("Max pays a single recipient: give each of several an amount");
             };
@@ -3240,7 +3258,7 @@ pub mod api {
                 tokens,
             });
         }
-        Ok(Withdrawing::Amounts(paid, to_pay))
+        Ok((paid, to_pay))
     }
 
     /// The withdrawal, proven, and how many UTxOs Max left out.
@@ -3259,10 +3277,10 @@ pub mod api {
                     build::max_inputs(&request.utxos, &Assets::new(), MAX_WITHDRAW_UTXOS)?;
                 (build::sweep_all(chain, &utxos, to, &owner, signer)?, left)
             }
-            Withdrawing::Most(to, tokens) => {
+            Withdrawing::Most(to, tokens, _, extra) => {
                 let (utxos, left) = build::max_inputs(&request.utxos, tokens, MAX_WITHDRAW_UTXOS)?;
                 (
-                    build::sweep_most(chain, &utxos, to, tokens, &owner, signer)?,
+                    build::sweep_most_with(chain, &utxos, to, tokens, extra, &owner, signer)?,
                     left,
                 )
             }
@@ -3431,10 +3449,14 @@ pub mod api {
     /// which hold only their least, ahead of UTxOs of ADA alone, and the part of those bundles couldn't pay its fee,
     /// which ended Max (the owner's test of 1.6.0: "I send all ada to myself … it skipped multi pure ada utxos and
     /// did not spend them").
-    struct Worth(HashMap<(String, u64), u64>);
+    ///
+    /// A session's funding (`histories`, its purpose's) takes them by its order first, then by that: received money
+    /// before the wallet's own, another session's last ([`build::Histories::rank_of`]), as one transaction's funding
+    /// does (privacy review §2.3), since a part that fills its room can't keep them apart.
+    struct Worth(HashMap<(String, u64), (u8, u64)>);
 
     impl Worth {
-        fn of(chain: &Chain, utxos: &[UtxoResponse]) -> Self {
+        fn of(chain: &Chain, utxos: &[UtxoResponse], histories: Option<&Histories>) -> Self {
             Worth(
                 utxos
                     .iter()
@@ -3449,17 +3471,18 @@ pub mod api {
                                 Some(lovelace.saturating_sub(kept))
                             })
                             .unwrap_or(0);
-                        ((u.tx_hash.clone(), u.tx_index), worth)
+                        let first = u8::MAX - histories.map_or(0, |h| h.rank_of(u));
+                        ((u.tx_hash.clone(), u.tx_index), (first, worth))
                     })
                     .collect(),
             )
         }
 
-        fn of_utxo(&self, u: &UtxoResponse) -> u64 {
+        fn of_utxo(&self, u: &UtxoResponse) -> (u8, u64) {
             self.0
                 .get(&(u.tx_hash.clone(), u.tx_index))
                 .copied()
-                .unwrap_or(0)
+                .unwrap_or((0, 0))
         }
     }
 
@@ -3596,26 +3619,32 @@ pub mod api {
     /// tokens still owed need, or an output of ADA alone (`least`), so what it keeps is valid change; or exactly
     /// what's owed, when it sends the last of the tokens and what stays is valid change. A part one transaction
     /// can't take tries less ([`Room`]).
+    ///
+    /// `most` and `amount` are told whether they build the first part, which pays `beside` too, apart from the
+    /// payment: a session's funding's collateral for its one-time account, an output of its own (`paid_of` counts
+    /// the payment alone).
     #[allow(clippy::too_many_arguments)]
     fn in_parts<R>(
         too_many: anyhow::Error,
         utxos: &[UtxoResponse],
         mut owed: u64,
         mut tokens: Vec<TokenAmount>,
+        beside: u64,
         least: impl Fn(&[TokenAmount]) -> Result<u64>,
         worth: &Worth,
         inputs_of: impl Fn(&R) -> &[OutRef],
         paid_of: impl Fn(&R) -> Result<u64>,
-        mut most: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
-        mut amount: impl FnMut(Vec<UtxoResponse>, u64, Vec<TokenAmount>) -> Result<R>,
+        mut most: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>, bool) -> Result<R>,
+        mut amount: impl FnMut(Vec<UtxoResponse>, u64, Vec<TokenAmount>, bool) -> Result<R>,
     ) -> Result<Vec<R>> {
-        holding_enough(utxos, owed)?;
+        holding_enough(utxos, owed.saturating_add(beside))?;
         let mut rest = utxos.to_vec();
         let mut parts = Vec::new();
         loop {
             if parts.len() + 1 >= MAX_PARTS {
                 return Err(too_many);
             }
+            let first = parts.is_empty();
             // Holding none of the tokens owed: spending one sends none, and keeps none a later part sends.
             let free: Vec<UtxoResponse> = rest
                 .iter()
@@ -3632,10 +3661,15 @@ pub mod api {
                 if picks.is_empty() {
                     bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
                 }
-                let built = most(picks.clone(), share.clone()).and_then(|all| {
+                let built = most(picks.clone(), share.clone(), first).and_then(|all| {
                     let paid = paid_of(&all)?;
                     if later.is_empty() && paid >= owed {
-                        match amount(picks.clone(), owed.max(least(&share)?), share.clone()) {
+                        match amount(
+                            picks.clone(),
+                            owed.max(least(&share)?),
+                            share.clone(),
+                            first,
+                        ) {
                             Err(e) if build::is_short(&e) => {}
                             exactly => return exactly,
                         }
@@ -3648,6 +3682,7 @@ pub mod api {
                         picks,
                         owed.saturating_sub(keep).max(least(&share)?),
                         share.clone(),
+                        first,
                     )
                 });
                 let next = match &built {
@@ -3672,7 +3707,12 @@ pub mod api {
             if tokens.is_empty() && owed == 0 {
                 return Ok(parts);
             }
-            match amount(rest.clone(), owed.max(least(&tokens)?), tokens.clone()) {
+            match amount(
+                rest.clone(),
+                owed.max(least(&tokens)?),
+                tokens.clone(),
+                false,
+            ) {
                 Ok(last) => {
                     parts.push(last);
                     return Ok(parts);
@@ -3767,7 +3807,7 @@ pub mod api {
             build_transfer(sk, sub)
         };
         let chain = chain_of(&request.network, &request.params)?;
-        let worth = Worth::of(&chain, &request.utxos);
+        let worth = Worth::of(&chain, &request.utxos, None);
         if let [only] = request.payments.as_slice()
             && only.lovelace.is_none()
         {
@@ -3795,47 +3835,60 @@ pub mod api {
             &request.utxos,
             owed,
             pay.tokens.clone(),
+            0,
             least,
             &worth,
             |r: &TransferResult| &r.inputs,
             |r| lovelace_of(&r.payments[0].lovelace),
-            |picks, share| with(picks, None, share),
-            |from, lovelace, tokens| with(from, Some(lovelace), tokens),
+            |picks, share, _| with(picks, None, share),
+            |from, lovelace, tokens, _| with(from, Some(lovelace), tokens),
         )
     }
 
     /// Paying an address from the Seedelf balance (Make public, Send to an address) as several transactions when one
     /// can't take it, as [`build_transfer_parts`] pays a Seedelf: an amount to one address in parts, Everything (Max)
     /// every UTxO, and `most` (a shortfall's measure) every UTxO too, so the most it says an amount can be is what
-    /// the parts would pay. Never a session's funding, nor several addresses at once: those are one transaction, as
-    /// before.
+    /// the parts would pay. Several addresses at once go in one transaction, as before.
+    ///
+    /// A session's funding goes in parts too (the owner's test of 1.6.0: selling a token spread over more UTxOs than
+    /// one transaction spends): its first payment, the swap's or the site's, in parts as an amount is, picked by
+    /// funding's order first ([`Worth`]); the payments after it (the one-time account's collateral, an output of ADA
+    /// alone) in the first part.
     pub fn build_withdraw_parts(
         sk: Scalar,
         request: WithdrawRequest,
     ) -> Result<Vec<WithdrawResult>> {
-        if request.funding.is_some() {
-            return build_withdraw(sk, request).map(|one| vec![one]);
-        }
+        let funding = request.funding.is_some();
         let with = |utxos: Vec<UtxoResponse>,
                     lovelace: Option<u64>,
                     tokens: Vec<TokenAmount>,
-                    most: bool| {
+                    most: bool,
+                    first: bool| {
             let mut sub = request.clone();
             sub.utxos = utxos;
             sub.most = most;
-            sub.payments = vec![WithdrawPayment {
+            let beside = if first && funding {
+                &request.payments[1..]
+            } else {
+                &[]
+            };
+            sub.payments = std::iter::once(WithdrawPayment {
                 lovelace: lovelace.map(|l| l.to_string()),
                 tokens,
                 ..request.payments[0].clone()
-            }];
+            })
+            .chain(beside.iter().cloned())
+            .collect();
             build_withdraw(sk, sub)
         };
         if let [only] = request.payments.as_slice()
             && only.lovelace.is_none()
+            && !funding
         {
             let worth = Worth::of(
                 &chain_of(&request.network, &request.params)?,
                 &request.utxos,
+                None,
             );
             // Everything sends every token; `most`, those named, the others staying.
             let most = request.most;
@@ -3850,12 +3903,12 @@ pub mod api {
                 &worth,
                 |r: &mut WithdrawResult| &mut r.left,
                 |r| &r.inputs,
-                |from, share| with(from, None, share, most),
+                |from, share| with(from, None, share, most, false),
             );
         }
         let too_many = match build_withdraw(sk, request.clone()) {
             Ok(one) => return Ok(vec![one]),
-            Err(e) if too_much(&e) && request.payments.len() == 1 => e,
+            Err(e) if too_much(&e) && (request.payments.len() == 1 || funding) => e,
             Err(e) => return Err(e),
         };
         let chain = chain_of(&request.network, &request.params)?;
@@ -3865,6 +3918,24 @@ pub mod api {
             build::minimum_address_payment(&chain.params, &to, &assets_of(tokens)?)
         };
         let owed = lovelace_of(pay.lovelace.as_deref().unwrap_or("0"))?.max(least(&pay.tokens)?);
+        let (beside, _) = amounts_of(&chain, &request.payments[1..])?;
+        let beside = beside
+            .iter()
+            .map(|p| lovelace_of(&p.lovelace))
+            .sum::<Result<u64>>()?;
+        let worth = match &request.funding {
+            Some(f) => Worth::of(
+                &chain,
+                &request.utxos,
+                Some(&histories(
+                    Purpose::Fund {
+                        session: f.session.clone(),
+                    },
+                    &request.classes,
+                )?),
+            ),
+            None => Worth::of(&chain, &request.utxos, None),
+        };
         // A part of an amount pays the most of its UTxOs' ADA, with the tokens it sends, every other token staying in
         // the Seedelf balance with the least ADA it needs (`most`): Everything would pay those too, which weren't asked
         // for.
@@ -3873,12 +3944,13 @@ pub mod api {
             &request.utxos,
             owed,
             pay.tokens.clone(),
+            beside,
             least,
-            &Worth::of(&chain, &request.utxos),
+            &worth,
             |r: &WithdrawResult| &r.inputs,
             |r| lovelace_of(&r.payments[0].lovelace),
-            |picks, share| with(picks, None, share, true),
-            |from, lovelace, tokens| with(from, Some(lovelace), tokens, false),
+            |picks, share, first| with(picks, None, share, true, first),
+            |from, lovelace, tokens, first| with(from, Some(lovelace), tokens, false, first),
         )
     }
 
@@ -3905,14 +3977,16 @@ pub mod api {
                 true,
                 false,
             ),
-            // The most: all but the fee and what the tokens that stay need.
-            Withdrawing::Most(_, tokens) => (
-                vec![Paid {
+            // The most: all but the fee, what the tokens that stay need, and the amounts after it.
+            Withdrawing::Most(_, tokens, extra, _) => (
+                std::iter::once(Paid {
                     to: to(),
                     lovelace: built.rest_lovelace.unwrap_or_default().to_string(),
                     minimum: None,
                     tokens: tokens.items.iter().map(token_amount).collect(),
-                }],
+                })
+                .chain(extra)
+                .collect(),
                 true,
                 true,
             ),

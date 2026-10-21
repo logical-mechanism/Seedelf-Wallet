@@ -730,6 +730,8 @@ export function ConnectRequest({
                 CW-8). */}
             <Row label={tr("dappUi.keptAside")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral?.lovelace ?? "0") })} />
             <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
+            {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
+            {review.parts && <Row label={tr("review.parts")} value={String(review.parts.length)} />}
             {/* What leaves the private balance and what it holds after, as every other review says them: the change
                 (3.766792 ₳ of a 25 ₳ UTxO) didn't match what the tester worked out from 28 ₳ (blind test T16). From
                 Home's figure, what's on its way back included: homeBalance takes a side unlocked, as forms get it. */}
@@ -745,6 +747,11 @@ export function ConnectRequest({
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}
           </Callout>
+          {review.parts && (
+            <p className="note" data-testid="dapp-funding-parts">
+              {tr("review.fundingPartsNote", { count: review.parts.length })}
+            </p>
+          )}
           <HistoriesNote histories={review.histories} session={review.index} testId="dapp-funding-histories" />
           <GivemeNote funding />
         </div>

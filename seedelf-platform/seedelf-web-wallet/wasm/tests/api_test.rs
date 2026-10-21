@@ -2521,6 +2521,147 @@ mod withdraw {
         assert_eq!(parts[0].left, 0);
     }
 
+    /// A session's funding of `lovelace` and `tokens` into a one-time account (`theirs()` stands in), with the
+    /// account's 5 ₳ collateral beside it, as sessions.ts asks for one; session 9's.
+    fn funding(
+        utxos: Vec<UtxoResponse>,
+        lovelace: u64,
+        tokens: Vec<api::TokenAmount>,
+    ) -> WithdrawRequest {
+        let mut r = request("max");
+        r.utxos = utxos;
+        r.payments = vec![
+            api::WithdrawPayment {
+                to: theirs(),
+                lovelace: Some(lovelace.to_string()),
+                tokens,
+            },
+            api::WithdrawPayment {
+                to: theirs(),
+                lovelace: Some("5000000".into()),
+                tokens: vec![],
+            },
+        ];
+        r.funding = Some(api::Funding {
+            session: Some("session:9".into()),
+        });
+        r
+    }
+
+    #[test]
+    fn a_funding_more_utxos_pay_than_one_transaction_spends_goes_in_parts_its_collateral_in_the_first()
+     {
+        // The owner, after 1.6.0's payments in parts: "if a user wants to sell X tokens on minswap but to fund the
+        // private one time flow it requires that tx to be split".
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (utxos, all) = spread(30);
+        let r = funding(utxos, 0, vec![all.clone()]);
+        let e = api::build_withdraw(sk, r.clone()).err().unwrap();
+        assert!(seedelf_core::build::is_too_many(&e), "{e}");
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert_eq!(parts.len(), 2);
+        // Every token into the account between them; each spends its own.
+        let sent: u128 = parts
+            .iter()
+            .flat_map(|p| p.payments[0].tokens.iter())
+            .map(|t| t.quantity.parse::<u128>().unwrap())
+            .sum();
+        assert_eq!(sent.to_string(), all.quantity);
+        assert!(disjoint(
+            &parts.iter().map(|p| p.inputs.clone()).collect::<Vec<_>>()
+        ));
+        // The collateral once, in the first part: an output of ADA alone, 5 ₳, at the account.
+        assert_eq!(
+            parts.iter().map(|p| p.payments.len()).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(
+            (
+                parts[0].payments[1].lovelace.as_str(),
+                parts[0].payments[1].tokens.len()
+            ),
+            ("5000000", 0)
+        );
+        let fives = parts
+            .iter()
+            .flat_map(|p| outputs(&p.tx_cbor))
+            .filter(|o| *o == (theirs(), 5_000_000))
+            .count();
+        assert_eq!(fives, 1);
+    }
+
+    #[test]
+    fn a_funding_in_parts_takes_its_own_money_first_and_another_sessions_last() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let base = owned().into_iter().next().unwrap();
+        let utxo = |at: u64, lovelace: u64| UtxoResponse {
+            tx_hash: format!("{at:064x}"),
+            value: lovelace.to_string(),
+            ..base.clone()
+        };
+        let class = |id: &str, origin: &str| api::ClassIn {
+            id: id.into(),
+            origin: origin.into(),
+        };
+        let received: Vec<UtxoResponse> = (1..=30).map(|i| utxo(i, 25_000_000)).collect();
+        let at = |u: &UtxoResponse| format!("{}#{}", u.tx_hash, u.tx_index);
+        let spent = |parts: &[api::WithdrawResult]| -> Vec<String> {
+            parts
+                .iter()
+                .flat_map(|p| p.inputs.iter())
+                .map(|i| format!("{}#{}", i.tx_hash, i.tx_index))
+                .collect()
+        };
+
+        // Another session's money, the largest UTxOs here, is taken last: never, while received money pays.
+        let other: Vec<UtxoResponse> = (101..=110).map(|i| utxo(i, 30_000_000)).collect();
+        let mut r = funding(
+            [received.clone(), other.clone()].concat(),
+            600_000_000,
+            vec![],
+        );
+        r.classes = received
+            .iter()
+            .map(|u| (at(u), class("received:x", "received")))
+            .chain(other.iter().map(|u| (at(u), class("session:3", "session"))))
+            .collect();
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert!(parts.len() >= 2);
+        let taken = spent(&parts);
+        assert!(other.iter().all(|u| !taken.contains(&at(u))), "{taken:?}");
+
+        // A top-up's own money, the smallest here, first of all: the whole of it in the first part.
+        let own: Vec<UtxoResponse> = (201..=210).map(|i| utxo(i, 10_000_000)).collect();
+        let mut r = funding(
+            [received.clone(), own.clone()].concat(),
+            600_000_000,
+            vec![],
+        );
+        r.classes = received
+            .iter()
+            .map(|u| (at(u), class("received:x", "received")))
+            .chain(own.iter().map(|u| (at(u), class("session:9", "session"))))
+            .collect();
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        let first = spent(&parts[..1]);
+        assert!(own.iter().all(|u| first.contains(&at(u))), "{first:?}");
+    }
+
+    #[test]
+    fn a_funding_one_transaction_pays_is_one_part_with_its_collateral() {
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let parts = api::build_withdraw_parts(sk, funding(many(4), 40_000_000, vec![])).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(
+            parts[0]
+                .payments
+                .iter()
+                .map(|p| p.lovelace.as_str())
+                .collect::<Vec<_>>(),
+            vec!["40000000", "5000000"]
+        );
+    }
+
     #[test]
     fn max_takes_the_twenty_largest_and_says_what_is_left() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();

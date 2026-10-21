@@ -2384,6 +2384,14 @@ impl Histories {
             .unwrap_or_default()
     }
 
+    /// How much the spend would rather take `utxo`, by its class: lowest
+    /// first ([`Purpose`]'s order). The web wallet's funding in parts picks
+    /// by it, since it can't keep classes apart in a part that takes all
+    /// its room.
+    pub fn rank_of(&self, utxo: &UtxoResponse) -> u8 {
+        self.purpose.rank(&self.class_of(utxo))
+    }
+
     /// The classes `inputs` merge: each one once, in the order first spent,
     /// when there's more than one; none when they share a history.
     pub fn merged(&self, inputs: &[UtxoResponse]) -> Vec<Class> {
@@ -2794,12 +2802,14 @@ pub fn max_inputs(
 /// [`max_inputs`], the rest taken by `worth`, the most first: what each adds
 /// to a payment. The web wallet's payments in parts rank a UTxO by its ADA
 /// less what its own tokens need, so a bundle of tokens holding no more than
-/// their least comes after a UTxO of ADA alone, however much ADA it holds.
-pub fn max_inputs_by(
+/// their least comes after a UTxO of ADA alone, however much ADA it holds; a
+/// session's funding in parts by its history's place first
+/// ([`Histories::rank_of`]), then that.
+pub fn max_inputs_by<K: Ord>(
     available: &[UtxoResponse],
     needed: &Assets,
     at_most: usize,
-    worth: impl Fn(&UtxoResponse) -> u64,
+    worth: impl Fn(&UtxoResponse) -> K,
 ) -> Result<(Vec<UtxoResponse>, usize)> {
     let holds_needed = |u: &UtxoResponse| {
         needed.items.iter().any(|want| {
@@ -3390,7 +3400,32 @@ pub fn sweep_most(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<ScriptSpend> {
-    ScriptSpend::new(chain, inputs, change_owner, signer)?
+    sweep_most_with(chain, inputs, to, tokens, &[], change_owner, signer)
+}
+
+/// [`sweep_most`] that pays each of `extra` too, as its own outputs, first:
+/// the web wallet's funding in parts, whose first part carries the one-time
+/// account's collateral beside the most it can pay.
+pub fn sweep_most_with(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    to: &Address,
+    tokens: &Assets,
+    extra: &[AddressPayment],
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<ScriptSpend> {
+    let fixed = if extra.is_empty() {
+        Vec::new()
+    } else {
+        address_outputs(chain, extra)?
+    };
+    fixed
+        .into_iter()
+        .try_fold(
+            ScriptSpend::new(chain, inputs, change_owner, signer)?,
+            |spend, (output, tokens)| spend.output(output, &tokens),
+        )?
         .pay_rest(RestTo::Address(to.clone()), tokens)
 }
 
