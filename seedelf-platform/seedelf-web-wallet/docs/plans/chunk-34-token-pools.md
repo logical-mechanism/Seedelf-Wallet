@@ -912,7 +912,18 @@ Branch `web-wallet/release-1.6.0`, from main e6b5dae (after #320 merged); sessio
 
 ### Start here (the next session)
 
-**Next:** the owner's items (item 4 under *Before session 5*, as it now reads), then item 5: PR, CI, the API deployed first, then the package. Session 5 is committed and pushed (*Session 5* below).
+**Next:** item 10b, below. Then the owner's items (item 4 under *Before session 5*, as it now reads), then item 5: PR, CI, the API deployed first, then the package.
+
+#### Session 8 starts here: item 10b, chains where needed and Max over every UTxO
+
+**State, 2026-10-21:** 10a is committed and pushed on `web-wallet/release-1.6.0` (`79742931` code, `923ae44e` docs): a session's funding in parts, independent parts only. Every check was green on that tree: Rust core + WebAssembly, Vitest 2,479, e2e 103/103 on the dev and store builds, `cargo fmt --check`, clippy `-D warnings`, the i18n guards. It's live on preprod too (*10a, built*, below). The owner's three calls are under *Session 7* below. 10b's design is *10b, the design* there: build it as written, or say where it had to bend.
+
+**Where to start, by file:**
+- WebAssembly (`wasm/src/lib.rs`): `in_parts` (3627) and `max_in_parts` (3733) get the chain mode, `Room` (3494) a room of 19 beside a carry. The carry goes through `TransferRequest` (2754) and `WithdrawRequest` (3111) as a request field (`carry`, serde default false). `transfer_spend` (2944) and `withdraw_spend` (3265) then spend exactly the given UTxOs, pay the share with its least, and `pay_rest(RestTo::Seedelf(owner), none)` (core `build.rs` 1660). The carry's row is modelled on core's `came_back` (`lovejoin/box_value.rs` 214). Measuring is already local (`measure_locally`, `build.rs` 1811), so a row not on chain needs nothing new.
+- Worker: `sendParts` (`script-spend.ts` 466) and `sendFunding` (`sessions.ts` 5011) send only the independent parts and record the rest as waiting. A new pump sends each waiting part once its parent is listed: the minute alarm (`runAll`) and Home's poll. Home's banner (`PendingBanner.tsx` 232) needs a count of the parts still waiting, not only `chain.first`. A funding's waiting parts count as pending in `fundingState` (`sessions.ts` 966) until they go or the chain stops.
+- The shapes harness (`wasm/tests/payment_parts_shapes_test.rs`, ignored, run in release) gets A's live shape (one big ADA UTxO, 20 bundles of 20 tokens at their least) and checks every chain.
+
+**The live case is ready on A** (driver on port 47001, build `dist-A-parts-5` = 10a; rebuild with `DIST_TAG=parts-6 FRESH_DIST=1`, after a `kill -9` of the old driver, which ignores SIGTERM and keeps the profile locked). A holds 24 private UTxOs: the 400 test tokens in 20 bundles at exactly their least, 120.496922 MIN in 2 UTxOs (one also holding the 2,218 tADA back from 10a's swap), and two 1.75 tADA UTxOs. All 400 tokens, 0 tADA, to A's own Seedelf was refused before (409 tADA in one UTxO, 3+ parts by size): with 10b it should go as a chain. That run also shows whether the "1 of 3" words read right, the open question (b) under *Also item 10*.
 
 #### Session 6: the owner's test by hand (2026-10-19, in progress; items 1–5 pushed)
 
