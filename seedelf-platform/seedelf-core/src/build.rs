@@ -2788,6 +2788,19 @@ pub fn max_inputs(
     needed: &Assets,
     at_most: usize,
 ) -> Result<(Vec<UtxoResponse>, usize)> {
+    max_inputs_by(available, needed, at_most, lovelace_of)
+}
+
+/// [`max_inputs`], the rest taken by `worth`, the most first: what each adds
+/// to a payment. The web wallet's payments in parts rank a UTxO by its ADA
+/// less what its own tokens need, so a bundle of tokens holding no more than
+/// their least comes after a UTxO of ADA alone, however much ADA it holds.
+pub fn max_inputs_by(
+    available: &[UtxoResponse],
+    needed: &Assets,
+    at_most: usize,
+    worth: impl Fn(&UtxoResponse) -> u64,
+) -> Result<(Vec<UtxoResponse>, usize)> {
     let holds_needed = |u: &UtxoResponse| {
         needed.items.iter().any(|want| {
             quantity_in(
@@ -2813,7 +2826,7 @@ pub fn max_inputs(
         .into_iter()
         .filter(|u| !taken.iter().any(|t| same_utxo(t, u)))
         .collect();
-    rest.sort_by_key(|u| std::cmp::Reverse(lovelace_of(u)));
+    rest.sort_by_key(|u| std::cmp::Reverse(worth(u)));
     rest.truncate(at_most - taken.len());
     taken.extend(rest);
     let left = available.len() - taken.len();

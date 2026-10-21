@@ -3426,6 +3426,43 @@ pub mod api {
         build::is_too_many(e) || build::is_too_large(e)
     }
 
+    /// What each UTxO adds to a payment, the order a part takes them in ([`build::max_inputs_by`]): its ADA less the
+    /// least its own tokens need kept in the Seedelf balance. The largest by ADA put a move-in's bundles of tokens,
+    /// which hold only their least, ahead of UTxOs of ADA alone, and the part of those bundles couldn't pay its fee,
+    /// which ended Max (the owner's test of 1.6.0: "I send all ada to myself … it skipped multi pure ada utxos and
+    /// did not spend them").
+    struct Worth(HashMap<(String, u64), u64>);
+
+    impl Worth {
+        fn of(chain: &Chain, utxos: &[UtxoResponse]) -> Self {
+            Worth(
+                utxos
+                    .iter()
+                    .map(|u| {
+                        let worth = seedelf_core::utxos::assets_of(vec![u.clone()])
+                            .ok()
+                            .and_then(|(lovelace, tokens)| {
+                                if tokens.is_empty() {
+                                    return Some(lovelace);
+                                }
+                                let kept = build::minimum_deposit(&chain.params, &tokens).ok()?;
+                                Some(lovelace.saturating_sub(kept))
+                            })
+                            .unwrap_or(0);
+                        ((u.tx_hash.clone(), u.tx_index), worth)
+                    })
+                    .collect(),
+            )
+        }
+
+        fn of_utxo(&self, u: &UtxoResponse) -> u64 {
+            self.0
+                .get(&(u.tx_hash.clone(), u.tx_index))
+                .copied()
+                .unwrap_or(0)
+        }
+    }
+
     /// How much one part of a payment takes: `k` UTxOs at most; of those, `h` at most holding the tokens it sends;
     /// and while parts of tokens follow it, `ada` at most holding none, so the ADA they hold is left for those parts'
     /// fees too (a move-in of many tokens leaves each output of them exactly its least ADA, which pays no fee). The
@@ -3446,14 +3483,16 @@ pub mod api {
             }
         }
 
-        /// What a part spends: of `group`, the holders its `share` of the tokens needs, then the largest of the rest
-        /// and of `free` (those holding none of the tokens); `more` when parts of tokens follow it.
+        /// What a part spends: of `group`, the holders its `share` of the tokens needs, then those of the rest and of
+        /// `free` (those holding none of the tokens) adding the most to it ([`Worth`]); `more` when parts of tokens
+        /// follow it.
         fn picks(
             &self,
             group: &[UtxoResponse],
             free: &[UtxoResponse],
             share: &[TokenAmount],
             more: bool,
+            worth: &Worth,
         ) -> Result<Vec<UtxoResponse>> {
             let from: Vec<UtxoResponse> = group.iter().chain(free).cloned().collect();
             let at_most = if more {
@@ -3461,7 +3500,18 @@ pub mod api {
             } else {
                 self.k
             };
-            Ok(build::max_inputs(&from, &assets_of(share)?, at_most)?.0)
+            Ok(build::max_inputs_by(&from, &assets_of(share)?, at_most, |u| worth.of_utxo(u))?.0)
+        }
+
+        /// Fewer UTxOs, two-thirds as many: after too much computation, or a part of ADA alone that couldn't pay its
+        /// own fee (those adding least to it cost more than they bring). `None` at one.
+        fn fewer(self) -> Option<Room> {
+            let k = (self.k * 2 / 3).clamp(1, self.k.saturating_sub(1).max(1));
+            (k < self.k).then_some(Room {
+                k,
+                h: self.h.min(k),
+                ..self
+            })
         }
 
         /// Less room, after a part of `holders` token holders was too much for one transaction (`e`); `None` when
@@ -3476,7 +3526,7 @@ pub mod api {
                     });
                 }
                 Some(large) => large.fewer(self.k),
-                None => (self.k * 2 / 3).clamp(1, self.k.saturating_sub(1).max(1)),
+                None => return self.fewer(),
             };
             (k < self.k).then_some(Room {
                 k,
@@ -3539,8 +3589,8 @@ pub mod api {
     /// what's left is tried as the last (`amount`).
     ///
     /// While tokens are owed, a part sends those its UTxOs hold: every holder's, when they're few enough, or those
-    /// holding the most of them ([`token_group`]); the largest UTxOs holding none join them for ADA. Then parts of ADA
-    /// alone, the largest first. Each pays all its UTxOs hold but its fee and what the tokens that stay need (`most`),
+    /// holding the most of them ([`token_group`]); those holding none that add the most join them for ADA ([`Worth`]).
+    /// Then parts of ADA alone, those adding the most first. Each pays all its UTxOs hold but its fee and what the tokens that stay need (`most`),
     /// so ADA held with the tokens goes too (the owner's test of 1.6.0: a pool's boxes brought back hold most of the
     /// ADA). Where that's more than is owed, it pays as much as leaves the rest what it must carry: the least the
     /// tokens still owed need, or an output of ADA alone (`least`), so what it keeps is valid change; or exactly
@@ -3553,6 +3603,7 @@ pub mod api {
         mut owed: u64,
         mut tokens: Vec<TokenAmount>,
         least: impl Fn(&[TokenAmount]) -> Result<u64>,
+        worth: &Worth,
         inputs_of: impl Fn(&R) -> &[OutRef],
         paid_of: impl Fn(&R) -> Result<u64>,
         mut most: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
@@ -3577,7 +3628,7 @@ pub mod api {
                 let share = share_of(&group, &tokens);
                 let later = less(&tokens, &share);
                 let more = !later.is_empty();
-                let picks = room.picks(&group, &free, &share, more)?;
+                let picks = room.picks(&group, &free, &share, more, worth)?;
                 if picks.is_empty() {
                     bail!("Not enough ADA in the Seedelf balance for this payment and its fees");
                 }
@@ -3605,6 +3656,7 @@ pub mod api {
                     Err(e) if build::is_short(e) && !share.is_empty() && !free.is_empty() => {
                         room.for_ada(group.len(), free.len(), more)
                     }
+                    Err(e) if build::is_short(e) && share.is_empty() => room.fewer(),
                     Err(_) => None,
                 };
                 match (built, next) {
@@ -3633,13 +3685,15 @@ pub mod api {
 
     /// Max in parts: every UTxO, [`MAX_PARTS`] transactions at most, each the most of what it spends (`part`, given
     /// the UTxOs it spends and the tokens it sends). The tokens sent go first: every holder's, when they're few
-    /// enough, or those holding the most of them ([`token_group`]), with the largest UTxOs holding none of them. A
-    /// part one transaction can't take tries less ([`Room`]). The last says how many it left, as one transaction's
-    /// Max does. A part after the first that can't be built otherwise (what's left pays less than a payment carries)
-    /// ends it.
+    /// enough, or those holding the most of them ([`token_group`]), with the UTxOs holding none of them that add the
+    /// most ([`Worth`]); then the rest, those adding the most first, so a UTxO of ADA alone goes before a bundle of
+    /// tokens holding only their least. A part one transaction can't take, or one of ADA alone that can't pay its
+    /// fee, tries less ([`Room`]). The last says how many it left, as one transaction's Max does: what's left then
+    /// adds nothing a payment can carry (a bundle holding its least).
     fn max_in_parts<R>(
         utxos: &[UtxoResponse],
         mut tokens: Vec<TokenAmount>,
+        worth: &Worth,
         left_of: impl Fn(&mut R) -> &mut usize,
         inputs_of: impl Fn(&R) -> &[OutRef],
         mut part: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
@@ -3657,13 +3711,17 @@ pub mod api {
                 let group = token_group(&rest, &tokens, room.h);
                 let share = share_of(&group, &tokens);
                 let more = !less(&tokens, &share).is_empty();
-                let built = part(room.picks(&group, &free, &share, more)?, share.clone());
+                let built = part(
+                    room.picks(&group, &free, &share, more, worth)?,
+                    share.clone(),
+                );
                 let next = match &built {
                     Ok(_) => None,
                     Err(e) if too_much(e) => room.after(e, group.len()),
                     Err(e) if build::is_short(e) && !share.is_empty() && !free.is_empty() => {
                         room.for_ada(group.len(), free.len(), more)
                     }
+                    Err(e) if build::is_short(e) && share.is_empty() => room.fewer(),
                     Err(_) => None,
                 };
                 match (built, next) {
@@ -3708,12 +3766,15 @@ pub mod api {
             }];
             build_transfer(sk, sub)
         };
+        let chain = chain_of(&request.network, &request.params)?;
+        let worth = Worth::of(&chain, &request.utxos);
         if let [only] = request.payments.as_slice()
             && only.lovelace.is_none()
         {
             return max_in_parts(
                 &request.utxos,
                 only.tokens.clone(),
+                &worth,
                 |r: &mut TransferResult| &mut r.left,
                 |r| &r.inputs,
                 |from, share| with(from, None, share),
@@ -3724,7 +3785,6 @@ pub mod api {
             Err(e) if too_much(&e) && request.payments.len() == 1 => e,
             Err(e) => return Err(e),
         };
-        let chain = chain_of(&request.network, &request.params)?;
         let pay = &request.payments[0];
         let least = |tokens: &[TokenAmount]| {
             build::minimum_seedelf_payment(&chain.params, &assets_of(tokens)?)
@@ -3736,6 +3796,7 @@ pub mod api {
             owed,
             pay.tokens.clone(),
             least,
+            &worth,
             |r: &TransferResult| &r.inputs,
             |r| lovelace_of(&r.payments[0].lovelace),
             |picks, share| with(picks, None, share),
@@ -3772,6 +3833,10 @@ pub mod api {
         if let [only] = request.payments.as_slice()
             && only.lovelace.is_none()
         {
+            let worth = Worth::of(
+                &chain_of(&request.network, &request.params)?,
+                &request.utxos,
+            );
             // Everything sends every token; `most`, those named, the others staying.
             let most = request.most;
             let tokens = if most {
@@ -3782,6 +3847,7 @@ pub mod api {
             return max_in_parts(
                 &request.utxos,
                 tokens,
+                &worth,
                 |r: &mut WithdrawResult| &mut r.left,
                 |r| &r.inputs,
                 |from, share| with(from, None, share, most),
@@ -3808,6 +3874,7 @@ pub mod api {
             owed,
             pay.tokens.clone(),
             least,
+            &Worth::of(&chain, &request.utxos),
             |r: &WithdrawResult| &r.inputs,
             |r| lovelace_of(&r.payments[0].lovelace),
             |picks, share| with(picks, None, share, true),

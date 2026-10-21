@@ -3958,6 +3958,42 @@ mod parts_of_any_shape {
     }
 
     #[test]
+    fn max_spends_every_utxo_of_ada_before_bundles_that_add_nothing() {
+        // The owner's test of 1.6.0: "I send all ada to myself. But I do not get a single utxo of ada and the rest as
+        // change … it skipped multi pure ada utxos and did not spend them". Max took the largest UTxOs first, a
+        // move-in's bundles (each holding only the least its tokens need) ahead of small UTxOs of ADA alone; the next
+        // part, all bundles, couldn't pay its fee, and Max stopped there, the ADA left unspent.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, _) = bundles(12, 20);
+        let ada: Vec<UtxoResponse> = [24_000_000, 14_000_000, 2_000_000, 500_000, 500_000, 300_000]
+            .iter()
+            .enumerate()
+            .map(|(i, extra)| utxo(200 + i as u64, *extra, &[]))
+            .collect();
+        utxos.extend(ada.clone());
+        let parts = api::build_transfer_parts(sk, transfer(utxos, None, vec![])).unwrap();
+        sound(
+            &parts
+                .iter()
+                .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let spent: Vec<&api::OutRef> = parts.iter().flat_map(|p| &p.inputs).collect();
+        for u in &ada {
+            assert!(
+                spent.iter().any(|i| i.tx_hash == u.tx_hash),
+                "left {}",
+                u.value
+            );
+        }
+        // All of it in one payment, as one transaction's Max pays: what's left holds only its tokens' least.
+        assert_eq!(parts.len(), 1);
+        let held: u64 = ada.iter().map(|u| u.value.parse::<u64>().unwrap()).sum();
+        let paid: u64 = parts[0].payments[0].lovelace.parse().unwrap();
+        assert!(paid > held - 3_000_000, "{paid} of {held}");
+    }
+
+    #[test]
     fn the_most_an_amount_can_be_is_what_its_parts_would_pay() {
         // Make public's shortfall says "up to" what `most` pays: one transaction of the largest 20 UTxOs said 500 ADA
         // could go of a balance that pays 1,100 in parts.

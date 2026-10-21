@@ -610,6 +610,15 @@ fn check_parts(
                     ));
                 }
             }
+            // Max never leaves a UTxO of ADA alone: it adds to the payment whatever else is left.
+            let unspent_ada = utxos
+                .iter()
+                .filter(|u| u.asset_list.iter().flatten().next().is_none())
+                .filter(|u| !seen.contains(&(u.tx_hash.clone(), u.tx_index)))
+                .count();
+            if unspent_ada > 0 {
+                problems.push(format!("max left {unspent_ada} UTxOs of ADA alone"));
+            }
             if left == 0 && seen.len() != utxos.len() {
                 problems.push(format!(
                     "max spent {} of {} but says none left",
