@@ -1399,7 +1399,7 @@ mod transfer {
     }
 
     #[test]
-    fn an_amount_too_many_utxos_pay_goes_in_parts_the_tokens_in_the_last() {
+    fn an_amount_too_many_utxos_pay_goes_in_parts_the_tokens_in_the_first() {
         let sk = seedelf_key_v1(PHRASE, 0).unwrap();
         let base = owned().into_iter().next().unwrap();
         let token = owned().into_iter().nth(1).unwrap();
@@ -1422,15 +1422,15 @@ mod transfer {
             .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
             .sum();
         assert_eq!(paid, 600_000_000);
-        // The token goes in the last alone, from the UTxO holding it; the others pay ADA.
-        let last = parts.last().unwrap();
-        assert_eq!(last.payments[0].tokens, request().payments[0].tokens);
-        assert!(last.inputs.iter().any(|i| i.tx_hash == token.tx_hash));
-        assert!(
-            parts[..parts.len() - 1]
-                .iter()
-                .all(|p| p.payments[0].tokens.is_empty())
-        );
+        // The token goes in the first, from the UTxO holding it, with all the ADA of the largest beside it; the
+        // others pay ADA alone.
+        let first = &parts[0];
+        assert_eq!(first.payments[0].tokens, request().payments[0].tokens);
+        assert!(first.inputs.iter().any(|i| i.tx_hash == token.tx_hash));
+        assert_eq!(first.inputs.len(), api::MAX_WITHDRAW_UTXOS);
+        // What stays is the token not sent, with the least ADA it needs.
+        assert_eq!(first.change_lovelace, first.change_minimum);
+        assert!(parts[1..].iter().all(|p| p.payments[0].tokens.is_empty()));
         assert!(
             parts
                 .iter()
@@ -3612,5 +3612,365 @@ mod validity {
             let r = api::finish_account_mint(&account, sk, asked(finish, slot)).unwrap();
             assert_eq!(ttl(&r.tx_cbor, Some(&r.tx_hash)), slot, "mint");
         }
+    }
+}
+
+/// Payments in parts over UTxOs of any shape (the owner, 1.6.0: "we know our solution works for ada only and for ada
+/// plus tokens but we dont know if it works in general for any type of utxo with arbitrary amount of tokens").
+mod parts_of_any_shape {
+    use pallas_codec::minicbor;
+    use pallas_traverse::MultiEraTx;
+    use seedelf_core::assets::{Asset, Assets};
+    use seedelf_core::build::{MAX_TX_SIZE, MAX_VALUE_SIZE};
+    use seedelf_core::transaction::wallet_minimum_lovelace_with_assets;
+    use seedelf_crypto::derivation::seedelf_key_v1;
+    use seedelf_koios::koios::{Asset as Held, ProtocolParameters, UtxoResponse};
+    use seedelf_wasm::api::{
+        self, SeedelfPayment, TokenAmount, TransferRequest, WithdrawPayment, WithdrawRequest,
+    };
+    use serde_json::Value;
+
+    const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn fixture(path: &str) -> Value {
+        let path = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn params() -> Value {
+        fixture("../../seedelf-core/tests/fixtures/epoch_params.json")[0].clone()
+    }
+
+    /// The phrase's 25 ADA contract UTxO: every UTxO here is a copy of it, its own outpoint.
+    fn base() -> UtxoResponse {
+        serde_json::from_value(
+            fixture("../extension/tests/fixtures/owned-utxos.json")["owned_utxos"][0].clone(),
+        )
+        .unwrap()
+    }
+
+    fn theirs() -> String {
+        fixture("../../seedelf-crypto/tests/vectors/cardano_account.json")["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["account"] == 0 && v["phrase"].as_str().unwrap().split(' ').count() == 15)
+            .unwrap()["preprod"]["receive_0"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// UTxO `n`: `lovelace` more than the least its `tokens` need in one output, as a Seedelf payment holds them.
+    fn utxo(n: u64, lovelace: u64, tokens: &[TokenAmount]) -> UtxoResponse {
+        let pp = ProtocolParameters::from_koios(&params()).unwrap();
+        let held = tokens.iter().fold(Assets::new(), |all, t| {
+            all.add(
+                Asset::new(
+                    t.policy_id.clone(),
+                    t.asset_name.clone(),
+                    t.quantity.parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        });
+        let least = wallet_minimum_lovelace_with_assets(&pp, held).unwrap();
+        UtxoResponse {
+            tx_hash: format!("{n:064x}"),
+            value: (least + lovelace).to_string(),
+            asset_list: Some(
+                tokens
+                    .iter()
+                    .map(|t| Held {
+                        decimals: 0,
+                        quantity: t.quantity.clone(),
+                        policy_id: t.policy_id.clone(),
+                        asset_name: t.asset_name.clone(),
+                        fingerprint: String::new(),
+                    })
+                    .collect(),
+            ),
+            ..base()
+        }
+    }
+
+    /// Token `i`: its own policy and a 32-byte name, as many bytes as a token takes.
+    fn token(i: u64, quantity: u64) -> TokenAmount {
+        TokenAmount {
+            policy_id: format!("{:056x}", 0xabc0_0000 + i),
+            asset_name: format!("{:064x}", 0x1000 + i),
+            quantity: quantity.to_string(),
+        }
+    }
+
+    /// `n` UTxOs of `k` tokens each at the least ADA they need, as a move-in of many tokens leaves them (deposits go
+    /// 20 tokens to an output); and every token they hold.
+    fn bundles(n: u64, k: u64) -> (Vec<UtxoResponse>, Vec<TokenAmount>) {
+        let all: Vec<TokenAmount> = (0..n * k).map(|i| token(i, 1_000 + i)).collect();
+        let utxos = all
+            .chunks(k as usize)
+            .enumerate()
+            .map(|(i, c)| utxo(i as u64 + 1, 0, c))
+            .collect();
+        (utxos, all)
+    }
+
+    fn ada(first: u64, n: u64, lovelace: u64) -> Vec<UtxoResponse> {
+        (first..first + n).map(|i| utxo(i, lovelace, &[])).collect()
+    }
+
+    fn transfer(
+        utxos: Vec<UtxoResponse>,
+        lovelace: Option<u64>,
+        tokens: Vec<TokenAmount>,
+    ) -> TransferRequest {
+        let r = fixture("../extension/tests/fixtures/transfer-preprod.json");
+        TransferRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos,
+            payments: vec![SeedelfPayment {
+                to: r["to"].as_str().unwrap().into(),
+                recipient: serde_json::from_value(r["recipient"].clone()).unwrap(),
+                lovelace: lovelace.map(|l| l.to_string()),
+                tokens,
+            }],
+            classes: Default::default(),
+            seed: None,
+            evaluation: None,
+        }
+    }
+
+    fn withdraw(
+        utxos: Vec<UtxoResponse>,
+        lovelace: Option<u64>,
+        tokens: Vec<TokenAmount>,
+    ) -> WithdrawRequest {
+        WithdrawRequest {
+            network: "preprod".into(),
+            params: params(),
+            utxos,
+            payments: vec![WithdrawPayment {
+                to: theirs(),
+                lovelace: lovelace.map(|l| l.to_string()),
+                tokens,
+            }],
+            classes: Default::default(),
+            funding: None,
+            most: false,
+            seed: None,
+            evaluation: None,
+        }
+    }
+
+    /// Each part as the ledger takes it: no bigger than a transaction may be, no output's value bigger than one may
+    /// be; and none spending what another does. Returns how many UTxOs they spend.
+    fn sound(parts: &[(String, Vec<api::OutRef>)]) -> usize {
+        let mut spent: Vec<(String, u64)> = Vec::new();
+        for (cbor, inputs) in parts {
+            let bytes = hex::decode(cbor).unwrap();
+            assert!(bytes.len() as u64 <= MAX_TX_SIZE, "{} bytes", bytes.len());
+            for output in MultiEraTx::decode(&bytes).unwrap().outputs() {
+                let value = minicbor::to_vec(output.value().into_conway())
+                    .unwrap()
+                    .len() as u64;
+                assert!(
+                    value <= MAX_VALUE_SIZE,
+                    "an output's value is {value} bytes"
+                );
+            }
+            for i in inputs {
+                assert!(
+                    !spent.contains(&(i.tx_hash.clone(), i.tx_index)),
+                    "spent twice"
+                );
+                spent.push((i.tx_hash.clone(), i.tx_index));
+            }
+        }
+        spent.len()
+    }
+
+    /// Each token's total across the parts' payments.
+    fn sent<'a>(tokens: impl Iterator<Item = &'a TokenAmount>) -> Vec<(String, String, u128)> {
+        let mut all: Vec<(String, String, u128)> = Vec::new();
+        for t in tokens {
+            let q: u128 = t.quantity.parse().unwrap();
+            match all
+                .iter_mut()
+                .find(|(p, n, _)| *p == t.policy_id && *n == t.asset_name)
+            {
+                Some(had) => had.2 += q,
+                None => all.push((t.policy_id.clone(), t.asset_name.clone(), q)),
+            }
+        }
+        all.sort();
+        all
+    }
+
+    fn every(tokens: &[TokenAmount]) -> Vec<(String, String, u128)> {
+        sent(tokens.iter())
+    }
+
+    #[test]
+    fn an_amount_with_all_of_a_token_whose_utxos_hold_the_ada_goes_in_parts() {
+        // The owner's test of 1.6.0: a token pool's boxes brought back, 4.5 ADA and 100 MIN each, hold most of the
+        // ADA. The parts of the token sent only the least ADA it needs and kept the rest as change, so the last was
+        // short: 113 ADA of 189 was refused as "Not enough ADA".
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let min = token(0, 100_000_000);
+        let boxes: Vec<UtxoResponse> = (1..=42)
+            .map(|i| UtxoResponse {
+                value: "4500000".into(),
+                ..utxo(i, 0, std::slice::from_ref(&min))
+            })
+            .collect();
+        let all = TokenAmount {
+            quantity: (100_000_000u64 * 42).to_string(),
+            ..min.clone()
+        };
+        let asked = 113_000_000;
+        let parts =
+            api::build_transfer_parts(sk, transfer(boxes.clone(), Some(asked), vec![all.clone()]))
+                .unwrap();
+        assert_eq!(
+            sound(
+                &parts
+                    .iter()
+                    .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                    .collect::<Vec<_>>()
+            ),
+            42
+        );
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(paid, asked);
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(std::slice::from_ref(&all))
+        );
+        let parts =
+            api::build_withdraw_parts(sk, withdraw(boxes, Some(asked), vec![all.clone()])).unwrap();
+        sound(
+            &parts
+                .iter()
+                .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(paid, asked);
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&[all])
+        );
+    }
+
+    #[test]
+    fn everything_and_max_go_in_parts_when_the_tokens_make_one_transaction_too_large() {
+        // A move-in of 240 tokens leaves 12 UTxOs of 20. Everything took the largest 20 UTxOs at once, a transaction
+        // of 20,397 bytes, and refused it: "Send fewer tokens" though none were asked for.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.extend(ada(100, 2, 30_000_000));
+        let parts = api::build_withdraw_parts(sk, withdraw(utxos.clone(), None, vec![])).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        assert_eq!(
+            sound(
+                &parts
+                    .iter()
+                    .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                    .collect::<Vec<_>>()
+            ),
+            14
+        );
+        assert_eq!(parts.last().unwrap().left, 0);
+        // Max to a Seedelf with all the tokens: every UTxO too.
+        let parts = api::build_transfer_parts(sk, transfer(utxos, None, all.clone())).unwrap();
+        assert_eq!(
+            sound(
+                &parts
+                    .iter()
+                    .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                    .collect::<Vec<_>>()
+            ),
+            14
+        );
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&all)
+        );
+    }
+
+    #[test]
+    fn a_payment_of_more_tokens_than_one_output_holds_goes_twenty_to_an_output() {
+        // 160 tokens went in one output of 11,176 bytes, more than the ledger takes (max_val_size 5,000): the wallet
+        // showed it as fine and the node would have refused it.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(4, 40);
+        utxos.extend(ada(100, 3, 20_000_000));
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos.clone(), Some(0), all.clone())).unwrap();
+        assert_eq!(parts.len(), 1);
+        sound(&[(parts[0].tx_cbor.clone(), parts[0].inputs.clone())]);
+        assert_eq!(sent(parts[0].payments[0].tokens.iter()), every(&all));
+        let parts = api::build_withdraw_parts(sk, withdraw(utxos, Some(0), all.clone())).unwrap();
+        assert_eq!(parts.len(), 1);
+        sound(&[(parts[0].tx_cbor.clone(), parts[0].inputs.clone())]);
+        assert_eq!(sent(parts[0].payments[0].tokens.iter()), every(&all));
+    }
+
+    #[test]
+    fn more_tokens_than_one_transaction_holds_go_in_parts() {
+        // All 240 tokens of a move-in's 12 UTxOs: one transaction would be about 19,500 bytes, and was refused.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.extend(ada(100, 2, 30_000_000));
+        let parts =
+            api::build_transfer_parts(sk, transfer(utxos.clone(), Some(0), all.clone())).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        sound(
+            &parts
+                .iter()
+                .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&all)
+        );
+        let parts = api::build_withdraw_parts(sk, withdraw(utxos, Some(0), all.clone())).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        sound(
+            &parts
+                .iter()
+                .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+            every(&all)
+        );
+    }
+
+    #[test]
+    fn the_most_an_amount_can_be_is_what_its_parts_would_pay() {
+        // Make public's shortfall says "up to" what `most` pays: one transaction of the largest 20 UTxOs said 500 ADA
+        // could go of a balance that pays 1,100 in parts.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let mut r = withdraw(ada(1, 45, 0), None, vec![]);
+        r.utxos.iter_mut().for_each(|u| u.value = "25000000".into());
+        r.most = true;
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert_eq!(parts.iter().map(|p| p.inputs.len()).sum::<usize>(), 45);
+        let most: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert!(most > 1_100_000_000, "{most}");
     }
 }

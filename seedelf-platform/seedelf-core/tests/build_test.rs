@@ -1400,8 +1400,10 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
         None,
     )
     .err()
-    .unwrap()
-    .to_string();
+    .unwrap();
+    // Typed, so a payment in parts tries fewer UTxOs at once.
+    assert!(build::is_too_large(&e), "{e}");
+    let e = e.to_string();
     assert!(e.contains("over the network's limit of 16384"), "{e}");
     // Well under it, the same payments are fine.
     assert!(
@@ -1417,4 +1419,156 @@ fn a_transaction_over_the_size_limit_is_refused_in_words() {
         )
         .is_ok()
     );
+}
+
+/// `n` tokens, each under its own policy with a 32-byte name: as many bytes
+/// a token as a value can take.
+fn distinct_tokens(n: u8) -> Vec<Asset> {
+    (0..n)
+        .map(|i| Asset {
+            decimals: 0,
+            quantity: (u32::MAX as u64 + i as u64).to_string(),
+            policy_id: hex::encode([i; 28]),
+            asset_name: hex::encode([0xa0 ^ i; 32]),
+            fingerprint: String::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_value_is_measured_as_the_ledger_encodes_it() {
+    let w = world();
+    let to = elsewhere();
+    let tokens = distinct_tokens(20);
+    let picked: Vec<(String, String, u64)> = tokens
+        .iter()
+        .map(|t| {
+            (
+                t.policy_id.clone(),
+                t.asset_name.clone(),
+                t.quantity.parse().unwrap(),
+            )
+        })
+        .collect();
+    let available = vec![
+        utxo(&w, 1, 0, 10_000_000, tokens),
+        utxo(&w, 2, 1, 40_000_000, vec![]),
+    ];
+    let built = build::account_send_many(
+        &w.params,
+        &available,
+        &[AccountPay::new(
+            Payee::Address(&to),
+            AccountAmount::Lovelace(9_000_000),
+            &picked,
+        )],
+        true,
+        &w.change,
+        &Staking::none(),
+        None,
+        None,
+    )
+    .unwrap();
+    let tx = MultiEraTx::decode(&built.tx.tx_bytes.0).unwrap();
+    let decoded = decode(&built, 1);
+    for (output, read) in tx.outputs().iter().zip(&decoded.outputs) {
+        let encoded = pallas_codec::minicbor::to_vec(output.value().into_conway()).unwrap();
+        assert_eq!(build::value_size(&read.raw), encoded.len() as u64);
+    }
+    assert!(decoded.outputs.iter().any(|o| o.assets.len() == 20));
+}
+
+#[test]
+fn an_output_holding_more_than_the_ledger_takes_is_refused_as_too_large() {
+    let w = world();
+    let mut big = Output::new(elsewhere(), 100_000_000);
+    for t in distinct_tokens(80) {
+        big = big
+            .add_asset(
+                pallas_crypto::hash::Hash::new(
+                    hex::decode(&t.policy_id).unwrap().try_into().unwrap(),
+                ),
+                hex::decode(&t.asset_name).unwrap(),
+                t.quantity.parse().unwrap(),
+            )
+            .unwrap();
+    }
+    assert!(build::value_size(&big) > build::MAX_VALUE_SIZE);
+    let e = build::settle_fee(&w.params, 1, |_| {
+        Ok(pallas_txbuilder::StagingTransaction::new()
+            .input(pallas_txbuilder::Input::new(
+                pallas_crypto::hash::Hash::new([1; 32]),
+                0,
+            ))
+            .output(big.clone()))
+    })
+    .unwrap_err();
+    assert!(build::is_too_large(&e), "{e}");
+    assert!(
+        e.to_string().contains("over the network's limit of 5000"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_payment_of_more_tokens_than_one_output_holds_goes_twenty_to_an_output() {
+    // 80 tokens in one output is over 6,000 bytes, more than the ledger takes (max_val_size): one went to the node,
+    // which refused it at submit.
+    let w = world();
+    let to = elsewhere();
+    let tokens = distinct_tokens(80);
+    let picked: Vec<(String, String, u64)> = tokens
+        .iter()
+        .map(|t| {
+            (
+                t.policy_id.clone(),
+                t.asset_name.clone(),
+                t.quantity.parse().unwrap(),
+            )
+        })
+        .collect();
+    let available = vec![
+        utxo(&w, 1, 0, 30_000_000, tokens[..40].to_vec()),
+        utxo(&w, 2, 1, 30_000_000, tokens[40..].to_vec()),
+        utxo(&w, 3, 2, 40_000_000, vec![]),
+    ];
+    let pay = |lovelace| {
+        build::account_send_many(
+            &w.params,
+            &available,
+            &[AccountPay::new(
+                Payee::Address(&to),
+                AccountAmount::Lovelace(lovelace),
+                &picked,
+            )],
+            true,
+            &w.change,
+            &Staking::none(),
+            None,
+            None,
+        )
+    };
+    let least = build::minimum_address_payment(&w.params, &to, &{
+        let mut all = Assets::new();
+        for (p, n, q) in &picked {
+            all = all
+                .add(seedelf_core::assets::Asset::new(p.clone(), n.clone(), *q).unwrap())
+                .unwrap();
+        }
+        all
+    })
+    .unwrap();
+    let built = pay(least).unwrap();
+    let tx = assert_paid(&w, &available, &built, Some(&to));
+    let paid = paid_to(&tx, &to);
+    assert_eq!(paid.len(), 4);
+    assert!(paid.iter().all(|o| o.assets.len() == 20));
+    assert!(
+        tx.outputs
+            .iter()
+            .all(|o| build::value_size(&o.raw) <= build::MAX_VALUE_SIZE)
+    );
+    assert_eq!(paid.iter().map(|o| o.lovelace).sum::<u64>(), least);
+    // Less than every output's least isn't enough.
+    assert!(pay(least - 1).is_err());
 }

@@ -122,6 +122,8 @@ describe("a payment more UTxOs pay than one transaction spends (the owner's test
     ]);
     expect(summary.parts?.map((p) => p.inputs)).toEqual([20, 11]);
     expect(summary.payments[0]!.tokens).toEqual([expect.objectContaining({ policyId: token.policy_id, assetName: token.asset_name, quantity: all })]);
+    // Each part carries the least its share of the token needs, and the review says so: the least is theirs added up.
+    expect(summary.payments[0]!.minimum).toBe(summary.payments[0]!.lovelace);
   });
 
   it("takes every UTxO with Max, in parts of 20, and leaves none", async () => {

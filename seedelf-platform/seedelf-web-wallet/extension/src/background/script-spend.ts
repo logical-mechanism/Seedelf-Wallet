@@ -402,9 +402,9 @@ export interface PartBuilt {
 
 /**
  * A payment's parts as one, for its review (the owner's test of 1.6.0: "spending more than the max amount of utxos
- * does not create two healthy tx"): one recipient, paid what they all pay, with the tokens of each; their fees and
- * change added up; every UTxO they spend; Max only where every part is (an amount's parts but its last pay all their
- * UTxOs hold); what Max left, the last's. One part is itself.
+ * does not create two healthy tx"): one recipient, paid what they all pay, with the tokens of each; the least they
+ * carry, their fees and change added up; every UTxO they spend; Max only where every part is (an amount's parts but
+ * its last may pay all their UTxOs hold); what Max left, the last's. One part is itself.
  */
 export function whole<P extends PartBuilt>(parts: P[]): P {
   const [first] = parts;
@@ -417,10 +417,12 @@ export function whole<P extends PartBuilt>(parts: P[]): P {
     const had = tokens.get(key);
     tokens.set(key, had ? { ...had, quantity: (BigInt(had.quantity) + BigInt(token.quantity)).toString() } : token);
   }
+  // The least they carry, added up, so the review says when that's all they pay; none where a part is Max's.
+  const minimum = parts.every((p) => p.payments[0]!.minimum !== null) ? sum((p) => p.payments[0]!.minimum!) : null;
   return {
     ...first!,
     max: parts.every((p) => p.max),
-    payments: [{ ...last.payments[0]!, lovelace: sum((p) => p.payments[0]!.lovelace), tokens: [...tokens.values()] }],
+    payments: [{ ...last.payments[0]!, lovelace: sum((p) => p.payments[0]!.lovelace), minimum, tokens: [...tokens.values()] }],
     fee: {
       size: sum((p) => p.fee.size),
       compute: sum((p) => p.fee.compute),

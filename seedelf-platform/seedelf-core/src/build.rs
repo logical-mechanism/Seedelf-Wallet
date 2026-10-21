@@ -132,6 +132,88 @@ pub fn settle_fee(
 /// mainnet and preprod. A bigger one is refused at submit.
 pub const MAX_TX_SIZE: u64 = 16_384;
 
+/// The most bytes one output's value (its ADA and tokens) may take: the
+/// ledger's `max_val_size`, 5,000 on mainnet and preprod. An output holding
+/// more is refused at submit, however small the transaction.
+pub const MAX_VALUE_SIZE: u64 = 5_000;
+
+/// A transaction, or one of its outputs, larger than the ledger takes
+/// ([`MAX_TX_SIZE`], [`MAX_VALUE_SIZE`]): fewer UTxOs or tokens at once might
+/// go, so a payment can go as several transactions ([`is_too_large`]).
+#[derive(Debug, Clone, Copy)]
+pub enum TooLarge {
+    /// The signed transaction's size.
+    Transaction(u64),
+    /// The largest output's value's size.
+    Output(u64),
+}
+
+impl TooLarge {
+    /// How many UTxOs of `k` would fit, read off how far over its limit this
+    /// is: fewer than `k`, and at least one.
+    pub fn fewer(&self, k: usize) -> usize {
+        let (size, limit) = match *self {
+            TooLarge::Transaction(size) => (size, MAX_TX_SIZE),
+            TooLarge::Output(size) => (size, MAX_VALUE_SIZE),
+        };
+        let fit = (k as u64).saturating_mul(limit) / size.max(1);
+        (fit as usize).clamp(1, k.saturating_sub(1).max(1))
+    }
+}
+
+impl fmt::Display for TooLarge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TooLarge::Transaction(size) => write!(
+                f,
+                "This transaction would be {size} bytes, over the network's limit of {MAX_TX_SIZE}. Send fewer tokens, or pay fewer recipients, at once"
+            ),
+            TooLarge::Output(size) => write!(
+                f,
+                "One output would hold {size} bytes of tokens, over the network's limit of {MAX_VALUE_SIZE}. Send fewer tokens at once"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TooLarge {}
+
+/// Whether `e` is [`TooLarge`]: a transaction or an output bigger than the
+/// ledger takes.
+pub fn is_too_large(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<TooLarge>().is_some()
+}
+
+/// The CBOR size of a whole number, or of the head of a byte string or map
+/// that long.
+fn head_size(n: u64) -> u64 {
+    match n {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
+}
+
+/// The size of `output`'s value as the ledger measures it against
+/// [`MAX_VALUE_SIZE`]: its CBOR, the lovelace alone, or `[lovelace,
+/// {policy: {name: amount}}]`.
+pub fn value_size(output: &Output) -> u64 {
+    let Some(assets) = output.assets.as_ref().filter(|a| !a.is_empty()) else {
+        return head_size(output.lovelace);
+    };
+    let mut size = 1 + head_size(output.lovelace) + head_size(assets.len() as u64);
+    for names in assets.values() {
+        size += head_size(28) + 28 + head_size(names.len() as u64);
+        for (name, amount) in names {
+            let length = name.0.len() as u64;
+            size += head_size(length) + length + head_size(*amount);
+        }
+    }
+    size
+}
+
 /// What's patched into a built transaction, since Pallas can stage neither:
 /// staking (certificates, a withdrawal; see [`Staking::patch`]) and a note
 /// ([`Note::patch`]).
@@ -162,8 +244,8 @@ impl<'a> Patches<'a> {
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
 /// `size` signed bytes needs. `patches` go into each draft before it's
 /// priced; `signers` doesn't count the stake key a staking patch needs.
-/// A draft over [`MAX_TX_SIZE`], or a fee over [`MAX_FEE`], is refused here,
-/// in words.
+/// A draft over [`MAX_TX_SIZE`], one with an output over [`MAX_VALUE_SIZE`]
+/// ([`TooLarge`]), or a fee over [`MAX_FEE`], is refused here, in words.
 pub(crate) fn settle(
     signers: usize,
     patches: Patches,
@@ -173,11 +255,19 @@ pub(crate) fn settle(
     let mut fee: u64 = 200_000;
     for _ in 0..5 {
         let staged = build(fee)?;
+        let largest = staged
+            .outputs
+            .iter()
+            .flatten()
+            .map(value_size)
+            .max()
+            .unwrap_or(0);
+        if largest > MAX_VALUE_SIZE {
+            return Err(TooLarge::Output(largest).into());
+        }
         let size = signed_size(&staged, signers, patches)?;
         if size > MAX_TX_SIZE {
-            bail!(
-                "This transaction would be {size} bytes, over the network's limit of {MAX_TX_SIZE}. Send fewer tokens, or pay fewer recipients, at once"
-            );
+            return Err(TooLarge::Transaction(size).into());
         }
         let needed = price(size);
         check_fee(needed)?;
@@ -253,6 +343,17 @@ fn deposit_output(
     Ok(output)
 }
 
+/// The tokens of each output a payment, deposit or change of `tokens` goes
+/// out in: `MAXIMUM_TOKENS_PER_UTXO` to an output, so none holds more than the
+/// ledger takes ([`MAX_VALUE_SIZE`]); one of ADA alone when there are none.
+fn token_chunks(tokens: &Assets) -> Vec<Assets> {
+    if tokens.items.is_empty() {
+        vec![Assets::new()]
+    } else {
+        tokens.split(MAXIMUM_TOKENS_PER_UTXO as usize)
+    }
+}
+
 /// Outputs that deposit `lovelace` and `tokens` into the wallet contract,
 /// each under a fresh re-randomization of `owner`. Tokens go
 /// `MAXIMUM_TOKENS_PER_UTXO` to an output; every output but the last carries
@@ -264,11 +365,7 @@ pub fn deposit_outputs(
     lovelace: u64,
     tokens: &Assets,
 ) -> Result<Vec<Output>> {
-    let chunks: Vec<Assets> = if tokens.items.is_empty() {
-        vec![Assets::new()]
-    } else {
-        tokens.split(MAXIMUM_TOKENS_PER_UTXO as usize)
-    };
+    let chunks = token_chunks(tokens);
     let last = chunks.len() - 1;
     let mut remaining = lovelace;
     let mut outputs = Vec::with_capacity(chunks.len());
@@ -287,14 +384,23 @@ pub fn deposit_outputs(
     Ok(outputs)
 }
 
+/// [`deposit_outputs`], each output with the tokens it holds: a payment to the
+/// Seedelf under `owner`.
+fn seedelf_payment(
+    params: &ProtocolParameters,
+    wallet_addr: &Address,
+    owner: &Register,
+    lovelace: u64,
+    tokens: &Assets,
+) -> Result<Vec<(Output, Assets)>> {
+    let outputs = deposit_outputs(params, wallet_addr, owner, lovelace, tokens)?;
+    Ok(outputs.into_iter().zip(token_chunks(tokens)).collect())
+}
+
 /// The least lovelace a deposit of `tokens` needs: the sum of each deposit
 /// output's minimum.
 pub fn minimum_deposit(params: &ProtocolParameters, tokens: &Assets) -> Result<u64> {
-    if tokens.items.is_empty() {
-        return wallet_minimum_lovelace_with_assets(params, Assets::new());
-    }
-    tokens
-        .split(MAXIMUM_TOKENS_PER_UTXO as usize)
+    token_chunks(tokens)
         .into_iter()
         .map(|chunk| wallet_minimum_lovelace_with_assets(params, chunk))
         .sum()
@@ -494,7 +600,7 @@ pub enum Payee<'a> {
         owner: &'a Register,
         wallet_addr: &'a Address,
     },
-    /// A key address, in one output.
+    /// A key address. Tokens go `MAXIMUM_TOKENS_PER_UTXO` to an output.
     Address(&'a Address),
     /// No one: the transaction only does something with the stake key
     /// (certificates, a withdrawal), and everything comes back as change.
@@ -521,7 +627,10 @@ impl Payee<'_> {
             Payee::Seedelf { owner, wallet_addr } => {
                 deposit_outputs(params, wallet_addr, owner, lovelace, tokens)
             }
-            Payee::Address(to) => Ok(vec![pay_address(params, to, lovelace, tokens)?]),
+            Payee::Address(to) => Ok(pay_address(params, to, lovelace, tokens)?
+                .into_iter()
+                .map(|(output, _)| output)
+                .collect()),
             Payee::Nobody if lovelace == 0 && tokens.items.is_empty() => Ok(Vec::new()),
             Payee::Nobody => bail!("A transaction that pays no one pays nothing"),
         }
@@ -1891,9 +2000,12 @@ impl ScriptSpend {
             |fee| self.stage(fee, Some(budgets), redeemers),
         )?;
         let (rest_lovelace, change_lovelace, change_tokens) = self.split(fee)?;
-        let change_outputs = staged.outputs.as_ref().map_or(0, Vec::len)
-            - self.outputs.len()
-            - usize::from(rest_lovelace.is_some());
+        let rest_outputs = match (&self.rest, rest_lovelace) {
+            (Some(rest), Some(_)) => token_chunks(&rest.tokens).len(),
+            _ => 0,
+        };
+        let change_outputs =
+            staged.outputs.as_ref().map_or(0, Vec::len) - self.outputs.len() - rest_outputs;
         Ok(FinalSpend {
             tx: built_with(staged, self.patches())?,
             fee: ScriptFee {
@@ -1997,14 +2109,17 @@ impl ScriptSpend {
         } = &self.chain;
         let (rest_lovelace, change_lovelace, change_tokens) = self.split(fee)?;
         let wallet_addr = wallet_contract(*network_flag, config.contract.wallet_contract_hash);
-        let rest = match (&self.rest, rest_lovelace) {
-            (Some(Rest { to, tokens }), Some(lovelace)) => Some(match to {
+        let rest: Vec<Output> = match (&self.rest, rest_lovelace) {
+            (Some(Rest { to, tokens }), Some(lovelace)) => match to {
                 RestTo::Seedelf(register) => {
-                    deposit_output(&wallet_addr, register, lovelace, tokens)?
+                    deposit_outputs(params, &wallet_addr, register, lovelace, tokens)?
                 }
-                RestTo::Address(addr) => pay_address(params, addr, lovelace, tokens)?,
-            }),
-            _ => None,
+                RestTo::Address(addr) => pay_address(params, addr, lovelace, tokens)?
+                    .into_iter()
+                    .map(|(output, _)| output)
+                    .collect(),
+            },
+            _ => Vec::new(),
         };
         let change = if change_lovelace == 0 && change_tokens.is_empty() {
             Vec::new()
@@ -2986,8 +3101,9 @@ fn paying(
     )
 }
 
-/// One output per payment, each under a fresh re-randomization of the
-/// recipient's register and above its minimum.
+/// Each payment's outputs, each under a fresh re-randomization of the
+/// recipient's register, its tokens `MAXIMUM_TOKENS_PER_UTXO` to an output
+/// ([`seedelf_payment`]), and together above its minimum.
 fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, Assets)>> {
     if payments.is_empty() {
         bail!("A transfer pays at least one Seedelf");
@@ -2996,7 +3112,7 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
         chain.network_flag,
         chain.config.contract.wallet_contract_hash,
     );
-    payments
+    let paid = payments
         .iter()
         .map(|payment| {
             if !is_payable(&payment.register) {
@@ -3015,16 +3131,23 @@ fn payment_outputs(chain: &Chain, payments: &[Payment]) -> Result<Vec<(Output, A
                     ada(minimum)
                 );
             }
-            let output = deposit_output(&wallet_addr, &payment.register, payment.lovelace, &payment.tokens)?;
-            Ok((output, payment.tokens.clone()))
+            seedelf_payment(
+                &chain.params,
+                &wallet_addr,
+                &payment.register,
+                payment.lovelace,
+                &payment.tokens,
+            )
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(paid.into_iter().flatten().collect())
 }
 
-/// The least lovelace a payment to a seedelf with `tokens` must carry: one
-/// contract output under a register.
+/// The least lovelace a payment to a seedelf with `tokens` must carry: its
+/// contract outputs' under the register, the tokens `MAXIMUM_TOKENS_PER_UTXO`
+/// to an output ([`minimum_deposit`]).
 pub fn minimum_seedelf_payment(params: &ProtocolParameters, tokens: &Assets) -> Result<u64> {
-    wallet_minimum_lovelace_with_assets(params, tokens.clone())
+    minimum_deposit(params, tokens)
 }
 
 /// Lovelace as ADA, with all six decimals.
@@ -3065,7 +3188,8 @@ fn check_payable(addr: &Address, network_flag: bool) -> Result<()> {
     Ok(())
 }
 
-/// The least lovelace an output paying `to` exactly `tokens` must carry.
+/// The least lovelace a payment to `to` of exactly `tokens` must carry: its
+/// outputs', the tokens `MAXIMUM_TOKENS_PER_UTXO` to an output.
 pub fn minimum_address_payment(
     params: &ProtocolParameters,
     to: &Address,
@@ -3074,22 +3198,33 @@ pub fn minimum_address_payment(
     let bech32 = to
         .to_bech32()
         .map_err(|e| anyhow::anyhow!("Failed to encode the address: {e}"))?;
-    address_minimum_lovelace_with_assets(params, &bech32, tokens.clone())
+    token_chunks(tokens)
+        .into_iter()
+        .map(|chunk| address_minimum_lovelace_with_assets(params, &bech32, chunk))
+        .sum()
 }
 
-/// The output paying `to` exactly `lovelace` and `tokens`, above its minimum.
-fn address_output(chain: &Chain, to: &Address, lovelace: u64, tokens: &Assets) -> Result<Output> {
+/// The outputs paying `to` exactly `lovelace` and `tokens`, above their
+/// minimum ([`pay_address`]).
+fn address_payment(
+    chain: &Chain,
+    to: &Address,
+    lovelace: u64,
+    tokens: &Assets,
+) -> Result<Vec<(Output, Assets)>> {
     check_address(chain, to)?;
     pay_address(&chain.params, to, lovelace, tokens)
 }
 
-/// [`address_output`] for an address already checked.
+/// [`address_payment`] for an address already checked: the tokens
+/// `MAXIMUM_TOKENS_PER_UTXO` to an output, every output but the last carrying
+/// its minimum and the last the rest, each with the tokens it holds.
 fn pay_address(
     params: &ProtocolParameters,
     to: &Address,
     lovelace: u64,
     tokens: &Assets,
-) -> Result<Output> {
+) -> Result<Vec<(Output, Assets)>> {
     if tokens.items.iter().any(|a| a.amount == 0) {
         bail!("A payment can't send none of a token");
     }
@@ -3105,13 +3240,29 @@ fn pay_address(
             ada(minimum)
         );
     }
-    let mut output = Output::new(to.clone(), lovelace);
-    for asset in &tokens.items {
-        output = output
-            .add_asset(asset.policy_id, asset.token_name.clone(), asset.amount)
-            .context("Failed To Add An Asset")?;
+    let bech32 = to
+        .to_bech32()
+        .map_err(|e| anyhow::anyhow!("Failed to encode the address: {e}"))?;
+    let chunks = token_chunks(tokens);
+    let last = chunks.len() - 1;
+    let mut remaining = lovelace;
+    let mut outputs = Vec::with_capacity(chunks.len());
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        let amount = if i == last {
+            remaining
+        } else {
+            address_minimum_lovelace_with_assets(params, &bech32, chunk.clone())?
+        };
+        remaining -= amount;
+        let mut output = Output::new(to.clone(), amount);
+        for asset in &chunk.items {
+            output = output
+                .add_asset(asset.policy_id, asset.token_name.clone(), asset.amount)
+                .context("Failed To Add An Asset")?;
+        }
+        outputs.push((output, chunk));
     }
-    Ok(output)
+    Ok(outputs)
 }
 
 /// `sweep`: pays `to` exactly `lovelace` and `tokens` from owned
@@ -3189,20 +3340,17 @@ pub fn sweep_many_apart(
     )
 }
 
-/// One output per payment, each to its address and above its minimum.
+/// Each payment's outputs, to its address and above its minimum
+/// ([`address_payment`]).
 fn address_outputs(chain: &Chain, payments: &[AddressPayment]) -> Result<Vec<(Output, Assets)>> {
     if payments.is_empty() {
         bail!("A withdrawal pays at least one address");
     }
-    payments
+    let paid = payments
         .iter()
-        .map(|p| {
-            Ok((
-                address_output(chain, &p.to, p.lovelace, &p.tokens)?,
-                p.tokens.clone(),
-            ))
-        })
-        .collect()
+        .map(|p| address_payment(chain, &p.to, p.lovelace, &p.tokens))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(paid.into_iter().flatten().collect())
 }
 
 /// [`sweep_many`] spending exactly `inputs`. They must hold the tokens being
@@ -3243,8 +3391,12 @@ pub fn sweep_from(
     change_owner: &Register,
     signer: Hash<28>,
 ) -> Result<ScriptSpend> {
-    let output = address_output(chain, to, lovelace, tokens)?;
-    ScriptSpend::new(chain, inputs, change_owner, signer)?.output(output, tokens)
+    address_payment(chain, to, lovelace, tokens)?
+        .into_iter()
+        .try_fold(
+            ScriptSpend::new(chain, inputs, change_owner, signer)?,
+            |spend, (output, tokens)| spend.output(output, &tokens),
+        )
 }
 
 /// `sweep --all`: everything `inputs` hold, less the fee, to `to`. Tokens go
