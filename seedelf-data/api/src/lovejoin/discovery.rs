@@ -174,7 +174,8 @@ impl Discovery {
                 (Some(generation), Some(s)) if s.generation == generation => {
                     let known = s.high;
                     s.found.extend(newer.into_iter().filter(|f| f.id > known));
-                    s.high = s.found.iter().map(|f| f.id).max().unwrap_or(known);
+                    // Never below what was read: what's refused is dropped from `found`, and is above what's left.
+                    s.high = s.found.iter().map(|f| f.id).fold(known, i64::max);
                     s.upto = s.upto.max(at);
                 }
                 // What it read on from was replaced meanwhile by a read from the start, perhaps by an
@@ -439,5 +440,29 @@ mod tests {
         let read = discovery.found_with(1200, read_on).await.unwrap();
         assert_eq!(ids(&read), [10, 45, 48, 55]);
         assert_eq!(calls.get(), READ_ON_TRIES + 1);
+    }
+
+    /// 1.6.0's release review (discovery-cursor-moves-back): once what's
+    /// refused was dropped from what's kept, a read on went on from the
+    /// highest id left, below it, and gathered it again every other read.
+    #[tokio::test]
+    async fn a_read_on_goes_on_from_the_highest_id_read_whatever_was_dropped() {
+        // A pool at 45, and a candidate refused at 48.
+        let chain = chain_of(&[10, 45, 48]);
+        let discovery = Discovery::default();
+        discovery.found_with(1000, read_of(&chain)).await.unwrap();
+        // What `shown` does with what's refused.
+        if let Some(seen) = discovery.seen.lock().unwrap().as_mut() {
+            seen.found.retain(|f| f.id != 48);
+        }
+        let afters = std::cell::RefCell::new(Vec::new());
+        for at in [1100, 1200, 1300] {
+            let read = |at, after| {
+                afters.borrow_mut().push(after);
+                read_of(&chain)(at, after)
+            };
+            discovery.found_with(at, read).await.unwrap();
+        }
+        assert_eq!(afters.into_inner(), [48, 48, 48]);
     }
 }

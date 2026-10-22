@@ -3,7 +3,8 @@
 // would total more with the rest than one output can hold (it comes with a
 // later payment), nor one holding a reference script the wallet can't spend,
 // nor one a return through Lovejoin still being sent spends (final review
-// lovejoin-3). Without this, "everything" would quietly not be.
+// lovejoin-3), nor one a payment's parts still to go spend. Without this,
+// "everything" would quietly not be.
 
 import { useT, type I18nKey } from "../../i18n";
 import type { LeftOutUtxo } from "../../shared/rpc";
@@ -14,6 +15,7 @@ import { Callout } from "./Callout";
 export function leftOutReasonKey(reason: LeftOutUtxo["reason"]): I18nKey {
   if (reason === "tokens") return "leftOut.reason.tokens";
   if (reason === "returning") return "leftOut.reason.returning";
+  if (reason === "parts") return "leftOut.reason.parts";
   return "leftOut.reason.script";
 }
 

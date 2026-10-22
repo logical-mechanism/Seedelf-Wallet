@@ -193,11 +193,12 @@ describe("a payment whose later parts have no ADA of their own (1.6.0, item 10b)
     });
   });
 
-  it("stops the rest when the part before never shows", async () => {
+  it("stops the rest when the part before never shows, and frees what they'd have spent", async () => {
     const { t, tokens } = await walletA(12);
-    const { transfer, parts } = services(t);
+    const { transfer, parts, deps } = services(t);
     const summary = await transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
     await transfer.submit("preprod", summary.txHash);
+    const held = await t.wallet.withKeys(() => reservedSet(t.session, "preprod", { sending: true }));
     // Sent longer ago than a part is looked for (the clock itself would lock the wallet first).
     const key = SESSION_WAITING_PREFIX + "preprod";
     const waiting = (await t.session.get<Record<string, { at: number }>>(key))!;
@@ -206,6 +207,12 @@ describe("a payment whose later parts have no ADA of their own (1.6.0, item 10b)
     expect(await parts.pump("preprod")).toBe(false);
     expect(await parts.of("preprod", summary.txHash)).toMatchObject({ stopped: "unseen" });
     expect(submittedIds(t)).toHaveLength(1);
+    // Nothing is held for parts that will never go: the next review can spend what they would have (1.6.0's review).
+    expect((await t.wallet.withKeys(() => reservedSet(t.session, "preprod", { sending: true }))).inputs.size).toBe(0);
+    const listed = new Set((await readContract(deps, "preprod")).utxos.map((u) => `${u.tx_hash}#${u.tx_index}`));
+    const own = [...held.inputs].filter((o) => !summary.parts!.some((p) => o.startsWith(`${p.txHash}#`)));
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.filter((o) => !listed.has(o))).toEqual([]);
   });
 
   it("keeps its waiting parts when the next payment is reviewed under the same keys, which leaves what they spend out", async () => {

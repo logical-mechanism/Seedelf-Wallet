@@ -272,9 +272,18 @@ describe("the Mix form's Four boxes a mix switch: four takes what fits at four, 
 
   it("stops at one chain's length at four, and at ten either way", () => {
     // Three waves deep, a box is 21 mixes four wide: six boxes make 126 of a chain's 130; three wide, ten make 130.
-    expect(room(4, 3, 10_000)).toEqual({ most: 6, three: 10 });
+    expect(room(4, 3, 10_000)).toEqual({ most: 6, three: 10, chain: true });
     expect(room(4, 1, 10_000)).toEqual({ most: 10 });
     expect(room(3, 3, 10_000)).toEqual({ most: 10 });
+  });
+
+  it("says which caps four: one chain's length, or the pool's room where it caps first or as soon (1.6.0's review)", () => {
+    // 10,000 free: the chain, which the pool doesn't cap, is the reason.
+    expect(t("lovejoin.mix.capFourChain", { count: 6, three: 10 })).toBe("At four boxes a mix one chain this deep takes 6 boxes; at three, 10.");
+    // 378 free: the pool has room for six at four, as the chain does: its room is said, as before.
+    expect(room(4, 3, 378)).toEqual({ most: 6, three: 10 });
+    // 300 free: the pool's room, four at four, caps first.
+    expect(room(4, 3, 300)).toEqual({ most: 4, three: 10 });
   });
 
   it("says the switch in Settings' words, with what three would take on a review that went four, and starts as Settings has it", () => {

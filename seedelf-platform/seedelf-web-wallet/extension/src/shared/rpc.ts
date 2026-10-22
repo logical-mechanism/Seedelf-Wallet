@@ -903,9 +903,10 @@ export interface PendingTx {
   confirmations: number | null;
   /**
    * A payment in parts some of which wait for the part before to be in a block (background/parts.ts): how many went
-   * of how many, and why the rest didn't once they won't (a part turned away, or the part before never showed).
+   * of how many, and why the rest didn't once they won't (a part turned away, the part before never showed, or the
+   * session whose funding they are said they mustn't go).
    */
-  parts?: { sent: number; total: number; stopped?: "refused" | "unseen" };
+  parts?: { sent: number; total: number; stopped?: "refused" | "unseen" | "cancelled" };
   /**
    * Koios didn't answer its submit, so it may or may not have gone through.
    * The wallet holds its UTxOs back, sends it again now and then (the network
@@ -1969,7 +1970,8 @@ export interface SessionBackSummary {
  * script the wallet can't measure, so it can't price spending it, and no
  * transaction of this wallet takes it; `returning`, a return through
  * Lovejoin that's still being sent spends it (a private one, Make public's
- * Max). A session's return only (independent review H1, H2): `cost`, a
+ * Max); `parts`, a payment's parts still to go spend it (parts.ts). A
+ * session's return only (independent review H1, H2): `cost`, a
  * stranger's token UTxO whose own ADA doesn't pay for the deposit its
  * tokens need, so it stays (and is left behind); `size`, one transaction
  * can't hold it with the rest, so the next return takes it.
@@ -1977,7 +1979,7 @@ export interface SessionBackSummary {
 export interface LeftOutUtxo {
   txHash: string;
   txIndex: number;
-  reason: "tokens" | "script" | "returning" | "cost" | "size";
+  reason: "tokens" | "script" | "returning" | "parts" | "cost" | "size";
 }
 
 /**
@@ -2378,9 +2380,10 @@ export interface LovejoinHeld {
    * from its page (`pool`, `classic` for the classic pool's), or every pool's; the withdraws it sent, how many of
    * them aren't on chain yet once none is left to send (`confirming`),
    * the boxes its last run left (none before its first), why the last box that didn't go didn't (`why`), and, once
-   * it stopped for that, the reason (`stopped`). None once it's over.
+   * it stopped for that, the reason (`stopped`); `held` while a mix built and kept for Send holds what's left, which
+   * it waits for. None once it's over.
    */
-  bringing?: { back: number; pool?: string; left?: number; confirming?: number; why?: string; stopped?: string };
+  bringing?: { back: number; pool?: string; left?: number; confirming?: number; why?: string; stopped?: string; held?: true };
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */

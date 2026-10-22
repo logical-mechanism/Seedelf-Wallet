@@ -6,11 +6,12 @@
 // goes as Send sends any (script-spend.ts `send`): giveme.my, the one-time key, Koios.
 //
 // The parts that wait are held in session storage (`seedelf.waiting.<network>`), each kept under its own key so a new
-// review never takes it, and what they spend reserved (spent.ts) so nothing else builds on it. The sessions alarm and
-// Home's poll send each once its parent shows (`pumpParts`), never as the wallet unlocks. A lock wipes session storage,
-// and with it what waits: the rest never go, and what they'd have spent stays in the private balance. A session's
-// funding short of them is the session's to tell (10a's rule: sessions.ts `fundingState`), and is told at once when a
-// part is turned away (`stopped`).
+// review never takes it, and what they spend reserved (spent.ts) so nothing else builds on it: both written before
+// the parts that go at Send are, so a worker stopped meanwhile leaves them to the pump, never held by nobody. The
+// sessions alarm and Home's poll send each once its parent shows (`pumpParts`), never as the wallet unlocks. A lock
+// wipes session storage, and with it what waits: the rest never go, and what they'd have spent stays in the private
+// balance. A session's funding short of them is the session's to tell (10a's rule: sessions.ts `fundingState`), and
+// is told at once when a part is turned away (`stopped`); it's asked before each goes whether it still may (`mayGo`).
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
@@ -19,8 +20,9 @@ import { txInputs } from "./cbor";
 import { CollateralError } from "./collateral";
 import { chainStatus } from "./feed";
 import { KoiosBusyError } from "./koios";
-import { settleMaybeSent, startRuns, UNSEEN_AFTER_MS } from "./pending";
-import { type Kept, partKey, type ScriptSpendDeps, send, type SpendWhat } from "./script-spend";
+import { MaybeSentWait, nameParts, onSettled, sentBefore, settleMaybeSent, startRuns, UNSEEN_AFTER_MS } from "./pending";
+import { type Kept, partKey, PARTS_RESERVED, type ScriptSpendDeps, send, type SpendWhat } from "./script-spend";
+import { heldSent, type SentTx } from "./sent-txs";
 import { reservationOf, SESSION_RESERVED_PREFIX, type Reservation } from "./spent";
 import { WalletLocked } from "./wallet";
 import { isTrap } from "./wasm";
@@ -33,7 +35,7 @@ const waitingKey = (network: NetworkName) => SESSION_WAITING_PREFIX + network;
 export const waitingPartKey = (txHash: string) => `seedelf.waitingPart.${txHash}`;
 
 /** Its reservation's name (spent.ts): what its parts still to go spend. */
-const reservationName = (first: string) => `parts.${first}`;
+const reservationName = (first: string) => PARTS_RESERVED + first;
 
 /**
  * How long a part waits, after its parent shows, for giveme.my to see it too: its own read of the chain may be a
@@ -53,8 +55,23 @@ export const LOOK_EVERY_MS = 15_000;
 /** When each parent was last looked for, by hash: in the worker's memory, so a restart looks at once. */
 const looked = new Map<string, number>();
 
-/** Why the rest of a payment's parts didn't go: a part turned away, or the part before never showed. */
-export type PartsStopped = "refused" | "unseen";
+/**
+ * The payments Send is sending the first parts of now, by their first's hash, for each worker's session storage: the
+ * pump leaves their waiting parts to Send until it's done (`holdWaiting`, `unsplit`). In the worker's memory, so a
+ * worker stopped meanwhile leaves them to the next one's pump.
+ */
+const sendingNow = new WeakMap<object, Set<string>>();
+const sendingOn = (deps: Pick<ScriptSpendDeps, "session">) => {
+  let firsts = sendingNow.get(deps.session);
+  if (!firsts) sendingNow.set(deps.session, (firsts = new Set()));
+  return firsts;
+};
+
+/**
+ * Why the rest of a payment's parts didn't go: a part turned away, the part before never showed, or the session whose
+ * funding they are said they mustn't (`mayGo`).
+ */
+export type PartsStopped = "refused" | "unseen" | "cancelled";
 
 /** A payment's parts, some still to go. */
 export interface Waiting {
@@ -72,10 +89,32 @@ export interface Waiting {
   stopped?: PartsStopped;
   /** A session's funding: the session's index. */
   session?: number;
+  /**
+   * Held by a Send still sending the parts that go now (`splitParts`), until it's done (`holdWaiting`, `unsplit`). One a
+   * stopped worker's Send left is settled by the next pump (`lostSend`), and Home is shown none meanwhile.
+   */
+  sending?: true;
+  /**
+   * Stopped at Send, its last part that went one Koios didn't answer, which the watch holds: landed once the watch
+   * sees it, and never seen once the watch lets it go unseen (`settledPart`).
+   */
+  unsure?: true;
 }
 
 /** A session's funding told its parts won't all go (sessions.ts). */
 export type OnStopped = (network: NetworkName, w: Waiting) => Promise<void>;
+
+/**
+ * Whether the next of `w`'s parts may still go (sessions.ts `partsMayGo`): not once the session whose funding it is
+ * stops, or brings back what came. A Send's parts always may.
+ */
+export type MayGo = (network: NetworkName, w: Waiting) => Promise<boolean>;
+
+/** What the pump tells, and asks, of the payments whose parts wait. */
+interface Hooks {
+  stopped?: OnStopped;
+  mayGo?: MayGo;
+}
 
 /** Which earlier part each of `parts` spends an output of, read off its inputs (null: none). */
 export function parentsOf(parts: Array<Pick<Kept, "txHash" | "txCbor">>): Array<string | null> {
@@ -136,33 +175,162 @@ export interface Split {
   kept: Kept[];
   after: Array<string | null>;
   goNow: number;
+  kind: PendingTx["kind"];
+  what: SpendWhat;
+  /** A session's funding: the session's index. */
+  session?: number;
 }
 
 /**
  * How payment `hashes`, kept under `key` (keepParts), goes: the parts before the first that spends what another
- * carried forward go now, and those are reserved from (`reserve`) so nothing built meanwhile takes what they'll spend.
- * One part, or parts not all kept (Send then says the review is stale), all go now.
+ * carried forward go now. Those after them are held before any goes (`holdWaiting` once they went, `unsplit` if not):
+ * a copy of each under its own key, what they spend reserved (`reserve`) so nothing built meanwhile takes it, and
+ * their record, which the pump owns should the worker stop while the first are sent (1.6.0's review: the reservation
+ * was left to nobody until the lock, and the rest never went). One part, or parts not all kept (Send then says the
+ * review is stale), all go now. `session`: a session's funding, told if they don't all go.
  */
-export async function splitParts(deps: ScriptSpendDeps, network: NetworkName, key: string, hashes: string[]): Promise<Split> {
-  const all: Split = { hashes, kept: [], after: hashes.map(() => null), goNow: hashes.length };
+export async function splitParts(
+  deps: ScriptSpendDeps,
+  network: NetworkName,
+  key: string,
+  hashes: string[],
+  kind: PendingTx["kind"],
+  what: SpendWhat,
+  session?: number,
+): Promise<Split> {
+  const of = { kind, what, ...(session !== undefined ? { session } : {}) };
+  const all: Split = { hashes, kept: [], after: hashes.map(() => null), goNow: hashes.length, ...of };
   if (hashes.length === 1) return all;
   const kept = await deps.wallet.withKeys(() => Promise.all(hashes.map((_, i) => deps.session.get<Kept>(partKey(key, i)))));
   if (!kept.every((k, i) => k !== undefined && k.txHash === hashes[i] && k.network === network)) return all;
   const after = parentsOf(kept as Kept[]);
-  const waits = after.findIndex((a) => a !== null);
-  if (waits < 0) return { ...all, kept: kept as Kept[], after };
-  await reserve(deps, network, hashes[0]!, (kept as Kept[]).slice(waits));
-  return { hashes, kept: kept as Kept[], after, goNow: waits };
+  const goNow = after.findIndex((a) => a !== null);
+  if (goNow < 0) return { ...all, kept: kept as Kept[], after };
+  const first = hashes[0]!;
+  const waiting = (kept as Kept[]).slice(goNow);
+  // Send's own copies stay until the first went, for a Send pressed again after one turned away.
+  await deps.wallet.withKeys(async () => {
+    for (const part of waiting) await deps.session.set(waitingPartKey(part.txHash), part);
+  });
+  await reserve(deps, network, first, waiting);
+  sendingOn(deps).add(first);
+  await writeWaiting(deps, network, first, () => ({ hashes, after, sent: goNow, at: deps.now(), ...of, sending: true }));
+  await startRuns(deps.session);
+  return { hashes, kept: kept as Kept[], after, goNow, ...of };
 }
 
-/** The parts that go now didn't all go: those held back are freed, and never go. */
-export async function unsplit(deps: ScriptSpendDeps, network: NetworkName, split: Split): Promise<void> {
-  if (split.goNow < split.hashes.length) await reserve(deps, network, split.hashes[0]!, []);
+/** How many of the first `goNow` of `hashes` went, before one that didn't: each kept as sent (pending.ts `sentBefore`). */
+async function wentOf(deps: ScriptSpendDeps, network: NetworkName, hashes: string[], goNow: number): Promise<number> {
+  let went = 0;
+  while (went < goNow && (await sentBefore(deps, network, hashes[went]!).catch(() => false))) went++;
+  return went;
 }
 
 /**
- * The parts that went now did: those after them are held to go once their parents show, each moved to its own key,
- * and the sessions alarm started. `session`: a session's funding, told if they don't all go.
+ * Payment `p`'s parts that go now didn't all go (`went` of them did): those held back are freed, and never go. When
+ * some went, the record says so (stopped as `refused`), and Home's banner names what went by the first, so it says how
+ * many didn't rather than that the payment is confirmed or a session funded (1.6.0's review); a last one Koios didn't
+ * answer isn't said to have landed until the watch sees it (`unsure`). `own`: the record is this Send's to replace; a
+ * Send pressed again, on a first part that may have gone while the rest wait, holds none, and leaves them as they are.
+ */
+async function letGo(
+  deps: ScriptSpendDeps,
+  network: NetworkName,
+  p: Pick<Waiting, "hashes" | "after" | "kind" | "what" | "session">,
+  goNow: number,
+  went: number,
+  own: boolean,
+): Promise<void> {
+  const { hashes } = p;
+  const first = hashes[0]!;
+  if (goNow < hashes.length) {
+    await deps.wallet.withKeys(async () => {
+      for (const h of hashes.slice(goNow)) await deps.session.remove(waitingPartKey(h));
+    });
+    await reserve(deps, network, first, []);
+  }
+  if (!went) {
+    if (own) await writeWaiting(deps, network, first, () => undefined);
+    return;
+  }
+  if (!own && (await waitingOn(deps, network))[first]) return;
+  const unsure = await nameParts(deps, network, hashes[went - 1]!, { first, total: hashes.length }).catch(() => false);
+  const { after, kind, what, session } = p;
+  const w: Waiting = {
+    hashes,
+    after,
+    sent: went,
+    at: deps.now(),
+    kind,
+    what,
+    stopped: "refused",
+    ...(session !== undefined ? { session } : {}),
+    ...(unsure ? { unsure: true as const } : {}),
+  };
+  await writeWaiting(deps, network, first, () => w);
+}
+
+/**
+ * The parts that go now didn't all go: those held back are freed, and never go (`letGo`). A session's funding marks
+ * its own unsent (sessions.ts `sendFunding`).
+ */
+export async function unsplit(deps: ScriptSpendDeps, network: NetworkName, split: Split): Promise<void> {
+  const { hashes, goNow } = split;
+  if (hashes.length === 1) return;
+  sendingOn(deps).delete(hashes[0]!);
+  await letGo(deps, network, split, goNow, await wentOf(deps, network, hashes, goNow), goNow < hashes.length);
+}
+
+/**
+ * Payment `first`'s record a Send left that this worker isn't sending (`sending`, and none in `sendingOn`): the worker
+ * stopped while Send sent the parts that go now (1.6.0's review). With every one of them gone, the rest wait as Send
+ * would have left them; otherwise they never go (`letGo`), and a session's funding is told (`stopped`) at once, rather
+ * than once its parts are missed. Returns what still waits.
+ */
+async function lostSend(
+  deps: ScriptSpendDeps,
+  network: NetworkName,
+  first: string,
+  w: Waiting,
+  stopped?: OnStopped,
+): Promise<Waiting | undefined> {
+  const went = await wentOf(deps, network, w.hashes, w.sent);
+  if (went === w.sent) {
+    const { sending: _sending, ...rest } = w;
+    await writeWaiting(deps, network, first, (cur) => (cur?.sending ? rest : cur));
+    return rest;
+  }
+  await letGo(deps, network, w, w.sent, went, true);
+  await stopped?.(network, { ...w, sent: went, stopped: "refused" }).catch(() => undefined);
+  return undefined;
+}
+
+/**
+ * How a part the watch let go ended (pending.ts `onSettled`): a payment stopped at Send whose last part that went
+ * Koios didn't answer (`unsure`) now says it landed, or never showed, as a part the pump sent would (1.6.0's review).
+ */
+async function settledPart(deps: ScriptSpendDeps, network: NetworkName, txHash: string, landed: boolean): Promise<void> {
+  const ours = (w: Waiting | undefined): w is Waiting => !!w?.unsure && w.hashes[w.sent - 1] === txHash;
+  for (const [first, w] of Object.entries(await waitingOn(deps, network))) {
+    if (!ours(w)) continue;
+    await writeWaiting(deps, network, first, (cur) => {
+      if (!ours(cur)) return cur;
+      const { unsure: _unsure, ...rest } = cur;
+      return landed ? { ...rest, seen: deps.now() } : { ...rest, stopped: "unseen" };
+    });
+  }
+}
+
+/** Whether the wallet sent a payment of its own on the network since `w`'s parts last went (sent-txs.ts, in order). */
+function sentSince(sent: SentTx[], w: Waiting): boolean {
+  const last = sent.findLastIndex((s) => w.hashes.includes(s.txHash));
+  return sent.slice(last + 1).some((s) => s.account !== undefined && !w.hashes.includes(s.txHash));
+}
+
+/**
+ * The parts that went now did: those after them, held already (`splitParts`), go once their parents show. Send's own
+ * copies of them go, their parent's wait counts from now, and the sessions alarm is started. `kind`, `what` and
+ * `session` are the split's, for a record a lock took meanwhile.
  */
 export async function holdWaiting(
   deps: ScriptSpendDeps,
@@ -174,6 +342,7 @@ export async function holdWaiting(
   session?: number,
 ): Promise<void> {
   const { hashes, kept, after, goNow } = split;
+  const first = hashes[0]!;
   await deps.wallet.withKeys(async () => {
     for (const [i, part] of kept.entries()) {
       if (i < goNow) continue;
@@ -182,7 +351,8 @@ export async function holdWaiting(
     }
   });
   const w: Waiting = { hashes, after, sent: goNow, at: deps.now(), kind, what, ...(session !== undefined ? { session } : {}) };
-  await writeWaiting(deps, network, hashes[0]!, () => w);
+  await writeWaiting(deps, network, first, (cur) => (cur && (cur.sent !== goNow || cur.stopped) ? cur : w));
+  sendingOn(deps).delete(first);
   await startRuns(deps.session);
 }
 
@@ -239,10 +409,12 @@ async function stopWaiting(deps: ScriptSpendDeps, network: NetworkName, first: s
 /**
  * Sends the part of `w` whose turn it is once its parent shows on chain, and on to the next while one needs no other
  * wait: nothing while another payment on the network may still go through, nor, for a while (GIVEME_BEHIND_MS), when
- * giveme.my or Koios turns it away as not ready. Otherwise a part turned away stops the rest, as does a parent that
- * never shows (UNSEEN_AFTER_MS after the part before it went).
+ * giveme.my or Koios turns it away as not ready. One that went already (a worker stopped while Koios was asked, and
+ * the watch settled it since) counts as went. Otherwise a part turned away stops the rest, as does a parent that
+ * never shows (UNSEEN_AFTER_MS after the part before it went), and a session's funding that says it mustn't go
+ * (`mayGo`).
  */
-async function step(deps: ScriptSpendDeps, network: NetworkName, first: string, w: Waiting, stopped?: OnStopped): Promise<void> {
+async function step(deps: ScriptSpendDeps, network: NetworkName, first: string, w: Waiting, { stopped, mayGo }: Hooks): Promise<void> {
   const total = w.hashes.length;
   let { at, seen } = w;
   for (let i = w.sent; i < total; i++) {
@@ -261,6 +433,10 @@ async function step(deps: ScriptSpendDeps, network: NetworkName, first: string, 
       const shown = (seen = deps.now());
       await writeWaiting(deps, network, first, (cur) => cur && { ...cur, seen: shown });
     }
+    if (mayGo && !(await mayGo(network, { ...w, sent: i, at, ...(seen !== undefined ? { seen } : {}) }))) {
+      await stopWaiting(deps, network, first, "cancelled", stopped);
+      return;
+    }
     // Another payment on the network may still go through: this one waits for it, as a new one would.
     try {
       await settleMaybeSent(deps, network);
@@ -271,11 +447,17 @@ async function step(deps: ScriptSpendDeps, network: NetworkName, first: string, 
       await send(deps, network, hash, waitingPartKey(hash), w.kind, w.what, { chain: { first, total }, waited: reservationName(first) });
     } catch (e) {
       if (e instanceof WalletLocked || isTrap(e)) throw e;
+      // Another payment went maybe sent since that wait (a site's funding written ahead while giveme.my was asked):
+      // it waits for that one too (1.6.0's review).
+      if (e instanceof MaybeSentWait) return;
       // Not sent, and maybe only for now: giveme.my's view of the chain behind Koios's, giveme.my or Koios busy.
       const behind = e instanceof CollateralError || (e instanceof KoiosBusyError && !e.maybeSent);
       if (behind && deps.now() - (seen ?? at) < GIVEME_BEHIND_MS) return;
-      await stopWaiting(deps, network, first, "refused", stopped);
-      return;
+      // Not sent now because it went already: the worker stopped while Koios was asked, and the watch settled it.
+      if (!(await sentBefore(deps, network, hash).catch(() => false))) {
+        await stopWaiting(deps, network, first, "refused", stopped);
+        return;
+      }
     }
     await went(deps, network, first, i + 1);
     at = deps.now();
@@ -288,13 +470,15 @@ const pumping = new WeakMap<object, Map<NetworkName, Promise<boolean>>>();
 
 /**
  * Sends what waits on `network` (`step`), each part once its parent shows. Returns whether any payment still has
- * parts to go, so the sessions alarm keeps going. `unlock`: the run as the wallet unlocks, which sends nothing (privacy
- * review §3.1). `stopped`: a session's funding, told its parts won't all go.
+ * parts to go, so the sessions alarm keeps going: one whose look or send failed (Koios down, the device offline as
+ * Chrome fires a missed alarm) still has, and is looked at again at the next run, as pending.watch keeps a payment
+ * Koios didn't answer (1.6.0's review). `unlock`: the run as the wallet unlocks, which sends nothing (privacy review
+ * §3.1). `stopped`: a session's funding, told its parts won't all go; `mayGo`, asked whether they still may.
  */
 export function pumpParts(
   deps: ScriptSpendDeps,
   network: NetworkName,
-  { unlock = false, stopped }: { unlock?: boolean; stopped?: OnStopped } = {},
+  { unlock = false, ...hooks }: { unlock?: boolean } & Hooks = {},
 ): Promise<boolean> {
   let byNetwork = pumping.get(deps.session);
   if (!byNetwork) pumping.set(deps.session, (byNetwork = new Map()));
@@ -307,7 +491,20 @@ export function pumpParts(
         if (deps.now() - w.at > STOPPED_KEEP_MS) await writeWaiting(deps, network, first, () => undefined);
         continue;
       }
-      if (!unlock) await step(deps, network, first, w, stopped);
+      // Send is still sending its first parts: what waits is Send's until it's done.
+      if (sendingOn(deps).has(first)) {
+        busy = true;
+        continue;
+      }
+      try {
+        // A Send a stopped worker left, which this one isn't sending: what went goes on, what didn't never goes.
+        const left = w.sending ? await lostSend(deps, network, first, w, hooks.stopped) : w;
+        if (left && !unlock) await step(deps, network, first, left, hooks);
+      } catch (e) {
+        if (e instanceof WalletLocked || isTrap(e)) throw e;
+        busy = true;
+        continue;
+      }
       const now = (await waitingOn(deps, network))[first];
       if (now && !now.stopped) busy = true;
     }
@@ -319,11 +516,13 @@ export function pumpParts(
 
 /** The worker's parts that wait (sw.ts): the sessions alarm's runs and Home's poll pump them. */
 export class PartsService {
-  constructor(private readonly deps: ScriptSpendDeps & { stopped?: OnStopped }) {}
+  constructor(private readonly deps: ScriptSpendDeps & Hooks) {
+    onSettled(deps.session, (network, txHash, landed) => settledPart(deps, network, txHash, landed));
+  }
 
   /** Sends what waits on `network` and can go: whether any still waits (`pumpParts`). */
   pump(network: NetworkName, unlock = false): Promise<boolean> {
-    return pumpParts(this.deps, network, { unlock, stopped: this.deps.stopped });
+    return pumpParts(this.deps, network, { unlock, stopped: this.deps.stopped, mayGo: this.deps.mayGo });
   }
 
   /** Payment `first`'s parts, as Home's banner counts them (`partsOf`). */
@@ -334,12 +533,18 @@ export class PartsService {
   /**
    * The payment whose parts went or stopped last on `network`, as Home's banner shows one, for when the watch holds
    * none (pending.ts lets a private one go once it's seen, or after 10 minutes): its last part that went, landed once
-   * the next one's wait saw it (`seen`) or a part after it was turned away, which only happens once it's there; never
-   * seen, it never showed. None once every part went.
+   * the next one's wait saw it (`seen`) or a part after it was turned away, which happens once it's there, or at Send
+   * (`unsplit`), whose watch has let it go by now (one Koios didn't answer, once it's seen: `settledPart`); never seen,
+   * it never showed. None once every part went, for one Send is still sending, nor for parts that stopped once the
+   * wallet sent another payment of its own there: what they'd have spent may have gone in it (1.6.0's review).
    */
   async shown(network: NetworkName): Promise<PendingTx | undefined> {
+    const { wallet, session } = this.deps;
+    const sent = await wallet.withKeys(() => heldSent(session, network)).catch(() => [] as SentTx[]);
     const [first, w] =
-      Object.entries(await waitingOn(this.deps, network)).sort(([, a], [, b]) => b.at - a.at)[0] ?? [];
+      Object.entries(await waitingOn(this.deps, network))
+        .filter(([, w]) => !w.sending && !(w.stopped && sentSince(sent, w)))
+        .sort(([, a], [, b]) => b.at - a.at)[0] ?? [];
     if (!first || !w || w.sent === 0) return undefined;
     const landed = w.stopped === "refused" || w.seen !== undefined;
     return {
@@ -362,7 +567,8 @@ export class PartsService {
  * be in a block (`splitParts`, `holdWaiting`, `pumpParts`), and the answer says how many went (`parts`). Where one that
  * goes now after the first doesn't, or Koios doesn't answer one before the last of them (nothing more goes while it may
  * still go through), it says how many went, and why the rest didn't: those that went stay watched, in Home's banner
- * and Activity, and those that would have waited never go.
+ * and Activity, and those that would have waited never go. The review's age is checked once, as the first goes: a Send
+ * pressed in time sends every part (1.6.0's review).
  */
 export async function sendParts(
   deps: ScriptSpendDeps,
@@ -375,14 +581,16 @@ export async function sendParts(
   const first = await deps.wallet.withKeys(() => deps.session.get<Kept>(key));
   const hashes = first?.txHash === txHash && first.network === network && first.partHashes?.length ? first.partHashes : [txHash];
   const total = hashes.length;
-  const split = await splitParts(deps, network, key, hashes);
+  const split = await splitParts(deps, network, key, hashes, kind, what);
   const { goNow } = split;
   let sent: PendingTx | undefined;
   try {
     for (const [i, hash] of hashes.slice(0, goNow).entries()) {
       const chain = total > 1 && i === goNow - 1 ? { chain: { first: hashes[0]!, total } } : {};
+      // After the first, sent however long since the review, as a part that waited is: the first's send checked it.
+      const after = i > 0 ? { waited: reservationName(hashes[0]!) } : {};
       try {
-        sent = await send(deps, network, hash, partKey(key, i), kind, what, chain);
+        sent = await send(deps, network, hash, partKey(key, i), kind, what, { ...chain, ...after });
       } catch (e) {
         if (i === 0 || isTrap(e)) throw e;
         throw new Error(t("worker.parts.partly", { sent: i, total, why: e instanceof Error ? e.message : String(e) }));

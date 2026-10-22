@@ -2619,7 +2619,7 @@ test("withdraw: more UTxOs than one transaction spends go as several, said on th
   const review = page.getByTestId("withdraw-review");
   await expect(review).toContainText("Amount600 ₳", { timeout: 30_000 });
   await expect(review).toContainText("Transactions2");
-  await expect(page.getByTestId("withdraw-parts")).toHaveText("More UTxOs than one transaction can spend, so it goes as 2, one after another.");
+  await expect(page.getByTestId("withdraw-parts")).toHaveText("Too much for one transaction, so it goes as 2, one after another.");
   expect(koios.collateralAsked).toBe(0);
 });
 

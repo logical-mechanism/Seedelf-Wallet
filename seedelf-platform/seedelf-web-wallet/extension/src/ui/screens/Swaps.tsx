@@ -1325,7 +1325,7 @@ export function SwapApproval({
         )}
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
-        {/* More UTxOs than one transaction spends: funded as several, every one needed (the owner's call, 2026-10-21). */}
+        {/* Too much for one transaction: funded as several, every one needed (the owner's call, 2026-10-21). */}
         {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
         {/* What leaves, and the balance after, as every other review says them. The change isn't a row, as it isn't
             on theirs: beside the balance, "back to your private balance" read as what would be left (ReviewTotals). */}

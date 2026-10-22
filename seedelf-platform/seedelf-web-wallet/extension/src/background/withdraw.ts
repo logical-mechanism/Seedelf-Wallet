@@ -32,6 +32,7 @@ import { reviewParts, sendParts } from "./parts";
 import { settleMaybeSent } from "./pending";
 import { privateShort, privateShortOf, tooMany } from "./short";
 import {
+  carried,
   changeHistory,
   classesOf,
   keep,
@@ -86,7 +87,7 @@ export class WithdrawService {
     progress?.("checking");
     await settleMaybeSent(this.deps, network);
     progress?.("reading");
-    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
+    const { view, utxos, params, returning, waiting, classes } = await readContract(this.deps, network);
     const request = {
       network,
       params,
@@ -95,7 +96,7 @@ export class WithdrawService {
       payments: payments.map((p, i) => ({ to: destinations[i]!.address, lovelace: p.lovelace, tokens: p.tokens })),
     };
     if (request.utxos.length === 0) {
-      throw nothingToSpend(this.deps, view, t("worker.withdraw.empty"), returning);
+      throw nothingToSpend(this.deps, view, t("worker.withdraw.empty"), returning, waiting);
     }
     progress?.("measuring");
     // In as many transactions as the UTxOs it spends need, each spending its own (the owner's test of 1.6.0): one
@@ -112,15 +113,21 @@ export class WithdrawService {
       const most = async () => whole(await measured({ ...request, most: true, payments: [{ ...request.payments[0]!, lovelace: null }] }));
       throw tooMany(await privateShortOf(e, request.payments.map((p) => p.lovelace), most, available));
     });
+    // A chained part's carry has the history of what the part before it spent.
+    const seen = carried(classes, parts);
     const summaryOf = (finished: WithdrawResult): WithdrawSummary => {
       const { txCbor: _txCbor, seed: _seed, inputs, payments: paid, classesMixed, ...rest } = finished;
-      const histories = spentHistories(classes, inputs, classesMixed);
-      // Max says what no Seedelf spend can take, which the private balance leaves out too, and what a
-      // return through Lovejoin being sent will spend (final review lovejoin-3).
+      const histories = spentHistories(seen, inputs, classesMixed);
+      // Max says what no Seedelf spend can take, which the private balance leaves out too, and what a chain being
+      // sent will spend: a return through Lovejoin (final review lovejoin-3), or a payment's parts still to go.
       const leftOut: LeftOutUtxo[] = finished.max
         ? [
             ...unspendable(this.deps, view).map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })),
-            ...returning.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "returning" as const })),
+            ...returning.map((u) => ({
+              txHash: u.tx_hash,
+              txIndex: u.tx_index,
+              reason: waiting.includes(u) ? ("parts" as const) : ("returning" as const),
+            })),
           ]
         : [];
       return {
@@ -136,9 +143,9 @@ export class WithdrawService {
     await keepParts(
       this.deps,
       SESSION_WITHDRAW,
-      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(classes, p.inputs) })),
+      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(seen, p.inputs) })),
     );
-    const summary = summaryOf(whole(parts));
+    const summary = summaryOf(whole(parts, { classes: seen, utxos }));
     return parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary;
   }
 

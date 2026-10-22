@@ -4321,6 +4321,46 @@ mod parts_of_any_shape {
     }
 
     #[test]
+    fn a_chained_part_spends_no_bundle_whose_tokens_stay() {
+        // A carry part filled its room by worth, so bundles of tokens not sent, each at its least, rode along: fees,
+        // size and change outputs for nothing, and sometimes a part more (1.6.0 review, carry-part-fills-room).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        for (n, k) in [(20, 10), (30, 16)] {
+            let (mut utxos, all) = bundles(n, 20);
+            let kept = utxos[k as usize..].to_vec();
+            utxos.extend(ada(100, 1, 409_000_000));
+            let tokens = all[..k as usize * 20].to_vec();
+            let parts =
+                api::build_transfer_parts(sk, transfer(utxos.clone(), Some(0), tokens.clone()))
+                    .unwrap();
+            let built: Vec<(String, Vec<api::OutRef>)> = parts
+                .iter()
+                .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                .collect();
+            assert!(carries(&built).iter().any(|from| !from.is_empty()));
+            sound(&built);
+            assert!(!spends_any(parts.iter().map(|p| &p.inputs), &kept));
+            assert_eq!(
+                sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+                every(&tokens)
+            );
+            let parts =
+                api::build_withdraw_parts(sk, withdraw(utxos, Some(0), tokens.clone())).unwrap();
+            sound(
+                &parts
+                    .iter()
+                    .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                    .collect::<Vec<_>>(),
+            );
+            assert!(!spends_any(parts.iter().map(|p| &p.inputs), &kept));
+            assert_eq!(
+                sent(parts.iter().flat_map(|p| &p.payments[0].tokens)),
+                every(&tokens)
+            );
+        }
+    }
+
+    #[test]
     fn parts_that_can_each_pay_their_own_fee_stay_apart() {
         // Chains only where needed (the owner, 2026-10-21): a part waits for the one before to be on chain, so where
         // each part has ADA of its own, none spends another's output.
@@ -4385,6 +4425,307 @@ mod parts_of_any_shape {
             .collect();
         assert_eq!(carried.len(), 1, "one output of ADA alone to the wallet");
         assert!(carried[0].0 > 90_000_000, "{}", carried[0].0);
+    }
+
+    /// Every UTxO of `utxos` of history `id`, as the worker gives it (activity.ts `classes`).
+    fn of_history(utxos: &[UtxoResponse], id: &str, origin: &str) -> api::Classes {
+        utxos
+            .iter()
+            .map(|u| {
+                (
+                    format!("{}#{}", u.tx_hash, u.tx_index),
+                    api::ClassIn {
+                        id: id.into(),
+                        origin: origin.into(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// A session's funding of `tokens` from `utxos` into a one-time account (`theirs()` stands in), with the
+    /// account's 5 ₳ collateral beside it, as sessions.ts asks for one.
+    fn funding(utxos: Vec<UtxoResponse>, tokens: Vec<TokenAmount>) -> WithdrawRequest {
+        let mut r = withdraw(utxos, Some(0), tokens);
+        r.payments.push(WithdrawPayment {
+            to: theirs(),
+            lovelace: Some("5000000".into()),
+            tokens: vec![],
+        });
+        r.funding = Some(api::Funding {
+            session: Some("session:9".into()),
+        });
+        r
+    }
+
+    /// `n` UTxOs at exactly their least, each holding one token sold and 19 kept; and the tokens sold.
+    fn one_sold_in_each(first: u64, n: u64) -> (Vec<UtxoResponse>, Vec<TokenAmount>) {
+        let sold: Vec<TokenAmount> = (first..first + n).map(|i| token(i, 1)).collect();
+        let utxos = sold
+            .iter()
+            .zip(first..)
+            .map(|(t, i)| {
+                let mut held = vec![t.clone()];
+                held.extend((0..19).map(|j| token(10_000 + i * 100 + j, 7)));
+                utxo(i + 1, 0, &held)
+            })
+            .collect();
+        (utxos, sold)
+    }
+
+    /// How many outputs of each part pay the one-time account 5 ₳ of ADA alone: its collateral.
+    fn collaterals(parts: &[api::WithdrawResult]) -> Vec<usize> {
+        parts
+            .iter()
+            .map(|p| {
+                MultiEraTx::decode(&hex::decode(&p.tx_cbor).unwrap())
+                    .unwrap()
+                    .outputs()
+                    .iter()
+                    .filter(|o| {
+                        o.address().unwrap().to_bech32().unwrap() == theirs()
+                            && o.value().coin() == 5_000_000
+                            && o.value().assets().is_empty()
+                    })
+                    .count()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_funding_in_three_parts_or_a_chain_pays_the_accounts_collateral_once() {
+        // The collateral goes in the payment's first part alone (`in_parts`' `first`, `chained`'s `starts`); only a
+        // funding in two parts was tested, so paying it in a middle part, or in every part of a chain, went unseen
+        // (1.6.0 review, untested-funding-collateral-once).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let spent = |parts: &[api::WithdrawResult]| {
+            sound(
+                &parts
+                    .iter()
+                    .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        // A token spread over 50 UTxOs with ADA to spare: three parts, each paying its own way.
+        let min = token(0, 100);
+        let utxos: Vec<UtxoResponse> = (1..=50)
+            .map(|i| utxo(i, 2_000_000, std::slice::from_ref(&min)))
+            .collect();
+        let all = TokenAmount {
+            quantity: (100 * 50).to_string(),
+            ..min.clone()
+        };
+        let parts = api::build_withdraw_parts(sk, funding(utxos, vec![all])).unwrap();
+        assert!(parts.len() >= 3, "{}", parts.len());
+        spent(&parts);
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert!(carries(&built).iter().all(Vec::is_empty));
+        assert_eq!(collaterals(&parts)[0], 1);
+        assert_eq!(collaterals(&parts).iter().sum::<usize>(), 1);
+
+        // Bundles at their least and one UTxO of ADA alone: a chain from the first part.
+        let (mut utxos, sold) = one_sold_in_each(0, 60);
+        utxos.push(utxo(5_000, 100_000_000, &[]));
+        let parts = api::build_withdraw_parts(sk, funding(utxos, sold)).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        spent(&parts);
+        let chained = carries(&built);
+        assert!(chained[0].is_empty() && chained[1..].iter().all(|c| c.len() == 1));
+        assert!(parts.len() >= 3, "{}", parts.len());
+        assert_eq!(collaterals(&parts)[0], 1);
+        assert_eq!(collaterals(&parts).iter().sum::<usize>(), 1);
+
+        // The same after a first part that pays its own way: a chain from the second, which pays none.
+        let mut utxos: Vec<UtxoResponse> = (0..20)
+            .map(|i| utxo(20_000 + i, 3_000_000, &[token(20_000 + i, 1)]))
+            .collect();
+        let mut sold: Vec<TokenAmount> = (0..20).map(|i| token(20_000 + i, 1)).collect();
+        let (bundled, more) = one_sold_in_each(0, 60);
+        utxos.extend(bundled);
+        sold.extend(more);
+        utxos.push(utxo(5_000, 100_000_000, &[]));
+        let parts = api::build_withdraw_parts(sk, funding(utxos, sold)).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        spent(&parts);
+        let chained = carries(&built);
+        assert!(
+            chained[0].is_empty() && chained[1].is_empty() && chained[2].len() == 1,
+            "{chained:?}"
+        );
+        assert_eq!(collaterals(&parts)[0], 1);
+        assert_eq!(collaterals(&parts).iter().sum::<usize>(), 1);
+    }
+
+    #[test]
+    fn a_chained_parts_carry_keeps_the_history_of_the_part_that_made_it() {
+        // A chained part spends the carry, an output of the part before it, which no history the worker sends
+        // names: it read as money of no history, so the review said a payment of money made private from one
+        // account merged it with money the wallet has no history for (1.6.0 review, carry-has-no-history).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.extend(ada(100, 1, 409_000_000));
+        let mut r = transfer(utxos.clone(), Some(0), all.clone());
+        r.classes = of_history(&utxos, "public:0", "own");
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        assert!(carries(&built).iter().any(|from| !from.is_empty()));
+        for p in &parts {
+            assert!(p.classes_mixed.is_empty(), "{:?}", p.classes_mixed);
+        }
+        // Max over the same.
+        let mut r = transfer(utxos.clone(), None, all.clone());
+        r.classes = of_history(&utxos, "public:0", "own");
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        for p in &parts {
+            assert!(p.classes_mixed.is_empty(), "{:?}", p.classes_mixed);
+        }
+
+        // A funding's chain, all of it received: the same.
+        let (mut utxos, sold) = one_sold_in_each(0, 60);
+        utxos.push(utxo(5_000, 100_000_000, &[]));
+        let mut r = funding(utxos.clone(), sold);
+        r.classes = of_history(&utxos, "received:ab", "received");
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert!(parts.len() >= 3, "{}", parts.len());
+        for p in &parts {
+            assert!(p.classes_mixed.is_empty(), "{:?}", p.classes_mixed);
+        }
+
+        // Two accounts' money: once a part spent both, its carry is both accounts', never Unknown.
+        let (mut utxos, all) = bundles(12, 20);
+        utxos.extend(ada(100, 1, 409_000_000));
+        let mut classes = of_history(&utxos[..7], "public:1", "own");
+        classes.extend(of_history(&utxos[7..], "public:0", "own"));
+        let mut r = transfer(utxos.clone(), Some(0), all.clone());
+        r.classes = classes;
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        let mixed: Vec<&String> = parts.iter().flat_map(|p| &p.classes_mixed).collect();
+        assert!(mixed.iter().all(|c| !c.contains("unknown")), "{mixed:?}");
+    }
+
+    /// Whether any of `parts` spends a UTxO of `utxos`.
+    fn spends_any<'a>(
+        parts: impl IntoIterator<Item = &'a Vec<api::OutRef>>,
+        utxos: &[UtxoResponse],
+    ) -> bool {
+        parts.into_iter().flatten().any(|i| {
+            utxos
+                .iter()
+                .any(|u| u.tx_hash == i.tx_hash && u.tx_index == i.tx_index)
+        })
+    }
+
+    #[test]
+    fn parts_keep_histories_apart_where_money_of_one_history_pays() {
+        // Parts picked by what each UTxO adds alone, a funding's by its order without the tiers that keep boxes last,
+        // so they merged histories that one history's money paid on its own (1.6.0 review,
+        // parts-pick-by-worth-not-history).
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+
+        // 40 × 10 ₳ made private from account 2, and a payment of 15 ₳ received: 300 ₳ goes in parts of the
+        // account's money alone, never tying the payment to it.
+        let own = ada(1, 40, 10_000_000);
+        let received = vec![utxo(500, 15_000_000, &[])];
+        let utxos = [own.clone(), received.clone()].concat();
+        let mut classes = of_history(&own, "public:1", "own");
+        classes.extend(of_history(&received, "received:aa", "received"));
+        let mut r = transfer(utxos.clone(), Some(300_000_000), vec![]);
+        r.classes = classes.clone();
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        assert!(!spends_any(parts.iter().map(|p| &p.inputs), &received));
+        assert!(parts.iter().all(|p| p.classes_mixed.is_empty()));
+        let mut r = withdraw(utxos, Some(300_000_000), vec![]);
+        r.classes = classes;
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        assert!(!spends_any(parts.iter().map(|p| &p.inputs), &received));
+        assert!(parts.iter().all(|p| p.classes_mixed.is_empty()));
+
+        // A funding of 250 ₳ from 30 × 10 ₳ of the account's money and 25 boxes back from Lovejoin: no box, where
+        // the account's money pays (boxes last, as one transaction's funding takes them).
+        let own = ada(1, 30, 10_000_000);
+        let boxes = ada(100, 25, 10_000_000);
+        let utxos = [own.clone(), boxes.clone()].concat();
+        let mut classes = of_history(&own, "public:0", "own");
+        for b in &boxes {
+            classes.extend(of_history(
+                std::slice::from_ref(b),
+                &format!("box:{}", b.tx_hash),
+                "lovejoin",
+            ));
+        }
+        let mut r = funding(utxos, vec![]);
+        r.payments[0].lovelace = Some("250000000".into());
+        r.classes = classes;
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        assert!(!spends_any(parts.iter().map(|p| &p.inputs), &boxes));
+        assert_eq!(collaterals(&parts).iter().sum::<usize>(), 1);
+
+        // Two accounts' money, where the one with more pays alone: that one's alone.
+        let first = ada(1, 25, 10_000_000);
+        let second = ada(100, 40, 10_000_000);
+        let utxos = [first.clone(), second.clone()].concat();
+        let mut classes = of_history(&first, "public:0", "own");
+        classes.extend(of_history(&second, "public:1", "own"));
+        let mut r = transfer(utxos, Some(300_000_000), vec![]);
+        r.classes = classes;
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        assert!(parts.len() >= 2, "{}", parts.len());
+        assert!(!spends_any(parts.iter().map(|p| &p.inputs), &first));
+        assert!(parts.iter().all(|p| p.classes_mixed.is_empty()));
+    }
+
+    #[test]
+    fn parts_by_history_never_refuse_what_parts_by_worth_pay() {
+        // Money of the history taken first that adds next to nothing (a move-in's bundles of 20 tokens, a little ADA
+        // past their least) can't pay a part's fee: the parts by history are refused, and those by what each UTxO
+        // adds go.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (bundled, _) = bundles(25, 20);
+        let own: Vec<UtxoResponse> = bundled
+            .into_iter()
+            .map(|u| UtxoResponse {
+                value: (u.value.parse::<u64>().unwrap() + 50_000).to_string(),
+                ..u
+            })
+            .collect();
+        let paid_a = ada(100, 15, 10_000_000);
+        let paid_b = ada(200, 15, 10_000_000);
+        let utxos = [own.clone(), paid_a.clone(), paid_b.clone()].concat();
+        let mut classes = of_history(&own, "public:0", "own");
+        classes.extend(of_history(&paid_a, "received:aa", "received"));
+        classes.extend(of_history(&paid_b, "received:bb", "received"));
+        let mut r = transfer(utxos.clone(), Some(250_000_000), vec![]);
+        r.classes = classes.clone();
+        let parts = api::build_transfer_parts(sk, r).unwrap();
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(paid, 250_000_000);
+        let mut r = withdraw(utxos, Some(250_000_000), vec![]);
+        r.classes = classes;
+        let parts = api::build_withdraw_parts(sk, r).unwrap();
+        let paid: u64 = parts
+            .iter()
+            .map(|p| p.payments[0].lovelace.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(paid, 250_000_000);
     }
 
     #[test]

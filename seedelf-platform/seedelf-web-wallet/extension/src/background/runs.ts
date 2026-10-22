@@ -59,8 +59,9 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
     if (await ctx.lovejoin.pumpPublic(network).catch(() => false)) busy = true;
     // And a payment that may still go through, sent again now and then until it's settled.
     if (await ctx.pending.watch(network, unlock).catch(() => false)) busy = true;
-    // And a payment's parts that wait for the one before to be in a block (parts.ts).
-    if (await ctx.parts?.pump(network, unlock).catch(() => false)) busy = true;
+    // And a payment's parts that wait for the one before to be in a block (parts.ts): a pump that failed may have
+    // left some waiting, as a watch Koios didn't answer does, so it never stops the alarm (1.6.0's review).
+    if (await ctx.parts?.pump(network, unlock).catch(() => true)) busy = true;
   }
   for (const network of ctx.networks) {
     if (!unlock && (await relocked())) unlock = true;

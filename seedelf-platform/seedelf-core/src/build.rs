@@ -2444,11 +2444,20 @@ impl Histories {
     }
 
     /// How much the spend would rather take `utxo`, by its class: lowest
-    /// first ([`Purpose`]'s order). The web wallet's funding in parts picks
-    /// by it, since it can't keep classes apart in a part that takes all
-    /// its room.
+    /// first ([`Purpose`]'s order). The web wallet's payments in parts order
+    /// histories by it, after [`Histories::tier_of`], since a part that takes
+    /// all its room can't keep them apart.
     pub fn rank_of(&self, utxo: &UtxoResponse) -> u8 {
         self.purpose.rank(&self.class_of(utxo))
+    }
+
+    /// When the spend merges histories, how late it takes `utxo`, by its
+    /// class ([`Purpose`]'s tiers): 0 first, 1 only when nothing else pays
+    /// (another session's money, for a funding), 2 last (a box back from
+    /// Lovejoin). The web wallet's payments in parts take them in this order,
+    /// as one transaction merges them.
+    pub fn tier_of(&self, utxo: &UtxoResponse) -> u8 {
+        self.purpose.tier(&self.class_of(utxo))
     }
 
     /// The classes `inputs` merge: each one once, in the order first spent,
@@ -2861,9 +2870,9 @@ pub fn max_inputs(
 /// [`max_inputs`], the rest taken by `worth`, the most first: what each adds
 /// to a payment. The web wallet's payments in parts rank a UTxO by its ADA
 /// less what its own tokens need, so a bundle of tokens holding no more than
-/// their least comes after a UTxO of ADA alone, however much ADA it holds; a
-/// session's funding in parts by its history's place first
-/// ([`Histories::rank_of`]), then that.
+/// their least comes after a UTxO of ADA alone, however much ADA it holds;
+/// where histories are known, by history first ([`Histories::tier_of`],
+/// [`Histories::rank_of`]), then that.
 pub fn max_inputs_by<K: Ord>(
     available: &[UtxoResponse],
     needed: &Assets,

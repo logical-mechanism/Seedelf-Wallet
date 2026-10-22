@@ -290,8 +290,8 @@ export class LovejoinLaunchService {
     invalidHereafter?: number;
   }> {
     const { wasm } = this.deps;
-    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
-    if (!utxos.length) throw nothingToSpend(this.deps, view, t("lj.launch.privateEmpty"), returning);
+    const { view, utxos, params, returning, waiting, classes } = await readContract(this.deps, network);
+    if (!utxos.length) throw nothingToSpend(this.deps, view, t("lj.launch.privateEmpty"), returning, waiting);
     // Without the certificate, from what the review showed it spends alone: coin selection keeps histories apart
     // (launch_apart), and needing 2 ₳ less it could pick UTxOs, and ties, the review never showed.
     const { built, bare } = await this.both((register, only) => {

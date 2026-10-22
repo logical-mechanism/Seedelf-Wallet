@@ -7,6 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { i18n } from "../src/i18n/core";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DappSite, DataHolds, SessionView, Status } from "../src/shared/rpc";
 import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadge";
@@ -305,7 +306,8 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
     expect(shown).toContain("Bring every box back now?");
     expect(shown).toContain("Sent back to back, they show they're one person's and are easier to match to their deposits.");
     expect(shown).toContain("A box not mixed since its deposit ties that deposit, and the public account if it paid, to your private balance.");
-    expect(shown).toContain("Each box pays about 0.3 ₳ to come back. Where it can't, your private balance pays, tying the UTxO it pays with to the box.");
+    // What it ties where a box can't pay its own way back, as Bring one back's question says it (call 36).
+    expect(shown).toContain("Each box pays about 0.3 ₳ to come back. Where it can't, your private balance pays, tying the UTxO it pays with, and where it came from, to the box.");
     expect(shown).toContain("Keep Seedelf Wallet unlocked: if it locks, this pauses until you unlock.");
     expect(shown).toContain("Keep them in Lovejoin");
     // A confirm that fits one line (the owner, 2026-10-20).
@@ -336,7 +338,9 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
 
   it("says why once it stopped by itself, offering it again; and once it's over, how many went", () => {
     const stopped = view({ bringing: { back: 1, left: 1, stopped: "giveme.my didn't answer." } });
-    expect(stopped).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer. The rest come back by themselves, each after its wait, unless you press Try again.");
+    // Only what holds for every box left: a Bootstrap's, one not mixed yet and a stuck pool's never come back by themselves.
+    expect(stopped).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer. Press Try again to bring back the rest.");
+    expect(stopped).not.toContain("by themselves");
     expect(stopped).toContain("Try again");
     expect(stopped).not.toContain("Stop ");
     expect(view({ done: 4 })).toContain("Done: 4 boxes back in your private balance.");
@@ -347,6 +351,45 @@ describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () =>
     expect(confirming).not.toContain("0 boxes left");
     expect(confirming).not.toContain("Stop");
     expect(view({ done: 0 })).toContain("Nothing of yours was left in Lovejoin.");
+  });
+
+  it("says a mix built and not sent holds what's left, never an older run's reason, while it waits (1.6.0's review)", () => {
+    const shown = view({ bringing: { back: 0, left: 2, held: true, why: "giveme.my didn't answer." } });
+    expect(shown).toContain("2 boxes left.");
+    expect(shown).toContain("A mix you built and haven't sent holds what's left, for 10 minutes at most.");
+    expect(shown).not.toContain("The last box that didn't go");
+    expect(shown).toContain("Stop");
+  });
+
+  it("says nothing was left only when nothing of the wallet's is there once it's over (1.6.0's review)", () => {
+    const empty = { boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 0 };
+    expect(Bring.doneOf({ back: 3 }, { ...empty, boxes: 1 })).toBe(3);
+    expect(Bring.doneOf({ back: 0 }, empty)).toBe(0);
+    // A mix sent since it was asked: its boxes wait their turn, so it says nothing.
+    expect(Bring.doneOf({ back: 0 }, { ...empty, boxes: 1 })).toBeUndefined();
+    expect(Bring.doneOf({ back: 0 }, { ...empty, pools: [{ id: "a1", boxes: 0, lovelace: "0", next: null, notMixed: 0, bootstrap: 2 }] })).toBeUndefined();
+    // A pool's run, by that pool's figures alone.
+    const other = { ...empty, pools: [{ id: "a1", boxes: 1, lovelace: "0", next: null, notMixed: 0 }] };
+    expect(Bring.doneOf({ back: 0, pool: "classic" }, other)).toBe(0);
+    expect(Bring.doneOf({ back: 0, pool: "a1" }, other)).toBeUndefined();
+    expect(Bring.doneOf({ back: 0, pool: "a1" }, { ...empty, boxes: 1 })).toBe(0);
+  });
+
+  it("ends the worker's reason with a full stop of its own before what follows, in any language (1.6.0's review)", async () => {
+    // The node's words, as a withdraw refused passes them on: no full stop of their own.
+    const raw = "The network rejected the transaction: BadInputsUTxO";
+    expect(view({ bringing: { back: 1, left: 1, stopped: raw } })).toContain(`${raw}. Press Try again`);
+    expect(view({ bringing: { back: 1, left: 1, why: raw } })).toContain(`The last box that didn't go: ${raw}.`);
+    await i18n.changeLanguage("ja");
+    try {
+      // One that ends a sentence already, in Japanese's 。, keeps it alone.
+      const ja = "giveme.my が応答しませんでした。";
+      const shown = view({ bringing: { back: 1, left: 1, stopped: ja } });
+      expect(shown).toContain(`${ja}残りのボックスを`);
+      expect(shown).not.toContain("。.");
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 });
 

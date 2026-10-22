@@ -11,7 +11,9 @@ import type { NetworkName } from "../../networks";
 import type { LovejoinHeld } from "../../shared/rpc";
 import { call } from "../background";
 import { adaText } from "../format";
+import { CLASSIC_ID } from "../lovejoin-pools";
 import { useAmounts } from "../preferences";
+import { withStop } from "../sentence";
 import { BOX_BACK_ESTIMATE } from "../swap";
 import { Callout } from "./Callout";
 import { Modal } from "./Modal";
@@ -22,10 +24,22 @@ const BRING_READ_MS = 2_000;
 type Bringing = LovejoinHeld["bringing"];
 
 /**
+ * What a run this page saw go says once it's over (`held`, the read that found it so): how many it sent; or, having
+ * sent none, that none was left, unless the wallet still has boxes where it ran (its pool, or every pool), a mix's
+ * sent since it was asked, which wait their turn: then nothing (1.6.0's review). Exported for its test.
+ */
+export function doneOf(last: NonNullable<Bringing>, held: LovejoinHeld): number | undefined {
+  if (last.back) return last.back;
+  const there = (p: Pick<LovejoinHeld, "boxes" | "notMixed" | "bootstrap">) => p.boxes + p.notMixed + (p.bootstrap ?? 0);
+  const pools = [{ ...held, id: CLASSIC_ID }, ...(held.pools ?? [])].filter((p) => last.pool === undefined || p.id === last.pool);
+  return pools.some((p) => there(p) > 0) ? undefined : 0;
+}
+
+/**
  * Settings' (no `pool`), or a pool's page's (`pool`, its id, `classic` for the classic pool's). A pool's page shows a
  * run that covers it, every pool's or its own, and says when another pool's goes, which it can't join; its button
  * shows only while the wallet has something there (`shown`). Settings shows any run, and every pool's stopped. A run
- * this page saw go on until it was over says so once, with how many it sent, and calls `onOver`.
+ * this page saw go on until it was over says so once, with how many it sent (doneOf), and calls `onOver`.
  */
 export function BringAllBack({ network, pool, shown = true, onOver }: { network: NetworkName; pool?: string; shown?: boolean; onOver?: () => void }) {
   const [bringing, setBringing] = useState<Bringing>();
@@ -50,7 +64,7 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
           if (!live || sent !== presses.current) return;
           // Over since the last read, not stopped: every box it found went.
           if (covers(last.current) && !last.current!.stopped && !held.bringing) {
-            setDone(last.current!.back);
+            setDone(doneOf(last.current!, held));
             over.current?.();
           }
           last.current = held.bringing;
@@ -177,7 +191,13 @@ export function BringAllBackView({
             : joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}
         </span>
         <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
-        {going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: going.why })}</span>}
+        {/* What it waits for, in place of an older run's reason; or the worker's reason, as it caught it: the node's own
+            words may end with no full stop. */}
+        {going.held ? (
+          <span className="note">{tr("settings.lovejoin.bringHeld")}</span>
+        ) : (
+          going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: withStop(going.why) })}</span>
+        )}
         {!confirming && (
           <span>
             <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
@@ -199,7 +219,7 @@ export function BringAllBackView({
       )}
       {stopped !== undefined && (
         <Callout tone="warn" testId="lovejoin-bring-stopped">
-          {tr("settings.lovejoin.warn.bringStopped", { why: stopped })}
+          {tr("settings.lovejoin.warn.bringStopped", { why: withStop(stopped) })}
         </Callout>
       )}
       {done !== undefined && (

@@ -228,15 +228,17 @@ export const readingOf = (cardano?: Pick<Balances["cardano"], "lovelace" | "utxo
  * mix would offer (`threeRoom`), where that's more, for the reason under the stepper. Four takes what fits at four,
  * and the user turns the switch to take more: the form went three behind the switch wherever four couldn't take
  * every box asked (the owner's test of 1.6.0: "Four now, rest next press"). As the build decides it (lovejoin.ts
- * widthFor), which goes three only where the pool changed since, and says so. Exported for its test.
+ * widthFor), which goes three only where the pool changed since, and says so. `chain`: one chain's length caps four
+ * before the pool's room does, so the reason says that (1.6.0's review). Exported for its test.
  */
-export function formRoom(width: number, depth: number, room?: Room, threeRoom?: Room): { most: number; three?: number } {
+export function formRoom(width: number, depth: number, room?: Room, threeRoom?: Room): { most: number; three?: number; chain?: true } {
   const chainMost = (w: number) => (depth < 1 ? MAX_BOXES : Math.floor(MAX_CHAIN_MIXES / mixesPerBox(depth, w)));
   const at = (w: number, r?: Room) => (!r || r.floorShort ? MAX_BOXES : Math.min(MAX_BOXES, r.fits, chainMost(w)));
   const most = at(width, room);
   if (width !== 4 || !threeRoom) return { most };
   const three = at(3, threeRoom);
-  return three > most ? { most, three } : { most };
+  if (three <= most) return { most };
+  return room && !room.floorShort && chainMost(width) < Math.min(MAX_BOXES, room.fits) ? { most, three, chain: true } : { most, three };
 }
 
 /**
@@ -2253,7 +2255,7 @@ export function PoolPage({
   // four, and the reason says what three would take (formRoom).
   const roomAt = (w: number) => (asked ? poolRoom(pool, boxes, asked.depth, w) : undefined);
   const room = roomAt(roomWidth);
-  const { most: roomMost, three: threeMost } = formRoom(roomWidth, asked?.depth ?? 0, room, four ? roomAt(3) : undefined);
+  const { most: roomMost, three: threeMost, chain: chainCaps } = formRoom(roomWidth, asked?.depth ?? 0, room, four ? roomAt(3) : undefined);
   const funding = asked;
   const width = funding?.width ?? 3;
   // The side that pays, its ADA and, for a token pool, its token: shown beside the count, and what it pays for.
@@ -2603,8 +2605,9 @@ export function PoolPage({
                 per: formatAda(perBox.toString()),
               })
             : threeMost !== undefined
-              ? // At four, the pool's room or one chain's length: three a mix would take more (the owner's test of 1.6.0).
-                tr("lovejoin.mix.capFour", { count: most, three: threeMost })
+              ? // At four, the pool's room or one chain's length, whichever caps it: three a mix would take more (the
+                // owner's test of 1.6.0; 1.6.0's review).
+                tr(chainCaps ? "lovejoin.mix.capFourChain" : "lovejoin.mix.capFour", { count: most, three: threeMost })
               : tr("lovejoin.mix.capPool", { count: most })
       : undefined;
   // Not even one box can go, so − and + are both off (blind test T11): the pool's room, the token held, or the ADA of

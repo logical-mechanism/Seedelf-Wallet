@@ -253,8 +253,13 @@ function getContext(): Promise<Worker> {
       }),
     });
     const sessions = new SessionService({ ...spends, store, minswap, alarm: sessionsAlarm, lovejoin });
-    // A payment's parts that wait for the one before to be in a block; a session's funding is told when they won't all go.
-    const parts = new PartsService({ ...spends, stopped: (n, w) => sessions.partsStopped(n, w) });
+    // A payment's parts that wait for the one before to be in a block; a session's funding is told when they won't all
+    // go, and asked before each goes whether it still may.
+    const parts = new PartsService({
+      ...spends,
+      stopped: (n, w) => sessions.partsStopped(n, w),
+      mayGo: (n, w) => sessions.partsMayGo(n, w),
+    });
     // Starting a pool, from either side (chunk 34's 34d): what's shown already is discovery's.
     const launch = new LovejoinLaunchService({ ...spends, lovejoin, discovery });
     dapp = new DappService({

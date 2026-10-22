@@ -33,6 +33,7 @@ import { reviewParts, sendParts } from "./parts";
 import { settleMaybeSent } from "./pending";
 import { privateShortOf, tooMany } from "./short";
 import {
+  carried,
   changeHistory,
   keepParts,
   measureLocally,
@@ -85,7 +86,7 @@ export class TransferService {
     progress?.("checking");
     await settleMaybeSent(this.deps, network);
     progress?.("reading");
-    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
+    const { view, utxos, params, returning, waiting, classes } = await readContract(this.deps, network);
     const request = {
       network,
       params,
@@ -104,6 +105,7 @@ export class TransferService {
         view,
         t("worker.transfer.empty"),
         returning,
+        waiting,
       );
     }
 
@@ -121,15 +123,21 @@ export class TransferService {
       const most = async () => whole(await measured({ ...request, payments: [{ ...request.payments[0]!, lovelace: null }] }));
       throw tooMany(await privateShortOf(e, request.payments.map((p) => p.lovelace), most, available));
     });
+    // A chained part's carry has the history of what the part before it spent.
+    const seen = carried(classes, parts);
     const summaryOf = (finished: TransferResult): TransferSummary => {
       const { txCbor: _txCbor, seed: _seed, inputs, payments: paid, classesMixed, ...rest } = finished;
-      const histories = spentHistories(classes, inputs, classesMixed);
-      // Max says what no Seedelf spend can take, and what a return through Lovejoin being sent will spend, as Make
-      // public's does (withdraw.ts).
+      const histories = spentHistories(seen, inputs, classesMixed);
+      // Max says what no Seedelf spend can take, and what a chain being sent will spend: a return through Lovejoin,
+      // or a payment's parts still to go. As Make public's does (withdraw.ts).
       const leftOut: LeftOutUtxo[] = finished.max
         ? [
             ...unspendable(this.deps, view).map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "script" as const })),
-            ...returning.map((u) => ({ txHash: u.tx_hash, txIndex: u.tx_index, reason: "returning" as const })),
+            ...returning.map((u) => ({
+              txHash: u.tx_hash,
+              txIndex: u.tx_index,
+              reason: waiting.includes(u) ? ("parts" as const) : ("returning" as const),
+            })),
           ]
         : [];
       return {
@@ -148,9 +156,9 @@ export class TransferService {
     await keepParts(
       this.deps,
       SESSION_TRANSFER,
-      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(classes, p.inputs) })),
+      parts.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed, origin: changeHistory(seen, p.inputs) })),
     );
-    const summary = summaryOf(whole(parts));
+    const summary = summaryOf(whole(parts, { classes: seen, utxos }));
     return parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary;
   }
 

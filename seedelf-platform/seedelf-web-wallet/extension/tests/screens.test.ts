@@ -134,9 +134,10 @@ describe("Home's banner for a payment Koios didn't answer (launch review #10)", 
     expect(banner(landed, true)).toContain("2 more to go, each once the one before lands.");
     expect(banner(landed, true)).not.toMatch(/confirmed/i);
     expect(banner({ ...landed, parts: { sent: 2, total: 3 } }, true)).toContain("1 more to go, once the one before lands.");
-    // Turned away: landed, and the rest didn't go.
+    // Turned away: landed, and the rest didn't go. Only partly sent, never "confirmed" (1.6.0's review).
     const stopped = banner({ ...landed, parts: { sent: 1, total: 3, stopped: "refused" as const } }, false);
-    expect(stopped).toMatch(/confirmed/i);
+    expect(stopped).not.toMatch(/confirmed/i);
+    expect(stopped).toContain("Private payment only partly sent");
     expect(stopped).toContain("2 of 3 didn't go. What they would have spent stays in your private balance.");
   });
 

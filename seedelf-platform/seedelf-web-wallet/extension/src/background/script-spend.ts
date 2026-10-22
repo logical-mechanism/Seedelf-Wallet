@@ -41,7 +41,7 @@ import { refuseSent, settleMaybeSent, submitWatched } from "./pending";
 import type { PrivateIndex } from "./private-index";
 import type { PrivateStore } from "./private-store";
 import type { Area } from "./storage";
-import { outpoint, reservedSet, spentSet } from "./spent";
+import { outpoint, reservations, spentSet, type Reservation } from "./spent";
 import type { Keys, Wallet } from "./wallet";
 
 /** A built transaction is only sent within this long; after that, build again. */
@@ -90,6 +90,24 @@ const CHAIN_CONFLICT: Record<SpendWhat, I18nKey> = {
   topUp: "worker.spend.chainConflict.topUp",
   launch: "worker.spend.chainConflict.launch",
 };
+
+/** It spends what a payment's parts still to go, sent since, will spend (refuseReserved). */
+const PARTS_CONFLICT: Record<SpendWhat, I18nKey> = {
+  payment: "worker.spend.partsConflict.payment",
+  seedelf: "worker.spend.partsConflict.seedelf",
+  staking: "worker.spend.partsConflict.staking",
+  collateral: "worker.spend.partsConflict.collateral",
+  removal: "worker.spend.partsConflict.removal",
+  mix: "worker.spend.partsConflict.mix",
+  topUp: "worker.spend.partsConflict.topUp",
+  launch: "worker.spend.partsConflict.launch",
+};
+
+/**
+ * How the reservation of a payment's parts still to go is named (parts.ts); every other chain being sent goes through
+ * Lovejoin. Each is said as what it is: the parts read as a return through Lovejoin (1.6.0 review).
+ */
+export const PARTS_RESERVED = "parts.";
 
 export interface ScriptSpendDeps {
   wasm: typeof Wasm;
@@ -155,6 +173,25 @@ export function changeHistory(classes: Classes, inputs: OutRef[]): HistoryClass 
 }
 
 /**
+ * `classes` with each carry a payment's `parts` spend (parts.ts): a chained part spends what the part before it
+ * carried forward, an output no history names at review. Its money is what that part spent, merged, as WebAssembly
+ * builds the next part with it (lib.rs `Carried`). Read as Unknown, the review said the payment merged money the
+ * wallet has no history for, and each later part's change was sealed with that for good (1.6.0 review). Money of no
+ * history carried forward stays out, as `classesOf` leaves it out.
+ */
+export function carried(classes: Classes, parts: Array<{ txHash: string; inputs: OutRef[] }>): Classes {
+  const all = { ...classes };
+  for (const [i, part] of parts.entries()) {
+    const origin = changeHistory(all, part.inputs);
+    if (origin.id === UNKNOWN.id) continue;
+    for (const carry of parts.slice(i + 1).flatMap((p) => p.inputs.filter((o) => o.txHash === part.txHash))) {
+      all[`${carry.txHash}#${carry.txIndex}`] = origin;
+    }
+  }
+  return all;
+}
+
+/**
  * The histories a spend's `inputs` have, each once, for its review: the
  * classes WebAssembly says it spent together (`mixed`), or the one they
  * share. None when the wallet knows nothing of them. Money with no history
@@ -170,14 +207,15 @@ export function spentHistories(classes: Classes, inputs: OutRef[], mixed: string
 /**
  * This wallet's view of the contract (contract-scan.ts), what a Seedelf
  * spend may pay with (`utxos`: owned, holding no seedelf, not locked, and
- * not `returning`), and the protocol parameters. `returning`: what a return
- * through Lovejoin being sent will spend, left out. A session's return ends
- * merged into its funding's change, many blocks after its chain starts, so
- * no other spend of the private balance takes that change meanwhile (final
- * review lovejoin-3). The view itself is left as it is. `classes`: where
- * each of `utxos` came from, from the sealed history alone (Koios is asked
- * nothing), for coin selection. `known`: the parameters, when the caller read
- * them already, so they're read once.
+ * not `returning`), and the protocol parameters. `returning`: what a chain
+ * being sent will spend, left out: a return through Lovejoin's, or a
+ * payment's parts still to go (`waiting`, of those: parts.ts). A session's
+ * return ends merged into its funding's change, many blocks after its chain
+ * starts, so no other spend of the private balance takes that change
+ * meanwhile (final review lovejoin-3). The view itself is left as it is.
+ * `classes`: where each of `utxos` came from, from the sealed history alone
+ * (Koios is asked nothing), for coin selection. `known`: the parameters, when
+ * the caller read them already, so they're read once.
  */
 export async function readContract(
   deps: ScriptSpendDeps,
@@ -188,18 +226,38 @@ export async function readContract(
   utxos: KoiosUtxo[];
   params: Record<string, unknown>;
   returning: KoiosUtxo[];
+  waiting: KoiosUtxo[];
   classes: Classes;
 }> {
-  const [view, params, reserved] = await Promise.all([
+  const [view, params, sending] = await Promise.all([
     readContractView(deps, network),
     known ?? deps.koios(network).epochParams(),
-    deps.wallet.withKeys(() => reservedSet(deps.session, network, { sending: true })),
+    sendingChains(deps, network),
   ]);
+  const reserved = new Set(sending.flatMap(([, r]) => r.inputs));
+  const parted = new Set(sending.flatMap(([chain, r]) => (chain.startsWith(PARTS_RESERVED) ? r.inputs : [])));
   const all = spendable(deps, view);
-  const returning = all.filter((u) => reserved.inputs.has(outpoint(u)));
-  const free = all.filter((u) => !reserved.inputs.has(outpoint(u)));
+  const returning = all.filter((u) => reserved.has(outpoint(u)));
+  const waiting = returning.filter((u) => parted.has(outpoint(u)));
+  const free = all.filter((u) => !reserved.has(outpoint(u)));
   const utxos = await deps.coins.seedelf(network, free);
-  return { view, utxos, params, returning, classes: await classesOf(deps, network, utxos) };
+  return { view, utxos, params, returning, waiting, classes: await classesOf(deps, network, utxos) };
+}
+
+/**
+ * The chains being sent on `network`, by name (spent.ts reservations: none only kept for Send), but `except`. Call
+ * it while unlocked.
+ */
+function sendingChains(
+  deps: Pick<ScriptSpendDeps, "wallet" | "session" | "now">,
+  network: NetworkName,
+  except?: string,
+): Promise<Array<[string, Reservation]>> {
+  return deps.wallet.withKeys(async () =>
+    Object.entries(await reservations(deps.session, network, deps.now())).filter(
+      ([chain, r]) => chain !== except && r.until === undefined,
+    ),
+  );
 }
 
 /**
@@ -218,24 +276,27 @@ export async function classesOf(
 /**
  * Why a Seedelf spend has nothing to pay with: `utxos` from readContract,
  * `empty` for an empty balance, and `returning` (readContract's) for what a
- * return through Lovejoin being sent holds.
+ * chain being sent holds; `waiting`, of those, a payment's parts still to go,
+ * which are said as that when they're all it holds.
  */
 export function nothingToSpend(
   deps: Pick<ScriptSpendDeps, "contract">,
   view: ContractView,
   empty: string,
   returning: KoiosUtxo[] = [],
+  waiting: KoiosUtxo[] = [],
 ): Error {
   const all = spendable(deps, view);
   if (!all.length) return new Error(empty);
+  const parts = waiting.length === returning.length;
   if (returning.length === all.length) {
     return new Error(
-      t("worker.spend.waitsForReturn"),
+      t(parts ? "worker.spend.waitsForParts" : "worker.spend.waitsForReturn"),
     );
   }
   if (returning.length) {
     return new Error(
-      t("worker.spend.allLockedOrWaiting"),
+      t(parts ? "worker.spend.allLockedOrParts" : "worker.spend.allLockedOrWaiting"),
     );
   }
   return new Error(t("worker.spend.allLocked"));
@@ -407,8 +468,13 @@ export interface PartBuilt {
  * does not create two healthy tx"): one recipient, paid what they all pay, with the tokens of each; the least they
  * carry, their fees and change added up; every UTxO they spend; Max only where every part is (an amount's parts but
  * its last may pay all their UTxOs hold); what Max left, the last's. One part is itself.
+ *
+ * `read`: readContract's `classes`, each carry's with them (`carried`), and `utxos`. The parts tie everything they
+ * spend as one transaction would (privacy.md), so the histories merged are those of every UTxO any part spends, two
+ * or more of them; and a token kept in several parts is kept once (1.6.0 review). Without it, each part's own, added
+ * up, which is all a shortfall's `most` asks of it.
  */
-export function whole<P extends PartBuilt>(parts: P[]): P {
+export function whole<P extends PartBuilt>(parts: P[], read?: { classes: Classes; utxos: KoiosUtxo[] }): P {
   const [first] = parts;
   if (parts.length === 1) return first!;
   const last = parts.at(-1)!;
@@ -432,13 +498,41 @@ export function whole<P extends PartBuilt>(parts: P[]): P {
       total: sum((p) => p.fee.total),
     },
     changeLovelace: sum((p) => p.changeLovelace),
-    changeTokens: parts.reduce((n, p) => n + p.changeTokens, 0),
+    changeTokens: read ? tokensKept(read.utxos, parts) : parts.reduce((n, p) => n + p.changeTokens, 0),
     changeOutputs: parts.reduce((n, p) => n + p.changeOutputs, 0),
     changeMinimum: last.changeMinimum,
     inputs: parts.flatMap((p) => p.inputs),
     left: last.left,
-    classesMixed: [...new Set(parts.flatMap((p) => p.classesMixed))],
+    classesMixed: read ? spentTogether(read.classes, parts) : [...new Set(parts.flatMap((p) => p.classesMixed))],
   };
+}
+
+/** The histories a payment's parts spend, each once, when they're more than one: a carry's is the part before's. */
+function spentTogether(classes: Classes, parts: PartBuilt[]): string[] {
+  const made = new Set(parts.map((p) => p.txHash));
+  const own = parts.flatMap((p) => p.inputs).filter((i) => !made.has(i.txHash));
+  const ids = [...new Set(own.map((i) => classOf(classes, i).id))];
+  return ids.length > 1 ? ids : [];
+}
+
+/** How many tokens a payment's parts keep in the private balance, each once: what their UTxOs hold past what's paid. */
+function tokensKept(utxos: KoiosUtxo[], parts: PartBuilt[]): number {
+  const at = new Map(utxos.map((u) => [outpoint(u), u]));
+  const left = new Map<string, bigint>();
+  const add = (policyId: string, assetName: string, quantity: bigint) => {
+    const key = `${policyId}.${assetName}`;
+    left.set(key, (left.get(key) ?? 0n) + quantity);
+  };
+  // A carry isn't among `utxos`, and holds ADA alone (core's `carried`).
+  for (const i of parts.flatMap((p) => p.inputs)) {
+    for (const a of at.get(`${i.txHash}#${i.txIndex}`)?.asset_list ?? []) {
+      add(a.policy_id, a.asset_name, BigInt(a.quantity));
+    }
+  }
+  for (const token of parts.flatMap((p) => p.payments.flatMap((q) => q.tokens))) {
+    add(token.policyId, token.assetName, -BigInt(token.quantity));
+  }
+  return [...left.values()].filter((q) => q > 0n).length;
 }
 
 /** Where part `i` of a payment is kept: the first where a single transaction is, so Send finds it as ever. */
@@ -485,11 +579,11 @@ async function refuseSpentSince(
 }
 
 /**
- * Refuses a kept transaction that spends what a chain through Lovejoin being
- * sent will spend (spent.ts reservations: a session's return, whose last
- * transaction merges into its funding's change, or a mix from the public
- * account): readContract leaves those out, but only of what's built after
- * the chain started.
+ * Refuses a kept transaction that spends what a chain being sent will spend
+ * (spent.ts reservations: a session's return through Lovejoin, whose last
+ * transaction merges into its funding's change, a mix from the public
+ * account, or a payment's parts still to go): readContract leaves those out,
+ * but only of what's built after the chain started.
  */
 async function refuseReserved(
   deps: ScriptSpendDeps,
@@ -498,11 +592,10 @@ async function refuseReserved(
   what: SpendWhat,
   except?: string,
 ): Promise<void> {
-  const inputs = txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16)));
-  const reserved = await deps.wallet.withKeys(() =>
-    reservedSet(deps.session, network, { sending: true, now: deps.now(), ...(except !== undefined ? { except } : {}) }),
-  );
-  if (inputs.some((o) => reserved.inputs.has(o))) {
-    throw new StaleReviewError(t(CHAIN_CONFLICT[what]));
-  }
+  const inputs = new Set(txInputs(Uint8Array.from(txCbor.match(/../g) ?? [], (h) => Number.parseInt(h, 16))));
+  const holding = (await sendingChains(deps, network, except)).filter(([, r]) => r.inputs.some((o) => inputs.has(o)));
+  if (!holding.length) return;
+  // Held by a payment's parts still to go alone, it's said as that, not as a chain through Lovejoin.
+  const parts = holding.every(([chain]) => chain.startsWith(PARTS_RESERVED));
+  throw new StaleReviewError(t((parts ? PARTS_CONFLICT : CHAIN_CONFLICT)[what]));
 }

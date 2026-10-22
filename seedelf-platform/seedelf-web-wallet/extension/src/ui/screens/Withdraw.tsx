@@ -218,7 +218,7 @@ export function Withdraw({
       >
         <ReviewRecipients testId="withdraw-review" payments={summary.payments} rows={recipientRows}>
           <Row label={t("review.fee")} value={adaText(summary.fee.total)} />
-          {/* More UTxOs than one transaction spends: it goes as several (the owner's test of 1.6.0). */}
+          {/* More than one transaction holds, by UTxOs or size: it goes as several (the owner's test of 1.6.0). */}
           {summary.parts && <Row label={t("review.parts")} value={String(summary.parts.length)} />}
           <TotalRows side="private" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>

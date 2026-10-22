@@ -87,6 +87,16 @@ export const HELD_IN_MEMPOOL_MS = VALID_FOR_MS + EXPIRED_AFTER_SLOTS * 1000;
 /** Refused while a payment may still go through. */
 export const MAYBE_SENT_WAIT = () => t("worker.pending.maybeSentWait");
 
+/**
+ * That refusal (MAYBE_SENT_WAIT's words): a wait, not a no. A payment's part that waited for the one before
+ * (parts.ts `step`) waits on for it, rather than stopping the rest.
+ */
+export class MaybeSentWait extends Error {
+  constructor() {
+    super(MAYBE_SENT_WAIT());
+  }
+}
+
 /** What the watch keeps beyond what Home is shown. */
 interface Watched extends PendingTx {
   /** A maybe-sent transaction, signed (hex), to send again as it is. */
@@ -256,6 +266,24 @@ const alarms = new WeakMap<Area, { start(): Promise<void> }>();
 
 async function wake(deps: PendingDeps): Promise<void> {
   await (deps.alarm ?? alarms.get(deps.session))?.start().catch(() => undefined);
+}
+
+/** Told how a watched transaction ended as the watch lets it go: on chain (`landed`), or never seen. */
+export type OnSettled = (network: NetworkName, txHash: string, landed: boolean) => Promise<void>;
+
+/**
+ * What hears each watched transaction's end, by the worker's session storage (parts.ts `PartsService`: a payment
+ * stopped at Send whose last part Koios didn't answer says, once it's settled, whether that one went).
+ */
+const settledHooks = new WeakMap<Area, OnSettled>();
+
+/** Has `hook` hear how each transaction the watch on `session` lets go ended. */
+export function onSettled(session: Area, hook: OnSettled): void {
+  settledHooks.set(session, hook);
+}
+
+async function told(deps: PendingDeps, w: Watched, landed: boolean): Promise<void> {
+  await settledHooks.get(deps.session)?.(w.network, w.txHash, landed).catch(() => undefined);
 }
 
 /** Starts the sessions alarm PendingService keeps for this worker's session storage: a payment's parts that wait (parts.ts). */
@@ -578,7 +606,7 @@ async function writeAhead(deps: PendingDeps, s: Sending): Promise<Ahead> {
       return { was, before };
     });
     if (unsettled(was)) {
-      if (was.txHash !== s.txHash) throw new Error(MAYBE_SENT_WAIT());
+      if (was.txHash !== s.txHash) throw new MaybeSentWait();
       return { record: was, again: true };
     }
     const ahead: Ahead = { record, again: false, before };
@@ -738,6 +766,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     // A Bootstrap from the public account is its deposit alone: seen here, it went in, whatever a later pool read
     // lists there (MERGED-5). Telling it is never the watch's failure.
     if (w.kind === "lovejoin-mix") await deps.depositLanded?.(w.network, w.txHash).catch(() => undefined);
+    await told(deps, w, true);
     return seen;
   }
 
@@ -788,6 +817,7 @@ async function settleNow(deps: PendingDeps, w: Watched, look: boolean): Promise<
     });
     if (held) return held.cur;
     if (w.contract) await forgetContractView(deps, w.network);
+    await told(deps, w, false);
     return { ...w, dropped: expired ? "expired" : "unseen" };
   }
 
@@ -935,7 +965,29 @@ export async function settleMaybeSent(deps: PendingDeps, network: NetworkName): 
   await settle(deps, w);
   // As the watch stands now: another may have gone maybe sent meanwhile, or a lock and an unlock
   // while Koios was asked took this one, and it's put back first (final review F7).
-  if (unsettled(await watchedOn(deps, network))) throw new Error(MAYBE_SENT_WAIT());
+  if (unsettled(await watchedOn(deps, network))) throw new MaybeSentWait();
+}
+
+/**
+ * Names watched `txHash` a part of the payment in parts `chain` names, when it went without (a part before the
+ * last that went at Send, parts.ts `unsplit`): Home's banner then asks how many of it went, and says the rest didn't.
+ * Nothing else of the watch changes. Returns whether the watch holds it as one that may still go through.
+ */
+export async function nameParts(
+  deps: PendingDeps,
+  network: NetworkName,
+  txHash: string,
+  chain: NonNullable<PendingTx["chain"]>,
+): Promise<boolean> {
+  const key = pendingKey(network);
+  return inTurn(deps, network, () =>
+    deps.wallet.withKeys(async () => {
+      const w = await deps.session.get<Watched>(key);
+      if (w?.txHash !== txHash) return false;
+      if (!w.chain) await deps.session.set(key, { ...w, chain });
+      return unsettled(w);
+    }),
+  );
 }
 
 export class PendingService {
