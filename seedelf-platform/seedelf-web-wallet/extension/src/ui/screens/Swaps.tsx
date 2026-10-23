@@ -51,6 +51,8 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
+  CollateralBoxNote,
+  CollateralBoxRow,
   delayText,
   IntoRow,
   LOVEJOIN_UNAUDITED,
@@ -2227,6 +2229,7 @@ export function Session({
             value={tr("swaps.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
           />
           <IntoRow back={back} />
+          <CollateralBoxRow back={back} />
         </ReviewRows>
         {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
         <TokenWays
@@ -2245,6 +2248,7 @@ export function Session({
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
+        <CollateralBoxNote back={back} />
         <ReturnLinks back={back} after={neverAgain(s, back)} />
       </Screen>
     );

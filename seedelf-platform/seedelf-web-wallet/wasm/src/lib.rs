@@ -936,6 +936,10 @@ pub mod api {
         /// account comes back first when not everything can at once.
         #[serde(default)]
         pub own: Vec<String>,
+        /// The 5 ₳ Lovejoin pool the session's collateral goes into, rather
+        /// than back with the rest (`lovejoin::CollateralBox`).
+        #[serde(default)]
+        pub collateral_pool: Option<crate::lovejoin::PoolRef>,
     }
 
     /// A signed return, ready to submit, and what it moves.
@@ -956,6 +960,10 @@ pub mod api {
         pub merged: usize,
         /// The account's UTxOs it leaves there, for a later return.
         pub left_out: Vec<LeftOut>,
+        /// The box the collateral went into, when `collateral_pool` was asked
+        /// and the return pays for it; `lovelace` leaves its 5 ₳ out.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub collateral_box: Option<crate::lovejoin::OutRef>,
     }
 
     /// The most funding changes one return merges into.
@@ -1040,6 +1048,9 @@ pub mod api {
     /// [`MAX_MERGE`] of the funding's UTxOs, their proofs, the collateral and
     /// the script data. One merged into four measured under 1,000 bytes.
     const MERGED_OVERHEAD_BYTES: u64 = 2_000;
+    /// What the collateral's box adds to a return, at most: the pool's
+    /// address, 5 ₳ and its inline `{a, b}` (two 48-byte points).
+    const BOX_OUTPUT_BYTES: u64 = 200;
     /// What one more input adds to a transaction, at most: `[tx hash, index]`.
     const INPUT_BYTES: u64 = 40;
     /// Room each deposit output's measure leaves for the amount it really
@@ -1159,6 +1170,7 @@ pub mod api {
         rows: &[UtxoResponse],
         merge: &[UtxoResponse],
         own: &[String],
+        boxed: bool,
     ) -> Result<ReturnPlan> {
         let priced: Vec<&UtxoResponse> = rows
             .iter()
@@ -1212,7 +1224,7 @@ pub mod api {
                 MERGED_OVERHEAD_BYTES
             } else {
                 SWEEP_OVERHEAD_BYTES
-            },
+            } + if boxed { BOX_OUTPUT_BYTES } else { 0 },
             inputs: 0,
             tokens: base.clone().unwrap_or_default(),
             script_bytes: 0,
@@ -1334,6 +1346,7 @@ pub mod api {
     /// a site connected to the session can ask its key to sign, so a proof
     /// bound to it could be replayed in what the site builds. Measured in the
     /// wallet; `known` are UTxOs among `rows` that aren't on chain yet.
+    /// `extra`, outputs of ADA alone, are paid first (the collateral's box).
     /// Signed by the one-time key and the session's, here.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn merged_return(
@@ -1345,6 +1358,7 @@ pub mod api {
         collateral: &UtxoResponse,
         merge: &[UtxoResponse],
         known: &[seedelf_core::eval::Resolved],
+        extra: &[pallas_txbuilder::Output],
     ) -> Result<(BuiltTransaction, build::FinalSpend)> {
         check_spendable(sk, chain, merge)?;
         if merge.len() > MAX_MERGE {
@@ -1353,8 +1367,11 @@ pub mod api {
         let key = accounts.key_hash(Role::Receive, index)?;
         let owner = Register::create(sk)?;
         let one_time = one_time_key(&sk, &new_seed());
-        let spend = ScriptSpend::new(chain, merge, &owner, key_hash(&one_time))?
+        let mut spend = ScriptSpend::new(chain, merge, &owner, key_hash(&one_time))?
             .with_account(key, rows, collateral)?;
+        for output in extra {
+            spend = spend.output(output.clone(), &Assets::new())?;
+        }
         let built = prove_with(sk, spend)?.measure_locally(known)?;
         let session_key = accounts
             .private_key(Role::Receive, index)?
@@ -1399,27 +1416,54 @@ pub mod api {
                 );
             }
         }
-        let plan = plan_return(&params, &request.utxos, &request.merge, &request.own)?;
-        if plan.taken.is_empty() {
-            bail!(NOTHING_PAYS);
-        }
-        let (result, _) = built_or_without_strangers(plan, |plan| {
-            planned_return(accounts, sk, &request, &params, plan)
-        })?;
+        // The collateral's box when it's asked for and the return pays for it;
+        // otherwise the return as it was, the collateral back with the rest.
+        let boxed =
+            crate::lovejoin::CollateralBox::of(network_flag, request.collateral_pool.as_ref(), sk)
+                .unwrap_or(None);
+        let attempt = |boxed: Option<&crate::lovejoin::CollateralBox>| {
+            let plan = plan_return(
+                &params,
+                &request.utxos,
+                &request.merge,
+                &request.own,
+                boxed.is_some(),
+            )?;
+            if plan.taken.is_empty() {
+                bail!(NOTHING_PAYS);
+            }
+            built_or_without_strangers(plan, |plan| {
+                planned_return(accounts, sk, &request, &params, plan, boxed)
+            })
+        };
+        let (result, _) = match &boxed {
+            Some(b) => attempt(Some(b)).or_else(|_| attempt(None))?,
+            None => attempt(None)?,
+        };
         Ok(result)
     }
 
-    /// Session `request.index`'s return of what `plan` takes.
+    /// Session `request.index`'s return of what `plan` takes, with the
+    /// collateral's box when `boxed`.
     fn planned_return(
         accounts: &CardanoAccount,
         sk: Scalar,
         request: &SessionReturnRequest,
         params: &ProtocolParameters,
         plan: &ReturnPlan,
+        boxed: Option<&crate::lovejoin::CollateralBox>,
     ) -> Result<SessionReturnResult> {
         let network_flag = network_flag(&request.network)?;
         let key = accounts.key_hash(Role::Receive, request.index)?;
         let (total, tokens) = utxo_assets(plan.taken.clone())?;
+        let extra: Vec<pallas_txbuilder::Output> = boxed.iter().map(|b| b.output.clone()).collect();
+        // What comes back at once after `fee`; with the box, only out of the
+        // session's own ADA, its collateral among it (`CollateralBox::back_from`).
+        let back = |fee: u64| match boxed {
+            Some(b) => b.back_from(&plan.taken, total, fee),
+            None => Ok(total - fee),
+        };
+        let box_of = |tx: &BuiltTransaction| boxed.map(|b| b.found_in(tx)).transpose();
         if let (true, Some(collateral)) = (plan.merged, session_collateral(&plan.taken)) {
             let chain = chain_of(&request.network, &request.params)?;
             let (signed, built) = merged_return(
@@ -1431,23 +1475,26 @@ pub mod api {
                 collateral,
                 &request.merge,
                 &[],
+                &extra,
             )?;
             return Ok(SessionReturnResult {
                 tx_cbor: hex::encode(&signed.tx_bytes.0),
                 tx_hash: hex::encode(signed.tx_hash.0),
                 fee: built.fee.total.to_string(),
-                lovelace: (total - built.fee.total).to_string(),
+                lovelace: back(built.fee.total)?.to_string(),
                 tokens: tokens.items.iter().map(token_amount).collect(),
                 deposit_outputs: built.change_outputs,
                 inputs: plan.taken.len(),
                 merged: request.merge.len(),
                 left_out: plan.left_out.clone(),
+                collateral_box: box_of(&signed)?,
             });
         }
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
         let owner = Register::create(sk)?;
-        let (tx, fee) = build::external_sweep(params, &plan.taken, &owner, &wallet, key)?;
+        let (tx, fee) =
+            build::external_sweep_with(params, &plan.taken, &owner, &wallet, key, &extra)?;
         let signed = tx
             .sign(
                 accounts
@@ -1456,22 +1503,24 @@ pub mod api {
             )
             .map_err(|e| anyhow!("failed to sign: {e:?}"))?;
 
-        // Every output is a deposit into the contract.
+        // Every output but the collateral's box is a deposit into the contract.
         let deposit_outputs = pallas_primitives::conway::Tx::decode_fragment(&signed.tx_bytes.0)
             .map_err(|e| anyhow!("the return doesn't decode: {e}"))?
             .transaction_body
             .outputs
-            .len();
+            .len()
+            - extra.len();
         Ok(SessionReturnResult {
             tx_cbor: hex::encode(&signed.tx_bytes.0),
             tx_hash: hex::encode(signed.tx_hash.0),
             fee: fee.to_string(),
-            lovelace: (total - fee).to_string(),
+            lovelace: back(fee)?.to_string(),
             tokens: tokens.items.iter().map(token_amount).collect(),
             deposit_outputs,
             inputs: plan.taken.len(),
             merged: 0,
             left_out: plan.left_out.clone(),
+            collateral_box: box_of(&signed)?,
         })
     }
 

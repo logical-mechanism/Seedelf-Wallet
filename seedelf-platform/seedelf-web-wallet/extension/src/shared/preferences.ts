@@ -136,6 +136,13 @@ export interface Preferences {
    * Lovejoin tile mixes whatever it says (privacy review §4.1).
    */
   lovejoinReturns: boolean;
+  /**
+   * With `lovejoinReturns`, the session's 5 ₳ collateral goes into a 5 ₳
+   * Lovejoin pool as a box of the wallet's, rather than back with the rest,
+   * where it would carry the session's history (the owner, 2026-10-22). Only
+   * where such a pool is shown; nobody mixes the box for the session.
+   */
+  lovejoinCollateral: boolean;
   /** Lovejoin's fan-out for a session's return: 1, 2 or 3 waves deep, three wide. */
   lovejoinDepth: LovejoinDepth;
   /** Lovejoin: the range each box's wait is drawn from. */
@@ -161,6 +168,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   dappPassword: true,
   dappAccount: 0,
   lovejoinReturns: true,
+  lovejoinCollateral: true,
   lovejoinDepth: 2,
   lovejoinDelay: "1-6",
   lovejoinWidth: 3,

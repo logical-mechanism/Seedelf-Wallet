@@ -9,14 +9,16 @@ use pallas_crypto::key::ed25519::SecretKey;
 use pallas_traverse::MultiEraTx;
 use rand_core::OsRng;
 use seedelf_core::eval::{self, Resolved};
-use seedelf_core::lovejoin::{PoolBox, Protocol, mix_datum};
+use seedelf_core::lovejoin::{
+    BoxValue, PoolBox, Protocol, ReferenceDatum, holder_address, mix_datum, templates,
+};
 use seedelf_crypto::cardano::{CardanoAccount, ONE_TIME_ACCOUNT, Role};
 use seedelf_crypto::register::Register;
 use seedelf_koios::koios::UtxoResponse;
 use seedelf_wasm::api;
 use seedelf_wasm::lovejoin::{
     self, AccountChainRequest, ChainRequest, FinishRequest, FundingRequest, OutRef, OwnedRequest,
-    PlanRequest, WithdrawRequest,
+    PlanRequest, PoolRef, WithdrawRequest,
 };
 use serde_json::{Value, json};
 
@@ -183,6 +185,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             merge: vec![],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -258,6 +261,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             merge: vec![funding_change(sk)],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -333,6 +337,7 @@ fn a_chains_return_leaves_out_what_would_overflow_a_token() {
                 merge,
                 again: false,
                 own: vec![],
+                collateral_pool: None,
             },
         )
         .unwrap()
@@ -388,6 +393,7 @@ fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
             merge: vec![funding_change(sk)],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -434,6 +440,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             merge: vec![],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -552,6 +559,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             merge: vec![],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap_err();
@@ -835,6 +843,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             merge: vec![],
             again: true,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -905,6 +914,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             merge: vec![],
             again: true,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap_err();
@@ -1141,6 +1151,7 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
         merge: vec![],
         again,
         own: vec![],
+        collateral_pool: None,
     };
     let result =
         lovejoin::chain(&accounts(), sk, request(rows.clone(), false, holdings())).unwrap();
@@ -1193,4 +1204,216 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("pool has 1 boxes"), "{err}");
+}
+
+/// An ADA pool of `lovelace` boxes as the worker names one: a 5 ₳ pool takes
+/// a session's collateral (the owner, 2026-10-22). Lovejoin's own preprod
+/// token pool's seed stands in for its launch.
+fn ada_pool_ref(lovelace: u64) -> PoolRef {
+    const SEED: &str = "5c6f327e511818805adb6b4e055a6b222f9f8706cfda3540bdb0e9bb0f6acc0b";
+    const NFT_POLICY: &str = "c5852bb700034b0b259c9e237e58ffc5d022ce8f67600fbf32736e69";
+    let d = templates::derive(&hex::decode(SEED).unwrap().try_into().unwrap(), 2).unwrap();
+    let datum = ReferenceDatum {
+        box_value: BoxValue::ada(lovelace),
+        max_fee: lovelace * 3 / 4,
+        mix_box_hash: d.mix_box.hash,
+        mix_logic_hash: d.mix_logic.hash,
+        fee_hash: d.fee_contract.hash,
+    };
+    let holder = holder_address(true).to_bech32().unwrap();
+    let at_holder = |mut row: UtxoResponse| {
+        row.payment_cred = hex::encode(templates::REFERENCE_HOLDER_HASH);
+        row
+    };
+    let mut reference = at_holder(row(
+        0x7f,
+        0,
+        &holder,
+        1_698_140,
+        &[(NFT_POLICY, &hex::encode("lovejoin"), 1)],
+    ));
+    reference.inline_datum =
+        serde_json::from_value(json!({ "bytes": hex::encode(datum.encode()), "value": {} }))
+            .unwrap();
+    let script = |tx: u8, s: &templates::Script| {
+        let mut row = at_holder(row(tx, 0, &holder, 20_000_000, &[]));
+        row.reference_script = serde_json::from_value(json!({
+            "hash": hex::encode(s.hash), "size": s.cbor.len(), "type": "plutusV3",
+            "bytes": hex::encode(&s.cbor),
+        }))
+        .unwrap();
+        row
+    };
+    PoolRef {
+        reference,
+        seed: OutRef {
+            tx_hash: SEED.to_string(),
+            tx_index: 2,
+        },
+        scripts: vec![script(0x7d, &d.mix_box), script(0x17, &d.mix_logic)],
+    }
+}
+
+/// The collateral's box in `tx_cbor` at `at`: 5 ₳ alone at the 5 ₳ pool's
+/// `mix_box`, under a register `sk` owns. The other outputs are Seedelf's,
+/// and hold what comes back.
+fn collateral_box_in(tx_cbor: &str, at: &OutRef, sk: Scalar) -> u64 {
+    let bytes = hex::decode(tx_cbor).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    assert_eq!(hex::encode(tx.hash()), at.tx_hash);
+    let pool = lovejoin::protocol_of(true, Some(&ada_pool_ref(5_000_000))).unwrap();
+    let outputs = eval::resolve_outputs(&bytes).unwrap();
+    let boxed = PoolBox::from_resolved(outputs[at.tx_index as usize].clone(), &pool)
+        .expect("a box of the 5 ₳ pool");
+    assert!(boxed.is_owned(&sk), "the wallet's own box");
+    let mut seedelf = 0;
+    for (i, output) in tx.outputs().iter().enumerate() {
+        if i as u64 == at.tx_index {
+            assert_eq!(output.value().coin(), 5_000_000);
+            assert!(output.value().assets().is_empty());
+            continue;
+        }
+        let address = Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
+        assert_ne!(
+            address.to_vec(),
+            pool.mix_box_address().to_vec(),
+            "one box only"
+        );
+        assert!(address.has_script(), "into the wallet contract");
+        seedelf += output.value().coin();
+    }
+    seedelf
+}
+
+#[test]
+fn a_chains_return_puts_the_collateral_into_the_5_ada_pool() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(5151u64);
+    let request = |merge: Vec<UtxoResponse>| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: holdings(),
+        collateral: collateral(),
+        pool: pool(&protocol),
+        depth: 1,
+        boxes: Some(1),
+        merge,
+        again: false,
+        own: vec![],
+        collateral_pool: Some(ada_pool_ref(5_000_000)),
+    };
+    // Merged into the funding's change, and swept into new registers.
+    for merge in [vec![funding_change(sk)], vec![]] {
+        let merged = !merge.is_empty();
+        let result = lovejoin::chain(&accounts(), sk, request(merge)).unwrap();
+        let back = result.txs.last().unwrap();
+        assert_eq!(back.kind, "back");
+        let at = result.collateral_box.clone().expect("the collateral's box");
+        let seedelf = collateral_box_in(&back.tx_cbor, &at, sk);
+        // The return spends the collateral, and a merged one puts it up too.
+        let bytes = hex::decode(&back.tx_cbor).unwrap();
+        let tx = MultiEraTx::decode(&bytes).unwrap();
+        assert!(spends(&tx, [2; 32], 1));
+        // What comes back at once leaves the box's 5 ₳ out.
+        let returned: u64 = result.returned.parse().unwrap();
+        assert_eq!(seedelf, returned + if merged { 12_000_000 } else { 0 });
+        // The box is the return's own: the chain's leaves are still the mixed boxes alone.
+        assert_eq!(result.leaves.len(), 1);
+        assert!(result.leaves.iter().all(|l| l.tx_hash != back.tx_hash));
+    }
+}
+
+#[test]
+fn a_direct_return_puts_the_collateral_into_the_5_ada_pool() {
+    let sk = Scalar::from(6262u64);
+    let at = session();
+    let utxos = vec![
+        row(1, 0, &at, 20_000_000, &[]),
+        row(2, 1, &at, 5_000_000, &[]),
+    ];
+    for merge in [vec![funding_change(sk)], vec![]] {
+        let merged = !merge.is_empty();
+        let result = api::session_return(
+            &accounts(),
+            sk,
+            api::SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos: utxos.clone(),
+                merge,
+                own: vec![],
+                collateral_pool: Some(ada_pool_ref(5_000_000)),
+            },
+        )
+        .unwrap();
+        let at = result.collateral_box.clone().expect("the collateral's box");
+        let seedelf = collateral_box_in(&result.tx_cbor, &at, sk);
+        let fee: u64 = result.fee.parse().unwrap();
+        assert_eq!(result.lovelace, (25_000_000 - fee - 5_000_000).to_string());
+        assert_eq!(
+            seedelf,
+            25_000_000 - fee - 5_000_000 + if merged { 12_000_000 } else { 0 }
+        );
+        let outputs = MultiEraTx::decode(&hex::decode(&result.tx_cbor).unwrap())
+            .unwrap()
+            .outputs()
+            .len();
+        assert_eq!(result.deposit_outputs, outputs - 1, "the box is no deposit");
+    }
+}
+
+#[test]
+fn a_return_boxes_only_its_collateral_and_only_from_its_own_ada() {
+    let sk = Scalar::from(7373u64);
+    let at = session();
+    let ask_merged = |utxos: Vec<UtxoResponse>, lovelace: u64, merge: Vec<UtxoResponse>| {
+        api::session_return(
+            &accounts(),
+            sk,
+            api::SessionReturnRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos,
+                merge,
+                own: vec![],
+                collateral_pool: Some(ada_pool_ref(lovelace)),
+            },
+        )
+        .unwrap()
+    };
+    let ask = |utxos: Vec<UtxoResponse>, lovelace: u64| ask_merged(utxos, lovelace, vec![]);
+    // The collateral alone can't pay its own box and the return's fee.
+    let poor = ask(vec![row(2, 1, &at, 5_000_000, &[])], 5_000_000);
+    assert!(poor.collateral_box.is_none());
+    let fee: u64 = poor.fee.parse().unwrap();
+    assert_eq!(poor.lovelace, (5_000_000 - fee).to_string());
+    // Nor does the funding's change a merged return spends pay for it.
+    let merged = ask_merged(
+        vec![row(2, 1, &at, 5_000_000, &[])],
+        5_000_000,
+        vec![funding_change(sk)],
+    );
+    assert_eq!(merged.merged, 1);
+    assert!(merged.collateral_box.is_none());
+    let fee: u64 = merged.fee.parse().unwrap();
+    assert_eq!(merged.lovelace, (5_000_000 - fee).to_string());
+    // A pool of other boxes isn't the collateral's: the return is as before.
+    let other = ask(
+        vec![
+            row(1, 0, &at, 20_000_000, &[]),
+            row(2, 1, &at, 5_000_000, &[]),
+        ],
+        25_000_000,
+    );
+    assert!(other.collateral_box.is_none());
+    let fee: u64 = other.fee.parse().unwrap();
+    assert_eq!(other.lovelace, (25_000_000 - fee).to_string());
+    // An account whose collateral is spent puts none of its other ADA in a box.
+    let spent = ask(vec![row(1, 0, &at, 20_000_000, &[])], 5_000_000);
+    assert!(spent.collateral_box.is_none());
+    let fee: u64 = spent.fee.parse().unwrap();
+    assert_eq!(spent.lovelace, (20_000_000 - fee).to_string());
 }

@@ -112,6 +112,7 @@ import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
 import { txInputs } from "./cbor";
 import { fartherKeys, GAP_LIMIT } from "./chain";
+import { COLLATERAL_LOVELACE } from "./coin-control";
 import { KoiosBusyError, KoiosError, RawJson, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
 import { chainStatus, noteCursor, type Watching } from "./feed";
 import { IndexDown, type IndexRow, utxoOf } from "./private-index";
@@ -635,6 +636,12 @@ export interface LovejoinChain {
   fellBack?: string;
   /** What a box holds in each token pool `ways` names, by its id, for the review (34f). */
   values?: Record<string, LovejoinBoxValue>;
+  /**
+   * The box the return put the session's collateral into, in the 5 ₳ pool `ChainWay.collateralPool` named, when the
+   * return pays for it (the owner, 2026-10-22): the return made it, so it isn't one of `leaves`, and `returned`
+   * leaves its 5 ₳ out.
+   */
+  collateralBox?: { txHash: string; txIndex: number };
 }
 
 /** What a box holds in each of `pools`, by its id, for a review to name them (34f). */
@@ -657,6 +664,8 @@ export interface ChainWay {
    * `most`: at most this many boxes of each token, by its unit, as the approval showed (34e's review, 10).
    */
   returns?: { tokens?: Record<string, string | null>; fills?: string[]; only?: boolean; most?: Record<string, number> };
+  /** A return's 5 ₳ pool for the session's collateral (collateralPool): its return puts the 5 ₳ in as a box. */
+  collateralPool?: LovejoinPool;
 }
 
 /**
@@ -686,6 +695,8 @@ interface ChainCall {
   pool: LovejoinPool;
   /** The width asked: approved, funded, or Settings'. */
   asked: LovejoinWidth;
+  /** Where the return puts the session's collateral (ChainWay's). */
+  collateralPool?: LovejoinPool;
 }
 
 /**
@@ -2855,7 +2866,21 @@ export class LovejoinService {
     const asked = way.width ?? set.width;
     const depth = fixed ?? set.depth;
     const owner = chainOwner(index);
-    const c: ChainCall = { owner, index, rows, collateral, params, merge, depth, again, own, publicToo, pool: into, asked };
+    const c: ChainCall = {
+      owner,
+      index,
+      rows,
+      collateral,
+      params,
+      merge,
+      depth,
+      again,
+      own,
+      publicToo,
+      pool: into,
+      asked,
+      ...(way.collateralPool ? { collateralPool: way.collateralPool } : {}),
+    };
     // A return's tokens go through their own pools beside its ADA's, one chain (chunk 34's §7).
     let tokens: LovejoinTokenWay[] | undefined;
     let values: Record<string, LovejoinBoxValue> | undefined;
@@ -2960,6 +2985,7 @@ export class LovejoinService {
         own,
         ...(w !== 3 ? { width: w } : {}),
         ...(pool.ref ? { poolRef: pool.ref } : {}),
+        ...(c.collateralPool?.ref ? { collateralPool: c.collateralPool.ref } : {}),
       };
       const built = await this.deps.wallet.withKeys(
         (keys) =>
@@ -3156,6 +3182,7 @@ export class LovejoinService {
           legs: legs.map((l, i) => ({ ...(l.pool.ref ? { poolRef: l.pool.ref } : {}), pool: this.real(l.split), most: fits[i] })),
           fills: returns.fills ?? [],
           ...(w !== 3 ? { width: w } : {}),
+          ...(c.collateralPool?.ref ? { collateralPool: c.collateralPool.ref } : {}),
         };
         const built = await this.deps.wallet.withKeys(
           (keys) =>
@@ -3314,6 +3341,34 @@ export class LovejoinService {
     const why =
       pool.copy && !again ? "superseded" : this.usableNow(network, pool, params ?? (await this.deps.koios(network).epochParams()), again);
     if (why) throw new Error(unusableReason(why));
+  }
+
+  /**
+   * The pool a session's return puts its 5 ₳ collateral into, as a box of the wallet's (the owner, 2026-10-22): the
+   * shown ADA pool whose box holds exactly the collateral's 5 ₳, as discovery last kept it, asking nobody, while it
+   * takes a new box (usableNow). Only one pool of a value is ever shown. None on a network that has none, which on
+   * mainnet is every network until someone starts one: the collateral comes back with the rest, as before.
+   */
+  async collateralPool(network: NetworkName, params: unknown): Promise<LovejoinPool | undefined> {
+    if (!this.available(network)) return undefined;
+    const pools = await this.readSet(network, true);
+    const pool = pools.find((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
+    if (!pool || this.usableNow(network, pool, params)) return undefined;
+    return pool;
+  }
+
+  /**
+   * Return `txHash` puts a session's collateral into a box (collateralPool): what made it is written as Koios would
+   * have said it, a deposit and no mix (Origin), so a pool read holds the box as not mixed yet, as any deposit's, and
+   * never asks what made it. Once someone else's mix moves it, the box that mix made is found as any is, and comes
+   * back by itself. Written before the return is sent; one never sent goes as any origin no read lists, and a chain
+   * whose return lands past RECORD_KEEP_MS has its box asked of, as a restore's are, which says the same.
+   */
+  async noteCollateralBox(network: NetworkName, txHash: string): Promise<void> {
+    const at = this.deps.now();
+    await this.update(network, (s) => {
+      s.origins = { ...s.origins, [txHash]: { mixed: false, seen: at } };
+    });
   }
 
   /**

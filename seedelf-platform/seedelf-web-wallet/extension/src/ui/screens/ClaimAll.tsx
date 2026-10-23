@@ -258,6 +258,7 @@ export function ClaimReview({
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
   const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
+  const collaterals = picked.filter((r) => r.collateralBox).length;
   const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
@@ -398,9 +399,18 @@ export function ClaimReview({
         )}
         {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
         {boxes > 0 && <BoxesBackRow boxes={boxes} />}
+        {/* Each session's 5 ₳ collateral its return puts into Lovejoin's 5 ₳ pool, not back with the rest. */}
+        {collaterals > 0 && (
+          <Row label={t("claim.collateralLabel")} value={t("claim.collateralValue", { count: collaterals })} />
+        )}
         <Row label={t("claim.fees")} value={`${formatAda(fees.toString())}\u00a0₳`} />
         <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>
+      {collaterals > 0 && (
+        <Callout tone="privacy" testId="claim-collateral-box-note">
+          {t("lovejoin.collateralBox.privacy.note", { count: collaterals })}
+        </Callout>
+      )}
       {fellBack.map((why) => (
         <WidthNote key={why} fellBack={why} testId="claim-width-fell-back" />
       ))}

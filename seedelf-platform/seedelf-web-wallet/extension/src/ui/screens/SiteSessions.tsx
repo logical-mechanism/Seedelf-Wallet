@@ -33,6 +33,8 @@ import { HistoriesNote } from "../components/HistoriesNote";
 import { PaidRows } from "../components/PaidRows";
 import {
   chainText,
+  CollateralBoxNote,
+  CollateralBoxRow,
   IntoRow,
   LovejoinNote,
   LovejoinRows,
@@ -274,6 +276,7 @@ export function SiteSession({
             value={tr("sites.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
           />
           <IntoRow back={back} />
+          <CollateralBoxRow back={back} />
         </ReviewRows>
         {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
         <TokenWays
@@ -286,6 +289,7 @@ export function SiteSession({
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
+        <CollateralBoxNote back={back} />
         <p className="note">{tr("sites.back.staysConnected")}</p>
         <ReturnLinks back={back} />
       </Screen>

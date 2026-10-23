@@ -25,6 +25,8 @@ describe("preferences", () => {
       dappAccount: 0,
       // A session's spare ADA comes back through Lovejoin, fanned out two waves deep, and each box waits 1 to 6 hours.
       lovejoinReturns: true,
+      // With them, a session's 5 ₳ collateral into a pool of 5 ₳ boxes, where one is shown (the owner, 2026-10-22).
+      lovejoinCollateral: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
       // Three boxes a mix; four is the option (chunk 34's D3).
@@ -42,6 +44,7 @@ describe("preferences", () => {
       dappPassword: true,
       dappAccount: 0,
       lovejoinReturns: true,
+      lovejoinCollateral: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
       lovejoinWidth: 3,
@@ -58,6 +61,10 @@ describe("preferences", () => {
     expect((await prefs.get()).dappConnector).toBe(false);
     await prefs.set({ dappConnector: true });
     expect((await prefs.get()).dappConnector).toBe(true);
+    await prefs.set({ lovejoinCollateral: "off" as never });
+    expect((await prefs.get()).lovejoinCollateral).toBe(true);
+    await prefs.set({ lovejoinCollateral: false });
+    expect((await prefs.get()).lovejoinCollateral).toBe(false);
     // Four boxes a mix, or three, and nothing else (chunk 34's D3).
     await prefs.set({ lovejoinWidth: 5 as never });
     expect((await prefs.get()).lovejoinWidth).toBe(3);

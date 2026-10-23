@@ -4020,6 +4020,16 @@ export class SessionService {
     // and says why when it would have gone through Lovejoin (independent review L17).
     const restOnItsWay = started && sent.some((t) => t.kind === "back" && !t.confirmed && !t.replaced);
     if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK();
+    // The session's 5 ₳ collateral goes into the 5 ₳ pool as a box, rather than back with the rest under the
+    // session's history, wherever its return goes through Lovejoin, a chain's or one that comes back directly, and
+    // Settings keeps it on (the owner, 2026-10-22). Read as it's built, as Settings' Lovejoin is for any session but
+    // a swap. WebAssembly brings it back with the rest where the return can't pay for the box.
+    const intoPool =
+      !direct && lovejoin?.available(network) && (await this.throughLovejoin(record)) && (await this.collateralIntoPool())
+        ? await lovejoin.collateralPool(network, params)
+        : undefined;
+    const boxedIn = (made?: { txHash: string; txIndex: number }) =>
+      made && intoPool ? { collateralBox: { txHash: made.txHash, txIndex: made.txIndex, pool: intoPool.id } } : {};
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
       // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
@@ -4053,8 +4063,8 @@ export class SessionService {
             record?.mix?.seed || record?.mix?.bootstrap ? 0 : record?.auto?.lovejoin?.depth,
             // The pool its mix was funded for: a token pool's token went with its ADA.
             record?.mix?.pool,
-            // Its width, and a return's tokens' pools (chunk 34's 34e).
-            wayOf(record, pools),
+            // Its width, a return's tokens' pools (chunk 34's 34e), and its collateral's.
+            { ...wayOf(record, pools), ...(intoPool ? { collateralPool: intoPool } : {}) },
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -4107,6 +4117,7 @@ export class SessionService {
           },
           chain: chain.txs,
           leaves: chain.leaves,
+          ...boxedIn(chain.collateralBox),
           builtAt: now(),
         };
       }
@@ -4125,7 +4136,11 @@ export class SessionService {
       result = await wallet.withKeys(
         (keys) =>
           JSON.parse(
-            wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge, own })),
+            wasm.buildSessionReturn(
+              keys.oneTime,
+              keys.seedelf,
+              JSON.stringify({ network, params, index, utxos: rows, merge, own, ...(intoPool?.ref ? { collateralPool: intoPool.ref } : {}) }),
+            ),
           ) as typeof result,
       );
     } catch (e) {
@@ -4138,7 +4153,14 @@ export class SessionService {
       throw new NothingComesBack(t("sess.tooLittleBack"));
     }
     await this.leftBy(network, index, rows, result.leftOut);
-    return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
+    // WebAssembly names the box by where it is; the pool it's in is the one asked.
+    const { collateralBox: made, ...back } = result;
+    return { ...back, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), ...boxedIn(made), builtAt: now() };
+  }
+
+  /** Whether Settings has a session's collateral go into the 5 ₳ pool (`lovejoinCollateral`), on by default. */
+  private async collateralIntoPool(): Promise<boolean> {
+    return (await this.deps.preferences?.get())?.lovejoinCollateral ?? DEFAULT_PREFERENCES.lovejoinCollateral;
   }
 
   /**
@@ -4296,6 +4318,9 @@ export class SessionService {
    * the user waits on); the runner's steps and the alarm send the rest.
    */
   private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK, budgetMs = 0): Promise<PendingTx> {
+    // The box its return puts the collateral into is held as not mixed yet once it's there, asking nobody what made
+    // it. A record that can't be written is no reason to keep the money: the box is then asked of, as any is.
+    if (built.collateralBox) await this.deps.lovejoin?.noteCollateralBox(network, built.collateralBox.txHash).catch(() => undefined);
     if (built.chain) return this.sendChain(network, built, kept, budgetMs);
     // Lovejoin was left out: the session says so, a swap that ran itself too.
     const skipped = built.lovejoinSkipped;

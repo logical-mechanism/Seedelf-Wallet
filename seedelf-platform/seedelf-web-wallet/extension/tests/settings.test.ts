@@ -205,6 +205,27 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.8 ₳)");
     expect(shown).toContain("A mix from the Lovejoin tile still mixes");
   });
+
+  // The owner's call (2026-10-22): a returning session's 5 ₳ collateral into a pool of 5 ₳ boxes, with its own switch.
+  it("has the collateral's own switch, on by default, off with the returns', saying what each way does", () => {
+    const render = (prefs: Partial<typeof DEFAULT_PREFERENCES>) =>
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: { ...DEFAULT_PREFERENCES, ...prefs }, loaded: true, set: async () => undefined } },
+          createElement(Settings.LovejoinSettings, { network: "mainnet" }),
+        ),
+      ).replaceAll("&#x27;", "'");
+    const button = (html: string) => html.match(/<button[^>]*data-testid="lovejoin-collateral-switch"[^>]*>/)![0];
+    expect(DEFAULT_PREFERENCES.lovejoinCollateral).toBe(true);
+    const on = render({});
+    expect(button(on)).toContain('aria-checked="true"');
+    expect(button(on)).not.toContain("disabled");
+    expect(text(on)).toContain("Put a session's 5 ₳ collateral into Lovejoin as it's brought back");
+    expect(text(on)).toContain("if that pool exists; if not, it comes back with the rest");
+    expect(text(render({ lovejoinCollateral: false }))).toContain("anyone can tie it to the session, as they can that money");
+    expect(button(render({ lovejoinReturns: false }))).toContain('disabled=""');
+  });
 });
 
 describe("Settings' Connected sites (launch review H7)", () => {

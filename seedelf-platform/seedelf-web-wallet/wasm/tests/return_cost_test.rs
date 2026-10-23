@@ -100,6 +100,7 @@ fn request(utxos: Vec<UtxoResponse>, merge: Vec<UtxoResponse>, own: &[u8]) -> Se
         utxos,
         merge,
         own: own.iter().map(|t| hex::encode([*t; 32])).collect(),
+        collateral_pool: None,
     }
 }
 
@@ -398,6 +399,7 @@ fn a_chains_return_leaves_a_strangers_junk_behind_and_the_chain_still_goes() {
                 merge,
                 again: false,
                 own: vec![hex::encode([0x20u8; 32])],
+                collateral_pool: None,
             },
         )
         .unwrap();

@@ -272,6 +272,7 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             merge: Vec::new(),
             again: false,
             own: vec![funding.clone()],
+            collateral_pool: None,
         },
         Some(&pool_ref()),
     )

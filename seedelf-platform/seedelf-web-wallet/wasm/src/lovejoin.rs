@@ -32,7 +32,7 @@ use blstrs::Scalar;
 use pallas_addresses::{Address, ShelleyPaymentPart};
 use pallas_crypto::hash::Hash;
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
-use pallas_txbuilder::BuiltTransaction;
+use pallas_txbuilder::{BuiltTransaction, Output};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
@@ -155,6 +155,89 @@ pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protoco
         &scripts,
     )
     .map_err(|e| anyhow!("{e}"))
+}
+
+/// The box a session's return puts the session's 5 ₳ collateral into (the
+/// owner, 2026-10-22): the collateral is free once the chain's last mix is in,
+/// and back in the private balance it would carry the session's history. At
+/// the `mix_box` of an ADA pool whose box holds exactly the collateral's 5 ₳,
+/// under a fresh re-randomization of the Seedelf key's register. Nobody mixes
+/// it for the session: it waits, not mixed yet, as any such box does.
+pub(crate) struct CollateralBox {
+    pub output: Output,
+    protocol: Protocol,
+    datum: ([u8; 48], [u8; 48]),
+}
+
+impl CollateralBox {
+    /// The box for `pool`, verified; none without one. A pool that isn't 5 ₳
+    /// boxes of ADA, or doesn't verify, is refused: the caller brings the
+    /// collateral back with the rest rather than fail a session's return.
+    pub(crate) fn of(
+        network_flag: bool,
+        pool: Option<&PoolRef>,
+        sk: Scalar,
+    ) -> Result<Option<Self>> {
+        let Some(pool) = pool else {
+            return Ok(None);
+        };
+        let protocol = protocol_of(network_flag, Some(pool))?;
+        let value = protocol.box_value();
+        if value.token.is_some() || value.lovelace != build::COLLATERAL_LOVELACE {
+            bail!("The collateral goes only into a Lovejoin pool of 5 ₳ boxes of ADA");
+        }
+        let owner = Register::create(sk)?.rerandomize()?;
+        let point = |hex_point: &str| -> Result<[u8; 48]> {
+            hex::decode(hex_point)?
+                .try_into()
+                .map_err(|_| anyhow!("a register's point isn't 48 bytes"))
+        };
+        let datum = (point(&owner.generator)?, point(&owner.public_value)?);
+        let output = value
+            .output(protocol.mix_box_address())?
+            .set_inline_datum(lovejoin::mix_datum(&datum.0, &datum.1));
+        Ok(Some(CollateralBox {
+            output,
+            protocol,
+            datum,
+        }))
+    }
+
+    /// What a return taking `taken`, `total` lovelace of the session's, brings
+    /// back at once with the box, after `fee`: its 5 ₳ left out. Only where
+    /// the session's collateral is among what it takes (exactly 5 ₳ of ADA
+    /// alone, no datum, no script: the worker's `collateralFits`), and only
+    /// out of the session's own ADA: a merged return's funding change never
+    /// pays for it, nor other money at an account whose collateral is spent.
+    /// Otherwise refused, and the return is built without it.
+    pub(crate) fn back_from(&self, taken: &[UtxoResponse], total: u64, fee: u64) -> Result<u64> {
+        let collateral = |u: &UtxoResponse| {
+            u.value.parse::<u64>().ok() == Some(build::COLLATERAL_LOVELACE)
+                && u.asset_list.as_ref().is_none_or(|a| a.is_empty())
+                && u.reference_script.is_none()
+                && u.inline_datum.is_none()
+                && u.datum_hash.is_none()
+        };
+        if !taken.iter().any(collateral) {
+            bail!("The return doesn't take the session's collateral");
+        }
+        total
+            .checked_sub(fee)
+            .and_then(|left| left.checked_sub(self.output.lovelace))
+            .context(
+                "The session's own ADA doesn't pay for the collateral's box and the return's fee",
+            )
+    }
+
+    /// Where `tx` put it: its output at the pool holding its datum.
+    pub(crate) fn found_in(&self, tx: &BuiltTransaction) -> Result<OutRef> {
+        seedelf_core::eval::resolve_outputs(&tx.tx_bytes.0)?
+            .into_iter()
+            .filter_map(|u| PoolBox::from_resolved(u, &self.protocol))
+            .find(|b| (b.a, b.b) == self.datum)
+            .map(|b| OutRef::of_box(&b))
+            .context("The return doesn't hold the collateral's box")
+    }
 }
 
 fn token_amount(token: &lovejoin::BoxToken, quantity: u64) -> api::TokenAmount {
@@ -891,6 +974,9 @@ pub struct ChainRequest {
     /// The session's own transactions (`api::SessionReturnRequest::own`).
     #[serde(default)]
     pub own: Vec<String>,
+    /// The 5 ₳ pool the return puts the collateral into ([`CollateralBox`]).
+    #[serde(default)]
+    pub collateral_pool: Option<PoolRef>,
 }
 
 #[derive(Serialize, Debug)]
@@ -933,6 +1019,11 @@ pub struct ChainResult {
     /// as many and in that order among `leaves`. Absent for one pool.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub legs: Vec<usize>,
+    /// The box the return put the collateral into, made by the return and
+    /// never mixed by it, when `collateral_pool` was asked and the return
+    /// pays for it; `returned` leaves its 5 ₳ out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collateral_box: Option<OutRef>,
 }
 
 impl ChainResult {
@@ -950,6 +1041,7 @@ impl ChainResult {
             left_out: Vec::new(),
             skipped: Some(short.to_string()),
             legs: Vec::new(),
+            collateral_box: None,
         }
     }
 }
@@ -1271,36 +1363,58 @@ fn with_return(
     // the deposit's token change.
     let mut unsent = vec![built.change.utxo.clone()];
     unsent.extend(built.token_change.iter().map(|h| h.utxo.clone()));
-    let plan = api::plan_return(params, &rows, &request.merge, &own)?;
-    let ((back, back_fee), plan) = api::built_or_without_strangers(plan, |plan| {
-        if !plan.merged {
-            let key = accounts.key_hash(Role::Receive, request.index)?;
-            let config = get_config(VARIANT, network_flag)?;
-            let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-            let base = Register::create(sk)?;
-            let (tx, fee) = build::external_sweep(params, &plan.taken, &base, &wallet, key)?;
-            Ok((sign(tx, accounts, request.index)?, fee))
-        } else {
-            let chain = build::Chain {
-                params: params.clone(),
-                network_flag,
-                config: get_config(VARIANT, network_flag)?,
-            };
-            let (signed, spend) = api::merged_return(
-                accounts,
-                sk,
-                &chain,
-                request.index,
-                &plan.taken,
-                &held.collateral,
-                &request.merge,
-                &unsent,
-            )?;
-            Ok((signed, spend.fee.total))
-        }
-    })?;
-    let (total, tokens) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
-    let returned: u64 = total - back_fee;
+    // The collateral's box when it's asked for and the return pays for it;
+    // otherwise the return as it was, the collateral back with the rest.
+    let boxed =
+        CollateralBox::of(network_flag, request.collateral_pool.as_ref(), sk).unwrap_or(None);
+    let attempt = |boxed: Option<&CollateralBox>| -> Result<_> {
+        let extra: Vec<Output> = boxed.iter().map(|b| b.output.clone()).collect();
+        let plan = api::plan_return(params, &rows, &request.merge, &own, boxed.is_some())?;
+        let ((back, fee), plan) = api::built_or_without_strangers(plan, |plan| {
+            if !plan.merged {
+                let key = accounts.key_hash(Role::Receive, request.index)?;
+                let config = get_config(VARIANT, network_flag)?;
+                let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+                let base = Register::create(sk)?;
+                let (tx, fee) =
+                    build::external_sweep_with(params, &plan.taken, &base, &wallet, key, &extra)?;
+                Ok((sign(tx, accounts, request.index)?, fee))
+            } else {
+                let chain = build::Chain {
+                    params: params.clone(),
+                    network_flag,
+                    config: get_config(VARIANT, network_flag)?,
+                };
+                let (signed, spend) = api::merged_return(
+                    accounts,
+                    sk,
+                    &chain,
+                    request.index,
+                    &plan.taken,
+                    &held.collateral,
+                    &request.merge,
+                    &unsent,
+                    &extra,
+                )?;
+                Ok((signed, spend.fee.total))
+            }
+        })?;
+        let (total, _) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
+        let returned = match boxed {
+            Some(b) => b.back_from(&plan.taken, total, fee)?,
+            None => total - fee,
+        };
+        Ok((back, fee, plan, returned))
+    };
+    let ((back, back_fee, plan, returned), boxed) = match boxed.as_ref() {
+        Some(b) => match attempt(Some(b)) {
+            Ok(built) => (built, Some(b)),
+            Err(_) => (attempt(None)?, None),
+        },
+        None => (attempt(None)?, None),
+    };
+    let collateral_box = boxed.map(|b| b.found_in(&back)).transpose()?;
+    let (_, tokens) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
 
     let mut txs = Vec::with_capacity(built.txs.len() + 1);
     let mut fees = back_fee;
@@ -1340,6 +1454,7 @@ fn with_return(
         left_out: plan.left_out,
         skipped: None,
         legs,
+        collateral_box,
     })
 }
 
@@ -1736,6 +1851,7 @@ pub fn chain_from_account_at(
         left_out: Vec::new(),
         skipped: None,
         legs: Vec::new(),
+        collateral_box: None,
     })
 }
 
@@ -1881,6 +1997,7 @@ pub fn again_from_account_at(
         left_out: Vec::new(),
         skipped: None,
         legs: Vec::new(),
+        collateral_box: None,
     })
 }
 

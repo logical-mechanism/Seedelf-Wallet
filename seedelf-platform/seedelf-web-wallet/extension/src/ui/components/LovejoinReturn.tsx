@@ -450,6 +450,27 @@ export function LovejoinSkipped({ reason }: { reason?: string }) {
   );
 }
 
+/**
+ * Where the session's 5 ₳ collateral goes when its return puts it into Lovejoin's 5 ₳ pool (the owner, 2026-10-22):
+ * not back with the rest. Nothing otherwise. CollateralBoxNote says that it waits there.
+ */
+export function CollateralBoxRow({ back }: { back: SessionBackSummary }) {
+  const tr = useT();
+  if (!back.collateralBox) return null;
+  return <Row label={tr("lovejoin.collateralBox.label")} value={tr("lovejoin.collateralBox.value")} />;
+}
+
+/** That the collateral's box waits in the 5 ₳ pool until someone else's mix moves it, tied to the session until then. */
+export function CollateralBoxNote({ back }: { back: SessionBackSummary }) {
+  const tr = useT();
+  if (!back.collateralBox) return null;
+  return (
+    <Callout tone="privacy" testId="collateral-box-note">
+      {tr("lovejoin.collateralBox.privacy.note", { count: 1 })}
+    </Callout>
+  );
+}
+
 /** Where what comes back lands: the private UTxO the session's funding made, or new ones. */
 export function IntoRow({ back }: { back: SessionBackSummary }) {
   const tr = useT();

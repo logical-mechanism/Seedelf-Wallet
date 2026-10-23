@@ -554,19 +554,41 @@ pub fn external_sweep(
     wallet_addr: &Address,
     signer: Hash<28>,
 ) -> Result<(BuiltTransaction, u64)> {
+    external_sweep_with(params, utxos, owner, wallet_addr, signer, &[])
+}
+
+/// [`external_sweep`] that pays `extra` first, outputs of ADA alone (a web
+/// wallet session's return putting its collateral into a Lovejoin box): what
+/// they hold isn't swept back. With none, it's [`external_sweep`]'s
+/// transaction exactly.
+pub fn external_sweep_with(
+    params: &ProtocolParameters,
+    utxos: &[UtxoResponse],
+    owner: &Register,
+    wallet_addr: &Address,
+    signer: Hash<28>,
+    extra: &[Output],
+) -> Result<(BuiltTransaction, u64)> {
     if utxos.is_empty() {
         bail!("Not Enough Lovelace/Tokens");
     }
     let (total, tokens) = assets_of(utxos.to_vec())?;
+    let paid = extra
+        .iter()
+        .try_fold(0u64, |sum, o| sum.checked_add(o.lovelace))
+        .context("output lovelace overflow")?;
     let inputs: Vec<Input> = utxos.iter().map(input_of).collect::<Result<_>>()?;
     // Conway charges for a reference script on a spent input too.
     let script_fee = reference_script_fee(params, reference_script_bytes(utxos)?)?;
     let price = |size| linear_fee(params, size).saturating_add(script_fee);
     let (fee, staged) = settle(1, Patches::staking(&Staking::none()), price, |fee| {
-        let lovelace = checked_lovelace(total, &[fee])?;
+        let lovelace = checked_lovelace(total, &[fee, paid])?;
         let mut tx = StagingTransaction::new();
         for input in &inputs {
             tx = tx.input(input.clone());
+        }
+        for output in extra {
+            tx = tx.output(output.clone());
         }
         for output in deposit_outputs(params, wallet_addr, owner, lovelace, &tokens)? {
             tx = tx.output(output);

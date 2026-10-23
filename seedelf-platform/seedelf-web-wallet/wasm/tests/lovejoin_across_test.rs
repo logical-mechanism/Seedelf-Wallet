@@ -303,6 +303,7 @@ fn a_return_across_pools_deposits_once_and_mixes_each_box_in_its_pool() {
         merge: Vec::new(),
         again: false,
         own: vec![funding.clone()],
+        collateral_pool: None,
     };
     let chain = wasm::chain_across_pools(
         &accounts(),
@@ -417,6 +418,7 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             merge: Vec::new(),
             again: false,
             own: vec![funding],
+            collateral_pool: None,
         },
         None,
         4,
@@ -449,6 +451,7 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             merge: Vec::new(),
             again: false,
             own: Vec::new(),
+            collateral_pool: None,
         },
         None,
         4,

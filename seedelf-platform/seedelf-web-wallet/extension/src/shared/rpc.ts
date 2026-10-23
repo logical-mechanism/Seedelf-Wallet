@@ -1961,6 +1961,12 @@ export interface SessionBackSummary {
   lovejoinSkipped?: string;
   /** The session's UTxOs this return leaves at its account, and why. */
   leftOut?: LeftOutUtxo[];
+  /**
+   * The session's 5 ₳ collateral goes into a 5 ₳ Lovejoin pool (`pool`, its id) as a box of the wallet's, made by
+   * this return, rather than back with the rest (the owner, 2026-10-22). Nobody mixes it for the session: it's not
+   * mixed yet until someone else's mix moves it, then it comes back by itself. `lovelace` leaves its 5 ₳ out.
+   */
+  collateralBox?: { txHash: string; txIndex: number; pool: string };
 }
 
 /**

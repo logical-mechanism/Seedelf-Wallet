@@ -11,7 +11,7 @@ import { PoolDiscovery, REFRESH_MS } from "../src/background/lovejoin-pools";
 import { privateIndexClient } from "../src/background/private-index";
 import { DEFAULT_PREFERENCES, type Preferences } from "../src/shared/preferences";
 import type { LovejoinMixView, LovejoinPublicSummary, PendingTx, SessionBackSummary, SessionOutSummary, SessionView, SwapLovejoin, SwapQuote } from "../src/shared/rpc";
-import { LovejoinNote, LovejoinSwitch } from "../src/ui/components/LovejoinReturn";
+import { CollateralBoxNote, CollateralBoxRow, LovejoinNote, LovejoinSwitch } from "../src/ui/components/LovejoinReturn";
 import { SENT, PendingBanner } from "../src/ui/components/PendingBanner";
 import { poolsOf } from "../src/ui/lovejoin-pools";
 import { NetworkContext } from "../src/ui/network";
@@ -235,6 +235,46 @@ describe("a return's review says why four boxes a mix went three (UI-4)", () => 
     const two = review([back(t("lj.width.warn.short")), { ...back(t("lj.width.warn.short")), index: 4 }]);
     expect(two.split(t("lj.width.warn.short")).length - 1).toBe(1);
     expect(review([back()])).not.toContain("three at a time");
+  });
+});
+
+// The owner's call (2026-10-22): a return that puts its session's 5 ₳ collateral into a pool of 5 ₳ boxes says so.
+describe("a return's review names the collateral's box", () => {
+  const back = (boxed: boolean, index = 3): SessionBackSummary => ({
+    network: "preprod",
+    index,
+    txHash: "ab".repeat(32),
+    fee: "300000",
+    lovelace: "5200000",
+    tokens: [],
+    depositOutputs: 1,
+    inputs: 2,
+    ...(boxed ? { collateralBox: { txHash: "ab".repeat(32), txIndex: 1, pool: "cd".repeat(28) } } : {}),
+  });
+
+  it("on a swap's or a site's return review, and nothing where the collateral comes back with the rest", () => {
+    const row = text(createElement(CollateralBoxRow, { back: back(true) }));
+    expect(row).toContain("Its 5 ₳ collateral");
+    expect(row).toContain("Becomes a box in Lovejoin's pool of 5 ₳ boxes");
+    expect(text(createElement(CollateralBoxNote, { back: back(true) }))).toContain("anyone can tie it to this session");
+    expect(text(createElement(CollateralBoxRow, { back: back(false) }))).toBe("");
+    expect(text(createElement(CollateralBoxNote, { back: back(false) }))).toBe("");
+  });
+
+  it("on Bring everything back's, counted across the sessions", () => {
+    const review = text(
+      createElement(ClaimReview, {
+        built: { returns: [back(true), back(true, 4), back(false, 5)], skipped: [] },
+        chosen: new Set([3, 4, 5]),
+        sessions: [],
+        direct: false,
+        busy: false,
+        onToggle: () => undefined,
+        onDirect: () => undefined,
+      }),
+    );
+    expect(review).toContain("2 boxes in Lovejoin's pool of 5 ₳ boxes");
+    expect(review).toContain("Each session's 5 ₳ collateral becomes a box");
   });
 });
 

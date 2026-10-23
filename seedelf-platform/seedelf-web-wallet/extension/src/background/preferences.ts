@@ -28,6 +28,9 @@
 // lovejoinReturns   A private session's spare ADA goes through Lovejoin on
 //                   its way back (sessions.ts). On by default; off, it comes
 //                   back directly. A swap's approval records its own.
+// lovejoinCollateral With it, the session's 5 ₳ collateral goes into a 5 ₳
+//                   Lovejoin pool as a box, where one is shown (sessions.ts).
+//                   On by default; off, it comes back with the rest.
 // lovejoinDepth,    How deep each box fans out, and the range its wait is
 // lovejoinDelay     drawn from (lovejoin.ts).
 // lovejoinWidth     How many boxes each mix takes: three, or four (chunk 34's
@@ -118,6 +121,8 @@ export class PreferencesService {
       dappPassword: typeof kept.dappPassword === "boolean" ? kept.dappPassword : DEFAULT_PREFERENCES.dappPassword,
       dappAccount: isAccountIndex(kept.dappAccount) ? kept.dappAccount : DEFAULT_PREFERENCES.dappAccount,
       lovejoinReturns: typeof kept.lovejoinReturns === "boolean" ? kept.lovejoinReturns : DEFAULT_PREFERENCES.lovejoinReturns,
+      lovejoinCollateral:
+        typeof kept.lovejoinCollateral === "boolean" ? kept.lovejoinCollateral : DEFAULT_PREFERENCES.lovejoinCollateral,
       lovejoinDepth: isLovejoinDepth(kept.lovejoinDepth) ? kept.lovejoinDepth : DEFAULT_PREFERENCES.lovejoinDepth,
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
       lovejoinWidth: isLovejoinWidth(kept.lovejoinWidth) ? kept.lovejoinWidth : DEFAULT_PREFERENCES.lovejoinWidth,
@@ -136,6 +141,7 @@ export class PreferencesService {
     if (typeof change.dappPassword === "boolean") next.dappPassword = change.dappPassword;
     if (isAccountIndex(change.dappAccount)) next.dappAccount = change.dappAccount;
     if (typeof change.lovejoinReturns === "boolean") next.lovejoinReturns = change.lovejoinReturns;
+    if (typeof change.lovejoinCollateral === "boolean") next.lovejoinCollateral = change.lovejoinCollateral;
     if (isLovejoinDepth(change.lovejoinDepth)) next.lovejoinDepth = change.lovejoinDepth;
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
     if (isLovejoinWidth(change.lovejoinWidth)) next.lovejoinWidth = change.lovejoinWidth;
