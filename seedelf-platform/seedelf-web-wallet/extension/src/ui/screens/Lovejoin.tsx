@@ -86,6 +86,7 @@ import {
   mixesPerBox,
   useSessionsWhile,
   WidthNote,
+  CollateralReserveRow,
 } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
@@ -3237,6 +3238,9 @@ function mixedValue(mix: { depth: number; mixes: number; mixFees?: string; width
  * its pool holds (the classic pool's 10 ₳ when none is given). `cantComeBack`: the pool's boxes can't pay their own
  * way back today, said first, and no row promises a box back after its wait (session 5's cross-area review, M1).
  */
+/** The funding's first payment less what it pays for its collateral's mix, which a row of its own shows. */
+const lessReserve = (lovelace: string, summary: SessionOutSummary) => (BigInt(lovelace) - BigInt(summary.collateralReserve ?? "0")).toString();
+
 export function PrivateReview({
   summary,
   before,
@@ -3263,9 +3267,10 @@ export function PrivateReview({
         {/* A Bootstrap has no mixes: its funding pays for the boxes and the fees alone (1.6.0's rehearsal, R4). */}
         <Row
           label={tr(mix.bootstrap ? "lovejoin.review.forBoxesBootstrap" : "lovejoin.review.forBoxes")}
-          value={withToken(network, `${formatAda(boxesPart!.lovelace)}\u00a0₳`, boxesPart!.tokens[0])}
+          value={withToken(network, `${formatAda(lessReserve(boxesPart!.lovelace, summary))}\u00a0₳`, boxesPart!.tokens[0])}
         />
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        <CollateralReserveRow reserve={summary.collateralReserve} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
         {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
         {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
@@ -3326,8 +3331,9 @@ function AgainReview({
       <ReviewRows testId="lovejoin-again-review">
         <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: summary.index + 1 })} strong />
         <Row label={tr("lovejoin.review.account")} value={shortHex(summary.address, 16, 8)} title={summary.address} />
-        <Row label={tr("lovejoin.review.forMixes")} value={`${formatAda(mixesPart!.lovelace)}\u00a0₳`} />
+        <Row label={tr("lovejoin.review.forMixes")} value={`${formatAda(lessReserve(mixesPart!.lovelace, summary))}\u00a0₳`} />
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        <CollateralReserveRow reserve={summary.collateralReserve} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
         {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
         {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}

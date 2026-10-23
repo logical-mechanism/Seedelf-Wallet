@@ -258,7 +258,7 @@ export function ClaimReview({
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
   const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
-  const collaterals = picked.filter((r) => r.collateralBox).length;
+  const collaterals = picked.filter((r) => r.collateralTail).length;
   const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
@@ -399,7 +399,7 @@ export function ClaimReview({
         )}
         {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
         {boxes > 0 && <BoxesBackRow boxes={boxes} />}
-        {/* Each session's 5 ₳ collateral its return puts into Lovejoin's 5 ₳ pool, not back with the rest. */}
+        {/* Each session's 5 ₳ collateral its return mixes once into Lovejoin's 5 ₳ pool, not back with the rest. */}
         {collaterals > 0 && (
           <Row label={t("claim.collateralLabel")} value={t("claim.collateralValue", { count: collaterals })} />
         )}

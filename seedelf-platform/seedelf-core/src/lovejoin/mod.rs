@@ -778,6 +778,53 @@ pub fn mix(
     boxes: &[PoolBox],
     payer: &Payer,
 ) -> Result<Mix> {
+    // A mix spends the pool's scripts, so it always puts collateral up; only a
+    // seed, which makes no mixes, ever goes without, and never reaches here.
+    let collateral = payer
+        .collateral
+        .as_ref()
+        .context("A mix needs collateral")?;
+    mix_with(
+        params,
+        protocol,
+        boxes,
+        payer,
+        MixCollateral::Own(collateral),
+    )
+}
+
+/// [`mix`] under giveme.my's collateral, `payer.collateral` unused: for the
+/// mix of a session's own collateral, put into a box once its chain's mixes
+/// no longer need it (the owner, 2026-10-23). The payer still pays the fee and
+/// keeps the change, and signs; giveme.my signs after, and only once every
+/// input is on chain, since it runs the transaction through Ogmios as it is.
+/// The fee is even, so giveme.my's collateral return (5 ₳ − 3/2 × fee) is
+/// whole, as a withdraw's is.
+pub fn mix_giveme(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    payer: &Payer,
+) -> Result<Mix> {
+    mix_with(params, protocol, boxes, payer, MixCollateral::Giveme)
+}
+
+/// Who puts up a mix's collateral.
+#[derive(Clone, Copy)]
+enum MixCollateral<'a> {
+    /// The payer's own, its return back to the payer ([`mix`]).
+    Own(&'a Coin),
+    /// giveme.my's, with its signature ([`mix_giveme`]).
+    Giveme,
+}
+
+fn mix_with(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxes: &[PoolBox],
+    payer: &Payer,
+    collateral: MixCollateral<'_>,
+) -> Result<Mix> {
     let n = boxes.len();
     if n < 2 {
         bail!("A mix needs at least two boxes");
@@ -847,12 +894,6 @@ pub fn mix(
     all_inputs.sort_by_key(|i| (i.tx_hash.0, i.txo_index));
 
     let least = least_change(params, &payer.address)?;
-    // A mix spends the pool's scripts, so it always puts collateral up; only a
-    // seed, which makes no mixes, ever goes without, and never reaches here.
-    let collateral = payer
-        .collateral
-        .as_ref()
-        .context("A mix needs collateral")?;
     let stage = |fee: u64, budgets: Option<&Budgets>| -> Result<BuiltTransaction> {
         let change = payer
             .fee
@@ -860,10 +901,6 @@ pub fn mix(
             .checked_sub(fee)
             .filter(|c| *c >= least)
             .context("There isn't enough ADA left to pay this mix's fee and keep the change")?;
-        let collateral_back = collateral
-            .lovelace
-            .checked_sub(fee * 3 / 2 + 1)
-            .context("The collateral can't cover this mix")?;
         let mut tx = StagingTransaction::new();
         for boxed in &sorted {
             let index = all_inputs
@@ -892,20 +929,45 @@ pub fn mix(
             tx = tx.reference_input(reference);
         }
         tx = protocol.with_scripts(tx);
-        tx = tx
-            .collateral_input(collateral.input())
-            .collateral_output(Output::new(payer.address.clone(), collateral_back))
-            .fee(fee)
-            .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone());
+        tx = match collateral {
+            MixCollateral::Own(c) => tx
+                .collateral_input(c.input())
+                .collateral_output(Output::new(
+                    payer.address.clone(),
+                    c.lovelace
+                        .checked_sub(fee * 3 / 2 + 1)
+                        .context("The collateral can't cover this mix")?,
+                ))
+                .fee(fee)
+                .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone()),
+            MixCollateral::Giveme => tx
+                .collateral_input(collateral_input(protocol.network_flag))
+                .collateral_output(collateral_output(
+                    collateral_address(protocol.network_flag),
+                    fee,
+                )?)
+                .fee(fee)
+                .language_view(ScriptKind::PlutusV3, params.cost_model_v3.clone())
+                .disclosed_signer(Hash::new(COLLATERAL_HASH)),
+        };
         let built = tx.build_conway_raw().context("Failed To Build The Mix")?;
         let reward = budgets.and_then(|b| b.withdraw(0)).unwrap_or(DRAFT_BUDGET);
         withdraw.patch(built, units(reward), &params.cost_model_v3)
     };
 
+    // The scripts read only the inputs and the references: giveme.my's coin
+    // isn't needed to measure, as for a withdraw.
     let mut known: Vec<Resolved> = sorted.iter().map(|b| b.utxo.clone()).collect();
     known.push(payer.fee.utxo.clone());
-    known.push(collateral.utxo.clone());
+    if let MixCollateral::Own(c) = collateral {
+        known.push(c.utxo.clone());
+    }
     known.extend(protocol.references.iter().cloned());
+    // giveme.my signs beside the payer's keys.
+    let signers = match collateral {
+        MixCollateral::Own(_) => payer.signers,
+        MixCollateral::Giveme => payer.signers + 1,
+    };
     let measure = |tx: &BuiltTransaction| -> Result<(Budgets, Vec<Budget>)> {
         let answer = eval::evaluate(
             &tx.tx_bytes.0,
@@ -941,12 +1003,15 @@ pub fn mix(
     let mut fee = 1_000_000;
     for _ in 0..5 {
         let tx = stage(fee, Some(&budgets))?;
-        let needed = price(params, signed_size(&tx, payer.signers)?, &used, script_fee);
+        let needed = price(params, signed_size(&tx, signers)?, &used, script_fee);
         check_fee(needed)?;
         if needed <= fee && fee - needed < 1_000 {
             break;
         }
-        fee = needed;
+        fee = match collateral {
+            MixCollateral::Own(_) => needed,
+            MixCollateral::Giveme => even(needed),
+        };
     }
     let tx = stage(fee, Some(&budgets))?;
     // The finished transaction must pass as it will be sent.
@@ -1525,6 +1590,15 @@ pub fn mix_fee_estimate(protocol: &Protocol, width: usize) -> u64 {
 /// are planned on.
 const DEPOSIT_RESERVE: u64 = 1_500_000;
 
+/// What a session holds beside its boxes for its 5 ₳ collateral to be mixed
+/// on its way into a 5 ₳ pool (the owner, 2026-10-23, [`collateral_tail`]):
+/// the deposit that boxes it, about 0.18 ₳; its one mix under giveme.my's
+/// collateral, planned on [`MIX_FEE_ESTIMATE`]; and the return after it, a
+/// sweep rather than merged (the collateral a merge puts up is in the box by
+/// then), whose Seedelf output must hold its least. Set aside before the
+/// session's boxes are counted; what isn't spent comes back with the change.
+pub const COLLATERAL_TAIL_RESERVE: u64 = 1_500_000;
+
 /// What a box costs at `depth`: the box, and every mix of its fan-out.
 fn per_box(depth: u32, denom: u64) -> u64 {
     denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
@@ -1927,6 +2001,85 @@ pub fn again_at(
     }
     let fresh = fresh_for(boxes.len(), depth, width, pool, boxes)?;
     fan_out(params, protocol, boxes.to_vec(), payer, depth, width, fresh)
+}
+
+/// A session's collateral, mixed once (the owner, 2026-10-23): the deposit
+/// that puts it into a box once its chain's mixes no longer need it, and the
+/// mix that moves that box under giveme.my's collateral ([`collateral_mix`]).
+#[derive(Debug, Clone)]
+pub struct Tail {
+    pub deposit: Deposit,
+    pub mix: Mix,
+    /// The box the mix made of ours.
+    pub leaf: PoolBox,
+}
+
+/// Puts `coins` (the session's collateral, and the change that pays) into one
+/// box under `owner` at `protocol`'s `mix_box`, the rest back to `address` as
+/// change, then mixes that box once ([`collateral_mix`]). Both are measured
+/// before either is on chain, as a chain's transactions are. `pool` is the
+/// pool's boxes the mix may draw from: never the wallet's own, nor any its
+/// chain drew, which the caller leaves out.
+pub fn collateral_tail(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    coins: &[Coin],
+    owner: &Register,
+    pool: &[PoolBox],
+    address: &Address,
+    signers: usize,
+) -> Result<Tail> {
+    let deposit = deposit(
+        params,
+        protocol,
+        coins,
+        std::slice::from_ref(owner),
+        address,
+        signers,
+    )?;
+    let boxed = deposit
+        .boxes
+        .first()
+        .context("The collateral's deposit made no box")?;
+    let (mix, leaf) = collateral_mix(
+        params,
+        protocol,
+        boxed,
+        &deposit.change,
+        pool,
+        address,
+        signers,
+    )?;
+    Ok(Tail { deposit, mix, leaf })
+}
+
+/// Mixes `boxed` once, three wide, with two boxes drawn at random from `pool`
+/// (never `boxed` itself), paid from `fee`, its change back to `address`,
+/// under giveme.my's collateral ([`mix_giveme`]): a session's collateral has
+/// gone into `boxed`, so nothing else of the session's can be put up. Built
+/// again with fresh draws when one drawn before is spent by the time it goes.
+/// Returns the mix and the box it made of `boxed`.
+pub fn collateral_mix(
+    params: &ProtocolParameters,
+    protocol: &Protocol,
+    boxed: &PoolBox,
+    fee: &Coin,
+    pool: &[PoolBox],
+    address: &Address,
+    signers: usize,
+) -> Result<(Mix, PoolBox)> {
+    let fresh = fresh_for(1, 1, 3, pool, std::slice::from_ref(boxed))?;
+    let mut boxes = vec![boxed.clone()];
+    boxes.extend(fresh.into_iter().take(2));
+    let payer = Payer {
+        fee: fee.clone(),
+        collateral: None,
+        address: address.clone(),
+        signers,
+    };
+    let mix = mix_giveme(params, protocol, &boxes, &payer)?;
+    let leaf = mix.outputs[mix.moved_to[0]].clone();
+    Ok((mix, leaf))
 }
 
 /// Lovejoin's pool has too few boxes to mix with for a fan-out: `have`

@@ -246,6 +246,7 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             },
             depth: 1,
             again: false,
+            collateral_reserve: false,
         },
         Some(&pool_ref()),
         std::slice::from_ref(&funding),
@@ -273,6 +274,8 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             again: false,
             own: vec![funding.clone()],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
         Some(&pool_ref()),
     )

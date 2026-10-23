@@ -451,24 +451,40 @@ export function LovejoinSkipped({ reason }: { reason?: string }) {
 }
 
 /**
- * Where the session's 5 ₳ collateral goes when its return puts it into Lovejoin's 5 ₳ pool (the owner, 2026-10-22):
- * not back with the rest. Nothing otherwise. CollateralBoxNote says that it waits there.
+ * Where the session's 5 ₳ collateral goes when its return mixes it once on its way into Lovejoin's 5 ₳ pool (the
+ * owner, 2026-10-22 and 2026-10-23): not back with the rest, and what that costs. Nothing otherwise.
+ * CollateralTailNote says how it comes back.
  */
-export function CollateralBoxRow({ back }: { back: SessionBackSummary }) {
+export function CollateralTailRow({ back }: { back: SessionBackSummary }) {
   const tr = useT();
-  if (!back.collateralBox) return null;
-  return <Row label={tr("lovejoin.collateralBox.label")} value={tr("lovejoin.collateralBox.value")} />;
+  if (!back.collateralTail) return null;
+  return (
+    <Row
+      label={tr("lovejoin.collateralBox.label")}
+      value={tr("lovejoin.collateralBox.value", { fee: formatAda(back.collateralTail.fee) })}
+    />
+  );
 }
 
-/** That the collateral's box waits in the 5 ₳ pool until someone else's mix moves it, tied to the session until then. */
-export function CollateralBoxNote({ back }: { back: SessionBackSummary }) {
+/** That the collateral is mixed once, giveme.my backing that mix, then comes back by itself; tied to the session until then. */
+export function CollateralTailNote({ back }: { back: SessionBackSummary }) {
   const tr = useT();
-  if (!back.collateralBox) return null;
+  if (!back.collateralTail) return null;
   return (
     <Callout tone="privacy" testId="collateral-box-note">
       {tr("lovejoin.collateralBox.privacy.note", { count: 1 })}
     </Callout>
   );
+}
+
+/**
+ * What a session's funding pays beside its 5 ₳ collateral for that collateral to be mixed as the session comes back
+ * (SessionOutSummary `collateralReserve`): what that mix doesn't spend comes back. Nothing where it won't be.
+ */
+export function CollateralReserveRow({ reserve }: { reserve?: string }) {
+  const tr = useT();
+  if (!reserve) return null;
+  return <Row label={tr("lovejoin.collateralReserve.label")} value={tr("lovejoin.collateralReserve.value", { ada: formatAda(reserve) })} />;
 }
 
 /** Where what comes back lands: the private UTxO the session's funding made, or new ones. */

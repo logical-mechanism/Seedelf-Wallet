@@ -156,6 +156,7 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
                 collateral: collateral(),
                 depth,
                 again: false,
+                collateral_reserve: false,
             },
         )
         .unwrap()
@@ -190,6 +191,8 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -267,6 +270,8 @@ fn a_chains_return_merges_into_the_funding_change() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -329,6 +334,8 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -448,6 +455,8 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap_err();
@@ -616,6 +625,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             collateral: collateral(),
             depth: 1,
             again: true,
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -638,6 +648,8 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             again: true,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -709,6 +721,8 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             again: true,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap_err();

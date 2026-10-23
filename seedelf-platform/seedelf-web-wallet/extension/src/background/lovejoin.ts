@@ -314,6 +314,17 @@ export const CHAIN_RESEND_MS = 3 * 60_000;
  */
 export const CHAIN_PUMP_MS = 20_000;
 
+/** How many of other people's boxes a session's collateral's mix draws: one mix, three wide (Tail). */
+const TAIL_DRAWS = 2;
+
+/**
+ * How long a session's collateral's mix keeps trying after its deposit is in (giveme.my behind or busy, a box it
+ * drew gone, a lock), and how many times it's built (Tail): past either it's over, and the box waits, not mixed
+ * yet, for Mix my boxes again.
+ */
+export const TAIL_KEEP_MS = 24 * 60 * 60_000;
+export const TAIL_TRIES = 2;
+
 /** A chain being sent, kept in chrome.storage.session between calls. */
 export interface ChainProgress {
   txs: LovejoinChain["txs"];
@@ -405,6 +416,11 @@ export async function pumpChain(
     save(): Promise<void>;
     sleep(ms: number): Promise<void>;
     now(): number;
+    /**
+     * giveme.my's signature on transaction `i` (`giveme`), put on it: true once it is, false while giveme.my can't
+     * yet, to be asked again at the next call. None: nothing of the chain asks for one.
+     */
+    witness?(i: number): Promise<boolean>;
   },
   budgetMs: number,
 ): Promise<boolean> {
@@ -439,8 +455,14 @@ export async function pumpChain(
     }
   };
   const window = chain.window ?? CHAIN_WINDOW;
+  // giveme.my signs the collateral's mix only once every transaction before it is on chain: it runs the transaction
+  // through Ogmios as it is, which knows nothing of the mempool (the owner, 2026-10-23).
+  const unwitnessed = () => {
+    const tx = chain.txs[chain.next];
+    return !!tx?.giveme && !tx.witnessed;
+  };
   for (let polls = Math.ceil(budgetMs / CHAIN_POLL_MS); ; polls--) {
-    if (chain.flying.length >= window) {
+    if (chain.flying.length >= window || (chain.flying.length && unwitnessed())) {
       const on = await io.onChain(chain.flying).catch((e: unknown) => {
         if (e instanceof KoiosError) return new Set<string>();
         throw e;
@@ -454,6 +476,11 @@ export async function pumpChain(
       }
     }
     while (chain.next < chain.txs.length && chain.flying.length < window) {
+      if (unwitnessed()) {
+        if (chain.flying.length) break;
+        if (!io.witness) throw new Error(t("lj.tail.noWitness"));
+        if (!(await io.witness(chain.next))) return false;
+      }
       try {
         await send(chain.next, false);
       } catch (e) {
@@ -601,7 +628,12 @@ const inThe = (p: string) => (b: OutRef): OutRef => (p === CLASSIC ? b : { ...b,
 
 /** A chain as WebAssembly builds it (`lovejoin::ChainResult`). */
 export interface LovejoinChain {
-  txs: Array<{ kind: "deposit" | "mix" | "back"; txCbor: string; txHash: string; fee: string }>;
+  /**
+   * `tail`: the session's collateral's deposit or mix (`collateralTail`); `giveme`: giveme.my signs it too before it's
+   * sent, once every transaction before it is on chain (the collateral's mix, pumpChain); `witnessed`: its signature is
+   * on it, as it's sent.
+   */
+  txs: Array<{ kind: "deposit" | "mix" | "back"; txCbor: string; txHash: string; fee: string; tail?: true; giveme?: true; witnessed?: true }>;
   boxes: number;
   depth: number;
   /** Every fee of the chain, the return's too. */
@@ -637,11 +669,28 @@ export interface LovejoinChain {
   /** What a box holds in each token pool `ways` names, by its id, for the review (34f). */
   values?: Record<string, LovejoinBoxValue>;
   /**
-   * The box the return put the session's collateral into, in the 5 ₳ pool `ChainWay.collateralPool` named, when the
-   * return pays for it (the owner, 2026-10-22): the return made it, so it isn't one of `leaves`, and `returned`
-   * leaves its 5 ₳ out.
+   * The session's collateral, mixed once on its way into the 5 ₳ pool `ChainWay.collateralPool` named, when what the
+   * chain leaves pays for it (the owner, 2026-10-23): its deposit's box (`box`), the box its mix made of ours
+   * (`leaf`, not one of `leaves`), and what both cost. Its two transactions go before the return; `returned` leaves
+   * its 5 ₳ out.
    */
-  collateralBox?: { txHash: string; txIndex: number };
+  collateralTail?: CollateralTail;
+}
+
+/** A session's collateral's tail, as WebAssembly builds it (`lovejoin::TailOut`). */
+export interface CollateralTail {
+  box: { txHash: string; txIndex: number };
+  leaf: { txHash: string; txIndex: number };
+  fee: string;
+}
+
+/**
+ * The 5 ₳ pool a return's collateral is mixed into (collateralPool), and its rows at `mix_box` less what another chain
+ * of the wallet's will spend: its mix draws two of them.
+ */
+export interface CollateralPool {
+  pool: LovejoinPool;
+  rows: KoiosUtxo[];
 }
 
 /** What a box holds in each of `pools`, by its id, for a review to name them (34f). */
@@ -664,8 +713,10 @@ export interface ChainWay {
    * `most`: at most this many boxes of each token, by its unit, as the approval showed (34e's review, 10).
    */
   returns?: { tokens?: Record<string, string | null>; fills?: string[]; only?: boolean; most?: Record<string, number> };
-  /** A return's 5 ₳ pool for the session's collateral (collateralPool): its return puts the 5 ₳ in as a box. */
-  collateralPool?: LovejoinPool;
+  /** A return's 5 ₳ pool for the session's collateral (collateralPool): the collateral is mixed once on its way in. */
+  collateralPool?: CollateralPool;
+  /** The session was funded for that (`COLLATERAL_TAIL_RESERVE`): its boxes are counted on what's left after it. */
+  collateralReserve?: boolean;
 }
 
 /**
@@ -695,8 +746,20 @@ interface ChainCall {
   pool: LovejoinPool;
   /** The width asked: approved, funded, or Settings'. */
   asked: LovejoinWidth;
-  /** Where the return puts the session's collateral (ChainWay's). */
-  collateralPool?: LovejoinPool;
+  /** Where the return mixes the session's collateral, and whether the session was funded for it (ChainWay's). */
+  collateralPool?: CollateralPool;
+  collateralReserve?: boolean;
+}
+
+/**
+ * What a chain's request names for its collateral's tail (`lovejoin::CollateralTail`): the 5 ₳ pool and its rows, and
+ * whether the session was funded for it.
+ */
+function collateralAsked(c: Pick<ChainCall, "collateralPool" | "collateralReserve">) {
+  return {
+    ...(c.collateralPool?.pool.ref ? { collateralPool: c.collateralPool.pool.ref, collateralBoxes: c.collateralPool.rows } : {}),
+    ...(c.collateralReserve ? { collateralReserve: true } : {}),
+  };
 }
 
 /**
@@ -1101,7 +1164,35 @@ interface ChainRecord {
    * mix from the account is built.
    */
   maybe?: { index: number; txHash: string; inputs: string[]; at: number; from?: number; unanswered?: true };
+  /** A session's collateral, mixed once on its way into the 5 ₳ pool (the owner, 2026-10-23, Tail). */
+  tail?: Tail;
 }
+
+/**
+ * A session's collateral's tail, as its chain's record keeps it: its deposit, which put the collateral into `box`,
+ * then its mix under giveme.my's collateral, which made `leaf` (one of the chain's `leaves`), both sent last before
+ * the return. The leaf's due time is drawn apart from the chain's boxes', when its mix is sent (`scheduled`), so it
+ * never takes one of theirs. `landed`: when its deposit was first known on chain, from which its mix keeps trying
+ * TAIL_KEEP_MS; `tries`: how many times its mix was built, this chain's and every one built again after it (the
+ * session's resumeTail); `over`: it went, or won't, and isn't built again.
+ */
+interface Tail {
+  deposit: string;
+  mix: string;
+  pool: string;
+  box: OutRef;
+  leaf: OutRef;
+  landed?: number;
+  tries: number;
+  scheduled?: true;
+  over?: true;
+}
+
+/**
+ * What chain `c` sends that makes the wallet's boxes, in the order it's sent: its deposit, its mixes, then its
+ * collateral's deposit and mix (ChainRecord `tail`).
+ */
+const makers = (c: ChainRecord): string[] => [...(c.deposit ? [c.deposit] : []), ...c.mixes, ...(c.tail ? [c.tail.deposit, c.tail.mix] : [])];
 
 /**
  * A mix from the public account's transaction that may have gone through,
@@ -1489,7 +1580,7 @@ const ownerOf = (c: ChainRecord) => (c.session === undefined ? publicOwner(c.acc
  * not mixed yet, so still traceable to where they went in.
  */
 function unmixedOf(chains: ChainRecord[], owned: OutRef[]): OutRef[] {
-  const made = new Set(chains.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...c.mixes]));
+  const made = new Set(chains.flatMap(makers));
   const leaves = new Set(chains.flatMap((c) => c.leaves.map(ref)));
   return owned.filter((b) => made.has(b.txHash) && !leaves.has(ref(b)));
 }
@@ -1500,7 +1591,7 @@ function unmixedOf(chains: ChainRecord[], owned: OutRef[]): OutRef[] {
  * after the record went).
  */
 function recorded(s: Schedule): (b: OutRef) => boolean {
-  const made = new Set(s.chains.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...c.mixes]));
+  const made = new Set(s.chains.flatMap(makers));
   return (b) => made.has(b.txHash) || s.leaves?.[ref(b)] !== undefined;
 }
 
@@ -1581,7 +1672,7 @@ function moreThanDue(s: Schedule, owned: OutRef[], listed: OutRef[], p = CLASSIC
   // have none (bootstrapOf).
   const held = new Set([...notMixedYet(s, owned), ...bootstrapOf(s, owned)].map(ref));
   const sending = s.chains.filter((c) => !c.ended && c.scheduled && c.deposit);
-  const made = new Set(sending.flatMap((c) => [c.deposit!, ...c.mixes]));
+  const made = new Set(sending.flatMap(makers));
   const theirs = new Set(owned.filter((b) => made.has(b.txHash)).map(ref));
   const back = owned.filter((b) => !held.has(ref(b)) && !theirs.has(ref(b))).length;
   const theirDue = sending.reduce((n, c) => {
@@ -1653,7 +1744,7 @@ function backOrder(boxes: OutRef[], rows: Map<string, KoiosUtxo>, leaves: Set<st
  * `public`).
  */
 function originOf(b: OutRef, s: Schedule): string | undefined {
-  const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
+  const made = s.chains.find((c) => makers(c).includes(b.txHash));
   if (made) return ownerOf(made);
   const told = s.origins?.[b.txHash];
   return s.leaves?.[ref(b)] ?? (told?.public ? publicOwner(told.account ?? 0) : undefined);
@@ -1694,7 +1785,7 @@ const CLOCKS_APART_MS = 10 * 60_000;
  * is over), or when no recorded chain went in before (a restore).
  */
 function ripeAt(b: OutRef, s: Schedule, rows: Map<string, KoiosUtxo>): number {
-  const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
+  const made = s.chains.find((c) => makers(c).includes(b.txHash));
   if (made) return ownWaitAt(made);
   if (s.leaves?.[ref(b)] !== undefined) return 0;
   // Unknown when it last moved: it may be any recorded chain's.
@@ -1710,7 +1801,7 @@ function ripeAt(b: OutRef, s: Schedule, rows: Map<string, KoiosUtxo>): number {
  * the public account or a swap's return, keeps its waits, or its withdraw minutes after it would say which mix it was.
  */
 function madeSince(b: OutRef, s: Schedule, rows: Map<string, KoiosUtxo>, at: number): boolean {
-  const made = s.chains.find((c) => c.deposit === b.txHash || c.mixes.includes(b.txHash));
+  const made = s.chains.find((c) => makers(c).includes(b.txHash));
   if (made) return made.at > at;
   if (s.leaves?.[ref(b)] !== undefined) return false;
   const time = rows.get(ref(b))?.block_time;
@@ -1874,7 +1965,7 @@ const openIn = (s: Schedule, p: string, bootstrap: boolean) =>
  * from before the list, a restore's, another device's.
  */
 function countBack(s: Schedule, p: string, box: OutRef | undefined, bootstrap = false): void {
-  const own = box && s.chains.find((c) => c.deposit === box.txHash || c.mixes.includes(box.txHash));
+  const own = box && s.chains.find((c) => makers(c).includes(box.txHash));
   const unmixed = own && !own.leaves.some((l) => ref(l) === ref(box!)) ? entries(s).find((e) => e.id === own.id && outIn(e, p) > 0) : undefined;
   const candidates = openIn(s, p, bootstrap);
   const released = bootstrap ? [] : openIn(s, p, true).filter((e) => e.released);
@@ -1915,7 +2006,7 @@ function moveOn(s: Schedule, p: string, count: number, except: string): void {
  */
 function squareUp(s: Schedule, p: string, listed: OutRef[], now: number): void {
   const recent = s.chains.filter((c) => !c.ended || now - c.ended < RECORD_KEEP_MS);
-  const theirs = new Set(recent.flatMap((c) => [...(c.deposit ? [c.deposit] : []), ...c.mixes]));
+  const theirs = new Set(recent.flatMap(makers));
   const recentIds = new Set(recent.map((c) => c.id));
   const found = listed.filter((b) => !theirs.has(b.txHash)).length;
   const older = (bootstrap: boolean) => openIn(s, p, bootstrap).filter((e) => !recentIds.has(e.id));
@@ -2306,19 +2397,21 @@ export class LovejoinService {
     const found = new Map<string, Pick<Watching, "feed" | "pools">>();
     if (ask.length) {
       const chains = await this.read(network).then((s) => s.chains, () => undefined);
-      const set = chains?.some((c) => c.pools) ? await this.readSet(network, true).catch(() => [] as LovejoinPool[]) : [];
+      const set = chains?.some((c) => c.pools || c.tail) ? await this.readSet(network, true).catch(() => [] as LovejoinPool[]) : [];
       for (const h of ask) {
-        const c = chains?.find((r) => r.id === h || r.deposit === h || r.mixes.includes(h));
+        const c = chains?.find((r) => r.id === h || makers(r).includes(h));
         if (!chains || !c) {
           // Not kept: its record may be read, or written, later.
           found.set(h, chains ? { feed: "lovejoin" } : {});
           continue;
         }
-        const pools = poolsOf(c).filter((p) => p !== CLASSIC);
+        // The collateral's deposit and mix are the 5 ₳ pool's alone, a pool on the token pools' scripts.
+        const tail = c.tail && (h === c.tail.deposit || h === c.tail.mix);
+        const pools = tail ? [c.tail!.pool] : poolsOf(c).filter((p) => p !== CLASSIC);
         // A pool the read set doesn't have now is named by its id, which no answer covers: tx_status says, not "not there".
         const boxes = pools.map((p) => set.find((x) => x.id === p)?.mixBox);
         const how: Pick<Watching, "feed" | "pools"> = pools.length
-          ? { feed: shareOf(c, CLASSIC) > 0 ? "lovejoin" : "tokens", pools: boxes.map((b, i) => b ?? pools[i]!) }
+          ? { feed: !tail && shareOf(c, CLASSIC) > 0 ? "lovejoin" : "tokens", pools: boxes.map((b, i) => b ?? pools[i]!) }
           : { feed: "lovejoin" };
         if (boxes.every((b) => b !== undefined)) this.watches.set(key(h), how);
         found.set(h, how);
@@ -2603,6 +2696,7 @@ export class LovejoinService {
     pool?: LovejoinPool,
     own: string[] = [],
     width: LovejoinWidth = 3,
+    reserve = false,
   ): Promise<LovejoinPlan> {
     const depth = fixed ?? (await this.settings()).depth;
     // A token pool's own UTxOs holding its token pay for its boxes too (`own`: the session's transactions).
@@ -2615,6 +2709,8 @@ export class LovejoinService {
       again,
       ...(width !== 3 ? { width } : {}),
       ...(pool?.ref ? { poolRef: pool.ref, own } : {}),
+      // Funded for its collateral's tail: that comes out first (collateralPool).
+      ...(reserve ? { collateralReserve: true } : {}),
     };
     return this.deps.wallet.withKeys(
       (keys) => JSON.parse(this.deps.wasm.planLovejoin(keys.oneTime, JSON.stringify(request))) as LovejoinPlan,
@@ -2880,6 +2976,7 @@ export class LovejoinService {
       pool: into,
       asked,
       ...(way.collateralPool ? { collateralPool: way.collateralPool } : {}),
+      ...(way.collateralReserve ? { collateralReserve: true } : {}),
     };
     // A return's tokens go through their own pools beside its ADA's, one chain (chunk 34's §7).
     let tokens: LovejoinTokenWay[] | undefined;
@@ -2897,7 +2994,7 @@ export class LovejoinService {
     const paid = new Map<LovejoinWidth, number>();
     const countAt = async (w: LovejoinWidth) => {
       if (!paid.has(w)) {
-        const plan = await this.plan(network, index, rows, collateral, again, fixed, into, own, w);
+        const plan = await this.plan(network, index, rows, collateral, again, fixed, into, own, w, !!way.collateralReserve);
         paid.set(w, Math.min(plan.boxes, boxes ?? plan.boxes));
       }
       return paid.get(w)!;
@@ -2985,7 +3082,7 @@ export class LovejoinService {
         own,
         ...(w !== 3 ? { width: w } : {}),
         ...(pool.ref ? { poolRef: pool.ref } : {}),
-        ...(c.collateralPool?.ref ? { collateralPool: c.collateralPool.ref } : {}),
+        ...collateralAsked(c),
       };
       const built = await this.deps.wallet.withKeys(
         (keys) =>
@@ -3182,7 +3279,7 @@ export class LovejoinService {
           legs: legs.map((l, i) => ({ ...(l.pool.ref ? { poolRef: l.pool.ref } : {}), pool: this.real(l.split), most: fits[i] })),
           fills: returns.fills ?? [],
           ...(w !== 3 ? { width: w } : {}),
-          ...(c.collateralPool?.ref ? { collateralPool: c.collateralPool.ref } : {}),
+          ...collateralAsked(c),
         };
         const built = await this.deps.wallet.withKeys(
           (keys) =>
@@ -3344,42 +3441,133 @@ export class LovejoinService {
   }
 
   /**
-   * The pool a session's return puts its 5 ₳ collateral into, as a box of the wallet's (the owner, 2026-10-22): the
-   * shown ADA pool whose box holds exactly the collateral's 5 ₳, as discovery last kept it, asking nobody, while it
-   * takes a new box (usableNow). Only one pool of a value is ever shown. None on a network that has none, which on
+   * The pool a session's return mixes its 5 ₳ collateral into (the owner, 2026-10-22 and 2026-10-23): the shown ADA
+   * pool whose box holds exactly the collateral's 5 ₳, as discovery last kept it, while it takes a new box
+   * (usableNow), and its rows. Only one pool of a value is ever shown. None on a network that has none, which on
    * mainnet is every network until someone starts one: the collateral comes back with the rest, as before.
    *
-   * Nor one under the network's floor (the owner, 2026-10-23): the box mixes as any box does, so it waits for the
-   * crowd a mix waits for. Under it, the box would sit with nobody else's to hide among, or only the boxes of whoever
-   * started the pool. The pool is read for it only where there's a floor, as every read is (split), so preprod's
-   * returns ask nothing more; a read that fails leaves the box out rather than the return.
+   * Nor one under the network's floor (the owner, 2026-10-23): the box mixes with other people's, so it waits for the
+   * crowd a mix waits for. Its mix draws two boxes that aren't the wallet's, nor what another of its chains will
+   * spend (`owner`'s own aside, built again), so one with fewer is none either. Read as every read is (split), on
+   * every network: a read that fails leaves the collateral out rather than the return.
    */
-  async collateralPool(network: NetworkName, params: unknown): Promise<LovejoinPool | undefined> {
+  async collateralPool(network: NetworkName, params: unknown, owner?: string): Promise<CollateralPool | undefined> {
     if (!this.available(network)) return undefined;
     const pools = await this.readSet(network, true);
     const pool = pools.find((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
     if (!pool || this.usableNow(network, pool, params)) return undefined;
-    if ((NETWORKS[network].lovejoin?.poolFloor ?? 0) > 0) {
-      const others = await this.split(network, undefined, undefined, pool).then(
-        (s) => s.others.length,
-        () => 0,
-      );
-      if (this.floorShort(network, others)) return undefined;
-    }
-    return pool;
+    const split = await this.split(network, owner, undefined, pool).catch(() => undefined);
+    if (!split || this.floorShort(network, split.others.length)) return undefined;
+    if (free(split.others, split.reserved).length < TAIL_DRAWS) return undefined;
+    return { pool, rows: this.real(split) };
   }
 
   /**
-   * Return `txHash` puts a session's collateral into a box (collateralPool): what made it is written as Koios would
-   * have said it, a deposit and no mix (Origin), so a pool read holds the box as not mixed yet, as any deposit's, and
-   * never asks what made it. Once someone else's mix moves it, the box that mix made is found as any is, and comes
-   * back by itself. Written before the return is sent; one never sent goes as any origin no read lists, and a chain
-   * whose return lands past RECORD_KEEP_MS has its box asked of, as a restore's are, which says the same.
+   * Session `index`'s collateral's tail that its chain left short of its mix (Tail): its deposit sent, its mix not,
+   * and the chain no longer being sent (a lock cut it, giveme.my refused it, a box it drew went). Its mix may be built
+   * again (tailChain) for TAIL_KEEP_MS after its deposit went in, and TAIL_TRIES builds in all: past either it's
+   * over, and its box waits, not mixed yet, for Mix my boxes again. With the id of the chain whose record holds it.
    */
-  async noteCollateralBox(network: NetworkName, txHash: string): Promise<void> {
-    const at = this.deps.now();
+  async tailOf(network: NetworkName, index: number): Promise<{ id: string; tail: Tail } | undefined> {
+    if (!this.available(network)) return undefined;
+    const c = (await this.read(network)).chains.filter((r) => r.session === index && r.tail && !r.tail.over).at(-1);
+    if (!c?.tail || !c.ended || c.tail.scheduled || c.sent < c.total - 2) return undefined;
+    if (c.tail.tries >= TAIL_TRIES || this.deps.now() - (c.tail.landed ?? c.ended) > TAIL_KEEP_MS) {
+      await this.tailOver(network, c.id);
+      return undefined;
+    }
+    return { id: c.id, tail: { ...c.tail } };
+  }
+
+  /**
+   * Session `index`'s collateral's mix built again (tailOf), with two boxes drawn afresh, and its return after it:
+   * the chain the session sends in place of a plain return. `wait` while it can't be built yet: its box isn't listed
+   * (its deposit not in), the 5 ₳ pool isn't shown, or it has too few boxes to draw; a plain return meanwhile would
+   * take what pays for its mix. None, with no tail to build, or once it's over (tailOver): its box moved by someone
+   * else's mix, which then comes back as any box a mix made does, or nothing at the account left to pay for its mix.
+   * `own`: the session's own transactions, which the return takes first.
+   */
+  async tailChain(
+    network: NetworkName,
+    index: number,
+    rows: KoiosUtxo[],
+    params: unknown,
+    own: string[],
+  ): Promise<{ chain: LovejoinChain; tail: Tail; resumes: string } | "wait" | undefined> {
+    const found = await this.tailOf(network, index);
+    if (!found) return undefined;
+    const { id, tail } = found;
+    const pool = (await this.readSet(network, true)).find((p) => p.id === tail.pool);
+    if (!pool?.ref) return "wait";
+    const split = await this.split(network, chainOwner(index), undefined, pool);
+    if (!split.owned.some((b) => ref(b) === ref(tail.box))) {
+      // Not listed: its deposit isn't in yet, or someone else's mix moved it since, which its deposit in says.
+      const landed =
+        tail.landed !== undefined || (await this.onChain(network, [tail.deposit]).catch(() => new Set<string>())).has(tail.deposit);
+      if (!landed) return "wait";
+      await this.tailOver(network, id);
+      return undefined;
+    }
+    await this.tailLanded(network, id);
+    const request = {
+      network,
+      params,
+      index,
+      utxos: rows,
+      box: { txHash: tail.box.txHash, txIndex: tail.box.txIndex },
+      poolRef: pool.ref,
+      pool: this.real(split),
+      own,
+    };
+    try {
+      const chain = await this.deps.wallet.withKeys(
+        (keys) => JSON.parse(this.deps.wasm.buildCollateralMix(keys.oneTime, keys.seedelf, JSON.stringify(request))) as LovejoinChain,
+      );
+      return { chain, tail, resumes: id };
+    } catch (e) {
+      if (isTrap(e) || e instanceof WalletLocked) throw e;
+      // Too few boxes to draw from waits for more; anything else won't build later either.
+      if (/pool has \d+ boxes/.test(e instanceof Error ? e.message : String(e))) return "wait";
+      await this.tailOver(network, id);
+      return undefined;
+    }
+  }
+
+  /**
+   * giveme.my's signature on a session's collateral's mix, every input of it on chain now (giveme.my runs it through
+   * Ogmios as it is): the network measures it first, so giveme.my's coin is never put up against budgets it would
+   * measure higher, and isn't asked for a mix a box of which is gone. Returns it finished, to send. Throws StalePool
+   * when a box it drew is gone, LovejoinSkipped when the network measures it higher, giveme.my's errors as they are.
+   */
+  async tailWitness(network: NetworkName, txCbor: string): Promise<{ txCbor: string; txHash: string }> {
+    const { wasm } = this.deps;
+    const answer = await this.deps.koios(network).evaluate(txCbor);
+    const unknown = unknownInputs(answer);
+    if (unknown) throw new StalePool(unknown);
+    const checked = JSON.parse(wasm.declaredCovers(txCbor, JSON.stringify(answer))) as { covers: boolean; reason?: string };
+    if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? t("lj.skip.warn.measuredDifferently"));
+    const collateral = await this.deps.collateral(network).witness(txCbor);
+    return JSON.parse(wasm.finishLovejoinWithdraw(JSON.stringify({ txCbor, collateral }))) as { txCbor: string; txHash: string };
+  }
+
+  /** When chain `id`'s collateral's deposit was first known in (Tail `landed`): now, the first time it's asked. */
+  async tailLanded(network: NetworkName, id: string): Promise<number> {
+    const now = this.deps.now();
+    let landed = now;
     await this.update(network, (s) => {
-      s.origins = { ...s.origins, [txHash]: { mixed: false, seen: at } };
+      const tail = s.chains.find((c) => c.id === id)?.tail;
+      if (!tail) return;
+      tail.landed ??= now;
+      landed = tail.landed;
+    });
+    return landed;
+  }
+
+  /** Chain `id`'s collateral's tail won't go: its box waits, not mixed yet, and the session's rest comes back. */
+  async tailOver(network: NetworkName, id: string): Promise<void> {
+    await this.update(network, (s) => {
+      const tail = s.chains.find((c) => c.id === id)?.tail;
+      if (tail) tail.over = true;
     });
   }
 
@@ -4130,7 +4318,10 @@ export class LovejoinService {
    * `pools`: of `boxes`, how many go to each token pool (the rest to the
    * classic pool), with each leaf named by its pool. `bootstrap`: a
    * Bootstrap's deposit (ChainRecord `bootstrap`). Its mix goes in the list
-   * of mixes with it, to be followed to the end (MixEntry).
+   * of mixes with it, to be followed to the end (MixEntry). `tail`: the session's
+   * collateral's deposit and mix among `txs` (ChainRecord `tail`), in the 5 ₳
+   * pool `pool`; or, built again (resumeTail), its mix alone, the deposit sent
+   * by chain `resumes`, whose tail this one takes over.
    */
   async recordChain(
     network: NetworkName,
@@ -4147,19 +4338,36 @@ export class LovejoinService {
       bootstrap?: boolean;
       delay?: LovejoinDelay;
       width?: 4;
+      tail?: { pool: string; box: OutRef; leaf: OutRef; deposit?: string; resumes?: string; tries?: number };
     },
     start?: () => Promise<void>,
   ): Promise<void> {
     const { txs } = chain;
     const tokenPools = Object.entries(chain.pools ?? {}).filter(([p, n]) => p !== CLASSIC && n > 0);
+    // The collateral's deposit and mix apart from the chain's own: they make no box of `boxes`.
+    const main = txs.filter((t) => !t.tail);
+    const tailMix = txs.find((t) => t.tail && t.kind === "mix");
+    const tailDeposit = chain.tail?.deposit ?? txs.find((t) => t.tail && t.kind === "deposit")?.txHash;
+    const tail: Tail | undefined =
+      chain.tail && tailMix && tailDeposit
+        ? {
+            deposit: tailDeposit,
+            mix: tailMix.txHash,
+            pool: chain.tail.pool,
+            box: inThe(chain.tail.pool)(chain.tail.box),
+            leaf: inThe(chain.tail.pool)(chain.tail.leaf),
+            tries: chain.tail.tries ?? 1,
+          }
+        : undefined;
     const record: ChainRecord = {
       id: txs.at(-1)!.txHash,
       ...(chain.session !== undefined ? { session: chain.session } : {}),
       ...(chain.session === undefined && chain.account !== undefined ? { account: chain.account } : {}),
       progress: chain.progress,
-      ...(txs[0]?.kind === "deposit" ? { deposit: txs[0].txHash } : {}),
-      mixes: txs.filter((t) => t.kind === "mix").map((t) => t.txHash),
-      leaves: chain.leaves,
+      ...(main[0]?.kind === "deposit" ? { deposit: main[0].txHash } : {}),
+      mixes: main.filter((t) => t.kind === "mix").map((t) => t.txHash),
+      leaves: tail ? [...chain.leaves, tail.leaf] : chain.leaves,
+      ...(tail ? { tail } : {}),
       boxes: chain.boxes,
       ...(tokenPools.length ? { pools: Object.fromEntries(tokenPools) } : {}),
       ...(chain.again ? { again: true } : {}),
@@ -4176,6 +4384,9 @@ export class LovejoinService {
       await this.update(network, (s) => {
         s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
         s.mixes = [...entries(s).filter((e) => e.id !== record.id), entryOf(record)];
+        // The chain whose collateral's mix this one builds again: its tail is this one's now.
+        const was = chain.tail?.resumes ? s.chains.find((c) => c.id === chain.tail!.resumes)?.tail : undefined;
+        if (was) was.over = true;
       });
       try {
         await start?.();
@@ -4206,12 +4417,22 @@ export class LovejoinService {
     if (i === 0 && !record.scheduled && !record.seed && !record.bootstrap) {
       for (const p of poolsOf(record)) draws.push([p, await this.draw(shareOf(record, p), record.delay)]);
     }
+    // Its collateral's mix, sent just before its return: that box's leaf comes back by itself, as any box a mix made
+    // does, with a due time of its own, never one of the chain's boxes'.
+    const tailDue = record.tail && !record.tail.scheduled && i === record.total - 2 ? await this.draw(1, record.delay) : [];
     await this.update(network, (s) => {
       const c = s.chains.find((r) => r.id === id);
       if (!c) return;
       c.sent = Math.max(c.sent, i + 1);
       // It went: marked as maybe gone while it was sent (pumpPublic), it's known now.
       if (c.maybe?.index === i) delete c.maybe;
+      if (tailDue.length && c.tail && !c.tail.scheduled) {
+        c.tail.scheduled = true;
+        dueFor(s, c.tail.pool).push(...tailDue);
+        // It's out under its chain's mix in the list, in its pool, until it comes back.
+        const e = entries(s).find((x) => x.id === c.id);
+        if (e) shareIn(e, c.tail.pool).boxes += 1;
+      }
       if (!draws.some(([, due]) => due.length) || c.scheduled) return;
       c.scheduled = true;
       for (const [p, due] of draws) {
@@ -4540,7 +4761,7 @@ export class LovejoinService {
         if (e.bootstrap) continue;
         const c = s.chains.find((r) => r.id === e.id);
         if (!c?.ended || c.sent !== 0 || c.maybe || keep(c)) continue;
-        const its = new Set([...(c.deposit ? [c.deposit] : []), ...c.mixes]);
+        const its = new Set(makers(c));
         if ([...listedTxs].some((tx) => its.has(tx))) continue;
         for (const share of e.shares) share.back = Math.max(0, share.boxes - (share.moved ?? 0));
       }
@@ -5123,7 +5344,7 @@ export class LovejoinService {
   async inChain(network: NetworkName, txHash: string): Promise<boolean> {
     if (!this.available(network)) return false;
     const wanted = txHash.trim().toLowerCase();
-    return (await this.read(network)).chains.some((c) => c.id === wanted || c.deposit === wanted || c.mixes.includes(wanted));
+    return (await this.read(network)).chains.some((c) => c.id === wanted || makers(c).includes(wanted));
   }
 
   /**

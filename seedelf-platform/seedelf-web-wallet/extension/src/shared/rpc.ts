@@ -1882,6 +1882,12 @@ export interface LeftBehindUtxo {
 export interface SessionOutSummary extends WithdrawSummary {
   index: number;
   address: string;
+  /**
+   * What it pays beside the session's 5 ₳ collateral for that collateral to be mixed on its way into a 5 ₳ Lovejoin
+   * pool as the session comes back (the owner, 2026-10-23), in lovelace: what that mix doesn't spend comes back.
+   * Absent where it won't be.
+   */
+  collateralReserve?: string;
 }
 
 /** A swap Minswap built for a session, or the wallet's own cancel of its orders, read by WebAssembly and waiting for Send. */
@@ -1966,11 +1972,18 @@ export interface SessionBackSummary {
   /** The session's UTxOs this return leaves at its account, and why. */
   leftOut?: LeftOutUtxo[];
   /**
-   * The session's 5 ₳ collateral goes into a 5 ₳ Lovejoin pool (`pool`, its id) as a box of the wallet's, made by
-   * this return, rather than back with the rest (the owner, 2026-10-22). Nobody mixes it for the session: it's not
-   * mixed yet until someone else's mix moves it, then it comes back by itself. `lovelace` leaves its 5 ₳ out.
+   * The session's 5 ₳ collateral, mixed once on its way into a 5 ₳ Lovejoin pool (`pool`, its id) rather than back
+   * with the rest (the owner, 2026-10-22 and 2026-10-23): once the chain's mixes no longer need it, a deposit puts it
+   * into a box of the wallet's (`box`), and one mix, under giveme.my's collateral, moves that box with two of other
+   * people's; the box that mix makes (`leaf`) comes back by itself, as any mixed box does. `fee`: what both cost.
+   * `lovelace` leaves its 5 ₳ out.
    */
-  collateralBox?: { txHash: string; txIndex: number; pool: string };
+  collateralTail?: {
+    box: { txHash: string; txIndex: number };
+    leaf: { txHash: string; txIndex: number };
+    fee: string;
+    pool: string;
+  };
 }
 
 /**

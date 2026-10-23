@@ -183,6 +183,7 @@ fn plan_request(utxos: Vec<UtxoResponse>, depth: u32) -> PlanRequest {
         collateral: collateral(),
         depth,
         again: false,
+        collateral_reserve: false,
     }
 }
 
@@ -304,6 +305,8 @@ fn a_return_across_pools_deposits_once_and_mixes_each_box_in_its_pool() {
         again: false,
         own: vec![funding.clone()],
         collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
     };
     let chain = wasm::chain_across_pools(
         &accounts(),
@@ -419,6 +422,8 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             again: false,
             own: vec![funding],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
         None,
         4,
@@ -452,6 +457,8 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             again: false,
             own: Vec::new(),
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
         None,
         4,

@@ -40,7 +40,7 @@ import { RadioCards } from "../components/RadioCards";
 import { ExplorerLink } from "../components/ExplorerLink";
 import { GlobeIcon, ShieldIcon, SpinnerIcon, WalletIcon } from "../components/Icons";
 import { PasswordField } from "../components/PasswordField";
-import { boxCost } from "../components/LovejoinReturn";
+import { boxCost, CollateralReserveRow } from "../components/LovejoinReturn";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { homeBalance, TotalRows } from "../components/ReviewTotals";
 import { Screen } from "../components/Screen";
@@ -667,7 +667,9 @@ export function ConnectRequest({
 
   // The funding, built: what goes where, and Send.
   if (review) {
-    const [forSite, collateral] = review.payments;
+    const [paidSite, collateral] = review.payments;
+    // Less what it pays for its collateral's mix, which a row of its own shows.
+    const forSite = paidSite && { ...paidSite, lovelace: (BigInt(paidSite.lovelace) - BigInt(review.collateralReserve ?? "0")).toString() };
     return (
       <Screen
         onSubmit={send}
@@ -729,6 +731,7 @@ export function ConnectRequest({
             {/* What it's for, not "collateral", a word the wallet uses for three things (chunk 23's second review,
                 CW-8). */}
             <Row label={tr("dappUi.keptAside")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral?.lovelace ?? "0") })} />
+            <CollateralReserveRow reserve={review.collateralReserve} />
             <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
             {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
             {review.parts && <Row label={tr("review.parts")} value={String(review.parts.length)} />}

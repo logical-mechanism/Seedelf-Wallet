@@ -206,7 +206,8 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(shown).toContain("A mix from the Lovejoin tile still mixes");
   });
 
-  // The owner's call (2026-10-22): a returning session's 5 ₳ collateral into a pool of 5 ₳ boxes, with its own switch.
+  // The owner's calls (2026-10-22 and 2026-10-23): a returning session's 5 ₳ collateral mixed once in a pool of 5 ₳
+  // boxes, with its own switch.
   it("has the collateral's own switch, on by default, off with the returns', saying what each way does", () => {
     const render = (prefs: Partial<typeof DEFAULT_PREFERENCES>) =>
       renderToStaticMarkup(
@@ -221,8 +222,10 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     const on = render({});
     expect(button(on)).toContain('aria-checked="true"');
     expect(button(on)).not.toContain("disabled");
-    expect(text(on)).toContain("Put a session's 5 ₳ collateral into Lovejoin as it's brought back");
-    expect(text(on)).toContain("if that pool exists and holds enough other people's boxes; if not, it comes back with the rest");
+    expect(text(on)).toContain("Mix a session's 5 ₳ collateral in Lovejoin as it's brought back");
+    expect(text(on)).toContain("is mixed once with two other people's boxes, if that pool exists and holds enough of theirs");
+    expect(text(on)).toContain("pays a little more for that mix, and what the mix doesn't use comes back");
+    expect(text(on)).toContain("If not, the collateral comes back with the rest");
     expect(text(render({ lovejoinCollateral: false }))).toContain("anyone can tie it to the session, as they can that money");
     expect(button(render({ lovejoinReturns: false }))).toContain('disabled=""');
   });

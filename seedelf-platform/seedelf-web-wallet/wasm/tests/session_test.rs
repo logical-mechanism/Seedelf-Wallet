@@ -186,6 +186,7 @@ fn a_session_comes_back_whole_into_seedelf_signed_by_its_key() {
             merge: vec![],
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
         },
     )
     .unwrap();
@@ -290,6 +291,7 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
             merge: vec![change.clone()],
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
         },
     )
     .unwrap();
@@ -353,6 +355,7 @@ fn a_return_merges_into_the_funding_change_under_the_sessions_collateral() {
             merge: vec![foreign],
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
         },
     )
     .unwrap_err();
@@ -393,6 +396,7 @@ fn a_return_leaves_out_what_would_overflow_a_token_and_brings_back_the_rest() {
             merge,
             own,
             collateral_pool: None,
+            collateral_boxes: vec![],
         };
     let junk_back = |result: &api::SessionReturnResult| {
         result
@@ -496,6 +500,7 @@ fn a_return_pays_for_a_strangers_reference_script_or_leaves_one_it_cant_measure(
             merge: vec![],
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
         },
     )
     .unwrap();
@@ -546,6 +551,7 @@ fn a_return_holding_a_reference_script_is_swept_not_merged() {
             merge: vec![change],
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
         },
     )
     .unwrap();
@@ -575,6 +581,7 @@ fn a_return_takes_only_the_sessions_own_utxos() {
         merge: vec![],
         own: vec![],
         collateral_pool: None,
+        collateral_boxes: vec![],
     };
     let sk = random_scalar();
     let err = api::session_return(
