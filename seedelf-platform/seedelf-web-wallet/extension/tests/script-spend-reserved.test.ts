@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { Koios } from "../src/background/koios";
-import { SESSION_RESERVED_PREFIX, type Reservation } from "../src/background/spent";
+import { nothingToSpend, readContract } from "../src/background/script-spend";
+import { outpoint, SESSION_RESERVED_PREFIX, type Reservation } from "../src/background/spent";
 import { SESSION_WITHDRAW, WithdrawService } from "../src/background/withdraw";
 import { loadTestWasm, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -93,5 +94,52 @@ describe("a private spend kept for Send (independent review L18)", () => {
     await t.session.remove(`${SESSION_RESERVED_PREFIX}preprod`);
     await service.submit("preprod", summary.txHash);
     expect(t.koios.submitted).toHaveLength(1);
+  });
+});
+
+describe("a payment's parts still to go (1.6.0 review: parts-reservation-blamed-on-lovejoin)", () => {
+  /** What a payment's parts still to go reserve is named after its first part (parts.ts). */
+  const PARTS = `parts.${"ee".repeat(32)}`;
+
+  it("are named as what holds a kept spend, never a chain through Lovejoin", async () => {
+    const t = await unlocked();
+    const { summary, input } = await reviewed(t);
+    await reserve(t, { [PARTS]: { inputs: [input] } });
+    const service = withSigner(t, summary.txHash);
+    await expect(service.submit("preprod", summary.txHash)).rejects.toThrow(
+      "That payment spends a UTxO that a payment still being sent in parts spends too. Review it again.",
+    );
+    // A return through Lovejoin holding it as well is one: said as that.
+    await reserve(t, { [PARTS]: { inputs: [input] }, "session:0": { inputs: [input] } });
+    await expect(service.submit("preprod", summary.txHash)).rejects.toThrow("a chain through Lovejoin");
+    expect(t.koios.submitted).toHaveLength(0);
+  });
+
+  it("are what Max leaves out, and what the private balance waits for, in words of their own", async () => {
+    const t = await unlocked();
+    const deps = { ...t.deps, collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch) };
+    const [held, ...rest] = (await readContract(deps, "preprod")).utxos;
+    await reserve(t, { [PARTS]: { inputs: [outpoint(held!)] } });
+    const max = await t.withdraw.build("preprod", [{ to: THEIRS, lovelace: null, tokens: [] }]);
+    expect(max.leftOut).toEqual([{ txHash: held!.tx_hash, txIndex: held!.tx_index, reason: "parts" }]);
+
+    // With the rest locked, nothing pays, and the error says what the private balance waits for.
+    for (const u of rest) await t.coins.setLocked("preprod", "seedelf", outpoint(u), true);
+    await expect(t.withdraw.build("preprod", [{ to: THEIRS, lovelace: "1000000", tokens: [] }])).rejects.toThrow(
+      "Every UTxO in your private balance is locked, or waits for a payment still being sent in parts.",
+    );
+    const read = await readContract(deps, "preprod");
+    expect(read.waiting.map(outpoint)).toEqual([outpoint(held!)]);
+    const only = { ...read.view, owned: read.view.owned.filter((u) => outpoint(u) === outpoint(held!)) };
+    expect(nothingToSpend({}, only, "Your private balance is empty.", read.returning, read.waiting).message).toBe(
+      "Your private balance waits for a payment still being sent in parts. Try again once it's all sent.",
+    );
+    // Beside a return through Lovejoin, that's what it says.
+    const [other] = rest;
+    await reserve(t, { [PARTS]: { inputs: [outpoint(held!)] }, "session:0": { inputs: [outpoint(other!)] } });
+    const both = await readContract(deps, "preprod");
+    expect(nothingToSpend({}, both.view, "Your private balance is empty.", both.returning, both.waiting).message).toContain(
+      "a return through Lovejoin",
+    );
   });
 });

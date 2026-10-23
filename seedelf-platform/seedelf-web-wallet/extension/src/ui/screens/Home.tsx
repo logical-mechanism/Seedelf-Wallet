@@ -745,6 +745,7 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
       <Dapps
         seedelf={free.seedelf}
         cardano={free.cardano}
+        publicTotal={totals?.public}
         blocked={watching ? busy : undefined}
         start={dappStart}
         banner={
@@ -1412,7 +1413,9 @@ function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index:
 }
 
 /** A transaction the chain hasn't shown, and the worker hasn't let go. */
-const unsettled = (p: PendingTx) => p.confirmations === null && !p.dropped;
+/** On its way: not on chain yet, or a payment some of whose parts still wait for the part before (background/parts.ts). */
+const unsettled = (p: PendingTx) =>
+  (p.confirmations === null && !p.dropped) || (!!p.parts && p.parts.sent < p.parts.total && !p.parts.stopped);
 
 type MixProgress = { total: number; sent: number; stopped?: string } | null;
 
@@ -1444,10 +1447,14 @@ export function PublicMixHolding({ progress, onOpen }: { progress: NonNullable<M
  */
 /**
  * Whether Home shows In Lovejoin: a box on its way back or not mixed yet in any pool, or a chain stopped partway. A
- * token pool's alone counts too (34f's review, 1).
+ * token pool's alone counts too (34f's review, 1); so does a box a Bootstrap holds (1.6.0's release review, MONEY-4).
  */
 export const inLovejoinShown = (held: LovejoinHeld) =>
-  held.boxes > 0 || held.notMixed > 0 || held.stopped > 0 || !!held.pools?.some((p) => p.boxes > 0 || p.notMixed > 0);
+  held.boxes > 0 ||
+  held.notMixed > 0 ||
+  held.stopped > 0 ||
+  (held.bootstrap ?? 0) > 0 ||
+  !!held.pools?.some((p) => p.boxes > 0 || p.notMixed > 0 || (p.bootstrap ?? 0) > 0);
 
 export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: number; onOpen: () => void }) {
   const t = useT();
@@ -1463,8 +1470,17 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
     { key: "classic", box: CLASSIC_BOX, figures: held },
     ...(held.pools ?? []).map((p) => ({ key: p.id, box: boxOf(p), figures: p })),
   ].filter((r, i) => i === 0 || r.figures.boxes > 0 || r.figures.notMixed > 0);
+  // Each pool's boxes a Bootstrap holds, on rows of their own after those (chunk 34's D2): none is on its way back,
+  // and they stay until brought back by hand. Without them the private balance dropped with nothing said here (1.6.0's
+  // release review, MONEY-4).
+  const holds = [
+    { key: "classic", box: CLASSIC_BOX as BoxValue | undefined, count: held.bootstrap ?? 0 },
+    ...(held.pools ?? []).map((p) => ({ key: p.id, box: boxOf(p), count: p.bootstrap ?? 0 })),
+  ].filter((h) => h.count > 0);
   // The classic pool's row says "Your mixes" when only a stopped chain or a token pool has something.
-  const shown = rows.filter((r, i) => r.figures.boxes > 0 || r.figures.notMixed > 0 || (i === 0 && rows.length === 1));
+  const shown = rows.filter((r, i) => r.figures.boxes > 0 || r.figures.notMixed > 0 || (i === 0 && rows.length === 1 && !holds.length));
+  // The stopped flag goes on the first row there is: a held box's when it's the only kind.
+  const flaggedText = (flagged: string) => t("home.lovejoin.flagged", { flags: flagged.charAt(0).toUpperCase() + flagged.slice(1) });
   return (
     <section className="section" aria-labelledby="in-lovejoin-title">
       <h2 id="in-lovejoin-title">{t("home.lovejoin.title")}</h2>
@@ -1499,7 +1515,31 @@ export function InLovejoin({ held, now, onOpen }: { held: LovejoinHeld; now: num
             <span className="token-row__sub">{f.boxes ? nextText(f.next) : f.notMixed ? t("home.lovejoin.notBack") : ""}</span>
             {flagged && (
               <span className="token-row__detail" data-testid={i === 0 ? "in-lovejoin-flag" : `in-lovejoin-flag-${r.key}`}>
-                {t("home.lovejoin.flagged", { flags: flagged.charAt(0).toUpperCase() + flagged.slice(1) })}
+                {flaggedText(flagged)}
+              </span>
+            )}
+          </button>
+        );
+      })}
+      {holds.map((h, i) => {
+        const first = !shown.length && i === 0;
+        const lovelace = (BigInt(h.count) * BigInt(h.box?.lovelace ?? "0")).toString();
+        return (
+          <button key={`held-${h.key}`} type="button" className="token-row" onClick={onOpen} data-testid={first ? "in-lovejoin" : `in-lovejoin-held-${h.key}`}>
+            <span className="avatar avatar--contact" aria-hidden="true">
+              <ShieldIcon size={16} />
+            </span>
+            <span className="token-row__label">
+              {h.box
+                ? t("lovejoin.mixes.boxesOf", { boxes: amounts.count(h.count, "amount.boxes"), box: boxText(network, h.box) })
+                : t("lovejoin.mixes.boxesIn", { boxes: amounts.count(h.count, "amount.boxes"), pool: shortHex(h.key, 8, 4) })}
+            </span>
+            <span className="token-row__amount">{h.box ? `${amounts.ada(lovelace)}\u00a0₳` : ""}</span>
+            {/* How many is an amount: one or many isn't said while balances are hidden (privacy review §2.16). */}
+            <span className="token-row__sub">{t("home.lovejoin.bootstrapping", { count: amounts.hidden ? 2 : h.count })}</span>
+            {first && stoppedFlag && (
+              <span className="token-row__detail" data-testid="in-lovejoin-flag">
+                {flaggedText(stoppedFlag)}
               </span>
             )}
           </button>

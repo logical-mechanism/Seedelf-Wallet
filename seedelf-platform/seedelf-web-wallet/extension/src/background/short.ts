@@ -22,6 +22,17 @@ import { isTrap } from "./wasm";
 const PUBLIC_SHORT = /Not enough ADA in the Cardano account/;
 const PRIVATE_SHORT = /Not enough ADA in the Seedelf balance/;
 
+/** Core's refusal of more UTxOs than one transaction spends (build.rs `TooMany`), where no split could send it either. */
+const TOO_MANY = /needs more computation than a transaction may use/;
+
+/**
+ * More UTxOs than the wallet sends at once, in the user's words: several recipients at once, or past what its parts
+ * spend (the owner's test of 1.6.0); any other error as it was.
+ */
+export function tooMany(e: unknown): unknown {
+  return e instanceof Error && TOO_MANY.test(e.message) ? new Error(t("worker.parts.tooMany")) : e;
+}
+
 /** Whether `e` is core saying the public account can't pay. */
 export const isPublicShort = (e: unknown): boolean => e instanceof Error && PUBLIC_SHORT.test(e.message);
 

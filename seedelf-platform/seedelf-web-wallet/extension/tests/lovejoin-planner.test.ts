@@ -198,6 +198,9 @@ async function siteSession(t: T): Promise<void> {
   });
 }
 
+/** A price of a byte at which a 4.5 ₳ MIN box still meets its minimum (3.87 ₳ at 11,000) but can't pay its own way back. */
+const STUCK_MIN = "12300";
+
 type Kept = { chain?: Array<{ kind: string; txCbor: string; txHash: string }> };
 const kept = async (t: T) => (await t.wallet.withKeys(() => t.session.get<Kept>(SESSION_BACK)))!;
 
@@ -339,7 +342,22 @@ describe("a return's tokens through their own pools (chunk 34's §7)", SLOW, () 
  * A MIN pool, 4.5 ₳ and 900 MIN a box, as the wallet's own start from the public account makes it: its reference
  * UTxO and its two scripts at the holder (named by their hashes, as the data layer names them), and its seed.
  */
-async function minPool(t: T, boxLovelace = "4500000", account: [string, string] = ["e1", "e5"]): Promise<{ ref: PoolRef; id: string; mixBox: string }> {
+function minPool(t: T, boxLovelace = "4500000", account: [string, string] = ["e1", "e5"]): Promise<{ ref: PoolRef; id: string; mixBox: string }> {
+  return launched(t, boxLovelace, account, { token: { policyId: MIN.policy, assetName: MIN.name }, quantity: MIN_Q.toString() });
+}
+
+/** An ADA pool of `boxLovelace` boxes, started as minPool's is: a 5 ₳ one takes a return's collateral (the owner, 2026-10-22). */
+function adaPool(t: T, boxLovelace = "5000000", account: [string, string] = ["e2", "e6"]): Promise<{ ref: PoolRef; id: string; mixBox: string }> {
+  return launched(t, boxLovelace, account, {});
+}
+
+/** A pool of `token` (none: an ADA pool) with `boxLovelace` a box, started from the public account's `account` UTxOs. */
+async function launched(
+  t: T,
+  boxLovelace: string,
+  account: [string, string],
+  what: { token?: { policyId: string; assetName: string }; quantity?: string },
+): Promise<{ ref: PoolRef; id: string; mixBox: string }> {
   const wasm = loadTestWasm();
   t.koios.addedToAccounts.push(atAccount(account[0], "40000000"), atAccount(account[1], "5000000"));
   let made: { txCbor: string; pool: { id: string; mixBoxHash: string; mixLogicHash: string; seed: { txHash: string; txIndex: number } }; locked: { mixBox: string } } | undefined;
@@ -357,7 +375,7 @@ async function minPool(t: T, boxLovelace = "4500000", account: [string, string] 
     lovejoin: t.lovejoin,
     discovery: { known: async () => [], look: async () => undefined },
   });
-  await launch.build("preprod", { from: "public", token: { policyId: MIN.policy, assetName: MIN.name }, quantity: MIN_Q.toString(), boxLovelace });
+  await launch.build("preprod", { from: "public", ...what, boxLovelace });
   const outs = JSON.parse(wasm.ogmiosUtxos(made!.txCbor)) as Array<{
     transaction: { id: string };
     index: number;
@@ -398,6 +416,48 @@ async function minPool(t: T, boxLovelace = "4500000", account: [string, string] 
   };
   return { ref, id: made!.pool.id, mixBox: made!.pool.mixBoxHash };
 }
+
+// The owner's call 34 (2026-10-19, asked in session 5): where the wallet picks a token's pool itself, a pool whose boxes
+// can't pay their own way back under today's fees is picked as any pool, and the review says so beside the token.
+describe("a token's pool whose boxes can't pay their own way back, picked as any (the owner's call 34)", SLOW, () => {
+  it("is a return's token's pool, and its way says the boxes wait", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    // A byte dearer than preprod's: a 2 ₳ LJTEST box still meets its minimum, but can't pay its own way back.
+    t.koios.params = { coins_per_utxo_size: "4800" };
+    const lj = pooled(t, [TOKEN_POOL]);
+    const sessions = runner(t, lj);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(
+      atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]),
+      atSession(OUT, 1, "40000000"),
+      atSession(OUT, 2, "5000000"),
+      ...POOL,
+      ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+    );
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin?.ways?.[0]).toMatchObject({ pool: TOKEN, boxes: 2, stuck: true });
+  });
+
+  it("is a swap's token's pool, and its way says the boxes wait", async () => {
+    const t = await wallet();
+    const min = await minPool(t);
+    t.koios.params = { coins_per_utxo_size: STUCK_MIN };
+    const lj = pooled(t, [min.ref]);
+    const sessions = runner(t, lj);
+    const wasm = loadTestWasm();
+    const datum = await t.wallet.withKeys((keys) => Buffer.from(wasm.registerToDatum(wasm.rerandomize(keys.seedelf.baseRegister()))).toString("hex"));
+    t.koios.added.push({ ...ownedUtxos[0]!, tx_hash: "d1".repeat(32), tx_index: 0, value: "100000000", inline_datum: { bytes: datum, value: {} } } as KoiosUtxo);
+    t.koios.addedToAccounts.push(...POOL, ...strangers(t, min.mixBox, 8, 0x80, "4500000", asset(MIN_UNIT, MIN_Q)));
+    const quote = await sessions.quote("preprod", minswapEstimate.ask);
+    const out = await sessions.outBuild("preprod", quote);
+    expect(out.lovejoin!.ways![0]).toMatchObject({ pool: min.id, boxes: 1, stuck: true });
+    // Under preprod's own fees, the same pool's way says nothing of it.
+    t.koios.params = undefined;
+    const fine = await runner(t, pooled(t, [min.ref])).outBuild("preprod", quote);
+    expect(fine.lovejoin!.ways![0]!.stuck).toBeUndefined();
+  });
+});
 
 describe("a swap that gets a token with a pool (chunk 34's 34e, the owner's call, 2026-10-18)", SLOW, () => {
   it("funds its token's boxes beside the swap, and keeps the pool its review showed", async () => {
@@ -572,6 +632,27 @@ describe("four boxes a mix (chunk 34's D3)", SLOW, () => {
     expect(txInputs(mix).filter((o) => CLASSIC_BOXES.has(o))).toHaveLength(3);
   });
 
+  it("follows the form's Four boxes a mix switch over Settings, either way (the owner's test of 1.6.0)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinWidth: 3, lovejoinDepth: 1 });
+    const lj = pooled(t, []);
+    const sessions = runner(t, lj);
+    account(t);
+    // Settings at three, the switch on: four.
+    expect(await lj.fits("preprod", 1, undefined, 4)).toEqual({ width: 4 });
+    expect((await sessions.mixOutBuild("preprod", 1, { width: 4 })).mix.width).toBe(4);
+    expect((await lj.publicBuild("preprod", 1, { width: 4 })).width).toBe(4);
+    // Settings at four, the switch off: three, with nothing to say of four.
+    await t.deps.preferences.set({ lovejoinWidth: 4 });
+    expect(await lj.fits("preprod", 1, undefined, 3)).toBeUndefined();
+    const three = await lj.publicBuild("preprod", 1, { width: 3 });
+    expect(three.width).toBeUndefined();
+    expect(three.fellBack).toBeUndefined();
+    // And the form's funding, priced at the switch's width, not capped at Settings'.
+    await t.deps.preferences.set({ lovejoinWidth: 3 });
+    expect((await lj.funding("preprod", 1, false, 1, undefined, 4)).width).toBe(4);
+  });
+
   it("refuses no tile mix for the width: what four can't take, three does", async () => {
     const t = await wallet();
     await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
@@ -720,14 +801,31 @@ describe("34e's review findings, each with a test", SLOW, () => {
     expect(book.sessions[0]!.auto.lovejoin?.tokens).toEqual({ [MIN_UNIT]: null });
   });
 
-  it("funds Mix my boxes again at three when four fell back, whatever Settings says (4)", async () => {
+  it("mixes again four a mix with the boxes that fit at four, the rest for the next press (the owner's test of 1.6.0)", async () => {
     const t = await wallet();
     await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
     const sessions = runner(t, pooled(t, []));
     t.koios.addedToAccounts.push(...POOL, await ownBox(t, "d6"), await ownBox(t, "d7"));
     // Two boxes two waves deep: four a mix takes 15 of the pool's 20 for each, so one; three takes 8 each, so both.
+    // Four went three, both boxes; four now goes, with one, and says three would take two.
     const out = await sessions.againBuild("preprod");
-    expect(out.mix).toMatchObject({ boxes: 2, again: true, depth: 2, mixes: 8, lovelace: "9100000", fellBack: tr("lj.width.warn.short") });
+    expect(out.mix).toMatchObject({ boxes: 1, owned: 2, again: true, depth: 2, mixes: 5, width: 4, atThree: 2 });
+    expect(out.mix.fellBack).toBeUndefined();
+    // The review's switch turned to three: both, three a mix, as Settings' three would.
+    const three = await sessions.againBuild("preprod", false, undefined, 3);
+    expect(three.mix).toMatchObject({ boxes: 2, owned: 2, mixes: 8, lovelace: "9100000" });
+    expect(three.mix.width).toBeUndefined();
+    expect(three.mix.atThree).toBeUndefined();
+  });
+
+  it("funds Mix my boxes again at three where four takes none, whatever Settings says (4)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinWidth: 4, lovejoinDepth: 2 });
+    const sessions = runner(t, pooled(t, []));
+    // Twelve in the pool: four a mix needs 15 for a box, three 8.
+    t.koios.addedToAccounts.push(...POOL.slice(0, 12), await ownBox(t, "d6"), await ownBox(t, "d7"));
+    const out = await sessions.againBuild("preprod");
+    expect(out.mix).toMatchObject({ boxes: 1, owned: 2, again: true, depth: 2, mixes: 4, fellBack: tr("lj.width.warn.short") });
     expect(out.mix.width).toBeUndefined();
   });
 
@@ -857,13 +955,13 @@ describe("34e's fixes' review, each with a test", SLOW, () => {
     const wasm = loadTestWasm();
     let why = "Spending 30 UTxOs at once needs more computation than a transaction may use";
     const sessions = runner(t, pooled(t, [min.ref]), {
-      // The funding with the token's boxes beside the swap takes more of the private balance's UTxOs than one
-      // transaction can spend; the swap's own fits.
-      buildWithdraw: (key: Parameters<typeof wasm.buildWithdraw>[0], request: string) => {
+      // The funding with the token's boxes beside the swap takes more of the private balance's UTxOs than its parts
+      // can spend (a funding goes in parts since the owner's test of 1.6.0); the swap's own fits.
+      buildWithdrawParts: (key: Parameters<typeof wasm.buildWithdrawParts>[0], request: string) => {
         const amount = (JSON.parse(request) as { payments: Array<{ lovelace: string }> }).payments[0]!.lovelace;
         amounts.add(amount);
         if (why.startsWith("Not enough") || BigInt(amount) > BigInt(swap)) throw new Error(why);
-        return wasm.buildWithdraw(key, request);
+        return wasm.buildWithdrawParts(key, request);
       },
     });
     await privately(t, "100000000");
@@ -1038,5 +1136,119 @@ describe("what the screens read of the planner (chunk 34's 34f)", SLOW, () => {
     // Approved to come back directly: no box of it is wanted, so no 5 ₳ for its mixes.
     await t.store.set("sessions.preprod", session({ [MIN_UNIT]: null }));
     expect((await sessions.backBuild("preprod", 0)).lovejoinSkipped).not.toBe(tr("sess.skip.warn.noCollateral"));
+  });
+});
+
+// The owner's call (2026-10-22): a session's 5 ₳ collateral goes into a shown 5 ₳ pool as a box, rather than back with
+// the rest under the session's history, wherever its return goes through Lovejoin; nobody mixes the box for it.
+describe("a return's 5 ₳ collateral into the 5 ₳ pool (the owner, 2026-10-22)", SLOW, () => {
+  type Out = { index: number; address: string; value: { ada: { lovelace: number } }; datum?: string };
+  /** What `txCbor` pays, each output as Ogmios has it. */
+  const paid = (txCbor: string) => JSON.parse(loadTestWasm().ogmiosUtxos(txCbor)) as Out[];
+  /** Pool `mixBox`'s address, where its boxes sit. */
+  const boxAddress = (mixBox: string) => bech32("addr_test", Uint8Array.from([0x70, ...Buffer.from(mixBox, "hex")]));
+  /** What made the wallet's boxes no record accounts for, as the sealed schedule keeps it. */
+  const origins = async (t: T) =>
+    (await t.store.get<{ origins?: Record<string, { mixed: boolean }> }>("lovejoin.preprod"))?.origins ?? {};
+  it("goes in as a chain's return makes it, and the box waits as not mixed yet, nobody asked what made it", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const five = await adaPool(t);
+    const lj = pooled(t, [five.ref]);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(atSession(OUT, 1, "40000000"), atSession(OUT, 2, "5000000"), ...POOL);
+    const sessions = runner(t, lj);
+    const review = await sessions.backBuild("preprod", 0);
+    expect(review.lovejoin!.boxes).toBeGreaterThanOrEqual(1);
+    expect(review.collateralBox).toEqual({ txHash: review.txHash, txIndex: expect.any(Number), pool: five.id });
+    // The return's own output, 5 ₳ alone at the 5 ₳ pool's mix_box.
+    const back = (await kept(t)).chain!.at(-1)!;
+    const box = paid(back.txCbor).find((o) => o.index === review.collateralBox!.txIndex)!;
+    expect(box.address).toBe(boxAddress(five.mixBox));
+    expect(box.value.ada.lovelace).toBe(5_000_000);
+    // What made it is written as it's sent, as Koios would say it: a deposit, no mix.
+    await sessions.backSubmit("preprod", review.txHash);
+    expect((await origins(t))[review.txHash]).toMatchObject({ mixed: false });
+    // Listed in its pool, it's the wallet's box not mixed yet, and no transaction that made it is asked of.
+    t.koios.addedToAccounts.push({
+      ...POOL[0]!,
+      tx_hash: review.txHash,
+      tx_index: box.index,
+      address: box.address,
+      payment_cred: five.mixBox,
+      value: "5000000",
+      datum_hash: null,
+      inline_datum: { bytes: box.datum!, value: {} },
+      asset_list: [],
+    } as KoiosUtxo);
+    const calls = t.koios.calls.length;
+    const status = await lj.status("preprod");
+    const pool = status.pools!.find((p) => p.id === five.id)!;
+    expect(pool.notMixed).toContainEqual({ txHash: review.txHash, txIndex: box.index, pool: five.id });
+    const asked = t.koios.calls.slice(calls).filter((c) => c.path.includes("tx_info") && JSON.stringify(c.body).includes(review.txHash));
+    expect(asked).toEqual([]);
+  });
+
+  it("goes in with a return that comes back directly, its spare ADA paying for no 10 ₳ box", async () => {
+    const t = await wallet();
+    const five = await adaPool(t);
+    const lj = pooled(t, [five.ref]);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(atSession(OUT, 1, "3000000"), atSession(OUT, 2, "5000000"), ...POOL);
+    const review = await runner(t, lj).backBuild("preprod", 0);
+    expect(review.lovejoin).toBeUndefined();
+    expect(review.collateralBox).toMatchObject({ txHash: review.txHash, pool: five.id });
+    // What comes back at once leaves the box's 5 ₳ out.
+    expect(BigInt(review.lovelace)).toBe(8_000_000n - BigInt(review.fee) - 5_000_000n);
+  });
+
+  // The owner, 2026-10-23: the box mixes as any box does, so a pool under the network's floor takes no collateral.
+  it("goes in only once the 5 ₳ pool holds the network's floor of boxes that aren't the wallet's", async () => {
+    const t = await wallet();
+    const five = await adaPool(t);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(atSession(OUT, 1, "3000000"), atSession(OUT, 2, "5000000"), ...POOL);
+    const lovejoin = NETWORKS.preprod.lovejoin!;
+    const floor = lovejoin.poolFloor;
+    lovejoin.poolFloor = 2;
+    try {
+      // Under it, as mainnet's first 5 ₳ pool would be: the collateral comes back with the rest.
+      const short = await runner(t, pooled(t, [five.ref])).backBuild("preprod", 0);
+      expect(short.collateralBox).toBeUndefined();
+      expect(BigInt(short.lovelace)).toBe(8_000_000n - BigInt(short.fee));
+      // Two boxes of other people's there, and it goes in.
+      t.koios.addedToAccounts.push(
+        ...POOL.slice(0, 2).map(
+          (u, i) =>
+            ({ ...u, tx_hash: "f5".repeat(32), tx_index: i, address: boxAddress(five.mixBox), payment_cred: five.mixBox, value: "5000000", asset_list: [] }) as KoiosUtxo,
+        ),
+      );
+      const met = await runner(t, pooled(t, [five.ref])).backBuild("preprod", 0);
+      expect(met.collateralBox).toMatchObject({ txHash: met.txHash, pool: five.id });
+    } finally {
+      lovejoin.poolFloor = floor;
+    }
+  });
+
+  it("comes back with the rest when Settings turns it off, the return goes directly, or no 5 ₳ pool is shown", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const five = await adaPool(t);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(atSession(OUT, 1, "40000000"), atSession(OUT, 2, "5000000"), ...POOL);
+    const sessions = runner(t, pooled(t, [five.ref]));
+    // Brought back directly, by the review's switch.
+    expect((await sessions.backBuild("preprod", 0, true)).collateralBox).toBeUndefined();
+    // Settings' switch off.
+    await t.deps.preferences.set({ lovejoinCollateral: false });
+    const off = await sessions.backBuild("preprod", 0);
+    expect(off.lovejoin).toBeDefined();
+    expect(off.collateralBox).toBeUndefined();
+    // On, with no 5 ₳ pool shown (mainnet, until someone starts one).
+    await t.deps.preferences.set({ lovejoinCollateral: true });
+    expect((await runner(t, pooled(t, [])).backBuild("preprod", 0)).collateralBox).toBeUndefined();
+    // And a pool of other boxes is no collateral's: a 25 ₳ ADA pool.
+    const other = await adaPool(t, "25000000", ["e3", "e7"]);
+    expect((await runner(t, pooled(t, [other.ref])).backBuild("preprod", 0)).collateralBox).toBeUndefined();
   });
 });

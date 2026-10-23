@@ -189,6 +189,70 @@ describe("a private transaction's watch", () => {
   });
 });
 
+describe("a token pool's transaction (1.6.0's release review, DATA-1)", () => {
+  /** A token pool's `mix_box`, as the token pools' feed names the pools it covers. */
+  const POOL_BOX = "5b".repeat(28);
+  /** The wallet read the token pools a moment before it sent: their feed's cursor in hand, the pool covered. */
+  async function onTokens() {
+    const w = await watching();
+    await noteCursor(w.t.session, "preprod", "tokens", cursorAt(NOW_SLOT - 1_500), w.t.clock.now - 20 * 60_000, w.t.clock.now);
+    w.index.tokenPools = [POOL_BOX];
+    return w;
+  }
+  const madeBy = (tx: string) => ({ row: { ...indexRowOf(ownedUtxos[1]!, NOW_SLOT - 3), ref: `${tx}#0` } });
+
+  it("is looked for on the token pools' feed, which the classic pool's doesn't stand in for, and never named to tx_status", async () => {
+    const { t, index, deps, asked } = await onTokens();
+    t.koios.confirmations = 3;
+    const sentAt = t.clock.now - 60_000;
+    const before = await chainStatus(deps, "preprod", [{ txHash: TX, feed: "tokens", pools: [POOL_BOX], sentAt }]);
+    expect(before).toMatchObject({ fed: true });
+    expect(before.statuses.get(TX)).toBeNull();
+    // It lands: it made a box in the token pool, which lovejoin/tokens lists and lovejoin/since never does.
+    index.tokens.push(madeBy(TX));
+    const after = await chainStatus(deps, "preprod", [{ txHash: TX, feed: "tokens", pools: [POOL_BOX], sentAt }]);
+    expect(after.statuses.get(TX)).toBe(1);
+    expect(asked()).toBe(0);
+    expect(index.calls.every((c) => c.startsWith("lovejoin/tokens/since/"))).toBe(true);
+  });
+
+  it("looks for a chain's steps across pools on both feeds: seen on either, it's on chain", async () => {
+    const { t, index, deps, asked } = await onTokens();
+    // The classic pool's mix, and the token pool's: each chain step watched alike, as the chain's pools say.
+    index.pool.push({ row: { ...indexRowOf(ownedUtxos[0]!, NOW_SLOT - 3), ref: `${TX}#0` } });
+    index.tokens.push(madeBy(OTHER));
+    const across = { feed: "lovejoin" as const, pools: [POOL_BOX], sentAt: t.clock.now };
+    const unseen = "fc".repeat(32);
+    const { statuses, fed } = await chainStatus(deps, "preprod", [
+      { txHash: TX, ...across },
+      { txHash: OTHER, ...across },
+      { txHash: unseen, ...across },
+    ]);
+    expect([statuses.get(TX), statuses.get(OTHER), statuses.get(unseen)]).toEqual([1, 1, null]);
+    expect(fed).toBe(true);
+    expect(asked()).toBe(0);
+  });
+
+  it("asks tx_status for one whose pool the feed doesn't cover (shown after its cursor), and while the token routes can't answer", async () => {
+    const { t, index, deps, parts } = await onTokens();
+    t.koios.confirmations = 2;
+    index.tokenPools = [];
+    const uncovered = await chainStatus(deps, "preprod", [{ txHash: TX, feed: "tokens", pools: [POOL_BOX], sentAt: t.clock.now }]);
+    expect(uncovered).toMatchObject({ fed: false });
+    expect(uncovered.statuses.get(TX)).toBe(2);
+    // Seen there all the same: on chain, whatever else it covers.
+    index.tokens.push(madeBy(TX));
+    expect((await chainStatus(deps, "preprod", [{ txHash: TX, feed: "tokens", pools: [POOL_BOX], sentAt: t.clock.now }])).statuses.get(TX)).toBe(1);
+    index.tokenPools = [POOL_BOX];
+    index.tokensFail = Response.json({ error: "behind" }, { status: 503 });
+    const down = await chainStatus(deps, "preprod", [{ txHash: OTHER, feed: "tokens", pools: [POOL_BOX], sentAt: t.clock.now }]);
+    expect(down.statuses.get(OTHER)).toBe(2);
+    expect(t.koios.calls.filter((c) => c.path === "tx_status").map((c) => c.body._tx_hashes)).toEqual([[TX], [OTHER]]);
+    // The token routes' trouble alone: the private part stays up.
+    expect(await parts.up("private")).toBe(true);
+  });
+});
+
 describe("which feed a signed transaction shows in", () => {
   it("is the contract's for one that pays a Seedelf, and none for one that pays only key addresses and a DEX", () => {
     expect(feedOfTx(bytes(transferPreprod.final.txCbor), "preprod")).toBe("contract");

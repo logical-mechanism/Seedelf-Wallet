@@ -1148,20 +1148,6 @@ export class Koios {
   }
 
   /**
-   * One token's total supply, in its raw units, for a Lovejoin pool's launch
-   * (chunk 34's §5: 30 boxes' worth must fit in it). Undefined when Koios
-   * knows no such token. Koios sees which token is asked about.
-   */
-  async assetSupply(policyId: string, assetName: string): Promise<bigint | undefined> {
-    const [row] = await this.post<{ total_supply?: string | null }>(
-      "asset_info",
-      { _asset_list: [[policyId, assetName]] },
-      "select=total_supply",
-    );
-    return typeof row?.total_supply === "string" && /^\d+$/.test(row.total_supply) ? BigInt(row.total_supply) : undefined;
-  }
-
-  /**
    * Submits a signed transaction; returns its hash. Retried only when Koios
    * says its node was unreachable: otherwise, if an answer were lost, a
    * second submit would fail with "inputs already spent" and hide the fact

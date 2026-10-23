@@ -189,6 +189,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             merge: vec![],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -265,6 +266,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             merge: vec![funding_change(sk)],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -326,6 +328,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             merge: vec![],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -444,6 +447,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             merge: vec![],
             again: false,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap_err();
@@ -633,6 +637,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             merge: vec![],
             again: true,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap();
@@ -703,6 +708,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             merge: vec![],
             again: true,
             own: vec![],
+            collateral_pool: None,
         },
     )
     .unwrap_err();

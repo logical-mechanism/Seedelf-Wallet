@@ -144,22 +144,30 @@ import {
   type LovejoinPool,
   type LovejoinService,
 } from "./lovejoin";
+import { holdWaiting, partsOf, reviewParts, splitParts, unsplit, type Waiting } from "./parts";
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
-import { chainStatus, type Feed } from "./feed";
+import { chainStatus, type Feed, type Watching } from "./feed";
 import {
+  carried,
   changeHistory,
   keep,
+  keepParts,
   measureLocally,
   nothingToSpend,
+  partKey,
+  PARTS_RESERVED,
   readContract,
   send,
   spendable,
   spentHistories,
+  whole,
   type Classes,
+  type Kept,
   type OutRef,
   type ScriptSpendDeps,
+  type SpendWhat,
 } from "./script-spend";
 import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
 import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN, type Keys } from "./wallet";
@@ -194,6 +202,8 @@ interface TokenChoice {
   named: string | null | undefined;
   chosen?: LovejoinPool;
   rooms?: Map<string, { others: number; free: number }>;
+  /** The chosen pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's call 34). */
+  stuck?: true;
 }
 /** About what bringing one Lovejoin box back costs, paid from the box: a 1-box withdraw measured 0.2897 ₳ on mainnet. */
 export const LOVEJOIN_WITHDRAW_ESTIMATE = 300_000n;
@@ -269,6 +279,18 @@ type RecordedTx = SessionTx & {
   /** Recorded, and on its way to Koios. */
   sending?: boolean;
   /**
+   * A part of a funding in parts that never landed: turned away, never sent after one before it was, or not seen in
+   * time. Its session's funding is short, and it holds nothing back: what did land waits to be brought back (the
+   * owner's call, 2026-10-21). One that lands after all is the funding's again (`confirmed`), and the session goes on.
+   */
+  missed?: boolean;
+  /**
+   * A part of a funding in parts held to go once the part before it is in a block (parts.ts), not sent yet: neither
+   * late nor missed while the parts' record has it still to go (`stillWaiting`). Its clock (`at`) starts as it goes
+   * (partsMayGo); one a lock wiped from that record never goes, and its clock is the record's.
+   */
+  waits?: boolean;
+  /**
    * The chain didn't show it in time, and its step is built again. It may
    * still land (Koios didn't answer, or took it late), so it's still looked
    * for: if it lands, it's the step, and the copy built after it can't land.
@@ -328,6 +350,9 @@ type RecordedTx = SessionTx & {
   /** A swap's: the least its order asks for, recorded before it's sent (independent review L24). */
   minAmountOut?: string;
 };
+
+/** A return's transactions: directly, or through Lovejoin, a chain. */
+const RETURNS: ReadonlySet<SessionTx["kind"]> = new Set(["back", "deposit", "mix"]);
 
 /** The steps whose transaction is built again when it goes unseen (a chain's own are sent again as they are). */
 const REBUILT: ReadonlySet<SessionTx["kind"]> = new Set(["swap", "cancel", "back"]);
@@ -420,6 +445,13 @@ interface SessionRecord {
   ownStake?: boolean;
   createdAt: number;
   txs: RecordedTx[];
+  /**
+   * Its funding went as this many transactions, the first `parts` of `txs` (fundingOf), when one couldn't spend
+   * enough UTxOs (the owner's test of 1.6.0: selling a token spread over more UTxOs than one spends). It's funded
+   * only once every one has landed: "if it requires y parts but y-k come in then its not complete and is basically
+   * equal to the one time account being not funded" (the owner, 2026-10-21). None: one, as every funding before.
+   */
+  parts?: number;
   swap?: SessionView["swap"];
   /** Set on sessions started since swaps run themselves. */
   auto?: AutoRecord;
@@ -451,6 +483,8 @@ interface SessionRecord {
     skipped?: string;
     /** Funded for four boxes a mix (chunk 34's D3): its chain goes four wide, or three if four can't. None: three. */
     width?: 4;
+    /** Cleared from Lovejoin's Your mixes (the owner's test of 1.6.0): the hub's list alone reads it. */
+    cleared?: true;
   };
   /**
    * The latest return through Lovejoin: how many transactions its chain has,
@@ -529,6 +563,21 @@ interface Book {
    * (cross-area review X02).
    */
   unscanned?: true;
+}
+
+/** A later part of a funding in parts, kept for Send with its own figures (keepFunding). */
+type FundingPart = SessionOutSummary & { origin: HistoryClass; txCbor: string; seed: string };
+
+/**
+ * A funding built for Send (buildFunding): the review's `summary`, its parts added up; the first part's transaction;
+ * its own figures (`first`) when there are more; and the parts after it (`later`).
+ */
+interface Funding {
+  summary: SessionOutSummary & { origin: HistoryClass };
+  txCbor: string;
+  seed: string;
+  first?: SessionOutSummary & { origin: HistoryClass };
+  later: FundingPart[];
 }
 
 interface KeptOut {
@@ -874,6 +923,9 @@ const TOO_LITTLE = /deposit of these tokens needs at least|insufficient lovelace
 /** WebAssembly couldn't fund a payment from the private balance: core's `NotEnough` (build.rs), in its fixed English. */
 const NOT_ENOUGH_PRIVATE = /Not enough ADA in the Seedelf balance/;
 
+/** More UTxOs than one transaction spends: core's `TooMany` (build.rs), in its fixed English. */
+const TOO_MANY = /needs more computation than a transaction may use/;
+
 /** The private balance doesn't pay for a funding (buildFunding), in the user's words: told apart by its type, never its words. */
 class NotEnoughPrivate extends Error {
   constructor() {
@@ -908,6 +960,72 @@ function holdsCancelCollateral(rows: KoiosUtxo[]): boolean {
   return rows.some((u) => plainAda(u) && BigInt(u.value) >= SESSION_COLLATERAL);
 }
 
+/** A session's funding: its first transaction, or its first `parts` when it went in parts. */
+function fundingOf(s: SessionRecord): RecordedTx[] {
+  return s.txs.slice(0, s.parts ?? 1);
+}
+
+/** Everything after a session's funding: its top-ups and its steps. */
+function afterFunding(s: SessionRecord): RecordedTx[] {
+  return s.txs.slice(s.parts ?? 1);
+}
+
+/**
+ * Where a session's funding is, and how many of its parts landed: `landed` once every part is on chain (`confirmed`)
+ * or what it paid is listed at the account (`rows`); `short` once some landed and every other was missed (`missed`,
+ * or turned away); `never` once none landed and every one was turned away, or (`failed`) the runner found none on
+ * chain in time; `funding` while any may still land. A session nothing runs (a site's) has no runner to mark a part
+ * missed: one not seen FAILED_AFTER_MS after it was sent is, at `now`. A part still waiting for the one before it
+ * (`waiting`, stillWaiting) is neither. One transaction's funding is `landed` once anything is at its account, as it
+ * always was.
+ */
+function fundingState(
+  s: SessionRecord,
+  rows?: KoiosUtxo[],
+  {
+    failed = !!s.auto?.failed,
+    now,
+    waiting = NONE_WAITING,
+  }: { failed?: boolean; now?: number; waiting?: ReadonlySet<string> } = {},
+): { state: "landed" | "funding" | "short" | "never"; landed: number; total: number } {
+  const parts = fundingOf(s);
+  const there = new Set((rows ?? []).map((u) => u.tx_hash));
+  const total = parts.length;
+  if (total === 1) {
+    const out = parts[0]!;
+    if (out.confirmed || !!rows?.length) return { state: "landed", landed: 1, total };
+    return { state: out.unsent || failed ? "never" : "funding", landed: 0, total };
+  }
+  const arrived = (t: RecordedTx) => t.confirmed || there.has(t.txHash);
+  const landed = parts.filter(arrived).length;
+  if (landed === total) return { state: "landed", landed, total };
+  const missed = (t: RecordedTx) =>
+    t.missed || t.unsent || (now !== undefined && !waiting.has(t.txHash) && now - t.at > FAILED_AFTER_MS);
+  const gone = parts.filter((t) => !arrived(t) && missed(t)).length;
+  if (landed + gone < total && !failed) return { state: "funding", landed, total };
+  return { state: landed ? "short" : "never", landed, total };
+}
+
+/** No part of a funding waits for the one before it. */
+const NONE_WAITING: ReadonlySet<string> = new Set();
+
+/**
+ * Pauses session `s`, whose funding in parts is short (fundingState), for the user to bring back what came: a funding
+ * every part of which was missed never started, and fails as one transaction's does. Its swap or mix never runs. One
+ * the user stopped isn't paused: what came is brought back, as Stop said, and nothing would step it again.
+ */
+function short(s: SessionRecord, at: number): void {
+  const { state, landed, total } = fundingState(s);
+  if (state === "never") {
+    s.auto!.failed ??= at;
+    return;
+  }
+  if (s.auto!.stopping) return;
+  if (state !== "short" || (s.auto!.paused?.why === "short" && s.auto!.paused.landed === landed)) return;
+  s.auto!.paused = { at, why: "short", landed, total };
+  delete s.auto!.retry;
+}
+
 /**
  * Whether top-up `t` of a session (anything it was paid after its funding)
  * may still reach its account: sent, not turned away, less than
@@ -925,7 +1043,7 @@ function topUpOnItsWay(t: RecordedTx, now: number): boolean {
 /** Whether a top-up of session `s` is on its way (topUpOnItsWay), what it pays the account not among `rows` yet. */
 function topUpComing(s: SessionRecord, rows: KoiosUtxo[], now: number): boolean {
   const there = new Set(rows.map(outpoint));
-  return s.txs.slice(1).some((t) => topUpOnItsWay(t, now) && !(t.outs ?? []).some((o) => there.has(o)));
+  return afterFunding(s).some((t) => topUpOnItsWay(t, now) && !(t.outs ?? []).some((o) => there.has(o)));
 }
 
 /**
@@ -935,7 +1053,7 @@ function topUpComing(s: SessionRecord, rows: KoiosUtxo[], now: number): boolean 
  */
 function markListed(s: SessionRecord, listed: KoiosUtxo[]): boolean {
   const there = new Set(listed.map((u) => u.tx_hash));
-  const reached = s.txs.slice(1).filter((t) => t.kind === "out" && !t.listed && there.has(t.txHash));
+  const reached = afterFunding(s).filter((t) => t.kind === "out" && !t.listed && there.has(t.txHash));
   for (const t of reached) t.listed = true;
   return reached.length > 0;
 }
@@ -1012,7 +1130,7 @@ function byHand(s: SessionRecord): boolean {
  * release review, C02).
  */
 function foundUntouched(s: SessionRecord): boolean {
-  return !!s.recovered && byHand(s) && s.txs.slice(1).every((t) => t.unsent || s.recovered!.own.includes(t.txHash));
+  return !!s.recovered && byHand(s) && afterFunding(s).every((t) => t.unsent || s.recovered!.own.includes(t.txHash));
 }
 
 /** A swap that runs itself and has something left to do without the user. */
@@ -1449,7 +1567,8 @@ export class SessionService {
     if (rooms) works.sort((a, b) => (rooms.get(b.id)?.others ?? 0) - (rooms.get(a.id)?.others ?? 0));
     const named = pools?.[unit];
     const chosen = named === null ? undefined : named === undefined ? works[0] : works.find((p) => p.id === named);
-    return { unit, works, named, chosen, rooms };
+    const stuck = pool && chosen && (await lovejoin.stuck(network, chosen, params));
+    return { unit, works, named, chosen, rooms, ...(stuck ? { stuck: true as const } : {}) };
   }
 
   /**
@@ -1462,7 +1581,7 @@ export class SessionService {
   private async tokenAt(
     network: NetworkName,
     quote: SwapQuote,
-    { unit, works, named, chosen, rooms }: TokenChoice,
+    { unit, works, named, chosen, rooms, stuck }: TokenChoice,
     depth: number,
     width: LovejoinWidth,
     short?: string,
@@ -1490,6 +1609,7 @@ export class SessionService {
         ...(named === null ? { direct: true as const } : {}),
         pools: works.map((p) => p.id),
         ...(skipped ? { skipped } : {}),
+        ...(stuck ? { stuck } : {}),
         mixes: funding?.mixes ?? 0,
         mixFees: funding?.mixFees ?? "0",
         withdrawFees: ((funding ? BigInt(boxes) : 0n) * LOVEJOIN_WITHDRAW_ESTIMATE).toString(),
@@ -1616,7 +1736,7 @@ export class SessionService {
       lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, short: t("lj.tokens.skip.warn.balance"), through });
       funding = await fund(lovejoin);
     }
-    const { summary, txCbor, seed } = funding;
+    const { summary, txCbor, seed, first, later } = funding;
     const swap = { ...ask, amountOut: quote.amountOut, minAmountOut: quote.minAmountOut, ...(display ? { display } : {}) };
     // Sending this is the approval: the swap runs itself within it. Through the pools, as its review said, and
     // not as an order, whose minimum it didn't say the wallet relies on Minswap for (release review C09).
@@ -1648,8 +1768,8 @@ export class SessionService {
           },
         }
       : {};
-    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...summary, txCbor, seed, index, swap, approved, ...way };
-    await keep(this.deps, SESSION_OUT, kept);
+    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...(first ?? summary), txCbor, seed, index, swap, approved, ...way };
+    await this.keepFunding(SESSION_OUT, kept, later);
     return { ...summary, ...(lovejoin ? { lovejoin } : {}) };
   }
 
@@ -1660,7 +1780,7 @@ export class SessionService {
   async siteOutBuild(network: NetworkName, origin: string, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
-    const { summary, txCbor, seed } = await this.buildFunding(
+    const { summary, txCbor, seed, first, later } = await this.buildFunding(
       network,
       index,
       address,
@@ -1670,8 +1790,8 @@ export class SessionService {
       ],
       t("sess.emptySession"),
     );
-    const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed, site: { origin } };
-    await keep(this.deps, SESSION_SITE_OUT, kept);
+    const kept: Omit<KeptFunding, "builtAt"> = { ...(first ?? summary), txCbor, seed, site: { origin } };
+    await this.keepFunding(SESSION_SITE_OUT, kept, later);
     return summary;
   }
 
@@ -1694,18 +1814,13 @@ export class SessionService {
         index: built.index,
         ownStake: true,
         createdAt: now(),
-        txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
+        ...(await this.fundingRecords(network, built.index, SESSION_SITE_OUT, built)),
         site: { origin },
       };
       await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       // The runs look for it until it lands, whether or not a page is open (runAll, final review F13).
       await this.deps.alarm?.start().catch(() => undefined);
-      try {
-        return { index: built.index, pending: await send(this.deps, network, txHash, SESSION_SITE_OUT, "session-out", "payment") };
-      } catch (e) {
-        await this.markUnsent(network, built.index, txHash, e);
-        throw e;
-      }
+      return { index: built.index, pending: await this.sendFunding(network, record, SESSION_SITE_OUT, "payment") };
     });
   }
 
@@ -1718,7 +1833,7 @@ export class SessionService {
   async mixOutBuild(
     network: NetworkName,
     boxes: number,
-    { pool, bootstrap = false }: { pool?: string; bootstrap?: boolean } = {},
+    { pool, bootstrap = false, width }: { pool?: string; bootstrap?: boolean; width?: LovejoinWidth } = {},
   ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
@@ -1730,8 +1845,9 @@ export class SessionService {
     // giveme.my's collateral as any is.
     checkBoxes(boxes, bootstrap ? mostBootstrap(pool) : MAX_MIX_BOXES);
     if (bootstrap) checkBoxes(boxes, await lovejoin.privateBootstrapMost(network, pool), true);
-    // Four boxes a mix where Settings has it and the pool has room for it, funded for that (chunk 34's D3).
-    const way = bootstrap ? undefined : await lovejoin.fits(network, boxes, pool);
+    // Four boxes a mix where the form's switch (else Settings) has it and the pool has room for it, funded for that
+    // (chunk 34's D3; the switch since the owner's test of 1.6.0).
+    const way = bootstrap ? undefined : await lovejoin.fits(network, boxes, pool, width);
     // None to say is three: the width fits chose, never Settings read again (34e's review, 4).
     const { seed: _seed, ...funding } = await lovejoin.funding(network, boxes, false, bootstrap ? 0 : undefined, pool, way?.width ?? 3);
     // No mixes is a Bootstrap since chunk 34's 34d: its boxes are held in the pool until brought back by hand.
@@ -1747,15 +1863,26 @@ export class SessionService {
    * account put in only when asked `anyway`: paid from here, they tie the
    * private balance to the account (lovejoin.ts againBoxes).
    */
-  async againBuild(network: NetworkName, anyway = false, pool?: string): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
+  async againBuild(
+    network: NetworkName,
+    anyway = false,
+    pool?: string,
+    asked?: LovejoinWidth,
+  ): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin?.available(network)) throw new Error(t("lj.notOnNetwork"));
     if (await this.mixingAgain(network)) throw new Error(t("sess.mixingAgain"));
-    const { boxes, owned, width, fellBack } = await lovejoin.againBoxes(network, anyway, pool);
+    const { boxes, owned, width, fellBack, atThree } = await lovejoin.againBoxes(network, anyway, pool, asked);
     // At the width againBoxes chose, three when it names none: never Settings' read again, which a fallback to three
     // would over-fund (34e's review, 4).
     const funding = await lovejoin.funding(network, boxes, true, undefined, pool, width ?? 3);
-    return this.mixFunding(network, { ...funding, owned, ...(anyway ? { publicToo: true } : {}), ...(fellBack ? { fellBack } : {}) });
+    return this.mixFunding(network, {
+      ...funding,
+      owned,
+      ...(anyway ? { publicToo: true } : {}),
+      ...(fellBack ? { fellBack } : {}),
+      ...(atThree ? { atThree } : {}),
+    });
   }
 
   /** Whether a mix of the wallet's boxes again may still spend them: Lovejoin withdraws none meanwhile. */
@@ -1767,7 +1894,7 @@ export class SessionService {
   private async mixFunding(network: NetworkName, mix: LovejoinFunding): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
-    const { summary, txCbor, seed } = await this.buildFunding(
+    const { summary, txCbor, seed, first, later } = await this.buildFunding(
       network,
       index,
       address,
@@ -1777,9 +1904,21 @@ export class SessionService {
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
       t(mix.again ? "sess.emptyMixPay" : "sess.emptyMix"),
-    );
-    const kept: Omit<KeptMix, "builtAt"> = { ...summary, txCbor, seed, mix };
-    await keep(this.deps, SESSION_MIX_OUT, kept);
+      undefined,
+      undefined,
+      // Mixing again pays its mixes from the account's largest UTxO (WebAssembly's plan): its funding stays one
+      // transaction, so it's one UTxO. A deposit spends everything at the account, so a new mix's may go in parts;
+      // not a Bootstrap's, whose cap is what a deposit of one funding UTxO leaves room for (mostBootstrap,
+      // privateBootstrapMost): each part's output more in its deposit costs fee, and near the cap the deposit
+      // couldn't pay, so it came back with no box and its fees spent (1.6.0's review). As one, it goes or is refused
+      // before anything does, in the user's words: fewer boxes take fewer UTxOs.
+      { inParts: !mix.again && !mix.bootstrap },
+    ).catch((e: unknown) => {
+      if (mix.bootstrap && e instanceof Error && TOO_MANY.test(e.message)) throw new Error(t("sess.bootstrapTooMany"));
+      throw e;
+    });
+    const kept: Omit<KeptMix, "builtAt"> = { ...(first ?? summary), txCbor, seed, mix };
+    await this.keepFunding(SESSION_MIX_OUT, kept, later);
     return { ...summary, mix };
   }
 
@@ -1801,7 +1940,7 @@ export class SessionService {
         index: built.index,
         ownStake: true,
         createdAt: now(),
-        txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
+        ...(await this.fundingRecords(network, built.index, SESSION_MIX_OUT, built)),
         mix: {
           boxes: built.mix.boxes,
           ...(built.mix.again ? { again: true } : {}),
@@ -1813,13 +1952,7 @@ export class SessionService {
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
       };
       await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
-      let pending: PendingTx;
-      try {
-        pending = await send(this.deps, network, txHash, SESSION_MIX_OUT, "session-out", "mix");
-      } catch (e) {
-        await this.markUnsent(network, built.index, txHash, e);
-        throw e;
-      }
+      const pending = await this.sendFunding(network, record, SESSION_MIX_OUT, "mix");
       await this.deps.alarm?.start();
       return { index: built.index, pending };
     });
@@ -1841,12 +1974,16 @@ export class SessionService {
     const held = await this.accountUtxos(network, keyHash);
     const payments = [{ to: address, lovelace, tokens }];
     if (!held.some(collateralFits)) payments.push({ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] });
+    // One transaction, as a top-up always was: its record is one top-up (topUpSubmit).
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
       index,
       address,
       payments,
       t("sess.emptyTopUp"),
+      undefined,
+      undefined,
+      { inParts: false },
     );
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
     await keep(this.deps, SESSION_TOP_UP, kept);
@@ -1876,7 +2013,7 @@ export class SessionService {
       // (1.5.0's release review, C29).
       if (!again && byHand(s)) {
         if (cancelling(s, now())) throw new Error(t("sess.cancelCollateral.cancelling"));
-        if (s.txs.slice(1).some((x) => x.txHash !== txHash && topUpOnItsWay(x, now()))) throw new Error(t("sess.topUpOnItsWay"));
+        if (afterFunding(s).some((x) => x.txHash !== txHash && topUpOnItsWay(x, now()))) throw new Error(t("sess.topUpOnItsWay"));
       }
       const out = await this.outRecord(network, built.index, txHash, built.txCbor);
       await this.update(network, built.index, (s) => {
@@ -1962,7 +2099,9 @@ export class SessionService {
   private async collateralTopUp(network: NetworkName, s: SessionRecord, address: string): Promise<SessionOutSummary> {
     const payments = [{ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] }];
     const own = new Set([...s.txs.filter((x) => x.kind === "out" && !x.unsent).map((x) => x.txHash), ...(s.recovered?.own ?? [])]);
-    const { summary, txCbor, seed } = await this.buildFunding(network, s.index, address, payments, t("sess.emptyTopUp"), own);
+    const { summary, txCbor, seed } = await this.buildFunding(network, s.index, address, payments, t("sess.emptyTopUp"), own, undefined, {
+      inParts: false,
+    });
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
     await keep(this.deps, SESSION_TOP_UP, kept);
     return summary;
@@ -2125,15 +2264,32 @@ export class SessionService {
    * waited for the funding (dapp.ts watchFunding): a funding or a top-up
    * with an output there landed, and is marked so, whatever tx_status says.
    * From then on only Koios showing what it paid spent ends the session,
-   * never a read that's behind it (ownGone, final review F13).
+   * never a read that's behind it (ownGone, final review F13). Returns where
+   * its funding is (fundingState): one in parts has landed only once every
+   * part has, and a site's `enable()` waits for that (the owner's call,
+   * 2026-10-21).
    */
-  fundingSeen(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<void> {
+  fundingSeen(network: NetworkName, index: number, rows: KoiosUtxo[]): Promise<"landed" | "funding" | "short" | "never"> {
     return this.serial(async () => {
-      const s = (await this.book(network)).sessions.find((r) => r.index === index);
-      if (!s || s.closedAt) return;
+      let s = (await this.book(network)).sessions.find((r) => r.index === index);
+      // No record to read, or over: what's there is all it ever was, as before funding in parts.
+      if (!s || s.closedAt) return "landed";
       const seen = fundingsListed(s, rows);
-      if (seen.size) await this.update(network, index, (r) => void settle(r, seen));
+      if (seen.size) s = await this.update(network, index, (r) => void settle(r, seen));
+      return fundingState(s, rows, s.auto ? {} : { now: this.deps.now(), waiting: await this.stillWaiting(network, s) }).state;
     });
+  }
+
+  /**
+   * Where a site's private session's funding is, for the connector to answer the site's `enable()` and its reads
+   * (dapp.ts), whichever page asks: one in parts that hasn't all landed, read at its account (fundingSeen). Any other
+   * is the site's as it always was, with no read.
+   */
+  async siteFunding(network: NetworkName, index: number): Promise<"landed" | "funding" | "short" | "never"> {
+    const s = (await this.book(network)).sessions.find((r) => r.index === index);
+    if (!s || s.closedAt || !s.parts || fundingOf(s).every((t) => t.confirmed)) return "landed";
+    const { keyHash } = (await this.accounts(network, [s])).get(index)!;
+    return this.fundingSeen(network, index, await this.accountUtxos(network, keyHash));
   }
 
   /**
@@ -2452,12 +2608,13 @@ export class SessionService {
     empty: string,
     own?: ReadonlySet<string>,
     known?: Record<string, unknown>,
-  ): Promise<{ summary: SessionOutSummary & { origin: HistoryClass }; txCbor: string; seed: string }> {
+    { inParts = true }: { inParts?: boolean } = {},
+  ): Promise<Funding> {
     const { wasm } = this.deps;
-    const { view, utxos, params, returning, classes: read } = await readContract(this.deps, network, known);
-    if (!utxos.length) throw nothingToSpend(this.deps, view, empty, returning);
+    const { view, utxos, params, returning, waiting, classes: read } = await readContract(this.deps, network, known);
+    if (!utxos.length) throw nothingToSpend(this.deps, view, empty, returning, waiting);
     const classes = own ? ownClassed(read, utxos, own, index) : read;
-    type Finished = Omit<SessionOutSummary, "network" | "payments" | "inputs" | "index" | "address" | "histories"> & {
+    type Finished = Omit<SessionOutSummary, "network" | "payments" | "inputs" | "index" | "address" | "histories" | "parts"> & {
       txCbor: string;
       seed: string;
       payments: Array<Paid & { to: string }>;
@@ -2465,29 +2622,61 @@ export class SessionService {
       classesMixed: string[];
     };
     const request = { network, params, utxos, payments, classes, funding: { session: sessionClass(index).id } };
-    const finished = await measureLocally<Finished>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r)).catch(
-      (e: unknown) => {
-        // Core's own words name the balance the screens call the private balance, and are English whatever the
-        // language: said in the user's words (chunk 23's second review, LJ-6). Core's text is fixed, never translated.
-        if (e instanceof Error && NOT_ENOUGH_PRIVATE.test(e.message)) throw new NotEnoughPrivate();
-        throw e;
-      },
-    );
-    const { txCbor, seed, inputs, payments: paid, classesMixed, ...rest } = finished;
-    const histories = spentHistories(classes, inputs, classesMixed);
-    const summary: SessionOutSummary = {
-      ...rest,
-      network,
-      index,
-      address,
-      payments: paid.map(({ to, ...p }) => ({ address: to, own: false, ...p })),
-      inputs: inputs.length,
-      ...(histories ? { histories } : {}),
+    // In as many transactions as the UTxOs it spends need, each spending its own (the owner's test of 1.6.0: a token
+    // spread over more UTxOs than one transaction spends, sold privately); the account's collateral in the first. A
+    // top-up goes as one, as ever.
+    const parts = await (inParts
+      ? measureLocally<{ parts: Finished[] }>(this.deps, request, (keys, r) => wasm.buildWithdrawParts(keys.seedelf, r)).then(
+          (built) => built.parts,
+        )
+      : measureLocally<Finished>(this.deps, request, (keys, r) => wasm.buildWithdraw(keys.seedelf, r)).then((one) => [one])
+    ).catch((e: unknown) => {
+      // Core's own words name the balance the screens call the private balance, and are English whatever the
+      // language: said in the user's words (chunk 23's second review, LJ-6). Core's text is fixed, never translated.
+      if (e instanceof Error && NOT_ENOUGH_PRIVATE.test(e.message)) throw new NotEnoughPrivate();
+      throw e;
+    });
+    // A chained part's carry has the history of what the part before it spent (script-spend.ts `carried`).
+    const seen = carried(classes, parts);
+    const summaryOf = (finished: Finished): SessionOutSummary & { origin: HistoryClass } => {
+      const { txCbor: _txCbor, seed: _seed, inputs, payments: paid, classesMixed, ...rest } = finished;
+      const histories = spentHistories(seen, inputs, classesMixed);
+      // Its change carries what paid for it, and is this session's from now on (activity.ts): selection still takes
+      // it as the session's, and a later review counts the boxes in it (independent review L41).
+      const origin = merged([changeHistory(seen, inputs), sessionClass(index)]);
+      return {
+        ...rest,
+        network,
+        index,
+        address,
+        payments: paid.map(({ to, ...p }) => ({ address: to, own: false, ...p })),
+        inputs: inputs.length,
+        ...(histories ? { histories } : {}),
+        origin,
+      };
     };
-    // Its change carries what paid for it, and is this session's from now on (activity.ts): selection still takes
-    // it as the session's, and a later review counts the boxes in it (independent review L41).
-    const origin = merged([changeHistory(classes, inputs), sessionClass(index)]);
-    return { summary: { ...summary, origin }, txCbor, seed };
+    const [first, ...rest] = parts;
+    // The review's: the parts added up, the histories they tie between them, the account's collateral as the first
+    // part pays it (payments after its first).
+    const all = whole(parts, { classes: seen, utxos });
+    const summary = summaryOf(parts.length > 1 ? { ...all, payments: [...all.payments, ...first!.payments.slice(1)] } : all);
+    return {
+      summary: parts.length > 1 ? { ...summary, parts: reviewParts(parts) } : summary,
+      txCbor: first!.txCbor,
+      seed: first!.seed,
+      // Each later part kept with its own figures, for the Seedelf history once it's sent; the first's are the review's
+      // when it's alone, its own otherwise (`firstOwn`).
+      later: rest.map((p) => ({ ...summaryOf(p), txCbor: p.txCbor, seed: p.seed })),
+      ...(parts.length > 1 ? { first: summaryOf(first!) } : {}),
+    };
+  }
+
+  /**
+   * Keeps a funding for Send under `key`: `kept`, its first part, with the session's own fields, and the parts after
+   * it (keepParts), each under its own key. One part is kept as a funding always was.
+   */
+  private keepFunding(key: string, kept: Omit<Kept, "builtAt" | "account"> & object, later: FundingPart[]): Promise<void> {
+    return keepParts(this.deps, key, [kept, ...later]);
   }
 
   /**
@@ -2524,18 +2713,12 @@ export class SessionService {
         index: built.index,
         ownStake: true,
         createdAt: now(),
-        txs: [await this.outRecord(network, built.index, txHash, built.txCbor)],
+        ...(await this.fundingRecords(network, built.index, SESSION_OUT, built)),
         swap: built.swap,
         auto: { approved: built.approved, ...back },
       };
       await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
-      let pending: PendingTx;
-      try {
-        pending = await send(this.deps, network, txHash, SESSION_OUT, "session-out", "payment");
-      } catch (e) {
-        await this.markUnsent(network, built.index, txHash, e);
-        throw e;
-      }
+      const pending = await this.sendFunding(network, record, SESSION_OUT, "payment");
       await this.deps.alarm?.start();
       return pending;
     });
@@ -2778,6 +2961,8 @@ export class SessionService {
         if (direct) s.auto!.direct = true;
         delete s.auto!.paused;
         delete s.auto!.retry;
+        // A funding in parts found never funded, part of which landed since: what came is brought back.
+        if (s.auto!.failed && s.parts && fundingState(s).state === "short") delete s.auto!.failed;
       });
       await this.deps.alarm?.start();
       await this.step(network, index, "asked");
@@ -2985,18 +3170,26 @@ export class SessionService {
       );
       const stale = waiting.filter((t) => t.replaced && !on.has(t.txHash) && now() - t.at >= REPLACED_WATCH_MS);
       // A funding may have reached the chain though Koios didn't answer, or tx_status doesn't know it yet:
-      // what it paid the account is looked for before it counts as failed.
-      const out = s.txs[0]!;
-      let neverFunded =
-        !out.confirmed && !on.has(out.txHash) && now() - out.at > (out.unsent ? RESEND_AFTER_MS : FAILED_AFTER_MS);
-      if (neverFunded) {
+      // what it paid the account is looked for before it counts as failed. Each part of one in parts too: one
+      // that didn't land in time is missed, and a funding that's short of one isn't funded (the owner's call,
+      // 2026-10-21). One that waits for the part before it isn't sent yet, so isn't late (stillWaiting).
+      const held = await this.stillWaiting(network, s);
+      const late = fundingOf(s).filter(
+        (t) =>
+          !t.confirmed &&
+          !t.missed &&
+          !on.has(t.txHash) &&
+          !held.has(t.txHash) &&
+          now() - t.at > (t.unsent ? RESEND_AFTER_MS : FAILED_AFTER_MS),
+      );
+      const missed = new Set<string>();
+      if (late.length) {
         const { keyHash } = (await this.accounts(network, [s])).get(s.index)!;
-        if ((await this.utxosOf(network, keyHash)).some((u) => u.tx_hash === out.txHash)) {
-          on.add(out.txHash);
-          neverFunded = false;
-        }
+        const there = new Set((await this.utxosOf(network, keyHash)).map((u) => u.tx_hash));
+        for (const t of late) (there.has(t.txHash) ? on : missed).add(t.txHash);
       }
-      if (on.size || gone.size || stale.length || neverFunded) {
+      const neverFunded = !s.parts && missed.size > 0;
+      if (on.size || gone.size || stale.length || missed.size) {
         let freed: string[] = [];
         s = await this.update(network, s.index, (r) => {
           settle(r, on);
@@ -3013,6 +3206,10 @@ export class SessionService {
             delete t.sending;
           }
           if (neverFunded) r.auto!.failed = now();
+          else if (missed.size) {
+            for (const t of fundingOf(r)) if (missed.has(t.txHash)) t.missed = true;
+            short(r, now());
+          }
         });
         // Free again: the step built again spends them, or a return takes them, and the ledger lets only one
         // of it and the unseen copy land (final review sessions-1).
@@ -3026,7 +3223,15 @@ export class SessionService {
     }
     // A return Koios didn't answer, on chain now: its history (independent review M7).
     s = await this.noteLanded(network, s);
-    if (s.txs.some((t) => !t.confirmed && !t.replaced)) return;
+    if (s.txs.some((t) => !t.confirmed && !t.replaced && !t.missed)) return;
+    // A funding short of a part is paused for the user, unless they stopped it: what came is brought back, never
+    // swapped or mixed. A Try again finds it short again, and one none of whose parts landed failed again: nothing
+    // would come of running on.
+    const funding = s.parts ? fundingState(s).state : undefined;
+    if (funding === "never" || (!s.auto?.stopping && funding === "short")) {
+      s = await this.update(network, s.index, (r) => short(r, now()));
+      return;
+    }
 
     const { address, keyHash } = (await this.accounts(network, [s])).get(s.index)!;
     const { listed, rows } = await this.listing(network, keyHash);
@@ -3815,6 +4020,16 @@ export class SessionService {
     // and says why when it would have gone through Lovejoin (independent review L17).
     const restOnItsWay = started && sent.some((t) => t.kind === "back" && !t.confirmed && !t.replaced);
     if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK();
+    // The session's 5 ₳ collateral goes into the 5 ₳ pool as a box, rather than back with the rest under the
+    // session's history, wherever its return goes through Lovejoin, a chain's or one that comes back directly, and
+    // Settings keeps it on (the owner, 2026-10-22). Read as it's built, as Settings' Lovejoin is for any session but
+    // a swap. WebAssembly brings it back with the rest where the return can't pay for the box.
+    const intoPool =
+      !direct && lovejoin?.available(network) && (await this.throughLovejoin(record)) && (await this.collateralIntoPool())
+        ? await lovejoin.collateralPool(network, params)
+        : undefined;
+    const boxedIn = (made?: { txHash: string; txIndex: number }) =>
+      made && intoPool ? { collateralBox: { txHash: made.txHash, txIndex: made.txIndex, pool: intoPool.id } } : {};
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
       // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
@@ -3848,8 +4063,8 @@ export class SessionService {
             record?.mix?.seed || record?.mix?.bootstrap ? 0 : record?.auto?.lovejoin?.depth,
             // The pool its mix was funded for: a token pool's token went with its ADA.
             record?.mix?.pool,
-            // Its width, and a return's tokens' pools (chunk 34's 34e).
-            wayOf(record, pools),
+            // Its width, a return's tokens' pools (chunk 34's 34e), and its collateral's.
+            { ...wayOf(record, pools), ...(intoPool ? { collateralPool: intoPool } : {}) },
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -3902,6 +4117,7 @@ export class SessionService {
           },
           chain: chain.txs,
           leaves: chain.leaves,
+          ...boxedIn(chain.collateralBox),
           builtAt: now(),
         };
       }
@@ -3920,7 +4136,11 @@ export class SessionService {
       result = await wallet.withKeys(
         (keys) =>
           JSON.parse(
-            wasm.buildSessionReturn(keys.oneTime, keys.seedelf, JSON.stringify({ network, params, index, utxos: rows, merge, own })),
+            wasm.buildSessionReturn(
+              keys.oneTime,
+              keys.seedelf,
+              JSON.stringify({ network, params, index, utxos: rows, merge, own, ...(intoPool?.ref ? { collateralPool: intoPool.ref } : {}) }),
+            ),
           ) as typeof result,
       );
     } catch (e) {
@@ -3933,7 +4153,14 @@ export class SessionService {
       throw new NothingComesBack(t("sess.tooLittleBack"));
     }
     await this.leftBy(network, index, rows, result.leftOut);
-    return { ...result, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), builtAt: now() };
+    // WebAssembly names the box by where it is; the pool it's in is the one asked.
+    const { collateralBox: made, ...back } = result;
+    return { ...back, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), ...boxedIn(made), builtAt: now() };
+  }
+
+  /** Whether Settings has a session's collateral go into the 5 ₳ pool (`lovejoinCollateral`), on by default. */
+  private async collateralIntoPool(): Promise<boolean> {
+    return (await this.deps.preferences?.get())?.lovejoinCollateral ?? DEFAULT_PREFERENCES.lovejoinCollateral;
   }
 
   /**
@@ -4059,7 +4286,10 @@ export class SessionService {
    * the private balance and not locked: a return merges into them rather
    * than making new ones, since they're linked to the session on chain
    * already. None when they've been spent (or the contract can't be read:
-   * the return then makes new ones, as it always did).
+   * the return then makes new ones, as it always did). Nor what another
+   * chain being sent will spend (spent.ts reservations): a payment's parts
+   * still to go would be refused once the return took one (1.6.0's review).
+   * The session's own, left from a chain that stopped, its return replaces.
    */
   private async fundingChange(network: NetworkName, index: number): Promise<KoiosUtxo[]> {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
@@ -4067,9 +4297,13 @@ export class SessionService {
     if (!outs.size) return [];
     try {
       const view = await readContractView(this.deps, network);
+      const { wallet, session, now } = this.deps;
+      const reserved = await wallet.withKeys(() =>
+        reservedSet(session, network, { sending: true, now: now(), except: chainOwner(index) }),
+      );
       const mine = await this.deps.coins.seedelf(network, spendable(this.deps, view));
       return mine
-        .filter((u) => outs.has(u.tx_hash))
+        .filter((u) => outs.has(u.tx_hash) && !reserved.inputs.has(outpoint(u)))
         .sort((a, b) => (BigInt(b.value) > BigInt(a.value) ? 1 : -1))
         .slice(0, MAX_MERGE);
     } catch {
@@ -4084,6 +4318,9 @@ export class SessionService {
    * the user waits on); the runner's steps and the alarm send the rest.
    */
   private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK, budgetMs = 0): Promise<PendingTx> {
+    // The box its return puts the collateral into is held as not mixed yet once it's there, asking nobody what made
+    // it. A record that can't be written is no reason to keep the money: the box is then asked of, as any is.
+    if (built.collateralBox) await this.deps.lovejoin?.noteCollateralBox(network, built.collateralBox.txHash).catch(() => undefined);
     if (built.chain) return this.sendChain(network, built, kept, budgetMs);
     // Lovejoin was left out: the session says so, a swap that ran itself too.
     const skipped = built.lovejoinSkipped;
@@ -4241,13 +4478,15 @@ export class SessionService {
         pending,
         {
           send: (i, maybeSent) => this.sendStep(network, pending, i, maybeSent),
-          // A return through Lovejoin: its deposit and mixes pay or spend boxes, so they're on the pool's feed
-          // (feed.ts). Its last transaction pays the private balance and spends no box: never asked here, since
-          // pumpChain is done once it's sent, and `landed` watches it on the contract's feed (the release review).
+          // A return through Lovejoin: its deposit and mixes pay or spend boxes, so they're on its pools' feeds
+          // (feed.ts), a token pool's on the token pools' feed, as its record names them (watchOf, 1.6.0's release
+          // review, DATA-1). Its last transaction pays the private balance and spends no box: never asked here,
+          // since pumpChain is done once it's sent, and `landed` watches it on the contract's feed (the release review).
           onChain: async (hashes) => {
             const tried = firstTries(pending, hashes);
             const at = tried?.length ? Math.min(...tried) : undefined;
-            const watched = hashes.map((txHash) => ({ txHash, feed: "lovejoin" as const, ...(at !== undefined ? { sentAt: at } : {}) }));
+            const how = await this.watchOf(network, hashes);
+            const watched = hashes.map((txHash) => ({ txHash, ...how.get(txHash), ...(at !== undefined ? { sentAt: at } : {}) }));
             const { statuses } = await chainStatus(this.deps, network, watched);
             const on = new Set(hashes.filter((h) => statuses.get(h) != null));
             if (on.size) {
@@ -4259,6 +4498,10 @@ export class SessionService {
                   delete t.sending;
                 }
               });
+            }
+            // Marked so here, its deposit never reaches `landed`: told here instead (MERGED-5).
+            for (const t of pending.txs) {
+              if (t.kind === "deposit" && on.has(t.txHash)) await this.deps.lovejoin?.landedDeposit(network, t.txHash).catch(() => undefined);
             }
             return on;
           },
@@ -4555,7 +4798,6 @@ export class SessionService {
       // Sessions the restore scan found that end with nothing left: their records go (below).
       const gone = new Set<SessionRecord>();
       for (const s of live) {
-        const out = s.txs[0]!;
         // What the funding, or a top-up, paid is at the account, whatever tx_status knows: it landed. As Koios
         // lists it, what this wallet has spent since included (final review F13).
         const seen = fundingsListed(s, of(listed, s.index));
@@ -4563,10 +4805,29 @@ export class SessionService {
         // So is a top-up's, and it's never on its way again, whatever spends it next; tx_status's word alone isn't
         // that (1.5.0's release review, C04).
         changed = markListed(s, of(listed, s.index)) || changed;
-        // A swap or a mix that was found never funded, whose funding is here after all, runs again.
-        if (s.auto?.failed && out.confirmed) {
+        // A swap or a mix that was found never funded, or short of a part, whose funding is here after all, runs
+        // again: every part of it.
+        const arrived = fundingOf(s).every((t) => t.confirmed);
+        if (s.auto?.failed && arrived) {
           delete s.auto.failed;
           changed = resumed = true;
+        }
+        if (s.auto?.paused?.why === "short" && arrived) {
+          delete s.auto.paused;
+          changed = resumed = true;
+        }
+        // One in parts found never funded, some of which landed after all, is short: paused as one found short is,
+        // for the user to bring back what came, and Stop brings it back (1.6.0's review).
+        if (s.auto?.failed && s.parts && !arrived && fundingState(s).state === "short") {
+          delete s.auto.failed;
+          short(s, now());
+          changed = resumed = true;
+        }
+        for (const t of fundingOf(s)) {
+          if (t.missed && t.confirmed) {
+            delete t.missed;
+            changed = true;
+          }
         }
         const last = s.txs.filter((t) => !t.replaced).at(-1)!;
         // Nothing of it to come back: the account as Koios lists it, no copy of
@@ -4640,7 +4901,8 @@ export class SessionService {
     const views: SessionView[] = [];
     for (const s of [...book.sessions].reverse()) {
       const utxos = holdings?.get(s.index) ?? this.seen.get(`${network}:${s.index}`);
-      views.push(this.view(network, s, keys.get(s.index)!.address, utxos, await this.backWantsCollateral(network, s, utxos)));
+      const held = await this.stillWaiting(network, s);
+      views.push(this.view(network, s, keys.get(s.index)!.address, utxos, await this.backWantsCollateral(network, s, utxos), held));
     }
     return views;
   }
@@ -4660,18 +4922,35 @@ export class SessionService {
     const s = (await this.book(network)).sessions.find((r) => r.index === index);
     if (!s) throw new Error(t("sess.noSuchSession"));
     const { address } = (await this.accounts(network, [s])).get(index)!;
-    return this.view(network, s, address, this.seen.get(`${network}:${index}`));
+    return this.view(network, s, address, this.seen.get(`${network}:${index}`), false, await this.stillWaiting(network, s));
   }
 
-  /** `backCollateral`: its return would go through Lovejoin but for 5 ₳ at its account (backWantsCollateral). */
-  private view(network: NetworkName, s: SessionRecord, address: string, utxos?: KoiosUtxo[], backCollateral = false): SessionView {
+  /**
+   * `backCollateral`: its return would go through Lovejoin but for 5 ₳ at its account (backWantsCollateral). `waiting`:
+   * its funding's parts still to go (stillWaiting).
+   */
+  private view(
+    network: NetworkName,
+    s: SessionRecord,
+    address: string,
+    utxos?: KoiosUtxo[],
+    backCollateral = false,
+    waiting = NONE_WAITING,
+  ): SessionView {
     const now = this.deps.now();
     // A step's transaction Koios never took isn't shown, nor one that went unseen: it's built again.
     const txs = s.txs.filter((t) => (t.kind === "out" || !t.unsent) && !t.replaced);
     const out = txs[0]!;
     const last = txs.at(-1)!;
-    const funded = out.confirmed || !!utxos?.length;
-    const neverFunded = s.auto ? !!out.unsent || !!s.auto.failed : !!out.unsent || now - out.at > FAILED_AFTER_MS;
+    // A funding in parts is funded only once every part landed (the owner's call, 2026-10-21); short of one, what
+    // came waits at the account to be brought back, its page says so, and nothing of it runs.
+    const parts = s.parts ? fundingState(s, utxos, s.auto ? {} : { now, waiting }) : undefined;
+    const funded = parts ? parts.state === "landed" || parts.state === "short" : out.confirmed || !!utxos?.length;
+    const neverFunded = parts
+      ? parts.state === "never"
+      : s.auto
+        ? !!out.unsent || !!s.auto.failed
+        : !!out.unsent || now - out.at > FAILED_AFTER_MS;
     const cancel = byHand(s) && cancelling(s, now);
     const stage: SessionView["stage"] = s.closedAt
       ? "closed"
@@ -4701,9 +4980,12 @@ export class SessionService {
           outs: _outs,
           listed: _listed,
           minAmountOut: _min,
+          missed: _missed,
+          waits: _waits,
           ...t
         }) => t,
       ),
+      ...(parts ? { parts: { landed: parts.landed, total: parts.total, ...(parts.state === "short" ? { short: true as const } : {}) } } : {}),
       ...(s.swap ? { swap: s.swap } : {}),
       holding: utxos ? holdingOf(returnable(s, utxos)) : null,
       ...(s.auto ? { auto: autoView(s.auto, txs, stage, !!s.mix, s.swap) } : {}),
@@ -4787,11 +5069,179 @@ export class SessionService {
    * key and the DEX, through tx_status (feed.ts).
    */
   private async landed(network: NetworkName, txs: Array<Pick<SessionTx, "kind" | "txHash" | "at">>): Promise<Map<string, number | null>> {
+    // A deposit's and a mix's feeds are their pools' (watchOf): a token pool's never shows in the classic pool's (DATA-1).
+    const how = await this.watchOf(network, txs.filter((t) => sessionFeed(t.kind) === "lovejoin").map((t) => t.txHash));
     const watched = txs.map((t) => {
       const feed = sessionFeed(t.kind);
-      return { txHash: t.txHash, sentAt: t.at, ...(feed ? { feed } : {}) };
+      return { txHash: t.txHash, sentAt: t.at, ...(feed ? { feed } : {}), ...how.get(t.txHash) };
     });
-    return (await chainStatus(this.deps, network, watched)).statuses;
+    const { statuses } = await chainStatus(this.deps, network, watched);
+    // A deposit on chain went in: a private Bootstrap's then never counts as never landed, whatever a later pool read
+    // lists there (lovejoin.ts landedDeposit; the merged fixes' review, MERGED-5). Telling it is never the read's failure.
+    for (const t of txs) {
+      if (t.kind === "deposit" && statuses.get(t.txHash) != null) await this.deps.lovejoin?.landedDeposit(network, t.txHash).catch(() => undefined);
+    }
+    return statuses;
+  }
+
+  /**
+   * How each of `hashes`, a chain's deposits and mixes, is looked for: on the feeds of the pools its chain's
+   * record names (lovejoin.ts watchOf); the classic pool's where there's no Lovejoin to ask, as before.
+   */
+  private async watchOf(network: NetworkName, hashes: string[]): Promise<Map<string, Pick<Watching, "feed" | "pools">>> {
+    if (!hashes.length || !this.deps.lovejoin) return new Map(hashes.map((h) => [h, { feed: "lovejoin" as const }]));
+    return this.deps.lovejoin.watchOf(network, hashes);
+  }
+
+  /**
+   * A new session's funding kept under `key` (keepFunding), `first` its first part: a record of each part, before any
+   * is sent, and how many there are when there's more than one (`parts`). A part missing from Send's keeping is a
+   * stale review, as a funding missing is.
+   */
+  private async fundingRecords(network: NetworkName, index: number, key: string, first: Kept): Promise<Pick<SessionRecord, "txs" | "parts">> {
+    const hashes = first.partHashes?.length ? first.partHashes : [first.txHash];
+    const txs: RecordedTx[] = [];
+    for (const [i, hash] of hashes.entries()) {
+      const kept = i === 0 ? first : await this.deps.wallet.withKeys(() => this.deps.session.get<Kept>(partKey(key, i)));
+      if (!kept || kept.txHash !== hash || kept.network !== network) throw new StaleReviewError(t("sess.outNotReady"));
+      txs.push(await this.outRecord(network, index, hash, kept.txCbor));
+    }
+    return { txs, ...(hashes.length > 1 ? { parts: hashes.length } : {}) };
+  }
+
+  /**
+   * Sends session `record`'s funding, kept under `key`, one part after another, each as Send sends one (script-spend.ts
+   * `send`), the last named in Home's banner by the first (`PendingTx.chain`). One turned away is marked unsent, and
+   * so is every part after it, which never goes: before the first went, the session never started, as one
+   * transaction's funding; after, what went may land, and the runner finds the funding short, for the user to bring
+   * back (the owner's call, 2026-10-21). One Koios didn't answer may have gone: the rest wait for nothing, and go
+   * unsent too. A part that spends what the one before carried forward, and every part after it, goes once that one
+   * is in a block (parts.ts); one of those that won't go is marked unsent then (`partsStopped`).
+   */
+  private async sendFunding(network: NetworkName, record: SessionRecord, key: string, what: SpendWhat): Promise<PendingTx> {
+    const hashes = fundingOf(record).map((t) => t.txHash);
+    const total = hashes.length;
+    const notSent = (rest: string[]) =>
+      rest.length
+        ? this.update(network, record.index, (s) => {
+            for (const t of fundingOf(s)) {
+              if (!rest.includes(t.txHash)) continue;
+              t.unsent = true;
+              delete t.waits;
+            }
+          })
+        : undefined;
+    const split = await splitParts(this.deps, network, key, hashes, "session-out", what, record.index);
+    const { goNow } = split;
+    // Those held aren't sent yet: no clock runs for them until they go (stillWaiting, partsMayGo, which asks in the
+    // queue, so after this). Unmarked, they'd only count from their record, as before.
+    const held = hashes.slice(goNow);
+    if (held.length) {
+      await this.update(network, record.index, (s) => {
+        for (const t of fundingOf(s)) if (held.includes(t.txHash)) t.waits = true;
+      }).catch(() => undefined);
+    }
+    let sent: PendingTx | undefined;
+    for (const [i, hash] of hashes.slice(0, goNow).entries()) {
+      const chain = total > 1 && i === goNow - 1 ? { chain: { first: hashes[0]!, total } } : {};
+      // The review's age is checked once, for the whole funding, as Send sends the first (1.6.0's review): a later part
+      // goes however long since, as one that waited does.
+      const after = i > 0 ? { waited: PARTS_RESERVED + hashes[0]! } : {};
+      try {
+        sent = await send(this.deps, network, hash, partKey(key, i), "session-out", what, { ...chain, ...after });
+      } catch (e) {
+        await unsplit(this.deps, network, split);
+        await this.markUnsent(network, record.index, hash, e);
+        await notSent(hashes.slice(i + 1));
+        if (i === 0 || isTrap(e)) throw e;
+        throw new Error(t("worker.parts.fundingPartly", { sent: i, total, why: e instanceof Error ? e.message : String(e) }));
+      }
+      // The last that goes now may be maybe sent: what waits for it waits for the chain to show it anyway.
+      if (sent.maybeSent && i < goNow - 1) {
+        await unsplit(this.deps, network, split);
+        await notSent(hashes.slice(i + 1));
+        throw new Error(t("worker.parts.fundingPartlyMaybe", { sent: i + 1, total }));
+      }
+    }
+    if (goNow === total) return sent!;
+    await holdWaiting(this.deps, network, key, split, "session-out", what, record.index);
+    return { ...sent!, parts: { sent: goNow, total } };
+  }
+
+  /**
+   * A session's funding whose parts that waited for the one before won't all go (parts.ts: one turned away, the one
+   * before never showed, or the session said no: partsMayGo): those not sent are marked unsent, so its funding is
+   * short at once (fundingState) and its page offers to bring back what came, rather than once the runner misses
+   * them; a stopped one brings it back. In the queue, as every write of the book is: Home's poll pumps the parts beside
+   * it, and of two saves that overlap, one would be lost (1.6.0's review).
+   */
+  partsStopped(network: NetworkName, w: Waiting): Promise<void> {
+    const index = w.session;
+    if (index === undefined) return Promise.resolve();
+    const rest = w.hashes.slice(w.sent);
+    return this.serial(async () => {
+      await this.update(network, index, (s) => {
+        for (const t of fundingOf(s)) {
+          if (!rest.includes(t.txHash)) continue;
+          t.unsent = true;
+          delete t.waits;
+        }
+      });
+    });
+  }
+
+  /**
+   * Whether the part of `w` whose turn it is may go (parts.ts asks before it sends each that waited). Not for a session
+   * whose funding it is that the user stopped, that's over or failed, or whose return is built or on its way: what came
+   * is brought back, and the rest would only need another return, and their fees (1.6.0's review). parts.ts stops them
+   * then, and tells the session (partsStopped). Nor for one the wallet no longer keeps: nothing would read its account.
+   * A session's goes otherwise, its clock starting as it goes (`waits`). A Send's parts always go, asking nothing of the
+   * sessions: a book that won't open, or a step that holds the queue, never holds them (the merged fixes' review).
+   */
+  partsMayGo(network: NetworkName, w: Waiting): Promise<boolean> {
+    if (w.session === undefined) return Promise.resolve(true);
+    return this.serial(async () => {
+      const first = w.hashes[0];
+      const s = (await this.book(network)).sessions.find((r) => fundingOf(r).some((t) => t.txHash === first));
+      if (!s) return false;
+      if (s.closedAt || s.auto?.stopping || s.auto?.failed || (await this.returning(network, s))) return false;
+      const going = w.hashes[w.sent];
+      await this.update(network, s.index, (r) => {
+        const t = fundingOf(r).find((x) => x.txHash === going);
+        if (!t) return;
+        t.at = this.deps.now();
+        delete t.waits;
+      });
+      return true;
+    });
+  }
+
+  /**
+   * Whether session `s` has a return on its way (sent, or its chain being sent), or built and still sendable: a site's
+   * Bring it back, Bring everything back.
+   */
+  private async returning(network: NetworkName, s: SessionRecord): Promise<boolean> {
+    if (s.chain || afterFunding(s).some((t) => RETURNS.has(t.kind) && !t.unsent)) return true;
+    if (await this.pendingChain(network, s.index)) return true;
+    const { wallet, session, now } = this.deps;
+    const [back, claim] = await wallet.withKeys(() =>
+      Promise.all([session.get<KeptBack>(SESSION_BACK), session.get<KeptBack[]>(SESSION_CLAIM)]),
+    );
+    const sendable = (k: KeptBack | undefined) => !!k && k.network === network && k.index === s.index && now() - k.builtAt <= BUILT_TTL_MS;
+    return sendable(back) || (claim ?? []).some(sendable);
+  }
+
+  /**
+   * Session `s`'s funding parts that wait for the one before them to be in a block, by hash: held (`waits`), and still
+   * to go as the parts' record has them (parts.ts `partsOf`). Not sent yet, they're neither late nor missed. One the
+   * record no longer has (a lock wiped it, and nothing sends it) is none.
+   */
+  private async stillWaiting(network: NetworkName, s: SessionRecord): Promise<ReadonlySet<string>> {
+    const funding = fundingOf(s);
+    if (!s.parts || !funding.some((t) => t.waits)) return NONE_WAITING;
+    const parts = await partsOf(this.deps, network, funding[0]!.txHash);
+    if (!parts || parts.stopped) return NONE_WAITING;
+    return new Set(funding.slice(parts.sent).filter((t) => t.waits && !t.unsent).map((t) => t.txHash));
   }
 
   /**
@@ -4925,6 +5375,26 @@ export class SessionService {
         ...(s.site ? { origin: s.site.origin } : {}),
         ...(s.closedAt ? { leftBehind: true } : {}),
       }));
+  }
+
+  /**
+   * Clears mix sessions `indexes` from Lovejoin's Your mixes (the owner's test of 1.6.0): a mark on each record, which
+   * the hub's list alone reads. Only one that's over, closed or its funding turned away: one still running, or whose
+   * funding may yet land, keeps its card.
+   */
+  clearMixes(network: NetworkName, indexes: number[]): Promise<void> {
+    return this.serial(async () => {
+      if (!indexes.length) return;
+      const asked = new Set(indexes);
+      const book = await this.book(network);
+      let changed = false;
+      for (const s of book.sessions) {
+        if (!s.mix || s.mix.cleared || !asked.has(s.index) || !(s.closedAt || s.txs[0]?.unsent)) continue;
+        s.mix = { ...s.mix, cleared: true };
+        changed = true;
+      }
+      if (changed) await this.save(network, book);
+    });
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
@@ -5093,7 +5563,7 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
   const step: SessionAuto["step"] =
     stage === "closed"
       ? "done"
-      : stage === "funding" || stage === "failed"
+      : stage === "funding" || stage === "failed" || auto.paused?.why === "short"
         ? "funding"
         : mix || has("back") || has("deposit")
           ? "returning"

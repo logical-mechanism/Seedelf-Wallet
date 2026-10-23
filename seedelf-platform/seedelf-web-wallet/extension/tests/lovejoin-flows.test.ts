@@ -263,6 +263,35 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(chain.seed).toBeUndefined();
     expect(s.due).toHaveLength(0);
     expect(s.mixes!.at(-1)).toMatchObject({ id: chain.id, bootstrap: true, session: index, shares: [{ boxes: 1 }] });
+
+    // A session's chain ends with its return, so its id is the return's, not the deposit's (34g's rehearsal: a private
+    // Bootstrap's 40 boxes were each given a due time at the next pool read, the hold matching none of them). Its box is
+    // listed, and held through an unlock's read, and once the chain's record has gone.
+    const depositHash = txIdOf(deposit!);
+    if (chain.id === depositHash) {
+      const record = (await t.store.get<Sealed & Record<string, unknown>>("lovejoin.preprod"))!;
+      record.chains.at(-1)!.id = record.mixes!.at(-1)!.id = "be".repeat(32);
+      await t.store.set("lovejoin.preprod", record);
+    }
+    const box = {
+      ...POOL[0]!,
+      tx_hash: depositHash,
+      tx_index: 0,
+      block_time: Math.floor(t.clock.now / 1000) - 60,
+      inline_datum: { bytes: await datum(t, true), value: {} },
+    } as KoiosUtxo;
+    t.koios.addedToAccounts.push(box);
+    const heldAfterRead = async () => {
+      await t.wallet.withKeys(() => t.session.set(SESSION_UNLOCKED_AT, t.clock.now - HOUR));
+      await lj.withdrawDue("preprod", true);
+      return { due: (await sealed(t)).due, held: (await lj.status("preprod")).bootstrap };
+    };
+    expect(await heldAfterRead()).toEqual({ due: [], held: [{ txHash: depositHash, txIndex: 0 }] });
+    t.clock.now += 3 * 24 * HOUR;
+    box.block_time = Math.floor(t.clock.now / 1000) - 60;
+    await t.wallet.unlock(PASSWORD);
+    expect(await heldAfterRead()).toEqual({ due: [], held: [{ txHash: depositHash, txIndex: 0 }] });
+    expect((await sealed(t)).chains.find((c) => c.bootstrap)).toBeUndefined();
   });
 
   it("caps a Bootstrap from the private balance at what its funding's reserve pays the deposit for (34d's review 3)", async () => {
@@ -503,6 +532,15 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(ada.pools).toEqual([]);
   });
 
+  it("says what a box of one token may hold, and refuses none before WebAssembly (1.6.0's release review, MONEY-2)", async () => {
+    const t = await wallet();
+    // "1" as the creator types it (SNEK and HOSKY have no decimals): it trapped, which locked the wallet.
+    const one = await launching(t).terms("preprod", min, "1");
+    expect(BigInt(one.least)).toBeLessThan(3_830_000n);
+    expect(one.suggested).toBe("4000000");
+    await expect(launching(t).terms("preprod", min, "0")).rejects.toThrow("whole number above zero");
+  });
+
   it("refuses what isn't a pool to start, before anything is built", async () => {
     const t = await wallet();
     const shown: FoundPool = {
@@ -560,9 +598,8 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(launch.builds).toEqual([]);
   });
 
-  it("starts a pool from the public account, and names its token and pool to Koios only at Send (34d's review 7)", async () => {
+  it("starts a pool from the public account, and names its pool to Koios only at Send (34d's review 7)", async () => {
     const t = await wallet();
-    t.koios.supplies.set(MIN.policy + MIN.name, "1000000000");
     t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
     const launch = launching(t);
     const summary = await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" });
@@ -581,12 +618,13 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const before = t.koios.calls.length;
     const pending = await launch.submit("preprod", summary.txHash);
     expect(pending).toMatchObject({ kind: "lovejoin-launch", txHash: summary.txHash });
-    // Send asked, then sent: the token's supply, and whether something registered the credential.
+    // Send asked, then sent: whether something registered the credential, and nothing of the token (call 35).
     const sentAt = t.koios.calls.findIndex((c, i) => i >= before && c.path === "submittx");
-    const supplyAt = t.koios.calls.findIndex((c, i) => i >= before && c.path === "asset_info");
-    expect(supplyAt).toBeGreaterThanOrEqual(before);
-    expect(supplyAt).toBeLessThan(sentAt);
+    const askedAt = t.koios.calls.findIndex((c, i) => i >= before && c.path === "account_info");
+    expect(askedAt).toBeGreaterThanOrEqual(before);
+    expect(askedAt).toBeLessThan(sentAt);
     expect(askedOf(t, withCert.mixLogicStake)).toHaveLength(1);
+    expect(t.koios.calls.some((c) => c.path === "asset_info")).toBe(false);
     const sent = t.koios.submitted.at(-1)!;
     expect(txIdOf(sent)).toBe(summary.txHash);
     expect(Buffer.from(sent).toString("hex")).toContain(HOLDER);
@@ -595,19 +633,21 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_LAUNCH))).toBeUndefined();
   });
 
-  it("checks the token's supply at Send, and sends nothing when 30 boxes' worth don't exist", async () => {
+  it("starts a pool whatever its token's supply, and asks no one about it (the owner, 2026-10-19, call 35)", async () => {
+    // Decision 14's 30 boxes' worth within the token's supply was a guard against a typo, nothing the contracts need,
+    // and a request naming the token: gone. A box of 2^63 is more than any token's supply holds 30 of, and more than
+    // one output holds 30 of: it's the creator's to read on the review.
     const t = await wallet();
     t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
     const launch = launching(t);
-    // 10^9 holds 30 boxes of 3·10^7, not of 10^8.
-    t.koios.supplies.set(MIN.policy + MIN.name, "1000000000");
-    const short = await launch.build("preprod", { from: "public", token: min, quantity: "100000000", boxLovelace: "4500000" });
-    await expect(launch.submit("preprod", short.txHash)).rejects.toThrow("Fewer than 30 boxes' worth");
-    // Koios knowing no supply is no supply.
-    t.koios.supplies.clear();
-    const unknown = await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" });
-    await expect(launch.submit("preprod", unknown.txHash)).rejects.toThrow("doesn't know this token's supply");
-    expect(t.koios.submitted).toHaveLength(0);
+    const quantity = (2n ** 63n).toString();
+    const summary = await launch.build("preprod", { from: "public", token: min, quantity, boxLovelace: "4500000" });
+    expect(summary.pool.token).toEqual({ ...min, quantity });
+    const pending = await launch.submit("preprod", summary.txHash);
+    expect(pending.txHash).toBe(summary.txHash);
+    expect(txIdOf(t.koios.submitted.at(-1)!)).toBe(summary.txHash);
+    // Neither Koios nor anyone else was asked of the token's supply, at review or at Send.
+    expect(t.koios.calls.some((c) => c.path === "asset_info")).toBe(false);
   });
 
   it("sends the start without the certificate when something registered the credential already", async () => {

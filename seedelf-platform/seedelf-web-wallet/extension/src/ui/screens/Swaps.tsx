@@ -51,6 +51,8 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
+  CollateralBoxNote,
+  CollateralBoxRow,
   delayText,
   IntoRow,
   LOVEJOIN_UNAUDITED,
@@ -261,6 +263,7 @@ function tagOf(s: SessionView): { tone: SwapTone; label: string } {
 const PAUSED: Record<SessionPause["why"], I18nKey> = {
   price: "swaps.paused.price",
   refused: "swaps.paused.refused",
+  short: "swaps.paused.short",
 };
 
 /** A session's second line: what it's doing while it runs (its tag says if it's stopping), or when it ran. */
@@ -1251,7 +1254,9 @@ export function SwapApproval({
   // so the switch stays, to turn back on (34f's review, 4).
   const any =
     !!l && ((turnedOff && !through) || l.boxes > 0 || !!l.of || !!l.ifStopped || !!l.ways?.some((w) => w.boxes > 0 || w.direct));
-  // What of the token it gets is less than a box, which comes back directly beside its boxes (34f's review, 3).
+  // What of the token it gets goes into no box, which comes back directly beside its boxes (34f's review, 3). Less
+  // than a box, or more: the boxes are counted on the least it asks for and capped by the pool's room and a chain, so
+  // the note never calls it less than a box (1.6.0's release review, UI-3).
   const rest =
     way?.pool && way.boxes > 0 && way.quantity ? BigInt(quote.amountOut) - BigInt(way.boxes) * BigInt(way.quantity) : 0n;
   // What a stop brings back through Lovejoin instead: the funding's ADA for an ADA swap, and the token's boxes' (34f's
@@ -1322,10 +1327,20 @@ export function SwapApproval({
         )}
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
+        {/* Too much for one transaction: funded as several, every one needed (the owner's call, 2026-10-21). */}
+        {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
         {/* What leaves, and the balance after, as every other review says them. The change isn't a row, as it isn't
             on theirs: beside the balance, "back to your private balance" read as what would be left (ReviewTotals). */}
         <TotalRows side="private" leaving={costs.leaving} before={before} tokens={tokensOut} />
       </ReviewRows>
+      {summary.parts && (
+        <p className="note" data-testid="swap-fund-parts">
+          {joinSentences([
+            tr("review.fundingPartsNote", { count: summary.parts.length }),
+            summary.parts.some((p) => p.waits) && tr("review.partsWait", { count: summary.parts.filter((p) => p.waits).length }),
+          ])}
+        </p>
+      )}
       <SwapCosts quote={quote} get={get} costs={costs} />
       <h2>{tr("lovejoin.review.thenItself")}</h2>
       <Plan lovejoin={mixes} adaOut={adaOut} pools={!!quote.againstPools} tokenBoxes={tokenBoxes > 0} />
@@ -2214,6 +2229,7 @@ export function Session({
             value={tr("swaps.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
           />
           <IntoRow back={back} />
+          <CollateralBoxRow back={back} />
         </ReviewRows>
         {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
         <TokenWays
@@ -2232,6 +2248,7 @@ export function Session({
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
+        <CollateralBoxNote back={back} />
         <ReturnLinks back={back} after={neverAgain(s, back)} />
       </Screen>
     );
@@ -2379,6 +2396,14 @@ export function Session({
               <span data-testid="session-paused-why">
                 {pauseText(auto.paused, auto.approvedMinOut, sides?.get, auto.stopping, !!auto.againstPools || !!auto.approvedPools)}
               </span>
+              {/* Short of a part, the one way on is to bring back what came: Stop's dialog, the approval's way set. */}
+              {auto.paused.why === "short" ? (
+                <span className="row-links">
+                  <button type="button" className="link" disabled={busy} onClick={openStop} data-testid="session-bring-back">
+                    {tr("swaps.foot.bringBack")}
+                  </button>
+                </span>
+              ) : (
               <span className="row-links">
                 <button
                   type="button"
@@ -2399,6 +2424,7 @@ export function Session({
                   </button>
                 )}
               </span>
+              )}
             </div>
           </Callout>
         )}
@@ -2856,6 +2882,8 @@ function heldText(t: TokenQuantity, s: SessionView, network: NetworkName): strin
  * `.warn.`: the name is what keeps them checked.
  */
 export function pauseText(p: SessionPause, approvedMinOut: string, out?: Pick, cancelling = false, pools = false): string {
+  // Its funding went in parts and fell short: nothing of it is swapped (the owner's call, 2026-10-21).
+  if (p.why === "short") return t("swaps.pause.warn.short", { landed: p.landed, total: p.total });
   if (p.why === "refused") {
     return cancelling
       ? t("swaps.pause.warn.cancelRefused", { detail: withStop(p.detail) })
@@ -2902,6 +2930,24 @@ export function retryReason({ error, reason }: Retry): string {
 type StepState = "done" | "now" | "paused" | "failed" | "todo" | "skipped";
 
 /**
+ * Where a swap's last step takes what's at its account: directly, as chosen or with Lovejoin left out; through
+ * Lovejoin, what goes into its boxes coming back later, each by itself, and the rest at once, as its approval's plan
+ * said, once its return goes that way, or before it's built when the swap was approved to; and where its chain was
+ * cut short or stopped, the chain's own words. It said "Everything at the account, under fresh registers" whichever
+ * way it went, while a swap's spare ADA, and since 34e its proceeds' boxes, went into Lovejoin's pools for hours
+ * (1.6.0's rehearsal, step 4). Those words stay for a return that went directly with nothing for a box, and for a swap
+ * from before the switch whose return isn't built, which goes as Settings has it.
+ */
+function backStepText(s: SessionView): string {
+  const auto = s.auto!;
+  if (s.lovejoinSkipped) return t("swaps.step.directLeftOut");
+  if (auto.direct) return t("swaps.step.directChosen");
+  if (s.chain) return s.chain.cut || s.chain.stopped ? chainText(s.chain) : t("swaps.step.throughLovejoin");
+  const returned = s.txs.some((x) => x.kind === "back");
+  return !returned && auto.direct === false ? t("swaps.step.throughLovejoin") : t("swaps.step.freshRegisters");
+}
+
+/**
  * A swap that runs itself, as four steps: funded, the order placed, filled
  * (or cancelled), and back in the private balance. Each is waiting, done
  * (with its transaction), or paused; the whole card turns the success colour
@@ -2929,8 +2975,11 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const cancelRefused = cancelled && !tx("cancel") && auto.paused?.why === "refused";
   // Its words: a swap against a DEX's pools once one has gone out, or before, approved so (release review C13).
   const pools = !!auto.againstPools || !!auto.approvedPools;
+  // Its funding went in parts and fell short: the funding step failed, and what came waits to be brought back.
+  const short = !!s.parts?.short;
   const state = (i: number): StepState => {
     if (failed) return i === 0 ? "failed" : "skipped";
+    if (short && i === 0) return "failed";
     if ((i === 1 || i === 2) && unordered) return "skipped";
     if (i < at) return "done";
     if (i > at) return "todo";
@@ -2940,11 +2989,13 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
   const least = sides ? amountOf((tx("swap") && auto.placedMinOut) || auto.approvedMinOut, sides.get) : undefined;
   const steps: Array<{ title: string; sub: string; tx?: SessionTx }> = [
     {
-      title: tr(failed ? "swaps.step.notFunded" : "swaps.plan.funded"),
-      // Only one turned away is known never to have gone out: one unseen may still land.
+      title: tr(failed ? "swaps.step.notFunded" : short ? "swaps.step.fundingShort" : "swaps.plan.funded"),
+      // Only one turned away is known never to have gone out: one unseen may still land. In parts, how many are in.
       sub: failed
         ? tr(s.unsent ? "swaps.step.neverReached" : "swaps.step.notShownYet")
-        : tr("swaps.plan.fundedSub"),
+        : s.parts && (short || s.stage === "funding")
+          ? tr("swaps.step.partsIn", { landed: s.parts.landed, total: s.parts.total })
+          : tr("swaps.plan.fundedSub"),
       tx: tx("out"),
     },
     {
@@ -2995,13 +3046,7 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
     },
     {
       title: tr("swaps.plan.back"),
-      sub: tr(
-        s.lovejoinSkipped
-          ? "swaps.step.directLeftOut"
-          : auto.direct
-            ? "swaps.step.directChosen"
-            : "swaps.step.freshRegisters",
-      ),
+      sub: backStepText(s),
       tx: tx("back"),
     },
   ];

@@ -124,6 +124,23 @@ describe("Home's banner for a payment Koios didn't answer (launch review #10)", 
     expect(banner({ ...chain, confirmations: 1 }, false)).not.toContain("the first of");
   });
 
+  it("counts a payment's parts still to go, landed or not, and says how many didn't once they won't (1.6.0, item 10b)", () => {
+    const first = "11".repeat(32);
+    const part = { ...sent, kind: "transfer" as const, txHash: "ee".repeat(32), chain: { first, total: 3 }, parts: { sent: 1, total: 3 } };
+    expect(banner(part, true)).toMatch(/sent\. Waiting for the network…/);
+    expect(banner(part, true)).toContain("2 more to go, each once the one before lands.");
+    // The first landed, two still to go: still on its way, not done.
+    const landed = { ...part, confirmations: 1 };
+    expect(banner(landed, true)).toContain("2 more to go, each once the one before lands.");
+    expect(banner(landed, true)).not.toMatch(/confirmed/i);
+    expect(banner({ ...landed, parts: { sent: 2, total: 3 } }, true)).toContain("1 more to go, once the one before lands.");
+    // Turned away: landed, and the rest didn't go. Only partly sent, never "confirmed" (1.6.0's review).
+    const stopped = banner({ ...landed, parts: { sent: 1, total: 3, stopped: "refused" as const } }, false);
+    expect(stopped).not.toMatch(/confirmed/i);
+    expect(stopped).toContain("Private payment only partly sent");
+    expect(stopped).toContain("2 of 3 didn't go. What they would have spent stays in your private balance.");
+  });
+
   it("says a private one is let go 20 minutes on, since it carries no slot", () => {
     const priv = { ...sent, kind: "transfer" as const, maybeSent: true };
     expect(validUntil(priv)).toBeUndefined();

@@ -32,14 +32,16 @@ use blstrs::Scalar;
 use pallas_addresses::{Address, ShelleyPaymentPart};
 use pallas_crypto::hash::Hash;
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
-use pallas_txbuilder::BuiltTransaction;
+use pallas_txbuilder::{BuiltTransaction, Output};
 use seedelf_core::address::wallet_contract;
 use seedelf_core::build;
 use seedelf_core::constants::{COLLATERAL_PUBLIC_KEY, VARIANT, get_config};
+use seedelf_core::data_structures::create_spend_redeemer;
 use seedelf_core::lovejoin::{self, Coin, Holding, PoolBox, PoolShort, Protocol, Version};
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
+use seedelf_crypto::schnorr;
+use seedelf_koios::koios::{ProtocolParameters, UtxoResponse, extract_bytes_with_logging};
 use serde::{Deserialize, Serialize};
 
 fn network_flag(network: &str) -> Result<bool> {
@@ -153,6 +155,89 @@ pub fn protocol_of(network_flag: bool, pool: Option<&PoolRef>) -> Result<Protoco
         &scripts,
     )
     .map_err(|e| anyhow!("{e}"))
+}
+
+/// The box a session's return puts the session's 5 ₳ collateral into (the
+/// owner, 2026-10-22): the collateral is free once the chain's last mix is in,
+/// and back in the private balance it would carry the session's history. At
+/// the `mix_box` of an ADA pool whose box holds exactly the collateral's 5 ₳,
+/// under a fresh re-randomization of the Seedelf key's register. Nobody mixes
+/// it for the session: it waits, not mixed yet, as any such box does.
+pub(crate) struct CollateralBox {
+    pub output: Output,
+    protocol: Protocol,
+    datum: ([u8; 48], [u8; 48]),
+}
+
+impl CollateralBox {
+    /// The box for `pool`, verified; none without one. A pool that isn't 5 ₳
+    /// boxes of ADA, or doesn't verify, is refused: the caller brings the
+    /// collateral back with the rest rather than fail a session's return.
+    pub(crate) fn of(
+        network_flag: bool,
+        pool: Option<&PoolRef>,
+        sk: Scalar,
+    ) -> Result<Option<Self>> {
+        let Some(pool) = pool else {
+            return Ok(None);
+        };
+        let protocol = protocol_of(network_flag, Some(pool))?;
+        let value = protocol.box_value();
+        if value.token.is_some() || value.lovelace != build::COLLATERAL_LOVELACE {
+            bail!("The collateral goes only into a Lovejoin pool of 5 ₳ boxes of ADA");
+        }
+        let owner = Register::create(sk)?.rerandomize()?;
+        let point = |hex_point: &str| -> Result<[u8; 48]> {
+            hex::decode(hex_point)?
+                .try_into()
+                .map_err(|_| anyhow!("a register's point isn't 48 bytes"))
+        };
+        let datum = (point(&owner.generator)?, point(&owner.public_value)?);
+        let output = value
+            .output(protocol.mix_box_address())?
+            .set_inline_datum(lovejoin::mix_datum(&datum.0, &datum.1));
+        Ok(Some(CollateralBox {
+            output,
+            protocol,
+            datum,
+        }))
+    }
+
+    /// What a return taking `taken`, `total` lovelace of the session's, brings
+    /// back at once with the box, after `fee`: its 5 ₳ left out. Only where
+    /// the session's collateral is among what it takes (exactly 5 ₳ of ADA
+    /// alone, no datum, no script: the worker's `collateralFits`), and only
+    /// out of the session's own ADA: a merged return's funding change never
+    /// pays for it, nor other money at an account whose collateral is spent.
+    /// Otherwise refused, and the return is built without it.
+    pub(crate) fn back_from(&self, taken: &[UtxoResponse], total: u64, fee: u64) -> Result<u64> {
+        let collateral = |u: &UtxoResponse| {
+            u.value.parse::<u64>().ok() == Some(build::COLLATERAL_LOVELACE)
+                && u.asset_list.as_ref().is_none_or(|a| a.is_empty())
+                && u.reference_script.is_none()
+                && u.inline_datum.is_none()
+                && u.datum_hash.is_none()
+        };
+        if !taken.iter().any(collateral) {
+            bail!("The return doesn't take the session's collateral");
+        }
+        total
+            .checked_sub(fee)
+            .and_then(|left| left.checked_sub(self.output.lovelace))
+            .context(
+                "The session's own ADA doesn't pay for the collateral's box and the return's fee",
+            )
+    }
+
+    /// Where `tx` put it: its output at the pool holding its datum.
+    pub(crate) fn found_in(&self, tx: &BuiltTransaction) -> Result<OutRef> {
+        seedelf_core::eval::resolve_outputs(&tx.tx_bytes.0)?
+            .into_iter()
+            .filter_map(|u| PoolBox::from_resolved(u, &self.protocol))
+            .find(|b| (b.a, b.b) == self.datum)
+            .map(|b| OutRef::of_box(&b))
+            .context("The return doesn't hold the collateral's box")
+    }
 }
 
 fn token_amount(token: &lovejoin::BoxToken, quantity: u64) -> api::TokenAmount {
@@ -889,6 +974,9 @@ pub struct ChainRequest {
     /// The session's own transactions (`api::SessionReturnRequest::own`).
     #[serde(default)]
     pub own: Vec<String>,
+    /// The 5 ₳ pool the return puts the collateral into ([`CollateralBox`]).
+    #[serde(default)]
+    pub collateral_pool: Option<PoolRef>,
 }
 
 #[derive(Serialize, Debug)]
@@ -931,6 +1019,11 @@ pub struct ChainResult {
     /// as many and in that order among `leaves`. Absent for one pool.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub legs: Vec<usize>,
+    /// The box the return put the collateral into, made by the return and
+    /// never mixed by it, when `collateral_pool` was asked and the return
+    /// pays for it; `returned` leaves its 5 ₳ out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collateral_box: Option<OutRef>,
 }
 
 impl ChainResult {
@@ -948,6 +1041,7 @@ impl ChainResult {
             left_out: Vec::new(),
             skipped: Some(short.to_string()),
             legs: Vec::new(),
+            collateral_box: None,
         }
     }
 }
@@ -1269,36 +1363,58 @@ fn with_return(
     // the deposit's token change.
     let mut unsent = vec![built.change.utxo.clone()];
     unsent.extend(built.token_change.iter().map(|h| h.utxo.clone()));
-    let plan = api::plan_return(params, &rows, &request.merge, &own)?;
-    let ((back, back_fee), plan) = api::built_or_without_strangers(plan, |plan| {
-        if !plan.merged {
-            let key = accounts.key_hash(Role::Receive, request.index)?;
-            let config = get_config(VARIANT, network_flag)?;
-            let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-            let base = Register::create(sk)?;
-            let (tx, fee) = build::external_sweep(params, &plan.taken, &base, &wallet, key)?;
-            Ok((sign(tx, accounts, request.index)?, fee))
-        } else {
-            let chain = build::Chain {
-                params: params.clone(),
-                network_flag,
-                config: get_config(VARIANT, network_flag)?,
-            };
-            let (signed, spend) = api::merged_return(
-                accounts,
-                sk,
-                &chain,
-                request.index,
-                &plan.taken,
-                &held.collateral,
-                &request.merge,
-                &unsent,
-            )?;
-            Ok((signed, spend.fee.total))
-        }
-    })?;
-    let (total, tokens) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
-    let returned: u64 = total - back_fee;
+    // The collateral's box when it's asked for and the return pays for it;
+    // otherwise the return as it was, the collateral back with the rest.
+    let boxed =
+        CollateralBox::of(network_flag, request.collateral_pool.as_ref(), sk).unwrap_or(None);
+    let attempt = |boxed: Option<&CollateralBox>| -> Result<_> {
+        let extra: Vec<Output> = boxed.iter().map(|b| b.output.clone()).collect();
+        let plan = api::plan_return(params, &rows, &request.merge, &own, boxed.is_some())?;
+        let ((back, fee), plan) = api::built_or_without_strangers(plan, |plan| {
+            if !plan.merged {
+                let key = accounts.key_hash(Role::Receive, request.index)?;
+                let config = get_config(VARIANT, network_flag)?;
+                let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
+                let base = Register::create(sk)?;
+                let (tx, fee) =
+                    build::external_sweep_with(params, &plan.taken, &base, &wallet, key, &extra)?;
+                Ok((sign(tx, accounts, request.index)?, fee))
+            } else {
+                let chain = build::Chain {
+                    params: params.clone(),
+                    network_flag,
+                    config: get_config(VARIANT, network_flag)?,
+                };
+                let (signed, spend) = api::merged_return(
+                    accounts,
+                    sk,
+                    &chain,
+                    request.index,
+                    &plan.taken,
+                    &held.collateral,
+                    &request.merge,
+                    &unsent,
+                    &extra,
+                )?;
+                Ok((signed, spend.fee.total))
+            }
+        })?;
+        let (total, _) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
+        let returned = match boxed {
+            Some(b) => b.back_from(&plan.taken, total, fee)?,
+            None => total - fee,
+        };
+        Ok((back, fee, plan, returned))
+    };
+    let ((back, back_fee, plan, returned), boxed) = match boxed.as_ref() {
+        Some(b) => match attempt(Some(b)) {
+            Ok(built) => (built, Some(b)),
+            Err(_) => (attempt(None)?, None),
+        },
+        None => (attempt(None)?, None),
+    };
+    let collateral_box = boxed.map(|b| b.found_in(&back)).transpose()?;
+    let (_, tokens) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
 
     let mut txs = Vec::with_capacity(built.txs.len() + 1);
     let mut fees = back_fee;
@@ -1338,6 +1454,7 @@ fn with_return(
         left_out: plan.left_out,
         skipped: None,
         legs,
+        collateral_box,
     })
 }
 
@@ -1610,11 +1727,10 @@ pub fn chain_from_account_at(
         .filter(not_collateral)
         .collect();
     ada.sort_by_key(|p| std::cmp::Reverse(lovelace(p)));
+    let mut rest = ada.into_iter();
     let mut coin_rows: Vec<&UtxoResponse> = Vec::new();
-    for p in ada {
-        if total >= needed {
-            break;
-        }
+    while total < needed {
+        let Some(p) = rest.next() else { break };
         total += lovelace(p);
         coin_rows.push(&p.utxo);
     }
@@ -1632,15 +1748,7 @@ pub fn chain_from_account_at(
                 .div_ceil(1_000_000)
         );
     }
-    let coins = coin_rows
-        .iter()
-        .map(|u| Coin::from_row(u))
-        .collect::<Result<Vec<_>>>()?;
-    picked.extend(coin_rows);
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
-    let mut deposit_keys: Vec<(Role, u32)> = picked.iter().map(|u| path_of(u)).collect();
-    deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
-    deposit_keys.dedup();
     let change_key = (Role::Receive, 0);
     let mut mix_keys = vec![change_key];
     if let Some(c) = &request.collateral {
@@ -1660,24 +1768,50 @@ pub fn chain_from_account_at(
         .filter_map(|row| PoolBox::from_row(row, &protocol))
         .filter(|b| !b.is_owned(&sk))
         .collect();
-    let funding = lovejoin::Funding {
-        coins,
-        // None only at depth 0, where `chain` makes no mixes and so never
-        // reads it: `fan_out`'s loop doesn't run, and only `mix` puts it up.
-        collateral: match &request.collateral {
-            Some(c) => Some(Coin::from_row(&c.utxo)?),
-            None => None,
-        },
-        address,
-        deposit_signers: deposit_keys.len(),
-        mix_signers: mix_keys.len(),
-    };
     let leg = lovejoin::Leg {
         protocol: &protocol,
         owners: &owners,
         pool: &pool,
     };
-    let built = lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width)?;
+    // `needed` plans the deposit's fee and its change on a 1.5 ₳ reserve,
+    // which a large deposit outgrows: 64 token boxes' fee is about 0.8 ₳, and
+    // an ADA change at a base address takes about 0.97 ₳. So when what was
+    // picked falls short of that, the next largest UTxO is picked too and the
+    // chain built again, while the account has one (1.6.0's release review,
+    // MONEY-5); only then is it short.
+    let (built, deposit_keys) = loop {
+        let coins = coin_rows
+            .iter()
+            .map(|u| Coin::from_row(u))
+            .collect::<Result<Vec<_>>>()?;
+        let mut deposit_keys: Vec<(Role, u32)> = picked
+            .iter()
+            .chain(&coin_rows)
+            .map(|u| path_of(u))
+            .collect();
+        deposit_keys.sort_by_key(|(role, index)| (*role as u32, *index));
+        deposit_keys.dedup();
+        let funding = lovejoin::Funding {
+            coins,
+            // None only at depth 0, where `chain` makes no mixes and so never
+            // reads it: `fan_out`'s loop doesn't run, and only `mix` puts it up.
+            collateral: match &request.collateral {
+                Some(c) => Some(Coin::from_row(&c.utxo)?),
+                None => None,
+            },
+            address: address.clone(),
+            deposit_signers: deposit_keys.len(),
+            mix_signers: mix_keys.len(),
+        };
+        match lovejoin::chain_across(&params, &funding, &tokens, &[leg], request.depth, width) {
+            Ok(built) => break (built, deposit_keys),
+            Err(short) if build::is_short(&short) => match rest.next() {
+                Some(p) => coin_rows.push(&p.utxo),
+                None => return Err(short),
+            },
+            Err(e) => return Err(e),
+        }
+    };
 
     let sign_with = |tx: BuiltTransaction, keys: &[(Role, u32)]| -> Result<BuiltTransaction> {
         let mut signed = tx;
@@ -1717,6 +1851,7 @@ pub fn chain_from_account_at(
         left_out: Vec::new(),
         skipped: None,
         legs: Vec::new(),
+        collateral_box: None,
     })
 }
 
@@ -1862,6 +1997,7 @@ pub fn again_from_account_at(
         left_out: Vec::new(),
         skipped: None,
         legs: Vec::new(),
+        collateral_box: None,
     })
 }
 
@@ -1953,6 +2089,28 @@ pub struct WithdrawResult {
     pub token: Option<api::TokenAmount>,
 }
 
+/// The wallet's box among the pool's `rows` that `box_ref` names, or the
+/// first of the wallet's there when it names none: what a withdraw takes.
+fn our_box(
+    sk: Scalar,
+    rows: &[UtxoResponse],
+    protocol: &Protocol,
+    box_ref: Option<&OutRef>,
+) -> Result<PoolBox> {
+    let mut ours = rows
+        .iter()
+        .filter_map(|row| PoolBox::from_row(row, protocol))
+        .filter(|b| b.is_owned(&sk));
+    match box_ref {
+        Some(r) => ours
+            .find(|b| OutRef::of_box(b) == *r)
+            .context("That box isn't in the pool as this wallet's anymore"),
+        None => ours
+            .next()
+            .context("This wallet has no box in Lovejoin's pool"),
+    }
+}
+
 /// One of our boxes into a fresh register of the Seedelf key.
 pub fn withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
     withdraw_in(sk, request, None)
@@ -1967,22 +2125,7 @@ pub fn withdraw_in(
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool)?;
-    let ours: Vec<PoolBox> = request
-        .pool
-        .iter()
-        .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| b.is_owned(&sk))
-        .collect();
-    let chosen = match &request.box_ref {
-        Some(r) => ours
-            .into_iter()
-            .find(|b| OutRef::of_box(b) == *r)
-            .context("That box isn't in the pool as this wallet's anymore")?,
-        None => ours
-            .into_iter()
-            .next()
-            .context("This wallet has no box in Lovejoin's pool")?,
-    };
+    let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
     let destination = Register::create(sk)?.rerandomize()?;
     let built = lovejoin::withdraw(
         &params,
@@ -2067,22 +2210,7 @@ pub fn withdraw_paid_in(
         .filter(|p| (p.utxo.tx_hash.clone(), p.utxo.tx_index) != collateral_ref)
         .max_by_key(|p| lovelace(p))
         .context("Your public account holds no UTxO of ADA alone to pay for this box's way back, besides its collateral")?;
-    let ours: Vec<PoolBox> = request
-        .pool
-        .iter()
-        .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| b.is_owned(&sk))
-        .collect();
-    let chosen = match &request.box_ref {
-        Some(r) => ours
-            .into_iter()
-            .find(|b| OutRef::of_box(b) == *r)
-            .context("That box isn't in the pool as this wallet's anymore")?,
-        None => ours
-            .into_iter()
-            .next()
-            .context("This wallet has no box in Lovejoin's pool")?,
-    };
+    let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
     let path_of = |u: &UtxoResponse| paths[&(u.tx_hash.clone(), u.tx_index)];
     let mut keys = vec![path_of(&paying.utxo)];
     let collateral_key = path_of(&request.collateral.utxo);
@@ -2123,6 +2251,117 @@ pub fn withdraw_paid_in(
         box_ref: OutRef::of_box(&chosen),
         token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
     })
+}
+
+/// What [`withdraw_private_in`] says when none of the private balance's
+/// UTxOs it was given pays for the box's way back. Fixed English the worker
+/// matches, never shown as it is.
+pub const NO_PRIVATE_PAYS: &str =
+    "Your private balance holds no UTxO of ADA alone that pays for this box's way back";
+
+/// One of the wallet's boxes brought back with a UTxO of the private balance
+/// paying its fee (34g's call 36: the private balance pays by default), as
+/// JSON from the extension.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawPrivateRequest {
+    pub network: String,
+    pub params: serde_json::Value,
+    pub pool: Vec<UtxoResponse>,
+    /// The box to take; the first of ours in the pool when absent.
+    pub box_ref: Option<OutRef>,
+    /// The private balance's spendable UTxOs, in the order to try them: the
+    /// first that pays is spent.
+    pub utxos: Vec<UtxoResponse>,
+}
+
+/// A box brought back paid by the private balance, unsigned, as any Seedelf
+/// spend: `signScriptSpend` adds giveme.my's and the one-time key's signatures.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawPrivateResult {
+    pub tx_cbor: String,
+    pub tx_hash: String,
+    /// Its one-time key's seed, for `signScriptSpend`.
+    pub seed: String,
+    pub fee: String,
+    /// Into the new register: the box's ADA and the private UTxO's, less the fee.
+    pub lovelace: String,
+    /// The private UTxO that paid, `txHash#index`.
+    pub spent: String,
+    /// Its ADA.
+    pub spent_lovelace: String,
+    pub box_ref: OutRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<api::TokenAmount>,
+}
+
+/// One of our boxes into a fresh register of the Seedelf key, its fee paid
+/// by one of `request.utxos` (`lovejoin::withdraw_private`): for a box that
+/// can't pay its own way back. Each is tried in the order given, and the
+/// first that pays is spent; one that isn't the wallet's, holds a token, or
+/// that the wallet's evaluator can't take (`seedelf_core::eval::refusal`) is
+/// passed over, and so is one too small for the output (`PrivateTooSmall`).
+/// None pays: [`NO_PRIVATE_PAYS`]. Spent together, the UTxO and the box are
+/// tied to each other on chain; the worker says so before it's built. Its
+/// proof is bound to a new one-time key, whose seed the answer carries, and
+/// it's finished as any Seedelf spend: giveme.my sees it unsigned, lends the
+/// collateral, then `signScriptSpend` adds both signatures. In the classic
+/// pool, or the token pool `pool` names.
+pub fn withdraw_private_in(
+    sk: Scalar,
+    request: WithdrawPrivateRequest,
+    pool: Option<&PoolRef>,
+) -> Result<WithdrawPrivateResult> {
+    let network_flag = network_flag(&request.network)?;
+    let params = ProtocolParameters::from_koios(&request.params)?;
+    let protocol = protocol_of(network_flag, pool)?;
+    let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
+    let destination = Register::create(sk)?.rerandomize()?;
+    let seed = api::new_seed();
+    let signer = api::key_hash(&api::one_time_key(&sk, &seed));
+    for utxo in &request.utxos {
+        if utxo.asset_list.as_ref().is_some_and(|a| !a.is_empty())
+            || seedelf_core::eval::refusal(utxo).is_some()
+        {
+            continue;
+        }
+        let Some(register) = extract_bytes_with_logging(&utxo.inline_datum)
+            .filter(|r| r.is_owned(sk).unwrap_or(false))
+        else {
+            continue;
+        };
+        let (z, g_r) = schnorr::create_proof(register, sk, hex::encode(signer))?;
+        let payer = lovejoin::SeedelfPayer {
+            coin: Coin::from_row(utxo)?,
+            redeemer: create_spend_redeemer(z, g_r, hex::encode(signer))?,
+            signer: *signer,
+        };
+        let built = match lovejoin::withdraw_private(
+            &params,
+            &protocol,
+            std::slice::from_ref(&chosen),
+            &sk,
+            destination.clone(),
+            &payer,
+        ) {
+            Ok(built) => built,
+            Err(e) if e.downcast_ref::<lovejoin::PrivateTooSmall>().is_some() => continue,
+            Err(e) => return Err(e),
+        };
+        return Ok(WithdrawPrivateResult {
+            tx_cbor: hex::encode(&built.tx.tx_bytes.0),
+            tx_hash: hex::encode(built.tx.tx_hash.0),
+            seed: hex::encode(seed),
+            fee: built.fee.to_string(),
+            lovelace: built.lovelace.to_string(),
+            spent: format!("{}#{}", utxo.tx_hash, utxo.tx_index),
+            spent_lovelace: payer.coin.lovelace.to_string(),
+            box_ref: OutRef::of_box(&chosen),
+            token: built.token.as_ref().map(|(t, q)| token_amount(t, *q)),
+        });
+    }
+    bail!(NO_PRIVATE_PAYS)
 }
 
 #[derive(Deserialize, Debug)]

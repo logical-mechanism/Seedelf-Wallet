@@ -67,6 +67,11 @@ export type IndexSince =
   /** The cursor's own block was rolled back: start again from a snapshot. */
   | { tip: IndexTip; reset: true };
 
+/** A `since` of the token pools: with the pools it covers, their `mix_box` hashes (seedelf-data/README.md). */
+export type IndexTokensSince =
+  | (Extract<IndexSince, { reset?: undefined }> & { pools: string[] })
+  | Extract<IndexSince, { reset: true }>;
+
 export interface IndexNames {
   tip: IndexTip;
   names: Array<{ name: string; row: IndexRow }>;
@@ -264,11 +269,25 @@ export class PrivateIndex {
     if (!isTip(snapshot?.tip) || !isCursor(snapshot.cursor) || !Array.isArray(snapshot.rows) || !snapshot.rows.every(isRow) || !isPools(snapshot.pools)) {
       throw new TokensDown("The data layer's token pools aren't an answer the wallet reads.");
     }
-    const since = await this.sinceAt(`lovejoin/tokens/since/${snapshot.cursor}`, false, true);
+    const since = await this.tokensSince(snapshot.cursor);
     if (since.reset) throw new TokensDown("The token pools were rolled back as they were read.");
     // `since` covers the pools shown as of the snapshot's cursor: the same ones.
-    if (!isPools((since as { pools?: unknown }).pools)) throw new TokensDown("The data layer's token pools aren't an answer the wallet reads.");
     return { tip: since.tip, rows: atTip(snapshot.rows, since), pools: snapshot.pools, cursors: [snapshot.cursor, since.cursor] };
+  }
+
+  /**
+   * What changed in every shown token pool after `cursor`, and the pools that
+   * covers (`pools`, their `mix_box` hashes): those shown as of the cursor. A
+   * watch of a token pool's transaction reads it, as one of the classic pool's
+   * reads `poolSince` (feed.ts; 1.6.0's release review, DATA-1). `kept` as
+   * `since`'s; `TokensDown` while db-sync can't answer.
+   */
+  async tokensSince(cursor: string, { kept = false } = {}): Promise<IndexTokensSince> {
+    const since = await this.sinceAt(`lovejoin/tokens/since/${cursor}`, kept, true);
+    if (since.reset) return since;
+    const pools = (since as { pools?: unknown }).pools;
+    if (!isPools(pools)) throw new TokensDown("The data layer's token pools aren't an answer the wallet reads.");
+    return { ...since, pools };
   }
 
   private async snapshotAt(path: string): Promise<IndexSnapshot> {

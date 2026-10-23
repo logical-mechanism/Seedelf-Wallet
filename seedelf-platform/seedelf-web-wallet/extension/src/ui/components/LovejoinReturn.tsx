@@ -205,7 +205,8 @@ export function LovejoinRows({ back }: { back: SessionBackSummary }) {
 
 /**
  * A return's or a swap's tokens on their way back (chunk 34's 34e and 34f): each through its own pool, its boxes
- * and what a box holds there, or back directly and why. Change, where there's a choice, picks another of its pools
+ * and what a box holds there, or back directly and why; a pool whose boxes can't pay their own way back today, under
+ * its row (`stuck`, the owner's call 34). Change, where there's a choice, picks another of its pools
  * that can take a box now, or back directly (`onChange`, by the token's unit, null for directly), and the review is
  * built again. `values`: what a box holds in each pool, by id. `funded`: a swap's, whose boxes are as many as the
  * least it asks for makes, funded at Send.
@@ -263,6 +264,13 @@ export function TokenWays({
                 </button>
               )}
               <span className={`token-row__sub wrap${!into && !w.direct ? " token-row__sub--warn" : ""}`}>{text}</span>
+              {/* Its pool's boxes can't pay their own way back today: chosen as any pool, and said (the owner's
+                  call 34). */}
+              {into && w.stuck && (
+                <span className="token-row__sub wrap token-row__sub--warn" data-testid="lovejoin-token-way-stuck">
+                  {tr("lovejoin.ways.warn.stuck")}
+                </span>
+              )}
             </li>
           );
         })}
@@ -365,12 +373,16 @@ export function LovejoinSwitch({
 }) {
   const tr = useT();
   if (!back.lovejoin && through) return null;
+  // A return whose boxes are all a token pool's mixes no spare ADA (the token legs are paid first, and its ADA may pay
+  // for none of the classic pool's): it says its tokens go into their pools instead (1.6.0's release review, UI-12).
+  const l = back.lovejoin;
+  const classic = !l || (l.parts?.length ? l.parts.some((p) => p.pool === undefined && p.boxes > 0) : l.pool === undefined);
   return (
     <div className="setting-row" data-testid="lovejoin-way">
       <span className="stack-tight">
         <span id="lovejoin-way-label">{tr("swaps.lovejoin.label")}</span>
         <span className="note" id="lovejoin-way-note">
-          {tr(through ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.off")}
+          {tr(!through ? "swaps.lovejoin.privacy.off" : classic ? "swaps.lovejoin.privacy.on" : "swaps.lovejoin.privacy.onTokens")}
         </span>
       </span>
       <button
@@ -388,7 +400,11 @@ export function LovejoinSwitch({
   );
 }
 
-/** What going through Lovejoin takes and hides, under a return's rows (LovejoinSwitch chooses it). Or why it was left out this time. */
+/**
+ * What going through Lovejoin takes and hides, under a return's rows (LovejoinSwitch chooses it), and why four boxes a
+ * mix went three where it did (D3: "the review says so"; it was said on every mix's review but a return's: 1.6.0's
+ * release review, UI-4). Or why it was left out this time.
+ */
 export function LovejoinNote({ back }: { back: SessionBackSummary }) {
   const tr = useT();
   const l = back.lovejoin;
@@ -411,6 +427,7 @@ export function LovejoinNote({ back }: { back: SessionBackSummary }) {
           delay: delayText(l.delay),
         })}
       </Callout>
+      <WidthNote fellBack={l.fellBack} />
       <p className="note" data-testid="lovejoin-unaudited">
         {LOVEJOIN_UNAUDITED()}
       </p>
@@ -429,6 +446,27 @@ export function LovejoinSkipped({ reason }: { reason?: string }) {
   return (
     <Callout tone="warn" testId="session-lovejoin-skipped">
       {tr("lovejoin.warn.skippedIts", { why: withoutStop(reason) })}
+    </Callout>
+  );
+}
+
+/**
+ * Where the session's 5 ₳ collateral goes when its return puts it into Lovejoin's 5 ₳ pool (the owner, 2026-10-22):
+ * not back with the rest. Nothing otherwise. CollateralBoxNote says that it waits there.
+ */
+export function CollateralBoxRow({ back }: { back: SessionBackSummary }) {
+  const tr = useT();
+  if (!back.collateralBox) return null;
+  return <Row label={tr("lovejoin.collateralBox.label")} value={tr("lovejoin.collateralBox.value")} />;
+}
+
+/** That the collateral's box waits in the 5 ₳ pool until someone else's mix moves it, tied to the session until then. */
+export function CollateralBoxNote({ back }: { back: SessionBackSummary }) {
+  const tr = useT();
+  if (!back.collateralBox) return null;
+  return (
+    <Callout tone="privacy" testId="collateral-box-note">
+      {tr("lovejoin.collateralBox.privacy.note", { count: 1 })}
     </Callout>
   );
 }

@@ -123,11 +123,21 @@ pub async fn tip(network_flag: bool) -> Result<Vec<BlockchainTip>, Error> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Asset {
+    /// 0 when Koios has none: see [`zero_if_null`].
+    #[serde(default, deserialize_with = "zero_if_null")]
     pub decimals: u8,
     pub quantity: String,
     pub policy_id: String,
     pub asset_name: String,
     pub fingerprint: String,
+}
+
+/// A token's decimals, or 0 where Koios lists `null`: it does for a token it
+/// hasn't cached yet, one just minted, and anyone can pay one to any address,
+/// so a row holding it must never make a whole response unreadable. A token
+/// with no decimals registered has 0.
+fn zero_if_null<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    Ok(Option::<u8>::deserialize(deserializer)?.unwrap_or(0))
 }
 
 /// An inline datum as Koios lists it: its CBOR, which is what's read (see

@@ -28,21 +28,15 @@ pub struct Found {
     pub slot: i64,
 }
 
-/// Every output at `holder` holding a token named `name`, made by the block at
-/// slot `at`, of those whose id is above `after`.
-pub async fn found(
-    chain: &Chain,
-    holder: &[u8],
-    name: &[u8],
-    at: i64,
-    after: i64,
-) -> Result<Vec<Found>> {
-    let sql = format!(
+/// `found`'s query: `$1` the holder, `$2` the slot, `$3` the name, `$4` the
+/// id read on from.
+fn found_sql() -> String {
+    format!(
         "with outs as materialized ( \
            select o.id, o.tx_id, o.index, o.address_id, o.value, o.inline_datum_id, \
                   o.reference_script_id, o.consumed_by_tx_id \
            from address a join tx_out o on o.address_id = a.id \
-           where a.payment_cred = $1::bytea) \
+           where a.payment_cred = $1::bytea and o.id > $4) \
          select {}, o.id::bigint as out_id, t.id::bigint as tx_id, encode(t.hash, 'hex') as tx, \
                 b.block_no::bigint as block, t.block_index::bigint as block_index \
          from outs o \
@@ -50,12 +44,26 @@ pub async fn found(
          join block b on b.id = t.block_id \
          join address a on a.id = o.address_id \
          left join datum d on d.id = o.inline_datum_id \
-         where b.slot_no <= $2 and o.id > $4 and exists ( \
+         where b.slot_no <= $2 and exists ( \
            select 1 from ma_tx_out mto join multi_asset m on m.id = mto.ident \
            where mto.tx_out_id = o.id and m.name = $3::bytea) \
          order by o.id",
         row_columns("false")
-    );
+    )
+}
+
+/// Every output at `holder` holding a token named `name`, made by the block at
+/// slot `at`, of those whose id is above `after`. Only those are gathered: a
+/// read on, at each new cursor, no longer gathers every output ever at the
+/// holder first, whatever anyone sends there (1.6.0's release review, DATA-4).
+pub async fn found(
+    chain: &Chain,
+    holder: &[u8],
+    name: &[u8],
+    at: i64,
+    after: i64,
+) -> Result<Vec<Found>> {
+    let sql = found_sql();
     let client = chain.private().await?;
     let rows = client.query(&sql, &[&holder, &at, &name, &after]).await?;
     rows.iter()
@@ -253,4 +261,19 @@ fn hex32(text: &str) -> Result<[u8; 32]> {
     crate::ids::hex_bytes(text, 32)
         .and_then(|b| b.try_into().ok())
         .context("not a 32-byte hash")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 1.6.0's release review, DATA-4: a read on's ids are bounded where the
+    /// holder's outputs are gathered, not after every one of them was.
+    #[test]
+    fn a_read_on_gathers_only_the_outputs_above_its_ids() {
+        let sql = found_sql();
+        let (gather, rest) = sql.split_at(sql.find(") select").expect("a gather"));
+        assert!(gather.contains("o.id > $4"), "{gather}");
+        assert!(!rest.contains("$4"), "{rest}");
+    }
 }

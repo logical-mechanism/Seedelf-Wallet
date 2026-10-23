@@ -8,7 +8,8 @@
 // The review says what each return leaves at its account (a token that
 // comes with the next return, a UTxO no return takes: launch review H6),
 // why a return leaves Lovejoin out (another's chain may have taken the
-// pool's boxes: #23), and warns before an ADA Handle comes into the private
+// pool's boxes: #23), which token goes into a pool whose boxes can't pay
+// their own way back today (chunk 34's call 34), and warns before an ADA Handle comes into the private
 // balance (#57), and that another browser may still use a session a
 // restore's scan found (C18). Returns that go through Lovejoin can all be
 // built again to come back directly instead, by a switch first on the
@@ -23,7 +24,7 @@ import type { SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { Callout } from "../components/Callout";
 import { HandleWarning } from "../components/HandleWarning";
-import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED, partsText } from "../components/LovejoinReturn";
+import { BoxesBackRow, delayText, LOVEJOIN_UNAUDITED, partsText, WidthNote } from "../components/LovejoinReturn";
 import { CheckIcon } from "../components/Icons";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { TxDetailButton } from "../components/TxDetail";
@@ -32,6 +33,7 @@ import { LeftBehindNote, ReturnLeftOut } from "../components/SessionLeft";
 import { formatAda } from "../format";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
+import { tokenText } from "../tokens";
 import { chainGoing, pairOf } from "./Swaps";
 
 /**
@@ -256,9 +258,25 @@ export function ClaimReview({
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
   const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
+  const collaterals = picked.filter((r) => r.collateralBox).length;
   const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
+  // Why four boxes a mix went three, where it did: each reason once, however many returns it's true of (D3; 1.6.0's
+  // release review, UI-4).
+  const fellBack = [...new Set(picked.flatMap((r) => (r.lovejoin?.fellBack ? [r.lovejoin.fellBack] : [])))];
+  // A token a pick's return puts into a pool whose boxes can't pay their own way back today: the wallet picked that
+  // pool as any other, and the review says so (the owner's call 34), by the token's name, once however many returns
+  // take it there. A return's own review says it under its token's row (TokenWays); this one said nothing (session
+  // 5's cross-area review, M2).
+  const stuckTokens = [
+    ...new Map(
+      picked
+        .flatMap((r) => r.lovejoin?.ways ?? [])
+        .filter((w) => w.stuck && w.pool && w.boxes > 0)
+        .map((w) => [`${w.policyId}${w.assetName}`, tokenText(network, w).label] as const),
+    ).values(),
+  ];
 
   return (
     <>
@@ -347,6 +365,15 @@ export function ClaimReview({
           </ul>
         </Callout>
       )}
+      {stuckTokens.length > 0 && (
+        <Callout tone="warn" testId="claim-lovejoin-stuck">
+          <div className="stack-tight">
+            {stuckTokens.map((name) => (
+              <span key={name}>{t("claim.warn.skippedItem", { name, why: withoutStop(t("lovejoin.ways.warn.stuck")) })}</span>
+            ))}
+          </div>
+        </Callout>
+      )}
       {/* Found by a restore's scan: the browser that started it may still be running it, as its own page warns
           (1.5.0's release review, C18). */}
       {found > 0 && (
@@ -372,9 +399,21 @@ export function ClaimReview({
         )}
         {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
         {boxes > 0 && <BoxesBackRow boxes={boxes} />}
+        {/* Each session's 5 ₳ collateral its return puts into Lovejoin's 5 ₳ pool, not back with the rest. */}
+        {collaterals > 0 && (
+          <Row label={t("claim.collateralLabel")} value={t("claim.collateralValue", { count: collaterals })} />
+        )}
         <Row label={t("claim.fees")} value={`${formatAda(fees.toString())}\u00a0₳`} />
         <Row label={t("claim.transactions")} value={String(txs)} />
       </ReviewRows>
+      {collaterals > 0 && (
+        <Callout tone="privacy" testId="claim-collateral-box-note">
+          {t("lovejoin.collateralBox.privacy.note", { count: collaterals })}
+        </Callout>
+      )}
+      {fellBack.map((why) => (
+        <WidthNote key={why} fellBack={why} testId="claim-width-fell-back" />
+      ))}
       {/* Each session comes back in its own transaction, so each is its own
           view — and where one goes through Lovejoin, the one shown is its
           chain's first, not the return it ends with. */}

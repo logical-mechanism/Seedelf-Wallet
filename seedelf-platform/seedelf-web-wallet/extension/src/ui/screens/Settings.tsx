@@ -39,6 +39,7 @@ import {
 } from "../../shared/preferences";
 import type { AtStake, DappSite, DataHolds, DataPart, KnownAccount, Status } from "../../shared/rpc";
 import { call } from "../background";
+import { BringAllBack } from "../components/BringAllBack";
 import { Callout } from "../components/Callout";
 import { Choice } from "../components/Choice";
 import { ContactsPage, useContacts } from "../components/Contacts";
@@ -832,6 +833,26 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
           disabled={!loaded}
         />
       </div>
+      {/* A return's 5 ₳ collateral into the 5 ₳ pool (the owner, 2026-10-22): with the returns, on by default. */}
+      <div className="setting-row">
+        <span className="stack-tight">
+          <span id="lovejoin-collateral-label">{t("settings.lovejoin.collateral")}</span>
+          <span className="note" id="lovejoin-collateral-note" data-testid="lovejoin-collateral-note">
+            {prefs.lovejoinCollateral ? t("settings.lovejoin.collateralOn") : t("settings.lovejoin.privacy.collateralOff")}
+          </span>
+        </span>
+        <button
+          type="button"
+          role="switch"
+          className="switch"
+          aria-checked={prefs.lovejoinCollateral}
+          aria-labelledby="lovejoin-collateral-label"
+          aria-describedby="lovejoin-collateral-note"
+          onClick={() => void set({ lovejoinCollateral: !prefs.lovejoinCollateral }).catch(fail)}
+          disabled={!loaded || !on}
+          data-testid="lovejoin-collateral-switch"
+        />
+      </div>
       <div className="field">
         <label htmlFor="lovejoin-depth">{t("settings.lovejoin.depth")}</label>
         <select
@@ -890,6 +911,7 @@ export function LovejoinSettings({ network, heading = true }: { network: Network
           ))}
         </select>
       </div>
+      <BringAllBack network={network} />
       {error && (
         <p className="error" role="alert">
           {error}

@@ -1,5 +1,5 @@
 {
-  "recorded": "2026-10-12",
+  "recorded": "2026-10-18",
   "dreps": [
     ["drep1yfqg3v85wl8hpz082yh55hppys5z6803mquqgvdfw78qg9qwr3a4h","@gersongomes"],
     ["drep1ytjyvm958ywjkp57f8wm3havj72lc653tp7ajttxxt6ftgcmcmdk2","$brock"],
@@ -20,6 +20,7 @@
     ["drep1ytrfnk7mslmfrwgqed6l5fyupkx22z59cx4qlwmrvdyjsmgrjejvq","ADA_Labo"],
     ["drep1yt08q60t22keg6yl8wmf4c2zs8v9kpwgl5nlm8vfa2zahzc0vmjww","Ada.StakeIt.Net"],
     ["drep1y25req7clwkrxnjvx9075he2l80t3wksgeu9eqru09uvt3ctz60gx","ADAAT"],
+    ["drep1y23n4kvdnvx6qsmfgquxtht8ucfmhn0vx495nrs74xhspmqqrqflk","Adalion"],
     ["drep1y22eh8rzfmnjw8m82hlcgxfm8tcmwqmdqy2mjupdduztq0s5s5dkk","ADALO"],
     ["drep1ygehgu65kchqm929zp69xhl06hqkpcjv0rzy44sx40qhufqgh3xv2","AdaLovelace777"],
     ["drep1yt9rp59j57rxev92qzsjyxpnyul8gc94fny4af32hr35l0qh9ahj8","Adapolis_Stakepool"],
@@ -127,6 +128,7 @@
     ["drep1ytd2mf58tfqv78z7e99fy0gnmfep0kscclnwpvx7qvwpc5srxwg5g","Crypto Eats Legacy"],
     ["drep1ytwlmrm6ksc8sa5fdhm63prqve6hjzvghdc3053zwz6hyeg0ayhg2","Crypto_Oaj"],
     ["drep1ytfwpmt2fvdnyvlswyjyggpf8alwkpm7ha6cua9nsak525ssmvm57","CryptoCrow"],
+    ["drep1y2t0lg9sf53c0qx2dwwjxsmp9qs0uvtcu70nj2n3r4c94pgvaw2z2","CryptoDossier"],
     ["drep1ygsrvdukj9unnxue5ffmrkjr9ve7yxz3wvccdstapmw696q8g2w9u","Cryptotexty"],
     ["drep1y24xr6m4mkgl7e7886sk3wee7h73mcreysyvhrwzksy5ajqrv0rrv","CTEC-Stake-Pool"],
     ["drep1ytc030h6jr0u47z57l5g8e9gx7pelwk0u7z8d3989una3xql3vfvy","CZBE1"],
@@ -168,6 +170,7 @@
     ["drep1ytgutursutn574aqvumh77egx5wxastcv777p6dq3elfzqqwd5yc6","Elite"],
     ["drep1yd03fdd4ehdsswwlqf5kr9px3m6gvuurd4mh0f7qtl7j70s0uk7mf","ElRaulito (Smart DRep)"],
     ["drep1ytvlwvyjmzfyn56n0zz4f6lj94wxhmsl5zky6knnzrf4jygpyahug","EMURGO"],
+    ["drep1ytj6hav29ur96ghu5mux7qsusr7jaff2gkfyvk0fur6f8xqyqh6dt","Endubis Hub"],
     ["drep1ygnwcy4wk6n7v9ksdefnhsy7jmz7q5ra0pvylan2eqfyr7qezgn8r","ENVY Stake Pool"],
     ["drep1yfltkppxdvpxjzv3meraz9wch4fzlmy8qxr6ey57gh0khqgug8qln","eoniam/Chad the New Mexico DRep"],
     ["drep1y23tfs3c25kfmyqzy5d3364g4smp59esdmzxynqd5ndjjgq5dx7c7","Erasmus"],
@@ -343,7 +346,6 @@
     ["drep1yfpazkd0aqex0kd3vrhk47sjy0jqgq3xu6h2zv9wevfequcxyynwv","PRIDE"],
     ["drep1y2j502uqsjl7ujrg5e73mxc2up2wu963r6eg44zdglzanncytjpxy","Protect the Treasury"],
     ["drep1yfr747pqr904utcw24puj9a9lx6t0x4xpjy38nvsux3rukskd7dj3","Quixote [QXT]"],
-    ["drep1yfqwhs8qe2yajwq4r0anpf2q0tp26rxxjuee6jdg9clfrpcs6vjhy","QuocTuan"],
     ["drep1ygj6hupsan57ujlv6l0vw9naxzt5753uhpe79nluymqzlcq7fe4vs","ranket"],
     ["drep1ygt4peza49upgsfu0heu8gfpn03q52wpgsm9y3zpx02rszs5qgfw5","Ratio_St8tik_St8tikRatio"],
     ["drep1y2anz6ukzr53d3v5fkn8kqp4076z8t2ah6ucwr0aaek9ytqpr848e","Ravi Vaishnv"],

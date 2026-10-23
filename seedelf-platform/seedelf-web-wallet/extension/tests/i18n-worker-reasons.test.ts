@@ -96,6 +96,14 @@ const SHOWN_IN: Array<{ field: string; frame: string; placeholder: string }> = [
   { field: "SessionBackSummary.lovejoinSkipped", frame: "lovejoin.warn.skippedThis", placeholder: "why" },
   { field: "SessionView.lovejoinSkipped", frame: "lovejoin.warn.skippedIts", placeholder: "why" },
   { field: "Bring everything back's lovejoinSkipped", frame: "claim.warn.skippedItem", placeholder: "why" },
+  // Its reason comes in as an error's own words alone, which the scan can't follow: bringAllBackNow keeps what a pool
+  // read, epochParams or the last withdraw that didn't go (withdrawOne: giveme.my's, Koios's or the node's words)
+  // threw, and bringNoted writes it to `why`. The screen gives it a full stop of its own (withStop).
+  {
+    field: "Bring every box back now's Bringing.why, once it stopped (a pool read's, epochParams' or withdrawOne's error)",
+    frame: "settings.lovejoin.warn.bringStopped",
+    placeholder: "why",
+  },
 ];
 
 type Node = { type: string; start: number; end: number; [key: string]: unknown };

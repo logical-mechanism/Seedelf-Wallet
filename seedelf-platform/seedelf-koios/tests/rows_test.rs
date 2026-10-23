@@ -257,3 +257,29 @@ fn nothing_but_constructor_0_with_two_48_byte_fields_is_a_register() {
     };
     assert_eq!(extract_bytes_with_logging(&Some(lying)), None);
 }
+
+#[test]
+fn a_token_koios_has_no_decimals_for_reads_as_zero() {
+    // Koios lists a token it hasn't cached yet, one just minted, with "decimals": null; anyone can pay one to any
+    // address, and a row holding it made the whole request unreadable (live on preprod, 1.6.0: the move-in of 240
+    // test tokens was refused as "invalid type: null, expected u8").
+    let token = |decimals: &str| {
+        format!(
+            r#"{{"decimals":{decimals},"quantity":"1000000","policy_id":"{}","asset_name":"70","fingerprint":"asset1"}}"#,
+            "64".repeat(28)
+        )
+    };
+    let rows = format!(
+        "[{}]",
+        row(1, "null", "null").replace(
+            r#""asset_list":[]"#,
+            &format!(r#""asset_list":[{},{}]"#, token("null"), token("6"))
+        )
+    );
+    let rows: Vec<UtxoResponse> = serde_json::from_str(&rows).unwrap();
+    let assets = rows[0].asset_list.as_ref().unwrap();
+    assert_eq!(
+        assets.iter().map(|a| a.decimals).collect::<Vec<_>>(),
+        vec![0, 6]
+    );
+}

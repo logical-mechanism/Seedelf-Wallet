@@ -871,7 +871,8 @@ describe("a restore's scan that doesn't finish", () => {
       expect(await ask({ type: "session-scan" }, ctx), what).toEqual({ used: 1, found: [0] });
       expect(await ask({ type: "session-scan-due" }, ctx), what).toEqual({ due: false, scanning: false });
     }
-  });
+    // Three restores and three fundings, each through WebAssembly: about 4 s alone, so a loaded run went past 5 s.
+  }, 20_000);
 
   it("marks nothing for a new phrase, which has nothing anywhere", async () => {
     const t = (await removedWithLeftovers()).t;

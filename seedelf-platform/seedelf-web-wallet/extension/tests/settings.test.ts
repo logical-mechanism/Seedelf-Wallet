@@ -7,17 +7,20 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
+import { i18n } from "../src/i18n/core";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
 import type { DappSite, DataHolds, SessionView, Status } from "../src/shared/rpc";
 import { NetworkBadge, TestNetworkStrip } from "../src/ui/components/NetworkBadge";
 import { PreferencesContext } from "../src/ui/preferences";
 
 let Settings: typeof import("../src/ui/screens/Settings");
+let Bring: typeof import("../src/ui/components/BringAllBack");
 
 beforeAll(async () => {
   // The page's view (ui/view.ts) is read from its URL when the module loads.
   vi.stubGlobal("location", { search: "?view=tab", hash: "" });
   Settings = await import("../src/ui/screens/Settings");
+  Bring = await import("../src/ui/components/BringAllBack");
 });
 
 /** The text a person reads, without the markup. */
@@ -202,6 +205,27 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(shown).toContain("It saves each box's mixes (4 mixes, about 3.8 ₳)");
     expect(shown).toContain("A mix from the Lovejoin tile still mixes");
   });
+
+  // The owner's call (2026-10-22): a returning session's 5 ₳ collateral into a pool of 5 ₳ boxes, with its own switch.
+  it("has the collateral's own switch, on by default, off with the returns', saying what each way does", () => {
+    const render = (prefs: Partial<typeof DEFAULT_PREFERENCES>) =>
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: { ...DEFAULT_PREFERENCES, ...prefs }, loaded: true, set: async () => undefined } },
+          createElement(Settings.LovejoinSettings, { network: "mainnet" }),
+        ),
+      ).replaceAll("&#x27;", "'");
+    const button = (html: string) => html.match(/<button[^>]*data-testid="lovejoin-collateral-switch"[^>]*>/)![0];
+    expect(DEFAULT_PREFERENCES.lovejoinCollateral).toBe(true);
+    const on = render({});
+    expect(button(on)).toContain('aria-checked="true"');
+    expect(button(on)).not.toContain("disabled");
+    expect(text(on)).toContain("Put a session's 5 ₳ collateral into Lovejoin as it's brought back");
+    expect(text(on)).toContain("if that pool exists and holds enough other people's boxes; if not, it comes back with the rest");
+    expect(text(render({ lovejoinCollateral: false }))).toContain("anyone can tie it to the session, as they can that money");
+    expect(button(render({ lovejoinReturns: false }))).toContain('disabled=""');
+  });
 });
 
 describe("Settings' Connected sites (launch review H7)", () => {
@@ -275,5 +299,179 @@ describe("Settings' Connected sites (launch review H7)", () => {
     const ending = Settings.disconnectText("app.example", 4);
     expect(ending).toContain("Private session 5 ends. app.example keeps what it saw, and must ask again to see more.");
     expect(ending).toContain("The wallet misses anything it pays or leaves on the account later.");
+  });
+});
+
+describe("Settings' Bring every box back now (the owner's test of 1.6.0)", () => {
+  const view = (props: Partial<Parameters<typeof Bring.BringAllBackView>[0]>, hideBalances = false) =>
+    text(
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances }, loaded: true, set: async () => undefined } },
+          createElement(Bring.BringAllBackView, { bringing: undefined, busy: false, onAsk: () => undefined, onStop: () => undefined, ...props }),
+        ),
+      ),
+    );
+
+  it("is in Lovejoin's settings, on each network it's on, saying what it does", () => {
+    for (const network of ["mainnet", "preprod"] as const) {
+      const shown = text(renderToStaticMarkup(createElement(Settings.LovejoinSettings, { network })));
+      expect(shown).toContain("Bring every box back now");
+      expect(shown).toContain("Every box in every pool, without the waits.");
+    }
+  });
+
+  it("asks first, saying what bringing them all back at once ties, what it costs, and to stay unlocked", () => {
+    const shown = text(renderToStaticMarkup(createElement(Bring.BringAllBackQuestion, { onKeep: () => undefined, onConfirm: () => undefined })));
+    expect(shown).toContain("Bring every box back now?");
+    expect(shown).toContain("Sent back to back, they show they're one person's and are easier to match to their deposits.");
+    expect(shown).toContain("A box not mixed since its deposit ties that deposit, and the public account if it paid, to your private balance.");
+    // What it ties where a box can't pay its own way back, as Bring one back's question says it (call 36).
+    expect(shown).toContain("Each box pays about 0.3 ₳ to come back. Where it can't, your private balance pays, tying the UTxO it pays with, and where it came from, to the box.");
+    expect(shown).toContain("Keep Seedelf Wallet unlocked: if it locks, this pauses until you unlock.");
+    expect(shown).toContain("Keep them in Lovejoin");
+    // A confirm that fits one line (the owner, 2026-10-20).
+    expect(shown).toContain("Bring them back");
+  });
+
+  it("says how it goes while it runs, with Stop in place of the button, its counts hidden with the balances", () => {
+    const going = { bringing: { back: 3, left: 2, why: "giveme.my didn't answer." } };
+    const shown = view(going);
+    expect(shown).toContain("Bringing every box back: 3 boxes sent back so far. 2 boxes left.");
+    expect(shown).toContain("The last box that didn't go: giveme.my didn't answer.");
+    expect(shown).toContain("Stop");
+    expect(shown).not.toContain("Bring every box back now Bring every box back now");
+    const hidden = view(going, true);
+    expect(hidden).not.toMatch(/\b[23] boxes/);
+    // A bar, as Bootstrap's progress has: 3 of 5.
+    const bar = renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(Bring.BringAllBackView, { ...going, busy: false, onAsk: () => undefined, onStop: () => undefined }),
+      ),
+    );
+    expect(bar).toMatch(/data-testid="lovejoin-bring-meter"[^]*?width:60%/);
+    // Before its first run it says nothing of what's left.
+    expect(view({ bringing: { back: 0 } })).not.toContain("left.");
+  });
+
+  it("says why once it stopped by itself, offering it again; and once it's over, how many went", () => {
+    const stopped = view({ bringing: { back: 1, left: 1, stopped: "giveme.my didn't answer." } });
+    // Only what holds for every box left: a Bootstrap's, one not mixed yet and a stuck pool's never come back by themselves.
+    expect(stopped).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer. Press Try again to bring back the rest.");
+    expect(stopped).not.toContain("by themselves");
+    expect(stopped).toContain("Try again");
+    expect(stopped).not.toContain("Stop ");
+    expect(view({ done: 4 })).toContain("Done: 4 boxes back in your private balance.");
+    expect(view({ done: 1 })).toContain("Done: 1 box back in your private balance.");
+    // All sent, the chain not done with them yet: said so, with nothing to stop (the owner: "confirming on chain then the final done").
+    const confirming = view({ bringing: { back: 8, left: 0, confirming: 8 } });
+    expect(confirming).toContain("8 boxes sent. Waiting for the chain to confirm.");
+    expect(confirming).not.toContain("0 boxes left");
+    expect(confirming).not.toContain("Stop");
+    expect(view({ done: 0 })).toContain("Nothing of yours was left in Lovejoin.");
+  });
+
+  it("says a mix built and not sent holds what's left, never an older run's reason, while it waits (1.6.0's review)", () => {
+    const shown = view({ bringing: { back: 0, left: 2, held: true, why: "giveme.my didn't answer." } });
+    expect(shown).toContain("2 boxes left.");
+    expect(shown).toContain("A mix you built and haven't sent holds what's left, for 10 minutes at most.");
+    expect(shown).not.toContain("The last box that didn't go");
+    expect(shown).toContain("Stop");
+  });
+
+  it("says nothing was left only when nothing of the wallet's is there once it's over (1.6.0's review)", () => {
+    const empty = { boxes: 0, lovelace: "0", next: null, notMixed: 0, stopped: 0 };
+    expect(Bring.doneOf({ back: 3 }, { ...empty, boxes: 1 })).toBe(3);
+    expect(Bring.doneOf({ back: 0 }, empty)).toBe(0);
+    // A mix sent since it was asked: its boxes wait their turn, so it says nothing.
+    expect(Bring.doneOf({ back: 0 }, { ...empty, boxes: 1 })).toBeUndefined();
+    expect(Bring.doneOf({ back: 0 }, { ...empty, pools: [{ id: "a1", boxes: 0, lovelace: "0", next: null, notMixed: 0, bootstrap: 2 }] })).toBeUndefined();
+    // A pool's run, by that pool's figures alone.
+    const other = { ...empty, pools: [{ id: "a1", boxes: 1, lovelace: "0", next: null, notMixed: 0 }] };
+    expect(Bring.doneOf({ back: 0, pool: "classic" }, other)).toBe(0);
+    expect(Bring.doneOf({ back: 0, pool: "a1" }, other)).toBeUndefined();
+    expect(Bring.doneOf({ back: 0, pool: "a1" }, { ...empty, boxes: 1 })).toBe(0);
+  });
+
+  it("ends the worker's reason with a full stop of its own before what follows, in any language (1.6.0's review)", async () => {
+    // The node's words, as a withdraw refused passes them on: no full stop of their own.
+    const raw = "The network rejected the transaction: BadInputsUTxO";
+    expect(view({ bringing: { back: 1, left: 1, stopped: raw } })).toContain(`${raw}. Press Try again`);
+    expect(view({ bringing: { back: 1, left: 1, why: raw } })).toContain(`The last box that didn't go: ${raw}.`);
+    await i18n.changeLanguage("ja");
+    try {
+      // One that ends a sentence already, in Japanese's 。, keeps it alone.
+      const ja = "giveme.my が応答しませんでした。";
+      const shown = view({ bringing: { back: 1, left: 1, stopped: ja } });
+      expect(shown).toContain(`${ja}残りのボックスを`);
+      expect(shown).not.toContain("。.");
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+});
+
+describe("a pool's page's Bring every box in this pool back now (the owner's test of 1.6.0)", () => {
+  const view = (props: Partial<Parameters<typeof Bring.BringAllBackView>[0]>) =>
+    text(
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+          createElement(Bring.BringAllBackView, { bringing: undefined, busy: false, onAsk: () => undefined, onStop: () => undefined, ...props }),
+        ),
+      ),
+    );
+
+  it("is a link on a pool's page, as Help start the pool is, and a button in Settings", () => {
+    const markup = (pool: boolean) =>
+      renderToStaticMarkup(
+        createElement(
+          PreferencesContext.Provider,
+          { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+          createElement(Bring.BringAllBackView, { bringing: undefined, pool, busy: false, onAsk: () => undefined, onStop: () => undefined }),
+        ),
+      );
+    expect(markup(true)).toMatch(/<button[^>]*class="link align-start"[^>]*data-testid="lovejoin-bring-ask"/);
+    expect(markup(false)).toMatch(/<button[^>]*class="secondary"[^>]*data-testid="lovejoin-bring-ask"/);
+    // The link alone on a pool's page; a button and one short line in Settings, no more (the owner: "the rest is text").
+    expect(text(markup(true)).trim()).toBe("Bring every box in this pool back now");
+    expect(text(markup(false)).trim()).toBe("Every box in every pool, without the waits. Bring every box back now");
+  });
+
+  it("speaks of this pool alone, and asks first with the same warning", () => {
+    const shown = view({ pool: true });
+    expect(shown).toContain("Bring every box in this pool back now");
+    const question = text(renderToStaticMarkup(createElement(Bring.BringAllBackQuestion, { pool: true, onKeep: () => undefined, onConfirm: () => undefined })));
+    expect(question).toContain("Bring this pool's boxes back now?");
+    expect(question).toContain("Sent back to back, they show they're one person's");
+    expect(question).toContain("Bring them back");
+  });
+
+  it("says how its own run goes, or every pool's, and that another pool's goes, which it can't join", () => {
+    expect(view({ pool: true, bringing: { back: 2, pool: "abc", left: 1 } })).toContain("Bringing every box in this pool back: 2 boxes sent back so far. 1 box left.");
+    expect(view({ pool: true, bringing: { back: 2, left: 1 } })).toContain("Bringing every box back: 2 boxes sent back so far.");
+    const other = renderToStaticMarkup(
+      createElement(
+        PreferencesContext.Provider,
+        { value: { prefs: DEFAULT_PREFERENCES, loaded: true, set: async () => undefined } },
+        createElement(Bring.BringAllBackView, { bringing: undefined, pool: true, other: true, busy: false, onAsk: () => undefined, onStop: () => undefined }),
+      ),
+    );
+    expect(text(other)).toContain("Another pool's boxes are coming back now. Stop that first, or use Settings for every pool.");
+    expect(other).toMatch(/data-testid="lovejoin-bring-ask"[^>]*disabled|disabled[^>]*data-testid="lovejoin-bring-ask"/);
+    expect(view({ pool: true, done: 0 })).toContain("Nothing of yours was left in this pool.");
+  });
+
+  it("in Settings, says one pool's goes and keeps the button to make it every pool's; a pool's stop is its page's to say", () => {
+    const one = view({ bringing: { back: 2, pool: "abc", left: 3 } });
+    expect(one).toContain("Bringing every box in one pool back: 2 boxes sent back so far. 3 boxes left.");
+    expect(one).toContain("Stop");
+    expect(one.match(/Bring every box back now/g)?.length).toBe(1);
+    expect(view({ bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).not.toContain("giveme.my didn't answer.");
+    expect(view({ pool: true, bringing: { back: 0, pool: "abc", stopped: "giveme.my didn't answer." } })).toContain("Stopped: several tries in a row sent nothing. giveme.my didn't answer.");
   });
 });

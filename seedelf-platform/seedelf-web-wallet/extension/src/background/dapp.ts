@@ -475,6 +475,8 @@ const DISCONNECTED: Words = (lng) => t("dapp.disconnected", { lng });
 const DECLINED: Words = (lng) => t("dapp.userDeclined", { lng });
 /** What a site's call ends with once its page is gone: nobody hears it. */
 const PAGE_GONE: Words = (lng) => t("dapp.pageGone", { lng });
+/** A private session's funding still not all there when its wait ends, whatever else is known. */
+const NOT_ALL_THERE: Words = (lng) => t("dapp.fundingNotAllThere", { lng });
 /** What a site asking on the network the wallet left hears, and the window says. */
 const NETWORK_LEFT: Words = (lng) => t("dapp.networkMoved", { lng });
 /** What a site hears when the dApp account changed while its signature waited: CIP-30's AccountChange. */
@@ -521,6 +523,8 @@ export class DappService {
    */
   private readonly pageCalls = new Map<string, number>();
   private readonly gonePages = new Set<string>();
+  /** Where each private session's funding is, by `network:index`: the calls waiting on it share one read a poll (`funded`). */
+  private readonly fundingReads = new Map<string, Promise<"landed" | "funding" | "short" | "never">>();
   /**
    * The sites connected on each network, as this worker last read or wrote
    * the sealed `dapps` record: in memory only, never stored. `isEnabled`
@@ -574,7 +578,7 @@ export class DappService {
     if (method === "enable") return this.enable(session, network, args[0]);
     const site = await this.site(network, origin);
     if (!site) throw refused(NOT_CONNECTED);
-    const holder = await this.holder(network, site);
+    const holder = await this.holder(network, site, session);
     const governance = governed(site);
     switch (method) {
       case "getNetworkId":
@@ -1051,7 +1055,11 @@ export class DappService {
     const wants = wantsGovernance(params);
     const site = await this.site(network, origin);
     // A private session has no DRep: governance isn't asked about for one. Nor is it asked again once declined.
-    if (site && (!wants || governed(site) || site.session !== undefined || site.cip95Declined)) return true;
+    if (site && (!wants || governed(site) || site.session !== undefined || site.cip95Declined)) {
+      // Its private session is the site's once its funding is all there, whichever page asks (`funded`).
+      if (site.session !== undefined) await this.funded(session, network, site.session);
+      return true;
+    }
     // Nothing is awaited from here until it's asked, so two pages can't both ask.
     const asking = this.waiting.find((w) => w.approval.kind === "connect" && w.session.origin === origin && w.network === network);
     if (asking) {
@@ -1299,12 +1307,51 @@ export class DappService {
    * — but one a site is handed behind their back is not (chunk 18, Eternl's
    * model).
    */
-  private async holder(network: NetworkName, site: DappSite): Promise<Holder> {
+  private async holder(network: NetworkName, site: DappSite, page: DappSession): Promise<Holder> {
     if (site.session === undefined) return undefined;
+    await this.funded(page, network, site.session);
     try {
       return { index: site.session, ...(await this.deps.sessions.siteAccount(network, site.session)) };
     } catch {
       throw refused((lng) => t("dapp.sessionOver", { lng }));
+    }
+  }
+
+  /**
+   * Returns once site session `index`'s funding is all there, for `enable()` and the site's reads, whichever page asks
+   * (1.6.0's review). One funded in parts is the site's only once every part has landed (the owner's call,
+   * 2026-10-21): until then this waits, as the asking page's own `enable()` does (`watchFunding`), and needs no page to
+   * watch on. Short of a part, or with none landed, the site is refused and its link to the session dropped: its next
+   * `enable()` can't take what came, which waits on the dApps page to be brought back. Any other funding is the site's
+   * at once, as it always was.
+   */
+  private async funded(page: DappSession, network: NetworkName, index: number): Promise<void> {
+    const { now } = this.deps;
+    const pause = this.deps.fundingPollMs ?? FUNDING_POLL_MS;
+    const started = now();
+    const key = `${network}:${index}`;
+    for (;;) {
+      let read = this.fundingReads.get(key);
+      if (!read) {
+        // Kept a poll long: the calls waiting at once ask Koios once between them.
+        read = this.deps.sessions
+          .siteFunding(network, index)
+          .catch(() => "funding" as const)
+          .finally(() => setTimeout(() => this.fundingReads.delete(key), pause));
+        this.fundingReads.set(key, read);
+      }
+      const state = await read;
+      if (state === "landed") return;
+      if (state !== "funding") {
+        await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
+        throw refused((lng) => t(state === "short" ? "dapp.fundingShort" : "dapp.fundingNeverLanded", { lng }));
+      }
+      // Nobody would hear the answer; and a funding still not there after its wait is looked for at the next call.
+      // Not all there is all that's known then: a part may have landed, and a locked wallet reads nothing (the merged
+      // fixes' review).
+      if (this.gonePages.has(page.id)) throw refused(PAGE_GONE);
+      if (now() - started > FUNDING_WAIT_MS) throw refused(NOT_ALL_THERE);
+      await new Promise((r) => setTimeout(r, pause));
     }
   }
 
@@ -1390,18 +1437,36 @@ export class DappService {
       settle();
       this.deps.changed();
     };
+    // Whether it may have reached the chain, as far as the reads tell: something was at the account (`seen`), or the
+    // last read failed (`unread`: a locked wallet reads nothing). Then it isn't said to have never reached it (the
+    // merged fixes' review).
+    let seen = false;
+    let unread = false;
     try {
       const { keyHash } = await sessions.siteAccount(network, index);
       // The site went away meanwhile: it finds itself connected next time.
       while (this.waiting.includes(w)) {
-        const rows = await sessions.accountUtxos(network, keyHash).catch(() => []);
+        unread = false;
+        const rows = await sessions.accountUtxos(network, keyHash).catch((): KoiosUtxo[] => {
+          unread = true;
+          return [];
+        });
+        seen ||= rows.length > 0;
         if (rows.length) {
           // Seen landed, and recorded so: no read behind it later takes it for one never sent (final review F13).
-          void sessions.fundingSeen(network, index, rows).catch(() => undefined);
-          return done(() => w.resolve(true));
+          // A funding in parts has landed only once every part has; short of one, the site isn't given it (the
+          // owner's call, 2026-10-21): what came waits on the dApps page to be brought back.
+          const state = await sessions.fundingSeen(network, index, rows).catch(() => "funding" as const);
+          if (state === "landed") return done(() => w.resolve(true));
+          if (state === "short") {
+            // Nor kept connected to it: its next enable() would hand it what came. That waits on the dApps page.
+            await this.changeSites((all) => all.filter((s) => !(s.session === index && s.network === network)));
+            return done(() => w.reject(refused((lng) => t("dapp.fundingShort", { lng }))));
+          }
+          if (state === "never") return done(() => w.reject(refused((lng) => t("dapp.fundingNeverLanded", { lng }))));
         }
         if (now() - started > FUNDING_WAIT_MS) {
-          return done(() => w.reject(refused((lng) => t("dapp.fundingNeverLanded", { lng }))));
+          return done(() => w.reject(refused(seen || unread ? NOT_ALL_THERE : (lng) => t("dapp.fundingNeverLanded", { lng }))));
         }
         await new Promise((r) => setTimeout(r, pause));
       }

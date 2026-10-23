@@ -16,6 +16,7 @@ import type { DataParts } from "./data-layer";
 import type { MintService } from "./mint";
 import type { MoveInService } from "./move-in";
 import type { NftImageService } from "./nft-image";
+import type { PartsService } from "./parts";
 import type { PendingService } from "./pending";
 import type { NetworkChoice, PreferencesService } from "./preferences";
 import type { PriceService } from "./prices";
@@ -29,6 +30,13 @@ import type { TransferService } from "./transfer";
 import { txView } from "./tx-view";
 import type { WithdrawService } from "./withdraw";
 import { SESSION_RESTORED, WalletLocked, type Wallet } from "./wallet";
+import { isLovejoinWidth, type LovejoinWidth } from "../shared/preferences";
+
+/**
+ * A mix's Four boxes a mix switch as a page sent it: three or four, nothing else; none, Settings' width (the owner's
+ * test of 1.6.0).
+ */
+const widthOf = (width: unknown): LovejoinWidth | undefined => (isLovejoinWidth(width) ? width : undefined);
 
 export interface Context {
   wasm: typeof Wasm;
@@ -42,6 +50,8 @@ export interface Context {
   withdraw: WithdrawService;
   send: SendService;
   pending: PendingService;
+  /** A payment's parts that wait for the part before to be in a block (parts.ts): Home's poll and the runs send them. */
+  parts?: PartsService;
   contacts: ContactsService;
   activity: ActivityService;
   coins: CoinControlService;
@@ -203,8 +213,16 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
       return ctx.send.build(ctx.network, message.payments, message.note, ctx.progress);
     case "send-submit":
       return ctx.send.submit(ctx.network, message.txHash);
-    case "pending-tx":
-      return ctx.pending.pending(ctx.network);
+    case "pending-tx": {
+      // Parts waiting for the one before go as Home asks too, between the sessions alarm's runs; not waited for.
+      void ctx.parts?.pump(ctx.network).catch(() => undefined);
+      const pending = await ctx.pending.pending(ctx.network);
+      // The watch lets a part go once it's seen: what's still to go is said by the parts' own record.
+      if (!pending) return (await ctx.parts?.shown(ctx.network).catch(() => undefined)) ?? null;
+      const first = pending.chain?.first;
+      const parts = first ? await ctx.parts?.of(ctx.network, first) : undefined;
+      return parts ? { ...pending, parts } : pending;
+    }
     case "reset-check":
       return atStake(ctx);
     case "reset-wallet":
@@ -477,7 +495,9 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
     case "lovejoin-chains":
       return ctx.lovejoin.chains(ctx.network);
     case "lovejoin-look-for-pools":
-      return ctx.lovejoin.lookForPools(ctx.network).then(() => ({}));
+      // Whether what a pool read reads changed with the look: the hub, which read the pools meanwhile, reads them again
+      // (1.6.0's rehearsal, R10).
+      return ctx.lovejoin.lookForPools(ctx.network);
     case "lovejoin-funding":
       // A pool's id from the page, or none: never a pool object it made up (its fixes' review, 6).
       return ctx.lovejoin.funding(
@@ -486,19 +506,27 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         false,
         undefined,
         typeof message.pool === "string" ? message.pool : undefined,
-        // Three where the form says four falls back; never wider than Settings' (34f's review, 5).
-        message.width === 3 ? 3 : undefined,
+        // The form's Four boxes a mix switch, either way (the owner's test of 1.6.0); none, Settings'.
+        widthOf(message.width),
       );
     case "lovejoin-mix-private-build":
-      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
+      return ctx.sessions.mixOutBuild(ctx.network, message.boxes, {
+        pool: message.pool,
+        bootstrap: message.bootstrap ?? false,
+        width: widthOf(message.width),
+      });
     case "lovejoin-again-build":
-      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false, message.pool);
+      return ctx.sessions.againBuild(ctx.network, message.anyway ?? false, message.pool, widthOf(message.width));
     case "lovejoin-again-public-build":
-      return ctx.lovejoin.publicAgainBuild(ctx.network, message.pool);
+      return ctx.lovejoin.publicAgainBuild(ctx.network, message.pool, widthOf(message.width));
     case "lovejoin-mix-private-submit":
       return ctx.sessions.mixOutSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-build":
-      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, { pool: message.pool, bootstrap: message.bootstrap ?? false });
+      return ctx.lovejoin.publicBuild(ctx.network, message.boxes, {
+        pool: message.pool,
+        bootstrap: message.bootstrap ?? false,
+        width: widthOf(message.width),
+      });
     case "lovejoin-mix-public-submit":
       return ctx.lovejoin.publicSubmit(ctx.network, message.txHash);
     case "lovejoin-mix-public-progress":
@@ -508,13 +536,30 @@ export async function handle(message: Message, ctx: Context): Promise<Requests[M
         ctx.network,
         message.box,
         message.anyway ?? false,
-        message.paid ?? false,
+        message.paid === "private" ? "private" : message.paid === true,
         typeof message.pool === "string" ? message.pool : undefined,
       );
     case "lovejoin-mixes":
       return ctx.lovejoin.mixes(ctx.network);
+    // Your mixes' Clear and Clear all (the owner's test of 1.6.0): ids and indexes as the page sent them, nothing else.
+    case "lovejoin-mixes-clear":
+      await ctx.lovejoin.clearMixes(ctx.network, (message.entries ?? []).filter((e): e is string => typeof e === "string"));
+      await ctx.sessions.clearMixes(ctx.network, (message.sessions ?? []).filter((i): i is number => Number.isInteger(i)));
+      return {};
     case "lovejoin-bootstrap-release":
       return ctx.lovejoin.releaseBootstrap(ctx.network, message.pool ?? CLASSIC).then(() => ({}));
+    // Bring every box back now (Settings): asked, then its first run started now, not at the alarm's next minute.
+    case "lovejoin-bring-all-back":
+      await ctx.lovejoin.bringAllBack(ctx.network, typeof message.pool === "string" ? message.pool : undefined);
+      void ctx.lovejoin.withdrawDue(ctx.network).catch(() => undefined);
+      return {};
+    case "lovejoin-bring-all-back-stop":
+      return ctx.lovejoin.stopBringingAllBack(ctx.network).then(() => ({}));
+    // The Bootstrap form's bound from the private balance: the worker's own (1.6.0's release review, MONEY-6).
+    case "lovejoin-bootstrap-most":
+      return ctx.lovejoin
+        .privateBootstrapMost(ctx.network, typeof message.pool === "string" ? message.pool : undefined)
+        .then((most) => ({ most }));
     case "lovejoin-launch-terms":
       return ctx.launch.terms(ctx.network, message.token, message.quantity);
     case "lovejoin-launch-build":

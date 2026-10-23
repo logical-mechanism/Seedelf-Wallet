@@ -761,6 +761,13 @@ export interface TransferSummary {
   leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
   histories?: HistoryClass[];
+  /**
+   * More UTxOs than one transaction spends (the owner's test of 1.6.0): it goes as these transactions, each spending
+   * its own, sent one after another; `txHash` is the first's, and the figures above are theirs added up. None when
+   * it's one. `waits`: it spends what the part before carried forward (a part of tokens with no ADA of its own to pay
+   * its fee), so it goes once that one is in a block (background/parts.ts).
+   */
+  parts?: Array<{ txHash: string; fee: string; inputs: number; waits?: true }>;
 }
 
 /** Where a withdrawal goes, as the wallet read it. */
@@ -811,6 +818,13 @@ export interface WithdrawSummary {
   leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
   histories?: HistoryClass[];
+  /**
+   * More UTxOs than one transaction spends (the owner's test of 1.6.0): it goes as these transactions, each spending
+   * its own, sent one after another; `txHash` is the first's, and the figures above are theirs added up. None when
+   * it's one. `waits`: it spends what the part before carried forward (a part of tokens with no ADA of its own to pay
+   * its fee), so it goes once that one is in a block (background/parts.ts).
+   */
+  parts?: Array<{ txHash: string; fee: string; inputs: number; waits?: true }>;
 }
 
 /** One recipient of a send from the Cardano account: an address (found by `$handle`, maybe), or someone's seedelf. */
@@ -887,6 +901,12 @@ export interface PendingTx {
   submittedAt: number;
   /** Null until it's on chain. */
   confirmations: number | null;
+  /**
+   * A payment in parts some of which wait for the part before to be in a block (background/parts.ts): how many went
+   * of how many, and why the rest didn't once they won't (a part turned away, the part before never showed, or the
+   * session whose funding they are said they mustn't go).
+   */
+  parts?: { sent: number; total: number; stopped?: "refused" | "unseen" | "cancelled" };
   /**
    * Koios didn't answer its submit, so it may or may not have gone through.
    * The wallet holds its UTxOs back, sends it again now and then (the network
@@ -1626,7 +1646,13 @@ export type SessionPause =
   /** The fresh quote expects `amountOut`, less than the least the user approved: the order couldn't fill. */
   | { at: number; why: "price"; amountOut: string }
   /** What Minswap built, or the wallet's own cancel after Stop, failed a check (`detail` says which), so the wallet didn't sign it. */
-  | { at: number; why: "refused"; detail: string };
+  | { at: number; why: "refused"; detail: string }
+  /**
+   * Its funding went in parts, and only `landed` of the `total` reached its account: it's not funded, so nothing of
+   * it is swapped or mixed, and what came waits there until the user brings it back (the owner's call, 2026-10-21).
+   * A missing part that lands after all lifts it.
+   */
+  | { at: number; why: "short"; landed: number; total: number };
 
 /**
  * Why a swap's step failed, as a code the page words (Swaps.tsx): Minswap or
@@ -1715,6 +1741,12 @@ export interface SessionView {
   createdAt: number;
   stage: "funding" | "open" | "returning" | "closed" | "failed";
   txs: SessionTx[];
+  /**
+   * Its funding went in parts: how many of them landed, of `total`. `short`: the rest never will, so it isn't
+   * funded, nothing of it runs, and what came waits at its account to be brought back (the owner's call,
+   * 2026-10-21). None on a funding in one transaction.
+   */
+  parts?: { landed: number; total: number; short?: true };
   /** The swap it's for, as last quoted, and how its two sides are shown. */
   swap?: SwapAsk & { amountOut: string; minAmountOut: string; display?: { in: SwapSide; out: SwapSide } };
   /** What its account holds, from Koios; null when it wasn't read. */
@@ -1729,7 +1761,7 @@ export interface SessionView {
    * the wallet's boxes in the pool mixed again, with no deposit. `skipped`:
    * why Lovejoin was left out, when it was.
    */
-  mix?: { boxes: number; again?: boolean; skipped?: string; bootstrap?: boolean; pool?: string };
+  mix?: { boxes: number; again?: boolean; skipped?: string; bootstrap?: boolean; pool?: string; cleared?: true };
   /**
    * A return through Lovejoin: its chain's transactions (the return last),
    * how many are sent and how many are on chain, as the runner last read
@@ -1929,6 +1961,12 @@ export interface SessionBackSummary {
   lovejoinSkipped?: string;
   /** The session's UTxOs this return leaves at its account, and why. */
   leftOut?: LeftOutUtxo[];
+  /**
+   * The session's 5 ₳ collateral goes into a 5 ₳ Lovejoin pool (`pool`, its id) as a box of the wallet's, made by
+   * this return, rather than back with the rest (the owner, 2026-10-22). Nobody mixes it for the session: it's not
+   * mixed yet until someone else's mix moves it, then it comes back by itself. `lovelace` leaves its 5 ₳ out.
+   */
+  collateralBox?: { txHash: string; txIndex: number; pool: string };
 }
 
 /**
@@ -1938,7 +1976,8 @@ export interface SessionBackSummary {
  * script the wallet can't measure, so it can't price spending it, and no
  * transaction of this wallet takes it; `returning`, a return through
  * Lovejoin that's still being sent spends it (a private one, Make public's
- * Max). A session's return only (independent review H1, H2): `cost`, a
+ * Max); `parts`, a payment's parts still to go spend it (parts.ts). A
+ * session's return only (independent review H1, H2): `cost`, a
  * stranger's token UTxO whose own ADA doesn't pay for the deposit its
  * tokens need, so it stays (and is left behind); `size`, one transaction
  * can't hold it with the rest, so the next return takes it.
@@ -1946,7 +1985,7 @@ export interface SessionBackSummary {
 export interface LeftOutUtxo {
   txHash: string;
   txIndex: number;
-  reason: "tokens" | "script" | "returning" | "cost" | "size";
+  reason: "tokens" | "script" | "returning" | "parts" | "cost" | "size";
 }
 
 /**
@@ -1968,6 +2007,11 @@ export interface LovejoinTokenWay {
   pools: string[];
   /** Why it comes back directly though a pool was meant to take it: none of its pools can take a box now, or not the one chosen. */
   skipped?: string;
+  /**
+   * The pool chosen for it can't have its boxes pay their own way back today: they wait there until the fees allow, or
+   * come back by Bring one back. Chosen as any pool, and said (the owner's call 34, 2026-10-19).
+   */
+  stuck?: true;
 }
 
 /** What mixing a number of boxes takes, before anything is built. Amounts in lovelace. */
@@ -2006,6 +2050,11 @@ export interface LovejoinFunding {
   width?: number;
   /** Four was asked, and it goes three: why. */
   fellBack?: string;
+  /**
+   * Mixing again four a mix, where four takes fewer of the wallet's boxes than three would: how many three would
+   * take (the review's switch says so; the owner's test of 1.6.0).
+   */
+  atThree?: number;
 }
 
 /** A mix from the public account, built and signed, waiting for Send. Amounts in lovelace. */
@@ -2039,10 +2088,14 @@ export interface LovejoinPublicSummary {
   change: string;
   /** Its own boxes a mix from it put in, mixed again: no deposit (privacy review §2.10). */
   again?: boolean;
+  /** Mixing again: how many of the account's boxes are in the pool (`boxes` is how many go this time). */
+  owned?: number;
   /** Four boxes a mix (chunk 34's D3); none: three. */
   width?: number;
   /** Four was asked, and it goes three: why. */
   fellBack?: string;
+  /** Mixing again four a mix, where four takes fewer of the account's boxes than three would: how many three would. */
+  atThree?: number;
 }
 
 /** The wallet's boxes in Lovejoin's pool, and when each is due back (ms). */
@@ -2151,16 +2204,40 @@ export interface LovejoinPoolStatus {
   bootstrap?: Array<{ txHash: string; txIndex: number; pool?: string }>;
   /**
    * A box of it can't pay its own way back under today's parameters (chunk 34's escape hatch): what's left after
-   * the withdraw's fee, and what the Seedelf output needs. Its boxes don't come back by themselves meanwhile;
-   * Bring one back with the public account paying does (`lovejoin-withdraw-now`'s `paid`).
+   * the withdraw's fee, and what the Seedelf output needs. Said whether or not the wallet has boxes there: a new box
+   * still goes in, with this said first (the owner's call 34). Its boxes don't come back by themselves meanwhile;
+   * Bring one back, paid from the private balance or the public account, does (`lovejoin-withdraw-now`'s `paid`).
    */
   cantComeBack?: { has: string; needs: string };
+  /**
+   * It takes no new box under today's parameters, and why (chunk 34's §2, usable): a mix, a Bootstrap and mixing again
+   * into it are refused, from either side, whether or not the wallet has boxes there. Measured once an epoch (1.6.0's
+   * release review, MONEY-3; since the owner's call 34, only a box below the network's minimum, or a copy).
+   */
+  unusable?: LovejoinUnusable;
   /** Its crowd, as the data layer last counted it; none on Koios. */
   crowd?: LovejoinCrowd;
   /** Its launch transaction, as discovery found it. */
   launch?: string;
   /** This wallet started it (the device's own record). */
   mine?: true;
+}
+
+/**
+ * Why a token pool takes no new box (WebAssembly's usable): a box holds less ADA than the network now asks of one
+ * (`belowMinimum`), so nothing can be built. Or it's a copy (`superseded`): an earlier launch of its values turned up
+ * after this device read it, so it's read for the boxes already in it and takes no new one, for good (decision 30; the
+ * merged fixes' review, MERGED-1). A box that couldn't pay its own way back, or a check that couldn't be made, is no
+ * reason since the owner's call 34 (`cantComeBack` on the pool says the first). Words are the screens' to choose;
+ * nothing here is translated.
+ */
+export interface LovejoinUnusable {
+  why: "belowMinimum" | "superseded";
+  /**
+   * In a copy (`superseded`), why mixing again its boxes is refused too, if it is: mixing again makes no deposit, so a
+   * copy alone doesn't refuse it, but a box's minimum does (fix round two's last review, R3-2).
+   */
+  again?: "belowMinimum";
 }
 
 /**
@@ -2249,7 +2326,8 @@ export interface LovejoinMixView {
   /** Its boxes in each pool (none: the classic pool), how many are back, and how many a later mix took. */
   shares: Array<{ pool?: string; boxes: number; back: number; moved: number }>;
   /** Its chain, while the wallet keeps its record: how far it was sent, how it ended, and four boxes a mix (`width`). */
-  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };
+  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };  /** Cleared from Your mixes (the owner's test of 1.6.0): the hub's list leaves it out. */
+  cleared?: true;
 }
 
 export interface LovejoinChainTx {
@@ -2280,6 +2358,12 @@ export interface LovejoinHeld {
   unsure?: number;
   stopped: number;
   /**
+   * How many of the wallet's boxes its open Bootstraps hold in the pool (chunk 34's D2: Home shows them apart): they
+   * have no due time, and stay until brought back by hand. From the list of mixes alone; none when none (1.6.0's
+   * release review, MONEY-4).
+   */
+  bootstrap?: number;
+  /**
    * Each token pool's own figures, as the fields above are the classic
    * pool's (chunk 34): its boxes on their way back, their ADA and token, and
    * its boxes not mixed yet. Only pools with something there.
@@ -2292,9 +2376,20 @@ export interface LovejoinHeld {
     next: number | null;
     notMixed: number;
     unsure?: number;
+    /** Its boxes a Bootstrap holds, as `bootstrap` is the classic pool's. */
+    bootstrap?: number;
     /** What each of its boxes holds, as the read set has it; none when the pool isn't read this time (34f). */
     box?: LovejoinBoxValue;
   }>;
+  /**
+   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0), while asked: one pool's alone, asked
+   * from its page (`pool`, `classic` for the classic pool's), or every pool's; the withdraws it sent, how many of
+   * them aren't on chain yet once none is left to send (`confirming`),
+   * the boxes its last run left (none before its first), why the last box that didn't go didn't (`why`), and, once
+   * it stopped for that, the reason (`stopped`); `held` while a mix built and kept for Send holds what's left, which
+   * it waits for. None once it's over.
+   */
+  bringing?: { back: number; pool?: string; left?: number; confirming?: number; why?: string; stopped?: string; held?: true };
 }
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */
@@ -2637,21 +2732,24 @@ export interface Requests {
   /**
    * Looks for Lovejoin token pools launched since the wallet last did, as the
    * Lovejoin page opens (chunk 34's 34c): the data layer's list, or Koios's
-   * holder where there's none. The next pool read reads what's found.
+   * holder where there's none. The next pool read reads what's found. `grew`: the pools the wallet reads changed
+   * with this look, so a page that read them before it ended reads them again (1.6.0's rehearsal: a wallet restored
+   * opened the hub to no pools and "None" of its boxes until Refresh).
    */
-  "lovejoin-look-for-pools": { payload: None; result: None };
+  "lovejoin-look-for-pools": { payload: None; result: { grew: boolean } };
   /**
-   * What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. `width`: three, where
-   * the form says four falls back (34f); none, Settings'.
+   * What mixing `boxes` boxes at the set depth takes, in the classic pool or token pool `pool`. `width`: the form's
+   * Four boxes a mix switch (the owner's test of 1.6.0); none, Settings'.
    */
-  "lovejoin-funding": { payload: { boxes: number; pool?: string; width?: 3 }; result: LovejoinFunding };
+  "lovejoin-funding": { payload: { boxes: number; pool?: string; width?: 3 | 4 }; result: LovejoinFunding };
   /**
    * Builds the funding of a new one-time account that mixes `boxes` boxes from the private balance, and runs itself
    * once sent. `pool`: a token pool's id (none: the classic pool), whose boxes take its token too. `bootstrap`: boxes
-   * in with no mixes, held in the pool until brought back by hand (chunk 34: it replaces the seed).
+   * in with no mixes, held in the pool until brought back by hand (chunk 34: it replaces the seed). `width`: the form's
+   * Four boxes a mix switch, as on every mix and Mix my boxes again since the owner's test of 1.6.0; none, Settings'.
    */
   "lovejoin-mix-private-build": {
-    payload: { boxes: number; pool?: string; bootstrap?: boolean };
+    payload: { boxes: number; pool?: string; bootstrap?: boolean; width?: 3 | 4 };
     result: SessionOutSummary & { mix: LovejoinFunding };
   };
   /**
@@ -2660,9 +2758,9 @@ export interface Requests {
    * deposit, and runs itself once sent. Sent with lovejoin-mix-private-submit.
    */
   /** `anyway`: the boxes a mix from the public account put in too, paid from the private balance (privacy review §2.10). */
-  "lovejoin-again-build": { payload: { anyway?: boolean; pool?: string }; result: SessionOutSummary & { mix: LovejoinFunding } };
+  "lovejoin-again-build": { payload: { anyway?: boolean; pool?: string; width?: 3 | 4 }; result: SessionOutSummary & { mix: LovejoinFunding } };
   /** Builds the mixes of the boxes a mix from the public account put in, paid by the account: sent as a mix from it is. */
-  "lovejoin-again-public-build": { payload: { pool?: string }; result: LovejoinPublicSummary };
+  "lovejoin-again-public-build": { payload: { pool?: string; width?: 3 | 4 }; result: LovejoinPublicSummary };
   /** Records the mix session, then sends its funding. */
   "lovejoin-mix-private-submit": { payload: { txHash: string }; result: { index: number; pending: PendingTx } };
   /** Builds `boxes` boxes from the public account straight into Lovejoin: the deposit and every mix. */
@@ -2671,7 +2769,7 @@ export interface Requests {
    * empty pool takes, held there until brought back by hand (chunk 34: it replaces the seed). It hides nothing of its
    * own; it gives other people boxes to mix with. `pool`: a token pool's id; none for the classic pool.
    */
-  "lovejoin-mix-public-build": { payload: { boxes: number; pool?: string; bootstrap?: boolean }; result: LovejoinPublicSummary };
+  "lovejoin-mix-public-build": { payload: { boxes: number; pool?: string; bootstrap?: boolean; width?: 3 | 4 }; result: LovejoinPublicSummary };
   /** Sends the public mix built last, in order. */
   "lovejoin-mix-public-submit": { payload: { txHash: string }; result: PendingTx };
   /**
@@ -2690,12 +2788,15 @@ export interface Requests {
   /**
    * Withdraws one of the wallet's boxes now, whatever its wait (`box`, or the
    * one that has waited longest). One not mixed yet only with `anyway`.
-   * `paid`: the public account pays its fee (chunk 34's escape hatch, for a
-   * box that can't pay its own way back), which ties the box to the account.
+   * `paid`, for a box that can't pay its own way back (chunk 34's escape
+   * hatch): `"private"`, one of the private balance's UTxOs of ADA alone pays
+   * its fee and comes back with it, which ties that UTxO to the box (the
+   * owner's call 36, the default on the page); `true`, the public account
+   * pays, which ties the box to the account.
    */
   /** `pool`: with no `box`, the one of this pool's boxes that has waited longest (none: any pool's). */
   "lovejoin-withdraw-now": {
-    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean; pool?: string };
+    payload: { box?: { txHash: string; txIndex: number; pool?: string }; anyway?: boolean; paid?: boolean | "private"; pool?: string };
     result: PendingTx;
   };
   /** Every mix in Lovejoin's list, from the device alone (chunk 34's session 1, 5): the hub's (34f). */
@@ -2705,6 +2806,26 @@ export interface Requests {
    * themselves from here, one a run, at random delays (chunk 34's round three, 24).
    */
   "lovejoin-bootstrap-release": { payload: { pool?: string }; result: None };
+  /**
+   * Bring every box back now (Settings → Lovejoin; the owner's test of 1.6.0): every box of the wallet's in every
+   * pool comes back, one withdraw after another, with none of its waits, from a run started at once (lovejoin.ts
+   * bringAllBackNow); `pool`, from a pool's page, that pool's alone (`classic` for the classic pool's). `-stop` stops
+   * it, or forgets that it stopped.
+   */
+  "lovejoin-bring-all-back": { payload: { pool?: string }; result: None };
+  "lovejoin-bring-all-back-stop": { payload: None; result: None };
+  /**
+   * Clears mixes from Lovejoin's Your mixes (the owner's test of 1.6.0): `entries`, the list's by id, and `sessions`,
+   * mix sessions by index. Only what's no longer in flight: a chain being sent, or a mix session still running or
+   * whose funding may land, stays. Activity keeps every transaction.
+   */
+  "lovejoin-mixes-clear": { payload: { entries?: string[]; sessions?: number[] }; result: None };
+  /**
+   * The most boxes a Bootstrap paid from the private balance puts into pool `pool` (none: the classic pool) at once:
+   * what its funding's reserve pays the deposit for, as the worker holds it (privateBootstrapMost), for the form's
+   * bound (1.6.0's release review, MONEY-6). It reads the parameters, as any build does.
+   */
+  "lovejoin-bootstrap-most": { payload: { pool?: string }; result: { most: number } };
   /** What a pool of `token` (none: an ADA pool) may hold a box, and the pools of its kind already shown. */
   /** `quantity`: Q, raw, once chosen; without it the least holds for any. */
   "lovejoin-launch-terms": {
@@ -2885,6 +3006,10 @@ const REQUEST_LIST = [
   "lovejoin-mix-public-progress",
   "lovejoin-mixes",
   "lovejoin-bootstrap-release",
+  "lovejoin-bring-all-back",
+  "lovejoin-bring-all-back-stop",
+  "lovejoin-mixes-clear",
+  "lovejoin-bootstrap-most",
   "lovejoin-launch-terms",
   "lovejoin-launch-build",
   "lovejoin-launch-submit",

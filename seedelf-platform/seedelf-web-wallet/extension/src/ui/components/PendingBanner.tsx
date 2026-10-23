@@ -102,6 +102,12 @@ export const CONFIRMED: Record<PendingTx["kind"], I18nKey> = {
   "lovejoin-launch": "pending.confirmed.lovejoin_launch",
 };
 
+/**
+ * The kinds a payment in parts goes as (background/parts.ts): Send, Make public and a session's funding. A public
+ * mix's chain through Lovejoin is named by its first too, but isn't one.
+ */
+const IN_PARTS: ReadonlySet<PendingTx["kind"]> = new Set(["transfer", "withdraw", "session-out"]);
+
 /** What the banner says of a transaction that never landed, by why it was let go. */
 const DROPPED: Record<NonNullable<PendingTx["dropped"]>, { title: (what: string) => string; detail: () => string }> = {
   expired: {
@@ -234,7 +240,34 @@ export function PendingBanner({
     testId: "pending-tx",
     private: privateBanner(pending),
   };
-  if (pending.confirmations !== null) {
+  // A payment in parts some of which wait for the part before to be in a block (background/parts.ts): how many are
+  // still to go, or how many didn't once they won't. While some wait, it's still on its way, landed or not.
+  const parts = pending.parts;
+  // A part after the first the network never showed most likely never went out, nor any after it; those before it
+  // did. So it's parts that stopped, not a payment that never went, whose words would have the user send again what's
+  // paid (1.6.0's review). The watch follows the last that went; with no parts' record (item 8's, all sent at Send),
+  // that's the last of all.
+  const unseenPart =
+    pending.dropped === "unseen" && IN_PARTS.has(pending.kind) && !!pending.chain && pending.txHash !== pending.chain.first;
+  const total = parts?.total ?? pending.chain?.total ?? 0;
+  const went = unseenPart ? (parts ? parts.sent - 1 : total - 1) : (parts?.sent ?? 0);
+  const left = parts || unseenPart ? total - went : 0;
+  const stopped = !!parts?.stopped || unseenPart;
+  const partsLine =
+    left > 0 ? (stopped ? tr("pending.partsStopped", { count: left, total }) : tr("pending.partsWaiting", { count: left })) : undefined;
+  // Some won't go: never "confirmed", nor a session "funded" that's short of a part (10a's rule).
+  if (stopped && left > 0 && (pending.confirmations !== null || unseenPart)) {
+    return (
+      <TxBanner
+        {...shared}
+        state="stale"
+        title={tr("pending.partsStoppedTitle", { what })}
+        detail={partsLine}
+        onDismiss={watching ? undefined : onDismiss}
+      />
+    );
+  }
+  if (pending.confirmations !== null && !partsLine) {
     return (
       <TxBanner
         {...shared}
@@ -242,6 +275,7 @@ export function PendingBanner({
         firstOf={undefined}
         state="done"
         title={tr(CONFIRMED[pending.kind])}
+        detail={partsLine}
         onDismiss={watching ? undefined : onDismiss}
       />
     );
@@ -267,9 +301,9 @@ export function PendingBanner({
       state={watching ? "waiting" : "stale"}
       title={watching ? tr("pending.sentWaiting", { what }) : tr("pending.notConfirmed", { what })}
       detail={
-        !watching && until
+        partsLine ?? (!watching && until
           ? tr("pending.notShownYet", { until })
-          : undefined
+          : undefined)
       }
       onDismiss={watching ? undefined : onDismiss}
     />

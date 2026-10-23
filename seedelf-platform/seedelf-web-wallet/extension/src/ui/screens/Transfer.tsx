@@ -57,6 +57,8 @@ export type AddressRoute = "private" | "public";
 
 /** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
 const MAX_UTXOS = 20;
+/** The most transactions one payment goes out as, 20 UTxOs each (script-spend.ts `MAX_PARTS`). */
+const MAX_PARTS = 25;
 
 /**
  * The amount an address's route hands on: what's typed, or nothing with Max on. The box keeps the figure typed
@@ -231,9 +233,19 @@ export function Transfer({
       >
         <ReviewRecipients testId="transfer-review" payments={summary.payments} rows={recipientRows}>
           <Row label={t("review.fee")} value={adaText(summary.fee.total)} />
+          {/* More than one transaction holds, by UTxOs or size: it goes as several (the owner's test of 1.6.0). */}
+          {summary.parts && <Row label={t("review.parts")} value={String(summary.parts.length)} />}
           <TotalRows side="private" leaving={leaving} before={total} tokens={tokenKinds} />
         </ReviewRecipients>
         <TxDetailButton txHash={summary.txHash} testId="transfer-tx" />
+        {summary.parts && (
+          <p className="note" data-testid="transfer-parts">
+            {joinSentences([
+              t("review.partsNote", { count: summary.parts.length }),
+              summary.parts.some((p) => p.waits) && t("review.partsWait", { count: summary.parts.filter((p) => p.waits).length }),
+            ])}
+          </p>
+        )}
         <HistoriesNote histories={summary.histories} max={summary.max} testId="transfer-histories" />
         {/* What Max leaves, and why it can't go: the balance after said it with no reason, and T05's tester took
             it for a bug (blind test §4.4). */}
@@ -247,9 +259,9 @@ export function Transfer({
             {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
             {joinSentences([
               t("withdraw.left", { count: summary.left }),
-              summary.inputs < MAX_UTXOS
+              summary.inputs < MAX_UTXOS * (summary.parts ? MAX_PARTS : 1)
                 ? t("withdraw.leftTokens", { count: summary.left })
-                : t("withdraw.leftLimit", { max: MAX_UTXOS }),
+                : t("withdraw.leftLimit", { max: MAX_UTXOS * (summary.parts ? MAX_PARTS : 1) }),
             ])}
           </p>
         )}
@@ -361,7 +373,7 @@ export function Transfer({
             </div>
             {maxed ? (
               <p className="note" data-testid="transfer-max-note">
-                {t(seedelf.locked.utxos ? "transfer.privacy.maxLocked" : "transfer.privacy.max", { max: MAX_UTXOS })}
+                {t(seedelf.locked.utxos ? "transfer.privacy.maxLocked" : "transfer.privacy.max")}
               </p>
             ) : (
               withTokens && <MinimumHint />

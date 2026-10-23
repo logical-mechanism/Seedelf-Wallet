@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
 
-import { NETWORKS, type NetworkName } from "../src/networks";
+import { epochAt, NETWORKS, type NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
@@ -108,7 +108,18 @@ const RECORDED_KEYS = new Set<string>(
   koiosPreprod.accounts[activityPreprod.stake].account_utxos.flatMap((u: { payment_cred: string | null }) => u.payment_cred ?? []),
 );
 export const stakingPreprod = fixture("staking-preprod.json");
-export const governancePreprod = fixture("governance.json").proposal_list.preprod;
+/**
+ * The recorded governance actions as they stood the day they were recorded, moved on to today's epoch: whether one is
+ * open is read against the clock (Governance's `epochAt`), so as recorded they closed for good as time passed (1.6.0's
+ * PR, 2026-10-23: preprod's epoch 321 closed the action the vote test opens).
+ */
+const governance = fixture("governance.json");
+const governanceShift = epochAt("preprod", Date.now()) - epochAt("preprod", Date.parse(`${governance.recorded}T12:00:00Z`));
+export const governancePreprod = governance.proposal_list.preprod.map((p: Record<string, unknown>) =>
+  Object.fromEntries(
+    Object.entries(p).map(([k, v]) => [k, (k === "expiration" || k.endsWith("_epoch")) && typeof v === "number" ? v + governanceShift : v]),
+  ),
+);
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
 /** Session 0 of the 12-word phrase and its UTxO (wasm/tests/session_test.rs). */
 export const sessionSwap = fixture("session-swap.json");
@@ -235,6 +246,8 @@ export interface KoiosFake {
   accountTxs: Map<string, Array<{ tx_hash: string; block_height: number; block_time: number }>>;
   /** UTxOs under other payment keys, as credential_utxos finds them: a private session's, say. */
   addedToAccounts: Array<{ payment_cred: string } & Record<string, unknown>>;
+  /** More wallet-contract UTxOs: a private balance of many, as boxes brought back from Lovejoin leave it. */
+  addedToContract: Array<{ tx_hash: string; tx_index: number; block_height?: number } & Record<string, unknown>>;
   /** Outpoints (`txhash#index`) the chain has spent, as utxo_info marks them: an order a batcher filled, say. */
   spent: Set<string>;
   /**
@@ -434,6 +447,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
         ...ownedUtxos,
         ...Object.values(koiosPreprod.accounts as Record<string, { account_utxos: unknown[] }>).flatMap((a) => a.account_utxos),
         ...koios.addedToAccounts,
+        ...koios.addedToContract,
       ] as Array<{ tx_hash: string; tx_index: number }>;
       const spent = (r: string) => koios.spent.has(r) || (koios.unlistedSpent && !known.some((u) => ref(u) === r));
       const found = known.filter((u) => refs.includes(ref(u))).map((u) => ({ ...u, is_spent: spent(ref(u)) }));
@@ -460,7 +474,7 @@ async function fakeKoios(context: BrowserContext, koios: KoiosFake) {
     const rows =
       path === "credential_utxos"
         ? credentials.includes(koiosPreprod.wallet_contract)
-          ? [...koiosPreprod.contract_utxos, ...ownedUtxos].filter((u) => (u.block_height ?? 0) > after)
+          ? [...koiosPreprod.contract_utxos, ...ownedUtxos, ...koios.addedToContract].filter((u) => (u.block_height ?? 0) > after)
           : byKey
         : path === "account_addresses"
           ? // A row for every stake address asked about that some address used, as Koios answers a batch of them.
@@ -562,6 +576,7 @@ export const test = base.extend<{
       stakesAsked: [],
       accountTxs: new Map(),
       addedToAccounts: [],
+      addedToContract: [],
       spent: new Set(),
       unlistedSpent: false,
       txSpends: new Map(),

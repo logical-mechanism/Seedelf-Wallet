@@ -822,6 +822,7 @@ describe("spending rewards", () => {
       dappPassword: true,
       dappAccount: 0,
       lovejoinReturns: true,
+      lovejoinCollateral: true,
       lovejoinDepth: 2,
       lovejoinDelay: "1-6",
       lovejoinWidth: 3,

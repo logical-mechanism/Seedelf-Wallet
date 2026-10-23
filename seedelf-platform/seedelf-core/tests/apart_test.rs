@@ -406,6 +406,9 @@ fn what_no_order_pays_is_still_refused() {
         .err()
         .unwrap();
     assert!(e.to_string().contains("more computation"), "{e}");
+    // Typed, so a payment can go as several transactions instead (the web wallet's split).
+    assert!(build::is_too_many(&e), "{e}");
+    assert!(!build::is_short(&e));
 }
 
 /// Merging follows the purpose's order, not the size alone (independent

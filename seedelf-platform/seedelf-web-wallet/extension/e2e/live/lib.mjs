@@ -85,7 +85,16 @@ export async function seedelfName(page, tag) {
   });
 }
 
-/** Presses Review, logs the review and screenshots it, then presses Send. */
+/**
+ * The review's own button: every review names it in "Nothing is sent until you press …" ("Make 800 ₳ private"),
+ * and a few still say Send.
+ */
+async function sendButton(page) {
+  const said = /Nothing is sent until you press (.+)$/m.exec(await page.locator("body").innerText());
+  return page.getByRole("button", { name: said ? said[1].trim() : "Send", exact: true });
+}
+
+/** Presses Review, logs the review and screenshots it, then presses its send button. */
 export async function reviewAndSend(page, testId, name) {
   await page.getByRole("button", { name: "Review" }).click();
   const review = page.getByTestId(testId);
@@ -94,7 +103,7 @@ export async function reviewAndSend(page, testId, name) {
   });
   log("review:", (await review.innerText()).replace(/\n/g, " | "));
   await page.screenshot({ path: `test-results/live-${name}-review.png`, fullPage: true });
-  await page.getByRole("button", { name: "Send" }).click();
+  await (await sendButton(page)).click();
 }
 
 /** Logs the staking review that's open and screenshots it, then presses Send. */

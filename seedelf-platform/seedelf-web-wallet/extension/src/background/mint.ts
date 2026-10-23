@@ -110,7 +110,7 @@ export class MintService {
   ): Promise<MintSummary> {
     const { wasm } = this.deps;
     progress?.("reading");
-    const { view, utxos, params, returning, classes } = await readContract(this.deps, network);
+    const { view, utxos, params, returning, waiting, classes } = await readContract(this.deps, network);
     const request = { network, params, label, utxos, classes };
     if (request.utxos.length === 0) {
       throw nothingToSpend(
@@ -118,6 +118,7 @@ export class MintService {
         view,
         t("worker.mint.privateEmpty"),
         returning,
+        waiting,
       );
     }
 

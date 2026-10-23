@@ -10,7 +10,8 @@
 // account may, a switch, never a link, since it shows that link.
 //
 // The worker checks it all again, builds it, and checks the pool it makes
-// from its own bytes (lovejoin-launch.ts); Send checks the token's supply.
+// from its own bytes (lovejoin-launch.ts); Send asks only whether the pool's
+// mix_logic is registered already.
 // The pool shows in the list once a look finds it, as every wallet's does:
 // the launcher's own record never puts it there sooner (§3). Bootstrapping
 // is offered next, from the pool's page, never forced (23).
@@ -31,7 +32,7 @@ import { Screen } from "../components/Screen";
 import { Tabs } from "../components/Tabs";
 import { TxDetailButton } from "../components/TxDetail";
 import { adaText, formatAda, formatQuantity, parseAda, parseQuantity, tokenKey } from "../format";
-import { boxText, crowdText, type ShownPool } from "../lovejoin-pools";
+import { boxText, crowdText, isCopy, type ShownPool } from "../lovejoin-pools";
 import { useNetwork } from "../network";
 import { listedTokens, tokenDecimals, tokenText } from "../tokens";
 
@@ -48,6 +49,7 @@ const ADA = "ada";
 
 export function LovejoinLaunch({
   seedelf,
+  publicTotal,
   pools,
   holdings,
   banner,
@@ -56,6 +58,8 @@ export function LovejoinLaunch({
   onSent,
 }: {
   seedelf: Balances["seedelf"];
+  /** The public account as Home shows it: a start it pays says what it holds after (LaunchTotals). */
+  publicTotal?: string;
   /** Every pool the wallet read, for the token's pools to join and their crowds. */
   pools: ShownPool[];
   /** The tokens the wallet holds, either side: listed first. */
@@ -114,8 +118,10 @@ export function LovejoinLaunch({
   }, [token?.policyId, token?.assetName, q]);
 
   const box = boxAda !== undefined ? parseAda(boxAda) : undefined;
-  // The token's pools already shown, with their crowds, to join rather than split (session 1, 14).
-  const same = pools.filter((p) => (token ? p.box.token && tokenKey(p.box.token) === unit : !p.box.token));
+  // The token's pools already shown, with their crowds, to join rather than split (session 1, 14). Never a copy, read
+  // for the boxes already in it, which takes none to join with (the merged fixes' review, MERGED-1): the earlier pool
+  // of its values is listed, and a start of those values is refused as its copy.
+  const same = pools.filter((p) => !isCopy(p) && (token ? p.box.token && tokenKey(p.box.token) === unit : !p.box.token));
   const copy = same.find((p) => p.box.lovelace === box && (!token || p.box.token?.quantity === q));
   // Why Review can't be pressed yet, each before a build would say it.
   const why = !terms
@@ -176,9 +182,6 @@ export function LovejoinLaunch({
   }
 
   if (review) {
-    const leaving = BigInt(review.locked.total) + BigInt(review.fee);
-    // The floor a pool's boxes not yours must reach before the wallet mixes there: none where the network has none.
-    const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
     return (
       <Screen
         title={tr("lovejoin.launch.reviewTitle")}
@@ -209,7 +212,7 @@ export function LovejoinLaunch({
           <Row label={tr("lovejoin.launch.lockedMixLogic")} value={adaText(review.locked.mixLogic)} part />
           <Row label={tr("lovejoin.launch.lockedDeposit")} value={adaText(review.locked.deposit)} part />
           <Row label={tr("review.fee")} value={adaText(review.fee)} />
-          <TotalRows side={review.from} leaving={leaving} before={review.from === "private" ? homeBalance(seedelf) : undefined} />
+          <LaunchTotals review={review} seedelf={seedelf} publicTotal={publicTotal} />
         </ReviewRows>
         {/* At most: Send sends the start with no deposit when something registered the credential already (34d). */}
         <p className="note" data-testid="lovejoin-launch-at-most">
@@ -218,12 +221,7 @@ export function LovejoinLaunch({
         <Callout tone="privacy" testId="lovejoin-launch-privacy">
           {tr(review.from === "private" ? "lovejoin.launch.privacy.private" : "lovejoin.launch.privacy.public")}
         </Callout>
-        {/* What D2 says of bootstrapping: the floor counts boxes not yours, so a pool needs others' too. */}
-        {floor > 0 && (
-          <p className="note" data-testid="lovejoin-launch-bootstrap">
-            {tr("lovejoin.launch.bootstrapNote", { floor })}
-          </p>
-        )}
+        <LaunchBootstrapNote />
         {review.from === "private" && <HistoriesNote histories={review.histories} testId="lovejoin-launch-histories" />}
         {review.from === "private" && <GivemeNote />}
         <TxDetailButton txHash={review.txHash} testId="lovejoin-launch-tx" />
@@ -372,6 +370,43 @@ export function LovejoinLaunch({
       )}
     </Screen>
   );
+}
+
+/**
+ * What the start's review says of bootstrapping (D2; round three, 23: the review offers Bootstrap next, never forces
+ * it): the floor counts boxes not yours, so a pool needs others' too. Where the network has no floor (preprod), that
+ * Bootstrap can follow from the pool's page, as the sent page says: the review said nothing of it there, so the
+ * owner's preprod run never met it (1.6.0's preprod rehearsal, R7).
+ */
+export function LaunchBootstrapNote() {
+  const tr = useT();
+  const network = useNetwork();
+  // The floor a pool's boxes not yours must reach before the wallet mixes there: none where the network has none.
+  const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+  return (
+    <p className="note" data-testid="lovejoin-launch-bootstrap">
+      {floor > 0 ? tr("lovejoin.launch.bootstrapNote", { floor }) : tr("lovejoin.launch.bootstrapNext")}
+    </p>
+  );
+}
+
+/**
+ * What a start takes from the side that pays it, all told, and what that side holds after, from Home's figure for it:
+ * the private balance's from the page's own, the public account's as Home handed it down (`publicTotal`). From the
+ * public account it said what left and not what stayed, where the private balance's said both (1.6.0's rehearsal,
+ * R9). No figure, no after line. Exported for its test.
+ */
+export function LaunchTotals({
+  review,
+  seedelf,
+  publicTotal,
+}: {
+  review: Pick<LovejoinLaunchSummary, "from" | "locked" | "fee">;
+  seedelf: Balances["seedelf"];
+  publicTotal?: string;
+}) {
+  const leaving = BigInt(review.locked.total) + BigInt(review.fee);
+  return <TotalRows side={review.from} leaving={leaving} before={review.from === "private" ? homeBalance(seedelf) : publicTotal} />;
 }
 
 /** The box a reviewed start's pool holds. */

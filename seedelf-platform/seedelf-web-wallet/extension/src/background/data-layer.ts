@@ -358,11 +358,6 @@ export class DataLayerKoios extends Koios {
     return this.read((k) => k.assetInfo(policyId, assetName), () => super.assetInfo(policyId, assetName));
   }
 
-  /** A Lovejoin pool's launch's, on Koios alone, as the privacy policy says (chunk 34's 34d): a launch is public anyway. */
-  override assetSupply(policyId: string, assetName: string) {
-    return super.assetSupply(policyId, assetName);
-  }
-
   override tipSlot() {
     return this.read((k) => k.tipSlot(), () => super.tipSlot());
   }
