@@ -1202,6 +1202,34 @@ describe("a return's 5 ₳ collateral into the 5 ₳ pool (the owner, 2026-10-22
     expect(BigInt(review.lovelace)).toBe(8_000_000n - BigInt(review.fee) - 5_000_000n);
   });
 
+  // The owner, 2026-10-23: the box mixes as any box does, so a pool under the network's floor takes no collateral.
+  it("goes in only once the 5 ₳ pool holds the network's floor of boxes that aren't the wallet's", async () => {
+    const t = await wallet();
+    const five = await adaPool(t);
+    await siteSession(t);
+    t.koios.addedToAccounts.push(atSession(OUT, 1, "3000000"), atSession(OUT, 2, "5000000"), ...POOL);
+    const lovejoin = NETWORKS.preprod.lovejoin!;
+    const floor = lovejoin.poolFloor;
+    lovejoin.poolFloor = 2;
+    try {
+      // Under it, as mainnet's first 5 ₳ pool would be: the collateral comes back with the rest.
+      const short = await runner(t, pooled(t, [five.ref])).backBuild("preprod", 0);
+      expect(short.collateralBox).toBeUndefined();
+      expect(BigInt(short.lovelace)).toBe(8_000_000n - BigInt(short.fee));
+      // Two boxes of other people's there, and it goes in.
+      t.koios.addedToAccounts.push(
+        ...POOL.slice(0, 2).map(
+          (u, i) =>
+            ({ ...u, tx_hash: "f5".repeat(32), tx_index: i, address: boxAddress(five.mixBox), payment_cred: five.mixBox, value: "5000000", asset_list: [] }) as KoiosUtxo,
+        ),
+      );
+      const met = await runner(t, pooled(t, [five.ref])).backBuild("preprod", 0);
+      expect(met.collateralBox).toMatchObject({ txHash: met.txHash, pool: five.id });
+    } finally {
+      lovejoin.poolFloor = floor;
+    }
+  });
+
   it("comes back with the rest when Settings turns it off, the return goes directly, or no 5 ₳ pool is shown", async () => {
     const t = await wallet();
     await t.deps.preferences.set({ lovejoinDepth: 1 });

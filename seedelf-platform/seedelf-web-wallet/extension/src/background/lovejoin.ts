@@ -3348,12 +3348,24 @@ export class LovejoinService {
    * shown ADA pool whose box holds exactly the collateral's 5 ₳, as discovery last kept it, asking nobody, while it
    * takes a new box (usableNow). Only one pool of a value is ever shown. None on a network that has none, which on
    * mainnet is every network until someone starts one: the collateral comes back with the rest, as before.
+   *
+   * Nor one under the network's floor (the owner, 2026-10-23): the box mixes as any box does, so it waits for the
+   * crowd a mix waits for. Under it, the box would sit with nobody else's to hide among, or only the boxes of whoever
+   * started the pool. The pool is read for it only where there's a floor, as every read is (split), so preprod's
+   * returns ask nothing more; a read that fails leaves the box out rather than the return.
    */
   async collateralPool(network: NetworkName, params: unknown): Promise<LovejoinPool | undefined> {
     if (!this.available(network)) return undefined;
     const pools = await this.readSet(network, true);
     const pool = pools.find((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
     if (!pool || this.usableNow(network, pool, params)) return undefined;
+    if ((NETWORKS[network].lovejoin?.poolFloor ?? 0) > 0) {
+      const others = await this.split(network, undefined, undefined, pool).then(
+        (s) => s.others.length,
+        () => 0,
+      );
+      if (this.floorShort(network, others)) return undefined;
+    }
     return pool;
   }
 

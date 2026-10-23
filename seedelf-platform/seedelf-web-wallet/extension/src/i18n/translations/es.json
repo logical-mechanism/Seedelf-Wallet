@@ -2083,7 +2083,7 @@
   "settings.lovejoin.returns": "Traer las sesiones privadas de vuelta a través de Lovejoin",
   "settings.lovejoin.returnsOn": "Cada intercambio y cada devolución pueden volver directamente, si así lo eliges.",
   "settings.lovejoin.collateral": "Al traer de vuelta una sesión, poner su colateral de 5 ₳ en Lovejoin",
-  "settings.lovejoin.collateralOn": "Al traer de vuelta una sesión, su colateral de 5 ₳ pasa a ser una caja del pool de cajas de 5 ₳ de Lovejoin, si ese pool existe; si no, vuelve con el resto. La caja vuelve a tu saldo privado cuando la mezcla de otra persona la mueva.",
+  "settings.lovejoin.collateralOn": "Al traer de vuelta una sesión, su colateral de 5 ₳ pasa a ser una caja del pool de cajas de 5 ₳ de Lovejoin, si ese pool existe y tiene suficientes cajas de otras personas; si no, vuelve con el resto. La caja vuelve a tu saldo privado cuando la mezcla de otra persona la mueva.",
   "settings.lovejoin.privacy.collateralOff": "Con esta opción desactivada, el colateral de 5 ₳ vuelve con el resto del dinero de la sesión, y cualquiera puede vincularlo con la sesión, igual que ese dinero.",
   "settings.lovejoin.stateOff": "Desactivado: el dinero de intercambios y sitios vuelve directamente",
   "settings.lovejoin.stateOn_many": "Activado: el dinero de intercambios y sitios vuelve mezclado, {{count}} oleadas de profundidad",

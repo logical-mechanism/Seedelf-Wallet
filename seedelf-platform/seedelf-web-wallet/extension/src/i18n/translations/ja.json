@@ -1827,7 +1827,7 @@
   "settings.lovejoin.returns": "プライベートセッションを Lovejoin 経由で戻す",
   "settings.lovejoin.returnsOn": "スワップや返却ごとに、直接戻すことも選べます。",
   "settings.lovejoin.collateral": "セッションを戻すときに、5 ₳ のコラテラルを Lovejoin に入れる",
-  "settings.lovejoin.collateralOn": "セッションを戻すとき、Lovejoin に 5 ₳ ボックスのプールがあれば、そのセッションの 5 ₳ のコラテラルはそこでボックス 1 つになり、ほかの人のミックスがそのボックスを動かしたら、プライベート残高に自動で戻ります。プールがなければ、コラテラルは残りのお金と一緒に戻ります。",
+  "settings.lovejoin.collateralOn": "セッションを戻すとき、Lovejoin に 5 ₳ ボックスのプールがあり、ほかの人のボックスが十分にあれば、そのセッションの 5 ₳ のコラテラルはそこでボックス 1 つになり、ほかの人のミックスがそのボックスを動かしたら、プライベート残高に自動で戻ります。そうでなければ、コラテラルは残りのお金と一緒に戻ります。",
   "settings.lovejoin.privacy.collateralOff": "オフのときは、5 ₳ のコラテラルはセッションの残りのお金と一緒に戻り、そのお金と同じく、誰でもコラテラルをセッションと結び付けられます。",
   "settings.lovejoin.stateOff": "オフ: スワップやサイトからのお金はそのまま戻ります",
   "settings.lovejoin.stateOn_other": "オン: スワップやサイトからのお金はミックスされて戻ります（深さ {{count}} 段）",

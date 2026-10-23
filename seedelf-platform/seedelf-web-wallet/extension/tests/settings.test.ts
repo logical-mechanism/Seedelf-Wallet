@@ -222,7 +222,7 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(button(on)).toContain('aria-checked="true"');
     expect(button(on)).not.toContain("disabled");
     expect(text(on)).toContain("Put a session's 5 ₳ collateral into Lovejoin as it's brought back");
-    expect(text(on)).toContain("if that pool exists; if not, it comes back with the rest");
+    expect(text(on)).toContain("if that pool exists and holds enough other people's boxes; if not, it comes back with the rest");
     expect(text(render({ lovejoinCollateral: false }))).toContain("anyone can tie it to the session, as they can that money");
     expect(button(render({ lovejoinReturns: false }))).toContain('disabled=""');
   });

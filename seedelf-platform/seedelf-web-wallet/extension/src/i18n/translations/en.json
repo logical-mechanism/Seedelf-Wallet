@@ -1955,7 +1955,7 @@
   "settings.lovejoin.returns": "Bring private sessions back through Lovejoin",
   "settings.lovejoin.returnsOn": "Each swap and return can still come back directly, if you choose.",
   "settings.lovejoin.collateral": "Put a session's 5 ₳ collateral into Lovejoin as it's brought back",
-  "settings.lovejoin.collateralOn": "When a session is brought back, its 5 ₳ collateral becomes a box in Lovejoin's pool of 5 ₳ boxes, if that pool exists; if not, it comes back with the rest. The box comes back once someone else's mix moves it.",
+  "settings.lovejoin.collateralOn": "When a session is brought back, its 5 ₳ collateral becomes a box in Lovejoin's pool of 5 ₳ boxes, if that pool exists and holds enough other people's boxes; if not, it comes back with the rest. The box comes back once someone else's mix moves it.",
   "settings.lovejoin.privacy.collateralOff": "Off, the 5 ₳ collateral comes back with the rest of the session's money, and anyone can tie it to the session, as they can that money.",
   "settings.lovejoin.stateOff": "Off: money from swaps and sites returns directly",
   "settings.lovejoin.stateOn_one": "On: money from swaps and sites returns mixed, {{count}} wave deep",
