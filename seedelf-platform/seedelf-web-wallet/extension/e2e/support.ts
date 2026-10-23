@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { test as base, chromium, expect, type BrowserContext, type Locator, type Page, type Request } from "@playwright/test";
 
-import { NETWORKS, type NetworkName } from "../src/networks";
+import { epochAt, NETWORKS, type NetworkName } from "../src/networks";
 import { DAPP_ORIGINS } from "../src/shared/dapp";
 import { LOCAL_NETWORK } from "../src/shared/preferences";
 import { UI_PORT } from "../src/shared/rpc";
@@ -108,7 +108,18 @@ const RECORDED_KEYS = new Set<string>(
   koiosPreprod.accounts[activityPreprod.stake].account_utxos.flatMap((u: { payment_cred: string | null }) => u.payment_cred ?? []),
 );
 export const stakingPreprod = fixture("staking-preprod.json");
-export const governancePreprod = fixture("governance.json").proposal_list.preprod;
+/**
+ * The recorded governance actions as they stood the day they were recorded, moved on to today's epoch: whether one is
+ * open is read against the clock (Governance's `epochAt`), so as recorded they closed for good as time passed (1.6.0's
+ * PR, 2026-10-23: preprod's epoch 321 closed the action the vote test opens).
+ */
+const governance = fixture("governance.json");
+const governanceShift = epochAt("preprod", Date.now()) - epochAt("preprod", Date.parse(`${governance.recorded}T12:00:00Z`));
+export const governancePreprod = governance.proposal_list.preprod.map((p: Record<string, unknown>) =>
+  Object.fromEntries(
+    Object.entries(p).map(([k, v]) => [k, (k === "expiration" || k.endsWith("_epoch")) && typeof v === "number" ? v + governanceShift : v]),
+  ),
+);
 export const minswapEstimate = fixture("minswap-estimate-preprod.json");
 /** Session 0 of the 12-word phrase and its UTxO (wasm/tests/session_test.rs). */
 export const sessionSwap = fixture("session-swap.json");
