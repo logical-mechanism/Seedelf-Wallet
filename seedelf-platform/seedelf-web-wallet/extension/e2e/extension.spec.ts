@@ -15,6 +15,7 @@ import {
   addTokens,
   appUrl,
   askWorker,
+  BUILD_FAILED,
   cardanoTab,
   dist,
   expect,
@@ -2813,8 +2814,26 @@ test("a private swap: Minswap's quote, a one-time account funded, and then it ru
   await expect(timeline.locator('[data-state="paused"]')).toHaveCount(1);
   await snap(page, "swap-retry");
 
-  // Try now: the order, from a fresh quote, for at least what was approved, signed by the session's key alone.
+  // Then a swap Minswap built and couldn't run, on its side: plain words, then Minswap's own, which wrap; the
+  // transaction it came with only under Details, to copy for a report, never on the line (2026-10-23).
   swaps.limited = false;
+  swaps.buildFails = true;
+  await retry.getByRole("button", { name: "Try now" }).click();
+  await expect(retry).toContainText("The swap Minswap built failed when Minswap ran it, on its side. Nothing was signed.");
+  await expect(retry.locator(".timeline__error")).toHaveText(`Minswap refused it (500): ${BUILD_FAILED}`);
+  await expect(retry.locator("p", { hasText: "RawTx" })).toHaveCount(0);
+  const cbor = retry.getByTestId("session-retry-cbor");
+  await expect(cbor).toBeHidden();
+  await retry.getByText("Details", { exact: true }).click();
+  await expect(cbor).toHaveText(swaps.swapCbor);
+  await expect(retry.getByRole("button", { name: "Copy the transaction's CBOR" })).toBeVisible();
+  // Open, it's no wider than the line it's on.
+  expect(await retry.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await snap(page, "swap-build-failed");
+  expect(koios.submitted).toHaveLength(0);
+
+  // Try now: the order, from a fresh quote, for at least what was approved, signed by the session's key alone.
+  swaps.buildFails = false;
   await retry.getByRole("button", { name: "Try now" }).click();
   await expect(page.getByTestId("session-now")).toContainText("The order is on its way");
   expect(swaps.calls.find((c) => c.path === "build-tx")?.body).toMatchObject({

@@ -1555,6 +1555,38 @@ describe("a swap that runs itself", () => {
     expect(view.txs.map((x) => x.kind)).toEqual(["out", "swap"]);
   });
 
+  it("records a build Minswap couldn't run by its code, with the transaction it came with beside its words", async () => {
+    const t = await unlocked();
+    const sessions = signing(t);
+    await started(sessions);
+    funded(t);
+    const real = t.minswap.fetch;
+    // Minswap's 500 for a swap whose script failed when it ran it: its words, then the whole transaction, as hex
+    // (a Danogo pool's on preprod, 2026-10-23).
+    const why = "Error evaluating tx: Error: failed script execution Withdraw[0] the validator crashed / exited prematurely";
+    t.minswap.fetch = async (url, init) =>
+      url.endsWith("/build-tx")
+        ? Response.json({ message: `${why} | RawTx: ${t.minswap.swapCbor}` }, { status: 500 })
+        : real(url, init);
+    const sent = t.koios.submitted.length;
+    let view = await sessions.advance("preprod", 0);
+    expect(view.auto!.retry).toEqual({
+      at: t.clock.now + 30_000,
+      error: `Minswap refused it (500): ${why}`,
+      reason: "minswap-build-failed",
+      cbor: t.minswap.swapCbor,
+    });
+    // Nothing was signed, so nothing went out.
+    expect(t.koios.submitted).toHaveLength(sent);
+
+    // The next failure's words replace it, and the transaction goes with them.
+    t.minswap.fetch = async (url, init) => (url.endsWith("/estimate") ? new Response("", { status: 429 }) : real(url, init));
+    t.clock.now += 30_000;
+    view = await sessions.advance("preprod", 0);
+    expect(view.auto!.retry).toMatchObject({ reason: "minswap-rate-limited" });
+    expect(view.auto!.retry!.cbor).toBeUndefined();
+  });
+
   describe("in the user's language, which the worker speaks too", () => {
     afterEach(async () => {
       await i18n.changeLanguage("en");

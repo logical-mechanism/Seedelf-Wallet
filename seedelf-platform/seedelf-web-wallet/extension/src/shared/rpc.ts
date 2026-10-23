@@ -1656,10 +1656,11 @@ export type SessionPause =
 
 /**
  * Why a swap's step failed, as a code the page words (Swaps.tsx): Minswap or
- * Koios asked the wallet to slow down, or didn't answer, or Minswap hasn't
- * seen the funding yet. `other` for anything else, whose own words the page
- * shows. The worker tells it from what failed (sessions.ts retryReasonOf),
- * never from the message, which is in the language the worker had then.
+ * Koios asked the wallet to slow down, or didn't answer, Minswap hasn't seen
+ * the funding yet, or the swap Minswap built failed when it ran it. `other`
+ * for anything else, whose own words the page shows. The worker tells it
+ * from what failed (sessions.ts retryReasonOf), never from the message,
+ * which is in the language the worker had then.
  */
 export type RetryReason =
   | "minswap-rate-limited"
@@ -1667,6 +1668,7 @@ export type RetryReason =
   | "minswap-silent"
   | "koios-silent"
   | "funding-unseen"
+  | "minswap-build-failed"
   | "other";
 
 /** A swap that runs itself, after one approval: where it's at, for its timeline. */
@@ -1678,8 +1680,10 @@ export interface SessionAuto {
    * The last step failed (Koios or Minswap didn't answer): it's tried again
    * at `at`. `reason`: why, as a code; none on a retry recorded before the
    * codes, whose `error` is English, the one language the worker wrote then.
+   * `cbor`: the transaction a build Minswap couldn't run came with, never
+   * signed, for a report (under Details, never in `error`).
    */
-  retry?: { at: number; error: string; reason?: RetryReason };
+  retry?: { at: number; error: string; reason?: RetryReason; cbor?: string };
   /**
    * The user pressed Stop: any order is cancelled, then everything comes
    * back. A swap against a DEX's pools that went out first has no order to

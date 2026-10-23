@@ -45,6 +45,7 @@ import type {
 import { call, isStale } from "../background";
 import { AmountField } from "../components/AmountField";
 import { Callout } from "../components/Callout";
+import { CopyButton } from "../components/CopyButton";
 import { GivemeNote } from "../components/GivemeNote";
 import { ExplorerLink, ExplorerNote } from "../components/ExplorerLink";
 import { HandleWarning } from "../components/HandleWarning";
@@ -2910,6 +2911,7 @@ const RETRY_REASONS: Record<Exclude<NonNullable<Retry["reason"]>, "other">, I18n
   "minswap-silent": "swaps.retry.minswapSilent",
   "koios-silent": "swaps.retry.koiosSilent",
   "funding-unseen": "swaps.retry.fundingUnseen",
+  "minswap-build-failed": "swaps.retry.minswapBuildFailed",
 };
 
 /**
@@ -3099,6 +3101,19 @@ function Timeline({ s, busy, onRetry }: { s: SessionView; busy: boolean; onRetry
             </button>
           </p>
           {retryReason(auto.retry) !== auto.retry.error && <p className="timeline__error">{auto.retry.error}</p>}
+          {/* What Minswap built and couldn't run: a few KB of hex, out of the way and ready to copy for a report. */}
+          {auto.retry.cbor && (
+            <details className="disclosure">
+              <summary>{tr("common.details")}</summary>
+              <div className="field-row">
+                <span className="note">{tr("swaps.retry.cbor", { bytes: auto.retry.cbor.length / 2 })}</span>
+                <CopyButton value={auto.retry.cbor} label={tr("tx.copyCbor")} />
+              </div>
+              <pre className="dapp-message" data-testid="session-retry-cbor">
+                {auto.retry.cbor}
+              </pre>
+            </details>
+          )}
         </div>
       ) : (
         // Paused, the callout above says why and what to do.

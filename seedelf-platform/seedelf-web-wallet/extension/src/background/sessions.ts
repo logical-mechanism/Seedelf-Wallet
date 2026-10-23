@@ -253,6 +253,7 @@ const MINSWAP_REASON: Record<MinswapTrouble, RetryReason> = {
   "rate-limited": "minswap-rate-limited",
   silent: "minswap-silent",
   "funding-unseen": "funding-unseen",
+  "build-failed": "minswap-build-failed",
 };
 const KOIOS_REASON: Record<KoiosTrouble, RetryReason> = { "rate-limited": "koios-rate-limited", silent: "koios-silent" };
 
@@ -367,8 +368,11 @@ interface AutoRecord {
    */
   approved: { minAmountOut: string; fund: SwapQuote["fund"]; aggregatorFee?: string; againstPools?: boolean };
   paused?: SessionPause;
-  /** The last failure, and why as a code (retryReasonOf): none on one recorded before the codes, whose words are English. */
-  retry?: { at: number; error: string; reason?: RetryReason; tries: number };
+  /**
+   * The last failure, and why as a code (retryReasonOf): none on one recorded before the codes, whose words are
+   * English. `cbor`: what a build Minswap couldn't run came with (MinswapError), the next failure's replacing it.
+   */
+  retry?: { at: number; error: string; reason?: RetryReason; tries: number; cbor?: string };
   /** When the user pressed Stop. */
   stopping?: number;
   /** When the runner saw the order filled (`partly`: part of it, the rest refunded). */
@@ -3136,7 +3140,8 @@ export class SessionService {
         } else {
           const tries = (auto.retry?.tries ?? 0) + 1;
           const error = e instanceof Error ? e.message : String(e);
-          auto.retry = { at: at + retryAfterMs(tries), error, reason: retryReasonOf(e), tries };
+          const cbor = e instanceof MinswapError ? e.cbor : undefined;
+          auto.retry = { at: at + retryAfterMs(tries), error, reason: retryReasonOf(e), tries, ...(cbor ? { cbor } : {}) };
         }
       });
     }
@@ -5588,7 +5593,14 @@ function autoView(auto: AutoRecord, txs: RecordedTx[], stage: SessionView["stage
     ...(placedMinOut ? { placedMinOut } : {}),
     ...(auto.paused ? { paused: auto.paused } : {}),
     ...(auto.retry
-      ? { retry: { at: auto.retry.at, error: auto.retry.error, ...(auto.retry.reason ? { reason: auto.retry.reason } : {}) } }
+      ? {
+          retry: {
+            at: auto.retry.at,
+            error: auto.retry.error,
+            ...(auto.retry.reason ? { reason: auto.retry.reason } : {}),
+            ...(auto.retry.cbor ? { cbor: auto.retry.cbor } : {}),
+          },
+        }
       : {}),
     ...(auto.unlockWait !== undefined ? { waitsUntil: auto.unlockWait } : {}),
     ...(auto.direct !== undefined ? { direct: auto.direct } : {}),
