@@ -3039,8 +3039,15 @@ output.swap-card__amount {
   color: var(--warn);
 }
 
+/* An error shown in its own words can hold a run of hex or JSON with no space: it wraps, never runs off. */
 .timeline__now--retry p {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* What Minswap built and couldn't run, under Details: the transaction's text, not the warning's. */
+.timeline__now--retry .dapp-message {
+  color: var(--text-2);
 }
 
 .timeline__error {

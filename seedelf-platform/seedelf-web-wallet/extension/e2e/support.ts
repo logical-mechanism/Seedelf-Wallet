@@ -274,6 +274,9 @@ export interface KoiosFake {
   strays: string[];
 }
 
+/** Minswap's words for a swap whose script failed when it ran it (a Danogo pool's on preprod, 2026-10-23). */
+export const BUILD_FAILED = "Error evaluating tx: Error: failed script execution Withdraw[0] the validator crashed / exited prematurely";
+
 /** Minswap's aggregator, for swaps in private sessions. */
 export interface MinswapFake {
   calls: Array<{ path: string; body: any }>;
@@ -284,6 +287,8 @@ export interface MinswapFake {
   orders: unknown[];
   /** While set, quotes and builds answer 429, as Minswap's rate limit does. */
   limited?: boolean;
+  /** While set, builds answer 500: the swap failed when Minswap ran it, its words then its transaction's hex. */
+  buildFails?: boolean;
   /** Requests a page made instead of the worker (`byWorker`): there must be none. */
   strays: string[];
 }
@@ -515,6 +520,10 @@ async function fakeMinswap(context: BrowserContext, swaps: MinswapFake) {
     }
     if (swaps.limited && (path === "estimate" || path === "build-tx")) {
       return route.fulfill({ status: 429, body: "Rate limit exceeded, retry in 50 seconds" });
+    }
+    if (swaps.buildFails && path === "build-tx") {
+      const message = `${BUILD_FAILED} | RawTx: ${swaps.swapCbor}`;
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message }) });
     }
     if (path === "estimate") return answer(asAsked(swaps.estimate, body));
     if (path === "build-tx") return answer({ cbor: swaps.swapCbor });

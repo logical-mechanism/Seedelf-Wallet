@@ -348,6 +348,7 @@ describe("a swap's retry line", () => {
       "minswap-silent": "Minswap が応答しませんでした。",
       "koios-silent": "サーバーが応答しませんでした。",
       "funding-unseen": "Minswap はまだ資金提供を認識していません。",
+      "minswap-build-failed": "Minswap が作成したスワップは、Minswap 側で実行した際に失敗しました。何も署名されていません。",
     };
     for (const [reason, said] of Object.entries(words)) {
       expect(retryReason({ at, error: "何かが起きました。", reason: reason as RetryReason })).toBe(said);

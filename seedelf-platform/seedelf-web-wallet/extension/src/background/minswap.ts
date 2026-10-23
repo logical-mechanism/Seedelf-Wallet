@@ -77,16 +77,19 @@ export interface SwapToken {
 
 /**
  * What went wrong at Minswap, for a page that says it in a few words (a
- * swap's retry line): it asked the wallet to slow down, didn't answer, or
- * hasn't seen the funding yet. Told where Minswap's answer is read, so the
- * page never reads the message, which is in the user's language.
+ * swap's retry line): it asked the wallet to slow down, didn't answer,
+ * hasn't seen the funding yet, or built a swap that failed when it ran it.
+ * Told where Minswap's answer is read, so the page never reads the message,
+ * which is in the user's language.
  */
-export type MinswapTrouble = "rate-limited" | "silent" | "funding-unseen";
+export type MinswapTrouble = "rate-limited" | "silent" | "funding-unseen" | "build-failed";
 
 export class MinswapError extends Error {
   constructor(
     message: string,
     readonly trouble?: MinswapTrouble,
+    /** The transaction a build that failed came with, as hex (RAW_TX): never signed, for a report. */
+    readonly cbor?: string,
   ) {
     super(message);
   }
@@ -97,6 +100,21 @@ export class MinswapError extends Error {
  * doesn't see the money to build from yet: a funding not on its backend yet.
  */
 const FUNDING_UNSEEN = /no wallet utxos|insufficient balance/i;
+
+/**
+ * Minswap's own words for a build whose transaction failed when Minswap ran
+ * it before answering: a DEX's script or the ledger refused it on Minswap's
+ * side (a Danogo pool's script on preprod, 2026-10-23), before the wallet had
+ * anything to sign.
+ */
+const BUILD_FAILED = /error evaluating tx/i;
+
+/**
+ * How such a refusal ends: the whole transaction Minswap built, a few KB of
+ * hex that ran off a swap's retry line as one word. It's cut from the words
+ * and kept apart (`MinswapError.cbor`).
+ */
+const RAW_TX = /\s*\|\s*RawTx:\s*([0-9a-f]+)\.?\s*$/i;
 
 /**
  * DEXes that swap straight against their pools in the same transaction,
@@ -368,18 +386,32 @@ export class Minswap {
     if (response.ok) return (await response.json()) as T;
     const text = await response.text().catch(() => "");
     if (response.status === 429) throw new MinswapError(t("minswap.rateLimited"), "rate-limited");
-    let message = text.slice(0, 300);
-    try {
-      const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
-      message = String(parsed.message ?? parsed.error ?? message);
-    } catch {
-      // Not JSON: keep the text.
-    }
+    const { why, cbor } = refusalOf(text);
     throw new MinswapError(
-      t("minswap.refused", { status: response.status, why: message }),
-      FUNDING_UNSEEN.test(message) ? "funding-unseen" : undefined,
+      t("minswap.refused", { status: response.status, why }),
+      FUNDING_UNSEEN.test(why) ? "funding-unseen" : BUILD_FAILED.test(why) ? "build-failed" : undefined,
+      cbor,
     );
   }
+}
+
+/**
+ * Minswap's words for a refusal, a JSON answer's `message` or `error` or the
+ * first 300 characters of any other, and the transaction a build that failed
+ * ends with, apart (RAW_TX).
+ */
+function refusalOf(text: string): { why: string; cbor?: string } {
+  let said: string | undefined;
+  try {
+    const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
+    if (parsed.message != null || parsed.error != null) said = String(parsed.message ?? parsed.error);
+  } catch {
+    // Not JSON: its text.
+  }
+  const all = said ?? text;
+  const raw = RAW_TX.exec(all);
+  const words = raw ? all.slice(0, raw.index) : all;
+  return { why: said === undefined ? words.slice(0, 300) : words, ...(raw ? { cbor: raw[1] } : {}) };
 }
 
 /**
