@@ -743,7 +743,8 @@ interface ChainCall {
   owner: string;
   index: number;
   rows: KoiosUtxo[];
-  collateral: KoiosUtxo;
+  /** What its mixes put up: none only for a Bootstrap's (depth 0), whose deposit runs no script. */
+  collateral?: KoiosUtxo;
   params: unknown;
   merge: KoiosUtxo[];
   depth: number;
@@ -756,6 +757,11 @@ interface ChainCall {
   /** Where the return mixes the session's collateral, and whether the session was funded for it (ChainWay's). */
   collateralPool?: CollateralPool;
   collateralReserve?: boolean;
+}
+
+/** A session's collateral as a plan's or a chain's request names it: none for a Bootstrap's, which has none. */
+function outRefOf(collateral: KoiosUtxo | undefined) {
+  return collateral ? { collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index } } : {};
 }
 
 /**
@@ -2701,7 +2707,7 @@ export class LovejoinService {
     network: NetworkName,
     index: number,
     rows: KoiosUtxo[],
-    collateral: KoiosUtxo,
+    collateral: KoiosUtxo | undefined,
     again = false,
     fixed?: LovejoinDepth | 0,
     pool?: LovejoinPool,
@@ -2715,7 +2721,7 @@ export class LovejoinService {
       network,
       index,
       utxos: rows,
-      collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index },
+      ...outRefOf(collateral),
       depth,
       again,
       ...(width !== 3 ? { width } : {}),
@@ -2954,7 +2960,8 @@ export class LovejoinService {
     pool?: string,
     way: ChainWay = {},
   ): Promise<LovejoinChain | undefined> {
-    if (!this.available(network) || !collateral) return undefined;
+    // Its mixes put the collateral up: only a Bootstrap's deposit alone (depth 0) goes without (the owner, 2026-10-23).
+    if (!this.available(network) || (!collateral && (fixed !== 0 || again))) return undefined;
     // The pool its mix session was funded for (chunk 34's 34d); a return's ADA goes to the classic pool.
     const into = await this.poolNamed(network, pool);
     // Checked at its review, that pool may take no new box by the time the funding lands and this builds (an earlier
@@ -3082,7 +3089,7 @@ export class LovejoinService {
         params,
         index,
         utxos: rows,
-        collateral: { txHash: collateral.tx_hash, txIndex: collateral.tx_index },
+        ...outRefOf(collateral),
         pool: this.real(split)
           .filter((u) => !left.has(outpoint(u)))
           .sort((a, b) => first(a) - first(b)),
@@ -3281,7 +3288,7 @@ export class LovejoinService {
           params: c.params,
           index: c.index,
           utxos: c.rows,
-          collateral: { txHash: c.collateral.tx_hash, txIndex: c.collateral.tx_index },
+          ...outRefOf(c.collateral),
           pool: [],
           depth,
           merge: c.merge,
@@ -3384,7 +3391,7 @@ export class LovejoinService {
       network,
       index: c.index,
       utxos: c.rows,
-      collateral: { txHash: c.collateral.tx_hash, txIndex: c.collateral.tx_index },
+      ...outRefOf(c.collateral),
       depth: c.depth,
       again: false,
       own: c.own,

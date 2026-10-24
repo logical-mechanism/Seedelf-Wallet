@@ -149,7 +149,7 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
                 network: "preprod".into(),
                 index: 0,
                 utxos: holdings(),
-                collateral: collateral(),
+                collateral: Some(collateral()),
                 depth,
                 again: false,
                 collateral_reserve: false,
@@ -179,7 +179,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: None,
@@ -257,7 +257,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -309,6 +309,89 @@ fn a_chains_return_merges_into_the_funding_change() {
     assert!(fee > 0);
 }
 
+/// A Bootstrap's session (depth 0) is funded with no collateral (the owner,
+/// 2026-10-23): its deposit runs no script, and its return is a sweep, never
+/// merged, since a merge needs one to put up. A chain that mixes still can't go
+/// without one.
+#[test]
+fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(4321u64);
+    let at = session();
+    let funded = vec![row(1, 0, &at, 30_000_000, &[])];
+    let plan = lovejoin::plan(
+        &accounts(),
+        PlanRequest {
+            network: "preprod".into(),
+            index: 0,
+            utxos: funded.clone(),
+            collateral: None,
+            depth: 0,
+            again: false,
+            collateral_reserve: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.spare, "30000000");
+    assert!(plan.boxes >= 2);
+    let request = |depth| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: funded.clone(),
+        collateral: None,
+        pool: pool(&protocol),
+        depth,
+        boxes: Some(2),
+        merge: vec![funding_change(sk)],
+        again: false,
+        own: vec![hex::encode([1u8; 32])],
+        collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
+    };
+    let result = lovejoin::chain(&accounts(), sk, request(0)).unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["deposit", "back"]);
+    assert_eq!(result.boxes, 2);
+    assert_eq!(result.merged, 0, "swept: nothing to put up for a merge");
+    let bytes: Vec<Vec<u8>> = result
+        .txs
+        .iter()
+        .map(|t| hex::decode(&t.tx_cbor).unwrap())
+        .collect();
+    let txs: Vec<MultiEraTx> = bytes
+        .iter()
+        .map(|b| MultiEraTx::decode(b).unwrap())
+        .collect();
+    for (tx, out) in txs.iter().zip(&result.txs) {
+        assert!(tx.collateral().is_empty(), "{} puts up nothing", out.kind);
+        assert!(tx.redeemers().is_empty(), "{} runs no script", out.kind);
+    }
+    // The deposit's change stays at the session's own address; the return leaves the
+    // funding's change where it is and pays the wallet contract.
+    let change: Vec<String> = txs[0]
+        .outputs()
+        .iter()
+        .map(|o| Address::from_bytes(&o.address().unwrap().to_vec()).unwrap())
+        .filter(|a| !a.has_script())
+        .map(|a| a.to_bech32().unwrap())
+        .collect();
+    assert_eq!(change, vec![at]);
+    assert!(!spends(&txs[1], [9; 32], 2));
+    for output in txs[1].outputs() {
+        let address = Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
+        assert!(address.has_script(), "into the wallet contract");
+    }
+    let refused = lovejoin::chain(&accounts(), sk, request(1)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("needs the session's collateral"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn a_chains_return_leaves_out_what_would_overflow_a_token() {
     let protocol = Protocol::of(true).unwrap();
@@ -335,7 +418,7 @@ fn a_chains_return_leaves_out_what_would_overflow_a_token() {
                 params: params(),
                 index: 0,
                 utxos: utxos.clone(),
-                collateral: collateral(),
+                collateral: Some(collateral()),
                 pool: pool(&protocol),
                 depth: 1,
                 boxes: Some(1),
@@ -393,7 +476,7 @@ fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
             params: params(),
             index: 0,
             utxos,
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -442,7 +525,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -563,7 +646,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
                 row(1, 0, &at, 8_000_000, &[]),
                 row(2, 1, &at, 5_000_000, &[]),
             ],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 2,
             boxes: None,
@@ -832,7 +915,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             network: "preprod".into(),
             index: 0,
             utxos: utxos.clone(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             depth: 1,
             again: true,
             collateral_reserve: false,
@@ -850,7 +933,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             params: params(),
             index: 0,
             utxos,
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: every,
             depth: 1,
             boxes: Some(2),
@@ -923,7 +1006,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             params: params(),
             index: 0,
             utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(2),
@@ -1162,7 +1245,7 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
         params: params(),
         index: 0,
         utxos,
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool,
         depth: 1,
         boxes: Some(1),
@@ -1443,7 +1526,7 @@ fn a_chains_collateral_is_mixed_once_on_its_way_into_the_5_ada_pool() {
         params: params(),
         index: 0,
         utxos: holdings(),
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool: pool(&protocol),
         depth: 1,
         boxes: Some(1),
@@ -1621,7 +1704,7 @@ fn the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built() {
             params: params(),
             index: 0,
             utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -1654,7 +1737,7 @@ fn the_collateral_never_draws_a_box_its_chain_drew() {
         params: params(),
         index: 0,
         utxos: holdings(),
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool: others.clone(),
         depth: 1,
         boxes: Some(1),
@@ -1717,7 +1800,7 @@ fn a_session_funded_for_its_collateral_counts_its_boxes_after_the_reserve() {
         params: params(),
         index: 0,
         utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool: pool(&protocol),
         depth: 1,
         boxes: None,
@@ -1743,7 +1826,7 @@ fn a_session_funded_for_its_collateral_counts_its_boxes_after_the_reserve() {
                     row(1, 0, &at, lovelace, &[]),
                     row(2, 1, &at, 5_000_000, &[]),
                 ],
-                collateral: collateral(),
+                collateral: Some(collateral()),
                 depth: 1,
                 again: false,
                 collateral_reserve: reserved,

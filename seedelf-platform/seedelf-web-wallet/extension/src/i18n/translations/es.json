@@ -1235,7 +1235,7 @@
   "lovejoin.bootstrap.button_one": "Arrancar el pool con {{count}} caja",
   "lovejoin.bootstrap.button_many": "Arrancar el pool con {{count}} cajas",
   "lovejoin.bootstrap.button_other": "Arrancar el pool con {{count}} cajas",
-  "lovejoin.bootstrap.cantAfford": "Tu saldo privado tiene {{held}} ₳: no alcanza para tantas, sumando el colateral y la comisión.",
+  "lovejoin.bootstrap.cantAfford": "Tu saldo privado tiene {{held}} ₳: no alcanza para tantas, sumando la comisión.",
   "lovejoin.bootstrap.held_many": "{{boxes}} tuyas están retenidas en el pool por un arranque: no vuelven solas.",
   "lovejoin.bootstrap.held_one": "{{boxes}} tuya está retenida en el pool por un arranque: no vuelve sola.",
   "lovejoin.bootstrap.held_other": "{{boxes}} tuyas están retenidas en el pool por un arranque: no vuelven solas.",

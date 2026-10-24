@@ -3128,8 +3128,9 @@ export function tokenBoxes(tokens: TokenAmount[] | undefined, token: TokenQuanti
  * - `most`: one deposit's (mostBootstrap), and from the private balance what its reserve pays for (`privateMost`, the
  *   worker's privateBootstrapMost) once known.
  * - `needed`: what the pool lacks of its floor, the form's default; `putting`: `asked` (or `needed`), 1 to `most`.
- * - `short`: the private balance holds too little for them: the boxes, the funding's 1.5 ₳ reserve, the one-time
- *   account's 5 ₳ collateral and the fee's room; or too little of the pool's token (`tokenShort`).
+ * - `short`: the private balance holds too little for them: the boxes, the funding's 1.5 ₳ reserve and the fee's
+ *   room, no collateral (a deposit alone runs no script; the owner, 2026-10-23); or too little of the pool's token
+ *   (`tokenShort`).
  */
 export function bootstrapLimits(
   pool: Pick<ShownPool, "id" | "box"> & Partial<Pick<ShownPool, "floor" | "others">>,
@@ -3146,7 +3147,7 @@ export function bootstrapLimits(
   const putting = Math.min(Math.max(asked ?? needed, 1), most);
   const token = pool.box.token;
   const tokenShort = source === "private" && !!token && tokenBoxes(seedelf.tokens, token) < putting;
-  const costs = BigInt(putting) * BigInt(pool.box.lovelace) + BOOTSTRAP_RESERVE + COLLATERAL + FEE_ROOM;
+  const costs = BigInt(putting) * BigInt(pool.box.lovelace) + BOOTSTRAP_RESERVE + FEE_ROOM;
   return { most, needed, putting, short: source === "private" && (costs > BigInt(seedelf.lovelace) || tokenShort), tokenShort };
 }
 
@@ -3269,7 +3270,10 @@ export function PrivateReview({
           label={tr(mix.bootstrap ? "lovejoin.review.forBoxesBootstrap" : "lovejoin.review.forBoxes")}
           value={withToken(network, `${formatAda(lessReserve(boxesPart!.lovelace, summary))}\u00a0₳`, boxesPart!.tokens[0])}
         />
-        <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        {/* A Bootstrap's funding pays no collateral: its deposit alone runs no script (the owner, 2026-10-23). */}
+        {collateral && (
+          <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })} />
+        )}
         <CollateralReserveRow reserve={summary.collateralReserve} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
         {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}

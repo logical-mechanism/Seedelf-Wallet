@@ -815,7 +815,9 @@ struct Holdings {
     /// together. Never a stranger's: what anyone else sent the session stays
     /// in `kept`, and comes back only if it pays its own way.
     tokens: Vec<(Holding, UtxoResponse)>,
-    collateral: UtxoResponse,
+    /// What its mixes put up. None for a Bootstrap's (depth 0), whose deposit
+    /// runs no script, so it was never funded one (the owner, 2026-10-23).
+    collateral: Option<UtxoResponse>,
     /// What comes back with the return: its token UTxOs, and any the
     /// evaluator can't take.
     kept: Vec<UtxoResponse>,
@@ -877,14 +879,26 @@ fn row_of(held: &Holding, address: &str) -> UtxoResponse {
     }
 }
 
+/// What a chain's mixes put up: the session's collateral, which a chain that
+/// mixes (`depth` above 0, or mixing `again`) can't go without; none for a
+/// Bootstrap's deposit alone, which runs no script.
+fn mixes_collateral(held: &Holdings, depth: u32, again: bool) -> Result<Option<Coin>> {
+    match &held.collateral {
+        Some(row) => Ok(Some(Coin::from_row(row)?)),
+        None if depth > 0 || again => bail!("A chain that mixes needs the session's collateral"),
+        None => Ok(None),
+    }
+}
+
 /// Session `index`'s UTxOs, split for its chain: `token` is a token pool's,
 /// whose UTxOs the session's own transactions (`own`) made go to its
-/// deposit. Without one, as before token pools.
+/// deposit. Without one, as before token pools. `collateral`: none for a
+/// session that has none (a Bootstrap's).
 fn holdings(
     accounts: &CardanoAccount,
     index: u32,
     utxos: &[UtxoResponse],
-    collateral: &OutRef,
+    collateral: Option<&OutRef>,
     token: Option<&lovejoin::BoxToken>,
     own: &[String],
 ) -> Result<Holdings> {
@@ -899,7 +913,7 @@ fn holdings_of(
     accounts: &CardanoAccount,
     index: u32,
     utxos: &[UtxoResponse],
-    collateral: &OutRef,
+    collateral: Option<&OutRef>,
     tokens_wanted: &[&lovejoin::BoxToken],
     own: &[String],
 ) -> Result<Holdings> {
@@ -919,7 +933,7 @@ fn holdings_of(
         let evaluable = seedelf_core::eval::refusal(row).is_none();
         // An ADA-only UTxO the evaluator can't take (a stranger's, carrying
         // a reference script) can't pay a mix: it comes back with the return.
-        if collateral.is(row) {
+        if collateral.is_some_and(|c| c.is(row)) {
             found = Some(row.clone());
         } else if row.asset_list.as_ref().is_none_or(|a| a.is_empty()) && evaluable {
             coins.push((Coin::from_row(row)?, row.clone()));
@@ -938,12 +952,23 @@ fn holdings_of(
             kept.push(row.clone());
         }
     }
-    let collateral = found.context("The session's collateral isn't among its UTxOs")?;
+    if collateral.is_some() && found.is_none() {
+        bail!("The session's collateral isn't among its UTxOs");
+    }
+    // Where change goes: the collateral's address, else one the session's own transactions paid (its funding),
+    // never first a stranger's, which may name the session's key under a stake key of its own.
+    let address = found
+        .as_ref()
+        .or_else(|| utxos.iter().find(|u| own.contains(&u.tx_hash)))
+        .or(utxos.first())
+        .context("Nothing is at the session's account")?
+        .address
+        .clone();
     Ok(Holdings {
-        address: collateral.address.clone(),
+        address,
         coins,
         tokens,
-        collateral,
+        collateral: found,
         kept,
     })
 }
@@ -955,7 +980,9 @@ pub struct PlanRequest {
     pub network: String,
     pub index: u32,
     pub utxos: Vec<UtxoResponse>,
-    pub collateral: OutRef,
+    /// None for a Bootstrap's session (depth 0), which has none.
+    #[serde(default)]
+    pub collateral: Option<OutRef>,
     pub depth: u32,
     /// Mixing the wallet's boxes again: no deposit, so no box to pay for.
     #[serde(default)]
@@ -1076,7 +1103,7 @@ pub fn plan_at(
         accounts,
         request.index,
         &request.utxos,
-        &request.collateral,
+        request.collateral.as_ref(),
         protocol.token.as_ref(),
         own,
     )?;
@@ -1216,7 +1243,7 @@ pub fn plan_across_pools(
         accounts,
         request.index,
         &request.utxos,
-        &request.collateral,
+        request.collateral.as_ref(),
         &wanted,
         &own_and_fills(own, across),
     )?;
@@ -1255,7 +1282,10 @@ pub struct ChainRequest {
     pub index: u32,
     /// Every UTxO at the session's account.
     pub utxos: Vec<UtxoResponse>,
-    pub collateral: OutRef,
+    /// What its mixes put up. None only for a Bootstrap's (depth 0), whose
+    /// deposit runs no script: its return is then a sweep, never merged.
+    #[serde(default)]
+    pub collateral: Option<OutRef>,
     /// The boxes at `mix_box` (Koios `credential_utxos`), minus any a sent
     /// transaction of ours already spends.
     pub pool: Vec<UtxoResponse>,
@@ -1442,7 +1472,7 @@ pub fn chain_at(
         accounts,
         request.index,
         &request.utxos,
-        &request.collateral,
+        request.collateral.as_ref(),
         protocol.token.as_ref(),
         &request.own,
     )?;
@@ -1457,7 +1487,7 @@ pub fn chain_at(
         .partition(|b| b.is_owned(&sk));
     let address = Address::from_bech32(&held.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
-    let collateral = Coin::from_row(&held.collateral)?;
+    let collateral = mixes_collateral(&held, request.depth, request.again)?;
 
     // The ADA-only UTxOs the chain doesn't spend: they come back with the return.
     let mut unused: Vec<UtxoResponse> = Vec::new();
@@ -1487,7 +1517,7 @@ pub fn chain_at(
         }
         let payer = lovejoin::Payer {
             fee,
-            collateral: Some(collateral),
+            collateral,
             address,
             signers: 1,
         };
@@ -1521,7 +1551,7 @@ pub fn chain_at(
             .collect::<Result<Vec<_>>>()?;
         let funding = lovejoin::Funding {
             coins: held.coins.iter().map(|(c, _)| c.clone()).collect(),
-            collateral: Some(collateral),
+            collateral,
             address,
             deposit_signers: 1,
             mix_signers: 1,
@@ -1584,7 +1614,7 @@ pub fn chain_across_pools(
         accounts,
         request.index,
         &request.utxos,
-        &request.collateral,
+        request.collateral.as_ref(),
         &wanted,
         &own_and_fills(&request.own, across),
     )?;
@@ -1637,7 +1667,7 @@ pub fn chain_across_pools(
         .collect();
     let funding = lovejoin::Funding {
         coins: held.coins.iter().map(|(c, _)| c.clone()).collect(),
-        collateral: Some(Coin::from_row(&held.collateral)?),
+        collateral: mixes_collateral(&held, request.depth, false)?,
         address,
         deposit_signers: 1,
         mix_signers: 1,
@@ -1719,9 +1749,9 @@ fn with_return(
     // What the return spends that isn't on chain yet: the chain's change (or
     // the tail's), and the deposit's token change.
     let token_change: Vec<_> = built.token_change.iter().map(|h| h.utxo.clone()).collect();
-    let tail = match &request.collateral_pool {
-        None => None,
-        Some(pool) => {
+    // A Bootstrap's session has no collateral to mix (`held.collateral` none).
+    let tail = match (&request.collateral_pool, &held.collateral) {
+        (Some(pool), Some(collateral)) => {
             let address = Address::from_bech32(&held.address)
                 .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
             let avoid = spent_by(built.txs.iter().map(|t| &t.tx))?;
@@ -1731,13 +1761,14 @@ fn with_return(
                 sk,
                 pool,
                 &request.collateral_boxes,
-                &held.collateral,
+                collateral,
                 vec![built.change.clone()],
                 &avoid,
                 &address,
             )
             .ok()
         }
+        _ => None,
     };
     let attempt = |tail: Option<&CollateralTail>| -> Result<_> {
         let mut rows = Vec::with_capacity(rest.len() + 2);
@@ -1755,9 +1786,15 @@ fn with_return(
             }
             None => {
                 rows.push(change.clone());
-                rows.push(held.collateral.clone());
                 unsent.push(built.change.utxo.clone());
-                &request.merge
+                match &held.collateral {
+                    Some(collateral) => {
+                        rows.push(collateral.clone());
+                        &request.merge
+                    }
+                    // None to put up for a merge: a sweep, which runs no script.
+                    None => &[],
+                }
             }
         };
         rows.extend(rest.iter().cloned());
@@ -1776,13 +1813,18 @@ fn with_return(
                     network_flag,
                     config: get_config(VARIANT, network_flag)?,
                 };
+                // Merged only with a collateral to put up (`merge` none without).
+                let collateral = held
+                    .collateral
+                    .as_ref()
+                    .context("A merged return needs the session's collateral")?;
                 let (signed, spend) = api::merged_return(
                     accounts,
                     sk,
                     &chain,
                     request.index,
                     &plan.taken,
-                    &held.collateral,
+                    collateral,
                     merge,
                     &unsent,
                 )?;

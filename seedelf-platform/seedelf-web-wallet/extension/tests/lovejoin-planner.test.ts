@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { txInputs } from "../src/background/cbor";
+import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import {
@@ -1482,21 +1482,33 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     expect(asked).not.toHaveBeenCalled();
   });
 
-  // The owner, 2026-10-23: a Bootstrap's chain is a deposit alone, which runs no script, so its collateral is never put
-  // up; it isn't mixed either, and comes back with the rest.
-  it("leaves a Bootstrap's collateral out of the 5 ₳ pool, and its funding pays nothing for a mix", async () => {
+  // The owner, 2026-10-23: a Bootstrap's chain is a deposit alone, which runs no script, so it's funded with no
+  // collateral at all, nothing is reserved for a collateral's mix, and it comes back through its deposit with none.
+  it("funds a Bootstrap with no collateral, and brings it back through its deposit with none put up", async () => {
     const { t, sessions } = await setUp();
     const reserve = loadTestWasm().lovejoinCollateralReserve();
-    expect((await sessions.mixOutBuild("preprod", 1)).collateralReserve).toBe(reserve);
-    expect((await sessions.mixOutBuild("preprod", 1, { bootstrap: true })).collateralReserve).toBeUndefined();
-    // A mix session's Bootstrap: its deposit alone, its boxes held in the classic pool until brought back by hand.
+    const mix = await sessions.mixOutBuild("preprod", 1);
+    expect(mix.payments.at(-1)!.lovelace).toBe("5000000");
+    expect(mix.collateralReserve).toBe(reserve);
+    const bootstrap = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
+    expect(bootstrap.payments).toHaveLength(1);
+    expect(bootstrap.collateralReserve).toBeUndefined();
+    // A mix session's Bootstrap, funded so: its ADA at the account, no 5 ₳.
     const book = (await t.store.get<{ next: number; sessions: Array<Record<string, unknown>> }>("sessions.preprod"))!;
     const { site: _site, ...session } = book.sessions[0]!;
     await t.store.set("sessions.preprod", { ...book, sessions: [{ ...session, mix: { boxes: 1, bootstrap: true } }] });
+    t.koios.addedToAccounts.splice(
+      t.koios.addedToAccounts.findIndex((u) => u.tx_hash === OUT && u.tx_index === 2),
+      1,
+    );
     const review = await sessions.backBuild("preprod", 0);
-    expect(review.lovejoin).toMatchObject({ bootstrap: true, depth: 0 });
+    expect(review.lovejoin).toMatchObject({ bootstrap: true, depth: 0, boxes: 1 });
+    expect(review.lovejoinSkipped).toBeUndefined();
     expect(review.collateralTail).toBeUndefined();
-    expect((await steps(t)).map((x) => x.kind)).toEqual(["deposit", "back"]);
+    const chain = await steps(t);
+    expect(chain.map((x) => x.kind)).toEqual(["deposit", "back"]);
+    // Neither puts anything up: the deposit runs no script, and the return is a sweep.
+    for (const tx of chain) expect(bodyOutpoints(Buffer.from(tx.txCbor, "hex"), 13) ?? []).toEqual([]);
   });
 
   // The owner, 2026-10-23: the box mixes with other people's, so it waits for the crowd a mix waits for.

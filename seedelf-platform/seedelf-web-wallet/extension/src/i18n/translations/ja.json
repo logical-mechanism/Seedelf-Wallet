@@ -1081,7 +1081,7 @@
   "lovejoin.bootstrap.allTitle": "すべて戻しますか？",
   "lovejoin.bootstrap.bringOne": "1 件戻す",
   "lovejoin.bootstrap.button_other": "ボックス {{count}} 件でプールをブートストラップする",
-  "lovejoin.bootstrap.cantAfford": "プライベート残高は {{held}} ₳ で、コラテラルと手数料も合わせるとその件数分には足りません。",
+  "lovejoin.bootstrap.cantAfford": "プライベート残高は {{held}} ₳ で、手数料も合わせるとその件数分には足りません。",
   "lovejoin.bootstrap.held_other": "あなたの{{boxes}}はブートストラップによってプールに保持されており、自動では戻りません。",
   "lovejoin.bootstrap.keep": "プールに残す",
   "lovejoin.bootstrap.keepAll": "すべてプールに残す",

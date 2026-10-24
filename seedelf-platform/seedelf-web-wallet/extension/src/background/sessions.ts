@@ -966,6 +966,11 @@ class NotEnoughPrivate extends Error {
   }
 }
 
+/** A mix session whose chain is a deposit alone (a Bootstrap, or a seed before it): it runs no script, so it needs no collateral. */
+function depositOnly(s: SessionRecord | undefined): boolean {
+  return !!(s?.mix?.bootstrap || s?.mix?.seed);
+}
+
 /**
  * A UTxO at a session's account its return's chain can put up as collateral
  * (privacy review §2.15): exactly 5 ₳ of ADA alone, as its funding pays one,
@@ -1961,7 +1966,8 @@ export class SessionService {
       [
         // A token pool's boxes take its token too, paid with their ADA in one UTxO, which the deposit spends.
         { to: address, lovelace: (BigInt(mix.lovelace) + reserve).toString(), tokens: mix.token ? [mix.token] : [] },
-        { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
+        // Its mixes' collateral. None for a Bootstrap: its deposit alone runs no script (the owner, 2026-10-23).
+        ...(mix.bootstrap ? [] : [{ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] }]),
       ],
       t(mix.again ? "sess.emptyMixPay" : "sess.emptyMix"),
       undefined,
@@ -4100,8 +4106,7 @@ export class SessionService {
     // put up, and it comes back with the rest (the owner, 2026-10-23).
     const intoPool =
       !direct &&
-      !record?.mix?.bootstrap &&
-      !record?.mix?.seed &&
+      !depositOnly(record) &&
       rows.some(collateralFits) &&
       lovejoin?.available(network) &&
       (await this.throughLovejoin(record)) &&
@@ -4154,7 +4159,9 @@ export class SessionService {
       const funding = record?.txs[0]?.txHash;
       const collateral = rows.find((u) => collateralFits(u) && u.tx_hash === funding) ?? rows.find(collateralFits);
       let chain: LovejoinChain | undefined;
-      if (!collateral) {
+      // A Bootstrap's (or a seed's) chain is its deposit alone, which runs no script: it goes without one, and its
+      // funding pays none (the owner, 2026-10-23).
+      if (!collateral && !depositOnly(record)) {
         // Something the account signed spent it (a site's transaction, or a return before this one, which takes
         // it; a top-up puts one back, and a session brought back by hand is offered 5 ₳ for it): no mix can go, so
         // it comes back directly, and says so when its spare ADA would have paid for a box. A session brought back
@@ -4342,7 +4349,7 @@ export class SessionService {
    */
   private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[]): Promise<boolean> {
     if (rows.some(collateralFits)) return false;
-    if (s?.mix) return true;
+    if (s?.mix) return !depositOnly(s);
     // A box three a mix: four falls back to three where it costs more than the spare pays (34e's review, 6).
     const lovejoin = this.deps.lovejoin!;
     const spare = spareOf(rows);

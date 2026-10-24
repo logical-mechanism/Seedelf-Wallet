@@ -1158,7 +1158,7 @@
   "lovejoin.bootstrap.bringOne": "Bring one back",
   "lovejoin.bootstrap.button_one": "Bootstrap the pool with {{count}} box",
   "lovejoin.bootstrap.button_other": "Bootstrap the pool with {{count}} boxes",
-  "lovejoin.bootstrap.cantAfford": "Your private balance holds {{held}} ₳: not enough for that many, with the collateral and fee on top.",
+  "lovejoin.bootstrap.cantAfford": "Your private balance holds {{held}} ₳: not enough for that many, with the fee on top.",
   "lovejoin.bootstrap.held_one": "{{boxes}} of yours is held in the pool by a Bootstrap: it doesn't come back by itself.",
   "lovejoin.bootstrap.held_other": "{{boxes}} of yours are held in the pool by a Bootstrap: they don't come back by themselves.",
   "lovejoin.bootstrap.keep": "Keep it in the pool",

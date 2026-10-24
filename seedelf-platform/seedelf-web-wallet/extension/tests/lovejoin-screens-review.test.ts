@@ -59,16 +59,14 @@ describe("the pending banner names a pool's start as a noun, as every other kind
 });
 
 describe("a private Bootstrap's review (R3, R4)", () => {
-  // 40 boxes of 100 MIN + 4.5 ₳ from the private balance, as the rehearsal reviewed it.
+  // 40 boxes of 100 MIN + 4.5 ₳ from the private balance, as the rehearsal reviewed it, and no collateral: a deposit
+  // alone runs no script (the owner, 2026-10-23).
   const summary = {
     network: "preprod",
     txHash: "ab".repeat(32),
     index: 1,
     address: "addr_test1" + "q".repeat(50),
-    payments: [
-      { address: "a", own: false, lovelace: "181500000", minimum: null, tokens: [{ ...MIN, quantity: "4000000000" }] },
-      { address: "a", own: false, lovelace: "5000000", minimum: null, tokens: [] },
-    ],
+    payments: [{ address: "a", own: false, lovelace: "181500000", minimum: null, tokens: [{ ...MIN, quantity: "4000000000" }] }],
     max: false,
     fee: { size: "0", compute: "0", scriptReference: "0", total: "236778" },
     changeLovelace: "0",
@@ -82,8 +80,13 @@ describe("a private Bootstrap's review (R3, R4)", () => {
 
   it("names the token in its total, as the row above does (R3)", () => {
     const review = text(shown(createElement(PrivateReview, { summary, box: MIN_100 })));
-    expect(review).toContain("Total leaving your private balance 186.736778 ₳ and 4,000 MIN");
+    expect(review).toContain("Total leaving your private balance 181.736778 ₳ and 4,000 MIN");
     expect(review).not.toContain("and 1 token");
+  });
+
+  it("has no row for a collateral, which a Bootstrap's funding doesn't pay", () => {
+    const review = text(shown(createElement(PrivateReview, { summary, box: MIN_100 })));
+    expect(review).not.toContain(t("lovejoin.review.itsCollateral"));
   });
 
   it("says what the funding is for without mixes, since a Bootstrap has none (R4)", () => {
