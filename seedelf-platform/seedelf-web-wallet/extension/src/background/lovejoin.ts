@@ -1676,6 +1676,8 @@ function moreThanDue(s: Schedule, owned: OutRef[], listed: OutRef[], p = CLASSIC
   const theirs = new Set(owned.filter((b) => made.has(b.txHash)).map(ref));
   const back = owned.filter((b) => !held.has(ref(b)) && !theirs.has(ref(b))).length;
   const theirDue = sending.reduce((n, c) => {
+    // Its collateral's leaf, once its mix is sent, has a due time of its own here, and is among what it made.
+    if (c.tail?.scheduled && c.tail.pool === p) n += 1;
     const share = shareOf(c, p);
     if (!share) return n;
     const its = new Set([c.deposit!, ...c.mixes]);
@@ -1962,10 +1964,12 @@ const openIn = (s: Schedule, p: string, bootstrap: boolean) =>
  * are interchangeable (chunk 34's session 1, 5), or a Bootstrap brought back
  * all at once; never one still holding its boxes, which would then hold one
  * fewer, and let one come back by itself. With none, it's no mix's: a box
- * from before the list, a restore's, another device's.
+ * from before the list, a restore's, another device's. Nor is a box a
+ * Bootstrap's collateral's tail made, which its entry never counts (chainSent).
  */
 function countBack(s: Schedule, p: string, box: OutRef | undefined, bootstrap = false): void {
   const own = box && s.chains.find((c) => makers(c).includes(box.txHash));
+  if (own?.bootstrap && own.tail && (box!.txHash === own.tail.deposit || box!.txHash === own.tail.mix)) return;
   const unmixed = own && !own.leaves.some((l) => ref(l) === ref(box!)) ? entries(s).find((e) => e.id === own.id && outIn(e, p) > 0) : undefined;
   const candidates = openIn(s, p, bootstrap);
   const released = bootstrap ? [] : openIn(s, p, true).filter((e) => e.released);
@@ -3381,6 +3385,8 @@ export class LovejoinService {
       fills,
       params: c.params,
       ...(width !== 3 ? { width } : {}),
+      // Counted on what's left after its collateral's mix, as the chain across pools counts them.
+      ...(c.collateralReserve ? { collateralReserve: true } : {}),
     };
     const plan = await this.deps.wallet.withKeys(
       (keys) => JSON.parse(this.deps.wasm.planLovejoin(keys.oneTime, JSON.stringify(request))) as LovejoinPlan & { legs?: number[] },
@@ -3467,9 +3473,11 @@ export class LovejoinService {
    * and the chain no longer being sent (a lock cut it, giveme.my refused it, a box it drew went). Its mix may be built
    * again (tailChain) for TAIL_KEEP_MS after its deposit went in, and TAIL_TRIES builds in all: past either it's
    * over, and its box waits, not mixed yet, for Mix my boxes again. With the id of the chain whose record holds it.
+   * A chain a lock cut is marked so first (cuts), whatever page asked before: never taken for one still being sent.
    */
   async tailOf(network: NetworkName, index: number): Promise<{ id: string; tail: Tail } | undefined> {
     if (!this.available(network)) return undefined;
+    await this.cuts(network);
     const c = (await this.read(network)).chains.filter((r) => r.session === index && r.tail && !r.tail.over).at(-1);
     if (!c?.tail || !c.ended || c.tail.scheduled || c.sent < c.total - 2) return undefined;
     if (c.tail.tries >= TAIL_TRIES || this.deps.now() - (c.tail.landed ?? c.ended) > TAIL_KEEP_MS) {
@@ -3508,7 +3516,8 @@ export class LovejoinService {
       await this.tailOver(network, id);
       return undefined;
     }
-    await this.tailLanded(network, id);
+    // Kept with the tail it hands on, so the chain built again keeps the day from this deposit, not from its own.
+    tail.landed = await this.tailLanded(network, id);
     const request = {
       network,
       params,
@@ -3538,11 +3547,14 @@ export class LovejoinService {
    * Ogmios as it is): the network measures it first, so giveme.my's coin is never put up against budgets it would
    * measure higher, and isn't asked for a mix a box of which is gone. Returns it finished, to send. Throws StalePool
    * when a box it drew is gone, LovejoinSkipped when the network measures it higher, giveme.my's errors as they are.
+   * `ours`: the transactions whose outputs it spends that the wallet sent, found on chain already (its deposit, the
+   * chain's change): an Ogmios that doesn't know only those is behind another read, not a box gone, and is asked again.
    */
-  async tailWitness(network: NetworkName, txCbor: string): Promise<{ txCbor: string; txHash: string }> {
+  async tailWitness(network: NetworkName, txCbor: string, ours: Set<string> = new Set()): Promise<{ txCbor: string; txHash: string }> {
     const { wasm } = this.deps;
     const answer = await this.deps.koios(network).evaluate(txCbor);
     const unknown = unknownInputs(answer);
+    if (unknown?.length && unknown.every((o) => ours.has(o.split("#")[0]!))) throw new KoiosError(t("sess.notCaughtUp"));
     if (unknown) throw new StalePool(unknown);
     const checked = JSON.parse(wasm.declaredCovers(txCbor, JSON.stringify(answer))) as { covers: boolean; reason?: string };
     if (!checked.covers) throw new LovejoinSkipped(checked.reason ?? t("lj.skip.warn.measuredDifferently"));
@@ -3690,12 +3702,14 @@ export class LovejoinService {
    * LovejoinSkipped when the network measures more or refuses a script: then
    * the wallet's evaluator is behind the network (a hard fork), and sending
    * would risk the collateral. A Koios error is thrown as it is, to be tried
-   * again.
+   * again. Never its collateral's mix (`tail`), which draws from a read of
+   * its own and is measured again before giveme.my is asked (tailWitness):
+   * a chain of depth 0 has no mix of its own to check.
    */
   private async crossCheck(network: NetworkName, chain: LovejoinChain, at?: number[]): Promise<void> {
     const { wasm } = this.deps;
     // The first mix, or, across pools, each pool's first: each runs scripts of its own (chunk 34's §8).
-    const firsts = at ?? [chain.txs.findIndex((t) => t.kind === "mix")];
+    const firsts = at ?? [chain.txs.findIndex((t) => t.kind === "mix" && !t.tail)];
     const deposit = chain.txs.find((t) => t.kind === "deposit");
     for (const i of firsts) {
       const mix = chain.txs[i];
@@ -4338,7 +4352,7 @@ export class LovejoinService {
       bootstrap?: boolean;
       delay?: LovejoinDelay;
       width?: 4;
-      tail?: { pool: string; box: OutRef; leaf: OutRef; deposit?: string; resumes?: string; tries?: number };
+      tail?: { pool: string; box: OutRef; leaf: OutRef; deposit?: string; resumes?: string; tries?: number; landed?: number };
     },
     start?: () => Promise<void>,
   ): Promise<void> {
@@ -4357,6 +4371,8 @@ export class LovejoinService {
             box: inThe(chain.tail.pool)(chain.tail.box),
             leaf: inThe(chain.tail.pool)(chain.tail.leaf),
             tries: chain.tail.tries ?? 1,
+            // Built again, the day its mix keeps trying runs from when that deposit was first known in (TAIL_KEEP_MS).
+            ...(chain.tail.landed !== undefined ? { landed: chain.tail.landed } : {}),
           }
         : undefined;
     const record: ChainRecord = {
@@ -4380,13 +4396,19 @@ export class LovejoinService {
       at: this.deps.now(),
     };
     this.starting.add(record.id);
+    // The chain whose collateral's mix this one builds again: its tail is this one's now, or again that chain's if
+    // this one never starts, to be built again later.
+    const resumes = chain.tail?.resumes;
+    let handedOn = false;
     try {
       await this.update(network, (s) => {
         s.chains = [...s.chains.filter((c) => c.id !== record.id), record];
         s.mixes = [...entries(s).filter((e) => e.id !== record.id), entryOf(record)];
-        // The chain whose collateral's mix this one builds again: its tail is this one's now.
-        const was = chain.tail?.resumes ? s.chains.find((c) => c.id === chain.tail!.resumes)?.tail : undefined;
-        if (was) was.over = true;
+        const was = resumes ? s.chains.find((c) => c.id === resumes)?.tail : undefined;
+        if (was && !was.over) {
+          was.over = true;
+          handedOn = true;
+        }
       });
       try {
         await start?.();
@@ -4394,6 +4416,8 @@ export class LovejoinService {
         await this.update(network, (s) => {
           s.chains = s.chains.filter((c) => c.id !== record.id);
           s.mixes = entries(s).filter((m) => m.id !== record.id);
+          const was = handedOn ? s.chains.find((c) => c.id === resumes)?.tail : undefined;
+          if (was) delete was.over;
         }).catch(() => undefined);
         throw e;
       }
@@ -4429,9 +4453,10 @@ export class LovejoinService {
       if (tailDue.length && c.tail && !c.tail.scheduled) {
         c.tail.scheduled = true;
         dueFor(s, c.tail.pool).push(...tailDue);
-        // It's out under its chain's mix in the list, in its pool, until it comes back.
+        // It's out under its chain's mix in the list, in its pool, until it comes back. Never a Bootstrap's: its
+        // boxes there are held (bootstrapOf), and this one comes back by itself (countBack).
         const e = entries(s).find((x) => x.id === c.id);
-        if (e) shareIn(e, c.tail.pool).boxes += 1;
+        if (e && !e.bootstrap) shareIn(e, c.tail.pool).boxes += 1;
       }
       if (!draws.some(([, due]) => due.length) || c.scheduled) return;
       c.scheduled = true;

@@ -259,7 +259,8 @@ export function ClaimReview({
   const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
   const collaterals = picked.filter((r) => r.collateralTail).length;
-  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
+  // A chain through Lovejoin counts its collateral's mix already; a return with no chain of boxes sends that first.
+  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? (1 + (r.collateralTail?.txs ?? 0))), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
   // Why four boxes a mix went three, where it did: each reason once, however many returns it's true of (D3; 1.6.0's

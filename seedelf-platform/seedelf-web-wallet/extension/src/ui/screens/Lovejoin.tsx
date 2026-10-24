@@ -3233,14 +3233,14 @@ function mixedValue(mix: { depth: number; mixes: number; mixFees?: string; width
   return mix.width === 4 ? t("lovejoin.review.fourWide", { value }) : value;
 }
 
+/** The funding's first payment less what it pays for its collateral's mix, which a row of its own shows. */
+const lessReserve = (lovelace: string, summary: SessionOutSummary) => (BigInt(lovelace) - BigInt(summary.collateralReserve ?? "0")).toString();
+
 /**
  * A mix from the private balance: the one-time account's funding, then what runs by itself. `box`: what each box in
  * its pool holds (the classic pool's 10 ₳ when none is given). `cantComeBack`: the pool's boxes can't pay their own
  * way back today, said first, and no row promises a box back after its wait (session 5's cross-area review, M1).
  */
-/** The funding's first payment less what it pays for its collateral's mix, which a row of its own shows. */
-const lessReserve = (lovelace: string, summary: SessionOutSummary) => (BigInt(lovelace) - BigInt(summary.collateralReserve ?? "0")).toString();
-
 export function PrivateReview({
   summary,
   before,

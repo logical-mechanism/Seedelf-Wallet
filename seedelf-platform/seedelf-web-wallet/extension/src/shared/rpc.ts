@@ -1976,13 +1976,15 @@ export interface SessionBackSummary {
    * with the rest (the owner, 2026-10-22 and 2026-10-23): once the chain's mixes no longer need it, a deposit puts it
    * into a box of the wallet's (`box`), and one mix, under giveme.my's collateral, moves that box with two of other
    * people's; the box that mix makes (`leaf`) comes back by itself, as any mixed box does. `fee`: what both cost.
-   * `lovelace` leaves its 5 ₳ out.
+   * `lovelace` leaves its 5 ₳ out. `txs`: how many of the return's transactions are its own, the return's not counted:
+   * its deposit and its mix, or its mix alone where it's built again.
    */
   collateralTail?: {
     box: { txHash: string; txIndex: number };
     leaf: { txHash: string; txIndex: number };
     fee: string;
     pool: string;
+    txs: number;
   };
 }
 

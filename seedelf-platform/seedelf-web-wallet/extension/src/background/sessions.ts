@@ -656,9 +656,9 @@ interface KeptBack extends SessionBackSummary {
   /**
    * Its collateral's tail as the chain's record keeps it (recordChain): how long its leaf waits, as the session's
    * approval or Settings has it; and, its mix built again (tailChain), the deposit an earlier chain sent, the chain
-   * whose tail this takes over, and how many times its mix has been built.
+   * whose tail this takes over, how many times its mix has been built, and when that deposit was first known in.
    */
-  tailOf?: { delay?: LovejoinDelay; deposit?: string; resumes?: string; tries?: number };
+  tailOf?: { delay?: LovejoinDelay; deposit?: string; resumes?: string; tries?: number; landed?: number };
 }
 
 /** A return's chain through Lovejoin being sent, a window at a time, between the runner's steps. */
@@ -4091,7 +4091,8 @@ export class SessionService {
       !direct && lovejoin?.available(network) && (await this.throughLovejoin(record)) && (await this.collateralIntoPool())
         ? await lovejoin.collateralPool(network, params, chainOwner(index))
         : undefined;
-    const tailIn = (tail?: CollateralTail) => (tail && intoPool ? { collateralTail: { ...tail, pool: intoPool.pool.id } } : {});
+    // Its deposit and its mix: two of the return's transactions.
+    const tailIn = (tail?: CollateralTail) => (tail && intoPool ? { collateralTail: { ...tail, pool: intoPool.pool.id, txs: 2 } } : {});
     // How long its leaf waits: as the swap was approved, else Settings' as it's sent.
     const delay = record?.auto?.lovejoin?.delay;
     // The collateral's mix its chain left (a lock cut it, giveme.my refused it, a box it drew went), built again with
@@ -4118,8 +4119,14 @@ export class SessionService {
           leftOut: chain.leftOut,
           chain: chain.txs,
           leaves: [],
-          collateralTail: { ...chain.collateralTail!, pool: tail.pool },
-          tailOf: { deposit: tail.deposit, resumes, tries: tail.tries + 1, ...(delay ? { delay } : {}) },
+          collateralTail: { ...chain.collateralTail!, pool: tail.pool, txs: 1 },
+          tailOf: {
+            deposit: tail.deposit,
+            resumes,
+            tries: tail.tries + 1,
+            ...(tail.landed !== undefined ? { landed: tail.landed } : {}),
+            ...(delay ? { delay } : {}),
+          },
           builtAt: now(),
         };
       }
@@ -4534,6 +4541,8 @@ export class SessionService {
       was = { ...(s.chain ? { chain: s.chain } : {}), ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}) };
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
+      // A return that comes back directly, its collateral's mix before it: why Lovejoin was left out, as sendBack says.
+      if (summary.lovejoinSkipped && !s.mix) s.lovejoinSkipped = summary.lovejoinSkipped;
     });
     const lovejoin = this.deps.lovejoin;
     const start = async () => {
@@ -4577,6 +4586,7 @@ export class SessionService {
               ...(tailOf?.deposit ? { deposit: tailOf.deposit } : {}),
               ...(tailOf?.resumes ? { resumes: tailOf.resumes } : {}),
               ...(tailOf?.tries ? { tries: tailOf.tries } : {}),
+              ...(tailOf?.landed !== undefined ? { landed: tailOf.landed } : {}),
             },
           }
         : {}),
@@ -4588,6 +4598,7 @@ export class SessionService {
       await this.update(network, built.index, (s) => {
         if (s.chain?.last !== record.txs.at(-1)!.txHash) return;
         delete s.chain;
+        delete s.lovejoinSkipped;
         Object.assign(s, was);
       }).catch(() => undefined);
       throw e;
@@ -4747,8 +4758,12 @@ export class SessionService {
     const landed = await lovejoin.tailLanded(network, pending.txs.at(-1)!.txHash);
     const waited = this.deps.now() - landed;
     if (waited > TAIL_KEEP_MS) throw new Error(t("lj.tail.tooLong"));
+    // What it spends that the wallet sent, all of it on chain by now: the chain's own before it, and its box's deposit
+    // (an earlier chain's, where its mix is built again). An Ogmios that doesn't know those yet is only behind.
+    const box = pending.summary.collateralTail?.box.txHash;
+    const ours = new Set([...pending.txs.slice(0, i).map((x) => x.txHash), ...(box ? [box] : [])]);
     try {
-      const finished = await lovejoin.tailWitness(network, pending.txs[i]!.txCbor);
+      const finished = await lovejoin.tailWitness(network, pending.txs[i]!.txCbor, ours);
       pending.txs[i] = { ...pending.txs[i]!, txCbor: finished.txCbor, witnessed: true };
       await this.keepPending(network, pending);
       return true;

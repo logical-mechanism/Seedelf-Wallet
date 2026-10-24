@@ -257,6 +257,7 @@ describe("a return's review names the collateral's mix", () => {
             leaf: { txHash: "01".repeat(32), txIndex: 2 },
             fee: "1100000",
             pool: "cd".repeat(28),
+            txs: 2,
           },
         }
       : {}),
@@ -296,6 +297,8 @@ describe("a return's review names the collateral's mix", () => {
     expect(review).toContain("2 boxes in Lovejoin's pool of 5 ₳ boxes, each mixed once");
     expect(review).toContain("Each session's 5 ₳ collateral becomes a box");
     expect(review).toContain("giveme.my backs each of those mixes");
+    // Each that comes back directly sends its collateral's deposit and mix before its return: 3, 3 and 1.
+    expect(review).toContain(`${t("claim.transactions")} 7`);
   });
 });
 
