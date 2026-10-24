@@ -668,7 +668,16 @@ interface PendingChain extends ChainProgress {
   kept: string;
   /** The return, for the private history once it's all sent. */
   summary: SessionBackSummary;
+  /**
+   * Its collateral's mix not signed yet (giveme.my busy or out of reach, Koios behind): not asked again before
+   * `witnessAfter` (ms), each wait twice the one before (`witnessWait`), TAIL_WITNESS_WAIT_MS up to its most.
+   */
+  witnessAfter?: number;
+  witnessWait?: number;
 }
+
+/** A collateral's mix not signed yet is asked again after a minute, then two, four and so on, 30 minutes at most. */
+const TAIL_WITNESS_WAIT_MS = [60_000, 30 * 60_000] as const;
 
 export interface SessionDeps extends ScriptSpendDeps {
   store: PrivateStore;
@@ -1943,8 +1952,8 @@ export class SessionService {
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): in the one UTxO
-    // that pays the mixes, whose change pays that mix too.
-    const reserve = await this.tailReserve(network, true);
+    // that pays the mixes, whose change pays that mix too. Not a Bootstrap's, which comes back with the rest (buildBack).
+    const reserve = mix.bootstrap ? 0n : await this.tailReserve(network, true);
     const { summary, txCbor, seed, first, later } = await this.buildFunding(
       network,
       index,
@@ -4086,9 +4095,17 @@ export class SessionService {
     // the session's history, wherever its return goes through Lovejoin, a chain's or one that comes back directly, and
     // Settings keeps it on (the owner, 2026-10-22 and 2026-10-23): its deposit and its mix go before the return. Read
     // as it's built, as Settings' Lovejoin is for any session but a swap. WebAssembly brings it back with the rest
-    // where what's left can't pay for that.
+    // where what's left can't pay for that. Nor is the pool read where the account holds no 5 ₳ to mix. Never a
+    // Bootstrap's, nor a seed's: their chain is a deposit alone, which runs no script, so their collateral was never
+    // put up, and it comes back with the rest (the owner, 2026-10-23).
     const intoPool =
-      !direct && lovejoin?.available(network) && (await this.throughLovejoin(record)) && (await this.collateralIntoPool())
+      !direct &&
+      !record?.mix?.bootstrap &&
+      !record?.mix?.seed &&
+      rows.some(collateralFits) &&
+      lovejoin?.available(network) &&
+      (await this.throughLovejoin(record)) &&
+      (await this.collateralIntoPool())
         ? await lovejoin.collateralPool(network, params, chainOwner(index))
         : undefined;
     // Its deposit and its mix: two of the return's transactions.
@@ -4747,14 +4764,16 @@ export class SessionService {
 
   /**
    * giveme.my's signature on chain `pending`'s collateral's mix, `i`, now that every transaction before it is on chain
-   * (pumpChain): false while giveme.my can't give it yet, to be asked at the next pump: busy or out of reach, or, for
-   * GIVEME_BEHIND_MS after the collateral's deposit was found in, behind the chain. A refusal after that, a box it drew
-   * that's gone, a network that measures it higher, or TAIL_KEEP_MS gone by stops the chain there; the runner then
-   * builds that mix again with fresh boxes, if it may (buildBack's tailChain), or brings the rest back.
+   * (pumpChain): false while giveme.my can't give it yet, to be asked again later, each wait twice the one before
+   * (TAIL_WITNESS_WAIT_MS): busy or out of reach, or, for GIVEME_BEHIND_MS after the collateral's deposit was found
+   * in, behind the chain. A refusal after that, a box it drew that's gone, a network that measures it higher, or
+   * TAIL_KEEP_MS gone by stops the chain there; the runner then builds that mix again with fresh boxes, if it may
+   * (buildBack's tailChain), or brings the rest back.
    */
   private async witnessTail(network: NetworkName, pending: PendingChain, i: number): Promise<boolean> {
     const lovejoin = this.deps.lovejoin;
     if (!lovejoin) throw new Error(t("lj.notOnNetwork"));
+    if (pending.witnessAfter !== undefined && this.deps.now() < pending.witnessAfter) return false;
     const landed = await lovejoin.tailLanded(network, pending.txs.at(-1)!.txHash);
     const waited = this.deps.now() - landed;
     if (waited > TAIL_KEEP_MS) throw new Error(t("lj.tail.tooLong"));
@@ -4765,12 +4784,18 @@ export class SessionService {
     try {
       const finished = await lovejoin.tailWitness(network, pending.txs[i]!.txCbor, ours);
       pending.txs[i] = { ...pending.txs[i]!, txCbor: finished.txCbor, witnessed: true };
+      delete pending.witnessAfter;
+      delete pending.witnessWait;
       await this.keepPending(network, pending);
       return true;
     } catch (e) {
       if (e instanceof CollateralRefusedError && !e.busy && waited >= GIVEME_BEHIND_MS) throw new Error(t("lj.tail.refused"));
-      if (e instanceof CollateralError || e instanceof KoiosError) return false;
-      throw e;
+      if (!(e instanceof CollateralError || e instanceof KoiosError)) throw e;
+      const [first, most] = TAIL_WITNESS_WAIT_MS;
+      pending.witnessWait = pending.witnessWait === undefined ? first : Math.min(pending.witnessWait * 2, most);
+      pending.witnessAfter = this.deps.now() + pending.witnessWait;
+      await this.keepPending(network, pending);
+      return false;
     }
   }
 

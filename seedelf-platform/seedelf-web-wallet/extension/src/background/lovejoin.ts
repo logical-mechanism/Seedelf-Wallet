@@ -325,6 +325,13 @@ const TAIL_DRAWS = 2;
 export const TAIL_KEEP_MS = 24 * 60 * 60_000;
 export const TAIL_TRIES = 2;
 
+/**
+ * How long a return waits on a collateral's deposit that isn't on chain yet, from when its chain stopped (the owner,
+ * 2026-10-23): one that hasn't landed by then most likely never will (a node dropped it), and the return goes. Safe
+ * even if it lands after all: it and the return spend the same UTxOs, and the network takes only one of them.
+ */
+export const TAIL_UNLANDED_MS = 60 * 60_000;
+
 /** A chain being sent, kept in chrome.storage.session between calls. */
 export interface ChainProgress {
   txs: LovejoinChain["txs"];
@@ -3475,7 +3482,7 @@ export class LovejoinService {
    * over, and its box waits, not mixed yet, for Mix my boxes again. With the id of the chain whose record holds it.
    * A chain a lock cut is marked so first (cuts), whatever page asked before: never taken for one still being sent.
    */
-  async tailOf(network: NetworkName, index: number): Promise<{ id: string; tail: Tail } | undefined> {
+  async tailOf(network: NetworkName, index: number): Promise<{ id: string; tail: Tail; ended: number } | undefined> {
     if (!this.available(network)) return undefined;
     await this.cuts(network);
     const c = (await this.read(network)).chains.filter((r) => r.session === index && r.tail && !r.tail.over).at(-1);
@@ -3484,16 +3491,17 @@ export class LovejoinService {
       await this.tailOver(network, c.id);
       return undefined;
     }
-    return { id: c.id, tail: { ...c.tail } };
+    return { id: c.id, tail: { ...c.tail }, ended: c.ended };
   }
 
   /**
    * Session `index`'s collateral's mix built again (tailOf), with two boxes drawn afresh, and its return after it:
    * the chain the session sends in place of a plain return. `wait` while it can't be built yet: its box isn't listed
-   * (its deposit not in), the 5 ₳ pool isn't shown, or it has too few boxes to draw; a plain return meanwhile would
-   * take what pays for its mix. None, with no tail to build, or once it's over (tailOver): its box moved by someone
-   * else's mix, which then comes back as any box a mix made does, or nothing at the account left to pay for its mix.
-   * `own`: the session's own transactions, which the return takes first.
+   * (its deposit not in, for TAIL_UNLANDED_MS at most), the 5 ₳ pool isn't shown, or it has too few boxes to draw; a
+   * plain return meanwhile would take what pays for its mix. None, with no tail to build, or once it's over
+   * (tailOver): its box moved by someone else's mix, which then comes back as any box a mix made does; its deposit
+   * not in after TAIL_UNLANDED_MS; or nothing at the account left to pay for its mix. `own`: the session's own
+   * transactions, which the return takes first.
    */
   async tailChain(
     network: NetworkName,
@@ -3504,15 +3512,17 @@ export class LovejoinService {
   ): Promise<{ chain: LovejoinChain; tail: Tail; resumes: string } | "wait" | undefined> {
     const found = await this.tailOf(network, index);
     if (!found) return undefined;
-    const { id, tail } = found;
+    const { id, tail, ended } = found;
     const pool = (await this.readSet(network, true)).find((p) => p.id === tail.pool);
     if (!pool?.ref) return "wait";
     const split = await this.split(network, chainOwner(index), undefined, pool);
     if (!split.owned.some((b) => ref(b) === ref(tail.box))) {
-      // Not listed: its deposit isn't in yet, or someone else's mix moved it since, which its deposit in says.
-      const landed =
-        tail.landed !== undefined || (await this.onChain(network, [tail.deposit]).catch(() => new Set<string>())).has(tail.deposit);
-      if (!landed) return "wait";
+      // Not listed: its deposit isn't in yet, or someone else's mix moved it since, which its deposit in says. Koios
+      // not answering says neither, so it waits.
+      const on = tail.landed !== undefined ? undefined : await this.onChain(network, [tail.deposit]).catch(() => null);
+      if (on === null) return "wait";
+      const landed = tail.landed !== undefined || on!.has(tail.deposit);
+      if (!landed && this.deps.now() - ended < TAIL_UNLANDED_MS) return "wait";
       await this.tailOver(network, id);
       return undefined;
     }
