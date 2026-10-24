@@ -180,9 +180,10 @@ fn plan_request(utxos: Vec<UtxoResponse>, depth: u32) -> PlanRequest {
         network: "preprod".into(),
         index: 0,
         utxos,
-        collateral: collateral(),
+        collateral: Some(collateral()),
         depth,
         again: false,
+        collateral_reserve: false,
     }
 }
 
@@ -296,7 +297,7 @@ fn a_return_across_pools_deposits_once_and_mixes_each_box_in_its_pool() {
         params: params(),
         index: 0,
         utxos,
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool: Vec::new(),
         depth: 1,
         boxes: None,
@@ -304,6 +305,8 @@ fn a_return_across_pools_deposits_once_and_mixes_each_box_in_its_pool() {
         again: false,
         own: vec![funding.clone()],
         collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
     };
     let chain = wasm::chain_across_pools(
         &accounts(),
@@ -411,7 +414,7 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             params: params(),
             index: 0,
             utxos,
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: others(&classic, 0xc0, 3),
             depth: 1,
             boxes: Some(1),
@@ -419,6 +422,8 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             again: false,
             own: vec![funding],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
         None,
         4,
@@ -444,7 +449,7 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
                 .into_iter()
                 .filter(|u| u.asset_list.as_ref().is_none_or(|a| a.is_empty()))
                 .collect(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: others(&classic, 0xc0, 2),
             depth: 1,
             boxes: Some(1),
@@ -452,6 +457,8 @@ fn a_session_mixes_four_boxes_a_mix_when_asked() {
             again: false,
             own: Vec::new(),
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
         None,
         4,

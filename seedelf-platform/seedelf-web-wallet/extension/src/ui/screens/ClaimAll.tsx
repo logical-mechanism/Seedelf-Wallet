@@ -258,8 +258,9 @@ export function ClaimReview({
   const fees = picked.reduce((sum, r) => sum + BigInt(r.fee), 0n);
   const tokens = picked.reduce((sum, r) => sum + r.tokens.length, 0);
   const boxes = picked.reduce((sum, r) => sum + (r.lovejoin?.boxes ?? 0), 0);
-  const collaterals = picked.filter((r) => r.collateralBox).length;
-  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? 1), 0);
+  const collaterals = picked.filter((r) => r.collateralTail).length;
+  // A chain through Lovejoin counts its collateral's mix already; a return with no chain of boxes sends that first.
+  const txs = picked.reduce((sum, r) => sum + (r.lovejoin?.txs ?? (1 + (r.collateralTail?.txs ?? 0))), 0);
   const delay = picked.find((r) => r.lovejoin)?.lovejoin?.delay;
   const found = picked.filter((r) => byIndex.get(r.index)?.recovered).length;
   // Why four boxes a mix went three, where it did: each reason once, however many returns it's true of (D3; 1.6.0's
@@ -399,7 +400,7 @@ export function ClaimReview({
         )}
         {/* Paid from each box as it comes back, which the network fees here leave out (pass two of the fix round). */}
         {boxes > 0 && <BoxesBackRow boxes={boxes} />}
-        {/* Each session's 5 ₳ collateral its return puts into Lovejoin's 5 ₳ pool, not back with the rest. */}
+        {/* Each session's 5 ₳ collateral its return mixes once into Lovejoin's 5 ₳ pool, not back with the rest. */}
         {collaterals > 0 && (
           <Row label={t("claim.collateralLabel")} value={t("claim.collateralValue", { count: collaterals })} />
         )}

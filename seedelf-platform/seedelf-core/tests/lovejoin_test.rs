@@ -392,6 +392,133 @@ fn deposit_mix_and_withdraw_chain_before_anything_is_on_chain() {
     );
 }
 
+/// What a mix under giveme.my's collateral must carry for giveme.my to sign
+/// it and the ledger to take it: its collateral input, never spent, its
+/// return to giveme.my's address of 5 ₳ less 3/2 of an even fee, and its key
+/// among the required signers.
+fn under_givemes_collateral(tx_cbor: &[u8]) {
+    let tx = MultiEraTx::decode(tx_cbor).unwrap();
+    let giveme = seedelf_core::transaction::collateral_input(true);
+    let at = |i: &pallas_traverse::MultiEraInput| (**i.hash(), i.index());
+    let given = (giveme.tx_hash.0, giveme.txo_index);
+    assert_eq!(
+        tx.collateral().iter().map(at).collect::<Vec<_>>(),
+        vec![given]
+    );
+    assert!(
+        !tx.inputs().iter().map(at).any(|i| i == given),
+        "giveme.my's coin is never spent"
+    );
+    let fee = tx.fee().unwrap();
+    assert_eq!(fee % 2, 0, "an even fee, so 3/2 of it is whole");
+    let back = tx.collateral_return().unwrap();
+    assert_eq!(
+        back.address().unwrap(),
+        seedelf_core::address::collateral_address(true)
+    );
+    assert_eq!(back.value().coin(), 5_000_000 - fee * 3 / 2);
+    let signers: Vec<[u8; 28]> = tx
+        .required_signers()
+        .collect::<Vec<_>>()
+        .iter()
+        .map(|h| ***h)
+        .collect();
+    assert_eq!(signers, vec![seedelf_core::constants::COLLATERAL_HASH]);
+}
+
+#[test]
+fn a_mix_under_givemes_collateral_passes_mix_logic() {
+    let protocol = Protocol::of(true).unwrap();
+    let boxes = pool_boxes(&protocol);
+    // The payer's collateral is never put up.
+    let mix = lovejoin::mix_giveme(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    under_givemes_collateral(&mix.tx.tx_bytes.0);
+    assert_eq!(mix.outputs.len(), 3);
+    assert_eq!(mix.change.lovelace, 20_000_000 - mix.fee);
+    // giveme.my's signature makes it a little dearer than the same mix under the payer's own.
+    let own = lovejoin::mix(&params(), &protocol, &boxes, &payer(20_000_000)).unwrap();
+    assert!(
+        mix.fee > own.fee && mix.fee - own.fee < 20_000,
+        "{} against {}",
+        mix.fee,
+        own.fee
+    );
+    let tx = MultiEraTx::decode(&own.tx.tx_bytes.0).unwrap();
+    assert!(tx.required_signers().collect::<Vec<_>>().is_empty());
+    collateral_is_enough(&own.tx.tx_bytes.0, 5_000_000);
+}
+
+#[test]
+fn a_sessions_collateral_goes_into_a_box_and_is_mixed_once() {
+    let protocol = Protocol::of(true).unwrap();
+    let params = params();
+    let sk = Scalar::from(424_242u64);
+    let owner = Register::create(sk).unwrap().rerandomize().unwrap();
+    // The session's collateral and the chain's change, which pays: this pool's
+    // boxes hold 10 ₳, a 5 ₳ pool's 5.
+    let coins = [coin(0x22, 10_000_000), coin(0x44, 2_500_000)];
+    let address = key_address(0x33);
+    let pool = pool_boxes(&protocol);
+    let tail =
+        lovejoin::collateral_tail(&params, &protocol, &coins, &owner, &pool, &address, 1).unwrap();
+
+    // The deposit spends both, makes one box of ours, and the rest is change.
+    let deposit = MultiEraTx::decode(&tail.deposit.tx.tx_bytes.0).unwrap();
+    let spent: Vec<[u8; 32]> = deposit.inputs().iter().map(|i| **i.hash()).collect();
+    assert_eq!(spent.len(), 2);
+    assert!(spent.contains(&[0x22; 32]) && spent.contains(&[0x44; 32]));
+    assert_eq!(tail.deposit.boxes.len(), 1);
+    assert!(tail.deposit.boxes[0].is_owned(&sk));
+    assert_eq!(
+        tail.deposit.change.lovelace,
+        12_500_000 - 10_000_000 - tail.deposit.fee
+    );
+
+    // The mix takes that box, two of the pool's, and the deposit's change, which
+    // exist only in the unsent deposit, under giveme.my's collateral.
+    under_givemes_collateral(&tail.mix.tx.tx_bytes.0);
+    let mixed = MultiEraTx::decode(&tail.mix.tx.tx_bytes.0).unwrap();
+    let spent: Vec<([u8; 32], u64)> = mixed
+        .inputs()
+        .iter()
+        .map(|i| (**i.hash(), i.index()))
+        .collect();
+    assert_eq!(spent.len(), 4);
+    for taken in [&tail.deposit.boxes[0].utxo, &tail.deposit.change.utxo] {
+        assert!(spent.contains(&(taken.tx_hash, taken.index)));
+    }
+    let drawn = pool
+        .iter()
+        .filter(|b| spent.contains(&(b.utxo.tx_hash, b.utxo.index)))
+        .count();
+    assert_eq!(drawn, 2);
+    assert_eq!(tail.mix.outputs.len(), 3);
+    let ours: Vec<&PoolBox> = tail
+        .mix
+        .outputs
+        .iter()
+        .filter(|b| b.is_owned(&sk))
+        .collect();
+    assert_eq!(
+        ours,
+        vec![&tail.leaf],
+        "exactly one output is ours: the leaf"
+    );
+    assert_eq!(
+        tail.mix.change.lovelace,
+        tail.deposit.change.lovelace - tail.mix.fee
+    );
+
+    // Too few of the pool's boxes to draw two: said as the pool short.
+    let err =
+        lovejoin::collateral_tail(&params, &protocol, &coins, &owner, &pool[..1], &address, 1)
+            .unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<PoolShort>(),
+        Some(&PoolShort { have: 1, needed: 2 })
+    );
+}
+
 #[test]
 fn someone_elses_box_is_not_withdrawn() {
     let protocol = Protocol::of(true).unwrap();

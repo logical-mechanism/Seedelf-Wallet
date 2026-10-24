@@ -153,9 +153,10 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
                 network: "mainnet".into(),
                 index: 0,
                 utxos: holdings(),
-                collateral: collateral(),
+                collateral: Some(collateral()),
                 depth,
                 again: false,
+                collateral_reserve: false,
             },
         )
         .unwrap()
@@ -182,7 +183,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: None,
@@ -190,6 +191,8 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -259,7 +262,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -267,6 +270,8 @@ fn a_chains_return_merges_into_the_funding_change() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -321,7 +326,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -329,6 +334,8 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -440,7 +447,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
                 row(1, 0, &at, 8_000_000, &[]),
                 row(2, 1, &at, 5_000_000, &[]),
             ],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 2,
             boxes: None,
@@ -448,6 +455,8 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap_err();
@@ -613,9 +622,10 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             network: "mainnet".into(),
             index: 0,
             utxos: utxos.clone(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             depth: 1,
             again: true,
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -630,7 +640,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             params: params(),
             index: 0,
             utxos,
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: every,
             depth: 1,
             boxes: Some(2),
@@ -638,6 +648,8 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             again: true,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -701,7 +713,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             params: params(),
             index: 0,
             utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(2),
@@ -709,6 +721,8 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             again: true,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap_err();

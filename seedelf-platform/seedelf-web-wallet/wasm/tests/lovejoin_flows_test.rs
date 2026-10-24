@@ -240,12 +240,13 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             network: "preprod".into(),
             index: 0,
             utxos: utxos.clone(),
-            collateral: OutRef {
+            collateral: Some(OutRef {
                 tx_hash: hex::encode([0x11; 32]),
                 tx_index: 0,
-            },
+            }),
             depth: 1,
             again: false,
+            collateral_reserve: false,
         },
         Some(&pool_ref()),
         std::slice::from_ref(&funding),
@@ -262,10 +263,10 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             params: params(),
             index: 0,
             utxos,
-            collateral: OutRef {
+            collateral: Some(OutRef {
                 tx_hash: hex::encode([0x11; 32]),
                 tx_index: 0,
-            },
+            }),
             pool: others(4),
             depth: 1,
             boxes: None,
@@ -273,6 +274,8 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
             again: false,
             own: vec![funding.clone()],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
         Some(&pool_ref()),
     )

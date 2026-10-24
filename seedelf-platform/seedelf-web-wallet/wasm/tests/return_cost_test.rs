@@ -101,6 +101,7 @@ fn request(utxos: Vec<UtxoResponse>, merge: Vec<UtxoResponse>, own: &[u8]) -> Se
         merge,
         own: own.iter().map(|t| hex::encode([*t; 32])).collect(),
         collateral_pool: None,
+        collateral_boxes: vec![],
     }
 }
 
@@ -389,10 +390,10 @@ fn a_chains_return_leaves_a_strangers_junk_behind_and_the_chain_still_goes() {
                 params: params(),
                 index: 0,
                 utxos: utxos.clone(),
-                collateral: OutRef {
+                collateral: Some(OutRef {
                     tx_hash: hex::encode([0x20u8; 32]),
                     tx_index: 1,
-                },
+                }),
                 pool: pool(&protocol),
                 depth: 1,
                 boxes: Some(1),
@@ -400,6 +401,8 @@ fn a_chains_return_leaves_a_strangers_junk_behind_and_the_chain_still_goes() {
                 again: false,
                 own: vec![hex::encode([0x20u8; 32])],
                 collateral_pool: None,
+                collateral_boxes: vec![],
+                collateral_reserve: false,
             },
         )
         .unwrap();

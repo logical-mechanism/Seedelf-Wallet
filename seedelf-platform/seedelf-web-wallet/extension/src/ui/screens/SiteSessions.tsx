@@ -33,8 +33,9 @@ import { HistoriesNote } from "../components/HistoriesNote";
 import { PaidRows } from "../components/PaidRows";
 import {
   chainText,
-  CollateralBoxNote,
-  CollateralBoxRow,
+  CollateralReserveRow,
+  CollateralTailNote,
+  CollateralTailRow,
   IntoRow,
   LovejoinNote,
   LovejoinRows,
@@ -276,7 +277,7 @@ export function SiteSession({
             value={tr("sites.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
           />
           <IntoRow back={back} />
-          <CollateralBoxRow back={back} />
+          <CollateralTailRow back={back} />
         </ReviewRows>
         {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
         <TokenWays
@@ -289,7 +290,7 @@ export function SiteSession({
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
-        <CollateralBoxNote back={back} />
+        <CollateralTailNote back={back} />
         <p className="note">{tr("sites.back.staysConnected")}</p>
         <ReturnLinks back={back} />
       </Screen>
@@ -569,7 +570,9 @@ function TopUp({
   }
 
   if (review) {
-    const [paid, collateral] = review.payments;
+    const [topUp, collateral] = review.payments;
+    // Less what it pays for its collateral's mix, which a row of its own shows.
+    const paid = topUp && { ...topUp, lovelace: (BigInt(topUp.lovelace) - BigInt(review.collateralReserve ?? "0")).toString() };
     return (
       <Screen
         title={tr("sites.topUp.reviewTitle")}
@@ -593,6 +596,7 @@ function TopUp({
           <Row label={tr("lovejoin.review.to")} value={tr("lovejoin.privateSession", { number: review.index + 1 })} strong />
           <PaidRows label={tr("sites.topUp.amount")} paid={paid} />
           {collateral && <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })} />}
+          <CollateralReserveRow reserve={review.collateralReserve} />
           <Row label={tr("review.fee")} value={`${formatAda(review.fee.total)}\u00a0₳`} />
           {/* What leaves the private balance, and what it holds after, as a session's funding says them, not its change
               (blind test §9.8, T16). */}

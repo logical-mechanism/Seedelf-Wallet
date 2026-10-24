@@ -134,17 +134,19 @@ import {
   secureRandom,
   sentAlready,
   SpentUnread,
+  TAIL_KEEP_MS,
   UNLOCK_WAIT_MS,
   unlockWait,
   valuesOf,
   wayOver,
   type ChainProgress,
   type ChainWay,
+  type CollateralTail,
   type LovejoinChain,
   type LovejoinPool,
   type LovejoinService,
 } from "./lovejoin";
-import { holdWaiting, partsOf, reviewParts, splitParts, unsplit, type Waiting } from "./parts";
+import { GIVEME_BEHIND_MS, holdWaiting, partsOf, reviewParts, splitParts, unsplit, type Waiting } from "./parts";
 import { pendingKey } from "./pending";
 import { UnreadableRecordError, type PrivateStore } from "./private-store";
 import { forgetContractView, readContractView } from "./contract-scan";
@@ -467,6 +469,12 @@ interface SessionRecord {
   /** A site's private session (private CIP-30), rather than a swap. */
   site?: { origin: string };
   /**
+   * A funding of it paid COLLATERAL_TAIL_RESERVE beside its collateral, for that collateral to be mixed on its way
+   * into a 5 ₳ pool when it comes back (the owner, 2026-10-23, tailReserve): its boxes are counted on what's left
+   * after it (ChainWay `collateralReserve`).
+   */
+  collateralReserve?: true;
+  /**
    * A mix from the Lovejoin tile, rather than a swap: once funded, its boxes
    * go through Lovejoin and the rest comes back, one chain, run by itself.
    * `again`: the wallet's boxes in the pool, mixed again with no deposit;
@@ -594,6 +602,8 @@ interface KeptOut {
   approved: AutoRecord["approved"];
   /** How deep and how long its return through Lovejoin goes, as the approval showed them. */
   lovejoin?: AutoRecord["lovejoin"];
+  /** Its funding pays for its collateral's mix too (SessionRecord `collateralReserve`). */
+  tailReserved?: true;
   builtAt: number;
 }
 
@@ -603,6 +613,8 @@ interface KeptFunding extends SessionOutSummary {
   seed: string;
   /** The site a new session is for; a top-up has none. */
   site?: { origin: string };
+  /** It pays for its session's collateral's mix too (SessionRecord `collateralReserve`). */
+  tailReserved?: true;
   builtAt: number;
   /** Signed as sent, once a submit went unanswered: Send sends it again as it is (pending.ts writeAhead). */
   sentCbor?: string;
@@ -629,6 +641,8 @@ interface KeptMix extends SessionOutSummary {
   txCbor: string;
   seed: string;
   mix: LovejoinFunding;
+  /** Its funding pays for its collateral's mix too (SessionRecord `collateralReserve`). */
+  tailReserved?: true;
   builtAt: number;
 }
 
@@ -639,6 +653,12 @@ interface KeptBack extends SessionBackSummary {
   chain?: LovejoinChain["txs"];
   /** And where its boxes end up, mixed all the way. */
   leaves?: LovejoinChain["leaves"];
+  /**
+   * Its collateral's tail as the chain's record keeps it (recordChain): how long its leaf waits, as the session's
+   * approval or Settings has it; and, its mix built again (tailChain), the deposit an earlier chain sent, the chain
+   * whose tail this takes over, how many times its mix has been built, and when that deposit was first known in.
+   */
+  tailOf?: { delay?: LovejoinDelay; deposit?: string; resumes?: string; tries?: number; landed?: number };
 }
 
 /** A return's chain through Lovejoin being sent, a window at a time, between the runner's steps. */
@@ -648,7 +668,16 @@ interface PendingChain extends ChainProgress {
   kept: string;
   /** The return, for the private history once it's all sent. */
   summary: SessionBackSummary;
+  /**
+   * Its collateral's mix not signed yet (giveme.my busy or out of reach, Koios behind): not asked again before
+   * `witnessAfter` (ms), each wait twice the one before (`witnessWait`), TAIL_WITNESS_WAIT_MS up to its most.
+   */
+  witnessAfter?: number;
+  witnessWait?: number;
 }
+
+/** A collateral's mix not signed yet is asked again after a minute, then two, four and so on, 30 minutes at most. */
+const TAIL_WITNESS_WAIT_MS = [60_000, 30 * 60_000] as const;
 
 export interface SessionDeps extends ScriptSpendDeps {
   store: PrivateStore;
@@ -935,6 +964,11 @@ class NotEnoughPrivate extends Error {
   constructor() {
     super(t("sess.notEnoughPrivate"));
   }
+}
+
+/** A mix session whose chain is a deposit alone (a Bootstrap, or a seed before it): it runs no script, so it needs no collateral. */
+function depositOnly(s: SessionRecord | undefined): boolean {
+  return !!(s?.mix?.bootstrap || s?.mix?.seed);
 }
 
 /**
@@ -1714,13 +1748,19 @@ export class SessionService {
     // Once, at Review, never as the user types: whether Lovejoin's pools take the boxes now (privacy review §2.7).
     // A token it gets through a pool of it has its boxes' ADA funded beside the swap's (chunk 34's 34e).
     let lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, through });
+    // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve).
+    const reserve = await this.tailReserve(network, through ?? (await this.throughLovejoin()), params);
     const fund = (l?: SwapLovejoin) =>
       this.buildFunding(
         network,
         index,
         address,
         [
-          { to: address, lovelace: (BigInt(quote.fund.lovelace) + BigInt(l?.fund ?? "0")).toString(), tokens: quote.fund.tokens },
+          {
+            to: address,
+            lovelace: (BigInt(quote.fund.lovelace) + BigInt(l?.fund ?? "0") + reserve).toString(),
+            tokens: quote.fund.tokens,
+          },
           { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
         ],
         t("sess.emptySwap"),
@@ -1772,9 +1812,18 @@ export class SessionService {
           },
         }
       : {};
-    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = { ...(first ?? summary), txCbor, seed, index, swap, approved, ...way };
+    const kept: Omit<KeptOut, "builtAt"> & SessionOutSummary = {
+      ...(first ?? summary),
+      txCbor,
+      seed,
+      index,
+      swap,
+      approved,
+      ...way,
+      ...(reserve ? { tailReserved: true as const } : {}),
+    };
     await this.keepFunding(SESSION_OUT, kept, later);
-    return { ...summary, ...(lovejoin ? { lovejoin } : {}) };
+    return { ...summary, ...(lovejoin ? { lovejoin } : {}), ...(reserve ? { collateralReserve: reserve.toString() } : {}) };
   }
 
   /**
@@ -1784,19 +1833,27 @@ export class SessionService {
   async siteOutBuild(network: NetworkName, origin: string, lovelace: string, tokens: TokenQuantity[]): Promise<SessionOutSummary> {
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
+    // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve).
+    const reserve = await this.tailReserve(network, await this.throughLovejoin());
     const { summary, txCbor, seed, first, later } = await this.buildFunding(
       network,
       index,
       address,
       [
-        { to: address, lovelace, tokens },
+        { to: address, lovelace: (BigInt(lovelace) + reserve).toString(), tokens },
         { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
       ],
       t("sess.emptySession"),
     );
-    const kept: Omit<KeptFunding, "builtAt"> = { ...(first ?? summary), txCbor, seed, site: { origin } };
+    const kept: Omit<KeptFunding, "builtAt"> = {
+      ...(first ?? summary),
+      txCbor,
+      seed,
+      site: { origin },
+      ...(reserve ? { tailReserved: true as const } : {}),
+    };
     await this.keepFunding(SESSION_SITE_OUT, kept, later);
-    return summary;
+    return { ...summary, ...(reserve ? { collateralReserve: reserve.toString() } : {}) };
   }
 
   /** Records the site's private session, then sends its funding. The connector waits for it to arrive. */
@@ -1820,6 +1877,7 @@ export class SessionService {
         createdAt: now(),
         ...(await this.fundingRecords(network, built.index, SESSION_SITE_OUT, built)),
         site: { origin },
+        ...(built.tailReserved ? { collateralReserve: true as const } : {}),
       };
       await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       // The runs look for it until it lands, whether or not a page is open (runAll, final review F13).
@@ -1898,14 +1956,18 @@ export class SessionService {
   private async mixFunding(network: NetworkName, mix: LovejoinFunding): Promise<SessionOutSummary & { mix: LovejoinFunding }> {
     const index = await this.freshIndex(network);
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
+    // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): in the one UTxO
+    // that pays the mixes, whose change pays that mix too. Not a Bootstrap's, which comes back with the rest (buildBack).
+    const reserve = mix.bootstrap ? 0n : await this.tailReserve(network, true);
     const { summary, txCbor, seed, first, later } = await this.buildFunding(
       network,
       index,
       address,
       [
         // A token pool's boxes take its token too, paid with their ADA in one UTxO, which the deposit spends.
-        { to: address, lovelace: mix.lovelace, tokens: mix.token ? [mix.token] : [] },
-        { to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] },
+        { to: address, lovelace: (BigInt(mix.lovelace) + reserve).toString(), tokens: mix.token ? [mix.token] : [] },
+        // Its mixes' collateral. None for a Bootstrap: its deposit alone runs no script (the owner, 2026-10-23).
+        ...(mix.bootstrap ? [] : [{ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] }]),
       ],
       t(mix.again ? "sess.emptyMixPay" : "sess.emptyMix"),
       undefined,
@@ -1921,9 +1983,9 @@ export class SessionService {
       if (mix.bootstrap && e instanceof Error && TOO_MANY.test(e.message)) throw new Error(t("sess.bootstrapTooMany"));
       throw e;
     });
-    const kept: Omit<KeptMix, "builtAt"> = { ...(first ?? summary), txCbor, seed, mix };
+    const kept: Omit<KeptMix, "builtAt"> = { ...(first ?? summary), txCbor, seed, mix, ...(reserve ? { tailReserved: true as const } : {}) };
     await this.keepFunding(SESSION_MIX_OUT, kept, later);
-    return { ...summary, mix };
+    return { ...summary, mix, ...(reserve ? { collateralReserve: reserve.toString() } : {}) };
   }
 
   /** Records the mix session, then sends its funding. From here it runs itself. */
@@ -1954,6 +2016,7 @@ export class SessionService {
           ...(built.mix.width === 4 ? { width: 4 as const } : {}),
         },
         auto: { approved: { minAmountOut: "0", fund: { lovelace: built.mix.lovelace, tokens: [] } } },
+        ...(built.tailReserved ? { collateralReserve: true as const } : {}),
       };
       await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       const pending = await this.sendFunding(network, record, SESSION_MIX_OUT, "mix");
@@ -1977,7 +2040,14 @@ export class SessionService {
     const { address, keyHash } = (await this.accounts(network, [s])).get(index)!;
     const held = await this.accountUtxos(network, keyHash);
     const payments = [{ to: address, lovelace, tokens }];
-    if (!held.some(collateralFits)) payments.push({ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] });
+    // A new collateral, and, where it would be mixed on its way into a 5 ₳ pool as the session comes back, what that
+    // mix takes (tailReserve).
+    let reserve = 0n;
+    if (!held.some(collateralFits)) {
+      reserve = await this.tailReserve(network, await this.throughLovejoin(s));
+      payments[0] = { to: address, lovelace: (BigInt(lovelace) + reserve).toString(), tokens };
+      payments.push({ to: address, lovelace: SESSION_COLLATERAL.toString(), tokens: [] });
+    }
     // One transaction, as a top-up always was: its record is one top-up (topUpSubmit).
     const { summary, txCbor, seed } = await this.buildFunding(
       network,
@@ -1989,9 +2059,9 @@ export class SessionService {
       undefined,
       { inParts: false },
     );
-    const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed };
+    const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed, ...(reserve ? { tailReserved: true as const } : {}) };
     await keep(this.deps, SESSION_TOP_UP, kept);
-    return summary;
+    return { ...summary, ...(reserve ? { collateralReserve: reserve.toString() } : {}) };
   }
 
   /** Records the top-up built last in its session, then sends it. */
@@ -2024,6 +2094,7 @@ export class SessionService {
         // Once in the record: a try turned away gives way to this one, and one that may have gone stays as it was.
         s.txs = s.txs.filter((x) => x.txHash !== txHash || !x.unsent);
         if (!s.txs.some((x) => x.txHash === txHash)) s.txs.push(out);
+        if (built.tailReserved) s.collateralReserve = true;
       });
       // Looked for until it lands, as a funding is (runAll, final review F13).
       await this.deps.alarm?.start().catch(() => undefined);
@@ -2720,6 +2791,7 @@ export class SessionService {
         ...(await this.fundingRecords(network, built.index, SESSION_OUT, built)),
         swap: built.swap,
         auto: { approved: built.approved, ...back },
+        ...(built.tailReserved ? { collateralReserve: true as const } : {}),
       };
       await this.save(network, { ...book, next: built.index + 1, sessions: [...book.sessions, record] });
       const pending = await this.sendFunding(network, record, SESSION_OUT, "payment");
@@ -2837,7 +2909,7 @@ export class SessionService {
     if (!rows.length) throw new Error(t("sess.accountEmptyBack"));
     const built = await this.buildBack(network, index, rows, undefined, direct, pools);
     await wallet.withKeys(() => session.set(SESSION_BACK, built));
-    const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, ...summary } = built;
+    const { txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, tailOf: _tailOf, ...summary } = built;
     return summary;
   }
 
@@ -2900,7 +2972,7 @@ export class SessionService {
     }
     await wallet.withKeys(() => session.set(SESSION_CLAIM, returns));
     return {
-      returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, ...summary }) => summary),
+      returns: returns.map(({ txCbor: _txCbor, builtAt: _builtAt, chain: _chain, leaves: _leaves, tailOf: _tailOf, ...summary }) => summary),
       skipped,
     };
   }
@@ -4025,23 +4097,71 @@ export class SessionService {
     // and says why when it would have gone through Lovejoin (independent review L17).
     const restOnItsWay = started && sent.some((t) => t.kind === "back" && !t.confirmed && !t.replaced);
     if (!direct && restOnItsWay && lovejoin?.available(network) && (await this.throughLovejoin(record))) skipped = REST_NOT_BACK();
-    // The session's 5 ₳ collateral goes into the 5 ₳ pool as a box, rather than back with the rest under the
-    // session's history, wherever its return goes through Lovejoin, a chain's or one that comes back directly, and
-    // Settings keeps it on (the owner, 2026-10-22). Read as it's built, as Settings' Lovejoin is for any session but
-    // a swap. WebAssembly brings it back with the rest where the return can't pay for the box.
+    // The session's 5 ₳ collateral is mixed once on its way into the 5 ₳ pool, rather than back with the rest under
+    // the session's history, wherever its return goes through Lovejoin, a chain's or one that comes back directly, and
+    // Settings keeps it on (the owner, 2026-10-22 and 2026-10-23): its deposit and its mix go before the return. Read
+    // as it's built, as Settings' Lovejoin is for any session but a swap. WebAssembly brings it back with the rest
+    // where what's left can't pay for that. Nor is the pool read where the account holds no 5 ₳ to mix. Never a
+    // Bootstrap's, nor a seed's: their chain is a deposit alone, which runs no script, so their collateral was never
+    // put up, and it comes back with the rest (the owner, 2026-10-23).
     const intoPool =
-      !direct && lovejoin?.available(network) && (await this.throughLovejoin(record)) && (await this.collateralIntoPool())
-        ? await lovejoin.collateralPool(network, params)
+      !direct &&
+      !depositOnly(record) &&
+      rows.some(collateralFits) &&
+      lovejoin?.available(network) &&
+      (await this.throughLovejoin(record)) &&
+      (await this.collateralIntoPool())
+        ? await lovejoin.collateralPool(network, params, chainOwner(index))
         : undefined;
-    const boxedIn = (made?: { txHash: string; txIndex: number }) =>
-      made && intoPool ? { collateralBox: { txHash: made.txHash, txIndex: made.txIndex, pool: intoPool.id } } : {};
+    // Its deposit and its mix: two of the return's transactions.
+    const tailIn = (tail?: CollateralTail) => (tail && intoPool ? { collateralTail: { ...tail, pool: intoPool.pool.id, txs: 2 } } : {});
+    // How long its leaf waits: as the swap was approved, else Settings' as it's sent.
+    const delay = record?.auto?.lovejoin?.delay;
+    // The collateral's mix its chain left (a lock cut it, giveme.my refused it, a box it drew went), built again with
+    // two boxes drawn afresh, and the return after it: what's left comes back once that box is mixed (tailChain).
+    if (started && !direct && lovejoin) {
+      const resumed = await lovejoin.tailChain(network, index, rows, params, own);
+      // Not yet: what's at the account pays for that mix, so nothing comes back before it (TAIL_KEEP_MS bounds it).
+      if (resumed === "wait") throw new Error(t("lj.tail.waiting"));
+      if (resumed) {
+        const { chain, tail, resumes } = resumed;
+        await this.leftBy(network, index, rows, chain.leftOut);
+        const back = chain.txs.at(-1)!;
+        return {
+          network,
+          index,
+          txHash: back.txHash,
+          txCbor: back.txCbor,
+          fee: chain.fees,
+          lovelace: chain.returned,
+          tokens: chain.tokens,
+          depositOutputs: 1,
+          inputs: rows.length - chain.leftOut.length,
+          merged: 0,
+          leftOut: chain.leftOut,
+          chain: chain.txs,
+          leaves: [],
+          collateralTail: { ...chain.collateralTail!, pool: tail.pool, txs: 1 },
+          tailOf: {
+            deposit: tail.deposit,
+            resumes,
+            tries: tail.tries + 1,
+            ...(tail.landed !== undefined ? { landed: tail.landed } : {}),
+            ...(delay ? { delay } : {}),
+          },
+          builtAt: now(),
+        };
+      }
+    }
     if (!direct && !started && lovejoin?.available(network) && (await this.throughLovejoin(record))) {
       // Its own collateral, the one its funding paid, else any 5 ₳ of ADA alone at the account (privacy review
       // §2.15). Never a stranger's 5 ₳ carrying a reference script or a datum: the mixes can't put it up.
       const funding = record?.txs[0]?.txHash;
       const collateral = rows.find((u) => collateralFits(u) && u.tx_hash === funding) ?? rows.find(collateralFits);
       let chain: LovejoinChain | undefined;
-      if (!collateral) {
+      // A Bootstrap's (or a seed's) chain is its deposit alone, which runs no script: it goes without one, and its
+      // funding pays none (the owner, 2026-10-23).
+      if (!collateral && !depositOnly(record)) {
         // Something the account signed spent it (a site's transaction, or a return before this one, which takes
         // it; a top-up puts one back, and a session brought back by hand is offered 5 ₳ for it): no mix can go, so
         // it comes back directly, and says so when its spare ADA would have paid for a box. A session brought back
@@ -4068,8 +4188,12 @@ export class SessionService {
             record?.mix?.seed || record?.mix?.bootstrap ? 0 : record?.auto?.lovejoin?.depth,
             // The pool its mix was funded for: a token pool's token went with its ADA.
             record?.mix?.pool,
-            // Its width, a return's tokens' pools (chunk 34's 34e), and its collateral's.
-            { ...wayOf(record, pools), ...(intoPool ? { collateralPool: intoPool } : {}) },
+            // Its width, a return's tokens' pools (chunk 34's 34e), and its collateral's, which a funding may have
+            // paid for (tailReserve).
+            {
+              ...wayOf(record, pools),
+              ...(intoPool ? { collateralPool: intoPool, ...(record?.collateralReserve ? { collateralReserve: true } : {}) } : {}),
+            },
           );
         } catch (e) {
           skipped = leftOut(e);
@@ -4087,7 +4211,7 @@ export class SessionService {
       if (chain) {
         await this.leftBy(network, index, rows, chain.leftOut);
         const back = chain.txs[chain.txs.length - 1]!;
-        const delay = record?.auto?.lovejoin?.delay ?? (await lovejoin.settings()).delay;
+        const chainDelay = delay ?? (await lovejoin.settings()).delay;
         return {
           network,
           index,
@@ -4104,10 +4228,10 @@ export class SessionService {
           lovejoin: {
             boxes: chain.boxes,
             depth: chain.depth,
-            mixes: chain.txs.filter((t) => t.kind === "mix").length,
+            mixes: chain.txs.filter((t) => t.kind === "mix" && !t.tail).length,
             fees: chain.fees,
             txs: chain.txs.length,
-            delay,
+            delay: chainDelay,
             ...(record?.mix?.again ? { again: true } : {}),
             ...(record?.mix?.bootstrap ? { bootstrap: true } : {}),
             ...(chain.pool ? { pool: chain.pool } : {}),
@@ -4122,7 +4246,7 @@ export class SessionService {
           },
           chain: chain.txs,
           leaves: chain.leaves,
-          ...boxedIn(chain.collateralBox),
+          ...tailIn(chain.collateralTail),
           builtAt: now(),
         };
       }
@@ -4136,7 +4260,7 @@ export class SessionService {
     }
     // No chain this time: a chain built for it before won't be sent, so nothing stays reserved for it.
     await lovejoin?.release(network, chainOwner(index));
-    let result: Omit<SessionBackSummary, "network" | "index"> & { txCbor: string };
+    let result: Omit<SessionBackSummary, "network" | "index"> & { txCbor: string; tail?: CollateralTail & { txs: LovejoinChain["txs"] } };
     try {
       result = await wallet.withKeys(
         (keys) =>
@@ -4144,7 +4268,15 @@ export class SessionService {
             wasm.buildSessionReturn(
               keys.oneTime,
               keys.seedelf,
-              JSON.stringify({ network, params, index, utxos: rows, merge, own, ...(intoPool?.ref ? { collateralPool: intoPool.ref } : {}) }),
+              JSON.stringify({
+                network,
+                params,
+                index,
+                utxos: rows,
+                merge,
+                own,
+                ...(intoPool?.pool.ref ? { collateralPool: intoPool.pool.ref, collateralBoxes: intoPool.rows } : {}),
+              }),
             ),
           ) as typeof result,
       );
@@ -4158,14 +4290,41 @@ export class SessionService {
       throw new NothingComesBack(t("sess.tooLittleBack"));
     }
     await this.leftBy(network, index, rows, result.leftOut);
-    // WebAssembly names the box by where it is; the pool it's in is the one asked.
-    const { collateralBox: made, ...back } = result;
-    return { ...back, network, index, ...(skipped ? { lovejoinSkipped: skipped } : {}), ...boxedIn(made), builtAt: now() };
+    const { tail, ...back } = result;
+    const said = skipped ? { lovejoinSkipped: skipped } : {};
+    if (!tail || !intoPool) return { ...back, network, index, ...said, builtAt: now() };
+    // Its collateral mixed on its way into the 5 ₳ pool: the deposit, the mix, then the return, sent as a chain.
+    const { txs, ...made } = tail;
+    return {
+      ...back,
+      network,
+      index,
+      fee: (BigInt(back.fee) + BigInt(made.fee)).toString(),
+      ...said,
+      chain: [...txs, { kind: "back", txCbor: back.txCbor, txHash: back.txHash, fee: back.fee }],
+      leaves: [],
+      ...tailIn(made),
+      ...(delay ? { tailOf: { delay } } : {}),
+      builtAt: now(),
+    };
   }
 
   /** Whether Settings has a session's collateral go into the 5 ₳ pool (`lovejoinCollateral`), on by default. */
   private async collateralIntoPool(): Promise<boolean> {
     return (await this.deps.preferences?.get())?.lovejoinCollateral ?? DEFAULT_PREFERENCES.lovejoinCollateral;
+  }
+
+  /**
+   * What a funding that pays a session its collateral adds for that collateral to be mixed on its way into a 5 ₳
+   * pool as the session comes back (the owner, 2026-10-23): COLLATERAL_TAIL_RESERVE where its return goes `through`
+   * Lovejoin, Settings has the collateral go in, and a 5 ₳ pool would take it now (collateralPool); nothing
+   * otherwise. What its mix doesn't spend comes back with the change.
+   */
+  private async tailReserve(network: NetworkName, through: boolean, params?: unknown): Promise<bigint> {
+    const lovejoin = this.deps.lovejoin;
+    if (!through || !lovejoin?.available(network) || !(await this.collateralIntoPool())) return 0n;
+    const pool = await lovejoin.collateralPool(network, params ?? (await this.deps.koios(network).epochParams())).catch(() => undefined);
+    return pool ? BigInt(this.deps.wasm.lovejoinCollateralReserve()) : 0n;
   }
 
   /**
@@ -4190,7 +4349,7 @@ export class SessionService {
    */
   private async collateralWanted(network: NetworkName, s: SessionRecord | undefined, rows: KoiosUtxo[]): Promise<boolean> {
     if (rows.some(collateralFits)) return false;
-    if (s?.mix) return true;
+    if (s?.mix) return !depositOnly(s);
     // A box three a mix: four falls back to three where it costs more than the spare pays (34e's review, 6).
     const lovejoin = this.deps.lovejoin!;
     const spare = spareOf(rows);
@@ -4323,9 +4482,6 @@ export class SessionService {
    * the user waits on); the runner's steps and the alarm send the rest.
    */
   private async sendBack(network: NetworkName, built: KeptBack, kept = SESSION_BACK, budgetMs = 0): Promise<PendingTx> {
-    // The box its return puts the collateral into is held as not mixed yet once it's there, asking nobody what made
-    // it. A record that can't be written is no reason to keep the money: the box is then asked of, as any is.
-    if (built.collateralBox) await this.deps.lovejoin?.noteCollateralBox(network, built.collateralBox.txHash).catch(() => undefined);
     if (built.chain) return this.sendChain(network, built, kept, budgetMs);
     // Lovejoin was left out: the session says so, a swap that ran itself too.
     const skipped = built.lovejoinSkipped;
@@ -4391,7 +4547,7 @@ export class SessionService {
    * `budgetMs`: how long this call looks for blocks after the first window.
    */
   private async sendChain(network: NetworkName, built: KeptBack, kept: string, budgetMs: number): Promise<PendingTx> {
-    const { chain: txs, leaves, txCbor: _txCbor, builtAt: _builtAt, ...summary } = built;
+    const { chain: txs, leaves, txCbor: _txCbor, builtAt: _builtAt, tailOf, ...summary } = built;
     // Another return of the session kept for Send (its page's, Bring everything back's) never takes the place
     // of a chain on its way: its progress, its reservation and its record stay as they are (final review lovejoin-4).
     if (await this.pendingChain(network, built.index)) {
@@ -4409,6 +4565,8 @@ export class SessionService {
       was = { ...(s.chain ? { chain: s.chain } : {}), ...(s.lovejoinSkipped ? { lovejoinSkipped: s.lovejoinSkipped } : {}) };
       s.chain = { total: txs!.length, last: txs!.at(-1)!.txHash, at: this.deps.now() };
       delete s.lovejoinSkipped;
+      // A return that comes back directly, its collateral's mix before it: why Lovejoin was left out, as sendBack says.
+      if (summary.lovejoinSkipped && !s.mix) s.lovejoinSkipped = summary.lovejoinSkipped;
     });
     const lovejoin = this.deps.lovejoin;
     const start = async () => {
@@ -4441,7 +4599,21 @@ export class SessionService {
       ...(summary.lovejoin?.parts ? { pools: tokenShares(summary.lovejoin.parts) } : {}),
       ...(summary.lovejoin?.width === 4 ? { width: 4 as const } : {}),
       // Its boxes wait as long as the return said: a swap's as approved (independent review L21).
-      ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : {}),
+      ...(summary.lovejoin?.delay ? { delay: summary.lovejoin.delay as LovejoinDelay } : tailOf?.delay ? { delay: tailOf.delay } : {}),
+      // Its collateral's deposit and mix (ChainRecord `tail`).
+      ...(summary.collateralTail
+        ? {
+            tail: {
+              pool: summary.collateralTail.pool,
+              box: summary.collateralTail.box,
+              leaf: summary.collateralTail.leaf,
+              ...(tailOf?.deposit ? { deposit: tailOf.deposit } : {}),
+              ...(tailOf?.resumes ? { resumes: tailOf.resumes } : {}),
+              ...(tailOf?.tries ? { tries: tailOf.tries } : {}),
+              ...(tailOf?.landed !== undefined ? { landed: tailOf.landed } : {}),
+            },
+          }
+        : {}),
     };
     try {
       await (lovejoin ? lovejoin.recordChain(network, record, start) : start());
@@ -4450,6 +4622,7 @@ export class SessionService {
       await this.update(network, built.index, (s) => {
         if (s.chain?.last !== record.txs.at(-1)!.txHash) return;
         delete s.chain;
+        delete s.lovejoinSkipped;
         Object.assign(s, was);
       }).catch(() => undefined);
       throw e;
@@ -4513,6 +4686,7 @@ export class SessionService {
           save: () => this.keepPending(network, pending),
           sleep,
           now: this.deps.now,
+          witness: (i) => this.witnessTail(network, pending, i),
         },
         budgetMs,
       );
@@ -4593,6 +4767,43 @@ export class SessionService {
       }
     }
     await this.deps.lovejoin?.chainSent(network, pending.txs.at(-1)!.txHash, i);
+  }
+
+  /**
+   * giveme.my's signature on chain `pending`'s collateral's mix, `i`, now that every transaction before it is on chain
+   * (pumpChain): false while giveme.my can't give it yet, to be asked again later, each wait twice the one before
+   * (TAIL_WITNESS_WAIT_MS): busy or out of reach, or, for GIVEME_BEHIND_MS after the collateral's deposit was found
+   * in, behind the chain. A refusal after that, a box it drew that's gone, a network that measures it higher, or
+   * TAIL_KEEP_MS gone by stops the chain there; the runner then builds that mix again with fresh boxes, if it may
+   * (buildBack's tailChain), or brings the rest back.
+   */
+  private async witnessTail(network: NetworkName, pending: PendingChain, i: number): Promise<boolean> {
+    const lovejoin = this.deps.lovejoin;
+    if (!lovejoin) throw new Error(t("lj.notOnNetwork"));
+    if (pending.witnessAfter !== undefined && this.deps.now() < pending.witnessAfter) return false;
+    const landed = await lovejoin.tailLanded(network, pending.txs.at(-1)!.txHash);
+    const waited = this.deps.now() - landed;
+    if (waited > TAIL_KEEP_MS) throw new Error(t("lj.tail.tooLong"));
+    // What it spends that the wallet sent, all of it on chain by now: the chain's own before it, and its box's deposit
+    // (an earlier chain's, where its mix is built again). An Ogmios that doesn't know those yet is only behind.
+    const box = pending.summary.collateralTail?.box.txHash;
+    const ours = new Set([...pending.txs.slice(0, i).map((x) => x.txHash), ...(box ? [box] : [])]);
+    try {
+      const finished = await lovejoin.tailWitness(network, pending.txs[i]!.txCbor, ours);
+      pending.txs[i] = { ...pending.txs[i]!, txCbor: finished.txCbor, witnessed: true };
+      delete pending.witnessAfter;
+      delete pending.witnessWait;
+      await this.keepPending(network, pending);
+      return true;
+    } catch (e) {
+      if (e instanceof CollateralRefusedError && !e.busy && waited >= GIVEME_BEHIND_MS) throw new Error(t("lj.tail.refused"));
+      if (!(e instanceof CollateralError || e instanceof KoiosError)) throw e;
+      const [first, most] = TAIL_WITNESS_WAIT_MS;
+      pending.witnessWait = pending.witnessWait === undefined ? first : Math.min(pending.witnessWait * 2, most);
+      pending.witnessAfter = this.deps.now() + pending.witnessWait;
+      await this.keepPending(network, pending);
+      return false;
+    }
   }
 
   /** Where session `index`'s chain waits while it's sent. */

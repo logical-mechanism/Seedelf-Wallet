@@ -52,8 +52,9 @@ import { HandleWarning } from "../components/HandleWarning";
 import { HistoriesNote } from "../components/HistoriesNote";
 import {
   chainText,
-  CollateralBoxNote,
-  CollateralBoxRow,
+  CollateralReserveRow,
+  CollateralTailNote,
+  CollateralTailRow,
   delayText,
   IntoRow,
   LOVEJOIN_UNAUDITED,
@@ -1272,7 +1273,8 @@ export function SwapApproval({
   const lovejoinCosts = mixes || tokenBoxes > 0 ? lovejoinOf(mixes ? l : undefined, tokenBoxes > 0 ? way : undefined) : undefined;
   const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, lovejoinCosts);
   // What the funding pays for the swap itself, apart from the token's boxes (34e's fixes' review, 2).
-  const forSwap = (BigInt(swapPart!.lovelace) - tokenFund).toString();
+  // Less what it pays for its collateral's mix, which a row of its own shows.
+  const forSwap = (BigInt(swapPart!.lovelace) - tokenFund - BigInt(summary.collateralReserve ?? "0")).toString();
   const tokensOut = new Set(summary.payments.flatMap((p) => p.tokens.map(tokenKey))).size;
   return (
     <>
@@ -1327,6 +1329,7 @@ export function SwapApproval({
           <TokenBoxesRows way={way} fund={tokenFund} box={way.pool ? l?.values?.[way.pool] : undefined} token={got?.label ?? ""} />
         )}
         <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral!.lovelace) })} />
+        <CollateralReserveRow reserve={summary.collateralReserve} />
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
         {/* Too much for one transaction: funded as several, every one needed (the owner's call, 2026-10-21). */}
         {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}
@@ -2230,7 +2233,7 @@ export function Session({
             value={tr("swaps.back.fromValue", { utxos: tr("amount.utxos", { count: back.inputs }), number: s.index + 1 })}
           />
           <IntoRow back={back} />
-          <CollateralBoxRow back={back} />
+          <CollateralTailRow back={back} />
         </ReviewRows>
         {/* Its tokens, each through its own pool or back directly, with Change (chunk 34's 34e). */}
         <TokenWays
@@ -2249,7 +2252,7 @@ export function Session({
         <ReturnLeftOut leftOut={back.leftOut} />
         <HandleWarning tokens={back.tokens} returning />
         <LovejoinNote back={back} />
-        <CollateralBoxNote back={back} />
+        <CollateralTailNote back={back} />
         <ReturnLinks back={back} after={neverAgain(s, back)} />
       </Screen>
     );

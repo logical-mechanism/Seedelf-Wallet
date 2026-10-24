@@ -149,9 +149,10 @@ fn a_session_plans_its_boxes_on_its_spare_ada() {
                 network: "preprod".into(),
                 index: 0,
                 utxos: holdings(),
-                collateral: collateral(),
+                collateral: Some(collateral()),
                 depth,
                 again: false,
+                collateral_reserve: false,
             },
         )
         .unwrap()
@@ -178,7 +179,7 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: None,
@@ -186,6 +187,8 @@ fn a_sessions_chain_is_signed_in_order_and_spends_its_collateral_last() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -254,7 +257,7 @@ fn a_chains_return_merges_into_the_funding_change() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -262,6 +265,8 @@ fn a_chains_return_merges_into_the_funding_change() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -304,6 +309,89 @@ fn a_chains_return_merges_into_the_funding_change() {
     assert!(fee > 0);
 }
 
+/// A Bootstrap's session (depth 0) is funded with no collateral (the owner,
+/// 2026-10-23): its deposit runs no script, and its return is a sweep, never
+/// merged, since a merge needs one to put up. A chain that mixes still can't go
+/// without one.
+#[test]
+fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(4321u64);
+    let at = session();
+    let funded = vec![row(1, 0, &at, 30_000_000, &[])];
+    let plan = lovejoin::plan(
+        &accounts(),
+        PlanRequest {
+            network: "preprod".into(),
+            index: 0,
+            utxos: funded.clone(),
+            collateral: None,
+            depth: 0,
+            again: false,
+            collateral_reserve: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.spare, "30000000");
+    assert!(plan.boxes >= 2);
+    let request = |depth| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: funded.clone(),
+        collateral: None,
+        pool: pool(&protocol),
+        depth,
+        boxes: Some(2),
+        merge: vec![funding_change(sk)],
+        again: false,
+        own: vec![hex::encode([1u8; 32])],
+        collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
+    };
+    let result = lovejoin::chain(&accounts(), sk, request(0)).unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["deposit", "back"]);
+    assert_eq!(result.boxes, 2);
+    assert_eq!(result.merged, 0, "swept: nothing to put up for a merge");
+    let bytes: Vec<Vec<u8>> = result
+        .txs
+        .iter()
+        .map(|t| hex::decode(&t.tx_cbor).unwrap())
+        .collect();
+    let txs: Vec<MultiEraTx> = bytes
+        .iter()
+        .map(|b| MultiEraTx::decode(b).unwrap())
+        .collect();
+    for (tx, out) in txs.iter().zip(&result.txs) {
+        assert!(tx.collateral().is_empty(), "{} puts up nothing", out.kind);
+        assert!(tx.redeemers().is_empty(), "{} runs no script", out.kind);
+    }
+    // The deposit's change stays at the session's own address; the return leaves the
+    // funding's change where it is and pays the wallet contract.
+    let change: Vec<String> = txs[0]
+        .outputs()
+        .iter()
+        .map(|o| Address::from_bytes(&o.address().unwrap().to_vec()).unwrap())
+        .filter(|a| !a.has_script())
+        .map(|a| a.to_bech32().unwrap())
+        .collect();
+    assert_eq!(change, vec![at]);
+    assert!(!spends(&txs[1], [9; 32], 2));
+    for output in txs[1].outputs() {
+        let address = Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
+        assert!(address.has_script(), "into the wallet contract");
+    }
+    let refused = lovejoin::chain(&accounts(), sk, request(1)).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("needs the session's collateral"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn a_chains_return_leaves_out_what_would_overflow_a_token() {
     let protocol = Protocol::of(true).unwrap();
@@ -330,7 +418,7 @@ fn a_chains_return_leaves_out_what_would_overflow_a_token() {
                 params: params(),
                 index: 0,
                 utxos: utxos.clone(),
-                collateral: collateral(),
+                collateral: Some(collateral()),
                 pool: pool(&protocol),
                 depth: 1,
                 boxes: Some(1),
@@ -338,6 +426,8 @@ fn a_chains_return_leaves_out_what_would_overflow_a_token() {
                 again: false,
                 own: vec![],
                 collateral_pool: None,
+                collateral_boxes: vec![],
+                collateral_reserve: false,
             },
         )
         .unwrap()
@@ -386,7 +476,7 @@ fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
             params: params(),
             index: 0,
             utxos,
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -394,6 +484,8 @@ fn a_utxo_with_a_reference_script_pays_no_mix_and_comes_back_swept() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -433,7 +525,7 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             params: params(),
             index: 0,
             utxos: holdings(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(1),
@@ -441,6 +533,8 @@ fn the_boxes_come_back_one_by_one_through_giveme_my() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -552,7 +646,7 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
                 row(1, 0, &at, 8_000_000, &[]),
                 row(2, 1, &at, 5_000_000, &[]),
             ],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 2,
             boxes: None,
@@ -560,6 +654,8 @@ fn a_session_without_a_box_of_spare_ada_is_refused() {
             again: false,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap_err();
@@ -819,9 +915,10 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             network: "preprod".into(),
             index: 0,
             utxos: utxos.clone(),
-            collateral: collateral(),
+            collateral: Some(collateral()),
             depth: 1,
             again: true,
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -836,7 +933,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             params: params(),
             index: 0,
             utxos,
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: every,
             depth: 1,
             boxes: Some(2),
@@ -844,6 +941,8 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             again: true,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap();
@@ -907,7 +1006,7 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             params: params(),
             index: 0,
             utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
-            collateral: collateral(),
+            collateral: Some(collateral()),
             pool: pool(&protocol),
             depth: 1,
             boxes: Some(2),
@@ -915,6 +1014,8 @@ fn a_mix_session_mixes_the_wallets_boxes_again_with_no_deposit() {
             again: true,
             own: vec![],
             collateral_pool: None,
+            collateral_boxes: vec![],
+            collateral_reserve: false,
         },
     )
     .unwrap_err();
@@ -1144,7 +1245,7 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
         params: params(),
         index: 0,
         utxos,
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool,
         depth: 1,
         boxes: Some(1),
@@ -1152,6 +1253,8 @@ fn a_pool_too_small_for_a_sessions_chain_skips_lovejoin() {
         again,
         own: vec![],
         collateral_pool: None,
+        collateral_boxes: vec![],
+        collateral_reserve: false,
     };
     let result =
         lovejoin::chain(&accounts(), sk, request(rows.clone(), false, holdings())).unwrap();
@@ -1254,47 +1357,176 @@ fn ada_pool_ref(lovelace: u64) -> PoolRef {
     }
 }
 
-/// The collateral's box in `tx_cbor` at `at`: 5 ₳ alone at the 5 ₳ pool's
-/// `mix_box`, under a register `sk` owns. The other outputs are Seedelf's,
-/// and hold what comes back.
-fn collateral_box_in(tx_cbor: &str, at: &OutRef, sk: Scalar) -> u64 {
-    let bytes = hex::decode(tx_cbor).unwrap();
-    let tx = MultiEraTx::decode(&bytes).unwrap();
-    assert_eq!(hex::encode(tx.hash()), at.tx_hash);
-    let pool = lovejoin::protocol_of(true, Some(&ada_pool_ref(5_000_000))).unwrap();
-    let outputs = eval::resolve_outputs(&bytes).unwrap();
-    let boxed = PoolBox::from_resolved(outputs[at.tx_index as usize].clone(), &pool)
+/// The 5 ₳ pool [`ada_pool_ref`] names, verified.
+fn five() -> Protocol {
+    lovejoin::protocol_of(true, Some(&ada_pool_ref(5_000_000))).unwrap()
+}
+
+/// `n` strangers' boxes in the 5 ₳ pool, as Koios lists them at its
+/// `mix_box`, their transactions' hashes starting `first`.
+fn strangers(first: u8, n: u8) -> Vec<UtxoResponse> {
+    let pool = five();
+    (0..n)
+        .map(|i| {
+            let owner = Register::create(Scalar::from(9_000u64 + u64::from(i)))
+                .unwrap()
+                .rerandomize()
+                .unwrap();
+            let point = |p: &str| -> [u8; 48] { hex::decode(p).unwrap().try_into().unwrap() };
+            let mut hash = [first; 32];
+            hash[31] = i;
+            let b = PoolBox {
+                utxo: Resolved {
+                    tx_hash: hash,
+                    index: 0,
+                    output: vec![],
+                },
+                a: point(&owner.generator),
+                b: point(&owner.public_value),
+            };
+            box_row(&b, &pool)
+        })
+        .collect()
+}
+
+fn spends_ref(tx: &MultiEraTx, at: &OutRef) -> bool {
+    tx.inputs()
+        .iter()
+        .any(|i| hex::encode(**i.hash()) == at.tx_hash && i.index() == at.tx_index)
+}
+
+/// A session's collateral's tail, as a chain's or a direct return's
+/// transactions have it: the deposit spends the session's 5 ₳ collateral and
+/// pays one box of 5 ₳ alone into the 5 ₳ pool, the wallet's own; the mix
+/// takes that box, two of `others`, and the deposit's change, under
+/// giveme.my's collateral, signed by the session's key alone for now, its
+/// leaf the wallet's. Returns the mix, whose change the return takes.
+fn the_tail(
+    deposit: &lovejoin::ChainTxOut,
+    mix: &lovejoin::ChainTxOut,
+    tail: &lovejoin::TailOut,
+    others: &[UtxoResponse],
+    sk: Scalar,
+) -> Vec<u8> {
+    let pool = five();
+    assert_eq!(
+        (deposit.kind.as_str(), mix.kind.as_str()),
+        ("deposit", "mix")
+    );
+    assert!(deposit.tail && !deposit.giveme);
+    assert!(mix.tail && mix.giveme);
+    let deposited = hex::decode(&deposit.tx_cbor).unwrap();
+    let d = MultiEraTx::decode(&deposited).unwrap();
+    assert!(spends(&d, [2; 32], 1), "the session's collateral");
+    assert_eq!(tail.boxed.tx_hash, hex::encode(d.hash()));
+    let outputs = eval::resolve_outputs(&deposited).unwrap();
+    let boxed = PoolBox::from_resolved(outputs[tail.boxed.tx_index as usize].clone(), &pool)
         .expect("a box of the 5 ₳ pool");
-    assert!(boxed.is_owned(&sk), "the wallet's own box");
-    let mut seedelf = 0;
-    for (i, output) in tx.outputs().iter().enumerate() {
-        if i as u64 == at.tx_index {
-            assert_eq!(output.value().coin(), 5_000_000);
-            assert!(output.value().assets().is_empty());
-            continue;
-        }
-        let address = Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
-        assert_ne!(
-            address.to_vec(),
-            pool.mix_box_address().to_vec(),
-            "one box only"
-        );
-        assert!(address.has_script(), "into the wallet contract");
-        seedelf += output.value().coin();
-    }
-    seedelf
+    assert!(boxed.is_owned(&sk));
+    let out = &d.outputs()[tail.boxed.tx_index as usize];
+    assert_eq!(out.value().coin(), 5_000_000);
+    assert!(out.value().assets().is_empty());
+    assert_eq!(
+        d.outputs()
+            .iter()
+            .filter(|o| o.address().unwrap().to_vec() == pool.mix_box_address().to_vec())
+            .count(),
+        1,
+        "one box"
+    );
+
+    let mixed = hex::decode(&mix.tx_cbor).unwrap();
+    let m = MultiEraTx::decode(&mixed).unwrap();
+    assert!(spends_ref(&m, &tail.boxed));
+    assert!(m.inputs().iter().any(|i| *i.hash() == d.hash()));
+    let drawn = others
+        .iter()
+        .filter(|r| {
+            spends_ref(
+                &m,
+                &OutRef {
+                    tx_hash: r.tx_hash.clone(),
+                    tx_index: r.tx_index,
+                },
+            )
+        })
+        .count();
+    assert_eq!(drawn, 2, "two of the others");
+    assert_eq!(m.inputs().len(), 4);
+    let giveme = seedelf_core::transaction::collateral_input(true);
+    assert_eq!(
+        m.collateral()
+            .iter()
+            .map(|i| (**i.hash(), i.index()))
+            .collect::<Vec<_>>(),
+        vec![(giveme.tx_hash.0, giveme.txo_index)]
+    );
+    let required = seedelf_core::build::required_signers(&mixed).unwrap();
+    assert!(
+        required
+            .iter()
+            .any(|h| **h == seedelf_core::constants::COLLATERAL_HASH)
+    );
+    assert_eq!(m.fee().unwrap() % 2, 0);
+    let key = accounts().key_hash(Role::Receive, 0).unwrap();
+    let witnesses = m.vkey_witnesses();
+    assert_eq!(witnesses.len(), 1, "giveme.my signs later");
+    assert_eq!(
+        pallas_crypto::hash::Hasher::<224>::hash(&witnesses[0].vkey),
+        key
+    );
+    let made = eval::resolve_outputs(&mixed).unwrap();
+    let leaf = PoolBox::from_resolved(made[tail.leaf.tx_index as usize].clone(), &pool)
+        .expect("the leaf, a box of the 5 ₳ pool");
+    assert_eq!(tail.leaf.tx_hash, hex::encode(m.hash()));
+    assert!(leaf.is_owned(&sk));
+    let ours = made
+        .iter()
+        .filter_map(|r| PoolBox::from_resolved(r.clone(), &pool))
+        .filter(|b| b.is_owned(&sk))
+        .count();
+    assert_eq!(ours, 1);
+    assert_eq!(
+        tail.fee.parse::<u64>().unwrap(),
+        deposit.fee.parse::<u64>().unwrap() + mix.fee.parse::<u64>().unwrap()
+    );
+    mixed
+}
+
+/// The return after a tail: a sweep of the mix's change into Seedelf, never
+/// the collateral, never merged. What it pays into Seedelf.
+fn swept_after(back: &str, mix: &[u8]) -> u64 {
+    let bytes = hex::decode(back).unwrap();
+    let tx = MultiEraTx::decode(&bytes).unwrap();
+    let mix = MultiEraTx::decode(mix).unwrap();
+    assert!(tx.inputs().iter().any(|i| *i.hash() == mix.hash()));
+    assert!(!spends(&tx, [2; 32], 1));
+    assert!(tx.collateral().is_empty(), "a sweep runs no script");
+    tx.outputs()
+        .iter()
+        .map(|o| {
+            let address = Address::from_bytes(&o.address().unwrap().to_vec()).unwrap();
+            assert!(address.has_script(), "into the wallet contract");
+            o.value().coin()
+        })
+        .sum()
 }
 
 #[test]
-fn a_chains_return_puts_the_collateral_into_the_5_ada_pool() {
+fn a_chains_collateral_is_mixed_once_on_its_way_into_the_5_ada_pool() {
     let protocol = Protocol::of(true).unwrap();
     let sk = Scalar::from(5151u64);
+    // Strangers' boxes, and one of the wallet's own, which is never drawn.
+    let mut others = strangers(0xa1, 3);
+    let mut rows = others.clone();
+    rows.extend(our_box_rows(sk, 1, &five()));
+    others.truncate(3);
     let request = |merge: Vec<UtxoResponse>| ChainRequest {
         network: "preprod".into(),
         params: params(),
         index: 0,
         utxos: holdings(),
-        collateral: collateral(),
+        collateral: Some(collateral()),
         pool: pool(&protocol),
         depth: 1,
         boxes: Some(1),
@@ -1302,38 +1534,63 @@ fn a_chains_return_puts_the_collateral_into_the_5_ada_pool() {
         again: false,
         own: vec![],
         collateral_pool: Some(ada_pool_ref(5_000_000)),
+        collateral_boxes: rows.clone(),
+        collateral_reserve: false,
     };
-    // Merged into the funding's change, and swept into new registers.
+    // Even with the funding's change to merge into: the collateral a merge puts up is in the box.
     for merge in [vec![funding_change(sk)], vec![]] {
-        let merged = !merge.is_empty();
         let result = lovejoin::chain(&accounts(), sk, request(merge)).unwrap();
-        let back = result.txs.last().unwrap();
-        assert_eq!(back.kind, "back");
-        let at = result.collateral_box.clone().expect("the collateral's box");
-        let seedelf = collateral_box_in(&back.tx_cbor, &at, sk);
-        // The return spends the collateral, and a merged one puts it up too.
-        let bytes = hex::decode(&back.tx_cbor).unwrap();
-        let tx = MultiEraTx::decode(&bytes).unwrap();
-        assert!(spends(&tx, [2; 32], 1));
-        // What comes back at once leaves the box's 5 ₳ out.
-        let returned: u64 = result.returned.parse().unwrap();
-        assert_eq!(seedelf, returned + if merged { 12_000_000 } else { 0 });
-        // The box is the return's own: the chain's leaves are still the mixed boxes alone.
+        let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["deposit", "mix", "deposit", "mix", "back"]);
+        assert!(result.txs[..2].iter().all(|t| !t.tail && !t.giveme));
+        let tail = result
+            .collateral_tail
+            .clone()
+            .expect("the collateral's tail");
+        // The tail's deposit is paid from the chain's change.
+        let chain_mix_bytes = hex::decode(&result.txs[1].tx_cbor).unwrap();
+        let chain_mix = MultiEraTx::decode(&chain_mix_bytes).unwrap();
+        let deposit_bytes = hex::decode(&result.txs[2].tx_cbor).unwrap();
+        let deposit = MultiEraTx::decode(&deposit_bytes).unwrap();
+        assert!(
+            deposit
+                .inputs()
+                .iter()
+                .any(|i| *i.hash() == chain_mix.hash())
+        );
+        let mixed = the_tail(&result.txs[2], &result.txs[3], &tail, &others, sk);
+        let back = &result.txs[4];
+        let seedelf = swept_after(&back.tx_cbor, &mixed);
+        assert_eq!(result.merged, 0);
+        assert_eq!(seedelf, result.returned.parse::<u64>().unwrap());
+        // Every fee counted, the tail's too; the chain's leaves are its own boxes alone.
+        let fees: u64 = result
+            .txs
+            .iter()
+            .map(|t| t.fee.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(result.fees, fees.to_string());
         assert_eq!(result.leaves.len(), 1);
-        assert!(result.leaves.iter().all(|l| l.tx_hash != back.tx_hash));
+        assert!(result.leaves.iter().all(|l| *l != tail.leaf));
+        // The worker reads the tail's marks and its boxes by these names.
+        let answer = serde_json::to_value(&result).unwrap();
+        assert_eq!(answer["txs"][3]["giveme"], json!(true));
+        assert!(answer["txs"][1].get("tail").is_none());
+        assert_eq!(answer["collateralTail"]["box"], json!(tail.boxed));
+        assert_eq!(answer["collateralTail"]["leaf"], json!(tail.leaf));
     }
 }
 
 #[test]
-fn a_direct_return_puts_the_collateral_into_the_5_ada_pool() {
+fn a_direct_return_mixes_the_collateral_once_on_its_way_into_the_5_ada_pool() {
     let sk = Scalar::from(6262u64);
     let at = session();
+    let others = strangers(0xa2, 2);
     let utxos = vec![
         row(1, 0, &at, 20_000_000, &[]),
         row(2, 1, &at, 5_000_000, &[]),
     ];
     for merge in [vec![funding_change(sk)], vec![]] {
-        let merged = !merge.is_empty();
         let result = api::session_return(
             &accounts(),
             sk,
@@ -1345,30 +1602,31 @@ fn a_direct_return_puts_the_collateral_into_the_5_ada_pool() {
                 merge,
                 own: vec![],
                 collateral_pool: Some(ada_pool_ref(5_000_000)),
+                collateral_boxes: others.clone(),
             },
         )
         .unwrap();
-        let at = result.collateral_box.clone().expect("the collateral's box");
-        let seedelf = collateral_box_in(&result.tx_cbor, &at, sk);
+        let tail = result.tail.as_ref().expect("the collateral's tail");
+        let mixed = the_tail(&tail.txs[0], &tail.txs[1], &tail.tail, &others, sk);
+        let seedelf = swept_after(&result.tx_cbor, &mixed);
+        assert_eq!(result.merged, 0);
         let fee: u64 = result.fee.parse().unwrap();
-        assert_eq!(result.lovelace, (25_000_000 - fee - 5_000_000).to_string());
-        assert_eq!(
-            seedelf,
-            25_000_000 - fee - 5_000_000 + if merged { 12_000_000 } else { 0 }
-        );
-        let outputs = MultiEraTx::decode(&hex::decode(&result.tx_cbor).unwrap())
-            .unwrap()
-            .outputs()
-            .len();
-        assert_eq!(result.deposit_outputs, outputs - 1, "the box is no deposit");
+        let tail_fee: u64 = tail.tail.fee.parse().unwrap();
+        // Everything but the box's 5 ₳ and the fees comes back.
+        assert_eq!(result.lovelace, (20_000_000 - tail_fee - fee).to_string());
+        assert_eq!(seedelf, 20_000_000 - tail_fee - fee);
+        assert_eq!(result.inputs, 1, "the mix's change alone");
     }
 }
 
 #[test]
-fn a_return_boxes_only_its_collateral_and_only_from_its_own_ada() {
+fn the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built() {
     let sk = Scalar::from(7373u64);
     let at = session();
-    let ask_merged = |utxos: Vec<UtxoResponse>, lovelace: u64, merge: Vec<UtxoResponse>| {
+    let ask = |utxos: Vec<UtxoResponse>,
+               lovelace: u64,
+               boxes: Vec<UtxoResponse>,
+               merge: Vec<UtxoResponse>| {
         api::session_return(
             &accounts(),
             sk,
@@ -1380,40 +1638,276 @@ fn a_return_boxes_only_its_collateral_and_only_from_its_own_ada() {
                 merge,
                 own: vec![],
                 collateral_pool: Some(ada_pool_ref(lovelace)),
+                collateral_boxes: boxes,
             },
         )
         .unwrap()
     };
-    let ask = |utxos: Vec<UtxoResponse>, lovelace: u64| ask_merged(utxos, lovelace, vec![]);
-    // The collateral alone can't pay its own box and the return's fee.
-    let poor = ask(vec![row(2, 1, &at, 5_000_000, &[])], 5_000_000);
-    assert!(poor.collateral_box.is_none());
-    let fee: u64 = poor.fee.parse().unwrap();
-    assert_eq!(poor.lovelace, (5_000_000 - fee).to_string());
-    // Nor does the funding's change a merged return spends pay for it.
-    let merged = ask_merged(
-        vec![row(2, 1, &at, 5_000_000, &[])],
-        5_000_000,
-        vec![funding_change(sk)],
-    );
-    assert_eq!(merged.merged, 1);
-    assert!(merged.collateral_box.is_none());
-    let fee: u64 = merged.fee.parse().unwrap();
-    assert_eq!(merged.lovelace, (5_000_000 - fee).to_string());
-    // A pool of other boxes isn't the collateral's: the return is as before.
-    let other = ask(
+    let as_before = |r: &api::SessionReturnResult, total: u64| {
+        assert!(r.tail.is_none());
+        let fee: u64 = r.fee.parse().unwrap();
+        assert_eq!(r.lovelace, (total - fee).to_string());
+    };
+    let both = || {
         vec![
             row(1, 0, &at, 20_000_000, &[]),
             row(2, 1, &at, 5_000_000, &[]),
-        ],
+        ]
+    };
+    // The collateral alone: nothing else pays for its mix.
+    as_before(
+        &ask(
+            vec![row(2, 1, &at, 5_000_000, &[])],
+            5_000_000,
+            strangers(0xa3, 2),
+            vec![],
+        ),
+        5_000_000,
+    );
+    // A pool of other boxes isn't the collateral's.
+    as_before(
+        &ask(both(), 25_000_000, strangers(0xa3, 2), vec![]),
         25_000_000,
     );
-    assert!(other.collateral_box.is_none());
-    let fee: u64 = other.fee.parse().unwrap();
-    assert_eq!(other.lovelace, (25_000_000 - fee).to_string());
     // An account whose collateral is spent puts none of its other ADA in a box.
-    let spent = ask(vec![row(1, 0, &at, 20_000_000, &[])], 5_000_000);
-    assert!(spent.collateral_box.is_none());
-    let fee: u64 = spent.fee.parse().unwrap();
-    assert_eq!(spent.lovelace, (20_000_000 - fee).to_string());
+    as_before(
+        &ask(
+            vec![row(1, 0, &at, 20_000_000, &[])],
+            5_000_000,
+            strangers(0xa3, 2),
+            vec![],
+        ),
+        20_000_000,
+    );
+    // One stranger's box and the wallet's own: too few to draw two.
+    let mut few = strangers(0xa3, 1);
+    few.extend(our_box_rows(sk, 1, &five()));
+    as_before(&ask(both(), 5_000_000, few, vec![]), 25_000_000);
+    // Merged as before, the collateral put up and spent with the rest.
+    let merged = ask(both(), 5_000_000, vec![], vec![funding_change(sk)]);
+    as_before(&merged, 25_000_000);
+    assert_eq!(merged.merged, 1);
+    assert!(spends(
+        &MultiEraTx::decode(&hex::decode(&merged.tx_cbor).unwrap()).unwrap(),
+        [2; 32],
+        1
+    ));
+
+    // A chain whose change can't pay for the tail: its return as before.
+    let protocol = Protocol::of(true).unwrap();
+    let funded = seedelf_core::lovejoin::funding_for(1, 1, 10_000_000);
+    let result = lovejoin::chain(
+        &accounts(),
+        sk,
+        ChainRequest {
+            network: "preprod".into(),
+            params: params(),
+            index: 0,
+            utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
+            collateral: Some(collateral()),
+            pool: pool(&protocol),
+            depth: 1,
+            boxes: Some(1),
+            merge: vec![],
+            again: false,
+            own: vec![],
+            collateral_pool: Some(ada_pool_ref(5_000_000)),
+            collateral_boxes: strangers(0xa3, 2),
+            collateral_reserve: false,
+        },
+    )
+    .unwrap();
+    assert!(result.collateral_tail.is_none());
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["deposit", "mix", "back"]);
+    let back_bytes = hex::decode(&result.txs[2].tx_cbor).unwrap();
+    let back = MultiEraTx::decode(&back_bytes).unwrap();
+    assert!(
+        spends(&back, [2; 32], 1),
+        "the collateral comes back with the rest"
+    );
+}
+
+#[test]
+fn the_collateral_never_draws_a_box_its_chain_drew() {
+    let sk = Scalar::from(4343u64);
+    // A chain into the 5 ₳ pool itself, which its collateral's mix draws from too.
+    let request = |others: Vec<UtxoResponse>| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: holdings(),
+        collateral: Some(collateral()),
+        pool: others.clone(),
+        depth: 1,
+        boxes: Some(1),
+        merge: vec![],
+        again: false,
+        own: vec![],
+        collateral_pool: Some(ada_pool_ref(5_000_000)),
+        collateral_boxes: others,
+        collateral_reserve: false,
+    };
+    let chain = |others| {
+        lovejoin::chain_in(
+            &accounts(),
+            sk,
+            request(others),
+            Some(&ada_pool_ref(5_000_000)),
+        )
+        .unwrap()
+    };
+    // Three: the chain's mix takes two, which leaves one, too few for the collateral's.
+    let three = chain(strangers(0xa6, 3));
+    assert_eq!(three.boxes, 1);
+    assert!(three.collateral_tail.is_none());
+    // Four: it takes the other two.
+    let others = strangers(0xa6, 4);
+    let four = chain(others.clone());
+    let tail = four.collateral_tail.clone().expect("the collateral's tail");
+    let mixed = the_tail(&four.txs[2], &four.txs[3], &tail, &others, sk);
+    let drew = |bytes: &[u8]| -> Vec<String> {
+        let tx = MultiEraTx::decode(bytes).unwrap();
+        others
+            .iter()
+            .filter(|r| {
+                spends_ref(
+                    &tx,
+                    &OutRef {
+                        tx_hash: r.tx_hash.clone(),
+                        tx_index: r.tx_index,
+                    },
+                )
+            })
+            .map(|r| r.tx_hash.clone())
+            .collect()
+    };
+    let chains = drew(&hex::decode(&four.txs[1].tx_cbor).unwrap());
+    let tails = drew(&mixed);
+    assert_eq!((chains.len(), tails.len()), (2, 2));
+    assert!(tails.iter().all(|t| !chains.contains(t)));
+}
+
+#[test]
+fn a_session_funded_for_its_collateral_counts_its_boxes_after_the_reserve() {
+    let protocol = Protocol::of(true).unwrap();
+    let sk = Scalar::from(8484u64);
+    let at = session();
+    let reserve = seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE;
+    let funded = seedelf_core::lovejoin::funding_for(1, 1, 10_000_000) + reserve;
+    let request = |reserved: bool| ChainRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: vec![row(1, 0, &at, funded, &[]), row(2, 1, &at, 5_000_000, &[])],
+        collateral: Some(collateral()),
+        pool: pool(&protocol),
+        depth: 1,
+        boxes: None,
+        merge: vec![],
+        again: false,
+        own: vec![],
+        collateral_pool: Some(ada_pool_ref(5_000_000)),
+        collateral_boxes: strangers(0xa4, 2),
+        collateral_reserve: reserved,
+    };
+    // One box, and the reserve pays for the collateral's mix and the sweep after it.
+    let result = lovejoin::chain(&accounts(), sk, request(true)).unwrap();
+    assert_eq!(result.boxes, 1);
+    assert!(result.collateral_tail.is_some());
+    // The plan counts the same way.
+    let plan = |reserved: bool, lovelace: u64| {
+        lovejoin::plan(
+            &accounts(),
+            PlanRequest {
+                network: "preprod".into(),
+                index: 0,
+                utxos: vec![
+                    row(1, 0, &at, lovelace, &[]),
+                    row(2, 1, &at, 5_000_000, &[]),
+                ],
+                collateral: Some(collateral()),
+                depth: 1,
+                again: false,
+                collateral_reserve: reserved,
+            },
+        )
+        .unwrap()
+        .boxes
+    };
+    let two = seedelf_core::lovejoin::funding_for(2, 1, 10_000_000);
+    assert_eq!(plan(false, two), 2);
+    assert_eq!(plan(true, two), 1, "the reserve comes out first");
+    assert_eq!(plan(true, two + reserve), 2);
+}
+
+#[test]
+fn the_collateral_mix_is_built_again_from_what_the_chain_left() {
+    let sk = Scalar::from(9595u64);
+    let at = session();
+    let pool = five();
+    // The tail's deposit is on chain: the box at the pool, its change at the account.
+    let boxed = our_box_rows(sk, 1, &pool).remove(0);
+    let others = strangers(0xa5, 3);
+    let mut rows = others.clone();
+    rows.push(boxed.clone());
+    let utxos = vec![
+        row(0x31, 1, &at, 3_000_000, &[]),
+        row(3, 0, &at, 2_000_000, &[(MIN_POLICY, "4d494e", 500)]),
+    ];
+    let request = |boxed: &UtxoResponse| lovejoin::CollateralMixRequest {
+        network: "preprod".into(),
+        params: params(),
+        index: 0,
+        utxos: utxos.clone(),
+        boxed: OutRef {
+            tx_hash: boxed.tx_hash.clone(),
+            tx_index: boxed.tx_index,
+        },
+        pool_ref: ada_pool_ref(5_000_000),
+        pool: rows.clone(),
+        own: vec![],
+    };
+    let result = lovejoin::collateral_mix(&accounts(), sk, request(&boxed)).unwrap();
+    let kinds: Vec<&str> = result.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, vec!["mix", "back"]);
+    assert!(result.txs[0].giveme && result.txs[0].tail);
+    let tail = result.collateral_tail.clone().unwrap();
+    let mixed = hex::decode(&result.txs[0].tx_cbor).unwrap();
+    let m = MultiEraTx::decode(&mixed).unwrap();
+    assert!(spends_ref(&m, &tail.boxed));
+    assert!(spends(&m, [0x31; 32], 1), "the deposit's change pays");
+    assert_eq!(m.inputs().len(), 4);
+    let made = eval::resolve_outputs(&mixed).unwrap();
+    assert!(
+        PoolBox::from_resolved(made[tail.leaf.tx_index as usize].clone(), &pool)
+            .unwrap()
+            .is_owned(&sk)
+    );
+    let seedelf = swept_after(&result.txs[1].tx_cbor, &mixed);
+    assert_eq!(seedelf, result.returned.parse::<u64>().unwrap());
+    let back_bytes = hex::decode(&result.txs[1].tx_cbor).unwrap();
+    let back = MultiEraTx::decode(&back_bytes).unwrap();
+    assert!(spends(&back, [3; 32], 0), "the rest comes back with it");
+
+    // giveme.my's signature goes on beside the session's.
+    let giveme = SecretKey::new(OsRng);
+    let hash = seedelf_core::build::tx_id(&mixed).unwrap();
+    let answer = json!({ "witness": format!("8258{}", hex::encode([0u8; 32])) + &hex::encode(giveme.sign(hash).as_ref()) });
+    let finished = lovejoin::finish_with_collateral_key(
+        FinishRequest {
+            tx_cbor: result.txs[0].tx_cbor.clone(),
+            collateral: answer,
+        },
+        giveme.public_key(),
+    )
+    .unwrap();
+    assert_eq!(finished.tx_hash, result.txs[0].tx_hash);
+    let signed_bytes = hex::decode(&finished.tx_cbor).unwrap();
+    let signed = MultiEraTx::decode(&signed_bytes).unwrap();
+    assert_eq!(signed.vkey_witnesses().len(), 2);
+
+    // A stranger's box isn't the collateral's.
+    let err = lovejoin::collateral_mix(&accounts(), sk, request(&others[0])).unwrap_err();
+    assert!(err.to_string().contains("isn't this wallet's"), "{err}");
 }

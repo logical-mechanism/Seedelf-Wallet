@@ -479,10 +479,11 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
   });
 
   it("counts the funding's 1.5 ₳ reserve in what the private balance must hold", () => {
-    // 30 boxes of 10 ₳, the 5 ₳ collateral and the fee's room: 306 ₳. The reserve makes it 307.5.
+    // 30 boxes of 10 ₳ and the fee's room: 301 ₳, and no collateral, which a deposit alone never puts up (the owner,
+    // 2026-10-23). The reserve makes it 302.5.
     const box = { id: undefined, box: { lovelace: "10000000" } };
-    expect(bootstrapLimits(box, "private", ada(307_000_000n), 53, 30).short).toBe(true);
-    expect(bootstrapLimits(box, "private", ada(307_500_000n), 53, 30).short).toBe(false);
+    expect(bootstrapLimits(box, "private", ada(302_000_000n), 53, 30).short).toBe(true);
+    expect(bootstrapLimits(box, "private", ada(302_500_000n), 53, 30).short).toBe(false);
     expect(bootstrapLimits(box, "public", ada(0n), undefined, 30).short).toBe(false);
   });
 });
