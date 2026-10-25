@@ -230,7 +230,11 @@ export function PendingBanner({
   onCheck?: () => Promise<void> | void;
 }) {
   const tr = useT();
-  const what = tr(SENT[pending.kind]);
+  // A Bootstrap from the public account goes as a mix's kind, watched as one, but makes no mixes, and its boxes stay
+  // held in the pool until brought back by hand: it said "Mixes into Lovejoin", then that they were on their way to
+  // the private balance (1.6.0's release review, 318-worker#0). Every title below names it by `what`.
+  const bootstrap = pending.kind === "lovejoin-mix" && !!pending.bootstrap;
+  const what = tr(bootstrap ? "pending.sent.lovejoin_bootstrap" : SENT[pending.kind]);
   const shared = {
     network: pending.network,
     // A chain through Lovejoin: its first transaction, the one its review showed and the first to land, until the
@@ -274,7 +278,7 @@ export function PendingBanner({
         txHash={pending.txHash}
         firstOf={undefined}
         state="done"
-        title={tr(CONFIRMED[pending.kind])}
+        title={tr(bootstrap ? "pending.confirmed.lovejoin_bootstrap" : CONFIRMED[pending.kind])}
         detail={partsLine}
         onDismiss={watching ? undefined : onDismiss}
       />

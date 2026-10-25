@@ -9,13 +9,14 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { bodyOutpoints, txInputs } from "../src/background/cbor";
+import { bodyOutpoints, MAX_DEPTH, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { handle, SWITCH_AT_STAKE, type Context } from "../src/background/handlers";
 import { KoiosError, type KoiosUtxo } from "../src/background/koios";
 import {
   CHAIN_WINDOW,
   CHAIN_WINDOW_FOUR,
+  evaluable,
   LANDING_MS,
   LovejoinService,
   poolChoice,
@@ -23,6 +24,7 @@ import {
   SESSION_LOVEJOIN_SENDING,
   TAIL_KEEP_MS,
   wayOver,
+  withinDepth,
   type ChainProgress,
   type PoolRef,
 } from "../src/background/lovejoin";
@@ -421,6 +423,94 @@ async function launched(
   };
   return { ref, id: made!.pool.id, mixBox: made!.pool.mixBoxHash };
 }
+
+// WebAssembly's deposit takes a token from a session's own UTxO only where its evaluator can take that UTxO (holdings_of,
+// core's eval::refusal): none carrying a reference script, nor a datum the wallet can't read. The worker counted a
+// token on every own UTxO (acrossOf), so such a token got a way into its pool that took no box, said as too little ADA.
+describe("a token on a UTxO WebAssembly's deposit can't take (1.6.0's release review, rr-1's note on 319-rust#0)", SLOW, () => {
+  it("is no token of a pool's this time, counted from the UTxOs the deposit takes: it comes back with the return", async () => {
+    const shapes: Array<[string, Partial<KoiosUtxo>]> = [
+      // Its bytes given, so the wallet can price spending it (koios.ts measurable), which a return's build asks first.
+      ["a reference script", { reference_script: { hash: "ab".repeat(28), size: 4, type: "plutusV3", bytes: "4e4d0100" } as never }],
+      ["a datum nested past what the wallet reads", { inline_datum: { bytes: `${"81".repeat(129)}00`, value: null } as never }],
+    ];
+    for (const [what, shape] of shapes) {
+      const t = await wallet();
+      await t.deps.preferences.set({ lovejoinDepth: 1 });
+      const sessions = runner(t, pooled(t, [TOKEN_POOL]));
+      await siteSession(t);
+      // Its own funding left two boxes' worth of LJTEST, on a UTxO WebAssembly can't take; 40 ₳, and its collateral.
+      t.koios.addedToAccounts.push(
+        { ...atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]), ...shape },
+        atSession(OUT, 1, "40000000"),
+        atSession(OUT, 2, "5000000"),
+        ...POOL,
+        ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+      );
+      const review = await sessions.backBuild("preprod", 0);
+      // The classic pool's alone, as a return with no token of a pool's goes: no way for LJTEST, nor a word of ADA.
+      expect(review.lovejoin?.ways, what).toBeUndefined();
+      expect(review.lovejoin?.parts, what).toBeUndefined();
+      expect(review.lovejoin!.boxes, what).toBeGreaterThanOrEqual(1);
+    }
+    // The same UTxO with neither goes into its pool, as ever.
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = runner(t, pooled(t, [TOKEN_POOL]));
+    await siteSession(t);
+    t.koios.addedToAccounts.push(
+      { ...atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]), inline_datum: { bytes: `${"81".repeat(128)}00`, value: null } as never },
+      atSession(OUT, 1, "40000000"),
+      atSession(OUT, 2, "5000000"),
+      ...POOL,
+      ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+    );
+    expect((await sessions.backBuild("preprod", 0)).lovejoin?.parts?.[0]).toEqual({ pool: TOKEN, boxes: 2 });
+  });
+
+  it("wants no collateral for a box of such a token: a return without its 5 ₳ says its spare is too little for a box, and none is offered", async () => {
+    const script = { reference_script: { hash: "ab".repeat(28), size: 4, type: "plutusV3", bytes: "4e4d0100" } as never };
+    for (const takes of [false, true]) {
+      const t = await wallet();
+      await t.deps.preferences.set({ lovejoinDepth: 1 });
+      const sessions = runner(t, pooled(t, [TOKEN_POOL]));
+      // Session 0, brought back by hand (no site's, nor a swap that runs itself): the one offered 5 ₳ for its collateral.
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [{ index: 0, ownStake: true, createdAt: t.clock.now, txs: [{ kind: "out", txHash: OUT, at: t.clock.now, confirmed: true }] }],
+      });
+      // Its 5 ₳ spent (a return before this one took it): two boxes' worth of LJTEST, and 6 ₳, too little for a 10 ₳ box.
+      t.koios.addedToAccounts.push(
+        { ...atSession(OUT, 0, "3000000", [asset(LJTEST, 2n * Q)]), ...(takes ? {} : script) },
+        atSession(OUT, 1, "6000000"),
+        ...POOL,
+        ...strangers(t, VIEW.mixBoxHash, 6, 0x60, "2000000", asset(LJTEST, Q)),
+      );
+      const review = await sessions.backBuild("preprod", 0);
+      expect(review.lovejoin).toBeUndefined();
+      // The deposit takes that UTxO: its mixes need the collateral, said so, and 5 ₳ is offered for it. It doesn't:
+      // nothing would mix with the collateral either, and the 6 ₳ pays for no box.
+      expect(review.lovejoinSkipped, `takes: ${takes}`).toBe(tr(takes ? "sess.skip.warn.noCollateral" : "sess.skip.warn.noBox"));
+      const [view] = await sessions.list("preprod", true);
+      expect(view!.backCollateral, `takes: ${takes}`).toBe(takes ? "missing" : undefined);
+    }
+  });
+
+  it("reads a UTxO's datum as core's evaluator does, held to core's own vectors", () => {
+    const core = JSON.parse(readFileSync(new URL("../../../seedelf-core/tests/fixtures/lovejoin-pool-vectors.json", import.meta.url), "utf8")) as {
+      scriptRowDatums: { maxDepth: number; datums: Array<{ about: string; cbor: string; readable: boolean }> };
+    };
+    const { maxDepth, datums } = core.scriptRowDatums;
+    expect(maxDepth).toBe(MAX_DEPTH);
+    expect(datums.length).toBeGreaterThanOrEqual(28);
+    for (const d of datums) {
+      expect(withinDepth(Uint8Array.from(Buffer.from(d.cbor, "hex"))), d.about).toBe(d.readable);
+      expect(evaluable({ ...atSession(OUT, 0, "3000000"), inline_datum: { bytes: d.cbor, value: null } as never }), d.about).toBe(d.readable);
+    }
+    expect(evaluable(atSession(OUT, 0, "3000000"))).toBe(true);
+    expect(evaluable({ ...atSession(OUT, 0, "3000000"), reference_script: { hash: "ab".repeat(28), size: 4, type: "plutusV3", bytes: "4e4d0100" } as never })).toBe(false);
+  });
+});
 
 // The owner's call 34 (2026-10-19, asked in session 5): where the wallet picks a token's pool itself, a pool whose boxes
 // can't pay their own way back under today's fees is picked as any pool, and the review says so beside the token.

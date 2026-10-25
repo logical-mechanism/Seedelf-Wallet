@@ -61,7 +61,8 @@ export function toCents(lovelace: bigint): string {
  * the funding pays the session's account (the swap and its costs, and the 5 ₳
  * kept aside); `fee`: its own network fee, exact. `lovejoin`: the return's
  * mixes and the boxes' way back, when it goes through Lovejoin and takes a
- * box.
+ * box. `collateral`: about what its collateral's mix costs, when the funding
+ * pays for that mix (LovejoinReturn.tsx COLLATERAL_MIX_COST).
  *
  * - `leaving`: the ADA the funding takes from the private balance now.
  * - `networkFees`: the funding's fee, and SESSION_FEE_ESTIMATE for each
@@ -69,27 +70,31 @@ export function toCents(lovelace: bigint): string {
  *   deposit when it takes a box; POOL_SWAP_FEE_ESTIMATE for a swap against a
  *   DEX's pools in place of the order. The later ones come out of the room
  *   for network fees (sessions.ts SWAP_MARGIN), whose rest comes back.
- * - `cost`: what's used up: the network fees, the DEX's fee, Minswap's, and
- *   Lovejoin's. The ADA swapped isn't a cost: it buys what's received.
+ * - `cost`: what's used up: the network fees, the DEX's fee, Minswap's,
+ *   Lovejoin's, and the collateral's mix. The ADA swapped isn't a cost: it
+ *   buys what's received.
  * - `back`: the ADA that comes back into the private balance: the 5 ₳ kept
  *   aside, the order's deposit, the room's rest and, from a token→ADA swap,
- *   the proceeds as quoted.
+ *   the proceeds as quoted. What pays for the collateral's mix comes back
+ *   only as far as that mix leaves it: `paid` holds all of it, and the totals
+ *   counted it as coming back (1.6.0's release review, 323-worker#1).
  */
 export function swapCosts(
   quote: SwapQuote,
   funding: { paid: bigint; fee: bigint },
   lovejoin?: { mixFees: string; withdrawFees: string },
-): { leaving: bigint; networkFees: bigint; later: number; lovejoin: bigint; cost: bigint; back: bigint } {
+  collateral = 0n,
+): { leaving: bigint; networkFees: bigint; later: number; lovejoin: bigint; collateral: bigint; cost: bigint; back: bigint } {
   const leaving = funding.paid + funding.fee;
   const later = lovejoin ? 3 : 2;
   const swap = quote.againstPools ? POOL_SWAP_FEE_ESTIMATE : SESSION_FEE_ESTIMATE;
   const networkFees = funding.fee + swap + BigInt(later - 1) * SESSION_FEE_ESTIMATE;
   const mixing = lovejoin ? BigInt(lovejoin.mixFees) + BigInt(lovejoin.withdrawFees) : 0n;
-  const cost = networkFees + BigInt(quote.dexFee) + BigInt(quote.aggregatorFee) + mixing;
+  const cost = networkFees + BigInt(quote.dexFee) + BigInt(quote.aggregatorFee) + mixing + collateral;
   const swapped = quote.ask.tokenIn === "lovelace" ? BigInt(quote.ask.amount) : 0n;
   const proceeds = quote.ask.tokenOut === "lovelace" ? BigInt(quote.amountOut) : 0n;
   const back = leaving - swapped - cost + proceeds;
-  return { leaving, networkFees, later, lovejoin: mixing, cost, back: back > 0n ? back : 0n };
+  return { leaving, networkFees, later, lovejoin: mixing, collateral, cost, back: back > 0n ? back : 0n };
 }
 
 /**
@@ -100,8 +105,13 @@ export function swapCosts(
 const USUAL_COSTS = 6_000_000n;
 /** The one-time account's collateral (sessions.ts SESSION_COLLATERAL); a quote carries the real one. */
 const USUAL_COLLATERAL = 5_000_000n;
-/** Left over by Max for the funding's network fee. */
-const FEE_ROOM = 1_000_000n;
+/**
+ * Left over by Max for the funding's network fee and its change, which must hold a Seedelf output's least: about
+ * 0.23 ₳ for the fee of a funding from one UTxO, and 1.46 ₳ for the change at today's parameters (1.65 ₳ with a token
+ * in it). 1 ₳ covered the fee alone, so Review refused Max's amount wherever rounding it to whole ₳ left too little
+ * (1.6.0's release review, 323-worker#0).
+ */
+const FEE_ROOM = 2_000_000n;
 
 /** Whether two asks are the same swap. */
 export function sameAsk(a: SwapAsk, b: SwapAsk): boolean {
@@ -111,13 +121,18 @@ export function sameAsk(a: SwapAsk, b: SwapAsk): boolean {
 /**
  * The most ADA a swap can take from `held` lovelace: what's left after its
  * costs, the one-time account's collateral and room for the network fee. The
- * costs are `quote`'s when it's an ADA swap's, else the usual ones.
+ * costs are `quote`'s when it's an ADA swap's, else the usual ones. And what
+ * a swap's funding adds for its collateral's mix where a 5 ₳ pool is shown
+ * (`collateralReserve`, any swap's quote): kept aside, so Max's amount is
+ * funded with it, as the most private way is the default; one typed past it
+ * is funded without it (1.6.0's release review, 323-worker#0).
  */
 export function maxAdaIn(held: string, quote?: SwapQuote): string {
   const priced = quote?.ask.tokenIn === "lovelace";
   const costs = priced ? BigInt(quote.fund.lovelace) - BigInt(quote.ask.amount) : USUAL_COSTS;
   const collateral = priced ? BigInt(quote.collateral) : USUAL_COLLATERAL;
-  const max = BigInt(held) - costs - collateral - FEE_ROOM;
+  const reserve = BigInt(quote?.collateralReserve ?? "0");
+  const max = BigInt(held) - costs - collateral - reserve - FEE_ROOM;
   return (max > 0n ? max : 0n).toString();
 }
 
@@ -143,6 +158,10 @@ export function wholeUnits(quantity: string, decimals: number): string {
  * The lovelace the private balance lacks for `quote`, if any: the funding
  * (the swap when it's ADA, and its costs) and the account's collateral. The
  * network fee comes on top; the funding's build says if that's what's short.
+ * Not what it adds for its collateral's mix (`collateralReserve`): a balance
+ * that doesn't pay for that too is funded without it (sessions.ts
+ * orWithoutReserve), so counting it here would refuse a swap the chain takes
+ * (1.6.0's release review, 323-worker#0).
  */
 export function adaShort(held: string, quote: SwapQuote): string | undefined {
   const short = BigInt(quote.fund.lovelace) + BigInt(quote.collateral) - BigInt(held);

@@ -336,7 +336,9 @@ describe("a box back that ties a public account to the private balance (1.6.0's 
 });
 
 describe("a Bootstrap whose deposit never landed (1.6.0's release review, STATE-5)", SLOW, () => {
-  it("lets go of the wallet's other box it held in its place once its record goes, and that box comes back", async () => {
+  // The wallet's other box was held in its place until 1.6.0's release review, 316#0: nothing is held for a Bootstrap
+  // before its deposit is known in now, so the box is never held at all.
+  it("holds none of the wallet's other boxes in its place, is gone once its record goes, and that box comes back", async () => {
     const t = await wallet();
     const lj = pooled(t);
     // A box of the wallet's no record accounts for (a restore's, or moved since its chain's record went): a mix made it.
@@ -479,15 +481,16 @@ describe("the Bootstrap form's bounds are the worker's (1.6.0's release review, 
   });
 
   it("counts the funding's reserves, the deposit's and its way back's, in what the private balance must hold", () => {
-    // 30 boxes of 10 ₳ and the fee's room: 301 ₳, and no collateral, which a deposit alone never puts up (the owner,
-    // 2026-10-23). What the worker funds beside the boxes, as WebAssembly prices it: the deposit's reserve
-    // (lovejoinFunding's, past the box) and the way back's, which pays the sweep of what's left with no collateral
-    // (1.6.0's release review, 318-rust#0). 3 ₳ today: 304 ₳.
+    // 30 boxes of 10 ₳ and the room for the fee and the change's least: 302 ₳, and no collateral, which a deposit alone
+    // never puts up (the owner, 2026-10-23). What the worker funds beside the boxes, as WebAssembly prices it: the
+    // deposit's reserve (lovejoinFunding's, past the box) and the way back's, which pays the sweep of what's left with
+    // no collateral (1.6.0's release review, 318-rust#0). 3 ₳ today: 305 ₳. The room was 1 ₳, the fee alone, which
+    // left a balance the form passed and the funding refused (1.6.0's release review, 323-worker#0).
     const wasm = loadTestWasm();
     const deposit = BigInt((JSON.parse(wasm.lovejoinFunding(JSON.stringify({ network: "preprod", boxes: 1, depth: 0 }))) as { lovelace: string }).lovelace);
     const reserves = deposit - 10_000_000n + BigInt(wasm.lovejoinBootstrapReserve());
     expect(reserves).toBe(3_000_000n);
-    const needs = 30n * 10_000_000n + reserves + 1_000_000n;
+    const needs = 30n * 10_000_000n + reserves + 2_000_000n;
     const box = { id: undefined, box: { lovelace: "10000000" } };
     expect(bootstrapLimits(box, "private", ada(needs - 1n), 96, 30).short).toBe(true);
     expect(bootstrapLimits(box, "private", ada(needs), 96, 30).short).toBe(false);

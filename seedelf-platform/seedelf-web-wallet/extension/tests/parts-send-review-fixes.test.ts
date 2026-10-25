@@ -4,6 +4,8 @@
 // mid-Send leaves nothing reserved that nobody owns; the review's age is checked once, at Send; a session's funding
 // can say its parts mustn't go (`mayGo`). Then the guards no test pinned, each shown by taking it out. Through
 // WebAssembly, on the 12-word phrase's register, as payment-parts-chain.test.ts.
+import { readFileSync } from "node:fs";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -17,6 +19,7 @@ import { Minswap } from "../src/background/minswap";
 import {
   GIVEME_BEHIND_MS,
   holdWaiting,
+  LOOK_EVERY_MS,
   type MayGo,
   type OnStopped,
   PartsService,
@@ -31,7 +34,7 @@ import { runNetworks } from "../src/background/runs";
 import { BUILT_TTL_MS, partKey, readContract, type ScriptSpendDeps, send } from "../src/background/script-spend";
 import { SESSION_RESERVED_PREFIX, SESSION_SPENT, reservedSet } from "../src/background/spent";
 import type { Area } from "../src/background/storage";
-import { SessionService } from "../src/background/sessions";
+import { SESSION_BACK, SessionService } from "../src/background/sessions";
 import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
@@ -39,6 +42,7 @@ import { PendingBanner } from "../src/ui/components/PendingBanner";
 import { NetworkContext } from "../src/ui/network";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, testBalances, transferPreprod, vectors } from "./fakes";
+import { atSession } from "./swap-session";
 
 const PASSWORD = "correct horse battery";
 const SLOW = { timeout: 240_000 };
@@ -50,6 +54,10 @@ const THEIRS = transferPreprod.to;
 const OWN = v12.preprod.receive_0 as string;
 /** Another wallet's address, for a payment from the public account. */
 const THEIR_ADDRESS = v15.preprod.receive_0 as string;
+/** 20 boxes from Lovejoin's preprod pool, as Koios lists them (2026-09-25): a session's return goes through it. */
+const CLASSIC_POOL = (JSON.parse(readFileSync(new URL("./fixtures/lovejoin-pool-preprod.json", import.meta.url), "utf8")) as { pool: KoiosUtxo[] }).pool;
+/** Ogmios's answer when the network measures no more than a transaction declares. */
+const AGREES = { jsonrpc: "2.0", method: "evaluateTransaction", result: [] };
 
 type T = ReturnType<typeof testBalances>;
 type Fetch = T["koios"]["fetch"];
@@ -1184,5 +1192,62 @@ describe("a payment in parts checked whole at Send (1.6.0's release review, 321-
     // Only the chain's own reservation is left: nothing of the payment's.
     expect(Object.keys((await t.session.get<Record<string, unknown>>(key)) ?? {})).toEqual(["return.test"]);
     expect(await s.parts.of("preprod", summary.txHash)).toBeUndefined();
+  });
+
+  it("refuses, sending none of it, a return through Lovejoin reviewed before the payment's Send whose chain merges into what a waiting part spends", async () => {
+    const { t, tokens } = await walletA(12);
+    const s = services(t);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    const all = summary.parts!;
+    expect(all.map((p) => !!p.waits)).toEqual([false, true]);
+    // F, a bundle the second part spends, is session 0's funding change: its return merges into it at its chain's end.
+    const [F] = await ownInputs(t, 1, all);
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        { index: 0, ownStake: true, createdAt: t.clock.now, txs: [{ kind: "out", txHash: F!.split("#")[0], at: t.clock.now, confirmed: true }], site: { origin: "https://example.org" } },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...CLASSIC_POOL);
+    // The network measures a chain's first mix within what it declares; one wave deep, as the recorded pool fits.
+    t.koios.evaluation = AGREES;
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    const sessions = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+      sleep: async () => undefined,
+    });
+    const back = await sessions.backBuild("preprod", 0);
+    expect(back.lovejoin).toBeDefined();
+    expect(back.merged).toBe(1);
+    const chain = (await t.wallet.withKeys(() => t.session.get<{ chain: Array<{ txCbor: string }> }>(SESSION_BACK)))!.chain;
+    expect(txInputs(Buffer.from(chain.at(-1)!.txCbor, "hex"))).toContain(F);
+
+    // The payment's Send: its first part goes, and the second waits, F reserved for it.
+    await s.transfer.submit("preprod", summary.txHash);
+    expect(submittedIds(t)).toEqual([all[0]!.txHash]);
+    expect((await sending(t)).inputs.has(F!)).toBe(true);
+
+    // The return's Send is refused whole, in words of its own, before anything of it goes or its chain is recorded.
+    await expect(sessions.backSubmit("preprod", back.txHash)).rejects.toThrow(
+      "That return spends a UTxO that a payment still being sent in parts spends too. Review it again.",
+    );
+    expect(submittedIds(t)).toEqual([all[0]!.txHash]);
+    const [view] = await sessions.list("preprod");
+    expect(view!.chain).toBeUndefined();
+    expect((await t.store.get<{ chains: unknown[] }>("lovejoin.preprod"))?.chains ?? []).toEqual([]);
+
+    // Reviewed again, it leaves F to the payment and goes; then the payment's rest goes, whole.
+    const again = await sessions.backBuild("preprod", 0);
+    expect(again.merged ?? 0).toBe(0);
+    await sessions.backSubmit("preprod", again.txHash);
+    expect(submittedIds(t).length).toBeGreaterThan(1);
+    t.koios.confirmations = 1;
+    t.clock.now += LOOK_EVERY_MS + 1;
+    await s.parts.pump("preprod");
+    expect(submittedIds(t)).toContain(all[1]!.txHash);
   });
 });

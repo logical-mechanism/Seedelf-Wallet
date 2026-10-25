@@ -8,6 +8,7 @@
 // Koios nothing (each service looks at its own records first).
 
 import type { Context } from "./handlers";
+import { isTrap } from "./wasm";
 
 export type Runner = Pick<Context, "wallet" | "sessions" | "lovejoin" | "pending" | "parts" | "networks">;
 
@@ -39,12 +40,38 @@ export interface Alarm {
  * meanwhile. A swap or a chain the user sends while a run reads Koios starts
  * it, and the run never stops it from under them: it's left on for one more
  * run, which stops it if nothing runs by then.
+ *
+ * WebAssembly that traps under a run is broken for good: the wallet locks, as
+ * under a page's request (sw.ts answerUi), and the run ends there, nothing
+ * more run on that instance. Nothing else would lock: the alarm's caller
+ * takes every failure of a run, and a step's own failure is taken here so one
+ * network's never stops the other's (1.6.0's release review, 314-wasm#0).
  */
 export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Promise<void> {
   if ((await ctx.wallet.state()) !== "unlocked") {
     await alarm.stop();
     return;
   }
+  try {
+    await runEach(ctx, alarm, unlock);
+  } catch (e) {
+    if (!isTrap(e)) throw e;
+    await ctx.wallet.trapped();
+    // Locked: the alarm stops until unlock, as for a run that finds the wallet locked.
+    await alarm.stop();
+  }
+}
+
+/** A step's failure in place of its answer, so one network's never stops the other's; a trap ends the run. */
+const unlessTrap =
+  <T>(answer: T) =>
+  (e: unknown): T => {
+    if (isTrap(e)) throw e;
+    return answer;
+  };
+
+/** runNetworks' run itself, the wallet found unlocked. */
+async function runEach(ctx: Runner, alarm: Alarm, unlock: boolean): Promise<void> {
   const started = alarm.starts();
   const since = Date.now();
   const unlockedAt = await ctx.wallet.unlockedAt().catch(() => undefined);
@@ -53,25 +80,25 @@ export async function runNetworks(ctx: Runner, alarm: Alarm, unlock = false): Pr
   for (const network of ctx.networks) {
     if (!unlock && (await relocked())) unlock = true;
     // One network's failure (Koios down, a record that won't open) never stops the other's.
-    if (await ctx.sessions.runAll(network, unlock).catch(() => false)) busy = true;
+    if (await ctx.sessions.runAll(network, unlock).catch(unlessTrap(false))) busy = true;
     // A public mix still being sent, or stopped at a transaction that may have gone through, keeps the alarm going
     // too (final review F2).
-    if (await ctx.lovejoin.pumpPublic(network).catch(() => false)) busy = true;
+    if (await ctx.lovejoin.pumpPublic(network).catch(unlessTrap(false))) busy = true;
     // And a payment that may still go through, sent again now and then until it's settled.
-    if (await ctx.pending.watch(network, unlock).catch(() => false)) busy = true;
+    if (await ctx.pending.watch(network, unlock).catch(unlessTrap(false))) busy = true;
     // And a payment's parts that wait for the one before to be in a block (parts.ts): a pump that failed may have
     // left some waiting, as a watch Koios didn't answer does, so it never stops the alarm (1.6.0's review).
-    if (await ctx.parts?.pump(network, unlock).catch(() => true)) busy = true;
+    if (await ctx.parts?.pump(network, unlock).catch(unlessTrap(true))) busy = true;
   }
   for (const network of ctx.networks) {
     if (!unlock && (await relocked())) unlock = true;
-    await ctx.lovejoin.withdrawDue(network, unlock, since).catch(() => undefined);
+    await ctx.lovejoin.withdrawDue(network, unlock, since).catch(unlessTrap(undefined));
     // Lovejoin's boxes on their way back keep the alarm going too: each comes
     // back soon after its own due time while the wallet is unlocked, rather
     // than all of them at the next unlock. A minute with nothing due asks
     // Koios nothing. So does a withdraw that may have gone through, looked
     // for and sent again at its time (independent review M11).
-    if (await ctx.lovejoin.returning(network).catch(() => false)) busy = true;
+    if (await ctx.lovejoin.returning(network).catch(unlessTrap(false))) busy = true;
   }
   if (busy) await alarm.start();
   else if (alarm.starts() === started) await alarm.stop();

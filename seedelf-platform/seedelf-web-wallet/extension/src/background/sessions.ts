@@ -123,6 +123,7 @@ import {
   chainWindow,
   chainRetryMs,
   checkBoxes,
+  evaluable,
   mostBootstrap,
   MAX_MIX_BOXES,
   MAX_TOKEN_DEPOSIT_BOXES,
@@ -173,7 +174,7 @@ import {
   type ScriptSpendDeps,
   type SpendWhat,
 } from "./script-spend";
-import { forgetSpent, outpoint, readFresh, rememberSpent, reservedSet, spentSet, unspent } from "./spent";
+import { forgetSpent, outpoint, readFresh, rememberSpent, reservations, reservedSet, spentSet, unspent } from "./spent";
 import { SESSION_PRIVATE_STALE_PREFIX, WalletLocked, WASM_BROKEN, type Keys } from "./wallet";
 import { isTrap } from "./wasm";
 
@@ -1535,7 +1536,15 @@ export class SessionService {
     const quote = quoteOf(network, checked, est);
     // Worked out here, without the pool: that's read once, at Review (outBuild).
     const lovejoin = await this.lovejoinCost(network, quote);
-    return { ...quote, verified: await this.verified(network, checked.tokenOut), ...(lovejoin ? { lovejoin } : {}) };
+    // What its funding would add for its collateral's mix (tailReserve), where a 5 ₳ pool is shown, asking nobody: the
+    // form's Max keeps it aside (1.6.0's release review, 323-worker#0). Review reads whether that pool takes it now.
+    const reserve = !!lovejoin?.on && (await this.collateralIntoPool()) && (await this.deps.lovejoin!.collateralPoolShown(network));
+    return {
+      ...quote,
+      verified: await this.verified(network, checked.tokenOut),
+      ...(lovejoin ? { lovejoin } : {}),
+      ...(reserve ? { collateralReserve: this.deps.wasm.lovejoinCollateralReserve() } : {}),
+    };
   }
 
   /**
@@ -4530,7 +4539,8 @@ export class SessionService {
     const own = new Set([...s.txs.map((t) => t.txHash), ...(returns.fills ?? [])]);
     const held = new Map<string, bigint>();
     for (const u of rows) {
-      if (!own.has(u.tx_hash)) continue;
+      // Only what a deposit takes, as acrossOf counts it (evaluable; 1.6.0's release review, rr-1's note on 319-rust#0).
+      if (!own.has(u.tx_hash) || !evaluable(u)) continue;
       for (const a of u.asset_list ?? []) held.set(a.policy_id + a.asset_name, (held.get(a.policy_id + a.asset_name) ?? 0n) + BigInt(a.quantity));
     }
     for (const [unit, quantity] of held) {
@@ -4727,6 +4737,17 @@ export class SessionService {
     const spent = await this.deps.wallet.withKeys(() => spentSet(this.deps.session));
     if (txs!.some((t) => txInputs(hexBytes(t.txCbor)).some((o) => spent.has(o)))) {
       throw new Error(t("sess.spentSince"));
+    }
+    // Nor what a payment's parts still to go will spend (parts.ts reserves it as the payment is sent): a return reviewed
+    // before that payment's Send may merge into the funding change a waiting part spends, and only one of the two could
+    // land. Refused here, said as what holds it, before its chain or the session's record is touched: reserve() below
+    // refuses it too, but as the pool having changed (1.6.0's release review, 321-parts-worker#3).
+    const held = await this.deps.wallet.withKeys(() => reservations(this.deps.session, network, this.deps.now()));
+    const parts = new Set(
+      Object.entries(held).flatMap(([owner, r]) => (owner.startsWith(PARTS_RESERVED) && r.until === undefined ? r.inputs : [])),
+    );
+    if (txs!.some((t) => txInputs(hexBytes(t.txCbor)).some((o) => parts.has(o)))) {
+      throw new Error(t("worker.spend.partsConflict.return"));
     }
     let was: Pick<SessionRecord, "chain" | "lovejoinSkipped"> = {};
     await this.update(network, built.index, (s) => {

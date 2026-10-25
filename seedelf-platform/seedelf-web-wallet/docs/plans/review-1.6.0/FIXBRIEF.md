@@ -102,3 +102,18 @@ The lead holds `reserve` until `bootstrap` is done, and `wss-1` until `reserve` 
 - `reserve`: the collateral's mix reserve is sized for returns that come back directly, and fundings fall back without it.
 
 Screens fixes come in a later round, after this one's rebuild, with the worker fields this round adds.
+
+## Round 2: the screens, and the worker's leftovers
+
+Round 1 is committed (`fc8561c7`), and **`wasm/pkg` is rebuilt from it**. Every suite is green, bar the critical-key gate's two es/ja checks: they wait for round 3's blind back-translation, so ignore them. Round 1's reports in `fixes/` name the worker fields the screens now need. Read the ones your prompt points to.
+
+- **No Rust this round.** If a fix needs Rust, report it and don't make it.
+- **e2e asserts the wallet's English.** When you change or remove words a screen shows, grep `WW/extension/e2e/*.ts` for them and update those expectations too. Still never run Playwright: the lead builds and runs e2e after this round, and checks the changed screens visually.
+- **Worker files:** Lane W owns `sessions.ts`, `lovejoin.ts` and `runs.ts` this round. A screens fixer that truly needs a worker field may add it with a small anchored edit, and says so in its report.
+- **Screens** keep their text short (the owner), show every state a fix makes reachable with at least one button that still works, and never leave a switch showing a state the review isn't in.
+
+| Lane | Fixers, in order | Owns |
+|---|---|---|
+| **S1**: the Lovejoin screens | `sc-lj-1`, `sc-lj-2` | `ui/screens/Lovejoin.tsx`, `LovejoinLaunch.tsx`, `ui/components/BringAllBack.tsx`, Settings' Lovejoin section, their tests |
+| **S2**: the other screens | `sc-o-1`, `sc-o-2` | `ui/screens/Swaps.tsx`, `DappApprovals.tsx`, `SiteSessions.tsx`, `ui/swap.ts`, `Collateral.tsx`, `Home.tsx`, `ui/components/PendingBanner.tsx`, `e2e/extension.spec.ts`, their tests |
+| **W**: the worker's leftovers | `w-left` | `background/sessions.ts`, `lovejoin.ts`, `runs.ts`, their tests |

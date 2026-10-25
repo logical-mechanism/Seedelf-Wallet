@@ -16,7 +16,7 @@ import { adaText, formatAda } from "../format";
 import { boxText, CLASSIC_BOX } from "../lovejoin-pools";
 import { useNetwork } from "../network";
 import { withoutStop } from "../sentence";
-import { BOX_BACK_ESTIMATE } from "../swap";
+import { BOX_BACK_ESTIMATE, SESSION_FEE_ESTIMATE } from "../swap";
 import { tokenText } from "../tokens";
 import { Callout } from "./Callout";
 import { ArrowDownIcon } from "./Icons";
@@ -486,6 +486,15 @@ export function CollateralReserveRow({ reserve }: { reserve?: string }) {
   if (!reserve) return null;
   return <Row label={tr("lovejoin.collateralReserve.label")} value={tr("lovejoin.collateralReserve.value", { ada: formatAda(reserve) })} />;
 }
+
+/**
+ * About what a session's collateral's mix costs where its funding pays for it (CollateralReserveRow), in lovelace: its
+ * deposit (SESSION_FEE_ESTIMATE) and the mix under giveme.my's collateral, three boxes wide, from what was paid for it,
+ * then its box's way back (BOX_BACK_ESTIMATE), from the box. Measured on preprod: 0.17, 0.83 and 0.29 ₳. A swap's
+ * costs and a site's way back count it, which counted what pays for that mix as coming back (1.6.0's release review,
+ * 323-worker#1).
+ */
+export const COLLATERAL_MIX_COST = SESSION_FEE_ESTIMATE + BigInt(MIX_FEE_ESTIMATE) + BOX_BACK_ESTIMATE;
 
 /** Where what comes back lands: the private UTxO the session's funding made, or new ones. */
 export function IntoRow({ back }: { back: SessionBackSummary }) {

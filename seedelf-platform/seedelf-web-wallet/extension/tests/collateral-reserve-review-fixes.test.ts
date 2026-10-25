@@ -17,6 +17,7 @@ import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { t as tr } from "../src/i18n";
 import bundled from "../src/lovejoin-pools.json";
+import { maxAdaIn, wholeUnits } from "../src/ui/swap";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
@@ -243,5 +244,48 @@ describe("1.6.0's release review: the collateral's mix reserve (323-worker#0, 32
     expect((await pooled(t, []).funding("preprod", 1)).collateralReserve).toBeUndefined();
     await t.deps.preferences.set({ lovejoinCollateral: false });
     expect((await lj.funding("preprod", 1)).collateralReserve).toBeUndefined();
+  });
+});
+
+// 323-worker#0's form half (fixer sc-o-1): a swap's quote names what its funding adds for its collateral's mix, asking
+// nobody as the user types, and the swap form's Max keeps it aside, with room for the funding's fee and its change's
+// least, so the amount Max gives is funded, with that mix where a 5 ₳ pool would take it.
+describe("1.6.0's release review: the swap form's Max and the collateral's mix (323-worker#0)", SLOW, () => {
+  it("names in a swap's quote what its funding would add for its collateral's mix where a 5 ₳ pool is shown, asking nobody", async () => {
+    const t = await wallet(ADA);
+    const quoted = async (sessions: SessionService) => {
+      const before = t.koios.calls.length;
+      const quote = await sessions.quote("preprod", minswapEstimate.ask);
+      return { quote, calls: t.koios.calls.length - before };
+    };
+    const shown = await quoted(runner(t));
+    expect(shown.quote.collateralReserve).toBe(CHAIN.toString());
+    // No 5 ₳ pool shown, Settings' collateral switch off, or sessions coming back directly: none.
+    expect((await quoted(runner(t, pooled(t, [])))).quote.collateralReserve).toBeUndefined();
+    await t.deps.preferences.set({ lovejoinCollateral: false });
+    const off = await quoted(runner(t));
+    expect(off.quote.collateralReserve).toBeUndefined();
+    // Looking for the pool asked nobody: as many requests as a quote that never looked.
+    expect(shown.calls).toBe(off.calls);
+    await t.deps.preferences.set({ lovejoinCollateral: true, lovejoinReturns: false });
+    expect((await quoted(runner(t))).quote.collateralReserve).toBeUndefined();
+  });
+
+  it("funds the ADA amount Max gives, with the collateral's mix where a 5 ₳ pool would take it", async () => {
+    for (const [pools, reserve] of [
+      [[FIVE.ref], CHAIN],
+      [[], 0n],
+    ] as const) {
+      // A balance whose Max is whole ₳ to the lovelace, so rounding it leaves nothing over: the swap's 10 ₳ and its 6 ₳
+      // of costs, the 5 ₳ kept aside, the reserve where it's added, and the form's room for the fee and the change.
+      const held = 10n * ADA + 6n * ADA + 5n * ADA + reserve + 2n * ADA;
+      const t = await wallet(held);
+      const sessions = runner(t, pooled(t, [...pools]));
+      const first = await sessions.quote("preprod", minswapEstimate.ask);
+      const max = wholeUnits(maxAdaIn(held.toString(), first), 6);
+      const built = await sessions.outBuild("preprod", await sessions.quote("preprod", { ...minswapEstimate.ask, amount: max }));
+      expect(built.collateralReserve, `${pools.length} pools`).toBe(reserve ? reserve.toString() : undefined);
+      expect(max).toBe((10n * ADA).toString());
+    }
   });
 });

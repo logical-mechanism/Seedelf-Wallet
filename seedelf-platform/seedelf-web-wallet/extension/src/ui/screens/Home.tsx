@@ -44,7 +44,7 @@
 // has a Collateral row, which opens the Settings page in place (the owner,
 // 2026-10-14): it was found in Settings alone.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type I18nKey, joinList, joinSentences, t, useT } from "../../i18n";
 
 import { NETWORKS } from "../../networks";
@@ -348,17 +348,24 @@ export function Home({ goHome = 0 }: { goHome?: number }) {
     }
   }, []);
 
+  // The sent transaction Home holds, as last drawn: the worker's answer that it watches none is about that one, never
+  // about one sent while it was asked.
+  const drawn = useRef(pending);
+  drawn.current = pending;
+
   // Ask about the sent transaction; once it's confirmed, or let go (nothing
   // was sent, and its UTxOs count again), read the balances again: what the
   // worker marked as behind. After a private spend that's only the private
   // side, so Koios doesn't see the public account read in the same second
-  // (privacy review §2.9).
+  // (privacy review §2.9). The worker watching none: `unwatched`.
   const watch = useCallback(async () => {
     try {
+      const asked = drawn.current;
       const p = await call("pending-tx", {});
       if (!p) {
-        // The worker no longer watches it: one that may have gone through holds nothing back any more.
-        setPending((was) => (was && unsettled(was) && was.maybeSent ? null : was));
+        const at = Date.now();
+        setPending((was) => (was?.txHash === asked?.txHash ? unwatched(was, at).pending : was));
+        if (unwatched(asked, at).read) void load(false);
         return;
       }
       setPending(p);
@@ -1416,6 +1423,21 @@ function RunningSwaps({ swaps, onOpen }: { swaps: SessionView[]; onOpen: (index:
 /** On its way: not on chain yet, or a payment some of whose parts still wait for the part before (background/parts.ts). */
 const unsettled = (p: PendingTx) =>
   (p.confirmations === null && !p.dropped) || (!!p.parts && p.parts.sent < p.parts.total && !p.parts.stopped);
+
+/**
+ * What Home keeps of the sent transaction it holds, `was`, once the worker watches none (`pending-tx` answered null)
+ * at `at`, and whether it reads the balances again. One that may have gone through holds nothing back any more.
+ * Neither does an ordinary one inside its hold: until then the worker lets one go only once it's seen land, and tells
+ * only whoever asked first (pending.ts settleNow), Settings' Collateral page in another window or another Home. So
+ * it's let go, and the balances read again, as its landing would have had them: Home kept it on "sent", held every
+ * payment for 10 minutes, then said it may not have been sent (1.6.0's release review, 309#0). Past its hold, a
+ * private one stops being watched unseen (pending.ts WATCH_MS), and "not confirmed yet" is what Home can say of it.
+ */
+export function unwatched(was: PendingTx | null, at: number): { pending: PendingTx | null; read: boolean } {
+  if (!was || !unsettled(was)) return { pending: was, read: false };
+  if (was.maybeSent) return { pending: null, read: false };
+  return at - was.submittedAt < HOLD_MS ? { pending: null, read: true } : { pending: was, read: false };
+}
 
 type MixProgress = { total: number; sent: number; stopped?: string } | null;
 

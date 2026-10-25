@@ -111,7 +111,7 @@ import { boxFrom, isHistoryClass, madePrivate, merged, UNKNOWN, type HistoryClas
 import { nothingInAccount, readAccount } from "./account";
 import { MAX_PROBE } from "./accounts";
 import { SESSION_ACCOUNT_ADDRESSES_PREFIX, type AccountAddresses } from "./activity";
-import { txInputs } from "./cbor";
+import { MAX_DEPTH, txInputs } from "./cbor";
 import { fartherKeys, GAP_LIMIT } from "./chain";
 import { COLLATERAL_LOVELACE } from "./coin-control";
 import { KoiosBusyError, KoiosError, RawJson, SpentInputError, TXS_PER_REQUEST, type Koios, type KoiosTxSpends, type KoiosUtxo } from "./koios";
@@ -885,6 +885,20 @@ interface Schedule {
   copies?: PoolRef[];
   /** Bring every box back now, from Settings (the owner's test of 1.6.0): asked, and not over yet. */
   bringing?: Bringing;
+  /**
+   * Each box a withdraw of Bring every box back now went for, counted back then (countBack), by box (`txhash#index`):
+   * its pool, and when that withdraw went (ms). Kept while a read of that pool lists it. A node may drop that withdraw,
+   * the box held as spent for SPENT_KEEP_MS, then free, and it's taken again, by the run or, after Stop, at its own
+   * time: counted back once, never twice, which closed another mix early, or let a Bootstrap's held box go (1.6.0's
+   * release review, wlj-2's notes). Not a box's own withdraw's: 1.5.0's records stay as they were (its gate).
+   */
+  counted?: Record<string, { pool: string; at: number }>;
+  /**
+   * Bring every box back now stopped with withdraws it sent that may not be on chain: when the last of them is no longer
+   * held as spent (SPENT_KEEP_MS), the pools are read once, so a box a node dropped one of them for gets its due time
+   * back, as a box found with none does (scheduleFound). It had none: its withdraw took it (wlj-2's notes).
+   */
+  recheck?: number;
 }
 
 /**
@@ -1098,6 +1112,11 @@ interface Withdrawing {
    * Its pool's (`pool`).
    */
   due?: number;
+  /**
+   * Bring every box back now sent it: once it went, its box is kept as counted back (Schedule `counted`, 1.6.0's
+   * release review, wlj-2's notes).
+   */
+  bring?: true;
 }
 
 /**
@@ -2029,7 +2048,9 @@ const empty = (s: Schedule) =>
   !s.mixes?.length &&
   !s.launches?.length &&
   !s.copies?.length &&
-  !s.bringing;
+  !s.bringing &&
+  !Object.keys(s.counted ?? {}).length &&
+  s.recheck === undefined;
 
 /** What Bring every box back now's record may say it waits for (Bringing `waiting`): one a later build wrote, none. */
 const BRING_WAITS: readonly LovejoinBringWait[] = ["again", "chain", "landing", "collateral", "withdraw", "payment"];
@@ -2358,6 +2379,117 @@ const atThreeOf = (way: Way, count: (w: LovejoinWidth) => number): { atThree?: n
 const narrower = (e: unknown) =>
   !(e instanceof KoiosError || e instanceof WalletLocked || e instanceof StalePool || e instanceof ChainGone || isTrap(e));
 
+/**
+ * Whether WebAssembly's evaluator takes UTxO `u` (core's eval::refusal): no reference script on it, and an inline datum,
+ * if it has one, the wallet can read. A deposit takes a session's own UTxO holding a pool's token only if so
+ * (holdings_of): any other comes back with the return, so its tokens make no box of that pool (acrossOf; 1.6.0's
+ * release review, rr-1's note on 319-rust#0). Bytes that aren't hex aren't read, as core doesn't read them either.
+ */
+export function evaluable(u: KoiosUtxo): boolean {
+  if (u.reference_script) return false;
+  const bytes = (u.inline_datum as { bytes?: unknown } | null | undefined)?.bytes;
+  if (typeof bytes !== "string" || !/^([0-9a-fA-F]{2})*$/.test(bytes)) return true;
+  return withinDepth(hexBytes(bytes));
+}
+
+/** Text in CBOR, as minicbor reads it: UTF-8, or not text at all. */
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * Whether `b` is one well-formed CBOR item with nothing after it, nested no deeper than `max`, each array, map and tag
+ * counting as a level: core's cbor::within_depth, which holds a row's datum to MAX_DEPTH (eval::unreadable_datum), as
+ * minicbor reads each item, held to core's vectors (lovejoin-pool-vectors.json `scriptRowDatums`). A walk, never a
+ * recursion: anyone can put a datum thousands of levels deep on a UTxO they make.
+ */
+export function withinDepth(b: Uint8Array, max = MAX_DEPTH): boolean {
+  let p = 0;
+  // The head at `p`, read past: its major type and argument, null for an indefinite length; none if it can't be one.
+  const head = (): { major: number; n: bigint | null } | undefined => {
+    if (p >= b.length) return undefined;
+    const major = b[p]! >> 5;
+    const info = b[p]! & 0x1f;
+    p += 1;
+    if (info < 24) return { major, n: BigInt(info) };
+    if (info === 31) return { major, n: null };
+    if (info > 27) return undefined;
+    const size = 1 << (info - 24);
+    if (p + size > b.length) return undefined;
+    let n = 0n;
+    for (let i = 0; i < size; i++) n = (n << 8n) | BigInt(b[p + i]!);
+    p += size;
+    return { major, n };
+  };
+  // A string of `n` bytes at `p`, read past: text must be UTF-8.
+  const string = (major: number, n: bigint): boolean => {
+    if (n > BigInt(b.length - p)) return false;
+    const end = p + Number(n);
+    if (major === 3) {
+      try {
+        utf8.decode(b.subarray(p, end));
+      } catch {
+        return false;
+      }
+    }
+    p = end;
+    return true;
+  };
+  // What's left of each open array, map and tag: how many items are still to come, or null for an indefinite length.
+  const open: Array<bigint | null> = [];
+  for (;;) {
+    const h = head();
+    if (!h) return false;
+    // The items this one opens, if it's an array, a map or a tag.
+    let opens: bigint | null | undefined;
+    if (h.major === 0 || h.major === 1) {
+      if (h.n === null) return false;
+    } else if (h.major === 2 || h.major === 3) {
+      if (h.n !== null) {
+        if (!string(h.major, h.n)) return false;
+      } else {
+        // In chunks until a break, each a whole string of its own kind.
+        for (;;) {
+          if (p >= b.length) return false;
+          if (b[p] === 0xff) {
+            p += 1;
+            break;
+          }
+          const chunk = head();
+          if (!chunk || chunk.major !== h.major || chunk.n === null || !string(h.major, chunk.n)) return false;
+        }
+      }
+    } else if (h.major === 4) {
+      opens = h.n;
+    } else if (h.major === 5) {
+      opens = h.n === null ? null : h.n * 2n;
+      if (opens !== null && opens > 0xffff_ffff_ffff_ffffn) return false;
+    } else if (h.major === 6) {
+      if (h.n === null) return false;
+      opens = 1n;
+    } else if (h.n === null && open.pop() !== null) {
+      // A break ends only an indefinite array or map; a simple value or a float nests nothing.
+      return false;
+    }
+    if (opens !== undefined) {
+      if (open.length === max) return false;
+      if (opens !== 0n) {
+        open.push(opens);
+        continue;
+      }
+    }
+    // An item is done: it counts toward each open one it finishes.
+    for (;;) {
+      if (!open.length) return p === b.length;
+      const left = open[open.length - 1]!;
+      if (left === null) break;
+      if (left > 1n) {
+        open[open.length - 1] = left - 1n;
+        break;
+      }
+      open.pop();
+    }
+  }
+}
+
 export class LovejoinService {
   /**
    * The networks whose public mix is being sent right now: the Send, the
@@ -2430,10 +2562,16 @@ export class LovejoinService {
     if (!mixBox) return [];
     const classic: LovejoinPool = { id: CLASSIC, mixBox, lovelace: LOVEJOIN_DENOM };
     // Discovery failing is no pool gone: the wallet reads what it last handed over, so a read and the look at what
-    // made its boxes never see two sets. `quiet`: as discovery last kept them, asking nobody (34e's review, 9).
+    // made its boxes never see two sets. `quiet`: as discovery last kept them, asking nobody (34e's review, 9). But a
+    // trap isn't discovery failing: WebAssembly is broken for good, and it's handed on to where the wallet locks (sw.ts
+    // answerUi, runs.ts), never read on from (1.6.0's release review, 314-wasm#0).
+    const kept = (e: unknown) => {
+      if (isTrap(e)) throw e;
+      return this.handed.get(network) ?? [];
+    };
     const found = quiet && this.deps.known
-      ? await this.deps.known(network).catch(() => this.handed.get(network) ?? [])
-      : ((await this.deps.pools?.(network).catch(() => this.handed.get(network) ?? [])) ?? []);
+      ? await this.deps.known(network).catch(kept)
+      : ((await this.deps.pools?.(network).catch(kept)) ?? []);
     if (this.deps.pools && !(quiet && this.deps.known)) this.handed.set(network, found);
     const pools: LovejoinPool[] = [classic];
     for (const handed of found) {
@@ -3361,7 +3499,10 @@ export class LovejoinService {
       returns.tokens && unit in returns.tokens ? (returns.tokens[unit] as string | null) : returns.only ? null : undefined;
     const held = new Map<string, bigint>();
     for (const u of c.rows) {
-      if (!mayGo.has(u.tx_hash)) continue;
+      // Only what the deposit takes, as WebAssembly counts it (holdings_of): a UTxO its evaluator can't take comes back
+      // with the return, so its tokens are no pool's this time, never a way that takes no box, said as too little ADA
+      // (1.6.0's release review, rr-1's note on 319-rust#0).
+      if (!mayGo.has(u.tx_hash) || !evaluable(u)) continue;
       for (const a of u.asset_list ?? []) held.set(a.policy_id + a.asset_name, (held.get(a.policy_id + a.asset_name) ?? 0n) + BigInt(a.quantity));
     }
     const byToken = new Map<string, LovejoinPool[]>();
@@ -3672,6 +3813,16 @@ export class LovejoinService {
     if (!split || this.floorShort(network, split.others.length)) return undefined;
     if (free(split.others, split.reserved).length < TAIL_DRAWS) return undefined;
     return { pool, rows: this.real(split) };
+  }
+
+  /**
+   * Whether the 5 ₳ pool collateralPool reads is shown, as discovery last kept the pools, asking nobody: a swap's quote
+   * as the user types, for its form's Max (sessions.ts quote; 1.6.0's release review, 323-worker#0). Whether it takes
+   * the collateral now, its floor and its free boxes, is collateralPool's, at Review.
+   */
+  async collateralPoolShown(network: NetworkName): Promise<boolean> {
+    if (!this.available(network)) return false;
+    return (await this.readSet(network, true)).some((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
   }
 
   /**
@@ -5097,6 +5248,10 @@ export class LovejoinService {
       );
       if (asking.length) s.asking = Object.fromEntries(asking);
       else delete s.asking;
+      // A box counted back goes from the record once a read of its pool doesn't list it: a withdraw of it is on chain.
+      const counted = Object.entries(s.counted ?? {}).filter(([r, c]) => there.has(r) || !pools.includes(c.pool));
+      if (counted.length) s.counted = Object.fromEntries(counted);
+      else delete s.counted;
       for (const p of pools) {
         const counts: Pick<PoolSchedule, "notMixed" | "unsure"> = p === CLASSIC ? s : ((s.pools ??= {})[p] ??= { due: [] });
         const [notMixed, doubt] = [inPool(unmixed, p).length, inPool(unsure, p).length];
@@ -5737,7 +5892,12 @@ export class LovejoinService {
     if (!this.available(network)) return false;
     await this.cuts(network);
     const schedule = await this.read(network);
-    return everyDue(schedule).length > 0 || !!schedule.withdrawing || (!!schedule.bringing && !schedule.bringing.stopped);
+    return (
+      everyDue(schedule).length > 0 ||
+      !!schedule.withdrawing ||
+      (!!schedule.bringing && !schedule.bringing.stopped) ||
+      schedule.recheck !== undefined
+    );
   }
 
   /**
@@ -5779,7 +5939,9 @@ export class LovejoinService {
     // Only a network with something of the wallet's open in Lovejoin reads its pool at unlock (privacy review §2.18).
     const notMixed = scheduledPools(before).some((p) => countsIn(before, p).notMixed > 0);
     const open = everyDue(before).length > 0 || before.chains.length > 0 || notMixed;
-    if (!(unlock && open) && !everyDue(before).some((d) => d.at <= now)) return [];
+    // And once, the read Bring every box back now's Stop asked for, its withdraws' boxes free again by then (`recheck`).
+    const recheck = before.recheck !== undefined && before.recheck <= now;
+    if (!(unlock && open) && !recheck && !everyDue(before).some((d) => d.at <= now)) return [];
     const scheduled = new Set(before.chains.filter((c) => c.scheduled).map((c) => c.id));
     const { reads, owned, listed } = await this.ours(network);
     const pools = reads.map((r) => r.pool.id);
@@ -5805,6 +5967,8 @@ export class LovejoinService {
     await this.update(network, (s) => {
       sending = s.chains.some((c) => mixing(c) || (c.scheduled && !scheduled.has(c.id)) || mayLand(c, now));
       if (!sending) for (const p of pools) setDue(s, p, [...dueIn(s, p)].sort((a, b) => a - b).slice(0, inPool(back, p).length));
+      // Read: a box Stop's recheck was for has its due time now.
+      if (s.recheck !== undefined && s.recheck <= now) delete s.recheck;
     });
     const random = this.deps.random ?? secureRandom;
     // The unlock's run sends nothing (unlockDraws drew each box due's wait): it reads the pool, so due times follow it.
@@ -5901,7 +6065,10 @@ export class LovejoinService {
     try {
       // Its due time goes with it, sent or maybe sent (Withdrawing `due`).
       return [await this.withdrawOne(network, read, box, { unlocked, due: time, ...(params ? { params } : {}) })];
-    } catch {
+    } catch (e) {
+      // A trap is handed on, so the wallet locks (runs.ts), never tried again on the broken instance (1.6.0's release
+      // review, 314-wasm#0).
+      if (isTrap(e)) throw e;
       // It never went: its due time is back, and it's tried again at the next unlock or alarm.
       return [];
     }
@@ -6099,6 +6266,9 @@ export class LovejoinService {
   async stopBringingAllBack(network: NetworkName): Promise<void> {
     if (!this.available(network)) return;
     await this.update(network, (s) => {
+      // A withdraw it sent that a node dropped leaves its box with no due time, held as spent until SPENT_KEEP_MS on:
+      // the pools are read once then, so it gets one back (Schedule `recheck`; 1.6.0's release review, wlj-2's notes).
+      if (s.bringing?.back) s.recheck = this.deps.now() + SPENT_KEEP_MS;
       delete s.bringing;
     });
   }
@@ -6155,7 +6325,9 @@ export class LovejoinService {
       found = await this.ours(network);
       reserved = await this.reservedBoxes(network);
     } catch (e) {
-      // A pool read that failed is a run that sent nothing, and says why; a lock ends the run as it is.
+      // A pool read that failed is a run that sent nothing, and says why; a lock ends the run as it is. A trap is
+      // handed on, so the wallet locks (runs.ts), never kept as the run's reason (1.6.0's release review, 314-wasm#0).
+      if (isTrap(e)) throw e;
       if (!(await locked())) await this.bringNoted(network, 0, undefined, e instanceof Error ? e.message : String(e));
       return [];
     }
@@ -6274,26 +6446,41 @@ export class LovejoinService {
       const stuck = read.pool.id !== CLASSIC && !!this.cantComeBack(network, read.pool, params);
       try {
         // A Bootstrap's held one counts against the Bootstrap that held it, as Bring one back now's does (316#0).
-        const holder = held.has(ref(box)) ? holderOf(await this.read(network), owned.filter((b) => !gone.has(ref(b))), box) : undefined;
+        const current = await this.read(network);
+        const holder = held.has(ref(box)) ? holderOf(current, owned.filter((b) => !gone.has(ref(b))), box) : undefined;
+        // Taken before by a withdraw that went, which a node dropped: it took its due time and was counted back then,
+        // so it takes no other box's (Schedule `counted`; wlj-2's notes). Settings counts it once, as one box back: this
+        // run's own earlier withdraw counted it already, one from before it was asked didn't.
+        const taken = current.counted?.[ref(box)];
+        const again = taken !== undefined;
+        const already = taken !== undefined && taken.at >= asked.at;
         const pending = await this.withdrawOne(network, read, box, {
           unlocked,
           // A box that had a due time takes its pool's earliest, as Bring one back now's does; a Bootstrap's held one
           // had none, and counts against its Bootstrap (countBack).
-          ...(held.has(ref(box)) ? { bootstrap: true as const, ...(holder !== undefined ? { holder } : {}) } : { due: "earliest" as const }),
+          ...(held.has(ref(box))
+            ? { bootstrap: true as const, ...(holder !== undefined ? { holder } : {}) }
+            : again
+              ? {}
+              : { due: "earliest" as const }),
           params,
           ...(stuck ? { paid: "private" as const } : {}),
+          bring: true,
         });
         sent.push(pending);
         gone.add(ref(box));
         await this.update(network, (s) => {
           const b = s.bringing;
           if (!b) return;
-          b.back += 1;
+          if (!already) b.back += 1;
           b.left = Math.max(0, takes.length - sent.length);
           delete b.why;
           delete b.fails;
         });
       } catch (e) {
+        // A trap ends it, handed on so the wallet locks (runs.ts): no box goes on the broken instance, and it's never
+        // kept as the run's reason (1.6.0's release review, 314-wasm#0).
+        if (isTrap(e)) throw e;
         // One that may have gone through is looked for first (settleWithdrawing), and a lock ends the run: the next goes on.
         if (e instanceof WithdrawMaybeSent || (await locked())) break;
         why = e instanceof Error ? e.message : String(e);
@@ -6324,7 +6511,11 @@ export class LovejoinService {
       } else if (why !== undefined) {
         b.why = why;
         b.fails = (b.fails ?? 0) + 1;
-        if (b.fails >= BRING_FAILED_RUNS) b.stopped = true;
+        if (b.fails >= BRING_FAILED_RUNS) {
+          b.stopped = true;
+          // Stopped, as Stop does it: a box a withdraw it sent was dropped for gets its due time back (wlj-2's notes).
+          if (b.back) s.recheck = this.deps.now() + SPENT_KEEP_MS;
+        }
       }
     });
   }
@@ -6429,6 +6620,7 @@ export class LovejoinService {
       holder,
       params: known,
       paid,
+      bring,
     }: {
       unlocked?: number;
       due?: number | "earliest";
@@ -6436,6 +6628,8 @@ export class LovejoinService {
       holder?: string;
       params?: Record<string, unknown>;
       paid?: true | "private";
+      /** Bring every box back now's: once it went, its box is kept as counted back (Schedule `counted`). */
+      bring?: true;
     } = {},
   ): Promise<PendingTx> {
     const { wasm, wallet, session, now } = this.deps;
@@ -6484,7 +6678,10 @@ export class LovejoinService {
         if (!(e instanceof Error && NO_PRIVATE_PAYS.test(e.message))) throw e;
         // Nothing free at all: what holds it, as any Seedelf spend says it (locked, or waiting for a return or a
         // payment's parts being sent), never "make some ADA private" for a balance that has some (session 5's review, L3).
-        throw utxos.length ? new Error(t("lj.privatePayNone")) : nothingToSpend(this.deps, view, t("lj.privatePayNone"), returning, waiting);
+        // Bring every box back now offers no public payer, so it names the ways it has: Bring one back's question did
+        // offer one (1.6.0's release review, 321-lj-screens#5).
+        const none = t(bring ? "lj.bring.warn.privatePayNone" : "lj.privatePayNone");
+        throw utxos.length ? new Error(none) : nothingToSpend(this.deps, view, none, returning, waiting);
       }
       built = made;
       spent = { lovelace: made.spentLovelace, class: classes[made.spent] ?? UNKNOWN };
@@ -6543,6 +6740,7 @@ export class LovejoinService {
         at,
         sentAt: at,
         ...(time !== undefined ? { due: time } : {}),
+        ...(bring ? { bring } : {}),
       };
     });
     try {
@@ -6599,14 +6797,23 @@ export class LovejoinService {
    * it never went. `back`: it never went, so the due time it took is its
    * box's again (Withdrawing `due`), in its pool. `gone`: it went, so its box
    * is back, counted against a mix in the list (countBack): one a Bootstrap
-   * held, against the one that held it (Withdrawing `holder`).
+   * held, against the one that held it (Withdrawing `holder`). Once: a box
+   * Bring every box back now's withdraw went for before, a node having dropped
+   * that one, is counted already (Schedule `counted`; 1.6.0's release review,
+   * wlj-2's notes).
    */
   private dropWithdrawing(network: NetworkName, txHash: string, back = false, gone = false): Promise<void> {
     return this.update(network, (s) => {
       const w = s.withdrawing;
       if (w?.txHash !== txHash) return;
       if (back && w.due !== undefined) dueFor(s, poolOf(w)).push(w.due);
-      if (gone) countBack(s, poolOf(w), withdrawn(w), w.bootstrap === true, typeof w.holder === "string" ? w.holder : undefined);
+      if (gone) {
+        const box = withdrawn(w);
+        if (!box || s.counted?.[ref(box)] === undefined) {
+          countBack(s, poolOf(w), box, w.bootstrap === true, typeof w.holder === "string" ? w.holder : undefined);
+        }
+        if (box && w.bring) (s.counted ??= {})[ref(box)] = { pool: poolOf(w), at: w.at };
+      }
       delete s.withdrawing;
     });
   }
@@ -6833,6 +7040,17 @@ export class LovejoinService {
       ...(record(kept?.bringing) && typeof kept!.bringing!.at === "number" && typeof kept!.bringing!.back === "number"
         ? { bringing: { ...kept!.bringing! } }
         : {}),
+      // Kept before a box counted back was (wlj-2's notes): none. One that doesn't read as one is left out.
+      ...(record(kept?.counted)
+        ? {
+            counted: Object.fromEntries(
+              Object.entries(kept!.counted!).filter(
+                ([, c]) => record(c) && typeof c.pool === "string" && typeof c.at === "number",
+              ),
+            ),
+          }
+        : {}),
+      ...(typeof kept?.recheck === "number" ? { recheck: kept.recheck } : {}),
     };
   }
 

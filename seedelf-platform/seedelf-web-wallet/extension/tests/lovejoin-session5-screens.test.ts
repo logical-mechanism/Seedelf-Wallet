@@ -27,6 +27,15 @@ vi.mock("../src/i18n", async (original) => {
   const real = await original<typeof import("../src/i18n")>();
   return { ...real, useT: () => real.t };
 });
+// And the accounts, one wallet's, for the same reason: a question names the public account a box is, where it's
+// another's (1.6.0's release review, x-privacy#0).
+vi.mock("../src/ui/accounts", async (original) => {
+  const real = await original<typeof import("../src/ui/accounts")>();
+  return {
+    ...real,
+    useAccounts: () => ({ accounts: [{ index: 0 }], active: 0, loaded: true, name: "Account 1", several: false, reload: async () => undefined }),
+  };
+});
 
 const { AnywayQuestion, HeldQuestion, PaidQuestion, PoolGroupList, anywayRequest, heldRequest, hatchRequest } = LovejoinScreen;
 const PoolPage = (LovejoinScreen as unknown as { PoolPage: (props: Record<string, unknown>) => ReactElement }).PoolPage;

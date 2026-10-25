@@ -1583,6 +1583,13 @@ export interface SwapQuote {
   verified?: boolean;
   /** Where Lovejoin is on, what bringing the session back through it is expected to take. */
   lovejoin?: SwapLovejoin;
+  /**
+   * What its funding would add beside the collateral for that collateral's mix (sessions.ts tailReserve), in lovelace,
+   * where its return goes through Lovejoin as Settings has it, Settings has the collateral go in, and a 5 ₳ pool is
+   * shown, as discovery last kept the pools, asking nobody: the form's Max keeps it aside (1.6.0's release review,
+   * 323-worker#0). Whether that pool takes the collateral now is read at Review, whose summary says what was added.
+   */
+  collateralReserve?: string;
 }
 
 /**

@@ -3039,6 +3039,14 @@ output.swap-card__amount {
   color: var(--warn);
 }
 
+/* Its words, the live part of it, laid out as the line's own children are: the transaction under Details stays out of
+   what's read aloud (1.6.0's release review, 322#1). */
+.timeline__said {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
 /* An error shown in its own words can hold a run of hex or JSON with no space: it wraps, never runs off. */
 .timeline__now--retry p {
   margin: 0;

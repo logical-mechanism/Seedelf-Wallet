@@ -1,0 +1,178 @@
+# Who touched what (fix rounds 1 and 2)
+
+Generated from the fixers' structured results. Each fixer's report is `fixes/<id>.md`.
+
+## Fixers and their findings
+
+- **bootstrap**: 318-rust#0=fixed, 323-rust#0=fixed, x-scenarios-lj#0=fixed, docs-small#0=fixed, x-compat#0=fixed, x-release#0=fixed, 316#2=fixed, 312#4=fixed, 323-worker#4=fixed
+- **wlj-1**: 316#0=fixed, 316#1=partly, 316#3=fixed, 316#4=fixed, x-privacy#0=partly
+- **wlj-2**: 321-lj-worker#0=fixed, 321-lj-worker#1=partly, 321-lj-worker#2=fixed, 321-lj-worker#4=partly, x-scenarios-lj#1=fixed
+- **wlj-3**: 323-worker#2=fixed, 323-worker#5=fixed, 323-worker#8=fixed, gap-1#0=fixed
+- **wlj-4**: 318-worker#0=partly, 318-worker#1=fixed, 318-worker#3=fixed, 319-worker#0=fixed, 319-worker#3=fixed, x-compat#2=fixed
+- **deep-datum**: 314-wasm#0=fixed
+- **pool-exists**: 317-wallet#0=fixed
+- **max-left**: 321-parts-worker#6=fixed, x-scenarios-sessions#1=fixed, 321-parts-rust#2=fixed
+- **reserve**: 323-rust#1=fixed, 323-worker#0=partly, 320-screens#2 / 321-lj-screens#3 (worker half)=partly
+- **rr-1**: 312#0=fixed, 312#1=fixed, 314-core#0=fixed, 314-core#1=fixed, 318-rust#1=fixed, 319-rust#0=fixed, 319-rust#2=fixed
+- **rr-2**: 321-lj-rust-data#1=fixed, 323-rust#2=fixed, 321-parts-rust#1=fixed, gap-2#0=fixed, 321-lj-rust-data#2=fixed, 314-core#2=fixed, 321-parts-rust#0=skipped-scope
+- **docs-1**: 312#2=fixed, 312#3=fixed, docs-small#1=fixed, docs-small#2=fixed, docs-small#3=fixed, gap-3#0=fixed, gap-3#1=partly, gap-3#3=fixed, gap-3#4=fixed, gap-3#5=fixed, gap-3#7=fixed
+- **docs-2**: x-privacy#2=fixed, x-release#3=fixed, x-release#2=fixed, x-release#5=fixed, 310#0=fixed, 311#1=fixed, x-compat#1=fixed, x-release#6=fixed, x-release#8=fixed
+- **i18n-existing**: x-i18n-es#0=fixed, x-i18n-es#1=fixed, x-i18n-ja#0=fixed, x-i18n-ja#1=fixed, x-i18n-ja#2=fixed, x-i18n-es#2=partly, x-i18n-es#3=fixed, x-i18n-es#4=fixed, x-i18n-es#5=fixed, x-i18n-ja#3=fixed, x-i18n-ja#4=fixed, x-i18n-ja#5=fixed, x-i18n-ja#6=fixed
+- **wss-1**: gap-1#1=fixed, gap-3#6=fixed, 321-parts-worker#2=owner-call, 321-parts-worker#0=fixed, 321-parts-worker#1=fixed, x-scenarios-sessions#2=fixed, 321-parts-worker#3=partly
+- **wss-2**: x-scenarios-sessions#0=fixed, 309#1=fixed, 309#2=fixed, 318-worker#2=fixed, 321-parts-worker#0 (wss-1's handoff, leftover in sendFunding)=fixed
+- **sc-lj-1**: 320-screens#2=fixed, 321-lj-screens#3=fixed, 323-worker#0=fixed, 321-lj-screens#4=fixed, 321-lj-screens#1=fixed, 320-screens#4=fixed, 321-lj-screens#2=fixed, x-privacy#1=fixed, 323-worker#6=fixed, gap-3#2=fixed, x-i18n-es#2=fixed
+- **sc-lj-2**: 321-lj-screens#0=fixed, 321-lj-screens#6=fixed, 321-lj-worker#1=fixed, 321-lj-worker#4=fixed, 321-lj-screens#5=fixed, 320-screens#0=fixed, 320-screens#1=fixed, x-privacy#0=fixed
+- **sc-o-1**: 323-worker#1=partly, 323-worker#0=fixed, 323-worker#6=fixed, gap-3#2=fixed, x-privacy#1=fixed, 319-worker#0=fixed, 320-screens#3=fixed, 322#0=fixed, 322#1=fixed
+- **sc-o-2**: 309#0=fixed, 311#0=fixed, 318-worker#0=fixed
+- **w-left**: 321-parts-worker#3=fixed, 314-wasm#0=fixed, 319-rust#0 (rr-1's note: acrossOf vs holdings_of)=fixed, wlj-2's notes (a): a dropped bring withdraw retaken counts back twice=fixed, wlj-2's notes (b): after Stop, a dropped bring withdraw's box has no due time=fixed, wlj-1's note: the STATE-5 test name=fixed
+
+## Files and the fixers who touched them
+
+- `.github/workflows/data-layer.yml`: docs-2
+- `README.md`: docs-1
+- `WW/README.md`: docs-1, docs-2
+- `WW/docs/architecture.md`: docs-1
+- `WW/docs/development.md`: docs-2
+- `WW/docs/flows.md`: docs-1
+- `WW/docs/i18n/es-provenance.json`: bootstrap, max-left, sc-lj-1, sc-lj-2, sc-o-1, sc-o-2, w-left, wlj-3, wlj-4, wss-1
+- `WW/docs/i18n/glossary.md`: i18n-existing
+- `WW/docs/i18n/ja-provenance.json`: bootstrap, max-left, sc-lj-1, sc-lj-2, sc-o-1, sc-o-2, w-left, wlj-3, wlj-4, wss-1
+- `WW/docs/keys-and-accounts.md`: docs-1
+- `WW/docs/lovejoin-mix-width.md`: docs-1
+- `WW/docs/plans/chunk-34-token-pools.md`: docs-1
+- `WW/docs/plans/review-1.6.0/fixes/bootstrap.md`: bootstrap
+- `WW/docs/plans/review-1.6.0/fixes/deep-datum.md`: deep-datum
+- `WW/docs/plans/review-1.6.0/fixes/docs-1.md`: docs-1
+- `WW/docs/plans/review-1.6.0/fixes/docs-2.md`: docs-2
+- `WW/docs/plans/review-1.6.0/fixes/i18n-existing.md`: i18n-existing
+- `WW/docs/plans/review-1.6.0/fixes/max-left.md`: max-left
+- `WW/docs/plans/review-1.6.0/fixes/pool-exists.md`: pool-exists
+- `WW/docs/plans/review-1.6.0/fixes/reserve.md`: reserve
+- `WW/docs/plans/review-1.6.0/fixes/rr-1.md`: rr-1
+- `WW/docs/plans/review-1.6.0/fixes/rr-2.md`: rr-2
+- `WW/docs/plans/review-1.6.0/fixes/sc-lj-1.md`: sc-lj-1
+- `WW/docs/plans/review-1.6.0/fixes/sc-lj-2.md`: sc-lj-2
+- `WW/docs/plans/review-1.6.0/fixes/sc-o-1.md`: sc-o-1
+- `WW/docs/plans/review-1.6.0/fixes/sc-o-2.md`: sc-o-2
+- `WW/docs/plans/review-1.6.0/fixes/w-left.md`: w-left
+- `WW/docs/plans/review-1.6.0/fixes/wlj-1.md`: wlj-1
+- `WW/docs/plans/review-1.6.0/fixes/wlj-2.md`: wlj-2
+- `WW/docs/plans/review-1.6.0/fixes/wlj-3.md`: wlj-3
+- `WW/docs/plans/review-1.6.0/fixes/wlj-4.md`: wlj-4
+- `WW/docs/plans/review-1.6.0/fixes/wss-1.md`: wss-1
+- `WW/docs/plans/review-1.6.0/fixes/wss-2.md`: wss-2
+- `WW/docs/privacy.md`: docs-2
+- `WW/docs/store/README.md`: docs-2
+- `WW/docs/store/privacy-policy.md`: docs-2
+- `WW/extension/README.md`: docs-2
+- `WW/extension/e2e/extension.spec.ts`: sc-lj-1, sc-o-1, sc-o-2
+- `WW/extension/e2e/live/flows.mjs`: docs-2
+- `WW/extension/e2e/live/lib.mjs`: docs-2
+- `WW/extension/e2e/live/run.mjs`: docs-2
+- `WW/extension/src/background/account.ts`: wlj-4
+- `WW/extension/src/background/activity.ts`: wss-2
+- `WW/extension/src/background/coin-control.ts`: wss-2
+- `WW/extension/src/background/handlers.ts`: wlj-3, wss-1
+- `WW/extension/src/background/incoming.ts`: wss-2
+- `WW/extension/src/background/lovejoin-launch.ts`: wlj-4
+- `WW/extension/src/background/lovejoin-pools.ts`: pool-exists
+- `WW/extension/src/background/lovejoin.ts`: bootstrap, reserve, sc-lj-2, sc-o-1, w-left, wlj-1, wlj-2, wlj-3, wlj-4
+- `WW/extension/src/background/parts.ts`: wss-1
+- `WW/extension/src/background/pending.ts`: wss-1
+- `WW/extension/src/background/runs.ts`: w-left
+- `WW/extension/src/background/script-spend.ts`: max-left, wss-1
+- `WW/extension/src/background/send.ts`: wss-2
+- `WW/extension/src/background/sessions.ts`: bootstrap, reserve, sc-o-1, w-left, wlj-3, wlj-4, wss-2
+- `WW/extension/src/background/transfer.ts`: max-left
+- `WW/extension/src/background/wasm.ts`: deep-datum
+- `WW/extension/src/background/withdraw.ts`: max-left
+- `WW/extension/src/i18n/translations/en.json`: bootstrap, i18n-existing, max-left, sc-lj-1, sc-lj-2, sc-o-1, sc-o-2, w-left, wlj-3, wlj-4, wss-1
+- `WW/extension/src/i18n/translations/es.json`: bootstrap, i18n-existing, max-left, sc-lj-1, sc-lj-2, sc-o-1, sc-o-2, w-left, wlj-3, wlj-4, wss-1
+- `WW/extension/src/i18n/translations/ja.json`: bootstrap, i18n-existing, max-left, sc-lj-1, sc-lj-2, sc-o-1, sc-o-2, w-left, wlj-3, wlj-4, wss-1
+- `WW/extension/src/shared/preferences.ts`: docs-1
+- `WW/extension/src/shared/rpc.ts`: bootstrap, max-left, reserve, sc-o-1, wlj-1, wlj-2, wlj-4, wss-1
+- `WW/extension/src/ui/components/BringAllBack.tsx`: sc-lj-2
+- `WW/extension/src/ui/components/LockCountdown.tsx`: wss-1
+- `WW/extension/src/ui/components/LovejoinReturn.tsx`: sc-o-1
+- `WW/extension/src/ui/components/PendingBanner.tsx`: sc-o-2
+- `WW/extension/src/ui/components/SendButton.tsx`: sc-o-1
+- `WW/extension/src/ui/screens/Collateral.tsx`: sc-o-2
+- `WW/extension/src/ui/screens/DappApprovals.tsx`: sc-o-1
+- `WW/extension/src/ui/screens/Home.tsx`: sc-o-2
+- `WW/extension/src/ui/screens/Lovejoin.tsx`: bootstrap, sc-lj-1, sc-lj-2, sc-o-1
+- `WW/extension/src/ui/screens/LovejoinLaunch.tsx`: sc-lj-2, wlj-4
+- `WW/extension/src/ui/screens/Settings.tsx`: wss-1
+- `WW/extension/src/ui/screens/SiteSessions.tsx`: sc-o-1
+- `WW/extension/src/ui/screens/Swaps.tsx`: sc-o-1
+- `WW/extension/src/ui/screens/Transfer.tsx`: max-left
+- `WW/extension/src/ui/screens/Withdraw.tsx`: max-left
+- `WW/extension/src/ui/styles.css`: sc-o-1
+- `WW/extension/src/ui/swap.ts`: sc-o-1
+- `WW/extension/tests/activity-review-fixes.test.ts`: wss-2
+- `WW/extension/tests/approvals-review-fixes.test.ts`: sc-o-1
+- `WW/extension/tests/chain-requests.test.ts`: wss-1
+- `WW/extension/tests/coin-control.test.ts`: wss-2
+- `WW/extension/tests/collateral-reserve-review-fixes.test.ts`: reserve, sc-o-1
+- `WW/extension/tests/home-review-fixes.test.ts`: sc-o-2
+- `WW/extension/tests/i18n-review-fixes.test.ts`: i18n-existing
+- `WW/extension/tests/live-runs-copy.test.ts`: docs-2
+- `WW/extension/tests/lovejoin-1-5-0.test.ts`: wlj-4
+- `WW/extension/tests/lovejoin-accounts-review-fixes.test.ts`: sc-lj-2
+- `WW/extension/tests/lovejoin-bring-all-back.test.ts`: wlj-2
+- `WW/extension/tests/lovejoin-bring-review-fixes.test.ts`: w-left, wlj-2
+- `WW/extension/tests/lovejoin-bring-screen-review-fixes.test.ts`: sc-lj-2
+- `WW/extension/tests/lovejoin-crediting-review-fixes.test.ts`: wlj-1
+- `WW/extension/tests/lovejoin-discovery-review-fixes.test.ts`: deep-datum
+- `WW/extension/tests/lovejoin-discovery.test.ts`: pool-exists
+- `WW/extension/tests/lovejoin-flows.test.ts`: bootstrap, wlj-1, wlj-4
+- `WW/extension/tests/lovejoin-form-review-fixes.test.ts`: sc-lj-1
+- `WW/extension/tests/lovejoin-launch-review-fixes.test.ts`: sc-lj-2
+- `WW/extension/tests/lovejoin-merged-review.test.ts`: bootstrap
+- `WW/extension/tests/lovejoin-planner.test.ts`: bootstrap, reserve, w-left, wlj-2, wlj-3, wlj-4
+- `WW/extension/tests/lovejoin-pools.test.ts`: wlj-1, wlj-4
+- `WW/extension/tests/lovejoin-release-rules.test.ts`: bootstrap, sc-lj-1, w-left
+- `WW/extension/tests/lovejoin-screens-review.test.ts`: bootstrap, wlj-4
+- `WW/extension/tests/lovejoin-session5-screens.test.ts`: sc-lj-2
+- `WW/extension/tests/lovejoin.test.ts`: bootstrap
+- `WW/extension/tests/max-left-review-fixes.test.ts`: max-left
+- `WW/extension/tests/parts-send-review-fixes.test.ts`: i18n-existing, w-left, wss-1, wss-2
+- `WW/extension/tests/remove-wallet.test.ts`: wss-1
+- `WW/extension/tests/restore-scan.test.ts`: wss-2
+- `WW/extension/tests/run-traps-review-fixes.test.ts`: w-left
+- `WW/extension/tests/sessions-review-fixes.test.ts`: bootstrap, i18n-existing
+- `WW/extension/tests/settings.test.ts`: i18n-existing
+- `WW/extension/tests/swap-form.test.ts`: sc-o-1
+- `WW/extension/tests/wasm-review-fixes.test.ts`: deep-datum
+- `WW/wasm/README.md`: rr-2
+- `WW/wasm/src/lib.rs`: max-left, reserve, rr-2
+- `WW/wasm/src/lovejoin.rs`: deep-datum, rr-1, rr-2
+- `WW/wasm/tests/api_test.rs`: max-left
+- `WW/wasm/tests/lovejoin-pools.test.mjs`: deep-datum
+- `WW/wasm/tests/lovejoin-reserve.test.mjs`: reserve
+- `WW/wasm/tests/lovejoin_across_test.rs`: pool-exists
+- `WW/wasm/tests/lovejoin_flows_test.rs`: pool-exists
+- `WW/wasm/tests/lovejoin_test.rs`: pool-exists, reserve, rr-1
+- `WW/wasm/tests/readme_test.rs`: rr-2
+- `seedelf-data/api/src/lovejoin/datum.rs`: deep-datum
+- `seedelf-data/api/src/lovejoin/standard.rs`: deep-datum
+- `seedelf-data/deploy/README.md`: docs-2
+- `seedelf-platform/CLAUDE.md`: docs-1
+- `seedelf-platform/seedelf-core/src/build.rs`: reserve, rr-2
+- `seedelf-platform/seedelf-core/src/cbor.rs`: deep-datum
+- `seedelf-platform/seedelf-core/src/eval.rs`: deep-datum, rr-1
+- `seedelf-platform/seedelf-core/src/lovejoin/launch.rs`: rr-1
+- `seedelf-platform/seedelf-core/src/lovejoin/mod.rs`: pool-exists, reserve, rr-1
+- `seedelf-platform/seedelf-core/src/lovejoin/pool.rs`: deep-datum, pool-exists, rr-1
+- `seedelf-platform/seedelf-core/src/lovejoin/templates.rs`: rr-1
+- `seedelf-platform/seedelf-core/src/staking.rs`: rr-2
+- `seedelf-platform/seedelf-core/tests/cbor_test.rs`: deep-datum
+- `seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json`: deep-datum
+- `seedelf-platform/seedelf-core/tests/lovejoin_launch_test.rs`: rr-1
+- `seedelf-platform/seedelf-core/tests/lovejoin_mainnet_test.rs`: rr-1
+- `seedelf-platform/seedelf-core/tests/lovejoin_planner_test.rs`: rr-1
+- `seedelf-platform/seedelf-core/tests/lovejoin_pools_test.rs`: deep-datum, pool-exists, rr-1
+- `seedelf-platform/seedelf-core/tests/lovejoin_test.rs`: rr-1
+- `seedelf-platform/seedelf-core/tests/lovejoin_vectors_test.rs`: deep-datum
+- `seedelf-platform/seedelf-core/tests/lovejoin_width_test.rs`: rr-1
+- `seedelf-platform/seedelf-core/tests/most_test.rs`: rr-2
+- `seedelf-platform/seedelf-core/tests/staking_test.rs`: rr-2

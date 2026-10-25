@@ -6,9 +6,9 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { joinSentences, useT } from "../../i18n";
+import { type I18nKey, joinSentences, useT } from "../../i18n";
 import type { NetworkName } from "../../networks";
-import type { LovejoinHeld } from "../../shared/rpc";
+import type { LovejoinBringWait, LovejoinHeld } from "../../shared/rpc";
 import { call } from "../background";
 import { adaText } from "../format";
 import { CLASSIC_ID } from "../lovejoin-pools";
@@ -24,6 +24,20 @@ const BRING_READ_MS = 2_000;
 type Bringing = LovejoinHeld["bringing"];
 
 /**
+ * What a run waits for before it can take what's left, or end (LovejoinHeld `bringing.waiting`), each in its own short
+ * line: it waited with no word of why, for a day where a session's collateral's mix waited for giveme.my (1.6.0's
+ * release review, 321-lj-worker#1).
+ */
+const BRING_WAIT: Record<LovejoinBringWait, I18nKey> = {
+  again: "settings.lovejoin.bringWait.again",
+  chain: "settings.lovejoin.bringWait.chain",
+  landing: "settings.lovejoin.bringWait.landing",
+  collateral: "settings.lovejoin.bringWait.collateral",
+  withdraw: "settings.lovejoin.bringWait.withdraw",
+  payment: "settings.lovejoin.bringWait.payment",
+};
+
+/**
  * What a run this page saw go says once it's over (`held`, the read that found it so): how many it sent; or, having
  * sent none, that none was left, unless the wallet still has boxes where it ran (its pool, or every pool), a mix's
  * sent since it was asked, which wait their turn: then nothing (1.6.0's review). Exported for its test.
@@ -33,6 +47,64 @@ export function doneOf(last: NonNullable<Bringing>, held: LovejoinHeld): number 
   const there = (p: Pick<LovejoinHeld, "boxes" | "notMixed" | "bootstrap">) => p.boxes + p.notMixed + (p.bootstrap ?? 0);
   const pools = [{ ...held, id: CLASSIC_ID }, ...(held.pools ?? [])].filter((p) => last.pool === undefined || p.id === last.pool);
   return pools.some((p) => there(p) > 0) ? undefined : 0;
+}
+
+/** Whether run `b` covers a page: every one does Settings' (no `pool`); a pool's page (`pool`), every pool's or its own. */
+const coversRun = (pool: string | undefined, b: Bringing) => !!b && (pool === undefined || b.pool === undefined || b.pool === pool);
+
+/**
+ * How a page follows Bring every box back now (Settings', no `pool`; or a pool's page's): what each read of
+ * lovejoin-held finds, and what each press asks. A run this page saw go, not stopped, that a read no longer finds is
+ * over: said once (`done`), with how many it sent (doneOf) and, for a pool's run, its pool, which Settings words it by
+ * (321-lj-screens#6); and `over` is called. A read sent before the last press's request answered answers for before
+ * it, and is dropped, whether it answers before that request or after: the worker reads its record outside the queue
+ * Stop writes it through, so a read sent while Stop went could come back after it, the run still going, and the next
+ * read, Stop's done, said the run was over, "Done: 3 back" for a run the user stopped; and one sent while the ask went,
+ * the run not there yet, said nothing was left before its first run (1.6.0's release review, 321-lj-screens#0).
+ * Exported for its test.
+ */
+export function bringFollower(
+  pool: string | undefined,
+  show: { bringing: (b: Bringing) => void; done: (count: number | undefined, pool?: string) => void; over: () => void },
+) {
+  let last: Bringing;
+  let presses = 0;
+  return {
+    /** A read about to be sent: what to do with its answer. */
+    read() {
+      const sent = presses;
+      return (held: LovejoinHeld) => {
+        if (sent !== presses) return;
+        // Over since the last read, not stopped: every box it found went.
+        if (coversRun(pool, last) && !last!.stopped && !held.bringing) {
+          show.done(doneOf(last!, held), last!.pool);
+          show.over();
+        }
+        last = held.bringing;
+        show.bringing(held.bringing);
+      };
+    },
+    /** A press: Stop (`stop`), or the ask, whose request `send` makes; then the run as the worker has it. */
+    async press(stop: boolean, send: () => Promise<unknown>) {
+      presses++;
+      show.done(undefined);
+      try {
+        await send();
+      } finally {
+        // Every read sent while it went is dropped too: only one sent once it's answered speaks for after it.
+        presses++;
+      }
+      // As the worker has it now: every pool's widens one pool's that goes; a pool's joins every pool's, or starts.
+      const was = last && !last.stopped ? last : undefined;
+      const widened = (b: NonNullable<Bringing>) => {
+        const { pool: _one, ...every } = b;
+        return every;
+      };
+      const now: Bringing = stop ? undefined : was ? (pool === undefined ? widened(was) : was) : { back: 0, ...(pool !== undefined ? { pool } : {}) };
+      last = now;
+      show.bringing(now);
+    },
+  };
 }
 
 /**
@@ -46,33 +118,21 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [done, setDone] = useState<number>();
-  const last = useRef<Bringing>(undefined);
-  // A read sent before the last press answers for before it: it's dropped, or one sent just before the press would say
-  // it was over before its first run.
-  const presses = useRef(0);
+  const [done, setDone] = useState<{ count: number; pool?: string }>();
   const over = useRef(onOver);
   over.current = onOver;
-  // Whether a run covers this page: every one does Settings'; a pool's page, every pool's or its own.
-  const covers = (b: Bringing) => !!b && (pool === undefined || b.pool === undefined || b.pool === pool);
+  // What this page follows of the runs, and of its presses (bringFollower): one for each network and pool it shows.
+  const follow = useRef<ReturnType<typeof bringFollower>>(undefined);
+  const covers = (b: Bringing) => coversRun(pool, b);
   useEffect(() => {
     let live = true;
-    const read = () => {
-      const sent = presses.current;
-      void call("lovejoin-held", {}).then(
-        (held) => {
-          if (!live || sent !== presses.current) return;
-          // Over since the last read, not stopped: every box it found went.
-          if (covers(last.current) && !last.current!.stopped && !held.bringing) {
-            setDone(doneOf(last.current!, held));
-            over.current?.();
-          }
-          last.current = held.bringing;
-          setBringing(held.bringing);
-        },
-        () => undefined,
-      );
-    };
+    const follower = bringFollower(pool, {
+      bringing: (b) => live && setBringing(b),
+      done: (count, of) => live && setDone(count === undefined ? undefined : { count, ...(of !== undefined ? { pool: of } : {}) }),
+      over: () => live && over.current?.(),
+    });
+    follow.current = follower;
+    const read = () => void call("lovejoin-held", {}).then(follower.read(), () => undefined);
     read();
     const timer = setInterval(read, BRING_READ_MS);
     return () => {
@@ -81,22 +141,12 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
     };
   }, [network, pool]);
   const ask = async (stop: boolean) => {
-    presses.current++;
     setBusy(true);
     setError(undefined);
-    setDone(undefined);
     try {
-      if (stop) await call("lovejoin-bring-all-back-stop", {});
-      else await call("lovejoin-bring-all-back", pool !== undefined ? { pool } : {});
-      // As the worker has it now: every pool's widens one pool's that goes; a pool's joins every pool's, or starts.
-      const was = last.current && !last.current.stopped ? last.current : undefined;
-      const widened = (b: NonNullable<Bringing>) => {
-        const { pool: _one, ...every } = b;
-        return every;
-      };
-      const now: Bringing = stop ? undefined : was ? (pool === undefined ? widened(was) : was) : { back: 0, ...(pool !== undefined ? { pool } : {}) };
-      last.current = now;
-      setBringing(now);
+      await follow.current?.press(stop, () =>
+        stop ? call("lovejoin-bring-all-back-stop", {}) : call("lovejoin-bring-all-back", pool !== undefined ? { pool } : {}),
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -114,7 +164,8 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
         bringing={mine}
         pool={pool !== undefined}
         other={other}
-        done={done}
+        done={done?.count}
+        donePool={done?.pool !== undefined}
         busy={busy}
         onAsk={() => setAsking(true)}
         onStop={() => void ask(true)}
@@ -140,15 +191,19 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
 
 /**
  * Its part of the page: the button and what it does, or, while it goes, how many went and are left, to keep the
- * wallet unlocked, why the last box that didn't go didn't, and Stop; once it stopped, why, and Try again. On a pool's
+ * wallet unlocked, what it waits for or why the last box that didn't go didn't, and Stop, which waits out the chain's
+ * confirming until one is late; once it stopped, why, and Try again. On a pool's
  * page (`pool`), in that pool's words, and `other` while another pool's goes. In Settings, one pool's that goes says
- * so, and its button stays, to make it every pool's. Every count hides with the balances (privacy review §2.16).
+ * so, and its button stays, to make it every pool's; one pool's that's over (`donePool`), having sent none, says that
+ * pool held nothing of the wallet's, never Lovejoin (1.6.0's release review, 321-lj-screens#6). Every count hides with
+ * the balances (privacy review §2.16).
  */
 export function BringAllBackView({
   bringing,
   pool = false,
   other = false,
   done,
+  donePool = false,
   busy,
   onAsk,
   onStop,
@@ -157,6 +212,7 @@ export function BringAllBackView({
   pool?: boolean;
   other?: boolean;
   done?: number;
+  donePool?: boolean;
   busy: boolean;
   onAsk: () => void;
   onStop: () => void;
@@ -174,9 +230,13 @@ export function BringAllBackView({
       : tr(pool ? "lovejoin.bring.going" : "settings.lovejoin.bringingPool", boxes(b.back));
   // A bar, as Bootstrap's progress has: how far through what was there it is, once a run has counted it.
   const total = going && going.left !== undefined ? going.back + going.left : 0;
+  // What else it waits for, in a word of the worker's (321-lj-worker#1): never the chain confirming, though all it
+  // found went, and none said left.
+  const waiting = going?.waiting;
   // All sent, and the chain not done with them yet: said, then Done once it is (the owner: "when it hits zero it
-  // becomes a, confirming on chain then the final done update"). Nothing to stop.
-  const confirming = !!going && going.left === 0 && going.back > 0;
+  // becomes a, confirming on chain then the final done update"). Nothing to stop, until a withdraw it waits for is late:
+  // a node may have dropped it, its box held as spent for two hours (1.6.0's release review, 321-lj-worker#4).
+  const confirming = !!going && going.left === 0 && going.back > 0 && !waiting;
   const progress = going && (
     <Callout tone="info" testId="lovejoin-bringing">
       <div className="stack-tight">
@@ -188,17 +248,28 @@ export function BringAllBackView({
         <span>
           {confirming
             ? tr("settings.lovejoin.bringConfirming", boxes(going.back))
-            : joinSentences([goingText(going), going.left !== undefined && tr("settings.lovejoin.bringLeft", boxes(going.left))])}
+            : joinSentences([
+                goingText(going),
+                going.left !== undefined && (going.left > 0 || !waiting) && tr("settings.lovejoin.bringLeft", boxes(going.left)),
+              ])}
         </span>
         <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
-        {/* What it waits for, in place of an older run's reason; or the worker's reason, as it caught it: the node's own
-            words may end with no full stop. */}
-        {going.held ? (
+        {/* What it waits for, in place of an older run's reason: a withdraw late, a word of the worker's, a mix kept for
+            Send; or the worker's reason, as it caught it: the node's own words may end with no full stop. */}
+        {going.late ? (
+          <span className="note" data-testid="lovejoin-bring-late">
+            {tr("settings.lovejoin.bringLate")}
+          </span>
+        ) : waiting ? (
+          <span className="note" data-testid="lovejoin-bring-waiting">
+            {tr(BRING_WAIT[waiting])}
+          </span>
+        ) : going.held ? (
           <span className="note">{tr("settings.lovejoin.bringHeld")}</span>
         ) : (
           going.why && <span className="note">{tr("settings.lovejoin.bringWhy", { why: withStop(going.why) })}</span>
         )}
-        {!confirming && (
+        {(!confirming || going.late) && (
           <span>
             <button type="button" className="secondary" onClick={onStop} disabled={busy} data-testid="lovejoin-bring-stop">
               {tr("lovejoin.mixes.stop")}
@@ -224,7 +295,9 @@ export function BringAllBackView({
       )}
       {done !== undefined && (
         <p className="note" data-testid="lovejoin-bring-done">
-          {done ? tr("settings.lovejoin.bringDone", boxes(done)) : tr(pool ? "lovejoin.bring.none" : "settings.lovejoin.bringNone")}
+          {done
+            ? tr("settings.lovejoin.bringDone", boxes(done))
+            : tr(pool ? "lovejoin.bring.none" : donePool ? "settings.lovejoin.bringNonePool" : "settings.lovejoin.bringNone")}
         </p>
       )}
     </>
