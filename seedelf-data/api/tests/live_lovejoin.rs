@@ -110,14 +110,16 @@ async fn every_candidate_at_the_holder_is_checked() {
     let chain = chain();
     let at = stable(&chain).await;
     let holder = bytes(HOLDER_HASH);
-    let found = db::found(&chain, &holder, NFT_NAME, at, 0).await.unwrap();
-    // Read on from a month back by output id, as the server does between its hourly reads: the same candidates.
-    let earlier = at - 2_592_000;
-    let before = db::found(&chain, &holder, NFT_NAME, earlier, 0)
+    let (found, _) = db::found(&chain, &holder, NFT_NAME, at, db::Gathered::default())
         .await
         .unwrap();
-    let high = before.iter().map(|f| f.id).max().unwrap_or(0);
-    let after = db::found(&chain, &holder, NFT_NAME, at, high)
+    // Read on from a month back, from as far as that read gathered, as the server does between its hourly reads:
+    // the same candidates.
+    let earlier = at - 2_592_000;
+    let (before, gathered) = db::found(&chain, &holder, NFT_NAME, earlier, db::Gathered::default())
+        .await
+        .unwrap();
+    let (after, _) = db::found(&chain, &holder, NFT_NAME, at, gathered)
         .await
         .unwrap();
     let ids = |f: &[db::Found]| f.iter().map(|f| f.id).collect::<Vec<_>>();

@@ -47,6 +47,9 @@ pub const FAILED_READS: u32 = 2;
 const MAX_CACHED: usize = 4096;
 const MAX_CACHED_BYTES: usize = 64 << 20;
 
+/// db-sync's stable cursor and the block there, read once for a tip.
+type Stable = Arc<OnceCell<(Cursor, Block)>>;
+
 /// What every wallet reads: always kept, whatever the budget holds, so no
 /// flood of other requests can push them out.
 const ALWAYS_KEPT: [&str; 6] = [
@@ -94,7 +97,7 @@ pub struct AppState {
     kupo_cache: Mutex<Cached>,
     /// db-sync's stable cursor and the block there, for the tip whose hash
     /// it's kept with ([`Self::stable_cursor`]).
-    stable: Mutex<Option<(String, Arc<OnceCell<(Cursor, Block)>>)>>,
+    stable: Mutex<Option<(String, Stable)>>,
     lasting: Mutex<HashMap<String, (Instant, Bytes)>>,
     /// Answers being worked out in the background, so one isn't started twice.
     working: Mutex<HashSet<String>>,

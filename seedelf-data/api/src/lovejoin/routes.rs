@@ -256,7 +256,9 @@ where
                     let _working = working;
                     let answer = tokio::time::timeout(WORK_BUDGET, list)
                         .await
-                        .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))))?;
+                        .unwrap_or_else(|_| {
+                            Err(ApiError::Unavailable(anyhow::anyhow!("timed out")))
+                        })?;
                     state.keep(&key, KEEP_POOLS, answer.clone());
                     state.keep(LATEST, KEEP_POOLS, answer.clone());
                     Ok::<_, ApiError>(answer)
@@ -280,7 +282,10 @@ where
                 && FAILED.due()
             {
                 let error = failure(error);
-                warn!(error, "a pool list couldn't be worked out, so the last one answers");
+                warn!(
+                    error,
+                    "a pool list couldn't be worked out, so the last one answers"
+                );
             }
             Ok(latest)
         }
@@ -402,10 +407,7 @@ mod tests {
                 slot: 1_200,
                 hash: hash.clone(),
             },
-            Block {
-                slot: 1_180,
-                hash,
-            },
+            Block { slot: 1_180, hash },
         )
     }
 
@@ -443,7 +445,13 @@ mod tests {
         let answer = pools_with(&state, &tip("aa"), || async { Ok(stable_at()) }, failing).await;
         assert_eq!(answer.unwrap(), LAST);
         // Before the first, why.
-        let answer = pools_with(&self::state(), &tip("aa"), || async { Ok(stable_at()) }, failing).await;
+        let answer = pools_with(
+            &self::state(),
+            &tip("aa"),
+            || async { Ok(stable_at()) },
+            failing,
+        )
+        .await;
         assert!(matches!(answer, Err(ApiError::Unavailable(_))));
     }
 

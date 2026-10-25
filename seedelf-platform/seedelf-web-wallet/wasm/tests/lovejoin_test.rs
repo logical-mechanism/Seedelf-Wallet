@@ -344,7 +344,8 @@ fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
             again: false,
         })
         .unwrap();
-        let lovelace = funding.lovelace.parse::<u64>().unwrap() + seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE;
+        let lovelace = funding.lovelace.parse::<u64>().unwrap()
+            + seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE;
         let funded = vec![row(1, 0, &at, lovelace, &[])];
         let plan = lovejoin::plan(
             &accounts(),
@@ -416,7 +417,8 @@ fn a_bootstrap_with_no_collateral_deposits_and_sweeps_back() {
         assert!(spends(&txs[1], *txs[0].hash(), boxes as u64));
         assert!(!spends(&txs[1], [9; 32], 2));
         assert_eq!(txs[1].inputs().len(), 1);
-        let wallet = seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash);
+        let wallet =
+            seedelf_core::address::wallet_contract(true, config.contract.wallet_contract_hash);
         for output in txs[1].outputs() {
             let address = Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
             assert_eq!(address, wallet, "into the wallet contract");

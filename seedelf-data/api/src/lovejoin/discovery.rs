@@ -173,7 +173,8 @@ impl Discovery {
                 // outputs have higher ids than an earlier one's, so nothing between is missed.
                 (Some(generation), Some(s)) if s.generation == generation => {
                     let known = s.high;
-                    s.found.extend(newer.into_iter().filter(|f| f.id > known.id));
+                    s.found
+                        .extend(newer.into_iter().filter(|f| f.id > known.id));
                     // Never below what was read: what's refused is dropped from `found`, and is above what's left.
                     // And as far as the read gathered, candidates or not, so an output that holds no `lovejoin`
                     // token isn't gathered again at the next cursor (1.6.0's release review, 321-lj-rust-data#0).

@@ -1462,7 +1462,8 @@ fn bootstraps(
         None => Holding::from(&coin(flag, 0x10, lovelace)),
         Some(_) => token_holding(pool, 0x10, lovelace, boxes as u64, None),
     };
-    let deposit = lovejoin::deposit_from(params, pool, &[input], &owners, &session(flag), 1).ok()?;
+    let deposit =
+        lovejoin::deposit_from(params, pool, &[input], &owners, &session(flag), 1).ok()?;
     // The funding holds exactly the boxes' token: nothing comes back beside the ADA.
     assert!(deposit.token_change.is_empty());
     let change = UtxoResponse {
@@ -1557,8 +1558,15 @@ fn a_private_bootstrap_is_held_to_what_its_funding_pays_its_deposit_and_way_back
         lovejoin::funding_for(past, 0, classic.denom) + lovejoin::BOOTSTRAP_BACK_RESERVE,
     ));
     assert!(
-        lovejoin::deposit_from(&dear, &classic, &[input], &vec![owner; past], &session(true), 1)
-            .is_ok(),
+        lovejoin::deposit_from(
+            &dear,
+            &classic,
+            &[input],
+            &vec![owner; past],
+            &session(true),
+            1
+        )
+        .is_ok(),
         "the deposit alone builds there"
     );
 }
