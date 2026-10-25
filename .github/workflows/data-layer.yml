@@ -7,11 +7,19 @@ on:
     paths:
       - "seedelf-data/**"
       - ".github/workflows/data-layer.yml"
-      # What the token pools' checks read from beside it (web wallet chunk 34's 34c): the wallet's token list, built
-      # in, and the vectors and scenarios its copy of the rules is held to.
+      # Every file beside it that its build reads (include_str!). What the token pools' checks read (web wallet
+      # chunk 34's 34c): the wallet's token list, built in, and the vectors and scenarios its copy of the rules is
+      # held to.
       - "seedelf-platform/seedelf-web-wallet/extension/src/tokens/list.json"
       - "seedelf-platform/seedelf-core/tests/fixtures/lovejoin-pool-vectors.json"
       - "seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/lovejoin-shown.json"
+      # What its constants are held to (api/src/constants.rs): the contract hash and the policy in seedelf-core's,
+      # and Lovejoin's mainnet mix box in the wallet's (1.6.0's release review, x-release#8).
+      - "seedelf-platform/seedelf-core/src/constants.rs"
+      - "seedelf-platform/seedelf-web-wallet/extension/src/networks.ts"
+      # A live test's fixture (api/tests/live_public.rs): the test doesn't run here, but it's compiled, so a move or
+      # a rename breaks the build.
+      - "seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/nft-images.json"
 
 permissions:
   contents: read

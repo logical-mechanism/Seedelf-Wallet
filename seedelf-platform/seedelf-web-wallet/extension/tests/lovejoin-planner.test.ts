@@ -11,14 +11,18 @@ import { describe, expect, it, vi } from "vitest";
 
 import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
-import type { KoiosUtxo } from "../src/background/koios";
+import { handle, SWITCH_AT_STAKE, type Context } from "../src/background/handlers";
+import { KoiosError, type KoiosUtxo } from "../src/background/koios";
 import {
   CHAIN_WINDOW,
   CHAIN_WINDOW_FOUR,
+  LANDING_MS,
   LovejoinService,
   poolChoice,
   pumpChain,
   SESSION_LOVEJOIN_SENDING,
+  TAIL_KEEP_MS,
+  wayOver,
   type ChainProgress,
   type PoolRef,
 } from "../src/background/lovejoin";
@@ -879,6 +883,45 @@ describe("34e's review findings, each with a test", SLOW, () => {
     expect(review.lovejoinSkipped).toBe(tr("lj.skip.warn.needsMore", { others: 7, needed: 8 }));
   });
 
+  it("gives no reason for three where three takes no box either, so nothing says it mixes three at a time (1.6.0's release review, 319-worker#0)", () => {
+    // The spare ADA pays for boxes, and neither width has room: three, as asked of a refusal, and nothing to say of four.
+    expect(wayOver([{ pays: 5, fits: 0, room: 0 }], [{ fits: 0 }])).toEqual({ width: 3 });
+    expect(wayOver([{ pays: 1, fits: 0, room: 0 }, { pays: 3, fits: 0, room: 0 }], [{ fits: 0 }, { fits: 0 }])).toEqual({ width: 3 });
+    // Where three takes a box, it still says why four didn't go.
+    expect(wayOver([{ pays: 5, fits: 0, room: 0 }], [{ fits: 1 }])).toEqual({ width: 3, fellBack: tr("lj.width.warn.short") });
+    expect(wayOver([{ pays: 0, fits: 0, room: 4 }], [{ fits: 1 }])).toEqual({ width: 3, fellBack: tr("lj.width.warn.cost") });
+    expect(wayOver([{ pays: 0, fits: 0, room: 4 }], [{ fits: 0 }])).toEqual({ width: 3 });
+  });
+
+  it("says on a swap's approval that its ADA comes back directly, never also that it mixes three at a time, where the pool has room at neither width (1.6.0's release review, 319-worker#0)", async () => {
+    const t = await wallet();
+    await t.deps.preferences.set({ lovejoinWidth: 4 });
+    const sessions = runner(t, pooled(t, []));
+    // MIN to sell from the private balance; its ADA, the recorded 906 ₳ out, pays for many 10 ₳ boxes.
+    const datum = await t.wallet.withKeys((keys) => Buffer.from(loadTestWasm().registerToDatum(loadTestWasm().rerandomize(keys.seedelf.baseRegister()))).toString("hex"));
+    t.koios.added.push({
+      ...ownedUtxos[0]!,
+      tx_hash: "d1".repeat(32),
+      tx_index: 0,
+      value: "20000000",
+      inline_datum: { bytes: datum, value: {} },
+      asset_list: [{ ...asset(MIN_UNIT, 500n), decimals: 0, fingerprint: "asset1min" } as never],
+    } as KoiosUtxo);
+    // Three of other people's boxes: a box two waves deep takes 8 three a mix, 15 four.
+    t.koios.addedToAccounts.push(...POOL.slice(0, 3));
+    const quote = await sessions.quote("preprod", { ...minswapEstimate.ask, tokenIn: MIN_UNIT, tokenOut: "lovelace", amount: "500" });
+    const out = await sessions.outBuild("preprod", quote);
+    expect(out.lovejoin?.skipped).toBe(tr("sess.skip.warn.poolFree", { count: 3, deep: tr("sess.skip.warn.deep", { count: 2 }), needs: 8 }));
+    expect(out.lovejoin?.fellBack).toBeUndefined();
+    // Nothing goes as things are: its return decides, at the width asked.
+    expect(out.lovejoin?.boxes).toBe(0);
+    // Stop's cost of a swap approved four wide, with the same pool: the same rule.
+    await approvedSwap(t, { depth: 2, delay: "1-6", width: 4 });
+    const stop = (await sessions.stopCost("preprod", 0))!;
+    expect(stop.skipped).toBeDefined();
+    expect(stop.fellBack).toBeUndefined();
+  });
+
   it("asks for no pool list as the user types a swap, nor for a return whose spare ADA pays for no box (9)", async () => {
     const t = await wallet();
     const min = await minPool(t);
@@ -918,6 +961,17 @@ describe("34e's review findings, each with a test", SLOW, () => {
     const before = params();
     const out = await sessions.outBuild("preprod", quote);
     expect(out.lovejoin!.ways![0]).toMatchObject({ pool: min.id, boxes: 1 });
+    expect(params() - before).toBe(1);
+  });
+
+  it("reads the parameters once at Mix my boxes again's review from the private balance, as a swap's (1.6.0's release review, 318-worker#3)", async () => {
+    const t = await wallet();
+    const sessions = runner(t, pooled(t, []));
+    t.koios.addedToAccounts.push(...POOL, await ownBox(t, "d6"), await ownBox(t, "d7"));
+    const params = () => t.koios.calls.filter((c) => c.path === "epoch_params").length;
+    const before = params();
+    // Its collateral's reserve and its funding, from one read.
+    expect((await sessions.againBuild("preprod")).mix).toMatchObject({ again: true, owned: 2 });
     expect(params() - before).toBe(1);
   });
 
@@ -1367,6 +1421,34 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     expect(sent).toEqual(expect.arrayContaining([deposit.txHash, mix.txHash, back.txHash]));
   });
 
+  it("lets a box of any pool come back while its mix waits, a day at most (1.6.0's release review, x-scenarios-lj#1)", async () => {
+    const { t, lj, sessions } = await setUp("16000000");
+    const review = await sessions.backBuild("preprod", 0);
+    const mix = (await steps(t)).at(-2)!;
+    await sessions.backSubmit("preprod", review.txHash);
+    // Everything before its mix on chain, and Koios's Ogmios a block behind for that mix: it waits, its chain unfinished.
+    t.koios.confirmations = 1;
+    const box = review.collateralTail!.box;
+    const behind = {
+      jsonrpc: "2.0",
+      method: "evaluateTransaction",
+      error: { code: 3117, message: "Unknown transaction input", data: { unknownOutputReferences: [{ transaction: { id: box.txHash }, index: box.txIndex }] } },
+    };
+    t.koios.evaluation = (body: unknown) => (JSON.stringify(body).includes(mix.txCbor) ? behind : AGREES);
+    await sessions.runAll("preprod");
+    const waiting = (await schedule(t)).chains.at(-1)!;
+    expect(waiting.ended).toBeUndefined();
+    expect(waiting.tail?.landed).toBeDefined();
+    expect(await lj.chainsSending("preprod")).toBe(true);
+    // A box of the wallet's in the classic pool comes back meanwhile, by Bring one back now: its chain puts no box in now.
+    t.koios.addedToAccounts.push(await ownBox(t, "c7"));
+    const before = t.koios.submitted.length;
+    expect((await lj.withdrawNow("preprod")).kind).toBe("lovejoin-withdraw");
+    expect(t.koios.submitted).toHaveLength(before + 1);
+    expect(txInputs(t.koios.submitted.at(-1)!)).toEqual([`${"c7".repeat(32)}#0`]);
+    expect(t.koios.submitted.map((b) => txIdOf(b))).not.toContain(mix.txHash);
+  });
+
   it("holds what's left at the account while a lock cut its chain before the collateral's box is listed", async () => {
     const { t, five, sessions } = await setUp("16000000");
     const review = await sessions.backBuild("preprod", 0);
@@ -1452,6 +1534,235 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     expect((await schedule(t)).chains.at(-1)!.ended).toBeUndefined();
   });
 
+  // 1.6.0's release review: what each of its waits says, its box before a listing shows it, the paths that give its mix
+  // up and let the session's money come back, and a switch of public accounts while it waits.
+  describe("its waits and its give-ups (1.6.0's release review)", () => {
+    /** setUp's return sent, a lock cutting its chain right after its collateral's deposit went: what that left at the account. */
+    async function cutAfterDeposit() {
+      const set = await setUp("16000000");
+      const { t, sessions } = set;
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      const deposit = chain.at(-3)!;
+      await sessions.backSubmit("preprod", review.txHash);
+      expect(t.koios.submitted.map((b) => txIdOf(b))).toContain(deposit.txHash);
+      await t.wallet.withKeys(() => t.session.remove(`${SESSION_CHAIN_PREFIX}preprod.0`));
+      for (const tx of chain.slice(0, -2)) for (const o of spent(tx)) t.koios.spent.add(o);
+      const change = paid(deposit.txCbor).find((o) => o.address === sessionSwap.address)!;
+      t.koios.addedToAccounts.push(atSession(deposit.txHash, change.index, String(change.value.ada.lovelace)));
+      const box = paid(deposit.txCbor).find((o) => o.index === review.collateralTail!.box.txIndex)!;
+      return { ...set, review, chain, deposit, box };
+    }
+
+    /** The worker's handlers (handlers.ts) over `t`, with `lj` and `sessions`. */
+    const contextOf = (t: T, lj: LovejoinService, sessions: SessionService) =>
+      ({
+        ...(t as unknown as Context),
+        lovejoin: lj,
+        sessions,
+        wasm: loadTestWasm(),
+        connector: async (on: boolean) => on,
+        version: "1.0.0",
+        network: "preprod",
+        networks: ["preprod"],
+      }) as Context;
+
+    it("says the 5 ₳ pool hasn't enough of other people's boxes for its mix, never that its box isn't in, until there are (323-worker#2)", async () => {
+      const { t, five, theirs, sessions, stopped } = await stoppedAtMix();
+      // Someone else's mix took both of the pool's other boxes since: its box is listed, and its mix has none to draw.
+      for (const u of theirs) t.koios.spent.add(`${u.tx_hash}#${u.tx_index}`);
+      await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("lj.tail.fewBoxes"));
+      expect((await schedule(t)).chains.find((c) => c.id === stopped.id)!.tail?.over).toBeUndefined();
+      // Two more of other people's there: its mix is built again, and the return after it.
+      t.koios.addedToAccounts.push(...strangers(t, five.mixBox, 2, 0x91, "5000000"));
+      await sessions.backBuild("preprod", 0);
+      expect((await steps(t)).map((x) => x.kind)).toEqual(["mix", "back"]);
+    });
+
+    it("says the 5 ₳ pool can't be read while discovery doesn't hand it over, never that its box isn't in (323-worker#2)", async () => {
+      const { t, stopped } = await stoppedAtMix();
+      await expect(runner(t, pooled(t, [])).backBuild("preprod", 0)).rejects.toThrow(tr("lj.tail.noPool"));
+      expect((await schedule(t)).chains.find((c) => c.id === stopped.id)!.tail?.over).toBeUndefined();
+    });
+
+    it("says what Koios answered, never that its box isn't in, while it can't tell whether its deposit went in (323-worker#2)", async () => {
+      const { t, sessions } = await cutAfterDeposit();
+      const fetch = t.koios.fetch;
+      t.koios.fetch = async (url, init) => (url.includes("/tx_status") ? new Response("busy", { status: 503 }) : fetch(url, init));
+      const refused = await sessions.backBuild("preprod", 0).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(refused).toBeInstanceOf(KoiosError);
+      expect((refused as Error).message).toContain("tx_status");
+      // Nothing comes back meanwhile: what's at the account may still pay for its mix.
+      expect((await schedule(t)).chains.at(-1)!.tail).toMatchObject({ tries: 1 });
+      expect((await schedule(t)).chains.at(-1)!.tail?.over).toBeUndefined();
+    });
+
+    it("waits for a listing behind its deposit to show its box, rather than take it for moved and sweep what pays for its mix (323-worker#5)", async () => {
+      const { t, five, sessions, deposit, box } = await cutAfterDeposit();
+      // On chain, as tx_status says, but the 5 ₳ pool's listing is a little behind and doesn't show its box yet.
+      t.koios.confirmations = 1;
+      await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("lj.tail.waiting"));
+      const cut = (await schedule(t)).chains.at(-1)!;
+      expect(cut.tail?.over).toBeUndefined();
+      // Its day runs from now, when its deposit was first known in.
+      expect(cut.tail?.landed).toBe(t.clock.now);
+      // Listed minutes later: its mix is built again, and the return after it, never a plain return.
+      t.clock.now += 5 * 60_000;
+      t.koios.addedToAccounts.push(listed(deposit, box, five.mixBox));
+      const again = await sessions.backBuild("preprod", 0);
+      expect((await steps(t)).map((x) => x.kind)).toEqual(["mix", "back"]);
+      expect(again.collateralTail).toMatchObject({ box: { txHash: deposit.txHash, txIndex: box.index } });
+    });
+
+    it("takes its box, still not listed a quarter of an hour after its deposit was known in, for one a mix moved, and brings the rest back (323-worker#5)", async () => {
+      const { t, sessions } = await cutAfterDeposit();
+      t.koios.confirmations = 1;
+      await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("lj.tail.waiting"));
+      // LANDING_MS on (moved back in its record), still not listed: someone else's mix moved it.
+      const s = await schedule(t);
+      s.chains.at(-1)!.tail!.landed! -= LANDING_MS;
+      await t.store.set("lovejoin.preprod", s);
+      const back = await sessions.backBuild("preprod", 0);
+      expect(back.collateralTail).toBeUndefined();
+      expect((await schedule(t)).chains.at(-1)!.tail?.over).toBe(true);
+    });
+
+    it("takes its box for moved at once where a send of the wallet's own spent it, as Mix my boxes again does (323-worker#5)", async () => {
+      const { t, five, sessions, stopped } = await stoppedAtMix();
+      // Its deposit went in minutes ago, and its box is listed; then a transaction of the wallet's own spent it.
+      const row = t.koios.addedToAccounts.find((u) => u.tx_hash === stopped.tail!.deposit && u.payment_cred === five.mixBox)!;
+      await t.wallet.withKeys(async () =>
+        t.session.set(SESSION_SPENT, { ...((await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {}), [`${row.tx_hash}#${row.tx_index}`]: Date.now() }),
+      );
+      const back = await sessions.backBuild("preprod", 0);
+      expect(back.collateralTail).toBeUndefined();
+      expect((await schedule(t)).chains.find((c) => c.id === stopped.id)!.tail?.over).toBe(true);
+    });
+
+    it("stops at its collateral's mix once giveme.my kept it waiting a day, and the rest comes back without it (323-worker#8)", async () => {
+      const { t, five, sessions } = await setUp("16000000");
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      const deposit = chain.at(-3)!;
+      await sessions.backSubmit("preprod", review.txHash);
+      t.koios.confirmations = 1;
+      t.collateral.answer = { status: 503, body: { error: "busy" } };
+      await sessions.runAll("preprod");
+      expect(t.collateral.asked).toHaveLength(1);
+      // A day on from when its deposit was first known in (moved back in its record: the wallet would lock first), its
+      // next ask stops the chain there, giveme.my not asked again.
+      const s = await schedule(t);
+      s.chains.at(-1)!.tail!.landed! -= TAIL_KEEP_MS;
+      await t.store.set("lovejoin.preprod", s);
+      t.clock.now += 60_000;
+      await sessions.runAll("preprod");
+      expect(t.collateral.asked).toHaveLength(1);
+      const stopped = (await schedule(t)).chains.at(-1)! as TailRecord & { stopped?: string };
+      expect(stopped.stopped).toBe(tr("lj.tail.tooLong"));
+      expect(stopped.tail).toMatchObject({ tries: 1 });
+      // Its box listed, the deposit's change at the account: the rest comes back directly, and its mix is never built again.
+      const box = paid(deposit.txCbor).find((o) => o.index === review.collateralTail!.box.txIndex)!;
+      const change = paid(deposit.txCbor).find((o) => o.address === sessionSwap.address)!;
+      t.koios.addedToAccounts.push(listed(deposit, box, five.mixBox), atSession(deposit.txHash, change.index, String(change.value.ada.lovelace)));
+      for (const tx of chain.slice(0, -2)) for (const o of spent(tx)) t.koios.spent.add(o);
+      const back = await sessions.backBuild("preprod", 0);
+      expect(back.collateralTail).toBeUndefined();
+      // Its chain went in: nothing says Lovejoin was left out of it.
+      expect(back.lovejoinSkipped).toBeUndefined();
+      expect((await schedule(t)).chains.find((c) => c.id === stopped.id)!.tail?.over).toBe(true);
+      expect(t.collateral.asked).toHaveLength(1);
+    });
+
+    it("gives its collateral's mix up once it was built twice, the second stopping too, and the rest comes back without it (323-worker#8)", async () => {
+      const { t, sessions, stopped } = await stoppedAtMix();
+      const again = await sessions.backBuild("preprod", 0);
+      // giveme.my refuses the mix built again too, past its wait: that chain stops at its mix as well.
+      t.collateral.answer = { status: 400, body: { error: "transaction fails validation" } };
+      await expect(sessions.backSubmit("preprod", again.txHash)).rejects.toThrow(tr("lj.tail.refused"));
+      const second = (await schedule(t)).chains.at(-1)!;
+      expect(second.id).toBe(again.txHash);
+      expect(second.tail).toMatchObject({ tries: 2 });
+      // That was its last build: the rest comes back directly, giveme.my not asked again, and both tails are over. Its
+      // chain went in, though the one built again sent nothing: nothing says Lovejoin was left out of it.
+      const asked = t.collateral.asked.length;
+      const back = await sessions.backBuild("preprod", 0);
+      expect(back.collateralTail).toBeUndefined();
+      expect(back.lovejoinSkipped).toBeUndefined();
+      expect(t.collateral.asked).toHaveLength(asked);
+      const chains = (await schedule(t)).chains;
+      expect(chains.find((c) => c.id === stopped.id)!.tail?.over).toBe(true);
+      expect(chains.find((c) => c.id === second.id)!.tail?.over).toBe(true);
+    });
+
+    it("never builds again a collateral's mix that was sent, though a node dropped it: its box waits not mixed yet, its due time gone (323-worker#8)", async () => {
+      const { t, five, lj, sessions } = await setUp("16000000");
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      const [deposit, mix, back] = chain.slice(-3) as [Step, Step, Step];
+      await sessions.backSubmit("preprod", review.txHash);
+      t.koios.confirmations = 1;
+      await sessions.runAll("preprod");
+      expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual(expect.arrayContaining([mix.txHash, back.txHash]));
+      // Sent: its leaf drew a due time of its own in the 5 ₳ pool.
+      expect((await schedule(t)).chains.at(-1)!.tail).toMatchObject({ scheduled: true });
+      expect((await schedule(t)).pools?.[five.id]?.due).toHaveLength(1);
+      // A node dropped the mix, and the return after it: its box is still in the pool, and what the wallet's sends spent
+      // is forgotten (two hours on, or a lock).
+      t.koios.missing.add(mix.txHash);
+      t.koios.missing.add(back.txHash);
+      const box = paid(deposit.txCbor).find((o) => o.index === review.collateralTail!.box.txIndex)!;
+      t.koios.addedToAccounts.push(listed(deposit, box, five.mixBox));
+      for (const tx of chain.slice(0, -2)) for (const o of spent(tx)) t.koios.spent.add(o);
+      await t.wallet.withKeys(() => t.session.remove(SESSION_SPENT));
+      // Never handed to a return to build again: that return brings what's left back directly.
+      expect(await lj.tailOf("preprod", 0)).toBeUndefined();
+      // Its box is the wallet's not mixed yet, held so, and the due time its leaf drew goes: nothing comes back by itself
+      // in its place.
+      const pool = (await lj.status("preprod")).pools!.find((p) => p.id === five.id)!;
+      expect(pool.notMixed).toContainEqual({ txHash: deposit.txHash, txIndex: box.index, pool: five.id });
+      expect((await schedule(t)).pools?.[five.id]?.due ?? []).toEqual([]);
+    });
+
+    it("lets the user switch public accounts while a session's collateral's mix waits for giveme.my: no account is in its transactions (gap-1#0)", async () => {
+      const { t, lj, sessions } = await setUp("16000000");
+      const review = await sessions.backBuild("preprod", 0);
+      const [, mix, back] = (await steps(t)).slice(-3) as [Step, Step, Step];
+      await sessions.backSubmit("preprod", review.txHash);
+      t.koios.confirmations = 1;
+      t.collateral.answer = { status: 503, body: { error: "busy" } };
+      await sessions.runAll("preprod");
+      const ctx = contextOf(t, lj, sessions);
+      await t.accounts.add(1);
+      // The lock countdown and Remove wallet still count its chain as being sent: a lock would cut it.
+      expect(await handle({ type: "chains-sending" }, ctx)).toBe(true);
+      expect(await handle({ type: "reset-check" }, ctx)).toMatchObject([{ network: "preprod", chainSending: true }]);
+      // Neither the session's keys nor where its money goes depend on the public account: the switch goes.
+      await handle({ type: "account-use", index: 1 }, ctx);
+      expect(await t.accounts.active()).toBe(1);
+      // And its chain goes on as it was once giveme.my answers: its mix, then the return.
+      t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+      t.clock.now += 60_000;
+      await sessions.runAll("preprod");
+      expect(t.koios.submitted.map((b) => txIdOf(b))).toEqual(expect.arrayContaining([mix.txHash, back.txHash]));
+    });
+
+    it("still refuses a switch while a mix from the public account is being sent, its watch following that account (gap-1#0)", async () => {
+      const t = await wallet();
+      await t.deps.preferences.set({ lovejoinDepth: 1 });
+      t.koios.addedToAccounts.push(atAccount("e5", "5000000"), atAccount("e6", "60000000"), ...POOL);
+      const lj = pooled(t, []);
+      const mix = await lj.publicBuild("preprod", 4);
+      await lj.publicSubmit("preprod", mix.txHash);
+      expect(await lj.chainsSending("preprod")).toBe(true);
+      await t.accounts.add(1);
+      await expect(handle({ type: "account-use", index: 1 }, contextOf(t, lj, runner(t, lj)))).rejects.toThrow(SWITCH_AT_STAKE());
+      expect(await t.accounts.active()).toBe(0);
+    });
+  });
+
   it("goes as a chain of its own with a return that comes back directly, its spare ADA paying for no 10 ₳ box", async () => {
     const { t, five, sessions } = await setUp("4000000");
     const review = await sessions.backBuild("preprod", 0);
@@ -1493,14 +1804,17 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     const bootstrap = await sessions.mixOutBuild("preprod", 1, { bootstrap: true });
     expect(bootstrap.payments).toHaveLength(1);
     expect(bootstrap.collateralReserve).toBeUndefined();
-    // A mix session's Bootstrap, funded so: its ADA at the account, no 5 ₳.
+    // A mix session's Bootstrap, funded so: its one payment at the account, exactly, and no 5 ₳ (1.6.0's release review,
+    // 318-rust#0: 40 ₳ there hid a funding whose deposit's change couldn't pay its sweep back). Recorded as mixOutSubmit
+    // records one, funded with no collateral.
     const book = (await t.store.get<{ next: number; sessions: Array<Record<string, unknown>> }>("sessions.preprod"))!;
     const { site: _site, ...session } = book.sessions[0]!;
-    await t.store.set("sessions.preprod", { ...book, sessions: [{ ...session, mix: { boxes: 1, bootstrap: true } }] });
+    await t.store.set("sessions.preprod", { ...book, sessions: [{ ...session, mix: { boxes: 1, bootstrap: true, noCollateral: true } }] });
     t.koios.addedToAccounts.splice(
       t.koios.addedToAccounts.findIndex((u) => u.tx_hash === OUT && u.tx_index === 2),
       1,
     );
+    t.koios.addedToAccounts.find((u) => u.tx_hash === OUT && u.tx_index === 1)!.value = bootstrap.payments[0]!.lovelace;
     const review = await sessions.backBuild("preprod", 0);
     expect(review.lovejoin).toMatchObject({ bootstrap: true, depth: 0, boxes: 1 });
     expect(review.lovejoinSkipped).toBeUndefined();
@@ -1568,7 +1882,10 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
 
   it("is paid for by a site's funding where a 5 ₳ pool would take it, and by none where it wouldn't", async () => {
     const { t, lj } = await setUp();
-    const reserve = loadTestWasm().lovejoinCollateralReserve();
+    // What a return that comes back directly with nothing else left needs, as WebAssembly prices it from the
+    // parameters: a site may spend all but the reserve (1.6.0's release review, 323-rust#1).
+    const reserve = loadTestWasm().lovejoinDirectCollateralReserve(JSON.stringify(await t.deps.koios().epochParams()));
+    expect(BigInt(reserve)).toBeGreaterThan(BigInt(loadTestWasm().lovejoinCollateralReserve()));
     const funded = await runner(t, lj).siteOutBuild("preprod", "https://example.org", "10000000", []);
     expect(funded.collateralReserve).toBe(reserve);
     expect(funded.payments[0]!.lovelace).toBe((10_000_000n + BigInt(reserve)).toString());

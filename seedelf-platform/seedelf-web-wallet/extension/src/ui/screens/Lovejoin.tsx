@@ -2186,9 +2186,10 @@ export function PoolPage({
   // Bootstrapping, behind its own link under Mix while the pool holds enough: it gives whoever puts it in nothing
   // (LJ-6; chunk 34: it replaces the seed). Below the floor it leads the page.
   const [bootstrapOpen, setBootstrapOpen] = useState(false);
-  // The most a Bootstrap from the private balance puts in at once, as the worker holds it (its funding's reserve pays
-  // the deposit for no more): asked once the form shows with that side chosen, a read of the parameters as any build
-  // makes (1.6.0's release review, MONEY-6). None in a pool that takes no new box, which says so itself.
+  // The most a Bootstrap from the private balance puts in at once, as the worker holds it (its funding's reserves pay
+  // the deposit and its way back for no more): asked once the form shows with that side chosen, a read of the
+  // parameters as any build makes (1.6.0's release review, MONEY-6). None in a pool that takes no new box, which says
+  // so itself.
   const [privateMost, setPrivateMost] = useState<number>();
   // A copy takes no new box for good (MERGED-1): no Bootstrap is offered there, so nothing asks its most (R2-2).
   const copy = isCopy(pool);
@@ -2575,8 +2576,8 @@ export function PoolPage({
   const short = !copy && pool.floor > 0 && pool.others < pool.floor;
   const progress = bootstrapProgress(pool);
   // What a Bootstrap may put in, as the worker holds it: one deposit's worth at most, from the private balance what
-  // its reserve pays the deposit for; what it still needs is the default, and the user can type any of it. And from
-  // the private balance, whether it holds too little for the boxes, the reserve, the collateral and the fee, or for
+  // its reserves pay the deposit and its way back for; what it still needs is the default, and the user can type any
+  // of it. And from the private balance, whether it holds too little for the boxes, the reserves and the fee, or for
   // the token (bootstrapLimits, MONEY-6).
   const { most: bootstrapMost, needed, putting, short: bootstrapShort, tokenShort } = bootstrapLimits(pool, source, seedelf, privateMost, bootstrapBoxes);
   // A token pool that takes no new box under today's parameters: Mix and Bootstrap are off, and say why before Review
@@ -3097,8 +3098,13 @@ export function PoolPage({
  */
 const MAX_TOKEN_BOOTSTRAP_BOXES = 64;
 
-/** The reserve a Bootstrap's funding from the private balance carries beside its boxes (seedelf-core's DEPOSIT_RESERVE). */
-const BOOTSTRAP_RESERVE = 1_500_000n;
+/**
+ * What a Bootstrap's funding from the private balance carries beside its boxes: the deposit's reserve, which pays its
+ * fee, and the way back's, which pays the sweep of what's left into the private balance, since it puts up no
+ * collateral (seedelf-core's DEPOSIT_RESERVE and BOOTSTRAP_BACK_RESERVE, 1.5 ₳ each; 1.6.0's release review,
+ * 318-rust#0). What neither uses comes back.
+ */
+const BOOTSTRAP_RESERVE = 3_000_000n;
 
 /**
  * Why a token pool takes no new box, in the words the worker refuses one with (lovejoin.ts unusableReason): the pool's
@@ -3125,12 +3131,12 @@ export function tokenBoxes(tokens: TokenAmount[] | undefined, token: TokenQuanti
  * review, MONEY-6 = UI-10): the form offered 96 for any pool without a token where the worker takes 64 in every pool
  * but the classic, 96 from the private balance where its funding's reserve pays the deposit for fewer, and left that
  * reserve out of what the balance must hold, so Review was refused after it was pressed.
- * - `most`: one deposit's (mostBootstrap), and from the private balance what its reserve pays for (`privateMost`, the
- *   worker's privateBootstrapMost) once known.
+ * - `most`: one deposit's (mostBootstrap), and from the private balance what its reserves pay the deposit and its way
+ *   back for (`privateMost`, the worker's privateBootstrapMost) once known.
  * - `needed`: what the pool lacks of its floor, the form's default; `putting`: `asked` (or `needed`), 1 to `most`.
- * - `short`: the private balance holds too little for them: the boxes, the funding's 1.5 ₳ reserve and the fee's
- *   room, no collateral (a deposit alone runs no script; the owner, 2026-10-23); or too little of the pool's token
- *   (`tokenShort`).
+ * - `short`: the private balance holds too little for them: the boxes, the funding's reserves (BOOTSTRAP_RESERVE: the
+ *   deposit's and the way back's) and the fee's room, no collateral (a deposit alone runs no script; the owner,
+ *   2026-10-23); or too little of the pool's token (`tokenShort`).
  */
 export function bootstrapLimits(
   pool: Pick<ShownPool, "id" | "box"> & Partial<Pick<ShownPool, "floor" | "others">>,
@@ -3234,8 +3240,12 @@ function mixedValue(mix: { depth: number; mixes: number; mixFees?: string; width
   return mix.width === 4 ? t("lovejoin.review.fourWide", { value }) : value;
 }
 
-/** The funding's first payment less what it pays for its collateral's mix, which a row of its own shows. */
-const lessReserve = (lovelace: string, summary: SessionOutSummary) => (BigInt(lovelace) - BigInt(summary.collateralReserve ?? "0")).toString();
+/**
+ * The funding's first payment less what it pays for its collateral's mix, or for a Bootstrap's way back, which rows of
+ * their own show.
+ */
+const lessReserve = (lovelace: string, summary: SessionOutSummary) =>
+  (BigInt(lovelace) - BigInt(summary.collateralReserve ?? "0") - BigInt(summary.bootstrapReserve ?? "0")).toString();
 
 /**
  * A mix from the private balance: the one-time account's funding, then what runs by itself. `box`: what each box in
@@ -3275,6 +3285,11 @@ export function PrivateReview({
           <Row label={tr("lovejoin.review.itsCollateral")} value={tr("swaps.review.comesBack", { ada: formatAda(collateral.lovelace) })} />
         )}
         <CollateralReserveRow reserve={summary.collateralReserve} />
+        {/* Its way back in a collateral's place: the sweep of what the deposit leaves into the private balance (1.6.0's
+            release review, 318-rust#0). */}
+        {summary.bootstrapReserve && (
+          <Row label={tr("lovejoin.review.returnRest")} value={tr("lovejoin.collateralReserve.value", { ada: formatAda(summary.bootstrapReserve) })} />
+        )}
         <Row label={tr("review.fee")} value={`${formatAda(summary.fee.total)}\u00a0₳`} />
         {/* Funded as several transactions, every one needed (the owner's call, 2026-10-21). */}
         {summary.parts && <Row label={tr("review.parts")} value={String(summary.parts.length)} />}

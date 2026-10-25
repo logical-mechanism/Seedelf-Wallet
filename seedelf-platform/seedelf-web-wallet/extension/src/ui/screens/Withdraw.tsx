@@ -46,8 +46,6 @@ import { useNetwork } from "../network";
 import { useAmounts } from "../preferences";
 import { tokenQuantity } from "../tokens";
 
-/** The most UTxOs Max takes in one transaction (the WebAssembly's `MAX_WITHDRAW_UTXOS`). */
-const MAX_UTXOS = 20;
 /** The most transactions one payment goes out as, 20 UTxOs each (script-spend.ts `MAX_PARTS`). */
 const MAX_PARTS = 25;
 
@@ -242,17 +240,7 @@ export function Withdraw({
             who={several ? t("recipients.nth", { number: i + 1 }) : undefined}
           />
         ))}
-        {summary.left > 0 && (
-          <p className="note" data-testid="withdraw-left">
-            {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
-            {joinSentences([
-              t("withdraw.left", { count: summary.left }),
-              summary.inputs < MAX_UTXOS * (summary.parts ? MAX_PARTS : 1)
-                ? t("withdraw.leftTokens", { count: summary.left })
-                : t("withdraw.leftLimit", { max: MAX_UTXOS * (summary.parts ? MAX_PARTS : 1) }),
-            ])}
-          </p>
-        )}
+        <MaxLeftNote of={summary} testId="withdraw-left" />
         <LeftOutNote leftOut={summary.leftOut} testId="withdraw-left-out" />
         {/* With several, each of the user's own by its number: the warning didn't say which it meant (PY-5). */}
         {summary.payments.map((p, i) => p.own && <OwnWarning key={i} account={p.ownAccount} nth={several ? i + 1 : undefined} />)}
@@ -401,5 +389,29 @@ export function OwnWarning({ account, nth }: { account?: number; nth?: number })
         ? t("withdraw.warn.ownAccount", { whose })
         : t("withdraw.warn.ownAccountNth", { whose, number: nth })}
     </Callout>
+  );
+}
+
+/**
+ * Max's review: how many private UTxOs it left for another payment, and why, as WebAssembly's parts say it
+ * (`leftWhy`). The review told 1.5.0's two reasons apart by how many UTxOs its one transaction spent; a payment in
+ * parts can also leave them for too little ADA to pay for spending them, or past the most transactions it goes as,
+ * and its parts can spend fewer than 20 each (1.6.0's release review, 321-parts-worker#6). Send's review shows it too.
+ */
+export function MaxLeftNote({ of, testId }: { of: Pick<WithdrawSummary, "left" | "leftWhy">; testId: string }) {
+  const t = useT();
+  if (of.left <= 0) return null;
+  return (
+    <p className="note" data-testid={testId}>
+      {/* Set as the language sets its sentences: a literal space ran into Japanese (cross-area review). */}
+      {joinSentences([
+        t("withdraw.left", { count: of.left }),
+        of.leftWhy === "fee"
+          ? t("withdraw.leftFee", { count: of.left })
+          : of.leftWhy === "limit"
+            ? t("withdraw.leftLimit", { max: MAX_PARTS })
+            : t("withdraw.leftTokens", { count: of.left }),
+      ])}
+    </p>
   );
 }

@@ -6,7 +6,8 @@
 // since the wallet's other page (the side panel and a tab) may have put it
 // off; at 0:00, asking locks it. While it shows, it also asks whether a
 // chain through Lovejoin is being sent, which only goes while the wallet is
-// unlocked: locking then stops it partway (privacy review §6).
+// unlocked: locking then stops it partway (privacy review §6). So does a
+// payment whose parts wait to go (1.6.0's release review).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
@@ -69,15 +70,21 @@ export function LockCountdown() {
   // While it shows: whether a chain is being sent, asked as often as the deadline. Neither counts as activity.
   // Unknown until the worker answers, and again once the countdown goes, so a chain's line from before never
   // shows when it comes back; the countdown says which it is (`data-chain-sending`), so the e2e test waits for the
-  // answer rather than looking before it (1.3.0's release review, C30).
+  // answer rather than looking before it (1.3.0's release review, C30). The same for a payment's parts that wait to
+  // go, which a lock wipes too (`data-parts-waiting`, 1.6.0's release review).
   const [chain, setChain] = useState<boolean>();
+  const [parts, setParts] = useState<boolean>();
   useEffect(() => {
     if (!near) {
       setChain(undefined);
+      setParts(undefined);
       return;
     }
     let live = true;
-    const look = () => call("chains-sending", {}).then((sending) => live && setChain(sending), () => undefined);
+    const look = () => {
+      call("chains-sending", {}).then((sending) => live && setChain(sending), () => undefined);
+      call("parts-waiting", {}).then((waiting) => live && setParts(waiting), () => undefined);
+    };
     look();
     const timer = setInterval(look, ASK_NEAR_MS);
     return () => {
@@ -142,6 +149,7 @@ export function LockCountdown() {
       aria-label={t("lock.autoLock")}
       data-testid="lock-countdown"
       data-chain-sending={chain === undefined ? undefined : String(chain)}
+      data-parts-waiting={parts === undefined ? undefined : String(parts)}
     >
       <span className="callout__icon">
         <LockIcon size={16} />
@@ -149,11 +157,25 @@ export function LockCountdown() {
       <div className="callout__body">
         <strong className="lock-countdown__time">{t("lock.lockingIn", { time: clock(left) })}</strong>
         <div>{t("lock.idle")}</div>
-        {chain && <div data-testid="lock-countdown-chain">{t("lock.warn.chainSending")}</div>}
+        <LockStops chain={chain} parts={parts} />
       </div>
       <button type="button" className="chip lock-countdown__stay" onClick={stay} data-testid="lock-stay">
         {t("lock.stayUnlocked")}
       </button>
     </section>
+  );
+}
+
+/**
+ * What locking now would stop partway, as the worker says it, under the countdown: a chain through Lovejoin being
+ * sent, and a payment's parts that wait to go (1.6.0's release review), each in its own words.
+ */
+export function LockStops({ chain, parts }: { chain?: boolean; parts?: boolean }) {
+  const t = useT();
+  return (
+    <>
+      {chain && <div data-testid="lock-countdown-chain">{t("lock.warn.chainSending")}</div>}
+      {parts && <div data-testid="lock-countdown-parts">{t("lock.warn.partsWaiting")}</div>}
+    </>
   );
 }

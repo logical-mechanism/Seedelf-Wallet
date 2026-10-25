@@ -4744,4 +4744,129 @@ mod parts_of_any_shape {
             .sum();
         assert!(most > 1_100_000_000, "{most}");
     }
+
+    #[test]
+    fn max_says_it_left_what_too_little_ada_pays_to_spend() {
+        // 1.6.0's release review, 321-parts-worker#6 and x-scenarios-sessions#1: a little ADA and 40 of a move-in's
+        // bundles at exactly their least, sent with Max to a Seedelf. The parts that can pay their fee go, and the
+        // bundles after them stay: their tokens stay too, with all their ADA, and no chain carries enough ADA to them.
+        // The review said each held a token that wouldn't fit, or that "a payment takes 20 at most". The last part
+        // now says why they stay.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, _) = bundles(40, 20);
+        utxos.extend(ada(100, 1, 2_000_000));
+        let parts = api::build_transfer_parts(sk, transfer(utxos.clone(), None, vec![])).unwrap();
+        let spent = sound(
+            &parts
+                .iter()
+                .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let last = parts.last().unwrap();
+        assert!(last.left > 0, "none left, in {} parts", parts.len());
+        // No chain went: what's left is every UTxO no part spends.
+        assert_eq!(spent + last.left, utxos.len());
+        assert_eq!(last.left_why, Some(api::LeftWhy::Fee));
+        assert!(
+            parts[..parts.len() - 1]
+                .iter()
+                .all(|p| (p.left, p.left_why) == (0, None))
+        );
+        // As the worker reads it (rpc.ts `LeftWhy`): on the last part alone.
+        assert_eq!(serde_json::to_value(last).unwrap()["leftWhy"], "fee");
+        assert!(
+            parts[..parts.len() - 1]
+                .iter()
+                .all(|p| serde_json::to_value(p).unwrap().get("leftWhy").is_none())
+        );
+    }
+
+    #[test]
+    fn max_says_what_a_chains_last_part_left_holds_a_token_that_would_not_fit() {
+        // 1.6.0's release review, 321-parts-worker#6: a chain went, so the ADA paid for every part, and its last part
+        // left out only a UTxO whose token would total more with the rest than an output can hold: three of 2^63 − 1
+        // of one token, paid into the Seedelf by a stranger. That's what the review says, not too little ADA.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let (mut utxos, _) = bundles(12, 20);
+        utxos.extend(ada(100, 1, 409_000_000));
+        let junk = TokenAmount {
+            policy_id: "ab".repeat(28),
+            asset_name: "6a756e6b".into(),
+            quantity: ((1u64 << 63) - 1).to_string(),
+        };
+        let junk: Vec<UtxoResponse> = (200..203)
+            .map(|n| utxo(n, 0, std::slice::from_ref(&junk)))
+            .collect();
+        utxos.extend(junk.clone());
+        let parts = api::build_transfer_parts(sk, transfer(utxos.clone(), None, vec![])).unwrap();
+        let built: Vec<(String, Vec<api::OutRef>)> = parts
+            .iter()
+            .map(|p| (p.tx_cbor.clone(), p.inputs.clone()))
+            .collect();
+        let carried: usize = carries(&built).iter().map(Vec::len).sum();
+        assert!(carried > 0, "no chain went");
+        let spent = sound(&built);
+        let last = parts.last().unwrap();
+        assert_eq!((last.left, last.left_why), (1, Some(api::LeftWhy::Tokens)));
+        assert_eq!(serde_json::to_value(last).unwrap()["leftWhy"], "tokens");
+        assert_eq!(spent + last.left, utxos.len() + carried);
+        let taken: Vec<&api::OutRef> = parts.iter().flat_map(|p| &p.inputs).collect();
+        assert_eq!(
+            junk.iter()
+                .filter(|u| !taken.iter().any(|i| i.tx_hash == u.tx_hash))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn max_says_it_left_what_is_past_the_most_parts_a_payment_goes_as() {
+        // 1.6.0's release review, x-scenarios-sessions#1: past 25 parts the rest stays. The review said "a payment
+        // takes 20 at most", or, where parts spent fewer than 20 each, that each held a token that wouldn't fit.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let most = (api::MAX_PARTS * api::MAX_WITHDRAW_UTXOS) as u64;
+        let parts =
+            api::build_withdraw_parts(sk, withdraw(ada(1, most + 7, 2_000_000), None, vec![]))
+                .unwrap();
+        assert_eq!(parts.len(), api::MAX_PARTS);
+        let last = parts.last().unwrap();
+        assert_eq!((last.left, last.left_why), (7, Some(api::LeftWhy::Limit)));
+        assert_eq!(serde_json::to_value(last).unwrap()["leftWhy"], "limit");
+        assert!(
+            parts[..parts.len() - 1]
+                .iter()
+                .all(|p| (p.left, p.left_why) == (0, None))
+        );
+    }
+
+    #[test]
+    fn max_in_parts_over_nothing_is_refused_as_one_transactions_max_is() {
+        // 1.6.0's release review, 321-parts-rust#2: over no UTxOs, Max in parts came back as no parts at all, where
+        // one transaction's Max says there's nothing to send, and the worker's review of the parts reads the last.
+        let sk = seedelf_key_v1(PHRASE, 0).unwrap();
+        let one = api::build_transfer(sk, transfer(vec![], None, vec![]))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            one.contains("There's nothing in the Seedelf balance to send"),
+            "{one}"
+        );
+        let parts = api::build_transfer_parts(sk, transfer(vec![], None, vec![]));
+        assert_eq!(parts.err().map(|e| e.to_string()), Some(one));
+        for most in [false, true] {
+            let mut r = withdraw(vec![], None, vec![]);
+            r.most = most;
+            let one = api::build_withdraw(sk, r.clone())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                one.contains("There's nothing in the Seedelf balance to withdraw"),
+                "{one}"
+            );
+            let parts = api::build_withdraw_parts(sk, r);
+            assert_eq!(parts.err().map(|e| e.to_string()), Some(one));
+        }
+    }
 }

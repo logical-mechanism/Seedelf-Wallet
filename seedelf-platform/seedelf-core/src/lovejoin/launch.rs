@@ -35,7 +35,8 @@
 //! finished launch is checked again from its own bytes ([`launched_pool`]).
 
 use super::pool::{
-    CLASSIC_LOVELACE, ReferenceDatum, Rejected, candidate, holder_address, usable, verify_pool,
+    CLASSIC_LOVELACE, ReferenceDatum, Rejected, candidate, holder_address, usable, verify_derived,
+    verify_pool,
 };
 use super::templates::{self, Derived, NFT_NAME};
 use super::value::{BoxToken, BoxValue};
@@ -112,6 +113,7 @@ pub struct Launch {
 }
 
 /// What a launch spending `seed` makes, whoever pays for it.
+#[derive(Clone)]
 struct Made {
     derived: Derived,
     datum: ReferenceDatum,
@@ -176,6 +178,25 @@ fn check_terms(terms: &Terms, seedelf_policy: &str) -> Result<()> {
 /// credential is registered. `register`: whether to register `mix_logic`'s
 /// credential (it isn't yet, by `account_info`).
 fn made(chain: &Chain, seed: ([u8; 32], u64), terms: &Terms, register: bool) -> Result<Made> {
+    let made = shaped(chain, seed, terms, register)?;
+    check_usable(&chain.params, &made.pool)?;
+    Ok(made)
+}
+
+/// Whether the pool a launch makes could take a mix once its credential is
+/// registered: a box of it meets the ledger's minimum and pays its own way
+/// back, which is built, proven and measured ([`usable`]).
+fn check_usable(params: &ProtocolParameters, pool: &Protocol) -> Result<()> {
+    usable(params, pool, true)
+        .map_err(|e| anyhow!("The pool this would launch couldn't be used: {e}"))?;
+    Ok(())
+}
+
+/// [`made`] but for whether its pool is usable, which only `terms` decide: a
+/// seed reaches the pool only through hashes of a fixed size, so every seed's
+/// pool is as long, costs as much to run and locks as much. Its scripts are
+/// derived once, and the pool is checked from them.
+fn shaped(chain: &Chain, seed: ([u8; 32], u64), terms: &Terms, register: bool) -> Result<Made> {
     let network_flag = chain.network_flag;
     let params = &chain.params;
     check_terms(terms, &chain.config.contract.seedelf_policy_id)?;
@@ -212,20 +233,19 @@ fn made(chain: &Chain, seed: ([u8; 32], u64), terms: &Terms, register: bool) -> 
     let (mix_box, mix_box_lovelace) = script_output(&derived.mix_box)?;
     let (mix_logic, mix_logic_lovelace) = script_output(&derived.mix_logic)?;
 
-    // The pool these outputs make, checked as a stranger's would be, and
-    // usable once its credential is registered.
-    let pool = verify_pool(
+    // The pool these outputs make, checked as a stranger's would be, from the
+    // scripts derived above.
+    let pool = verify_derived(
         network_flag,
         &resolved(0x01, &reference)?,
         seed,
+        &derived,
         &[resolved(0x02, &mix_box)?, resolved(0x03, &mix_logic)?],
     )
     .map_err(|e| anyhow!("The pool this would launch isn't one the wallet trusts: {e}"))?;
     if !pool.inline_scripts.is_empty() {
         bail!("The pool this would launch doesn't read its scripts from the holder");
     }
-    usable(params, &pool, true)
-        .map_err(|e| anyhow!("The pool this would launch couldn't be used: {e}"))?;
 
     let staking = if register {
         Staking {
@@ -293,6 +313,19 @@ pub fn launch(
     }
     let seed = seed_of(first)?;
     let made = made(chain, seed, terms, register)?;
+    spending(chain, inputs, seed, made, change_owner, signer)
+}
+
+/// The launch spending `inputs` that makes `made`, what their first, `seed`,
+/// makes.
+fn spending(
+    chain: &Chain,
+    inputs: &[UtxoResponse],
+    seed: ([u8; 32], u64),
+    made: Made,
+    change_owner: &Register,
+    signer: Hash<28>,
+) -> Result<Launch> {
     let [reference, mix_box, mix_logic] = made.outputs;
     let spend = ScriptSpend::new(chain, inputs, change_owner, signer)?
         .output(reference, &made.nft)?
@@ -323,6 +356,15 @@ pub fn launch(
 /// ([`crate::build::mint_apart`]): whatever pays for a launch is tied to it
 /// (pass [`crate::build::Purpose::Mint`]'s order). The first input picked is
 /// the seed.
+///
+/// Each choice the selection tries builds its spend alone, where each made
+/// and measured a whole pool, tens of times over for a balance of boxes back
+/// from Lovejoin (1.6.0's release review, 314-core#0). Only a choice's first
+/// input, the seed, makes the pool, so each seed's is made once; only `terms`
+/// decide whether it's usable, so that's measured once, on the pool chosen.
+/// The first seed's pool is made before anything is tried, which checks the
+/// terms, and what it locks, as every seed's launch does, is the least a
+/// choice must hold to be tried.
 pub fn launch_apart(
     chain: &Chain,
     available: &[UtxoResponse],
@@ -337,11 +379,31 @@ pub fn launch_apart(
         .filter(|u| u.asset_list.as_ref().is_none_or(|a| a.is_empty()))
         .cloned()
         .collect();
-    crate::build::select_script_inputs(&ada, &Assets::new(), 0, histories, |inputs| {
-        let built = launch(chain, inputs, terms, register, change_owner, signer)?;
-        built.spend.estimate()?;
-        Ok(built)
-    })
+    let mut pools: Vec<(([u8; 32], u64), Made)> = Vec::new();
+    let mut made_for = |seed: ([u8; 32], u64)| -> Result<Made> {
+        if let Some((_, made)) = pools.iter().find(|(s, _)| *s == seed) {
+            return Ok(made.clone());
+        }
+        let made = shaped(chain, seed, terms, register)?;
+        pools.push((seed, made.clone()));
+        Ok(made)
+    };
+    let floor = match ada.iter().find_map(|u| seed_of(u).ok()) {
+        Some(seed) => made_for(seed)?.locked.total(),
+        None => 0,
+    };
+    let built =
+        crate::build::select_script_inputs(&ada, &Assets::new(), floor, histories, |inputs| {
+            let first = inputs
+                .first()
+                .context("A launch spends at least one UTxO")?;
+            let seed = seed_of(first)?;
+            let built = spending(chain, inputs, seed, made_for(seed)?, change_owner, signer)?;
+            built.spend.estimate()?;
+            Ok(built)
+        })?;
+    check_usable(&chain.params, &built.pool)?;
+    Ok(built)
 }
 
 /// The account's UTxOs can't pay for a launch.
@@ -555,7 +617,8 @@ impl AccountLaunch {
 /// `available` (key addresses the caller can sign for), as an account-paid
 /// mint picks ([`crate::build::account_mint`]): pure ADA first, largest
 /// first, then token UTxOs, as few as pay for the launch, its fee and valid
-/// change; the first input is the seed. `collateral` is the account's own,
+/// change, never one the wallet's evaluator can't take ([`eval::refusal`]);
+/// the first input is the seed. `collateral` is the account's own,
 /// set aside (never an input), or one of `available` is picked. The change,
 /// tokens and all, goes to `change_addr`. `register` and `invalid_hereafter`
 /// as for [`launch`] and [`crate::build::move_in`].
@@ -568,7 +631,18 @@ pub fn launch_from_account(
     change_addr: &Address,
     invalid_hereafter: Option<u64>,
 ) -> Result<AccountLaunch> {
-    let spendable = account_inputs(available, collateral)?;
+    // Measured in the wallet ([`AccountLaunch::measure_locally`]), whose
+    // evaluator refuses a UTxO carrying a reference script, which anyone can
+    // send the account: picked once the ADA alone fell short, one had the
+    // launch refused where a token's UTxO would pay (1.6.0's release review,
+    // 318-rust#1). The other Lovejoin transactions the account pays leave
+    // them out too. The collateral isn't evaluated, so it may be any.
+    let evaluable: Vec<UtxoResponse> = available
+        .iter()
+        .filter(|u| eval::refusal(u).is_none())
+        .cloned()
+        .collect();
+    let spendable = account_inputs(&evaluable, collateral)?;
     let first = spendable
         .first()
         .context("There's nothing in the public account to pay for a launch")?;
@@ -627,4 +701,95 @@ pub fn launched_pool(
         bail!("The launch doesn't publish its scripts at the holder");
     }
     Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::counted::{DERIVES, MEASURES};
+    use super::*;
+    use crate::address::wallet_contract;
+    use crate::build::{Class, Histories, Origin, Purpose};
+    use crate::constants::{VARIANT, get_config};
+    use serde_json::{Value, json};
+
+    fn chain() -> Chain {
+        let rows: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/epoch_params.json")).unwrap();
+        Chain {
+            params: ProtocolParameters::from_koios(&rows[0]).unwrap(),
+            network_flag: true,
+            config: get_config(VARIANT, true).unwrap(),
+        }
+    }
+
+    /// A Seedelf UTxO of ADA alone, `owner`'s under a fresh register.
+    fn owned(chain: &Chain, owner: &Register, tx: u8, lovelace: u64) -> UtxoResponse {
+        let register = owner.clone().rerandomize().unwrap();
+        let wallet = wallet_contract(true, chain.config.contract.wallet_contract_hash);
+        serde_json::from_value(json!({
+            "tx_hash": hex::encode([tx; 32]), "tx_index": 1,
+            "address": wallet.to_bech32().unwrap(), "value": lovelace.to_string(),
+            "stake_address": null,
+            "payment_cred": hex::encode(chain.config.contract.wallet_contract_hash),
+            "epoch_no": 0, "block_height": 0, "block_time": 0, "datum_hash": null,
+            "inline_datum": {
+                "bytes": hex::encode(register.to_vec().unwrap()),
+                "value": { "constructor": 0, "fields": [
+                    { "bytes": register.generator }, { "bytes": register.public_value },
+                ]},
+            },
+            "reference_script": null, "asset_list": [], "is_spent": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_private_launch_derives_a_seeds_scripts_once_and_measures_a_way_back_once() {
+        // 1.6.0's release review, 314-core#0: each choice of inputs the selection tried derived its pool's scripts
+        // twice and built, proved and measured a whole withdraw (`usable`), though only the seed, the first input,
+        // changes the pool, and only the terms decide whether it's usable. Twelve UTxOs, each of a history of its own
+        // and too little to pay alone, as in a balance of boxes back from Lovejoin: each was tried alone, then the
+        // largest grown, 15 choices, 30 derivations and 15 withdraws.
+        let chain = chain();
+        let owner = Register::create(blstrs::Scalar::from(31_415u64)).unwrap();
+        let utxos: Vec<UtxoResponse> = (0..12u8)
+            .map(|i| owned(&chain, &owner, 0x40 + i, 9_110_000 - u64::from(i) * 10_000))
+            .collect();
+        let histories = utxos.iter().fold(Histories::new(Purpose::Mint), |h, u| {
+            let class = Class {
+                id: format!("received {}", u.tx_hash),
+                origin: Origin::Received,
+            };
+            h.with(&u.tx_hash, u.tx_index, class)
+        });
+        let terms = Terms {
+            token: Some(BoxToken {
+                policy: [0x1a; 28],
+                name: b"NIGHT".to_vec(),
+                quantity: 100_000_000,
+            }),
+            box_lovelace: 4_500_000,
+            max_fee: 1_500_000,
+        };
+        DERIVES.with(|c| c.set(0));
+        MEASURES.with(|c| c.set(0));
+        let launch = launch_apart(
+            &chain,
+            &utxos,
+            &histories,
+            &terms,
+            true,
+            &owner,
+            Hash::new([0x5e; 28]),
+        )
+        .unwrap();
+        // The three largest pay; the largest is the seed.
+        assert_eq!(launch.seed, ([0x40; 32], 1));
+        assert_eq!(launch.spend.inputs().len(), 3);
+        assert_eq!(
+            (DERIVES.with(|c| c.get()), MEASURES.with(|c| c.get())),
+            (1, 1),
+            "scripts derived, ways back measured"
+        );
+    }
 }

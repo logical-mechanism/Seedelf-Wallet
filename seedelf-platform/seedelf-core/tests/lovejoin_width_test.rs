@@ -672,57 +672,179 @@ fn row(mix: &Mix, limits: Limits) -> String {
     )
 }
 
-/// The harness is the wallet's builder: for the classic pools, `lovejoin::mix`
-/// given the same boxes and fee input declares the same budgets and fee.
+/// Lovejoin's token-pool launch on preprod spent this UTxO: the seed its
+/// scripts are derived from.
+const LJ_SEED: ([u8; 32], u64) = (
+    hex_literal::hex!("5c6f327e511818805adb6b4e055a6b222f9f8706cfda3540bdb0e9bb0f6acc0b"),
+    2,
+);
+
+/// `lovejoin::mix` of `given`'s boxes in `protocol`'s pool, paid as the
+/// harness pays.
+fn wallets_mix(pool: &Pool, protocol: &Protocol, given: &Inputs) -> anyhow::Result<lovejoin::Mix> {
+    let boxes: Vec<PoolBox> = given
+        .boxes
+        .iter()
+        .map(|(u, _, _)| PoolBox::from_resolved(u.clone(), protocol).unwrap())
+        .collect();
+    let payer = Payer {
+        fee: given.fee.clone(),
+        collateral: Some(given.collateral.clone()),
+        address: pallas_addresses::Address::from_bytes(&session_address(pool.network_flag))
+            .unwrap(),
+        signers: 1,
+    };
+    lovejoin::mix(&pool.params, protocol, &boxes, &payer)
+}
+
+/// What `tx` declares each script may use, by purpose and index, in
+/// [`measure`]'s order: the budgets the ledger holds it to, which the
+/// evaluator never reads (it measures each script on what's left).
+fn declared(tx: &[u8]) -> Vec<Used> {
+    let mut declared: Vec<Used> = MultiEraTx::decode(tx)
+        .unwrap()
+        .redeemers()
+        .iter()
+        .map(|r| Used {
+            tag: match r.tag() {
+                RedeemerTag::Spend => "spend",
+                RedeemerTag::Reward => "withdraw",
+                _ => "other",
+            },
+            index: r.index(),
+            budget: Budget {
+                mem: r.ex_units().mem,
+                steps: r.ex_units().steps,
+            },
+        })
+        .collect();
+    declared.sort_by_key(|u| (u.tag, u.index));
+    declared
+}
+
+/// The harness is the wallet's builder: `lovejoin::mix` given the same boxes
+/// and fee input declares the budgets the harness measures, redeemer by
+/// redeemer, and pays the same fee for as many bytes. On the classic pools,
+/// and on the token pool with its scripts read by reference, as the harness
+/// reads them. The wallet reads this pool's inline (they're at a key address,
+/// not the holder): then it declares what each of its scripts uses. A test
+/// that measured the wallet's transaction again saw what it uses, never what
+/// it declares, so budgets staged on the wrong redeemers passed (1.6.0's
+/// release review, 312#1).
 #[test]
 fn the_harness_builds_the_wallets_mix() {
-    for flag in [true, false] {
-        let pool = classic(flag);
-        let protocol = Protocol::of(flag).unwrap();
+    let token = token_preprod();
+    let inline =
+        lovejoin::verify_pool(true, &token.references[0], LJ_SEED, &token.references[1..]).unwrap();
+    assert_eq!(inline.inline_scripts.len(), 2);
+    let by_reference = Protocol {
+        references: token.references.clone(),
+        inline_scripts: Vec::new(),
+        script_bytes: token.script_bytes,
+        ..inline.clone()
+    };
+    let pools = [
+        (classic(true), Protocol::of(true).unwrap()),
+        (classic(false), Protocol::of(false).unwrap()),
+        (token_preprod(), by_reference),
+    ];
+    for (pool, protocol) in &pools {
         for n in [3, 4] {
             for fee_at in [FeeAt::First, FeeAt::Last] {
-                let given = inputs(&pool, n, fee_at);
-                let ours = build(&pool, &given);
-                let boxes: Vec<PoolBox> = given
-                    .boxes
-                    .iter()
-                    .map(|(u, _, _)| PoolBox::from_resolved(u.clone(), &protocol).unwrap())
-                    .collect();
-                let payer = Payer {
-                    fee: given.fee.clone(),
-                    collateral: Some(given.collateral.clone()),
-                    address: pallas_addresses::Address::from_bytes(&session_address(flag)).unwrap(),
-                    signers: 1,
-                };
-                let wallets = lovejoin::mix(&pool.params, &protocol, &boxes, &payer).unwrap();
-                let theirs = measure(&pool, &wallets.tx.tx_bytes.0, &ours.known);
-                assert_eq!(theirs, ours.used, "{} N={n} {fee_at:?}", pool.name);
-                assert_eq!(wallets.fee, ours.fee, "{} N={n} {fee_at:?}", pool.name);
-                assert_eq!(wallets.tx.tx_bytes.0.len(), ours.tx.len());
+                let given = inputs(pool, n, fee_at);
+                let ours = build(pool, &given);
+                let wallets = wallets_mix(pool, protocol, &given).unwrap();
+                let tx = &wallets.tx.tx_bytes.0;
+                let at = format!("{} N={n} {fee_at:?}", pool.name);
+                assert_eq!(declared(tx), ours.used, "{at}");
+                assert_eq!(measure(pool, tx, &ours.known), ours.used, "{at}");
+                assert_eq!(wallets.fee, ours.fee, "{at}");
+                assert_eq!(tx.len(), ours.tx.len(), "{at}");
             }
         }
+    }
+    for n in [3, 4] {
+        let given = inputs(&token, n, FeeAt::Last);
+        let ours = build(&token, &given);
+        let wallets = wallets_mix(&token, &inline, &given).unwrap();
+        let tx = &wallets.tx.tx_bytes.0;
+        assert_eq!(MultiEraTx::decode(tx).unwrap().plutus_v3_scripts().len(), 2);
+        assert_eq!(
+            declared(tx),
+            measure(&token, tx, &ours.known),
+            "scripts inline, N={n}"
+        );
+        assert!(
+            WALLET.fits(
+                declared(tx)
+                    .iter()
+                    .fold(Budget { mem: 0, steps: 0 }, |a, u| Budget {
+                        mem: a.mem + u.budget.mem,
+                        steps: a.steps + u.budget.steps,
+                    })
+            )
+        );
     }
 }
 
 /// The wallet's builder refuses a mix the ledger would: five boxes is over.
+/// Their `mix_logic` alone runs past the 14 billion steps the wallet's
+/// evaluator lets a transaction's scripts use together, so the measure
+/// refuses them, before the sum of their budgets is checked (1.6.0's release
+/// review, 312#0: the next test reaches that).
 #[test]
 fn the_wallet_refuses_five_boxes() {
     for flag in [true, false] {
         let pool = classic(flag);
         let protocol = Protocol::of(flag).unwrap();
         let given = inputs(&pool, 5, FeeAt::First);
-        let boxes: Vec<PoolBox> = given
-            .boxes
-            .iter()
-            .map(|(u, _, _)| PoolBox::from_resolved(u.clone(), &protocol).unwrap())
-            .collect();
-        let payer = Payer {
-            fee: given.fee.clone(),
-            collateral: Some(given.collateral.clone()),
-            address: pallas_addresses::Address::from_bytes(&session_address(flag)).unwrap(),
-            signers: 1,
-        };
-        assert!(lovejoin::mix(&pool.params, &protocol, &boxes, &payer).is_err());
+        let refused = wallets_mix(&pool, &protocol, &given).unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("withdraw 0: execution went over budget"),
+            "{refused:#}"
+        );
+    }
+}
+
+/// The wallet's builder refuses a mix whose scripts together need more
+/// computation than a transaction may use (`MAX_TX_BUDGET`), though each
+/// fits. The network's check of a chain's first mix goes through Ogmios,
+/// which gives each script a whole transaction's limit, so this sum is all
+/// that stands between such a mix and the node's refusal, and what has a
+/// chain four wide fall back to three. Four boxes fit today by about 1%;
+/// under a cost model 2% dearer they measure about 10.08 billion steps, past
+/// the ledger's 10 billion, though `mix_logic` alone still fits and the
+/// wallet's evaluator lets a transaction run 14 billion, so only the sum
+/// refuses them, in its own words (1.6.0's release review, 312#0: no test
+/// reached it before).
+#[test]
+fn the_wallet_refuses_four_boxes_once_together_they_pass_a_transactions_computation() {
+    for flag in [true, false] {
+        let mut pool = classic(flag);
+        for cost in &mut pool.params.cost_model_v3 {
+            *cost = *cost * 102 / 100;
+        }
+        let protocol = Protocol::of(flag).unwrap();
+        for fee_at in [FeeAt::First, FeeAt::Last] {
+            let given = inputs(&pool, 4, fee_at);
+            let harness = build(&pool, &given);
+            let shown = row(&harness, WALLET);
+            assert!(
+                harness.used.iter().all(|u| WALLET.fits(u.budget)),
+                "{shown}"
+            );
+            assert!(!WALLET.fits(harness.total), "{shown}");
+            assert!(harness.total.steps < 14_000_000_000, "{shown}");
+            let refused = wallets_mix(&pool, &protocol, &given).unwrap_err();
+            assert!(
+                refused.to_string().contains(
+                    "Mixing 4 boxes at once needs more computation than a transaction may use"
+                ),
+                "{shown}: {refused:#}"
+            );
+        }
     }
 }
 

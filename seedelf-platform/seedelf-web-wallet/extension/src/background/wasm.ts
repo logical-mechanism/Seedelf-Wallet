@@ -34,14 +34,30 @@ export function loadWasm(): Promise<typeof wasm> {
 /**
  * Whether `e`, thrown out of a WebAssembly call, means the instance itself is
  * broken rather than that the call refused: a trap (`unreachable`, memory
- * access out of bounds), or wasm-bindgen finding a Rust value still borrowed
- * by a call a trap cut short. A JavaScript stack overflow isn't one: it's
- * JSON.stringify's as often as not, and a value it leaves borrowed shows up
- * here on its next use.
+ * access out of bounds), wasm-bindgen finding a Rust value still borrowed by
+ * a call a trap cut short, or the stack running out inside WebAssembly. V8
+ * throws a RangeError for that last, as for JavaScript's own overflow, but it
+ * leaves Rust's stack pointer where the overflow stopped it, so the
+ * instance's next calls run short and trap (1.6.0's release review,
+ * 314-wasm#0). A JavaScript stack overflow isn't one: it's JSON.stringify's
+ * as often as not, and a value it leaves borrowed shows up here on its next
+ * use.
  */
 export function isTrap(e: unknown): boolean {
   if (e instanceof WebAssembly.RuntimeError) return true;
+  if (e instanceof RangeError) return inWasm(e);
   return e instanceof Error && /Rust value while it was borrowed|recursive use of an object detected/.test(e.message);
+}
+
+/**
+ * Whether `e` was thrown inside WebAssembly, or passed up through it: its
+ * stack holds a WebAssembly frame, and an overflow's starts where it ran out.
+ * V8 writes one `<module>:wasm-function[<index>]:<offset>`, as in Chrome's
+ * worker. A test runner's own formatter writes the frame's file instead,
+ * `wasm://wasm/<hash>` for a module compiled from its bytes.
+ */
+function inWasm(e: Error): boolean {
+  return /wasm-function\[\d+\]|\bwasm:\/\/wasm\//.test(e.stack ?? "");
 }
 
 /**

@@ -140,6 +140,35 @@ test("a script at the holder named by its hash alone is read with the bytes deri
   assert.equal(verify([atHolder(1, MIX_BOX, bytes[MIX_LOGIC]), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
 });
 
+test("a launch's script row under a datum too deep to read is no reference, and leaves the module whole (1.6.0's release review, 314-wasm#0)", () => {
+  // one_shot_mint checks only the reference output, so a launch can put any datum on its scripts' outputs at the
+  // holder. Decoded, one a few thousand levels deep overflowed the module's stack in V8 (a RangeError, which left its
+  // stack pointer behind), and the next call trapped, which locked the wallet.
+  const bytes = Object.fromEntries(found.scripts.map((s) => [s.reference_script.hash, s.reference_script.bytes]));
+  const under = (row, levels) => ({ ...row, inline_datum: { bytes: `${"81".repeat(levels)}00`, value: null } });
+  const verify = (scripts) =>
+    JSON.parse(lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: { ...poolRef, scripts } })));
+  const check = (scripts) =>
+    JSON.parse(lovejoinLaunchCheck(JSON.stringify({ network: "preprod", reference: found.reference, inputs: [found.seed], scripts })));
+  for (const levels of [3_000, 100_000]) {
+    // Twice each: a first overflow could pass, or only leak the stack.
+    for (let i = 0; i < 2; i++) {
+      // Named by its hash alone, as the data layer lists a pool's scripts.
+      assert.equal(verify([under(atHolder(1, MIX_BOX), levels), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
+      // With its bytes, as Koios lists the holder for the Lovejoin page's look.
+      const listed = [under(atHolder(1, MIX_BOX, bytes[MIX_BOX]), levels), atHolder(2, MIX_LOGIC, bytes[MIX_LOGIC])];
+      assert.equal(check(listed).pool.scriptsInline, 1);
+      assert.equal(verify(listed).scriptsInline, 1);
+    }
+  }
+  // Only a datum past the depth the wallet reads anywhere: one within it is read by reference, datum and all.
+  assert.equal(verify([under(atHolder(1, MIX_BOX), 128), atHolder(2, MIX_LOGIC)]).scriptsInline, 0);
+  assert.equal(verify([under(atHolder(1, MIX_BOX), 129), atHolder(2, MIX_LOGIC)]).scriptsInline, 1);
+  // The module is still whole.
+  assert.equal(verify([atHolder(1, MIX_BOX), atHolder(2, MIX_LOGIC)]).scriptsInline, 0);
+  assert.equal(JSON.parse(lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool: poolRef }))).version, "tokenV1");
+});
+
 test("a box of one token has a value, and none of it is refused in words, the module whole (1.6.0's release review, MONEY-2)", () => {
   // The launch form asks as the creator types: "1" trapped, which locked the wallet.
   const token = { policyId: "1a".repeat(28), assetName: Buffer.from("SNEK").toString("hex") };

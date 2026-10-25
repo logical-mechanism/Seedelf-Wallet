@@ -16,7 +16,11 @@
 //! `one_shot_mint(seed)` hashes to can mint only in the one transaction that
 //! spends the seed, and only one NFT. A seed comes from the bundled list,
 //! the data layer, or the inputs of the transaction that made the reference
-//! UTxO ([`find_seed`]).
+//! UTxO ([`find_seed`]). It doesn't prove the NFT minted: a reference UTxO
+//! made up from a seed no launch spent verifies as well, offline. The chain
+//! is the judge of that. Every transaction into a token pool reads its
+//! reference UTxO, the deposit too, so the ledger refuses one into a pool
+//! that isn't on chain (1.6.0's release review, 317-wallet#0).
 //!
 //! A verified pool is always read, so a box of the wallet's never vanishes
 //! from view; whether it's usable for a new mix is a separate question
@@ -264,8 +268,18 @@ pub(crate) fn script_address(hash: &[u8; 28], network_flag: bool) -> Address {
     .into()
 }
 
-/// An output as the ledger keeps it, if it's in Conway's (post-Alonzo) form.
+/// An output as the ledger keeps it, if it's in Conway's (post-Alonzo) form
+/// and nested within [`cbor::MAX_DEPTH`], what it embeds included. Its decoder
+/// recurses through an inline datum, and anyone can make a UTxO at the holder
+/// with one as deep as they like: a launch can put one beside its scripts,
+/// since `one_shot_mint` checks only the reference output. Decoded, one a few
+/// thousand levels deep overflowed WebAssembly's stack as a pool was verified
+/// (1.6.0's release review, 314-wasm#0). Such an output reads as unreadable:
+/// no reference to a script, nor a pool's reference UTxO.
 fn post_alonzo(output: &[u8]) -> Option<pallas_primitives::conway::PostAlonzoTransactionOutput> {
+    if !cbor::output_within_depth(output, cbor::MAX_DEPTH) {
+        return None;
+    }
     match minicbor::decode::<TransactionOutput>(output).ok()? {
         TransactionOutput::PostAlonzo(o) => Some(o),
         TransactionOutput::Legacy(_) => None,
@@ -345,8 +359,8 @@ pub fn candidate(
 /// the shape, offline; then the derivation, on the CPU.
 ///
 /// Each of `mix_box` and `mix_logic` is read from a reference UTxO at the
-/// holder when one carries it, and carried in each transaction otherwise
-/// (about 0.12 ₳ more a transaction). A reference anywhere else could be
+/// holder when one carries it, beside no datum or one the wallet reads, and
+/// carried in each transaction otherwise (about 0.12 ₳ more a transaction). A reference anywhere else could be
 /// spent by whoever holds its key, which would make every transaction
 /// reading it fail.
 pub fn verify_pool(
@@ -357,6 +371,41 @@ pub fn verify_pool(
 ) -> Result<Protocol, Rejected> {
     let (policy, datum) = candidate(network_flag, reference)?;
     let derived = templates::derive(&seed.0, seed.1).map_err(|_| Rejected::WrongSeed)?;
+    derived_from(
+        network_flag,
+        reference,
+        seed,
+        (policy, datum),
+        &derived,
+        script_refs,
+    )
+}
+
+/// [`verify_pool`] for a launch, which has derived `seed`'s scripts already
+/// to make the outputs `reference` and `script_refs` stand in for: the same
+/// checks, from those scripts, rather than deriving them again for each
+/// choice of inputs it tries (1.6.0's release review, 314-core#0).
+pub(crate) fn verify_derived(
+    network_flag: bool,
+    reference: &Resolved,
+    seed: ([u8; 32], u64),
+    derived: &Derived,
+    script_refs: &[Resolved],
+) -> Result<Protocol, Rejected> {
+    let shape = candidate(network_flag, reference)?;
+    derived_from(network_flag, reference, seed, shape, derived, script_refs)
+}
+
+/// The pool `reference` describes, once its NFT and its datum's scripts are
+/// checked against `derived`, the scripts `seed` derives.
+fn derived_from(
+    network_flag: bool,
+    reference: &Resolved,
+    seed: ([u8; 32], u64),
+    (policy, datum): ([u8; 28], ReferenceDatum),
+    derived: &Derived,
+    script_refs: &[Resolved],
+) -> Result<Protocol, Rejected> {
     if derived.policy() != policy {
         return Err(Rejected::WrongSeed);
     }
@@ -371,7 +420,7 @@ pub fn verify_pool(
         reference,
         seed,
         &datum,
-        &derived,
+        derived,
         script_refs,
     ))
 }
@@ -529,6 +578,8 @@ fn measured(
 ) -> Result<Usable, Unusable> {
     use blstrs::{G1Projective, Scalar};
     use group::Group;
+    #[cfg(test)]
+    super::counted::count(&super::counted::MEASURES);
     let unchecked = |e: anyhow::Error| Unusable::Unchecked(e.to_string());
     let sk = super::nonzero_scalar();
     let a = G1Projective::generator() * super::nonzero_scalar();

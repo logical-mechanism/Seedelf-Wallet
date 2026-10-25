@@ -1465,6 +1465,15 @@ fn the_tail(
     let d = MultiEraTx::decode(&deposited).unwrap();
     assert!(spends(&d, [2; 32], 1), "the session's collateral");
     assert_eq!(tail.boxed.tx_hash, hex::encode(d.hash()));
+    // It reads the 5 ₳ pool's reference UTxO, so the ledger refuses it if that
+    // pool isn't on chain (1.6.0's release review, 317-wallet#0).
+    let reference = &ada_pool_ref(5_000_000).reference;
+    let read: Vec<(String, u64)> = d
+        .reference_inputs()
+        .iter()
+        .map(|i| (hex::encode(i.hash()), i.index()))
+        .collect();
+    assert_eq!(read, vec![(reference.tx_hash.clone(), reference.tx_index)]);
     let outputs = eval::resolve_outputs(&deposited).unwrap();
     let boxed = PoolBox::from_resolved(outputs[tail.boxed.tx_index as usize].clone(), &pool)
         .expect("a box of the 5 ₳ pool");
@@ -1741,7 +1750,7 @@ fn the_collateral_comes_back_with_the_rest_where_its_mix_cant_be_built() {
 
     // A chain whose change can't pay for the tail: its return as before.
     let protocol = Protocol::of(true).unwrap();
-    let funded = seedelf_core::lovejoin::funding_for(1, 1, 10_000_000);
+    let funded = seedelf_core::lovejoin::funding_for(1, 1, 10_000_000).unwrap();
     let result = lovejoin::chain(
         &accounts(),
         sk,
@@ -1840,7 +1849,7 @@ fn a_session_funded_for_its_collateral_counts_its_boxes_after_the_reserve() {
     let sk = Scalar::from(8484u64);
     let at = session();
     let reserve = seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE;
-    let funded = seedelf_core::lovejoin::funding_for(1, 1, 10_000_000) + reserve;
+    let funded = seedelf_core::lovejoin::funding_for(1, 1, 10_000_000).unwrap() + reserve;
     let request = |reserved: bool| ChainRequest {
         network: "preprod".into(),
         params: params(),
@@ -1881,7 +1890,7 @@ fn a_session_funded_for_its_collateral_counts_its_boxes_after_the_reserve() {
         .unwrap()
         .boxes
     };
-    let two = seedelf_core::lovejoin::funding_for(2, 1, 10_000_000);
+    let two = seedelf_core::lovejoin::funding_for(2, 1, 10_000_000).unwrap();
     assert_eq!(plan(false, two), 2);
     assert_eq!(plan(true, two), 1, "the reserve comes out first");
     assert_eq!(plan(true, two + reserve), 2);
@@ -1956,4 +1965,80 @@ fn the_collateral_mix_is_built_again_from_what_the_chain_left() {
     // A stranger's box isn't the collateral's.
     let err = lovejoin::collateral_mix(&accounts(), sk, request(&others[0])).unwrap_err();
     assert!(err.to_string().contains("isn't this wallet's"), "{err}");
+}
+
+/// A direct return's collateral tail with nothing else at the account to pay
+/// for it (a site's session whose site spent all but the reserve) is built
+/// from `direct_tail_reserve` alone, at today's price of a byte and a dearer
+/// one, where the chain's 1.5 ₳ never built it. A swap's is built from the
+/// chain's 1.5 ₳ and what its 2 ₳ margin leaves after the order's fee, its
+/// fill carrying the sweep's least: why a swap's funding keeps 1.5 ₳ (1.6.0's
+/// release review, 323-rust#1).
+#[test]
+fn a_direct_returns_collateral_tail_is_paid_by_its_reserve_alone() {
+    let sk = Scalar::from(6363u64);
+    let at = session();
+    let others = strangers(0xa7, 2);
+    let chain_reserve = seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE;
+    for (byte, sized) in [("4310", 2_800_000), ("6465", 3_600_000)] {
+        let mut p = params();
+        p["coins_per_utxo_size"] = json!(byte);
+        let reserve = seedelf_core::lovejoin::direct_tail_reserve(
+            &seedelf_koios::koios::ProtocolParameters::from_koios(&p).unwrap(),
+        )
+        .unwrap();
+        let back = |utxos: Vec<UtxoResponse>| {
+            api::session_return(
+                &accounts(),
+                sk,
+                api::SessionReturnRequest {
+                    network: "preprod".into(),
+                    params: p.clone(),
+                    index: 0,
+                    utxos,
+                    merge: vec![],
+                    own: vec![],
+                    collateral_pool: Some(ada_pool_ref(5_000_000)),
+                    collateral_boxes: others.clone(),
+                },
+            )
+            .unwrap()
+        };
+        let alone = |lovelace: u64| {
+            vec![
+                row(1, 0, &at, lovelace, &[]),
+                row(2, 1, &at, 5_000_000, &[]),
+            ]
+        };
+        let result = back(alone(reserve));
+        let tail = result
+            .tail
+            .as_ref()
+            .unwrap_or_else(|| panic!("no tail built from {reserve} at {byte}"));
+        let mixed = the_tail(&tail.txs[0], &tail.txs[1], &tail.tail, &others, sk);
+        let seedelf = swept_after(&result.tx_cbor, &mixed);
+        // What its deposit, its mix and the sweep don't spend comes back.
+        let fees = tail.tail.fee.parse::<u64>().unwrap() + result.fee.parse::<u64>().unwrap();
+        assert_eq!(seedelf, reserve - fees);
+        assert!(
+            back(alone(chain_reserve)).tail.is_none(),
+            "the chain's reserve alone built a direct return's tail at {byte}"
+        );
+        // Priced from the parameters, and rounded up: the least that builds is
+        // 2.663 ₳ at 4,310 lovelace a byte, 3.392 ₳ at 6,465.
+        assert_eq!(reserve, sized, "at {byte}");
+        // A swap's, back directly: the reserve and its margin less an order's
+        // fee (0.2 to 0.4 ₳), its fill holding MIN.
+        let swap = vec![
+            row(1, 0, &at, chain_reserve + 2_000_000 - 400_000, &[]),
+            row(2, 1, &at, 5_000_000, &[]),
+            row(3, 0, &at, 2_000_000, &[(MIN_POLICY, "4d494e", 500)]),
+        ];
+        let result = back(swap);
+        let tail = result
+            .tail
+            .as_ref()
+            .unwrap_or_else(|| panic!("no tail for a swap's direct return at {byte}"));
+        the_tail(&tail.txs[0], &tail.txs[1], &tail.tail, &others, sk);
+    }
 }

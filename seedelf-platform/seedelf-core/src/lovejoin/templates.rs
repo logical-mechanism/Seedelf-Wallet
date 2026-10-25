@@ -118,6 +118,8 @@ pub fn one_shot_mint(seed_tx: &[u8; 32], seed_index: u64) -> Result<Script> {
 
 /// The scripts a launch spending the seed `seed_tx#seed_index` runs.
 pub fn derive(seed_tx: &[u8; 32], seed_index: u64) -> Result<Derived> {
+    #[cfg(test)]
+    super::counted::count(&super::counted::DERIVES);
     let one_shot_mint = one_shot_mint(seed_tx, seed_index)?;
     let policy = one_shot_mint.hash;
     let mix_logic = apply(MIX_LOGIC, vec![bytes(&policy), bytes(NFT_NAME)])?;

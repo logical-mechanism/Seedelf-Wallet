@@ -1588,6 +1588,10 @@ export function atStakeLines(stake: AtStake[]): string[] {
     if (s.chainSending) {
       lines.push(t("settings.remove.warn.chainSending", { network: on }));
     }
+    // A payment's parts still to go, which removing the wallet stops as it stops a chain (1.6.0's release review).
+    if (s.partsWaiting?.length) {
+      lines.push(t("settings.remove.warn.partsWaiting", { network: on, count: s.partsWaiting.length }));
+    }
     if (s.mixMaybeSent) {
       lines.push(t("settings.remove.warn.mixMaybeSent", { network: on }));
     }

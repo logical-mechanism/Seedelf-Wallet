@@ -11,16 +11,28 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import { DappService, type DappSession } from "../src/background/dapp";
+import { handle, RESET_AT_STAKE, type Context } from "../src/background/handlers";
 import { Koios, type KoiosUtxo } from "../src/background/koios";
 import { Minswap } from "../src/background/minswap";
-import { type MayGo, type OnStopped, PartsService, SESSION_WAITING_PREFIX, type Waiting, waitingPartKey } from "../src/background/parts";
+import {
+  GIVEME_BEHIND_MS,
+  holdWaiting,
+  type MayGo,
+  type OnStopped,
+  PartsService,
+  SESSION_WAITING_PREFIX,
+  splitParts,
+  type Waiting,
+  waitingPartKey,
+} from "../src/background/parts";
 import { pendingKey, PendingService, UNSEEN_AFTER_MS } from "../src/background/pending";
+import { NetworkChoice } from "../src/background/preferences";
 import { runNetworks } from "../src/background/runs";
-import { BUILT_TTL_MS, readContract, type ScriptSpendDeps } from "../src/background/script-spend";
-import { SESSION_RESERVED_PREFIX, reservedSet } from "../src/background/spent";
+import { BUILT_TTL_MS, partKey, readContract, type ScriptSpendDeps, send } from "../src/background/script-spend";
+import { SESSION_RESERVED_PREFIX, SESSION_SPENT, reservedSet } from "../src/background/spent";
 import type { Area } from "../src/background/storage";
 import { SessionService } from "../src/background/sessions";
-import { TransferService } from "../src/background/transfer";
+import { SESSION_TRANSFER, TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { PendingTx } from "../src/shared/rpc";
 import { PendingBanner } from "../src/ui/components/PendingBanner";
@@ -196,7 +208,10 @@ function banner(pending: PendingTx, watching = false): string {
     .trim();
 }
 
-/** What Home's poll hears (handlers.ts "pending-tx"): the watch, with its payment's parts; or the parts' own. */
+/**
+ * What Home's poll hears (handlers.ts "pending-tx"): the watch, with its payment's parts; or the parts' own. Not what
+ * it says once a lock took the parts' record (`homeAsks`, below, asks the handler itself).
+ */
 async function homeHears(s: ReturnType<typeof services>): Promise<PendingTx | null> {
   const pending = await s.pending.pending("preprod");
   if (!pending) return (await s.parts.shown("preprod")) ?? null;
@@ -826,7 +841,11 @@ describe("a payment in parts as Home tells it, after the merged fixes' review (1
         }
         return real(url, init);
       };
-      await expect(s.transfer.submit("preprod", summary.txHash)).rejects.toThrow(/Koios didn't answer/);
+      // It names the server, which on mainnet is the wallet's own first (x-i18n-ja#0), and says the second didn't go:
+      // letGo frees it, and nothing sends it later (x-scenarios-sessions#2; both 1.6.0's release review).
+      await expect(s.transfer.submit("preprod", summary.txHash)).rejects.toThrow(
+        /^1 of 2 transactions went, but the server didn't answer for the last one, so the rest didn't go\./,
+      );
       if (lands) t.koios.confirmations = 1;
       else t.koios.missing.add(all[0]!.txHash);
       // The watch settles it: seen, or let go unseen 20 minutes on.
@@ -843,5 +862,327 @@ describe("a payment in parts as Home tells it, after the merged fixes' review (1
         expect(banner(heard)).toMatch(/most likely never went out/);
       }
     }
+  });
+});
+
+/** A context as the worker builds one, with these services' Send, Make public, watch and parts: handlers.ts answers. */
+function context(t: T, s: ReturnType<typeof services>): Context {
+  return {
+    ...(t as unknown as Context),
+    wasm: loadTestWasm(),
+    transfer: s.transfer,
+    withdraw: s.withdraw,
+    pending: s.pending,
+    parts: s.parts,
+    connector: async (on: boolean) => on,
+    version: "1.6.0",
+    network: "preprod",
+    networks: ["preprod"],
+    networkChoice: new NetworkChoice(t.local, ["preprod"]),
+  };
+}
+
+/** What Home's poll hears, through the worker's own handler ("pending-tx"). */
+const homeAsks = async (ctx: Context) => (await handle({ type: "pending-tx" }, ctx)) as PendingTx | null;
+
+/** Koios taking each submit of one of `hashes` and never answering it: it may have gone. Clear the set to let it answer. */
+function silentOn(t: T, hashes: Set<string>) {
+  const real = t.koios.fetch;
+  t.koios.fetch = async (url, init) => {
+    const answer = await real(url, init);
+    if (String(url).endsWith("/submittx") && hashes.has(txIdOf(new Uint8Array((init as RequestInit).body as Uint8Array)))) {
+      throw new DOMException("signal timed out", "TimeoutError");
+    }
+    return answer;
+  };
+}
+
+/** The UTxOs the kept part `i` of Send's review spends of its own: not what an earlier part carried forward. */
+async function ownInputs(t: T, i: number, parts: Array<{ txHash: string }>): Promise<string[]> {
+  const kept = (await t.session.get<{ txCbor: string }>(partKey(SESSION_TRANSFER, i)))!;
+  return txInputs(Uint8Array.from(Buffer.from(kept.txCbor, "hex"))).filter((o) => !parts.some((p) => o.startsWith(`${p.txHash}#`)));
+}
+
+describe("what a lock or Remove wallet stops of a payment in parts (1.6.0's release review, gap-1#1, gap-3#6)", SLOW, () => {
+  it("lists a payment whose parts still wait, removing the wallet only at a second yes, and tells the lock countdown", async () => {
+    const { t, tokens } = await walletA(20);
+    const s = services(t);
+    const ctx = context(t, s);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    expect(summary.parts).toHaveLength(3);
+    await s.transfer.submit("preprod", summary.txHash);
+    // The first went, and Koios answered it: nothing may still go through, no session is open, and two parts wait.
+    expect(await handle({ type: "reset-check" }, ctx)).toEqual([
+      { network: "preprod", sessions: [], chainSending: false, partsWaiting: [{ sent: 1, total: 3 }] },
+    ]);
+    // The lock countdown hears it on a question of its own: it isn't a chain through Lovejoin.
+    expect(await handle({ type: "parts-waiting" }, ctx)).toBe(true);
+    expect(await handle({ type: "chains-sending" }, ctx)).toBe(false);
+    await expect(handle({ type: "reset-wallet" }, ctx)).rejects.toThrow(RESET_AT_STAKE());
+    expect(await s.parts.of("preprod", summary.txHash)).toEqual({ sent: 1, total: 3 });
+    // Asked again, it goes, and what waited with it.
+    expect(await handle({ type: "reset-wallet", force: true }, ctx)).toMatchObject({ state: "no-wallet" });
+    expect(await t.session.get(SESSION_WAITING_PREFIX + "preprod")).toBeUndefined();
+  });
+
+  it("lists nothing, and asks no second yes, once the parts stopped", async () => {
+    const { t, tokens } = await walletA(12);
+    const s = services(t);
+    const ctx = context(t, s);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    await s.transfer.submit("preprod", summary.txHash);
+    // giveme.my never sees the part before: the rest stop, kept a while only for Home's banner.
+    t.koios.confirmations = 1;
+    t.collateral.answer = { status: 400, body: { detail: "input not found" } };
+    await busy(t, 30_000);
+    expect(await s.parts.pump("preprod")).toBe(true);
+    await busy(t, GIVEME_BEHIND_MS + 60_000);
+    expect(await s.parts.pump("preprod")).toBe(false);
+    expect(await s.parts.of("preprod", summary.txHash)).toMatchObject({ stopped: "refused" });
+    expect(await handle({ type: "reset-check" }, ctx)).toEqual([]);
+    expect(await handle({ type: "parts-waiting" }, ctx)).toBe(false);
+    expect(await handle({ type: "reset-wallet" }, ctx)).toMatchObject({ state: "no-wallet" });
+  });
+
+  it("leaves a session's funding in parts to its session in Remove wallet's list, and still tells the lock countdown", async () => {
+    const t = testBalances();
+    await t.wallet.create(v12.phrase, PASSWORD);
+    const s = services(t);
+    const ctx = context(t, s);
+    const hashes = ["a1", "a2", "a3"].map((h) => h.repeat(32));
+    const funding: Waiting = { hashes, after: [null, hashes[0]!, hashes[1]!], sent: 1, at: t.clock.now, kind: "session-out", what: "payment", session: 0 };
+    await t.session.set(SESSION_WAITING_PREFIX + "preprod", { [hashes[0]!]: funding });
+    const origin = "https://app.example";
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [{ index: 0, createdAt: 1, txs: hashes.map((txHash) => ({ kind: "out", txHash, at: 1 })), parts: 3, site: { origin } }],
+    });
+    // Its session is listed as open (sessions.ts atStake), with what to do about it, once: its parts aren't listed again.
+    expect(await handle({ type: "reset-check" }, ctx)).toEqual([
+      { network: "preprod", sessions: [{ index: 0, kind: "site", origin }], chainSending: false },
+    ]);
+    // A lock stops them all the same, and the session ends short.
+    expect(await handle({ type: "parts-waiting" }, ctx)).toBe(true);
+    // Locked, there are none to stop.
+    await t.wallet.lock();
+    expect(await handle({ type: "parts-waiting" }, ctx)).toBe(false);
+  });
+});
+
+describe("a payment in parts after a lock (1.6.0's release review, 321-parts-worker#0)", SLOW, () => {
+  it("says a part the pump sent, which Koios didn't answer, went with the rest cut once it lands after a lock, and counts it among those that didn't if it never shows", async () => {
+    for (const lands of [true, false]) {
+      const { t, tokens } = await walletA(20);
+      const s = services(t);
+      const ctx = context(t, s);
+      const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+      const all = summary.parts!;
+      expect(all).toHaveLength(3);
+      await s.transfer.submit("preprod", summary.txHash);
+      // The first lands; the pump sends the second, and Koios doesn't answer.
+      t.koios.confirmations = 1;
+      for (const p of all.slice(1)) t.koios.missing.add(p.txHash);
+      silentOn(t, new Set([all[1]!.txHash]));
+      await busy(t, 30_000);
+      await s.parts.pump("preprod");
+      expect(submittedIds(t)).toEqual(all.slice(0, 2).map((p) => p.txHash));
+      expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: all[1]!.txHash, maybeSent: true });
+      // The wallet locks before it settles: the third, waiting, goes with the lock, and never goes out.
+      await t.wallet.lock();
+      await t.wallet.unlock(PASSWORD);
+      let heard: PendingTx | null = null;
+      if (lands) {
+        t.koios.missing.delete(all[1]!.txHash);
+        heard = await homeAsks(ctx);
+        expect(heard).toMatchObject({ txHash: all[1]!.txHash, confirmations: 1 });
+        expect(banner(heard!)).not.toMatch(/confirmed/i);
+        expect(banner(heard!)).toContain("Private payment only partly sent");
+        expect(banner(heard!)).toContain("1 of 3 didn't go.");
+      } else {
+        // Home asks every minute; the watch lets it go unseen 20 minutes on, and says so once.
+        for (let k = 0; k < 22; k++) {
+          await busy(t, 60_000);
+          heard = (await homeAsks(ctx)) ?? heard;
+        }
+        expect(heard).toMatchObject({ txHash: all[1]!.txHash, dropped: "unseen" });
+        expect(banner(heard!)).toContain("Private payment only partly sent");
+        // The second, never seen, didn't go, nor did the third.
+        expect(banner(heard!)).toContain("2 of 3 didn't go.");
+      }
+      expect(submittedIds(t)).not.toContain(all[2]!.txHash);
+    }
+  });
+
+  it("says a first part written ahead before a lock, its later part waiting, went with the rest cut once it lands", async () => {
+    const { t, tokens } = await walletA(12);
+    const hang: { hash?: string } = {};
+    const s = services(t, { fetch: hangingOn(t, hang) });
+    const ctx = context(t, s);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    const all = summary.parts!;
+    expect(all).toHaveLength(2);
+    // Koios takes the first, and the wallet locks while it's asked: what was written ahead is all that's left.
+    hang.hash = all[0]!.txHash;
+    void s.transfer.submit("preprod", summary.txHash).catch(() => undefined);
+    await until(() => submittedIds(t).length === 1);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    hang.hash = undefined;
+    t.koios.confirmations = 1;
+    const heard = (await homeAsks(ctx))!;
+    expect(heard).toMatchObject({ txHash: all[0]!.txHash, confirmations: 1 });
+    expect(banner(heard)).not.toMatch(/confirmed/i);
+    expect(banner(heard)).toContain("Private payment only partly sent");
+    expect(banner(heard)).toContain("1 of 2 didn't go.");
+  });
+
+  it("keeps, through a lock, the name a part Koios didn't answer at Send was given as the rest were let go", async () => {
+    const t = await spread(40);
+    const s = services(t);
+    const ctx = context(t, s);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "600000000", tokens: [] }]);
+    const all = summary.parts!;
+    expect(all).toHaveLength(2);
+    silentOn(t, new Set([all[0]!.txHash]));
+    await expect(s.transfer.submit("preprod", summary.txHash)).rejects.toThrow(/^1 of 2 transactions went, but/);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    t.koios.confirmations = 1;
+    const heard = (await homeAsks(ctx))!;
+    expect(heard).toMatchObject({ txHash: all[0]!.txHash, confirmations: 1 });
+    expect(banner(heard)).not.toMatch(/confirmed/i);
+    expect(banner(heard)).toContain("Private payment only partly sent");
+    expect(banner(heard)).toContain("1 of 2 didn't go.");
+  });
+
+  it("names a funding's part Koios didn't answer, as its later parts are held, so a lock never makes it funded", async () => {
+    const { t, tokens } = await walletA(12);
+    const s = services(t);
+    const ctx = context(t, s);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    const hashes = summary.parts!.map((p) => p.txHash);
+    expect(hashes).toHaveLength(2);
+    silentOn(t, new Set([hashes[0]!]));
+    // Sent as a session's funding is (sessions.ts sendFunding): split, the first sent named by itself, the rest held.
+    const split = await splitParts(s.deps, "preprod", SESSION_TRANSFER, hashes, "session-out", "payment", 0);
+    expect(split.goNow).toBe(1);
+    const first = await send(s.deps, "preprod", hashes[0]!, SESSION_TRANSFER, "session-out", "payment", {
+      chain: { first: hashes[0]!, total: 2 },
+    });
+    expect(first).toMatchObject({ maybeSent: true });
+    await holdWaiting(s.deps, "preprod", SESSION_TRANSFER, split, "session-out", "payment", 0);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    t.koios.confirmations = 1;
+    const heard = (await homeAsks(ctx))!;
+    expect(banner(heard)).not.toMatch(/funded/i);
+    expect(banner(heard)).toContain("Payment into a private session only partly sent");
+    expect(banner(heard)).toContain("1 of 2 didn't go.");
+  });
+
+  it("names a session's funding's first part as it's written ahead, its later parts waiting, so a lock while Koios is asked never makes it funded", async () => {
+    const lovelace = await bundleLeast();
+    const t = testBalances({ owned: false });
+    await t.wallet.create(v12.phrase, PASSWORD);
+    // Bundles at exactly their least, one token of each asked for, and one UTxO of ADA: the parts after the first wait
+    // for its carry.
+    const bundles = Array.from({ length: 30 }, (_, i) => ({ ...bundle(i, ""), value: lovelace }));
+    t.koios.added.push(bigAda(), ...bundles);
+    const tokens = bundles.map((b) => b.asset_list![0]!).map((a) => ({ policyId: a.policy_id, assetName: a.asset_name, quantity: a.quantity }));
+    const hang: { hash?: string } = {};
+    const s = services(t, { fetch: hangingOn(t, hang) });
+    const sessions = new SessionService({
+      ...s.deps,
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      alarm: { start: async () => undefined },
+    });
+    const out = await sessions.siteOutBuild("preprod", "https://app.example.com", "2000000", tokens);
+    const all = out.parts!;
+    expect(all.length).toBeGreaterThanOrEqual(2);
+    expect(all.slice(1).every((p) => p.waits)).toBe(true);
+    // Koios takes the first, and the wallet locks while it's asked (sessions.ts sendFunding): what was written ahead is
+    // all that's left, and the parts that waited go with the lock.
+    hang.hash = all[0]!.txHash;
+    void sessions.siteOutSubmit("preprod", out.txHash, "https://app.example.com").catch(() => undefined);
+    await until(() => submittedIds(t).length === 1);
+    await t.wallet.lock();
+    await t.wallet.unlock(PASSWORD);
+    hang.hash = undefined;
+    t.koios.confirmations = 1;
+    const heard = (await homeAsks(context(t, s)))!;
+    expect(heard).toMatchObject({ txHash: all[0]!.txHash, confirmations: 1 });
+    expect(banner(heard)).not.toMatch(/funded/i);
+    expect(banner(heard)).toContain("Payment into a private session only partly sent");
+    expect(banner(heard)).toContain(`${all.length - 1} of ${all.length} didn't go.`);
+  });
+});
+
+describe("Send pressed again on a payment in parts (1.6.0's release review, 321-parts-worker#1, x-scenarios-sessions#2)", SLOW, () => {
+  it("sends only the first again once the rest wait, and says how many went, never that the rest didn't", async () => {
+    for (const answers of [false, true]) {
+      const { t, tokens } = await walletA(12);
+      const s = services(t);
+      const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+      const all = summary.parts!;
+      expect(all).toHaveLength(2);
+      // Koios takes the first and doesn't answer: it may have gone, and the second waits for it all the same.
+      const silent = new Set([all[0]!.txHash]);
+      silentOn(t, silent);
+      expect(await s.transfer.submit("preprod", summary.txHash)).toMatchObject({ maybeSent: true, parts: { sent: 1, total: 2 } });
+      // The page missed that answer, and Send is pressed again: Koios answers this time, or still doesn't.
+      if (answers) silent.clear();
+      const again = await s.transfer.submit("preprod", summary.txHash);
+      expect(again).toMatchObject({ txHash: all[0]!.txHash, chain: { first: all[0]!.txHash, total: 2 }, parts: { sent: 1, total: 2 } });
+      expect(again.maybeSent ?? false).toBe(!answers);
+      // The watch still names the payment by its first, as Home's banner names it.
+      expect(await t.session.get(pendingKey("preprod"))).toMatchObject({ txHash: all[0]!.txHash, chain: { first: all[0]!.txHash, total: 2 } });
+      // The first lands: the second goes, once.
+      silent.clear();
+      t.koios.confirmations = 1;
+      await busy(t, 3 * 60_000);
+      await s.parts.pump("preprod");
+      expect(submittedIds(t).filter((h) => h === all[1]!.txHash)).toHaveLength(1);
+      expect(await s.parts.of("preprod", all[0]!.txHash)).toBeUndefined();
+    }
+  });
+});
+
+describe("a payment in parts checked whole at Send (1.6.0's release review, 321-parts-worker#3)", SLOW, () => {
+  it("refuses, sending nothing, a review whose later part spends what another of the wallet's transactions spent since", async () => {
+    for (const shape of ["each its own way", "chained"] as const) {
+      const made = shape === "chained" ? await walletA(12) : { t: await spread(40), tokens: [] };
+      const { t } = made;
+      const s = services(t);
+      const summary = await s.transfer.build("preprod", [
+        { to: THEIRS, lovelace: shape === "chained" ? "0" : "600000000", tokens: made.tokens },
+      ]);
+      const all = summary.parts!;
+      expect(all).toHaveLength(2);
+      // Another page's Send spent one of the second part's own UTxOs since this review.
+      const [own] = await ownInputs(t, 1, all);
+      const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {};
+      await t.session.set(SESSION_SPENT, { ...spent, [own!]: t.clock.now });
+      await expect(s.transfer.submit("preprod", summary.txHash)).rejects.toThrow(/^Another of your transactions spent part of it since this review\./);
+      expect(t.koios.submitted).toEqual([]);
+      expect((await sending(t)).inputs.size).toBe(0);
+      expect(await s.parts.of("preprod", summary.txHash)).toBeUndefined();
+    }
+  });
+
+  it("refuses, sending nothing, a review whose later part spends what a chain being sent holds", async () => {
+    const { t, tokens } = await walletA(12);
+    const s = services(t);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    const all = summary.parts!;
+    const [own] = await ownInputs(t, 1, all);
+    // A session's return started since the review: its chain ends merged into a UTxO the second part spends.
+    const key = SESSION_RESERVED_PREFIX + "preprod";
+    await t.session.set(key, { ...((await t.session.get<Record<string, unknown>>(key)) ?? {}), "return.test": { inputs: [own!], collateral: [] } });
+    await expect(s.transfer.submit("preprod", summary.txHash)).rejects.toThrow(/a chain through Lovejoin, sent since you reviewed it, spends too/);
+    expect(t.koios.submitted).toEqual([]);
+    // Only the chain's own reservation is left: nothing of the payment's.
+    expect(Object.keys((await t.session.get<Record<string, unknown>>(key)) ?? {})).toEqual(["return.test"]);
+    expect(await s.parts.of("preprod", summary.txHash)).toBeUndefined();
   });
 });

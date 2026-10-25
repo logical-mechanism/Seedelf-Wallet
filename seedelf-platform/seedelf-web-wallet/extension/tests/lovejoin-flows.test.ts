@@ -7,18 +7,21 @@
 // (2 ₳ and LJTEST a box) standing in for any token pool.
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { describe as describeTxs } from "../src/background/activity";
-import { txInputs } from "../src/background/cbor";
+import { CONTRACT_V1 } from "../src/background/balances";
+import { bodyOutpoints, txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosTxInfo, KoiosTxOut, KoiosUtxo } from "../src/background/koios";
 import { CLASSIC, LovejoinService, STUCK_WAIT_MS, type PoolRef } from "../src/background/lovejoin";
 import { LovejoinLaunchService, SESSION_LOVEJOIN_LAUNCH } from "../src/background/lovejoin-launch";
 import { HOLDER, LOVEJOIN_NFT, type FoundPool } from "../src/background/lovejoin-pools";
+import { PendingService } from "../src/background/pending";
 import { SessionService } from "../src/background/sessions";
-import { Minswap } from "../src/background/minswap";
+import { builtOutputs, Minswap } from "../src/background/minswap";
 import { SESSION_BALANCES_PREFIX, SESSION_UNLOCKED_AT } from "../src/background/wallet";
+import { t as tr } from "../src/i18n";
 import tokenList from "../src/tokens/list.json";
 import { NETWORKS } from "../src/networks";
 import { bech32 } from "./fixtures/bech32";
@@ -223,6 +226,29 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(s.mixes!.at(-1)).toMatchObject({ bootstrap: true, shares: [{ pool: TOKEN, boxes: 3 }] });
   });
 
+  it("is named a Bootstrap in Home's watch, sent and once its deposit is in, where a mix isn't (1.6.0's release review, 318-worker#0)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    // Home's watch, as sw.ts wires it.
+    const pending = new PendingService({ ...t.deps, depositLanded: (n, h) => lj.landedDeposit(n, h) });
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL);
+    const summary = await lj.publicBuild("preprod", 2, { bootstrap: true });
+    // What Send hands Home's banner (Lovejoin.tsx onPending): boxes held in the pool, never on their way back.
+    expect(await lj.publicSubmit("preprod", summary.txHash)).toMatchObject({ kind: "lovejoin-mix", bootstrap: true });
+    t.koios.confirmations = 1;
+    await lj.pumpPublic("preprod");
+    // And what Home's watch answers once the deposit is in.
+    expect(await pending.pending("preprod")).toMatchObject({ kind: "lovejoin-mix", bootstrap: true, confirmations: 1 });
+
+    // A mix from the account is no Bootstrap: its boxes come back by themselves.
+    const u = await wallet();
+    const mixing = pooled(u);
+    u.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL);
+    const mix = await mixing.publicBuild("preprod", 1);
+    expect(mix.bootstrap).toBeUndefined();
+    expect((await mixing.publicSubmit("preprod", mix.txHash)).bootstrap).toBeUndefined();
+  });
+
   it("goes through a one-time account from the private balance, its boxes held as the public account's are", async () => {
     const t = await wallet();
     const lj = pooled(t);
@@ -249,13 +275,21 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     const book = (await t.store.get<{ sessions: Array<{ index: number; mix?: { bootstrap?: boolean; seed?: boolean } }> }>("sessions.preprod"))!;
     expect(book.sessions.find((s) => s.index === index)!.mix).toMatchObject({ boxes: 1, bootstrap: true });
 
-    // Its funding lands, and the session runs (34d's review 6): its chain is recorded a Bootstrap's, held as the public
-    // account's is, never a seed's.
-    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    // Its funding lands as it paid the account, with no 5 ₳ (1.6.0's release review, x-compat#0), and the session runs
+    // (34d's review 6): its chain is recorded a Bootstrap's, held as the public account's is, never a seed's.
+    const paid = landed(t, out.txHash);
+    t.koios.addedToAccounts.push(...paid);
     t.koios.confirmations = 1;
     const before = t.koios.submitted.length;
     await sessions.advance("preprod", index, true);
-    const deposit = t.koios.submitted.slice(before).find((tx) => txInputs(tx).includes(`${out.txHash}#0`));
+    // The deposit: what spends the funding and pays a box at mix_box, never a return straight back that spends it.
+    const deposit = t.koios.submitted
+      .slice(before)
+      .find(
+        (tx) =>
+          txInputs(tx).includes(`${out.txHash}#${paid[0]!.tx_index}`) &&
+          builtOutputs(tx).some((o) => o.address.slice(2, 58) === NETWORKS.preprod.lovejoin!.mixBox),
+      );
     expect(deposit).toBeDefined();
     const s = await sealed(t);
     const chain = s.chains.at(-1)!;
@@ -294,26 +328,170 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect((await sealed(t)).chains.find((c) => c.bootstrap)).toBeUndefined();
   });
 
-  it("caps a Bootstrap from the private balance at what its funding's reserve pays the deposit for (34d's review 3)", async () => {
+  // 1.6.0's release review, 318-rust#0 (323-rust#0, x-scenarios-lj#0): since 62162483 a private Bootstrap puts up no
+  // collateral, so its return sweeps the deposit's change alone into the private balance, and the 1.5 ₳ beside its
+  // boxes left too little for that sweep's Seedelf output. Every one was funded, then came straight back with no box
+  // in and a second fee. Its funding lands here exactly as it paid the account, never a 5 ₳ a fixture supposes.
+  it("funds a private Bootstrap with its way back, deposits, then sweeps the change back with nothing put up (1.6.0's release review, 318-rust#0)", async () => {
+    const reserve = BigInt(loadTestWasm().lovejoinBootstrapReserve());
+    const cases: Array<{ boxes: number | "most"; pool?: string }> = [{ boxes: 1 }, { boxes: "most" }, { boxes: 2, pool: TOKEN }];
+    for (const { boxes: asked, pool } of cases) {
+      const t = await wallet();
+      const lj = pooled(t);
+      const boxes = asked === "most" ? await lj.privateBootstrapMost("preprod") : asked;
+      // The private balance holds enough for the boxes, and a token pool's token, two boxes' worth.
+      t.koios.added.push({
+        ...ownedUtxos[0]!,
+        tx_hash: "d1".repeat(32),
+        tx_index: 0,
+        value: (BigInt(boxes) * 10_000_000n + 10_000_000n).toString(),
+        inline_datum: { bytes: await datum(t, true), value: {} },
+        asset_list: pool ? [{ ...ljtest(2n * Q), decimals: 0, fingerprint: "asset1ljtest" } as never] : [],
+      } as KoiosUtxo);
+      const sessions = runner(t, lj);
+      const out = await sessions.mixOutBuild("preprod", boxes, { bootstrap: true, ...(pool ? { pool } : {}) });
+      const { index } = await sessions.mixOutSubmit("preprod", out.txHash);
+      // Its funding lands as it paid the account, and the session runs.
+      const paid = landed(t, out.txHash, pool ? ljtest(BigInt(boxes) * Q) : undefined);
+      t.koios.addedToAccounts.push(...paid);
+      t.koios.confirmations = 1;
+      const before = t.koios.submitted.length;
+      await sessions.advance("preprod", index, true);
+      const book = (await t.store.get<{ sessions: Array<{ index: number; txs: Array<{ kind: string }>; mix?: Record<string, unknown> }> }>("sessions.preprod"))!;
+      const record = book.sessions.find((s) => s.index === index)!;
+      // Its chain, the deposit then the return, never back directly.
+      const what = `${boxes} boxes of the ${pool ? "token" : "classic"} pool, ${String(record.mix?.skipped ?? "nothing skipped")}`;
+      expect(record.txs.map((x) => x.kind), what).toEqual(["out", "deposit", "back"]);
+      expect(record.mix?.skipped).toBeUndefined();
+      // One payment: the boxes and the deposit's reserve, as 1.5.0's funding has them, and the way back's beside them.
+      // No 5 ₳: a deposit alone runs no script (the owner, 2026-10-23).
+      const funding = await lj.funding("preprod", boxes, false, 0, pool);
+      expect(out.payments.map((p) => p.lovelace)).toEqual([(BigInt(funding.lovelace) + reserve).toString()]);
+      expect(out.mix.lovelace).toBe(funding.lovelace);
+      expect(out.bootstrapReserve).toBe(reserve.toString());
+      expect(out.collateralReserve).toBeUndefined();
+      expect(paid).toHaveLength(1);
+      // Marked as funded with no collateral: its return never takes one (323-worker#4).
+      expect(record.mix).toMatchObject({ boxes, bootstrap: true, noCollateral: true });
+      // The deposit spends the funding and pays every box into the pool.
+      const [deposit, back] = t.koios.submitted.slice(before) as [Uint8Array, Uint8Array];
+      expect(txInputs(deposit)).toEqual([`${out.txHash}#${paid[0]!.tx_index}`]);
+      const into = pool ? VIEW.mixBoxHash : NETWORKS.preprod.lovejoin!.mixBox;
+      expect(builtOutputs(deposit).filter((o) => o.address.slice(2, 58) === into)).toHaveLength(boxes);
+      // The return sweeps the deposit's change alone into the wallet contract: nothing put up, and no script.
+      const change = builtOutputs(deposit).findIndex((o) => o.address.slice(2, 58) === sessionSwap.keyHash);
+      expect(txInputs(back)).toEqual([`${txIdOf(deposit)}#${change}`]);
+      expect(bodyOutpoints(back, 13) ?? []).toEqual([]);
+      const swept = builtOutputs(back);
+      expect(swept.length).toBeGreaterThanOrEqual(1);
+      for (const o of swept) expect(o.address.slice(2, 58)).toBe(CONTRACT_V1.walletContractHash);
+      expect(swept.some((o) => o.tokens)).toBe(false);
+    }
+  });
+
+  /** A private Bootstrap of `boxes` classic boxes, built and sent, its session runnable; nothing landed yet. */
+  const bootstrapSent = async (boxes: number) => {
     const t = await wallet();
     const lj = pooled(t);
     const sessions = runner(t, lj);
-    // Measured by building the deposit: fewer than one deposit's room, and fewer in a token pool, whose boxes are longer.
+    const out = await sessions.mixOutBuild("preprod", boxes, { bootstrap: true });
+    const { index } = await sessions.mixOutSubmit("preprod", out.txHash);
+    t.koios.confirmations = 1;
+    type Book = { sessions: Array<{ index: number; txs: Array<{ kind: string }>; mix?: Record<string, unknown> }> };
+    const record = async () => (await t.store.get<Book>("sessions.preprod"))!.sessions.find((s) => s.index === index)!;
+    // Its record as a build before 1.6.0's release review kept it: no mark of a funding with no collateral.
+    const unmarked = async () => {
+      const book = (await t.store.get<Book>("sessions.preprod"))!;
+      delete book.sessions.find((s) => s.index === index)!.mix!.noCollateral;
+      await t.store.set("sessions.preprod", book);
+    };
+    return { t, lj, sessions, out, index, record, unmarked, chain: vi.spyOn(lj, "chain") };
+  };
+
+  // 1.6.0's release review, 323-worker#4: the return took any 5 ₳ of ADA alone at the account for its collateral, a
+  // Bootstrap's too, whose own funding was that in a pool whose boxes made it so: set apart from the coins, it paid for
+  // no box, and the session came back without going in. Marked as funded with none, it never puts one up.
+  it("puts up no collateral for a Bootstrap funded with none, whatever 5 ₳ of ADA alone its account holds (1.6.0's release review, 323-worker#4)", async () => {
+    const { t, sessions, out, index, record, chain } = await bootstrapSent(1);
+    // Its funding lands, and someone pays its account 5 ₳ of ADA alone.
+    const stranger = atSession("5e".repeat(32), 0, "5000000");
+    t.koios.addedToAccounts.push(...landed(t, out.txHash), stranger);
+    const before = t.koios.submitted.length;
+    await sessions.advance("preprod", index, true);
+    expect(chain).toHaveBeenCalled();
+    expect(chain.mock.calls.map((c) => c[3])).toEqual(chain.mock.calls.map(() => undefined));
+    expect((await record()).txs.map((x) => x.kind)).toEqual(["out", "deposit", "back"]);
+    const sent = t.koios.submitted.slice(before);
+    for (const tx of sent) expect(bodyOutpoints(tx, 13) ?? []).toEqual([]);
+    // The 5 ₳ is a coin like any other there, and comes back through the chain.
+    expect(sent.flatMap((tx) => txInputs(tx))).toContain(`${stranger.tx_hash}#0`);
+  });
+
+  // A Bootstrap funded before 62162483 paid 5 ₳ beside its boxes and the deposit's reserve: its record has no mark, and
+  // its return still puts that 5 ₳ up and brings it back with the rest, its box in (1.6.0's release review).
+  it("still puts up the 5 ₳ a Bootstrap funded before 62162483 paid, and goes in (1.6.0's release review)", async () => {
+    const { t, sessions, out, index, record, unmarked, chain } = await bootstrapSent(1);
+    await unmarked();
+    t.koios.addedToAccounts.push(atSession(out.txHash, 0, out.mix.lovelace), atSession(out.txHash, 1, "5000000"));
+    const before = t.koios.submitted.length;
+    await sessions.advance("preprod", index, true);
+    expect(chain.mock.calls[0]![3]).toMatchObject({ tx_hash: out.txHash, tx_index: 1, value: "5000000" });
+    expect((await record()).txs.map((x) => x.kind)).toEqual(["out", "deposit", "back"]);
+    expect((await record()).mix?.skipped).toBeUndefined();
+    const [deposit, back] = t.koios.submitted.slice(before) as [Uint8Array, Uint8Array];
+    expect(builtOutputs(deposit).filter((o) => o.address.slice(2, 58) === NETWORKS.preprod.lovejoin!.mixBox)).toHaveLength(1);
+    // The 5 ₳ comes back in the return, with the deposit's change.
+    expect(txInputs(back)).toContain(`${out.txHash}#1`);
+  });
+
+  // A Bootstrap funded between 62162483 and 1.6.0's release review paid neither a collateral nor its way back's reserve:
+  // its deposit's change can't pay its sweep back. It comes back as well as it can: one box fewer goes in, that box's
+  // ADA paying the way back, and a one-box Bootstrap comes back directly, saying its ADA pays for no box.
+  it("brings a Bootstrap funded with neither a collateral nor its way back back as well as it can (1.6.0's release review)", async () => {
+    const two = await bootstrapSent(2);
+    await two.unmarked();
+    two.t.koios.addedToAccounts.push(atSession(two.out.txHash, 0, two.out.mix.lovelace));
+    let before = two.t.koios.submitted.length;
+    await two.sessions.advance("preprod", two.index, true);
+    expect((await two.record()).txs.map((x) => x.kind)).toEqual(["out", "deposit", "back"]);
+    expect((await two.record()).mix?.skipped).toBeUndefined();
+    const [deposit] = two.t.koios.submitted.slice(before) as [Uint8Array];
+    expect(builtOutputs(deposit).filter((o) => o.address.slice(2, 58) === NETWORKS.preprod.lovejoin!.mixBox)).toHaveLength(1);
+
+    const one = await bootstrapSent(1);
+    await one.unmarked();
+    one.t.koios.addedToAccounts.push(atSession(one.out.txHash, 0, one.out.mix.lovelace));
+    before = one.t.koios.submitted.length;
+    await one.sessions.advance("preprod", one.index, true);
+    expect((await one.record()).txs.map((x) => x.kind)).toEqual(["out", "back"]);
+    expect((await one.record()).mix?.skipped).toBe(tr("sess.skip.warn.mixCannotPay"));
+    // Nothing stays: the whole funding comes back, less the return's fee.
+    const [back] = one.t.koios.submitted.slice(before) as [Uint8Array];
+    expect(txInputs(back)).toEqual([`${one.out.txHash}#0`]);
+  });
+
+  it("caps a Bootstrap from the private balance at what its funding pays the deposit and its way back for (34d's review 3; 1.6.0's release review, 318-rust#0)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    const sessions = runner(t, lj);
+    // Measured by building the deposit and its sweep back: under today's parameters the deposit's reserve and the way
+    // back's pay for one deposit's most, in the classic pool and in a token pool, whose boxes are longer.
+    expect(await lj.privateBootstrapMost("preprod")).toBe(96);
+    expect(await lj.privateBootstrapMost("preprod", TOKEN)).toBe(64);
+    // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit's change leaves:
+    // fewer go, as many as the sweep back can be built for.
+    t.koios.params = { coins_per_utxo_size: "6465", epoch_no: 291 };
     const classic = await lj.privateBootstrapMost("preprod");
-    const token = await lj.privateBootstrapMost("preprod", TOKEN);
-    expect(classic).toBeGreaterThanOrEqual(40);
+    expect(classic).toBeGreaterThanOrEqual(1);
     expect(classic).toBeLessThan(96);
-    expect(token).toBeLessThan(classic);
     // Refused before anything is built: never a session funded, then come back without a box, its fees spent.
     const asked = t.collateral.asked.length;
     await expect(sessions.mixOutBuild("preprod", classic + 1, { bootstrap: true })).rejects.toThrow(`Bootstrap 1 to ${classic} boxes at a time.`);
-    await expect(sessions.mixOutBuild("preprod", token + 1, { pool: TOKEN, bootstrap: true })).rejects.toThrow(
-      `Bootstrap 1 to ${token} boxes at a time.`,
-    );
     expect(t.collateral.asked.length).toBe(asked);
     expect(t.koios.submitted).toHaveLength(0);
-    // From the public account, whose deposit draws on whatever the account holds, one deposit's room stays the cap.
-    t.koios.addedToAccounts.push(atAccount("e1", "900000000"), atAccount("e5", "5000000"), ...POOL);
+    // From the public account, whose deposit draws on whatever the account holds and has no sweep back, one deposit's
+    // room stays the cap.
+    t.koios.addedToAccounts.push(atAccount("e1", "990000000"), atAccount("e5", "5000000"), ...POOL);
     const summary = await lj.publicBuild("preprod", classic + 1, { bootstrap: true });
     expect(summary).toMatchObject({ bootstrap: true, boxes: classic + 1 });
   });
@@ -328,6 +506,9 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
       await lj.publicSubmit("preprod", summary.txHash);
       t.koios.confirmations = 1;
       await lj.pumpPublic("preprod");
+      // Home's watch saw its deposit on chain (pending.ts depositLanded): no read lists a box there before it's moved,
+      // and only a deposit known to be in has boxes for a mix to move (1.6.0's release review, 316#0).
+      await lj.landedDeposit("preprod", summary.entry);
       if (old) {
         // 1.5.0's record: the chain a seed's, and no list of mixes (its entries are made from the chains).
         const record = (await t.store.get<Sealed & Record<string, unknown>>("lovejoin.preprod"))!;
@@ -365,6 +546,19 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect(bootstrap.spent).not.toContain(bootstrap.box);
   });
 });
+
+/**
+ * What funding `id` (submitted) paid session 0's account, as Koios lists it there once it lands: read from the
+ * transaction, never what a test supposes it pays (1.6.0's release review, x-compat#0: a 5 ₳ the fixtures landed hid
+ * a Bootstrap's funding that paid none). `token`: what the output carrying a token pool's token holds of it.
+ */
+function landed(t: T, id: string, token?: ReturnType<typeof ljtest>): KoiosUtxo[] {
+  const bytes = t.koios.submitted.find((b) => txIdOf(b) === id);
+  if (!bytes) throw new Error(`not submitted: ${id}`);
+  return builtOutputs(bytes).flatMap((o, i) =>
+    o.address.slice(2, 58) === sessionSwap.keyHash ? [atSession(id, i, o.lovelace.toString(), o.tokens && token ? [token] : [])] : [],
+  );
+}
 
 /** A UTxO at session 0's account, as Koios lists it. */
 function atSession(tx_hash: string, tx_index: number, value: string, assets: Array<ReturnType<typeof ljtest>> = []): KoiosUtxo {
@@ -463,6 +657,29 @@ describe("a mix from the private balance into a token pool (chunk 34's 34d)", SL
     expect(funding).toMatchObject({ pool: TOKEN, token: { policyId: VIEW.token.policyId, quantity: Q.toString() } });
     // The private balance holds no LJTEST: said as a shortfall, before anything is sent.
     await expect(sessions.mixOutBuild("preprod", 1, { pool: TOKEN })).rejects.toThrow();
+  });
+
+  it("reads the parameters once in its review, as a swap's does, whichever pool and whether a Bootstrap (1.6.0's release review, 318-worker#3)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.added.push({
+      ...ownedUtxos[0]!,
+      tx_hash: "d1".repeat(32),
+      tx_index: 0,
+      value: "60000000",
+      inline_datum: { bytes: await datum(t, true), value: {} },
+      asset_list: [{ ...ljtest(2n * Q), decimals: 0, fingerprint: "asset1ljtest" } as never],
+    } as KoiosUtxo);
+    t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
+    const sessions = runner(t, lj);
+    const read = () => t.koios.calls.filter((c) => c.path === "epoch_params").length;
+    // Whether the token pool takes a box, what its collateral's mix adds, and the funding itself: one read for all three.
+    // They could straddle an epoch's end, the least checked under one epoch's parameters and built under another's.
+    for (const asked of [{ pool: TOKEN }, {}, { bootstrap: true }, { pool: TOKEN, bootstrap: true }]) {
+      const before = read();
+      await sessions.mixOutBuild("preprod", 1, asked);
+      expect(read() - before, JSON.stringify(asked)).toBe(1);
+    }
   });
 });
 
@@ -628,7 +845,10 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const sent = t.koios.submitted.at(-1)!;
     expect(txIdOf(sent)).toBe(summary.txHash);
     expect(Buffer.from(sent).toString("hex")).toContain(HOLDER);
-    expect((await sealed(t)).launches).toEqual([{ id: summary.pool.id, txHash: summary.txHash, from: "public", account: 0, at: t.clock.now }]);
+    // With its values, so a start of the same ones before a look finds it says so (1.6.0's release review, 318-worker#1).
+    expect((await sealed(t)).launches).toEqual([
+      { id: summary.pool.id, txHash: summary.txHash, from: "public", account: 0, at: t.clock.now, box: { lovelace: "4500000", token: { ...min, quantity: "1000" } } },
+    ]);
     // Kept for Send no more.
     expect(await t.wallet.withKeys(() => t.session.get(SESSION_LOVEJOIN_LAUNCH))).toBeUndefined();
   });
@@ -714,6 +934,65 @@ describe("a pool's start (chunk 34's 34d)", SLOW, () => {
     const pending = await launch.submit("preprod", summary.txHash);
     expect(pending.txHash).toBe(bare.txHash);
     expect((await sealed(t)).launches).toMatchObject([{ id: "ef".repeat(28), txHash: bare.txHash }]);
+  });
+
+  it("says on the review that the wallet started a pool of these values no look has found yet, and refuses nothing (1.6.0's release review, 318-worker#1)", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e2", "40000000"), atAccount("e5", "5000000"));
+    const launch = launching(t);
+    const first = await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" });
+    expect(first.startedBefore).toBeUndefined();
+    await launch.submit("preprod", first.txHash);
+    const sentAt = t.clock.now;
+    // Five minutes on, no look has found it: a look takes a launch only once it's settled, about ten minutes after its
+    // block. Started again, one of the two lands after the other, a copy no wallet shows, its ADA locked for good: the
+    // chain takes it, so the review says so, and nothing is refused.
+    t.clock.now += 5 * 60_000;
+    const again = await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" });
+    expect(again.startedBefore).toEqual({ txHash: first.txHash, at: sentAt });
+    // Other values are another pool: a box's ADA, or its token's quantity.
+    expect((await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "5000000" })).startedBefore).toBeUndefined();
+    expect((await launch.build("preprod", { from: "public", token: min, quantity: "2000", boxLovelace: "4500000" })).startedBefore).toBeUndefined();
+    expect((await launch.build("preprod", { from: "public", boxLovelace: "4500000" })).startedBefore).toBeUndefined();
+    // A day on, a start no look found never will be (a copy that lost the race, a rollback): nothing to say of it.
+    t.clock.now = sentAt + 24 * HOUR;
+    await t.wallet.unlock(PASSWORD);
+    expect((await launch.build("preprod", { from: "public", token: min, quantity: "1000", boxLovelace: "4500000" })).startedBefore).toBeUndefined();
+  });
+
+  it("reads the parameters once in its review, from either side (1.6.0's release review, 318-worker#3)", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
+    t.koios.added.push({
+      ...ownedUtxos[0]!,
+      tx_hash: "d2".repeat(32),
+      tx_index: 0,
+      value: "60000000",
+      inline_datum: { bytes: await datum(t, true), value: {} },
+      asset_list: [],
+    } as KoiosUtxo);
+    const launch = launching(t);
+    const read = () => t.koios.calls.filter((c) => c.path === "epoch_params").length;
+    // A box's least and most, and the start built from the private balance or the public account, under one epoch's.
+    for (const from of ["private", "public"] as const) {
+      const before = read();
+      await launch.build("preprod", { from, token: min, quantity: "1000", boxLovelace: "4500000" });
+      expect(read() - before, from).toBe(1);
+    }
+  });
+
+  it("says a start Send sent in its review's place went already, never to review it again (1.6.0's release review, 318-worker#1)", async () => {
+    const t = await wallet();
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"));
+    const launch = launching(t);
+    const summary = await launch.build("preprod", { from: "public", boxLovelace: "25000000" });
+    const [withCert, bare] = launch.builds.map((b) => b.built) as [LaunchBuilt, LaunchBuilt];
+    registered(t, withCert.mixLogicStake);
+    expect((await launch.submit("preprod", summary.txHash)).txHash).toBe(bare.txHash);
+    // Send pressed again on the review, from a page that missed the answer: its kept copy is gone, and the hash asked
+    // for is the review's. A review built again would make a copy of the pool sent.
+    await expect(launch.submit("preprod", summary.txHash)).rejects.toThrow(tr("worker.spend.sentAlready"));
+    expect(t.koios.submitted).toHaveLength(1);
   });
 });
 

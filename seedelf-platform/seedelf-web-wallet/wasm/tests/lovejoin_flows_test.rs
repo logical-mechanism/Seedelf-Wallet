@@ -436,6 +436,138 @@ fn witnesses(tx_cbor: &str) -> usize {
     tx.vkey_witnesses().len()
 }
 
+/// What a transaction reads, its reference inputs, each as `<transaction>#<index>`.
+fn reads(tx_cbor: &str) -> Vec<String> {
+    let bytes = hex::decode(tx_cbor).unwrap();
+    MultiEraTx::decode(&bytes)
+        .unwrap()
+        .reference_inputs()
+        .iter()
+        .map(|i| format!("{}#{}", hex::encode(i.hash()), i.index()))
+        .collect()
+}
+
+/// Every deposit into a token pool reads the pool's reference UTxO (1.6.0's
+/// release review, 317-wallet#0): a mix session's, a private Bootstrap's and
+/// the public account's. A pool is verified offline, so one a list names may
+/// not be on chain, and boxes paid into it were locked for good; the ledger
+/// refuses such a deposit now. The classic pool's deposits read nothing, as
+/// 1.5.0's did.
+#[test]
+fn every_deposit_into_a_token_pool_reads_its_reference_utxo() {
+    let reference = vec![format!("{}#0", "7f".repeat(32))];
+    let sk = Scalar::from(8_080_808u64);
+    let in_session = |utxos: Vec<UtxoResponse>,
+                      collateral: Option<OutRef>,
+                      draws: Vec<UtxoResponse>,
+                      depth: u32,
+                      pool: Option<&PoolRef>| {
+        wasm::chain_in(
+            &accounts(),
+            sk,
+            ChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos,
+                collateral,
+                pool: draws,
+                depth,
+                boxes: Some(1),
+                merge: Vec::new(),
+                again: false,
+                own: vec![hex::encode([0x10; 32])],
+                collateral_pool: None,
+                collateral_boxes: vec![],
+                collateral_reserve: false,
+            },
+            pool,
+        )
+        .unwrap()
+    };
+    // A mix session: its deposit reads the pool's reference UTxO, as its mix does.
+    let mixed = in_session(
+        vec![
+            at_session(0x10, 0, 6_000_000, vec![ljtest(Q)]),
+            at_session(0x11, 0, 5_000_000, vec![]),
+        ],
+        Some(OutRef {
+            tx_hash: hex::encode([0x11; 32]),
+            tx_index: 0,
+        }),
+        others(4),
+        1,
+        Some(&pool_ref()),
+    );
+    let kinds: Vec<&str> = mixed.txs.iter().map(|t| t.kind.as_str()).collect();
+    assert_eq!(kinds, ["deposit", "mix", "back"]);
+    assert_eq!(reads(&mixed.txs[0].tx_cbor), reference);
+    assert!(reads(&mixed.txs[1].tx_cbor).contains(&reference[0]));
+    // A private Bootstrap: its session's one UTxO, no collateral, nothing drawn.
+    let funded = |pool: Option<&PoolRef>| {
+        let funding = FundingRequest {
+            network: "preprod".into(),
+            boxes: 1,
+            depth: 0,
+            again: false,
+        };
+        wasm::funding_in(funding, pool)
+            .unwrap()
+            .lovelace
+            .parse::<u64>()
+            .unwrap()
+            + lovejoin::BOOTSTRAP_BACK_RESERVE
+    };
+    let bootstrap = in_session(
+        vec![at_session(
+            0x10,
+            0,
+            funded(Some(&pool_ref())),
+            vec![ljtest(Q)],
+        )],
+        None,
+        Vec::new(),
+        0,
+        Some(&pool_ref()),
+    );
+    assert_eq!(bootstrap.txs[0].kind, "deposit");
+    assert_eq!(reads(&bootstrap.txs[0].tx_cbor), reference);
+    // The classic pool's reads nothing.
+    let classic = in_session(
+        vec![at_session(0x10, 0, funded(None), vec![])],
+        None,
+        Vec::new(),
+        0,
+        None,
+    );
+    assert_eq!(classic.txs[0].kind, "deposit");
+    assert!(reads(&classic.txs[0].tx_cbor).is_empty());
+    // The public account's, with a mix and without.
+    let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();
+    for depth in [1, 0] {
+        let chain = wasm::chain_from_account_in(
+            &account,
+            sk,
+            AccountChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                utxos: vec![
+                    public(0x60, Role::Receive, 1, 3_000_000, vec![ljtest(Q)]),
+                    public(0x61, Role::Change, 0, 20_000_000, vec![]),
+                ],
+                collateral: (depth > 0).then(|| public(0x6c, Role::Receive, 0, 5_000_000, vec![])),
+                pool: others(2),
+                depth,
+                boxes: 1,
+            },
+            Some(&pool_ref()),
+        )
+        .unwrap();
+        assert_eq!(chain.txs[0].kind, "deposit");
+        assert_eq!(reads(&chain.txs[0].tx_cbor), reference, "depth {depth}");
+    }
+}
+
 #[test]
 fn the_public_account_mixes_into_a_token_pool_with_its_token() {
     let account = CardanoAccount::from_phrase(PHRASE, 0).unwrap();

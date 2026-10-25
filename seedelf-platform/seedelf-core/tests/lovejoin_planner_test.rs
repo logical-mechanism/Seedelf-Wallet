@@ -244,8 +244,8 @@ fn the_classic_pool_plans_three_wide_exactly_as_before() {
     for depth in 0..=3 {
         for boxes in [1, 2, 3, 10, 40] {
             assert_eq!(
-                lovejoin::funding_for_in(boxes, &classic, depth, 3),
-                lovejoin::funding_for(boxes, depth, classic.denom)
+                lovejoin::funding_for_in(boxes, &classic, depth, 3).unwrap(),
+                lovejoin::funding_for(boxes, depth, classic.denom).unwrap()
             );
             if depth > 0 {
                 assert_eq!(
@@ -297,15 +297,15 @@ fn each_pool_plans_on_its_own_mix() {
     // A box at depth 2: its own ADA and four mixes three wide, five four wide.
     let token = lj_pool_by_reference();
     assert_eq!(
-        lovejoin::per_box_in(&token, 2, 3),
+        lovejoin::per_box_in(&token, 2, 3).unwrap(),
         token.denom + 4 * lovejoin::MIX_FEE_ESTIMATE
     );
     assert_eq!(
-        lovejoin::per_box_in(&token, 2, 4),
+        lovejoin::per_box_in(&token, 2, 4).unwrap(),
         token.denom + 5 * lovejoin::MIX_FEE_ESTIMATE_FOUR
     );
     assert_eq!(
-        lovejoin::funding_for_in(2, &classic, 2, 4),
+        lovejoin::funding_for_in(2, &classic, 2, 4).unwrap(),
         1_500_000 + 2 * (10_000_000 + 5 * lovejoin::MIX_FEE_ESTIMATE_FOUR)
     );
 }
@@ -343,8 +343,8 @@ fn token_boxes_come_first_and_ada_boxes_take_what_they_leave() {
     let pool = lj_pool_by_reference();
     let q = pool.token.clone().unwrap().quantity;
     let tokens = |boxes: u64| token_holding(&pool, 0x10, 2_000_000, boxes, None).tokens;
-    let per_token = lovejoin::per_box_in(&pool, 2, 3);
-    let per_classic = lovejoin::per_box_in(&classic, 2, 3);
+    let per_token = lovejoin::per_box_in(&pool, 2, 3).unwrap();
+    let per_classic = lovejoin::per_box_in(&classic, 2, 3).unwrap();
     let legs = |held: u64, most: usize| {
         [
             LegPlan {
@@ -438,13 +438,199 @@ fn the_boxes_that_take_every_token_keep_nothing_back_for_a_token_change() {
             held: 0,
         },
     ];
-    let spare = 1_500_000 + 2 * lovejoin::per_box_in(&pool, 2, 3);
+    let spare = 1_500_000 + 2 * lovejoin::per_box_in(&pool, 2, 3).unwrap();
     let plan = lovejoin::plan_across(&params(), &session(), spare, &tokens, &legs, 2, 3).unwrap();
     assert_eq!(plan, vec![2, 0]);
     // A little less, and the second box isn't paid for: the token left needs its change, kept back.
     let plan =
         lovejoin::plan_across(&params(), &session(), spare - 1, &tokens, &legs, 2, 3).unwrap();
     assert_eq!(plan, vec![1, 0]);
+}
+
+#[test]
+fn a_token_leg_with_no_box_leaves_the_others_planned_and_deposited() {
+    // 1.6.0's release review, 319-rust#0: a token leg the paying UTxOs hold none of plans no box, but its boxes'
+    // token (none of it) was still taken from what they hold, which has none to take: beside another leg's held
+    // token, the whole plan failed ("Can't Separate Assets"). A leg with no box takes nothing, in the plan and the
+    // deposit alike.
+    let classic = Protocol::of(true).unwrap();
+    let pool = lj_pool_by_reference();
+    let q = pool.token.clone().unwrap().quantity;
+    // A second token pool, whose token the session holds none of.
+    let unheld = Protocol {
+        id: [0x99; 28],
+        token: Some(lovejoin::BoxToken {
+            policy: [0x77; 28],
+            name: b"unheld".to_vec(),
+            quantity: q,
+        }),
+        ..pool.clone()
+    };
+    let tokens = token_holding(&pool, 0x10, 2_000_000, 2, None).tokens;
+    let legs = [
+        LegPlan {
+            protocol: &unheld,
+            most: usize::MAX,
+            held: 0,
+        },
+        LegPlan {
+            protocol: &pool,
+            most: usize::MAX,
+            held: 2 * u128::from(q),
+        },
+        LegPlan {
+            protocol: &classic,
+            most: usize::MAX,
+            held: 0,
+        },
+    ];
+    let spare = 1_500_000
+        + 2 * lovejoin::per_box_in(&pool, 2, 3).unwrap()
+        + 2 * lovejoin::per_box_in(&classic, 2, 3).unwrap();
+    let plan = lovejoin::plan_across(&params(), &session(), spare, &tokens, &legs, 2, 3).unwrap();
+    assert_eq!(plan, vec![0, 2, 2]);
+    assert_eq!(
+        lovejoin::plan_across(&params(), &session(), spare, &tokens, &legs[1..], 2, 3).unwrap(),
+        vec![2, 2]
+    );
+    // The deposit of that plan is the one without the leg, byte for byte.
+    let sk = Scalar::from(31u64);
+    let (in_token, in_classic) = (owners(sk, 2), owners(sk, 2));
+    let inputs = vec![
+        token_holding(&pool, 0x10, 2_000_000, 2, None),
+        Holding::from(&coin(0x11, 40_000_000)),
+    ];
+    let with = lovejoin::deposit_across(
+        &params(),
+        &[(&unheld, &[]), (&pool, &in_token), (&classic, &in_classic)],
+        &inputs,
+        &session(),
+        1,
+    )
+    .unwrap();
+    let without = lovejoin::deposit_across(
+        &params(),
+        &[(&pool, &in_token), (&classic, &in_classic)],
+        &inputs,
+        &session(),
+        1,
+    )
+    .unwrap();
+    assert_eq!(with.tx.tx_bytes.0, without.tx.tx_bytes.0);
+}
+
+/// An ADA pool on the generalized scripts whose datum says `lovelace` a box, verified as any pool found is:
+/// `one_shot_mint` takes any amount, so a launch can make one no ADA could ever enter.
+fn ada_pool_of(lovelace: u64) -> Protocol {
+    let seed = ([0x4d; 32], 0);
+    let derived = lovejoin::templates::derive(&seed.0, seed.1).unwrap();
+    let datum = lovejoin::ReferenceDatum {
+        box_value: lovejoin::BoxValue::ada(lovelace),
+        max_fee: 1_500_000,
+        mix_box_hash: derived.mix_box.hash,
+        mix_logic_hash: derived.mix_logic.hash,
+        fee_hash: derived.fee_contract.hash,
+    };
+    let reference = Resolved {
+        tx_hash: [0xb2; 32],
+        index: 0,
+        output: Output::new(lovejoin::holder_address(true), 2_000_000)
+            .add_asset(Hash::new(derived.policy()), b"lovejoin".to_vec(), 1)
+            .unwrap()
+            .set_inline_datum(datum.encode())
+            .build_babbage_raw()
+            .unwrap()
+            .encode_fragment()
+            .unwrap(),
+    };
+    lovejoin::verify_pool(true, &reference, seed, &[]).unwrap()
+}
+
+#[test]
+fn a_pools_box_ada_past_what_a_sum_holds_is_refused_in_words_never_wrapped() {
+    // 1.6.0's release review, 314-core#1: a pool's box ADA comes from its datum, which takes any amount up to
+    // 2^64 − 1, and the WebAssembly build doesn't check overflow. There the planner's sums on it wrapped, so a
+    // Bootstrap of one box of such a pool was quoted 1.5 ₳, and its deposit built with an output of 2^64 − 1
+    // lovelace from a 50 ₳ input, refused only at submit (a test build panicked instead). Each sum is checked.
+    let huge = ada_pool_of(u64::MAX);
+    assert_eq!(huge.denom, u64::MAX);
+    let words = lovejoin::MORE_THAN_THERE_IS;
+    for depth in 0..=3 {
+        for width in [3, 4] {
+            // With no mixes, a box costs its ADA alone; each mix is past it.
+            let per = lovejoin::per_box_in(&huge, depth, width);
+            match depth {
+                0 => assert_eq!(per.unwrap(), u64::MAX),
+                _ => assert_eq!(per.unwrap_err().to_string(), words),
+            }
+            assert_eq!(
+                lovejoin::funding_for_in(1, &huge, depth, width)
+                    .unwrap_err()
+                    .to_string(),
+                words
+            );
+            assert_eq!(
+                lovejoin::boxes_affordable_in(50_000_000, &huge, depth, width),
+                0
+            );
+        }
+        assert_eq!(
+            lovejoin::funding_for(1, depth, u64::MAX)
+                .unwrap_err()
+                .to_string(),
+            words
+        );
+        assert_eq!(lovejoin::boxes_affordable(50_000_000, depth, u64::MAX), 0);
+    }
+    // Half of that holds one box, quoted as it is, but not two.
+    let half = ada_pool_of(1 << 63);
+    assert_eq!(
+        lovejoin::funding_for_in(1, &half, 1, 3).unwrap(),
+        (1 << 63) + lovejoin::mix_fee_estimate(&half, 3) + 1_500_000
+    );
+    assert!(lovejoin::funding_for_in(2, &half, 1, 3).is_err());
+    // Across pools, such a leg gets no box, and the classic pool's plans as it would alone.
+    let classic = Protocol::of(true).unwrap();
+    let legs = [
+        LegPlan {
+            protocol: &huge,
+            most: usize::MAX,
+            held: 0,
+        },
+        LegPlan {
+            protocol: &classic,
+            most: usize::MAX,
+            held: 0,
+        },
+    ];
+    assert_eq!(
+        lovejoin::plan_across(
+            &params(),
+            &session(),
+            50_000_000,
+            &Assets::new(),
+            &legs,
+            2,
+            3
+        )
+        .unwrap(),
+        vec![0, lovejoin::boxes_affordable(50_000_000, 2, classic.denom)]
+    );
+    // A Bootstrap offers none, and a deposit of one box is refused, never built.
+    assert_eq!(
+        lovejoin::bootstrap_most(&params(), &huge, true, 96).unwrap(),
+        0
+    );
+    let refused = lovejoin::deposit(
+        &params(),
+        &huge,
+        &[coin(0x11, 50_000_000)],
+        &owners(Scalar::from(9u64), 1),
+        &session(),
+        1,
+    )
+    .unwrap_err();
+    assert_eq!(refused.to_string(), words);
 }
 
 // ---------------------------------------------------------------------------
@@ -687,7 +873,7 @@ fn a_four_wide_chain_mixes_four_boxes_at_a_time() {
         owners: &mine,
         pool: &pool,
     }];
-    let funded = lovejoin::funding_for_in(1, &classic, 1, 4);
+    let funded = lovejoin::funding_for_in(1, &classic, 1, 4).unwrap();
     let chain = lovejoin::chain_across(
         &params(),
         &funding(vec![coin(0x11, funded)]),

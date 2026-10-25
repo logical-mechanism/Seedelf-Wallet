@@ -2952,10 +2952,13 @@ pub mod api {
         /// The least ADA what stays in the Seedelf balance needs ([`change_minimum`]).
         pub change_minimum: String,
         pub inputs: Vec<OutRef>,
-        /// Spendable UTxOs Max left for another payment: past the
-        /// [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that would
-        /// total more with the rest than an output can hold. None for amounts.
+        /// Spendable UTxOs Max left for another payment: in parts ([`max_in_parts`]), on the last part, every UTxO no
+        /// part spends; one transaction's, those past the [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that
+        /// would total more with the rest than an output can hold. None for amounts.
         pub left: usize,
+        /// Why Max in parts left them, with `left` ([`LeftWhy`]); unset where it left none, and on one transaction's.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub left_why: Option<LeftWhy>,
         /// The classes of money it spends together, when they're more than one.
         pub classes_mixed: Vec<String>,
         /// What it carries forward, a part of a payment in a chain ([`TransferRequest::carry`]): the row the next part
@@ -3239,6 +3242,7 @@ pub mod api {
             change_minimum: change_minimum(&plan.chain, built)?.to_string(),
             inputs: out_refs(spend),
             left,
+            left_why: None,
             classes_mixed: classes_mixed(&request.classes, spend)?,
             carry,
         })
@@ -3344,11 +3348,13 @@ pub mod api {
         /// The least ADA what stays in the Seedelf balance needs ([`change_minimum`]).
         pub change_minimum: String,
         pub inputs: Vec<OutRef>,
-        /// Spendable UTxOs Max left for another withdrawal: past the
-        /// [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that would total
-        /// more with the rest than an output can hold
-        /// (`seedelf_core::utxos::fitting`).
+        /// Spendable UTxOs Max left for another withdrawal, as [`TransferResult::left`]: in parts, every UTxO no
+        /// part spends; one transaction's, those past the [`MAX_WITHDRAW_UTXOS`] largest, or holding a token that
+        /// would total more with the rest than an output can hold (`seedelf_core::utxos::fitting`).
         pub left: usize,
+        /// Why Max in parts left them, as [`TransferResult::left_why`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub left_why: Option<LeftWhy>,
         /// The classes of money it spends together, when they're more than one.
         pub classes_mixed: Vec<String>,
         /// What it carries forward, as [`TransferResult::carry`].
@@ -3580,6 +3586,23 @@ pub mod api {
     /// spends at most [`MAX_WITHDRAW_UTXOS`], so these spend 500 UTxOs, the boxes of pools brought back all at once
     /// (the owner's test of 1.6.0). Past it, Max says how many it left, as one transaction's does.
     pub const MAX_PARTS: usize = 25;
+
+    /// Why Max in parts left UTxOs for another payment ([`max_in_parts`]), for its review to say. One transaction's
+    /// Max left them only past the [`MAX_WITHDRAW_UTXOS`] largest or for a token that wouldn't fit, and the review
+    /// told those apart by how many it spent; parts leave them for reasons of their own (1.6.0's release review,
+    /// 321-parts-worker#6).
+    #[derive(Serialize, Debug, Clone, Copy, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub enum LeftWhy {
+        /// No part could take them with the rest: a token they hold would total more than an output can hold
+        /// (`seedelf_core::utxos::fitting`), or what they hold is too large for one transaction.
+        Tokens,
+        /// Too little ADA to pay for spending them: a part of them couldn't pay its fee, and no chain could carry
+        /// the ADA of an earlier part to it ([`max_chained`]).
+        Fee,
+        /// The payment went as [`MAX_PARTS`] transactions, the most one goes as.
+        Limit,
+    }
 
     /// `utxos` but those `inputs` spends.
     fn without(utxos: &[UtxoResponse], inputs: &[OutRef]) -> Vec<UtxoResponse> {
@@ -3912,8 +3935,9 @@ pub mod api {
         }
 
         /// Less room, after a part of `holders` token holders was too much for one transaction (`e`); `None` when
-        /// there's none less to try. Only a payment's tokens make one output too large (change goes 20 tokens to an
-        /// output), so that takes fewer holders; too large a transaction, or too much computation, fewer UTxOs.
+        /// there's none less to try. One output too large takes fewer holders, though payments go 20 tokens to an
+        /// output as change does (since 1.6.0), so none should be; too large a transaction, or too much computation,
+        /// fewer UTxOs.
         fn after(self, e: &anyhow::Error, holders: usize) -> Option<Room> {
             let k = match e.downcast_ref::<build::TooLarge>() {
                 Some(output @ build::TooLarge::Output(_)) if holders > 1 => {
@@ -4283,18 +4307,25 @@ pub mod api {
     /// Where what's left has no ADA to pay a part's fee with (bundles of tokens holding only their least), the parts
     /// from the last one that has ADA on go as a chain ([`max_chained`], `carry`), so Max leaves nothing it could
     /// spend (the owner, 2026-10-21: "grab all utxos, split the tokens off with their min ada going back as change
-    /// then send all the ada minus the fee out"). The last says how many it left, as one transaction's Max does.
+    /// then send all the ada minus the fee out"). The last says how many it left, as one transaction's Max does, and
+    /// why ([`LeftWhy`]: `left_of` gives a part's count and reason).
     #[allow(clippy::too_many_arguments)]
     fn max_in_parts<R>(
         utxos: &[UtxoResponse],
         mut tokens: Vec<TokenAmount>,
         worth: &Worth,
-        left_of: impl Fn(&mut R) -> &mut usize,
+        left_of: impl Fn(&mut R) -> (&mut usize, &mut Option<LeftWhy>),
         inputs_of: impl Fn(&R) -> &[OutRef],
         carried: impl Fn(&R) -> Option<UtxoResponse>,
         mut part: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
         mut carry: impl FnMut(Vec<UtxoResponse>, Vec<TokenAmount>) -> Result<R>,
     ) -> Result<Vec<R>> {
+        // Over nothing, one transaction's Max says what's wrong in its own words ("There's nothing in the Seedelf
+        // balance to send"), and so do its parts: they came back as none, which no review can read (1.6.0's release
+        // review, 321-parts-rust#2).
+        if utxos.is_empty() {
+            return Ok(vec![part(Vec::new(), tokens)?]);
+        }
         let mut rest = utxos.to_vec();
         let mut parts: Vec<R> = Vec::new();
         let mut before: Vec<(Vec<TokenAmount>, Vec<UtxoResponse>)> = Vec::new();
@@ -4319,11 +4350,21 @@ pub mod api {
                 break;
             }
         }
+        // Why what's left stays, where something does: the parts went as the most a payment goes as; or no part could
+        // take it with the rest (a part that failed for anything but its fee, a chain's last part).
+        let mut why = if parts.len() == MAX_PARTS {
+            LeftWhy::Limit
+        } else {
+            LeftWhy::Tokens
+        };
         // A part couldn't pay its fee: from it, taking the ADA there is forward, or from the one before it, back to
-        // the first, a chain. With none, Max sends what went, and says how many it left; refused only with nothing.
+        // the first, a chain. With none, Max sends what went, and says how many it left and that too little ADA pays
+        // for spending them, a chain past the most parts too: the ADA that could went with the parts that went, and
+        // what's left can't pay its own way. Refused only with nothing.
         if let Some(e) = failed {
             let mut went = false;
             if build::is_short(&e) {
+                why = LeftWhy::Fee;
                 for anchor in (0..before.len()).rev() {
                     match max_chained(
                         &before[anchor],
@@ -4338,6 +4379,7 @@ pub mod api {
                             parts.truncate(anchor);
                             parts.extend(chain);
                             went = true;
+                            why = LeftWhy::Tokens;
                             break;
                         }
                         Err(e) if build::is_short(&e) => {}
@@ -4355,10 +4397,12 @@ pub mod api {
             .collect();
         let left = without(utxos, &spent).len();
         for p in parts.iter_mut() {
-            *left_of(p) = 0;
+            let (n, reason) = left_of(p);
+            (*n, *reason) = (0, None);
         }
         if let Some(last) = parts.last_mut() {
-            *left_of(last) = left;
+            let (n, reason) = left_of(last);
+            (*n, *reason) = (left, (left > 0).then_some(why));
         }
         Ok(parts)
     }
@@ -4448,7 +4492,7 @@ pub mod api {
                 &request.utxos,
                 only.tokens.clone(),
                 &worth,
-                |r: &mut TransferResult| &mut r.left,
+                |r: &mut TransferResult| (&mut r.left, &mut r.left_why),
                 |r| &r.inputs,
                 |r| r.carry.clone(),
                 |from, share| with(from, None, share, false),
@@ -4565,7 +4609,7 @@ pub mod api {
                 &request.utxos,
                 tokens,
                 &worth,
-                |r: &mut WithdrawResult| &mut r.left,
+                |r: &mut WithdrawResult| (&mut r.left, &mut r.left_why),
                 |r| &r.inputs,
                 |r| r.carry.clone(),
                 |from, share| with(from, None, share, most, false, false),
@@ -4722,6 +4766,7 @@ pub mod api {
             .to_string(),
             inputs: out_refs(spend),
             left,
+            left_why: None,
             classes_mixed: classes_mixed(&request.classes, spend)?,
             carry: request
                 .carry
@@ -5690,10 +5735,26 @@ pub fn build_collateral_mix(
 
 /// What a session is funded with beside its boxes for its collateral to be
 /// mixed on its way into a 5 ₳ pool, in lovelace, as a string
-/// (`seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE`).
+/// (`seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE`): where something else
+/// pays for the sweep after it, a mix's chain or a swap's margin and fill.
 #[wasm_bindgen(js_name = lovejoinCollateralReserve)]
 pub fn lovejoin_collateral_reserve() -> String {
     seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE.to_string()
+}
+
+/// [`lovejoin_collateral_reserve`] where the session's return may come back
+/// directly with nothing else left to pay for the collateral's mix and the
+/// sweep after it (a site's session, and its top-up), priced from `params`,
+/// one row of Koios's `epoch_params`: in lovelace, as a string
+/// (`seedelf_core::lovejoin::direct_tail_reserve`; 1.6.0's release review,
+/// 323-rust#1).
+#[wasm_bindgen(js_name = lovejoinDirectCollateralReserve)]
+pub fn lovejoin_direct_collateral_reserve(params: &str) -> Result<String, JsError> {
+    let params = seedelf_koios::koios::ProtocolParameters::from_koios(&from_json(params)?)
+        .map_err(js_error)?;
+    Ok(seedelf_core::lovejoin::direct_tail_reserve(&params)
+        .map_err(js_error)?
+        .to_string())
 }
 
 /// What a Bootstrap's session, paid from the private balance, is funded with

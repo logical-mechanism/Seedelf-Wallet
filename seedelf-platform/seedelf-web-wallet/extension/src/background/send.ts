@@ -32,7 +32,7 @@ import { readContractView, type ContractView } from "./contract-scan";
 import { destinationResolver } from "./destination";
 import type { KoiosUtxo } from "./koios";
 import { settleMaybeSent } from "./pending";
-import { keep, send, type ScriptSpendDeps } from "./script-spend";
+import { keep, send, type Kept, type ScriptSpendDeps } from "./script-spend";
 import { isPublicShort, publicShort, severalShort } from "./short";
 import { holdsOwn, seedelfUtxo } from "./transfer";
 
@@ -90,10 +90,16 @@ export class SendService {
     return this.pay(network, [{ address, own: true }], [payment], SESSION_COLLATERAL);
   }
 
-  /** Sends the collateral payment; its first output is the collateral from now on. */
+  /**
+   * Sends the collateral payment; its first output is the collateral from now on, recorded on the public account its
+   * review was built on, which it pays: another window may have switched from it since, as Send's own records have it
+   * (pending.ts writeAhead; 1.6.0's release review, 309#2). With none kept, the one active when it's recorded.
+   */
   async submitCollateral(network: NetworkName, txHash: string): Promise<PendingTx> {
+    const { wallet, session } = this.deps;
+    const built = await wallet.withKeys(() => session.get<Kept>(SESSION_COLLATERAL));
     const pending = await send(this.deps, network, txHash, SESSION_COLLATERAL, "collateral", "collateral");
-    await this.deps.coins.sent(network, `${txHash}#0`);
+    await this.deps.coins.sent(network, `${txHash}#0`, built?.txHash === txHash ? built.account : undefined);
     return pending;
   }
 

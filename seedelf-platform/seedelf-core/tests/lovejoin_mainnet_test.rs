@@ -466,7 +466,7 @@ fn mainnet_chains_fan_out_and_mix_again() {
     let the_pool = pool(&protocol, 40);
 
     // One box, two waves deep, as the tile funds it.
-    let funded = lovejoin::funding_for(1, 2, protocol.denom);
+    let funded = lovejoin::funding_for(1, 2, protocol.denom).unwrap();
     let chain = lovejoin::chain(
         &params,
         &protocol,
@@ -481,7 +481,7 @@ fn mainnet_chains_fan_out_and_mix_again() {
     assert!(chain.change.lovelace > 1_000_000);
 
     // Three waves deep: 13 mixes, each within the plan.
-    let funded = lovejoin::funding_for(1, 3, protocol.denom);
+    let funded = lovejoin::funding_for(1, 3, protocol.denom).unwrap();
     let deep = lovejoin::chain(
         &params,
         &protocol,

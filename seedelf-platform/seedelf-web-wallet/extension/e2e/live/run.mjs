@@ -25,7 +25,11 @@
 import { FLOWS, run } from "./flows.mjs";
 import { log, openWallet } from "./lib.mjs";
 
-const ALL = "mint live-1 account + move-in 25.5 + mint live-2 Seedelf + transfer 3.3 live-1 + withdraw 5.5 + remove live-2 Seedelf";
+// Each run tags its own Seedelfs (15 characters at most), so the first one an earlier run left, which stays, is never
+// taken for this run's: a tag two Seedelfs share finds neither. "seedelf" is the flows' word for the private balance,
+// a keyword, not the name shown (chunk 14's rename reached it).
+const stamp = Date.now().toString(36).slice(-4);
+const ALL = `mint live1-${stamp} account + move-in 25.5 + mint live2-${stamp} seedelf + transfer 3.3 live1-${stamp} + withdraw 5.5 + remove live2-${stamp} seedelf`;
 
 const STAKING = "stake TPREP + vote abstain + stake LOGIC";
 

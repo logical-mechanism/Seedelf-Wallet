@@ -2,11 +2,15 @@
 // again and again, from the device alone (1.3.0's release review, C28, C30): the
 // Lovejoin page's rows, read again while a chain is sent; Transaction details
 // of one of a chain's transactions once the chain has moved on; and the lock
-// countdown's question, whether any chain on any network is being sent.
+// countdown's questions, whether any chain on any network is being sent, and
+// whether a payment's parts wait to go (1.6.0's release review, gap-3#6).
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { handle, type Context } from "../src/background/handlers";
 import { SESSION_LOVEJOIN_SENDING } from "../src/background/lovejoin";
+import { PartsService, SESSION_WAITING_PREFIX, type Waiting } from "../src/background/parts";
 import { NetworkChoice } from "../src/background/preferences";
 import { CHAIN_MOVED, NOT_HELD } from "../src/background/tx-view";
 import type { NetworkName } from "../src/networks";
@@ -117,5 +121,49 @@ describe("whether a chain is being sent, for the lock countdown (chains-sending)
     await sending(t, chainOf("b2"));
     await t.wallet.lock();
     expect(await ask({ type: "chains-sending" }, ctx)).toBe(false);
+  });
+});
+
+describe("whether a payment's parts wait to go, for the lock countdown (parts-waiting; 1.6.0's release review, gap-3#6)", () => {
+  /** A payment's parts as parts.ts records them on preprod, the first of three gone and the rest waiting, as `w` changes it. */
+  async function waiting(t: ReturnType<typeof testBalances>, w: Partial<Waiting> = {}) {
+    const hashes = ["c1", "c2", "c3"].map((h) => h.repeat(32));
+    const record: Waiting = { hashes, after: [null, hashes[0]!, hashes[1]!], sent: 1, at: t.clock.now, kind: "transfer", what: "payment", ...w };
+    await t.wallet.withKeys(() => t.session.set(SESSION_WAITING_PREFIX + "preprod", { [hashes[0]!]: record }));
+  }
+
+  it("says so for parts waiting on any network, a session's funding's too, and not once they stopped, nor while locked", async () => {
+    const t = await unlocked();
+    const parts = new PartsService({ ...t.deps, collateral: () => undefined } as never);
+    // The wallet shows mainnet; the parts are preprod's. A lock stops them all the same.
+    const ctx: Context = { ...context(t, "mainnet", ["mainnet", "preprod"]), parts };
+    expect(await ask({ type: "parts-waiting" }, ctx)).toBe(false);
+    await waiting(t);
+    expect(await ask({ type: "parts-waiting" }, ctx)).toBe(true);
+    // Not a chain through Lovejoin: that line stays as it was.
+    expect(await ask({ type: "chains-sending" }, ctx)).toBe(false);
+    await waiting(t, { kind: "session-out", session: 2 });
+    expect(await ask({ type: "parts-waiting" }, ctx)).toBe(true);
+    // Stopped, they're kept a while only for Home's banner: nothing is left to stop.
+    await waiting(t, { stopped: "refused" });
+    expect(await ask({ type: "parts-waiting" }, ctx)).toBe(false);
+    // Locked, there are none.
+    await waiting(t);
+    await t.wallet.lock();
+    expect(await ask({ type: "parts-waiting" }, ctx)).toBe(false);
+  });
+
+  it("says under the countdown that locking now stops them partway, beside a chain's line", async () => {
+    const { LockStops } = await import("../src/ui/components/LockCountdown");
+    const said = (stops: { chain?: boolean; parts?: boolean }) =>
+      renderToStaticMarkup(createElement(LockStops, stops))
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    expect(said({ parts: true })).toBe("A payment is being sent in parts: locking now stops it partway.");
+    expect(said({ chain: true, parts: true })).toBe(
+      "A Lovejoin chain is being sent: locking now stops it partway. A payment is being sent in parts: locking now stops it partway.",
+    );
+    expect(said({ chain: false, parts: false })).toBe("");
   });
 });

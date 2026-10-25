@@ -35,6 +35,7 @@ import { seedelfLabel, seedelfTokenOf, sumValue } from "./chain";
 import { keptContractView } from "./contract-scan";
 import { measurable, type KoiosUtxo } from "./koios";
 import type { PrivateStore } from "./private-store";
+import { heldSent } from "./sent-txs";
 import { outpoint, spentSet } from "./spent";
 import type { Area } from "./storage";
 import { SESSION_BALANCES_PREFIX, type Wallet } from "./wallet";
@@ -65,7 +66,11 @@ export interface ReadingUtxos {
 /** What a collateral holds: 5 ₳, as Lace and the CLI use. */
 export const COLLATERAL_LOVELACE = 5_000_000n;
 
-/** A collateral payment is waited for this long before the wallet stops expecting it. */
+/**
+ * A collateral payment is waited for at least this long from when it was sent, which is sealed with the choices: so
+ * it holds after a lock too, which forgets what the wallet sent (sent-txs.ts). After that, it's waited for while the
+ * wallet still keeps it as sent (`collateral`).
+ */
 const WAIT_MS = 10 * 60_000;
 
 /** The most collateral payments an account's record keeps, the newest: Activity names those (activity.ts). */
@@ -347,7 +352,13 @@ export class CoinControlService {
     });
   }
 
-  /** The collateral, from the last reading. */
+  /**
+   * The collateral, from the last reading. The payment making it is waited for while it's on its way: WAIT_MS from
+   * when it was sent, and after that for as long as the wallet keeps it as sent (sent-txs.ts `heldSent`), which is
+   * as long as it can land, neither turned away nor past its slot. That's what the balance counts as on its way, and
+   * Home's banner says it can land until then: "none" offered a second 5 ₳ payment meanwhile (1.6.0's release
+   * review, 309#1). Session storage alone, no request.
+   */
   async collateral(network: NetworkName): Promise<CollateralStatus> {
     const choices = await this.choices(network);
     const lists = await this.lists(network, undefined, false);
@@ -356,11 +367,20 @@ export class CoinControlService {
       const by = choices.collateral === `${set.txHash}#${set.index}` ? "you" : "wallet";
       return { state: "set", utxo: set, by };
     }
-    if (choices.collateral && choices.collateralSentAt && this.deps.now() - choices.collateralSentAt < WAIT_MS) {
-      return { state: "waiting", txHash: choices.collateral.slice(0, choices.collateral.indexOf("#")) };
+    if (choices.collateral && choices.collateralSentAt) {
+      const txHash = choices.collateral.slice(0, choices.collateral.indexOf("#"));
+      if (this.deps.now() - choices.collateralSentAt < WAIT_MS || (await this.onItsWay(network, txHash))) {
+        return { state: "waiting", txHash };
+      }
     }
     const candidate = lists.cardano.filter((u) => isCollateralShaped(asKoios(u))).sort(oldestInfoFirst)[0];
     return { state: "none", reclaimed: choices.collateral === null, ...(candidate ? { candidate } : {}) };
+  }
+
+  /** Whether the wallet still keeps transaction `txHash` as sent on `network`: on its way, and able to land (`heldSent`). */
+  private async onItsWay(network: NetworkName, txHash: string): Promise<boolean> {
+    const { wallet, session } = this.deps;
+    return wallet.withKeys(async () => (await heldSent(session, network)).some((s) => s.txHash === txHash));
   }
 
   /** Makes a pure 5 ₳ UTxO the account already holds its collateral: no transaction. */
@@ -383,14 +403,17 @@ export class CoinControlService {
 
   /**
    * The payment making a new collateral was sent: its 5 ₳ output is the collateral from now on, and its transaction
-   * is recorded, for Public activity to name.
+   * is recorded, for Public activity to name. On public account `account`, the one it was built on and pays, which
+   * another window may have switched from since (1.6.0's release review, 309#2); the one active now without it. Read
+   * and written on that one account, so a switch between the two never copies one account's choices onto another.
    */
-  sent(network: NetworkName, utxo: string): Promise<void> {
+  sent(network: NetworkName, utxo: string, account?: number): Promise<void> {
     return this.serial(async () => {
-      const choices = await this.choices(network);
+      const index = account ?? (await this.activeIndex());
+      const choices = await this.choices(network, index);
       const txHash = utxo.slice(0, utxo.indexOf("#"));
       const collateralPaid = [...(choices.collateralPaid ?? []).filter((h) => h !== txHash), txHash].slice(-COLLATERAL_PAID_KEPT);
-      await this.save(network, { ...choices, collateral: utxo, collateralSentAt: this.deps.now(), collateralPaid });
+      await this.save(network, { ...choices, collateral: utxo, collateralSentAt: this.deps.now(), collateralPaid }, index);
     });
   }
 
@@ -403,9 +426,10 @@ export class CoinControlService {
     });
   }
 
-  private async save(network: NetworkName, choices: Choices): Promise<void> {
-    const [stored, account] = await Promise.all([this.deps.store.get<Stored>(`coins.${network}`), this.activeIndex()]);
-    await this.deps.store.set(`coins.${network}`, withChoices(stored, account, choices));
+  /** Saves `choices` as public account `account`'s, or the active one's. */
+  private async save(network: NetworkName, choices: Choices, account?: number): Promise<void> {
+    const [stored, index] = await Promise.all([this.deps.store.get<Stored>(`coins.${network}`), account ?? this.activeIndex()]);
+    await this.deps.store.set(`coins.${network}`, withChoices(stored, index, choices));
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {

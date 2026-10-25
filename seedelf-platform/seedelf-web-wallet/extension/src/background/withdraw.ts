@@ -3,7 +3,8 @@
 //
 // send    to any normal addresses or ADA Handles (the CLI's `sweep`), up to
 //         20 in one transaction: an amount with optional tokens for each, or
-//         everything to a single one (Max, 20 UTxOs at most). The change goes
+//         everything to a single one (Max: every UTxO, in parts of 20 at
+//         most, saying how many it left and why, `leftWhy`). The change goes
 //         back into the Seedelf balance.
 // remove  one of this wallet's seedelfs (the CLI's `remove`): the token is
 //         burned, and the ADA locked with it goes to the Cardano account's

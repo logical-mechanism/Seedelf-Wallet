@@ -14,7 +14,7 @@ use pallas_primitives::{Fragment, Nullable, StakeCredential};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::BuiltTransaction;
 use seedelf_core::address::wallet_contract;
-use seedelf_core::build::{self, AccountAmount, Chain, fake_signer, tx_id};
+use seedelf_core::build::{self, AccountAmount, Chain, ScriptSpend, fake_signer, tx_id};
 use seedelf_core::constants::get_config;
 use seedelf_core::staking::{
     ALWAYS_ABSTAIN, ALWAYS_NO_CONFIDENCE, DrepAction, DrepKey, DrepState, MAX_ANCHOR_URL,
@@ -24,7 +24,7 @@ use seedelf_core::staking::{
 use seedelf_crypto::cardano::{CardanoAccount, Role};
 use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr::random_scalar;
-use seedelf_koios::koios::{Asset, ProtocolParameters, UtxoResponse};
+use seedelf_koios::koios::{Asset, InlineDatum, ProtocolParameters, UtxoResponse};
 
 const PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -428,6 +428,86 @@ fn refuses_what_the_ledger_would() {
             .is_empty()
     );
     assert!(Staking::withdraw(&w.key, &registered(5, false)).is_err());
+}
+
+/// A Seedelf spend adds no stake key's signature and runs no certificate's
+/// script, so it takes only Shelley's registration of a script's credential (a
+/// Lovejoin launch's of `mix_logic`), the one certificate of a script's the
+/// ledger asks no witness for. Any other built and measured, and then the node
+/// refused it for the witness it lacked (1.6.0's release review, 314-core#2).
+#[test]
+fn a_seedelf_spend_takes_no_certificate_whose_witness_it_never_adds() {
+    let w = world();
+    let chain = Chain {
+        params: w.params.clone(),
+        network_flag: true,
+        config: get_config(1, true).unwrap(),
+    };
+    let owner = Register::create(random_scalar()).unwrap();
+    let wallet = wallet_contract(true, chain.config.contract.wallet_contract_hash);
+    let held = UtxoResponse {
+        tx_hash: hex::encode([9; 32]),
+        address: wallet.to_bech32().unwrap(),
+        value: "20000000".to_string(),
+        inline_datum: Some(InlineDatum {
+            bytes: hex::encode(owner.to_vec().unwrap()),
+            value: serde_json::Value::Null,
+        }),
+        asset_list: Some(vec![]),
+        ..Default::default()
+    };
+    let spend = ScriptSpend::new(&chain, &[held], &owner, Hash::new([7; 28])).unwrap();
+    let with = |staking: Staking| spend.clone().with_staking(staking);
+    let certifying = |certificates: Vec<Certificate>| {
+        with(Staking {
+            certificates,
+            ..Staking::none()
+        })
+    };
+    let script = StakeCredential::ScriptHash(Hash::new([0x5c; 28]));
+    let registration = Certificate::StakeRegistration(script.clone());
+
+    // A launch's registration goes in, and so does nothing at all.
+    assert!(certifying(vec![registration.clone()]).is_ok());
+    assert!(with(Staking::none()).is_ok());
+
+    // Every other certificate of a script needs the script to run under a
+    // certifying redeemer, Conway's registration with a deposit too; a key's
+    // needs its signature; and so do a withdrawal and a vote.
+    let key = StakeCredential::AddrKeyhash(Hash::new([0x4b; 28]));
+    let refused = |staking: Staking, what: &str| {
+        let err = with(staking)
+            .err()
+            .unwrap_or_else(|| panic!("{what} went in"))
+            .to_string();
+        assert!(
+            err.contains("only a script's stake registration"),
+            "{what}: {err}"
+        );
+    };
+    for certificate in [
+        Certificate::Reg(script.clone(), DEPOSIT),
+        Certificate::StakeDeregistration(script.clone()),
+        Certificate::UnReg(script.clone(), DEPOSIT),
+        Certificate::StakeDelegation(script.clone(), logic()),
+        Certificate::StakeRegistration(key.clone()),
+        Certificate::StakeDelegation(key, logic()),
+    ] {
+        refused(
+            Staking {
+                certificates: vec![registration.clone(), certificate.clone()],
+                ..Staking::none()
+            },
+            &format!("{certificate:?}"),
+        );
+    }
+    refused(
+        Staking {
+            withdrawal: Some((w.stake.to_vec(), 1_000_000)),
+            ..Staking::none()
+        },
+        "a withdrawal",
+    );
 }
 
 #[test]

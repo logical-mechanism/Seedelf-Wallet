@@ -224,8 +224,10 @@ describe("Settings' Lovejoin switch (privacy review §4.1)", () => {
     expect(button(on)).not.toContain("disabled");
     expect(text(on)).toContain("Mix a session's 5 ₳ collateral in Lovejoin as it's brought back");
     expect(text(on)).toContain("is mixed once with two other people's boxes, if that pool exists and holds enough of theirs");
-    expect(text(on)).toContain("pays a little more for that mix, and what the mix doesn't use comes back");
-    expect(text(on)).toContain("If not, the collateral comes back with the rest");
+    // "If not" beside the condition it denies, before the funding's sentence, which it read as following
+    // (1.6.0's release review, x-i18n-es#1).
+    expect(text(on)).toContain("if that pool exists and holds enough of theirs; if not, the collateral comes back with the rest.");
+    expect(text(on)).toContain("A session funded while that pool does pays a little more for that mix, and what the mix doesn't use comes back");
     expect(text(render({ lovejoinCollateral: false }))).toContain("anyone can tie it to the session, as they can that money");
     expect(button(render({ lovejoinReturns: false }))).toContain('disabled=""');
   });

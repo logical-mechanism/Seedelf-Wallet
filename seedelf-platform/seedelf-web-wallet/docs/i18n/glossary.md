@@ -49,6 +49,7 @@ translated; the words on them are not.
 | script | script | スクリプト | |
 | token | token | トークン | |
 | make private / make public | hacer privado / hacer público | プライベートにする / 公開する | the wallet's own flow names |
+| the server (what the wallet reads Cardano through and sends to) | el servidor | サーバー | the owner's (2026-10-09): on mainnet the wallet's own answers first, on preprod Koios, so a screen names Koios only where Koios alone is meant: Chrome's access to it, the Koios-only switch, Settings' server status, a DRep profile Koios fetches |
 
 ## Chosen in the whole-locale review (2026-10-03)
 
@@ -116,6 +117,32 @@ of them is the owner's to overrule.
 | Keep it (a modal's cancel) | そのままにする | |
 | your | あなたの, only where it says whose | dropped before 公開アカウント / プライベート残高 |
 | IPFS gateway; metadata; Show image (chunk 20) | IPFS ゲートウェイ; メタデータ; 画像を表示 | "either of them could" is どちらか一方だけでも: どちらも can read as the two together |
+
+## Chosen for 1.6.0 (the release review, 2026-10-25)
+
+Lovejoin's token pools, Bootstrap, the collateral's mix and payments in parts
+came in 1.6.0. Each value's words were chosen as it was written, and recorded
+only in the notes of the verified files; the release review gathered them here
+as the values use them, and corrected the few values that strayed. Like the
+section above, these are Claude's choices, the owner's to overrule.
+
+| English | Spanish | Japanese | Note |
+|---|---|---|---|
+| token pool; ADA pool; the classic pool | pool de token; pool de ADA; el pool clásico | トークンプール; ADA プール; クラシックプール | the classic pool is 1.5.0's 10 ₳ one |
+| box value (what each box in a pool holds) | valor de caja | 中身; pools of the same box value: 中身が同じプール | not ボックス額, which reads as an amount of ADA |
+| Start a pool; its start | Iniciar un pool; la puesta en marcha | プールを開始; 開始 | what makes the pool; once it's on chain, es says it "está en marcha" |
+| Help start (a pool short of its floor); Being started | poner en marcha; Poniéndose en marcha | 立ち上げ; 立ち上げ中 | it can't be mixed in yet: never a bare "En marcha", which says it's running |
+| Bootstrap; to bootstrap; Bootstrapping | un arranque; arrancar; Arranque | ブートストラップ; ブートストラップする; ブートストラップ中 | boxes put in with no mix, for others to mix with |
+| held (by a Bootstrap); Held (a tag) | retenida(s); Retenida | 保持; 保持中 | an es tag agrees with the mix, as Completada does |
+| the floor (the boxes not yours a pool must hold before the wallet mixes) | el mínimo | 下限 | |
+| four boxes a mix | cuatro cajas por mezcla | ミックスごとにボックス 4 件 | |
+| the pool of 5 ₳ boxes; the collateral's mix | el pool de cajas de 5 ₳; la mezcla del colateral | 5 ₳ ボックスのプール; コラテラルのミックス | never "the 5 ₳ pool", which read as a pool holding 5 ₳ in all |
+| a copy (of a pool) | una copia | 複製 | |
+| a pool's credential | la credencial | 資格情報 | Lace's, and the transaction details'; not クレデンシャル |
+| sent in parts; only partly sent | por partes; enviado solo en parte | 分けて送信; 一部しか送られませんでした | each part is a transaction: トランザクション N 件 |
+| settled (a transaction that landed, or now can't) | resolverse | 確定するか、確定できなくなる | 確定 alone says it landed |
+| Bring every box back now | Traer todas las cajas de vuelta ahora | すべてのボックスを今すぐ戻す | |
+| change (what a transaction gives back) | el cambio | 釣り銭 | Lace has お釣り; おつり, in two values, says the same |
 
 ## How a translation is recorded
 

@@ -333,6 +333,14 @@ fn a_return_across_pools_deposits_once_and_mixes_each_box_in_its_pool() {
         .collect();
     assert!(spent.contains(&fill));
     assert!(spent.contains(&funding));
+    // It reads the token pool's reference UTxO, and nothing of the classic pool's (1.6.0's release review,
+    // 317-wallet#0): the ledger refuses it if that pool isn't on chain.
+    let read: Vec<(String, u64)> = deposit
+        .reference_inputs()
+        .iter()
+        .map(|i| (hex::encode(i.hash()), i.index()))
+        .collect();
+    assert_eq!(read, vec![("7f".repeat(32), 0)]);
     let outputs = deposit.outputs();
     let (token, classic) = (token_pool(), classic());
     let at = |o: &pallas_traverse::MultiEraOutput, p: &Protocol| {

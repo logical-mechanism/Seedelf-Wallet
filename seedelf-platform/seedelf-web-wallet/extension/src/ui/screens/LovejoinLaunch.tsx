@@ -218,6 +218,7 @@ export function LovejoinLaunch({
         <p className="note" data-testid="lovejoin-launch-at-most">
           {tr("lovejoin.launch.warn.atMost", { deposit: formatAda(review.locked.deposit) })}
         </p>
+        <LaunchStartedBefore review={review} />
         <Callout tone="privacy" testId="lovejoin-launch-privacy">
           {tr(review.from === "private" ? "lovejoin.launch.privacy.private" : "lovejoin.launch.privacy.public")}
         </Callout>
@@ -387,6 +388,22 @@ export function LaunchBootstrapNote() {
     <p className="note" data-testid="lovejoin-launch-bootstrap">
       {floor > 0 ? tr("lovejoin.launch.bootstrapNote", { floor }) : tr("lovejoin.launch.bootstrapNext")}
     </p>
+  );
+}
+
+/**
+ * What the start's review says where the wallet started a pool of these values that no look has found yet
+ * (`startedBefore`, lovejoin-launch.ts): if both go through, the later one is a copy no wallet shows, what it locks
+ * gone for good. The chain takes both, so it's said, never refused (1.6.0's release review, 318-worker#1). Exported for
+ * its test.
+ */
+export function LaunchStartedBefore({ review }: { review: Pick<LovejoinLaunchSummary, "startedBefore"> }) {
+  const tr = useT();
+  if (!review.startedBefore) return null;
+  return (
+    <Callout tone="warn" testId="lovejoin-launch-started-before">
+      {tr("lovejoin.launch.warn.startedBefore")}
+    </Callout>
   );
 }
 

@@ -755,8 +755,10 @@ export interface TransferSummary {
   changeMinimum: string;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
-  /** Seedelf UTxOs Max left for another payment: past the 20 it takes at most, or holding a token that would total more with the rest than an output can hold. */
+  /** Seedelf UTxOs Max left for another payment: every one its parts don't spend. */
   left: number;
+  /** Why Max left them, when it left any. */
+  leftWhy?: LeftWhy;
   /** Max's: private UTxOs no payment takes (a reference script), or one a return through Lovejoin being sent spends. */
   leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
@@ -808,12 +810,10 @@ export interface WithdrawSummary {
   changeMinimum: string;
   /** How many Seedelf UTxOs pay for it. */
   inputs: number;
-  /**
-   * Seedelf UTxOs Max left for another withdrawal: past the 20 it takes at
-   * most, or holding a token that would total more with the rest than an
-   * output can hold.
-   */
+  /** Seedelf UTxOs Max left for another withdrawal: every one its parts don't spend. */
   left: number;
+  /** Why Max left them, when it left any. */
+  leftWhy?: LeftWhy;
   /** Max's: private UTxOs no payment takes (a reference script), which the private balance leaves out, or one a return through Lovejoin being sent spends. */
   leftOut?: LeftOutUtxo[];
   /** The histories of the private UTxOs it spends, each once, when known (shared/histories.ts). */
@@ -904,9 +904,10 @@ export interface PendingTx {
   /**
    * A payment in parts some of which wait for the part before to be in a block (background/parts.ts): how many went
    * of how many, and why the rest didn't once they won't (a part turned away, the part before never showed, or the
-   * session whose funding they are said they mustn't go).
+   * session whose funding they are said they mustn't go; `locked`: their record went with session storage, a lock's or
+   * a closed browser's, while the watch still had a part they'd follow, 1.6.0's release review).
    */
-  parts?: { sent: number; total: number; stopped?: "refused" | "unseen" | "cancelled" };
+  parts?: { sent: number; total: number; stopped?: "refused" | "unseen" | "cancelled" | "locked" };
   /**
    * Koios didn't answer its submit, so it may or may not have gone through.
    * The wallet holds its UTxOs back, sends it again now and then (the network
@@ -946,6 +947,13 @@ export interface PendingTx {
    */
   chain?: { first: string; total: number };
   /**
+   * A Bootstrap from the public account (`lovejoin-mix`, lovejoin.ts publicSubmit): its deposit alone, whose boxes
+   * stay held in the pool until brought back by hand, never on their way back as a mix's are, so Home's banner can't
+   * say they are (1.6.0's release review, 318-worker#0). The kind stays a mix's: what watches it and on which feed
+   * (pending.ts LOVEJOIN_KINDS, its landing's hold) is the same.
+   */
+  bootstrap?: true;
+  /**
    * Watched on the private index's feed, which every wallet shares and names
    * no transaction (feed.ts): Home asks every 5 s, as the answer costs a unit
    * at the server's edge and nothing at home (chunk 26b, choice 5). Not kept:
@@ -974,6 +982,11 @@ export interface AtStake {
   chainSending: boolean;
   /** A mix from the public account stopped at a transaction that may have gone through, unsettled yet (final review F1). */
   mixMaybeSent?: boolean;
+  /**
+   * Payments whose parts still wait to go, each as far as it went (background/parts.ts): removing the wallet stops the
+   * rest, which then stay in the private balance (1.6.0's release review). A session's funding is its session's, above.
+   */
+  partsWaiting?: Array<{ sent: number; total: number }>;
   /** What the wallet keeps for this network couldn't be read: what's open there isn't known. */
   unreadable?: boolean;
 }
@@ -1888,6 +1901,12 @@ export interface SessionOutSummary extends WithdrawSummary {
    * Absent where it won't be.
    */
   collateralReserve?: string;
+  /**
+   * A Bootstrap's from the private balance: what its one payment carries beside its boxes and the deposit's reserve
+   * for its way back, in lovelace, since it puts up no collateral and its return sweeps the deposit's change alone
+   * (1.6.0's release review, 318-rust#0). What that sweep doesn't spend comes back. Absent for anything else.
+   */
+  bootstrapReserve?: string;
 }
 
 /** A swap Minswap built for a session, or the wallet's own cancel of its orders, read by WebAssembly and waiting for Send. */
@@ -2008,6 +2027,15 @@ export interface LeftOutUtxo {
 }
 
 /**
+ * Why Max on the private side left UTxOs for another payment (`left`), as WebAssembly's parts say it (lib.rs
+ * `LeftWhy`): `tokens`, no part could take them with the rest (a token that would total more than an output holds);
+ * `fee`, too little ADA to pay for spending them, even with an earlier part's ADA carried forward; `limit`, the payment
+ * went as the most transactions one goes as (script-spend.ts `MAX_PARTS`). 1.5.0's one transaction told its two
+ * reasons apart by how many UTxOs it spent, which parts can't (1.6.0's release review, 321-parts-worker#6).
+ */
+export type LeftWhy = "tokens" | "fee" | "limit";
+
+/**
  * A token's way back through Lovejoin on a return (chunk 34's 34e): the token pool it goes into, as many whole boxes
  * as the return holds of it and pays for, or none. `pools`: its pools that can take a box now, the most used first,
  * for Change. A session's return reviews it; a swap's approval keeps the pool chosen.
@@ -2074,6 +2102,16 @@ export interface LovejoinFunding {
    * take (the review's switch says so; the owner's test of 1.6.0).
    */
   atThree?: number;
+  /**
+   * `lovejoin-funding`'s alone: what a mix from the private balance adds beside `lovelace` for its collateral to be
+   * mixed on its way into the 5 ₳ pool `collateralPool` (sessions.ts tailReserve), which comes back where it isn't
+   * spent. It's added while that pool, in the page's own read, holds its floor of others, two of them free, and takes
+   * new boxes (1.6.0's release review, 320-screens#2). None for a Bootstrap, with Settings' collateral switch off, or
+   * with no such pool shown. A mix from the public account puts up its own collateral and adds none.
+   */
+  collateralReserve?: string;
+  /** The 5 ₳ pool `collateralReserve` is for, by its id. */
+  collateralPool?: string;
 }
 
 /** A mix from the public account, built and signed, waiting for Send. Amounts in lovelace. */
@@ -2296,6 +2334,12 @@ export interface LovejoinLaunchSummary {
   inputs: number;
   /** From the private balance: the histories the UTxOs it spends have, when known. */
   histories?: HistoryClass[];
+  /**
+   * The wallet's own start of a pool of these values, sent at `at`, that no look has found yet (within a day): if both
+   * go through, the later one is a copy no wallet shows, what it locks gone for good. The chain takes both, so it's
+   * said on the review, never refused (lovejoin-launch.ts; 1.6.0's release review, 318-worker#1).
+   */
+  startedBefore?: { txHash: string; at: number };
 }
 
 /** A chain through Lovejoin the wallet sent that isn't all sent. */
@@ -2323,7 +2367,6 @@ export interface LovejoinChainView {
   txs?: LovejoinChainTx[];
 }
 
-/** One transaction of a chain through Lovejoin, as its row on the Lovejoin page lists it. */
 /**
  * One mix in Lovejoin's list (chunk 34's session 1, 5): every mix, from
  * either side and in any pool, followed until its last box is back. Its
@@ -2345,10 +2388,12 @@ export interface LovejoinMixView {
   /** Its boxes in each pool (none: the classic pool), how many are back, and how many a later mix took. */
   shares: Array<{ pool?: string; boxes: number; back: number; moved: number }>;
   /** Its chain, while the wallet keeps its record: how far it was sent, how it ended, and four boxes a mix (`width`). */
-  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };  /** Cleared from Your mixes (the owner's test of 1.6.0): the hub's list leaves it out. */
+  chain?: { total: number; sent: number; done?: true; stopped?: string; maybeSent?: true; width?: 4 };
+  /** Cleared from Your mixes (the owner's test of 1.6.0): the hub's list leaves it out. */
   cleared?: true;
 }
 
+/** One transaction of a chain through Lovejoin, as its row on the Lovejoin page lists it. */
 export interface LovejoinChainTx {
   txHash: string;
   kind: "deposit" | "mix" | "back";
@@ -2406,10 +2451,33 @@ export interface LovejoinHeld {
    * them aren't on chain yet once none is left to send (`confirming`),
    * the boxes its last run left (none before its first), why the last box that didn't go didn't (`why`), and, once
    * it stopped for that, the reason (`stopped`); `held` while a mix built and kept for Send holds what's left, which
-   * it waits for. None once it's over.
+   * it waits for; `waiting`, what else it waits for, in place of an older run's reason (LovejoinBringWait); and `late`
+   * once a withdraw it's confirming hasn't reached the chain BRING_LATE_MS after it was sent, a node may have dropped
+   * it, when the page offers Stop (1.6.0's release review, 321-lj-worker#1 and #4). None once it's over.
    */
-  bringing?: { back: number; pool?: string; left?: number; confirming?: number; why?: string; stopped?: string; held?: true };
+  bringing?: {
+    back: number;
+    pool?: string;
+    left?: number;
+    confirming?: number;
+    why?: string;
+    stopped?: string;
+    held?: true;
+    waiting?: LovejoinBringWait;
+    late?: true;
+  };
 }
+
+/**
+ * What Bring every box back now waits for before it can take what's left, or end (LovejoinHeld `bringing.waiting`),
+ * said by the page in place of an older run's reason: `again`, Mix my boxes again, whose chain will spend the boxes;
+ * `chain`, a chain of the wallet's being sent, still putting boxes in or mixing them; `landing`, one all sent, its last
+ * transactions on their way into the pool, 15 minutes at most (lovejoin.ts LANDING_MS); `collateral`, what's left is a
+ * session's 5 ₳ collateral, whose mix waits for giveme.my, a day at most; `withdraw`, a withdraw that may have gone
+ * through, looked for first; `payment`, a payment that may still go through, which Home's banner watches (1.6.0's
+ * release review, 321-lj-worker#1).
+ */
+export type LovejoinBringWait = "again" | "chain" | "landing" | "collateral" | "withdraw" | "payment";
 
 /** A session's order not filled yet, read from chain (chunk 24, Step 3). */
 export interface SessionOrder {
@@ -2454,6 +2522,11 @@ export interface Requests {
   "lock-deadline": { payload: None; result: { at: number | null; lockAfterMs: number } };
   /** Whether a chain through Lovejoin is being sent on any network: locking stops it partway. Read from the device; not activity. */
   "chains-sending": { payload: None; result: boolean };
+  /**
+   * Whether a payment's parts wait to go on any network (background/parts.ts): locking stops the rest. Read from the
+   * device; not activity (1.6.0's release review).
+   */
+  "parts-waiting": { payload: None; result: boolean };
   account: { payload: None; result: Account };
   /** The last reading, or a new one if there is none or `refresh` is set. */
   /** `kept`: the worker's kept reading alone, never read again: Home's look right after a send (blind test §9.3). */
@@ -2915,6 +2988,7 @@ const REQUEST_LIST = [
   "activity",
   "lock-deadline",
   "chains-sending",
+  "parts-waiting",
   "account",
   "balances",
   "wordlist",

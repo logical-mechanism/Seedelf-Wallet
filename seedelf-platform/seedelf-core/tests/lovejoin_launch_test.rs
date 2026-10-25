@@ -482,3 +482,59 @@ fn an_account_launch_takes_tokens_only_when_ada_alone_doesnt_pay() {
     .to_string();
     assert!(why.contains("public account"), "{why}");
 }
+
+#[test]
+fn an_account_launch_never_spends_a_utxo_carrying_a_reference_script() {
+    // 1.6.0's release review, 318-rust#1: an account launch is measured in the wallet, whose evaluator can't take a
+    // UTxO carrying a reference script (anyone can send the account one). Picked after the ADA alone fell short, as
+    // the account's inputs are ordered for a measure through Ogmios, it had the launch refused, though the token's
+    // UTxO pays. Such a UTxO is never picked, as the other launches and mixes paid from the account leave it out.
+    let w = world(true);
+    let change = Address::from_bech32(&account_row(true, [0x0a; 28], 0, 1, None).address).unwrap();
+    let token = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0";
+    let scripted = |tx: u8, lovelace: u64| UtxoResponse {
+        reference_script: Some(
+            serde_json::from_value(json!({
+                "hash": hex::encode([0x5c; 28]), "size": 14, "type": "plutusV3",
+                "bytes": "4d01000033222220051200120011",
+            }))
+            .unwrap(),
+        ),
+        ..account_row(true, [0x0a; 28], tx, lovelace, None)
+    };
+    let available = vec![
+        account_row(true, [0x0a; 28], 0x71, 20_000_000, None),
+        scripted(0x72, 10_000_000),
+        account_row(true, [0x0a; 28], 0x73, 30_000_000, Some((token, 7))),
+    ];
+    let collateral = account_row(true, [0x0a; 28], 0x7c, 5_000_000, None);
+    let launch = lovejoin::launch_from_account(
+        &w.chain,
+        &available,
+        Some(&collateral),
+        &terms(),
+        true,
+        &change,
+        None,
+    )
+    .unwrap();
+    let spent: Vec<String> = launch.inputs().iter().map(|u| u.tx_hash.clone()).collect();
+    assert_eq!(spent, [hex::encode([0x71; 32]), hex::encode([0x73; 32])]);
+    let done = launch.measure_locally().unwrap();
+    assert_eq!(done.change_tokens.items.len(), 1);
+    assert!(lovejoin::launched_pool(true, &done.tx.tx_bytes.0, launch.seed).is_ok());
+    // One that would pay alone is no seed either: refused before anything is built.
+    let why = lovejoin::launch_from_account(
+        &w.chain,
+        &[scripted(0x74, 40_000_000)],
+        Some(&collateral),
+        &terms(),
+        true,
+        &change,
+        None,
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(why.contains("public account"), "{why}");
+}

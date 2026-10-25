@@ -241,6 +241,10 @@ impl<'a> Patches<'a> {
     }
 }
 
+/// The fee [`settle`] drafts a transaction at first, before it's priced: what
+/// it pays out must leave each output its least after this too.
+pub(crate) const FIRST_DRAFT_FEE: u64 = 200_000;
+
 /// [`settle_fee`] with any pricing: `price(size)` is the fee a transaction of
 /// `size` signed bytes needs. `patches` go into each draft before it's
 /// priced; `signers` doesn't count the stake key a staking patch needs.
@@ -252,7 +256,7 @@ pub(crate) fn settle(
     price: impl Fn(u64) -> u64,
     mut build: impl FnMut(u64) -> Result<StagingTransaction>,
 ) -> Result<(u64, StagingTransaction)> {
-    let mut fee: u64 = 200_000;
+    let mut fee: u64 = FIRST_DRAFT_FEE;
     for _ in 0..5 {
         let staged = build(fee)?;
         let largest = staged
@@ -554,41 +558,19 @@ pub fn external_sweep(
     wallet_addr: &Address,
     signer: Hash<28>,
 ) -> Result<(BuiltTransaction, u64)> {
-    external_sweep_with(params, utxos, owner, wallet_addr, signer, &[])
-}
-
-/// [`external_sweep`] that pays `extra` first, outputs of ADA alone (a web
-/// wallet session's return putting its collateral into a Lovejoin box): what
-/// they hold isn't swept back. With none, it's [`external_sweep`]'s
-/// transaction exactly.
-pub fn external_sweep_with(
-    params: &ProtocolParameters,
-    utxos: &[UtxoResponse],
-    owner: &Register,
-    wallet_addr: &Address,
-    signer: Hash<28>,
-    extra: &[Output],
-) -> Result<(BuiltTransaction, u64)> {
     if utxos.is_empty() {
         bail!("Not Enough Lovelace/Tokens");
     }
     let (total, tokens) = assets_of(utxos.to_vec())?;
-    let paid = extra
-        .iter()
-        .try_fold(0u64, |sum, o| sum.checked_add(o.lovelace))
-        .context("output lovelace overflow")?;
     let inputs: Vec<Input> = utxos.iter().map(input_of).collect::<Result<_>>()?;
     // Conway charges for a reference script on a spent input too.
     let script_fee = reference_script_fee(params, reference_script_bytes(utxos)?)?;
     let price = |size| linear_fee(params, size).saturating_add(script_fee);
     let (fee, staged) = settle(1, Patches::staking(&Staking::none()), price, |fee| {
-        let lovelace = checked_lovelace(total, &[fee, paid])?;
+        let lovelace = checked_lovelace(total, &[fee])?;
         let mut tx = StagingTransaction::new();
         for input in &inputs {
             tx = tx.input(input.clone());
-        }
-        for output in extra {
-            tx = tx.output(output.clone());
         }
         for output in deposit_outputs(params, wallet_addr, owner, lovelace, &tokens)? {
             tx = tx.output(output);
@@ -751,9 +733,9 @@ pub fn move_in(
 }
 
 /// Send: the Cardano account pays `to`, a key address on this network
-/// (`network_flag`: `true` is preprod), in one output. The UTxOs are chosen,
-/// the change made, and `staking` and `invalid_hereafter` carried, as for
-/// [`move_in`].
+/// (`network_flag`: `true` is preprod), its tokens `MAXIMUM_TOKENS_PER_UTXO`
+/// to an output ([`Payee::Address`]). The UTxOs are chosen, the change made,
+/// and `staking` and `invalid_hereafter` carried, as for [`move_in`].
 #[allow(clippy::too_many_arguments)]
 pub fn account_send(
     params: &ProtocolParameters,
@@ -1500,10 +1482,12 @@ struct AccountPart {
 /// Who [`ScriptSpend::pay_rest`] pays what's left.
 #[derive(Debug, Clone)]
 pub enum RestTo {
-    /// A Seedelf: into the contract, in one output, under a fresh
-    /// re-randomization of its register, which must be [`is_payable`].
+    /// A Seedelf: into the contract, each output under a fresh
+    /// re-randomization of its register, which must be [`is_payable`]. Tokens
+    /// go `MAXIMUM_TOKENS_PER_UTXO` to an output ([`deposit_outputs`]).
     Seedelf(Register),
-    /// A key address on this network ([`is_payable_address`]), in one output.
+    /// A key address on this network ([`is_payable_address`]). Tokens go
+    /// `MAXIMUM_TOKENS_PER_UTXO` to an output.
     Address(Address),
 }
 
@@ -1764,11 +1748,18 @@ impl ScriptSpend {
 
     /// Patches `staking`'s certificates in, and takes their deposit out of
     /// the change: a Lovejoin launch registering `mix_logic`'s credential.
-    /// Only certificates no key signs for: the spend has no stake key, and
-    /// takes no withdrawal or vote.
+    /// Only a script's registration with Shelley's certificate (0), the one
+    /// certificate of a script's the ledger asks no witness for
+    /// (`Staking::registers_scripts_alone`). The spend adds no key's
+    /// signature and stages no certifying redeemer, so any other certificate,
+    /// a withdrawal or a vote would be built and measured, then refused by
+    /// the node; it's refused here, in words (1.6.0's release review,
+    /// 314-core#2).
     pub fn with_staking(mut self, staking: Staking) -> Result<Self> {
-        if staking.withdrawal.is_some() || staking.votes.is_some() || staking.signers() > 0 {
-            bail!("A Seedelf spend takes only certificates no key signs for");
+        if !staking.registers_scripts_alone() {
+            bail!(
+                "A Seedelf spend takes only a script's stake registration: any other certificate, a withdrawal or a vote needs a signature or a script the spend doesn't add"
+            );
         }
         self.staking = staking;
         Ok(self)

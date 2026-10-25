@@ -207,7 +207,8 @@ describe("Bring every box back now (the owner's test of 1.6.0)", SLOW, () => {
     await lj.bringAllBack("preprod");
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toEqual([]);
-    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0 });
+    // Said, in a word (1.6.0's release review, 321-lj-worker#1).
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0, waiting: "chain" });
     expect(await lj.returning("preprod")).toBe(true);
     // Once it's sent, the run goes on.
     await lj.chainSent("preprod", "e0".repeat(32), 0);
@@ -387,12 +388,12 @@ describe("Bring every box back now: only what's there, and its waits (1.6.0's re
     await busyFor(t, 60_000);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     expect((await lj.held("preprod")).bringing).toEqual({ back: 0, left: 1, held: true });
-    // It's sent: the run waits for the chain being sent now, and no longer says the mix holds them.
+    // It's sent: the run waits for the chain being sent now, and says that, no longer that the mix holds them.
     await publicMix(lj, false);
     await t.wallet.withKeys(() => t.session.set("test.d0", { txs: [{ txHash: "d0".repeat(32) }, { txHash: "d1".repeat(32) }] }));
     await busyFor(t, 60_000);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
-    expect((await lj.held("preprod")).bringing).toEqual({ back: 0, left: 1 });
+    expect((await lj.held("preprod")).bringing).toEqual({ back: 0, left: 1, waiting: "chain" });
   });
 
   it("says nothing of none left when a mix built while it waited is sent: that mix's boxes stay, each after its wait", async () => {
@@ -463,7 +464,7 @@ describe("Bring every box back now: only what's there, and its waits (1.6.0's re
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     expect(t.collateral.asked).toEqual([]);
     expect(t.koios.submitted).toEqual([]);
-    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0 });
+    expect((await sealed(t)).bringing).toEqual({ at: expect.any(Number), back: 0, waiting: "again" });
   });
 
   it("looks for a withdraw Koios didn't answer before taking the next box, and its box's way back lands in the history", async () => {

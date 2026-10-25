@@ -24,6 +24,11 @@
 // in the same order give the same due times. What WebAssembly draws for
 // itself (a withdraw's fresh register) gives each withdraw a hash of its own
 // on each run, so those are named in the order they appear.
+//
+// Both are met again with the token pools every preprod wallet is handed
+// from its first read shown (the bundled head start), the classic pool's
+// plans and transactions against the same record: nothing is recorded for
+// it (1.6.0's release review, x-compat#2).
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,10 +36,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { LovejoinService } from "../src/background/lovejoin";
+import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
 import { SESSION_BACK, SessionService } from "../src/background/sessions";
-import { NETWORKS } from "../src/networks";
+import { NETWORKS, type NetworkName } from "../src/networks";
 import { txIdOf } from "./fixtures/cbor";
 import { busyFor, koiosPreprod, loadTestWasm, minswapEstimate, sessionSwap, testBalances, vectors, withdrawPreprod } from "./fakes";
 
@@ -105,12 +110,16 @@ function atSession(tx_hash: string, tx_index: number, value: string, block_time 
 
 type Env = ReturnType<typeof testBalances> & { lovejoin: LovejoinService; sessions: SessionService };
 
+/** The pools discovery hands the wallet on a network, as sw.ts wires it: none, the classic pool alone, as 1.5.0 read. */
+type Handed = (network: NetworkName) => Array<PoolRef | { copy: PoolRef }>;
+
 /**
  * Lovejoin and the sessions over the fakes, with every delay drawn from
  * `random`, and giveme.my's witness stood in for (its recorded answer is
- * another transaction's).
+ * another transaction's). `handed`: the pools discovery hands it, pool reads
+ * and what it last kept alike.
  */
-function wire(t: ReturnType<typeof testBalances>, random: () => number): Env {
+function wire(t: ReturnType<typeof testBalances>, random: () => number, handed?: Handed): Env {
   const wasm = loadTestWasm();
   t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
   const collateral = () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch);
@@ -126,6 +135,7 @@ function wire(t: ReturnType<typeof testBalances>, random: () => number): Env {
     collateral,
     store: t.store,
     random,
+    ...(handed ? { pools: async (n: NetworkName) => handed(n), known: async (n: NetworkName) => handed(n) } : {}),
   });
   const sessions = new SessionService({
     ...t.deps,
@@ -283,12 +293,13 @@ function normalized(value: unknown, name: (h: string) => string): unknown {
 // The plans (backward compatibility 3)
 // ---------------------------------------------------------------------------
 
-async function plans(): Promise<unknown> {
+/** `handed`: the pools discovery hands the wallet (wire); none, the classic pool alone, as 1.5.0 planned. */
+async function plans(handed?: Handed): Promise<unknown> {
   const out: Record<string, unknown> = {};
   // What mixing a number of boxes takes, as the tile and the reviews read it, on both networks.
   const funding: unknown[] = [];
   {
-    const t = wire(testBalances(), seeded(1));
+    const t = wire(testBalances(), seeded(1), handed);
     await t.wallet.create(PHRASE, PASSWORD);
     for (const network of ["preprod", "mainnet"] as const) {
       for (const depth of [0, 1, 2, 3] as const) {
@@ -306,7 +317,7 @@ async function plans(): Promise<unknown> {
   // What a session's spare ADA pays for, at each depth, a return's and mixing again's.
   const planned: unknown[] = [];
   for (const lovelace of ["12000000", "25000000", "40000000", "105000000", "300000000"]) {
-    const t = wire(testBalances(), seeded(2));
+    const t = wire(testBalances(), seeded(2), handed);
     await t.wallet.create(PHRASE, PASSWORD);
     const rows = [atSession("c1".repeat(32), 0, lovelace), atSession("c3".repeat(32), 2, "3000000"), atSession("c2".repeat(32), 1, "5000000")];
     for (const depth of [0, 1, 2, 3] as const) {
@@ -323,7 +334,7 @@ async function plans(): Promise<unknown> {
   const returns: unknown[] = [];
   for (const lovelace of ["25000000", "40000000", "105000000"]) {
     for (const depth of [1, 2, 3] as const) {
-      const t = wire(testBalances(), seeded(3));
+      const t = wire(testBalances(), seeded(3), handed);
       await t.wallet.create(PHRASE, PASSWORD);
       await t.deps.preferences.set({ lovejoinDepth: depth });
       await withSession(t, lovelace);
@@ -340,7 +351,7 @@ async function plans(): Promise<unknown> {
   // A swap's review and Stop's, as the pool's room has them.
   {
     const ASK = minswapEstimate.ask;
-    const t = wire(testBalances(), seeded(4));
+    const t = wire(testBalances(), seeded(4), handed);
     await t.wallet.create(PHRASE, PASSWORD);
     const spend = withdrawPreprod.amount.evaluation as { result: unknown[] };
     t.koios.evaluation = (body: { params: { additionalUtxo?: unknown[] } }) =>
@@ -351,7 +362,7 @@ async function plans(): Promise<unknown> {
     out.swap = { quote: quote.lovejoin, review: outBuilt.lovejoin };
   }
   {
-    const t = wire(testBalances(), seeded(5));
+    const t = wire(testBalances(), seeded(5), handed);
     await t.wallet.create(PHRASE, PASSWORD);
     await t.store.set("sessions.preprod", {
       next: 1,
@@ -521,9 +532,10 @@ function callsSince(t: ReturnType<typeof testBalances>, from: number, name: (h: 
  *
  * The schedule is compared whole but for `mixes`, which 1.5.0 never wrote:
  * chunk 34's list of every mix, followed until its boxes are back.
+ * `handed`: the pools discovery hands the wallet, and the restore's (wire).
  */
-async function afterUpdate(vault: Vault): Promise<unknown> {
-  const t = wire(testBalances(), seeded(20));
+async function afterUpdate(vault: Vault, handed?: Handed): Promise<unknown> {
+  const t = wire(testBalances(), seeded(20), handed);
   for (const [k, v] of Object.entries(vault.local)) t.local.data.set(k, v);
   t.koios.evaluation = AGREES;
   t.koios.addedToAccounts = vault.rows.map((r) => ({ ...r }));
@@ -621,7 +633,7 @@ async function afterUpdate(vault: Vault): Promise<unknown> {
   await step("sessions", async () => (await t.sessions.list("preprod")).map((s) => ({ index: s.index, chain: s.chain })));
 
   // A restore of the same phrase, in another browser, on the chain as it now stands (backward compatibility 8).
-  const r = wire(testBalances(), seeded(30));
+  const r = wire(testBalances(), seeded(30), handed);
   r.clock.now = t.clock.now;
   await r.wallet.create(PHRASE, PASSWORD);
   r.koios.evaluation = AGREES;
@@ -634,6 +646,62 @@ async function afterUpdate(vault: Vault): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// With the token pools shown (1.6.0's release review, x-compat#2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The pools discovery hands every wallet on `network` from its first read: the bundled head start's (preprod's MIN
+ * pool of 4.5 ₳ and 100 MIN a box, and its 5 ₳ ADA pool; none on mainnet), as discovery's kept() merges them. Read
+ * only when this case runs: 1.5.0's tree, where this file records, has no such file.
+ */
+const headStart: Handed = (network) => {
+  const file = JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as Record<string, { pools: Array<{ ref: PoolRef; copy?: true }> }>;
+  return file[network]!.pools.map((p) => (p.copy ? { copy: p.ref } : p.ref));
+};
+
+type Plans = {
+  funding: Array<{ network: string; depth: number; funding: Record<string, unknown> }>;
+  swap: { quote: Record<string, unknown>; review: Record<string, unknown> };
+};
+
+/**
+ * `plans` but what a token pool shown adds by design, none of it the classic pool's: what the Mix form counts for a
+ * collateral's mix where a 5 ₳ pool is shown (lovejoin-funding's collateralReserve and collateralPool), and a swap's
+ * way for the token it gets, through a pool of it (ways, values). As the user types, the quote funds that token's boxes
+ * beside the swap (fund), so a stop would bring their ADA back through the classic pool too (ifStopped): the quote's
+ * other figures are compared. At Review the token's pool has no room, so the review's are all 1.5.0's but its way.
+ */
+function classicPlans(plans: unknown): unknown {
+  const p = structuredClone(plans) as Plans;
+  for (const f of p.funding) {
+    delete f.funding.collateralReserve;
+    delete f.funding.collateralPool;
+  }
+  for (const key of ["ways", "values", "fund", "ifStopped"]) delete p.swap.quote[key];
+  for (const key of ["ways", "values"]) delete p.swap.review[key];
+  return p;
+}
+
+type After = { trace: Array<{ label: string; result?: unknown; calls?: string[] }>; restored: Record<string, unknown> };
+
+/**
+ * `after` but what a token pool shown adds by design: what's asked (calls), since every pool read names every shown
+ * pool's mix box (one read for all, never one naming a pool alone), a return reads the pools again for its
+ * collateral's 5 ₳ pool, and a token pool's read asks the parameters; and the token pools the hub lists (status's and
+ * held's `pools`). Each run's sends, results and schedule are compared whole.
+ */
+function classicAfter(after: unknown): unknown {
+  const a = structuredClone(after) as After;
+  for (const step of a.trace) {
+    delete step.calls;
+    if (step.result && typeof step.result === "object") delete (step.result as Record<string, unknown>).pools;
+  }
+  delete a.restored.calls;
+  for (const key of ["status", "held"]) delete (a.restored[key] as Record<string, unknown>).pools;
+  return a;
+}
+
+// ---------------------------------------------------------------------------
 
 describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => {
   afterEach(() => {
@@ -642,6 +710,10 @@ describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => 
 
   if (RECORD) {
     it("records 1.5.0", async () => {
+      // Only 1.5.0's own tree records it: run on a later one, the fixture would hold that tree's behaviour under 1.5.0's
+      // name, and the gate would hold every later tree to it (1.6.0's release review, x-compat#2).
+      const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+      if (version !== "1.5.0") throw new Error(`RECORD_1_5_0 records 1.5.0 alone, in a worktree at 63f87b8: this tree is ${version}`);
       const vault = await makeVault();
       // The vault as JSON keeps it: what's replayed is what's stored.
       const stored = JSON.parse(JSON.stringify(vault)) as Vault;
@@ -659,5 +731,31 @@ describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => 
 
   it("finishes a 1.5.0 vault left mid-flight by an update as 1.5.0 did, and a restore finds what 1.5.0's found", async () => {
     expect(await afterUpdate(recorded.vault)).toEqual(recorded.after);
+  });
+
+  describe("with the token pools every preprod wallet is handed shown (1.6.0's release review, x-compat#2)", () => {
+    const bundled = (JSON.parse(readFileSync(new URL("../src/lovejoin-pools.json", import.meta.url), "utf8")) as {
+      preprod: { pools: Array<{ id: string; boxLovelace: string; token?: unknown }> };
+    }).preprod.pools;
+    const minPool = bundled.find((p) => p.token)!;
+    const fivePool = bundled.find((p) => !p.token && p.boxLovelace === "5000000")!;
+
+    it("plans every return and mix as 1.5.0 did, but what a shown pool adds of its own", async () => {
+      const got = (await plans(headStart)) as Plans;
+      expect(nearly(classicPlans(got), classicPlans(recorded.plans))).toEqual([]);
+      // What's left out is the pools' own: the 5 ₳ pool's reserve wherever a preprod mix makes mixes, none on mainnet;
+      // the token's way into the MIN pool as the user types, and back directly at Review, its pool empty.
+      for (const f of got.funding) expect(f.funding.collateralPool, `${f.network} ${f.depth}`).toBe(f.network === "preprod" && f.depth > 0 ? fivePool.id : undefined);
+      expect(got.swap.quote.ways).toEqual([expect.objectContaining({ pool: minPool.id })]);
+      expect(got.swap.review.ways).toEqual([expect.objectContaining({ boxes: 0, pools: [] })]);
+    });
+
+    it("finishes a 1.5.0 vault left mid-flight by an update as 1.5.0 did, its sends and schedules alike, and a restore finds what 1.5.0's found", async () => {
+      const got = (await afterUpdate(recorded.vault, headStart)) as After;
+      expect(classicAfter(got)).toEqual(classicAfter(recorded.after));
+      // The hub lists both shown pools all along, as every preprod wallet's does.
+      const status = got.trace.find((s) => s.label === "status")!.result as { pools?: Array<{ id: string }> };
+      expect(status.pools?.map((p) => p.id).sort()).toEqual([minPool.id, fivePool.id].sort());
+    });
   });
 });

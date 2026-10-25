@@ -111,7 +111,8 @@ These hold for every change to what the wallet shows, from one label to a whole 
 
 On the built extension (`npm run build`, then load `dist/` unpacked), in the side panel and in a tab.
 
-1. **The automated layers:** `cargo test --workspace --locked`, the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=false npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
+1. **The automated layers:** `cargo test --workspace --locked`, and the one test it skips as slow, payments in parts over UTxOs of every shape (offline, about a minute: `cargo test --release --locked -p seedelf-wasm --test payment_parts_shapes_test -- --ignored`), the WASM tests, `npm test` and `VITE_ENABLE_MAINNET=false npm test`, and `npm run e2e`. Then `LIVE_KOIOS=1 npx vitest run tests/live.test.ts`, and `node e2e/live/run.mjs all` on the funded test wallet. Keep the six hashes.
+   - The live runs put the wallet on preprod before it opens, so they run on `npm run build`'s build. Each restores the test wallet in a fresh profile, and a restore can't know a Bootstrap's hold: a held box someone else's mix moved can come back by itself while a run is open. So run them on a wallet holding no Bootstrap's boxes (the phrase in `.preprod-test-wallet.txt` picks it).
 2. **Onboarding:** create a wallet from the toolbar button (it opens a tab), and once from the side panel (it opens one too): reveal, confirm three words, set a password. Restore that phrase in another Chrome profile and check the addresses match, and that Home says *Wallet restored* with what the phrase holds (nothing yet, for this one). Restore a 12- or 15-word phrase from Lace or Eternl, and check its account. **Restore a phrase that has used more than one account** (make one in Lace, or fund account 1's address): the picker appears on its own, and both accounts are there.
 3. **Public accounts** (chunk 18): switch from Home's Public heading ("Public account 2 ▾") and from Settings → Public accounts, and check the balance, Activity, Receive, the UTxOs screen, Staking and the collateral are all the account you chose. Name one and check the name shows in the picker and on Home. *Look for the next account* with nothing there says so and costs one request. **Make private from two accounts, then send privately from the balance**: the review names both accounts and says the spend ties them together. Add an account by a number of your own (1338, say) that has never been used, and check it can be switched to and received into. On Send publicly, **Your accounts** offers the others and picking one says what the payment reveals rather than refusing it. The × clears each To field, on both sides and on Make public, and Make public offers **Your accounts** too. Past eight accounts the Settings list filters by number or name. **Settings → Sites picks the account sites use:** connect a site, switch the wallet to another account, and check the site still sees the dApp account and is never refused; then change the dApp account and check the site sees the new one.
 4. **Locking:**
@@ -130,7 +131,7 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - send to a Seedelf, pasting a name someone else gave you;
    - withdraw to an address and to a `$handle`;
    - remove a Seedelf;
-   - stake with a pool from the browser, change pool, delegate the vote to a DRep by its ID, withdraw rewards, open **Rewards history**, and stop staking;
+   - stake with a pool from the browser (its **Pool details** end with its **Return on stake**), change pool, delegate the vote to a DRep by its ID, withdraw rewards, open **Rewards history** and **Delegation history**, and stop staking;
    - become a DRep with the account's own vote, vote on a live governance action, change the profile, and retire as a DRep;
    - send with *Use staking rewards when spending* on, then off;
    - set the collateral of a public account holding no 5 ₳ UTxO of ADA alone (Settings → Collateral), which pays itself 5 ₳: Public activity names that payment *Set collateral*;
@@ -139,6 +140,10 @@ On the built extension (`npm run build`, then load `dist/` unpacked), in the sid
    - a session found after a restore whose account holds ADA but no UTxO of exactly 5 ₳ of ADA alone: bring a session back, pay its address 20 ₳ from another wallet, then restore the phrase in a fresh profile, with *Bring private sessions back through Lovejoin* on, as by default. Its page offers **Put in 5 ₳ for Lovejoin** beside Bring it back: review it and Send. Once it's there, **Bring it back** goes through Lovejoin;
    - a private swap from the Minswap tile through to everything back, and one stopped partway;
    - a Lovejoin mix from each side, and **Bring one back now**; Public activity names the public account's deposit *Into Lovejoin* and its mixes *Lovejoin mix*;
+   - Lovejoin's pools beside the classic one (preprod's head start shows MIN's and one of 5 ₳ boxes of ADA): a mix in one from each side; with **Four boxes a mix** on (Settings), a mix whose review says four, or why three; a Bootstrap (*Help start the pool*, under Mix) from each side, then **Bring one back** and **Bring them all back**; and **Start a pool**'s review. Send a start only to test a change to it: every pool started shows to every preprod wallet, and its ADA never comes back;
+   - a private swap into a token with a pool shown: *What you get, on the way back* names the pool, and the tokens come back through it. With the 5 ₳ pool shown and two other people's boxes free in it, the return first puts the session's 5 ₳ collateral in and mixes it once (Settings' *Mix a session's 5 ₳ collateral*, on by default), and that mix waits for giveme.my;
+   - **Bring every box back now** (Settings), and a pool's own, on its page;
+   - **Max** on Send privately and on Make public from more than 20 UTxOs: the review's *Transactions* says how many it goes as, and Home follows each to the last;
    - **Show image** on an NFT, in each balance;
    - switch the language to Español and to 日本語, read Home and a review in each, and back to English.
 
@@ -169,6 +174,7 @@ From the repository root, on a `web-wallet/release-<x.y.z>` branch from `main`:
 ```bash
 cd seedelf-platform
 cargo test --workspace --locked
+cargo test --release --locked -p seedelf-wasm --test payment_parts_shapes_test -- --ignored
 cd seedelf-web-wallet/extension
 npm ci
 release_version=1.6.0
@@ -195,7 +201,21 @@ Then complete the manual [preprod checklist](#preprod-checklist-before-a-release
 
 ### 2. On `main`, after the merge: build and test the store package
 
-From the repository root, at the merge commit, with nothing changed or added (`git status --porcelain` prints nothing):
+**First, if the release changed `seedelf-data/` or the token list (`extension/src/tokens/list.json`, which the API builds in), deploy the API:** Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against, and checklist item 9 reads this one from the store's build. The deploy checks `/health` and CORS alone, so then check, from any machine, the routes those don't read. Each line should print `200 application/json`:
+
+```bash
+api=https://mainnet.seedelf.logicalmechanism.io
+curl -s -o /dev/null -w '%{http_code} %{content_type} lovejoin/pools\n' "$api/seedelf/v1/mainnet/lovejoin/pools"
+curl -s -o /dev/null -w '%{http_code} %{content_type} lovejoin/tokens\n' "$api/seedelf/v1/mainnet/lovejoin/tokens"
+curl -s -o /dev/null -w '%{http_code} %{content_type} pool_history\n' "$api/api/v1/pool_history?_pool_bech32=pool1gaztx97t53k47fr7282d70tje8323vvzx8pshgts30t9krw62tm&select=epoch_no,active_stake,block_cnt,deleg_rewards&order=epoch_no.desc&limit=18"
+curl -s -o /dev/null -w '%{http_code} %{content_type} account_update_history\n' -X POST -H 'content-type: application/json' \
+  -d '{"_stake_addresses":["stake1uxkjkwuygxqf24wacumm8ph2nlhp9e0ahv37fshdr060cyc36wvr9"]}' \
+  "$api/api/v1/account_update_history?select=action_type,tx_hash,epoch_no,absolute_slot,block_time&action_type=neq.withdrawal&order=absolute_slot.asc,tx_hash.asc,action_type.asc&offset=0&limit=1000"
+```
+
+The first two are the token pools' routes: refused, they send every wallet's token pool reads to Koios, which then learns which boxes are the wallet's. The last two ask exactly what the wallet asks for a pool's history and for a delegation history: a 404 or a 400 there holds the wallet's whole public part on Koios for 5 minutes. `status`'s `.prev` is what a `rollback` would put back, and the runbook's *Routine* says how to tell what it lacks.
+
+Then, from the repository root, at the merge commit, with nothing changed or added (`git status --porcelain` prints nothing):
 
 ```bash
 git switch main
@@ -211,8 +231,6 @@ git rev-parse HEAD
 ```
 
 No `npm version`, `npm run tokens`, `npm run dreps` or `npm run lovejoin-pools` here. On `main` the bump fails ("Version not changed"), and each refresh rewrites a bundled file no commit has, so the zip wouldn't be the recorded commit's. `release_version` is read from `package.json`, which the merge brought: the zip is the version part 1 set.
-
-**If the release changed `seedelf-data/` or the token list (`extension/src/tokens/list.json`, which the API builds in), deploy it before the upload:** Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against.
 
 The package to upload is:
 
@@ -258,7 +276,7 @@ The listing's text, its images and the privacy policy are in [store/](store/READ
 4. **Run [the preprod checklist](#preprod-checklist-before-a-release)** on a dev build (`npm run build`). The live runs expect the dev build's pinned ID.
 5. **The images:** if the UI changed, run `npm run store:images` and look at `docs/store/images/`, and at its `es/` and `ja/`: each screen is shot in all three languages. They're made from the recordings on mainnet, so they show the MAINNET badge and no test-network strip ([store/README.md](store/README.md), *Graphic assets*). The Japanese ones need a Japanese font on the machine (Noto Sans CJK JP here), or Chromium draws boxes.
 6. **Commit and merge:** the bump, both lists and the pools' head start, the images and any change to the listing's text, in the release branch's PR into `main`.
-7. **Deploy the data layer, if the release changed `seedelf-data/` or `extension/src/tokens/list.json`** (step 2's decimals included; the API builds the token list in, and shows a Lovejoin pool only of a listed token, so a token added to the list without a deploy leaves its pools hidden from every mainnet wallet: 1.6.0's release review, DATA-2): Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run and `curl -s https://mainnet.seedelf.logicalmechanism.io/health` ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against: a route the API lacks answers 404, and a request it takes in another shape 400; either holds the wallet's whole public part on Koios for 5 minutes. It goes before the package, so the store build's check on mainnet (step 9) reads it.
+7. **Deploy the data layer, if the release changed `seedelf-data/` or `extension/src/tokens/list.json`** (step 2's decimals included; the API builds the token list in, and shows a Lovejoin pool only of a listed token, so a token added to the list without a deploy leaves its pools hidden from every mainnet wallet: 1.6.0's release review, DATA-2): Actions → *Data layer deploy*, `deploy`, on `main`, approved, then a `status` run, `curl -s https://mainnet.seedelf.logicalmechanism.io/health`, and [part 2](#2-on-main-after-the-merge-build-and-test-the-store-package)'s checks of the routes `/health` doesn't read ([seedelf-data/deploy/README.md](../../../seedelf-data/deploy/README.md)). A wallet the store ships must never meet an API older than the one it was reviewed against: a public route the API lacks answers 404, and a request it takes in another shape 400, and either holds the wallet's whole public part on Koios for 5 minutes; a token pools' route refused sends the token pools' reads to Koios. It goes before the package, so the store build's check on mainnet (step 9) reads it.
 8. **Build the package**, on `main` at the merge commit, with `git status --porcelain` printing nothing: `npm run package` in `extension/`.
    - It builds with `VITE_ENABLE_MAINNET=true` and `VITE_STORE_BUILD=true`: mainnet by default, preprod in Settings, and no dev key.
    - It refuses a `dist/` with a key, one whose version doesn't match `package.json`, and one whose manifest lacks `https://api.koios.rest/*` (a preprod-only build).

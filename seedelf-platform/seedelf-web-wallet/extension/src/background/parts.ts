@@ -10,8 +10,11 @@
 // the parts that go at Send are, so a worker stopped meanwhile leaves them to the pump, never held by nobody. The
 // sessions alarm and Home's poll send each once its parent shows (`pumpParts`), never as the wallet unlocks. A lock
 // wipes session storage, and with it what waits: the rest never go, and what they'd have spent stays in the private
-// balance. A session's funding short of them is the session's to tell (10a's rule: sessions.ts `fundingState`), and
-// is told at once when a part is turned away (`stopped`); it's asked before each goes whether it still may (`mayGo`).
+// balance. The lock countdown and Remove wallet say so first (`waiting`), and the part the watch holds keeps how far
+// the payment went, sealed with it, so Home says it went in part, never that it's confirmed (1.6.0's release review:
+// handlers.ts `pending-tx`). A session's funding short of them is the session's to tell (10a's rule: sessions.ts
+// `fundingState`), and is told at once when a part is turned away (`stopped`); it's asked before each goes whether it
+// still may (`mayGo`).
 
 import { t } from "../i18n";
 import type { NetworkName } from "../networks";
@@ -254,7 +257,8 @@ async function letGo(
     return;
   }
   if (!own && (await waitingOn(deps, network))[first]) return;
-  const unsure = await nameParts(deps, network, hashes[went - 1]!, { first, total: hashes.length }).catch(() => false);
+  const total = hashes.length;
+  const unsure = await nameParts(deps, network, hashes[went - 1]!, { first, total }, { sent: went, total }).catch(() => false);
   const { after, kind, what, session } = p;
   const w: Waiting = {
     hashes,
@@ -353,6 +357,12 @@ export async function holdWaiting(
   const w: Waiting = { hashes, after, sent: goNow, at: deps.now(), kind, what, ...(session !== undefined ? { session } : {}) };
   await writeWaiting(deps, network, first, (cur) => (cur && (cur.sent !== goNow || cur.stopped) ? cur : w));
   sendingOn(deps).delete(first);
+  // The watch holds the last that went: named with how far the payment went, and sealed again where it may still go
+  // through, so a lock that wipes what waits never has Home call the payment confirmed, nor a session funded, once it
+  // lands. Send writes it ahead with its last part (`sendParts`); a session's funding's is named here (1.6.0's release
+  // review).
+  const total = hashes.length;
+  await nameParts(deps, network, hashes[goNow - 1]!, { first, total }, { sent: goNow, total }).catch(() => false);
   await startRuns(deps.session);
 }
 
@@ -444,7 +454,13 @@ async function step(deps: ScriptSpendDeps, network: NetworkName, first: string, 
       return;
     }
     try {
-      await send(deps, network, hash, waitingPartKey(hash), w.kind, w.what, { chain: { first, total }, waited: reservationName(first) });
+      // With more still to go after it, how far the payment went is written ahead and sealed with it (pending.ts).
+      const more = i + 1 < total ? { parts: { sent: i + 1, total } } : {};
+      await send(deps, network, hash, waitingPartKey(hash), w.kind, w.what, {
+        chain: { first, total },
+        waited: reservationName(first),
+        ...more,
+      });
     } catch (e) {
       if (e instanceof WalletLocked || isTrap(e)) throw e;
       // Another payment went maybe sent since that wait (a site's funding written ahead while giveme.my was asked):
@@ -531,6 +547,18 @@ export class PartsService {
   }
 
   /**
+   * The payments on `network` whose parts still wait to go, each as far as it went: a lock or Remove wallet stops the
+   * rest, as it stops a chain through Lovejoin, so the lock countdown and Remove wallet say so first (1.6.0's release
+   * review). One Send is still sending counts, since it's cut too; parts that stopped don't, kept only for Home's
+   * banner. `session`: a session's funding. Throws if locked.
+   */
+  async waiting(network: NetworkName): Promise<Array<{ sent: number; total: number; session?: number }>> {
+    return Object.values(await waitingOn(this.deps, network))
+      .filter((w) => !w.stopped && w.sent < w.hashes.length)
+      .map((w) => ({ sent: w.sent, total: w.hashes.length, ...(w.session !== undefined ? { session: w.session } : {}) }));
+  }
+
+  /**
    * The payment whose parts went or stopped last on `network`, as Home's banner shows one, for when the watch holds
    * none (pending.ts lets a private one go once it's seen, or after 10 minutes): its last part that went, landed once
    * the next one's wait saw it (`seen`) or a part after it was turned away, which happens once it's there, or at Send
@@ -561,6 +589,18 @@ export class PartsService {
 }
 
 /**
+ * Whether payment `hashes`, kept under `key`, has parts the pump holds (`holdWaiting`): its record is there, Send's no
+ * longer, and Send's own copies of the parts after the first are gone. A Send pressed again after one turned away
+ * still has them, and sends them again (`splitParts`).
+ */
+async function pumpHolds(deps: ScriptSpendDeps, network: NetworkName, key: string, hashes: string[]): Promise<boolean> {
+  const w = (await waitingOn(deps, network))[hashes[0]!];
+  if (!w || w.sending) return false;
+  const kept = await deps.wallet.withKeys(() => Promise.all(hashes.slice(1).map((_, i) => deps.session.get<Kept>(partKey(key, i + 1)))));
+  return kept.every((k, i) => k?.txHash !== hashes[i + 1]);
+}
+
+/**
  * Sends a payment kept in parts (keepParts), one after another, each as `send` sends one (written ahead, watched); the
  * last that goes now named in Home's banner by the first, as a chain is (`PendingTx.chain`). One part is sent as one
  * always was. A part that spends what the one before carried forward, and every part after it, waits for that one to
@@ -568,7 +608,9 @@ export class PartsService {
  * goes now after the first doesn't, or Koios doesn't answer one before the last of them (nothing more goes while it may
  * still go through), it says how many went, and why the rest didn't: those that went stay watched, in Home's banner
  * and Activity, and those that would have waited never go. The review's age is checked once, as the first goes: a Send
- * pressed in time sends every part (1.6.0's review).
+ * pressed in time sends every part (1.6.0's review). Every part is checked as the first goes, so one that can't go
+ * refuses the whole review, nothing sent (script-spend.ts `send`). Pressed again on a first part that may have gone,
+ * once the pump holds the rest, only the first goes again (`pumpHolds`, 1.6.0's release review).
  */
 export async function sendParts(
   deps: ScriptSpendDeps,
@@ -581,6 +623,15 @@ export async function sendParts(
   const first = await deps.wallet.withKeys(() => deps.session.get<Kept>(key));
   const hashes = first?.txHash === txHash && first.network === network && first.partHashes?.length ? first.partHashes : [txHash];
   const total = hashes.length;
+  // Send pressed again on a first part that may have gone (kept as sent) once the parts after it are the pump's
+  // (`holdWaiting`): only the first goes again, as it was, and the answer says how far the payment went, as the first
+  // Send's did. Tried as well, the rest weren't Send's to send any more, and the answer said they didn't go and to
+  // review what's left, while the pump still sent them: what's left would be paid twice (1.6.0's release review).
+  if (total > 1 && first?.sentCbor !== undefined && (await pumpHolds(deps, network, key, hashes))) {
+    const again = await send(deps, network, txHash, key, kind, what, { chain: { first: txHash, total }, parts: { sent: 1, total } });
+    const progress = await partsOf(deps, network, txHash);
+    return progress ? { ...again, parts: progress } : again;
+  }
   const split = await splitParts(deps, network, key, hashes, kind, what);
   const { goNow } = split;
   let sent: PendingTx | undefined;
@@ -589,8 +640,10 @@ export async function sendParts(
       const chain = total > 1 && i === goNow - 1 ? { chain: { first: hashes[0]!, total } } : {};
       // After the first, sent however long since the review, as a part that waited is: the first's send checked it.
       const after = i > 0 ? { waited: reservationName(hashes[0]!) } : {};
+      // With parts still to go after it, how far the payment went is written ahead and sealed with it (pending.ts).
+      const more = i === goNow - 1 && goNow < total ? { parts: { sent: goNow, total } } : {};
       try {
-        sent = await send(deps, network, hash, partKey(key, i), kind, what, { ...chain, ...after });
+        sent = await send(deps, network, hash, partKey(key, i), kind, what, { ...chain, ...after, ...more });
       } catch (e) {
         if (i === 0 || isTrap(e)) throw e;
         throw new Error(t("worker.parts.partly", { sent: i, total, why: e instanceof Error ? e.message : String(e) }));

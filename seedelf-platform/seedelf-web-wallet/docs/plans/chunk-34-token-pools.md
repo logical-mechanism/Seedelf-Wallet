@@ -207,7 +207,7 @@ Nothing a 1.5.x user has, or relies on, moves. Each point is a test or a gate, n
 
 **What it doesn't check, and what it costs**
 - **Mix inputs aren't value-checked.** An over-funded box can be mixed by anyone, and the excess goes to whoever builds the mix.
-- **CPU:** a token pool costs about 11–12M more than an ADA pool. A wallet-paid mix uses 58% of the budget at N=3 and 98.8% at N=4. Confirmed in the wallet's own mix, by the network too, in [lovejoin-mix-width.md](../lovejoin-mix-width.md): 5–10M more than the classic pool, and N=4 fits by 111M steps, so token pools stay three wide like the classic one. A box-paid withdraw to a key address cost 349,586 lovelace on preprod.
+- **CPU:** a token pool costs about 11–12M more than an ADA pool. A wallet-paid mix uses 58% of the budget at N=3 and 98.8% at N=4. Confirmed in the wallet's own mix, by the network too, in [lovejoin-mix-width.md](../lovejoin-mix-width.md): 5–10M more than the classic pool, and N=4 fits by 111M steps, as on the classic pool: three by default, and four an option on every pool since [D3](#d3--four-boxes-a-mix-as-an-option). A box-paid withdraw to a key address cost 349,586 lovelace on preprod.
 - **Not yet run on a token pool:** fee shards, and a chained mix on a deposit still in flight.
 
 **The bytecode**
@@ -284,12 +284,12 @@ Cheap checks first, offline before network:
    - the data layer;
    - or the inputs of the transaction that made the UTxO, which takes one `tx_info`, on the Koios path only.
 4. **Not a 10 ₳ ADA pool on the new code** ([backward compatibility](#backward-compatibility-with-the-classic-ada-pool), 2).
-5. **Shown only when finished, the earliest for its values, and of a listed token or ADA** ([session 1](#design-session-1-2026-10-17), 11, 20, 22). Run the cheap checks first, so a fake costs no lookup: are the derived scripts' references at the holder (from the same scan), and is L registered (one batched `account_info`)? Only then the seed proof.
+5. **Shown only when finished, the earliest for its values, and of a listed token or ADA** ([session 1](#design-session-1-2026-10-17), 11, 20, 22). Run the cheap checks first, so a fake costs no lookup: are the derived scripts' references at the holder (from the same scan), and is L registered (one batched `account_info`)? Only then the seed proof. As built ([34c](#34c--discovery-and-the-data-layer-2026-10-17), decision 30), L is checked once, when the pool is found: Koios's look reads its launch's certificates, or, for a launch that didn't register it, L's earlier registration (`account_update_history`); from the data layer's list (mainnet) it's the server's word, by its own copy of the rule.
 
 **Verified and usable aren't the same thing.**
 - **Verified pools are always read**, for ownership, a restore and boxes coming back. A pool's boxes must never vanish from view because the parameters changed.
-- **Usable gates only new mixes**, checked at each read (since the owner's call 34, 2026-10-19, only the first check gates: a box below the minimum, or a copy; a pool whose boxes can't come back takes new boxes, with a warning first):
-  - L's credential is registered (one `account_info` for all pools);
+- **Usable gates only new mixes**, checked at each read (since the owner's call 34, 2026-10-19, only the min-UTxO check gates: a box below the minimum, or a copy; a pool whose boxes can't come back takes new boxes, with a warning first):
+  - ~~L's credential is registered (one `account_info` for all pools);~~ not checked at a read: a pool's standing is final once it's found (decision 30), and `mix_logic` refuses L's deregistration (11), so the worker passes `registered: true` (`usableNow`);
   - a mix box meets min-UTxO under the live parameters;
   - `box_lovelace − withdraw fee` covers the **real** destination: an enterprise Seedelf output with a register datum and Q.
 - `minimum_seedelf_payment` sizes that destination against `dummy_base_address`, which is 120k too high, so add an exact enterprise sizing.
@@ -325,7 +325,7 @@ Cheap checks first, offline before network:
 
 **Mix**
 - Multi-asset outputs. Every input holds exactly the box value, the wallet's own hardening.
-- The fee is ADA from the payer line, and N stays at 3.
+- The fee is ADA from the payer line, and N stays at 3 (four became an option at [D3](#d3--four-boxes-a-mix-as-an-option)).
 - A chain may span pools, so records carry **a pool per leaf**.
 - `MIX_FEE_ESTIMATE` is per pool: about 0.96 ₳ inline.
 - `per_box`, `boxes_affordable`, `funding_for`, `again_*`, `fan_out` and `fresh_for` take a `Pool`.
@@ -349,7 +349,7 @@ Cheap checks first, offline before network:
 - the reference UTxO, with the 8-field datum;
 - the `mix_box` and `mix_logic` reference scripts, at the holder;
 - L's stake registration;
-- the change, into a fresh register under a history class of its own.
+- the change, into a fresh register, under the merged history of what it spent (`changeHistory`), as every Seedelf spend's change is. On chain it's tied to the launch and its inputs anyway.
 
 It's about 6.6 KB, and atomic: no half-launched pool, no stranded deposit.
 

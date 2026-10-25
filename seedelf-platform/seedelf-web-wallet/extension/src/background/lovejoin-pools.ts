@@ -29,8 +29,11 @@
 //
 // Where they're found:
 // - **The data layer** (mainnet), at most every REFRESH_MS: its list of every
-//   shown pool, each verified here again. It can leave a pool out, never make
-//   one look real.
+//   shown pool, each verified here again. It can leave a pool out, never pass
+//   off other scripts as a pool's. Verified offline, a pool may still not be
+//   on chain (a seed no launch spent verifies as well), so the ledger is the
+//   judge of that: every transaction into a token pool reads its reference
+//   UTxO, a deposit too (1.6.0's release review, 317-wallet#0).
 // - **Koios** (preprod, or while the data layer can't answer), when the
 //   Lovejoin page opens: the holder's outputs since the last look, each
 //   candidate's launch transaction, read in batches.
@@ -429,6 +432,12 @@ export class PoolDiscovery {
     this.answered.set(network, at);
     const found: FoundPool[] = [];
     for (const p of answer.pools) {
+      // A launch puts the reference UTxO and both scripts at the holder in one transaction, the one listed as its
+      // launch: a list saying otherwise contradicts itself, and isn't built on. That the pool is on chain at all, the
+      // ledger checks: every transaction into a token pool reads its reference UTxO, a deposit too (1.6.0's release
+      // review, 317-wallet#0).
+      const launched = txOf(p.reference.ref);
+      if (p.launch.tx !== launched || p.scripts.some((s) => txOf(s.ref) !== launched)) continue;
       const [txHash, txIndex] = p.seed.split("#");
       const ref: PoolRef = {
         reference: utxoOf(p.reference, HOLDER, network),
@@ -563,6 +572,9 @@ function holdsNft(r: KoiosUtxo): boolean {
 }
 
 const refOf = (u: Pick<KoiosUtxo, "tx_hash" | "tx_index">) => `${u.tx_hash}#${u.tx_index}`;
+
+/** The transaction of an index row's `<tx hash>#<index>`. */
+const txOf = (ref: string) => ref.slice(0, ref.lastIndexOf("#"));
 
 /** A pool as kept: its scripts named by their hashes alone, which WebAssembly fills in from its own derivation. */
 function slim(p: FoundPool): FoundPool {
