@@ -19,7 +19,9 @@ use pallas_primitives::conway::{BigInt, PlutusData, TransactionOutput, Value};
 use pallas_traverse::MultiEraTx;
 use pallas_txbuilder::{Output, ScriptKind};
 use rand_core::OsRng;
-use seedelf_core::build::Budgets;
+use seedelf_core::address::wallet_contract;
+use seedelf_core::build::{self, Budgets};
+use seedelf_core::constants::{VARIANT, get_config};
 use seedelf_core::eval::{self, Resolved};
 use seedelf_core::lovejoin::{
     self, BoxToken, BoxValue, Coin, Holding, Payer, PoolBox, Protocol, ReferenceDatum, Rejected,
@@ -27,7 +29,7 @@ use seedelf_core::lovejoin::{
 };
 use seedelf_crypto::lovejoin as crypto;
 use seedelf_crypto::register::Register;
-use seedelf_koios::koios::ProtocolParameters;
+use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use serde_json::Value as Json;
 
 fn json(text: &str) -> Json {
@@ -1439,32 +1441,62 @@ fn a_box_already_there_is_asked_only_about_its_way_back() {
     ));
 }
 
-/// A Bootstrap paid from the private balance (chunk 34's 34d review, 3):
-/// its mix session's one UTxO holds [`lovejoin::funding_for`]'s ADA at depth
-/// 0, so the deposit's fee and change come from the 1.5 ₳ reserve alone, and
-/// the fee grows with the boxes. `bootstrap_most` is the count past which
-/// the deposit can't be built: in the classic pool above 1.5.0's tested 40,
-/// below its 96; in a token pool fewer, the fewer the longer its token.
-#[test]
-fn a_private_bootstrap_is_held_to_what_its_reserve_pays_for() {
-    let deposits = |pool: &Protocol, boxes: usize| {
-        let owner = Register::create(Scalar::from(7u64)).unwrap();
-        let owners: Vec<Register> = (0..boxes)
-            .map(|_| owner.clone().rerandomize().unwrap())
-            .collect();
-        let lovelace = lovejoin::funding_for(boxes, 0, pool.denom);
-        let input = match &pool.token {
-            None => Holding::from(&coin(true, 0x10, lovelace)),
-            Some(_) => token_holding(pool, 0x10, lovelace, boxes as u64, None),
-        };
-        lovejoin::deposit_from(&params(), pool, &[input], &owners, &session(true), 1).is_ok()
+/// A private Bootstrap's session as the worker funds it, and what it runs
+/// (1.6.0's release review, 318-rust#0): one UTxO of [`lovejoin::funding_for`]'s
+/// ADA at depth 0 and the way back's reserve, and the boxes' token, with no
+/// collateral; its deposit, then its return, a sweep of the deposit's change
+/// alone into the wallet contract, signed by the session's key. The deposit's
+/// fee, and what the sweep pays back, when both build.
+fn bootstraps(
+    params: &ProtocolParameters,
+    pool: &Protocol,
+    flag: bool,
+    boxes: usize,
+) -> Option<(u64, u64)> {
+    let owner = Register::create(Scalar::from(7u64)).unwrap();
+    let owners: Vec<Register> = (0..boxes)
+        .map(|_| owner.clone().rerandomize().unwrap())
+        .collect();
+    let lovelace = lovejoin::funding_for(boxes, 0, pool.denom) + lovejoin::BOOTSTRAP_BACK_RESERVE;
+    let input = match &pool.token {
+        None => Holding::from(&coin(flag, 0x10, lovelace)),
+        Some(_) => token_holding(pool, 0x10, lovelace, boxes as u64, None),
     };
+    let deposit = lovejoin::deposit_from(params, pool, &[input], &owners, &session(flag), 1).ok()?;
+    // The funding holds exactly the boxes' token: nothing comes back beside the ADA.
+    assert!(deposit.token_change.is_empty());
+    let change = UtxoResponse {
+        tx_hash: hex::encode(deposit.change.utxo.tx_hash),
+        tx_index: deposit.change.utxo.index,
+        address: session(flag).to_bech32().unwrap(),
+        value: deposit.change.lovelace.to_string(),
+        ..Default::default()
+    };
+    let config = get_config(VARIANT, flag).unwrap();
+    let wallet = wallet_contract(flag, config.contract.wallet_contract_hash);
+    let (_, fee) =
+        build::external_sweep(params, &[change], &owner, &wallet, Hash::new([0x51; 28])).ok()?;
+    Some((deposit.fee, deposit.change.lovelace - fee))
+}
+
+/// A Bootstrap paid from the private balance (chunk 34's 34d review, 3; 1.6.0's
+/// release review, 318-rust#0): its session's one UTxO pays the deposit's fee,
+/// which grows with the boxes, from its 1.5 ₳ reserve, and its way back, a
+/// sweep with no collateral whose Seedelf output must hold its least, from
+/// what that leaves and the way back's reserve. `bootstrap_most` builds both:
+/// under today's parameters one deposit's most goes, in the classic pool and a
+/// token pool, on both networks, and at a dearer byte the sweep holds it to
+/// fewer, never the deposit alone.
+#[test]
+fn a_private_bootstrap_is_held_to_what_its_funding_pays_its_deposit_and_way_back_for() {
     let classic = Protocol::of(true).unwrap();
     let most = lovejoin::bootstrap_most(&params(), &classic, true, 96).unwrap();
     println!("a private Bootstrap of the classic pool: at most {most}");
-    assert!((40..96).contains(&most), "{most}");
-    assert!(deposits(&classic, most));
-    assert!(!deposits(&classic, most + 1));
+    for boxes in [1, most] {
+        let (fee, back) = bootstraps(&params(), &classic, true, boxes).expect("built");
+        println!("  {boxes} boxes: deposit fee {fee}, {back} back");
+    }
+    assert_eq!(most, 96);
     // Capped by what's asked, too.
     assert_eq!(
         lovejoin::bootstrap_most(&params(), &classic, true, 12).unwrap(),
@@ -1474,15 +1506,23 @@ fn a_private_bootstrap_is_held_to_what_its_reserve_pays_for() {
         lovejoin::bootstrap_most(&params(), &classic, true, 0).unwrap(),
         0
     );
+    // Mainnet's parameters and addresses alike.
+    let mainnet = Protocol::of(false).unwrap();
+    let mainnet_most = lovejoin::bootstrap_most(&mainnet_params(), &mainnet, false, 96).unwrap();
+    assert_eq!(mainnet_most, 96);
+    assert!(bootstraps(&mainnet_params(), &mainnet, false, 1).is_some());
+    assert!(bootstraps(&mainnet_params(), &mainnet, false, mainnet_most).is_some());
 
     let lj = lj_pool();
     let lj_most = lovejoin::bootstrap_most(&params(), &lj, true, 64).unwrap();
     println!("a private Bootstrap of LJTEST's pool: at most {lj_most}");
-    assert!((1..64).contains(&lj_most), "{lj_most}");
-    assert!(deposits(&lj, lj_most));
-    assert!(!deposits(&lj, lj_most + 1));
+    for boxes in [1, lj_most] {
+        let (fee, back) = bootstraps(&params(), &lj, true, boxes).expect("built");
+        println!("  {boxes} boxes: deposit fee {fee}, {back} back");
+    }
+    assert_eq!(lj_most, 64);
 
-    // The worst a token can be: fewer still, and still some.
+    // The worst a token can be: one token deposit's most still, its way back paid.
     let worst = Protocol {
         denom: 9_000_000,
         token: Some(BoxToken {
@@ -1494,7 +1534,31 @@ fn a_private_bootstrap_is_held_to_what_its_reserve_pays_for() {
     };
     let worst_most = lovejoin::bootstrap_most(&params(), &worst, true, 64).unwrap();
     println!("a private Bootstrap of the worst token's pool: at most {worst_most}");
-    assert!((1..=lj_most).contains(&worst_most), "{worst_most}");
-    assert!(deposits(&worst, worst_most));
-    assert!(!deposits(&worst, worst_most + 1));
+    let (fee, back) = bootstraps(&params(), &worst, true, worst_most).expect("built");
+    println!("  {worst_most} boxes: deposit fee {fee}, {back} back");
+    assert_eq!(worst_most, 64);
+
+    // At half as dear again a byte, the way back's Seedelf output needs more than a large deposit leaves: the sweep,
+    // not the deposit, holds it to fewer, and a count past it is never offered.
+    let dear = ProtocolParameters {
+        coins_per_utxo_size: params().coins_per_utxo_size * 3 / 2,
+        ..params()
+    };
+    let dear_most = lovejoin::bootstrap_most(&dear, &classic, true, 96).unwrap();
+    println!("at a dearer byte: at most {dear_most}");
+    assert!((1..96).contains(&dear_most), "{dear_most}");
+    assert!(bootstraps(&dear, &classic, true, dear_most).is_some());
+    assert!(bootstraps(&dear, &classic, true, dear_most + 1).is_none());
+    let owner = Register::create(Scalar::from(7u64)).unwrap();
+    let past = dear_most + 1;
+    let input = Holding::from(&coin(
+        true,
+        0x10,
+        lovejoin::funding_for(past, 0, classic.denom) + lovejoin::BOOTSTRAP_BACK_RESERVE,
+    ));
+    assert!(
+        lovejoin::deposit_from(&dear, &classic, &[input], &vec![owner; past], &session(true), 1)
+            .is_ok(),
+        "the deposit alone builds there"
+    );
 }

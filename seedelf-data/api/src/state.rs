@@ -17,6 +17,7 @@ use tracing::{info, warn};
 
 use crate::chain::{Block, Chain, Tip};
 use crate::constants::slot_time;
+use crate::cursor::Cursor;
 use crate::decimals::Decimals;
 use crate::kupo::Kupo;
 use crate::public::history::History;
@@ -48,9 +49,12 @@ const MAX_CACHED_BYTES: usize = 64 << 20;
 
 /// What every wallet reads: always kept, whatever the budget holds, so no
 /// flood of other requests can push them out.
-const ALWAYS_KEPT: [&str; 5] = [
+const ALWAYS_KEPT: [&str; 6] = [
     "contract/snapshot",
     "lovejoin/snapshot",
+    // The token pools' snapshot, which every wallet reads once a token pool
+    // is shown (1.6.0's release review, 317-data#1).
+    "lovejoin/tokens",
     "names",
     "epoch_params",
     "totals",
@@ -88,6 +92,9 @@ pub struct AppState {
     /// Answers made from db-sync, for its tip; the private index's made from Kupo, for Kupo's.
     cache: Mutex<Cached>,
     kupo_cache: Mutex<Cached>,
+    /// db-sync's stable cursor and the block there, for the tip whose hash
+    /// it's kept with ([`Self::stable_cursor`]).
+    stable: Mutex<Option<(String, Arc<OnceCell<(Cursor, Block)>>)>>,
     lasting: Mutex<HashMap<String, (Instant, Bytes)>>,
     /// Answers being worked out in the background, so one isn't started twice.
     working: Mutex<HashSet<String>>,
@@ -144,6 +151,7 @@ impl AppState {
             kupo_failing: AtomicBool::new(false),
             cache: Mutex::new(Cached::default()),
             kupo_cache: Mutex::new(Cached::default()),
+            stable: Mutex::new(None),
             lasting: Mutex::new(HashMap::new()),
             working: Mutex::new(HashSet::new()),
         }
@@ -286,6 +294,34 @@ impl AppState {
             })
             .await?;
         Ok(bytes.clone())
+    }
+
+    /// db-sync's stable cursor for its tip `tip`, and the block there, read by
+    /// `read` once a tip, for a route that needs it outside a cached answer
+    /// (`lovejoin/pools`: 1.6.0's release review, 317-data#2). Requests that
+    /// miss together wait on one read, and one that fails or is abandoned
+    /// leaves the next to try.
+    pub async fn stable_cursor<F, Fut>(
+        &self,
+        tip: &Block,
+        read: F,
+    ) -> Result<(Cursor, Block), ApiError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(Cursor, Block), ApiError>>,
+    {
+        let cell = {
+            let mut kept = self.stable.lock().expect("stable lock");
+            match kept.as_ref() {
+                Some((hash, cell)) if *hash == tip.hash => cell.clone(),
+                _ => {
+                    let cell = Arc::new(OnceCell::new());
+                    *kept = Some((tip.hash.clone(), cell.clone()));
+                    cell
+                }
+            }
+        };
+        Ok(cell.get_or_try_init(read).await?.clone())
     }
 
     /// The answer for `key` made within `keep`, whatever the tip has done
@@ -649,6 +685,42 @@ mod tests {
             (Bytes::from("1"), Bytes::from("1"))
         );
         assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    /// 1.6.0's release review, 317-data#1: past the budget, the token pools'
+    /// snapshot was worked out again for every wallet that read it, where the
+    /// classic pool's is read once a tip.
+    #[tokio::test]
+    async fn the_snapshots_are_kept_past_the_budget() {
+        let state = state();
+        state.set_tip(tip("a", i64::MAX / 2));
+        for i in 0..MAX_CACHED {
+            let key = format!("lovejoin/since/{i}");
+            state
+                .cached_in(Upstream::DbSync, "a", &key, || async { to_json(&i) })
+                .await
+                .unwrap();
+        }
+        /// How many times two requests for `key` read it.
+        async fn reads_of(state: &AppState, key: &str) -> usize {
+            let reads = std::sync::atomic::AtomicUsize::new(0);
+            let read = || async {
+                reads.fetch_add(1, Ordering::SeqCst);
+                to_json(&1)
+            };
+            for _ in 0..2 {
+                state
+                    .cached_in(Upstream::DbSync, "a", key, read)
+                    .await
+                    .unwrap();
+            }
+            reads.load(Ordering::SeqCst)
+        }
+        // The budget is spent: what isn't always kept is read at each request.
+        assert_eq!(reads_of(&state, "lovejoin/since/more").await, 2);
+        for key in ["contract/snapshot", "lovejoin/snapshot", "lovejoin/tokens"] {
+            assert_eq!(reads_of(&state, key).await, 1, "{key}");
+        }
     }
 
     #[tokio::test]

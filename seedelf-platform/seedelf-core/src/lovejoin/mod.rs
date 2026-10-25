@@ -1599,6 +1599,21 @@ const DEPOSIT_RESERVE: u64 = 1_500_000;
 /// session's boxes are counted; what isn't spent comes back with the change.
 pub const COLLATERAL_TAIL_RESERVE: u64 = 1_500_000;
 
+/// What a Bootstrap's session, paid from the private balance, holds beside
+/// [`DEPOSIT_RESERVE`] for its way back (1.6.0's release review, 318-rust#0).
+/// It puts up no collateral (the owner, 2026-10-23), so its return is a sweep
+/// of the deposit's change alone into the wallet contract, never merged: its
+/// Seedelf output must hold its least, 1.46 ₳ at today's 4,310 lovelace a
+/// byte, after the sweep's fee, about 0.17 ₳ though priced from a first draft
+/// of 0.2 ₳. [`DEPOSIT_RESERVE`] less the deposit's fee (0.17 ₳ for one box,
+/// 0.8 ₳ for one deposit's most of 96, about as much for a token pool's 64)
+/// leaves too little for that, so this pays the rest, with about 0.5 ₳ over
+/// at the largest deposit, in the classic pool or a token pool, for the
+/// parameters to move. [`bootstrap_most`] builds both with it. What the sweep
+/// doesn't spend comes back with it. Never in [`funding_for`], which plans
+/// every mix and 1.5.0's seeds.
+pub const BOOTSTRAP_BACK_RESERVE: u64 = 1_500_000;
+
 /// What a box costs at `depth`: the box, and every mix of its fan-out.
 fn per_box(depth: u32, denom: u64) -> u64 {
     denom + mixes_per_box(depth) as u64 * MIX_FEE_ESTIMATE
@@ -1754,11 +1769,14 @@ pub fn funding_for(boxes: usize, depth: u32, denom: u64) -> u64 {
 /// The most boxes, of `most`, a Bootstrap paid from the private balance
 /// puts into `protocol`'s pool under `params`, or none when not one fits.
 /// Its mix session holds one UTxO of [`funding_for`]'s ADA at depth 0 and
-/// the boxes' token, beside a collateral the deposit never spends, so
-/// [`DEPOSIT_RESERVE`] alone pays the deposit's fee and its change's least:
-/// a fee that grows with the boxes (chunk 34's 34d review, 3). Each count is
-/// built ([`deposit_from`]), never estimated, its change at a base address,
-/// as long as a session's is.
+/// [`BOOTSTRAP_BACK_RESERVE`], and the boxes' token, with no collateral (the
+/// owner, 2026-10-23). [`DEPOSIT_RESERVE`] pays the deposit's fee, which
+/// grows with the boxes (chunk 34's 34d review, 3), and what it leaves with
+/// the way back's reserve pays the return, a sweep of the deposit's change
+/// into the wallet contract (1.6.0's release review, 318-rust#0). Each count's
+/// deposit and sweep are built ([`deposit_from`],
+/// [`crate::build::external_sweep`]), never estimated, the change at a base
+/// address, as long as a session's is.
 pub fn bootstrap_most(
     params: &ProtocolParameters,
     protocol: &Protocol,
@@ -1768,6 +1786,9 @@ pub fn bootstrap_most(
     let mut address = vec![if network_flag { 0x00 } else { 0x01 }];
     address.extend([0x5e; 56]);
     let address = Address::from_bytes(&address).map_err(|e| anyhow!("{e}"))?;
+    let session = address.to_bech32().map_err(|e| anyhow!("{e}"))?;
+    let config = get_config(VARIANT, network_flag)?;
+    let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
     // One register for every box: each datum is as long as a fresh one's.
     let owner = Register::create(Scalar::from(4_242_424u64))?;
     let fits = |boxes: usize| -> Result<bool> {
@@ -1787,12 +1808,25 @@ pub fn bootstrap_most(
                 index: 0,
                 output: Vec::new(),
             },
-            lovelace: funding_for(boxes, 0, protocol.denom),
+            lovelace: funding_for(boxes, 0, protocol.denom) + BOOTSTRAP_BACK_RESERVE,
             tokens,
         };
         let owners = vec![owner.clone(); boxes];
         // Short of ADA, or over a transaction's size: both grow with the boxes.
-        Ok(deposit_from(params, protocol, &[input], &owners, &address, 1).is_ok())
+        let Ok(deposit) = deposit_from(params, protocol, &[input], &owners, &address, 1) else {
+            return Ok(false);
+        };
+        // Its return: the deposit's change alone (its boxes took every token), swept into the wallet contract
+        // and signed by the session's key, whose Seedelf output must hold its least after the sweep's fee.
+        let change = UtxoResponse {
+            tx_hash: hex::encode(deposit.change.utxo.tx_hash),
+            tx_index: deposit.change.utxo.index,
+            address: session.clone(),
+            value: deposit.change.lovelace.to_string(),
+            ..Default::default()
+        };
+        let key = Hash::new([0x5e; 28]);
+        Ok(crate::build::external_sweep(params, &[change], &owner, &wallet, key).is_ok())
     };
     if most == 0 || !fits(1)? {
         return Ok(0);

@@ -5696,6 +5696,16 @@ pub fn lovejoin_collateral_reserve() -> String {
     seedelf_core::lovejoin::COLLATERAL_TAIL_RESERVE.to_string()
 }
 
+/// What a Bootstrap's session, paid from the private balance, is funded with
+/// beside `lovejoinFunding`'s lovelace for its way back, in lovelace, as a
+/// string (`seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE`): with no
+/// collateral, its return is a sweep of the deposit's change, whose Seedelf
+/// output must hold its least (1.6.0's release review, 318-rust#0).
+#[wasm_bindgen(js_name = lovejoinBootstrapReserve)]
+pub fn lovejoin_bootstrap_reserve() -> String {
+    seedelf_core::lovejoin::BOOTSTRAP_BACK_RESERVE.to_string()
+}
+
 /// A session's whole chain through Lovejoin, built, measured against the
 /// scripts and signed with its key: the deposit, the mixes, then the return
 /// (`lovejoin::ChainRequest` → `lovejoin::ChainResult`); with `again`, the

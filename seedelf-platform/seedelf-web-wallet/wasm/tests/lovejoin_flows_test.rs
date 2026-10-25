@@ -21,8 +21,9 @@ use seedelf_crypto::register::Register;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse};
 use seedelf_wasm::api;
 use seedelf_wasm::lovejoin::{
-    self as wasm, AccountChainRequest, BoxValueRequest, ChainRequest, FundingRequest, OutRef,
-    PlanRequest, PoolRef, WithdrawPaidRequest, WithdrawPrivateRequest, WithdrawRequest,
+    self as wasm, AccountChainRequest, BootstrapMostRequest, BoxValueRequest, ChainRequest,
+    FundingRequest, OutRef, PlanRequest, PoolRef, WithdrawPaidRequest, WithdrawPrivateRequest,
+    WithdrawRequest,
 };
 use serde_json::{Value, json};
 
@@ -318,6 +319,96 @@ fn a_mix_session_deposits_its_token_and_brings_back_what_the_boxes_dont_take() {
         .map(|t| t.quantity.parse::<u64>().unwrap())
         .sum();
     assert_eq!(returned, Q / 2 + Q);
+}
+
+/// A Bootstrap of the token pool from the private balance (1.6.0's release
+/// review, 318-rust#0): its session funded exactly as the worker funds it, one
+/// UTxO of its boxes' ADA, the deposit's reserve and its way back's, and their
+/// LJTEST, with no collateral. Its chain is the deposit and a sweep back into
+/// the wallet contract, at one box and at the most the private balance may put
+/// in, where a token box's longer output makes the deposit dearer.
+#[test]
+fn a_private_bootstrap_of_a_token_pool_deposits_and_sweeps_back() {
+    let sk = Scalar::from(7_171_717u64);
+    let funding = hex::encode([0x10; 32]);
+    let most = wasm::bootstrap_most_in(
+        BootstrapMostRequest {
+            network: "preprod".into(),
+            params: params(),
+            most: 64,
+        },
+        Some(&pool_ref()),
+    )
+    .unwrap();
+    let config = get_config(VARIANT, true).unwrap();
+    let contract = wallet_contract(true, config.contract.wallet_contract_hash);
+    for boxes in [1, most] {
+        let funded = wasm::funding_in(
+            FundingRequest {
+                network: "preprod".into(),
+                boxes,
+                depth: 0,
+                again: false,
+            },
+            Some(&pool_ref()),
+        )
+        .unwrap();
+        let lovelace = funded.lovelace.parse::<u64>().unwrap() + lovejoin::BOOTSTRAP_BACK_RESERVE;
+        let quantity: u64 = funded.token.unwrap().quantity.parse().unwrap();
+        assert_eq!(quantity, boxes as u64 * Q);
+        let chain = wasm::chain_in(
+            &accounts(),
+            sk,
+            ChainRequest {
+                network: "preprod".into(),
+                params: params(),
+                index: 0,
+                utxos: vec![at_session(0x10, 0, lovelace, vec![ljtest(quantity)])],
+                collateral: None,
+                // A Bootstrap draws nothing: an empty pool takes it.
+                pool: Vec::new(),
+                depth: 0,
+                boxes: Some(boxes),
+                merge: Vec::new(),
+                again: false,
+                own: vec![funding.clone()],
+                collateral_pool: None,
+                collateral_boxes: vec![],
+                collateral_reserve: false,
+            },
+            Some(&pool_ref()),
+        )
+        .unwrap_or_else(|e| panic!("{boxes} boxes, funded {lovelace}: {e}"));
+        assert!(chain.skipped.is_none());
+        let kinds: Vec<&str> = chain.txs.iter().map(|t| t.kind.as_str()).collect();
+        assert_eq!(kinds, ["deposit", "back"]);
+        assert_eq!(chain.boxes, boxes);
+        let deposit_bytes = hex::decode(&chain.txs[0].tx_cbor).unwrap();
+        let deposit = MultiEraTx::decode(&deposit_bytes).unwrap();
+        let boxed = deposit
+            .outputs()
+            .iter()
+            .filter(|o| o.value().coin() == 2_000_000 && holds_ljtest(o) == Some(Q))
+            .count();
+        assert_eq!(boxed, boxes);
+        // The return sweeps the deposit's change alone, every LJTEST in the boxes: ADA into the wallet contract.
+        let back_bytes = hex::decode(&chain.txs[1].tx_cbor).unwrap();
+        let back = MultiEraTx::decode(&back_bytes).unwrap();
+        assert_eq!(back.inputs().len(), 1);
+        assert_eq!(*back.inputs()[0].hash(), deposit.hash());
+        assert!(back.collateral().is_empty() && back.redeemers().is_empty());
+        for output in back.outputs() {
+            let address =
+                pallas_addresses::Address::from_bytes(&output.address().unwrap().to_vec()).unwrap();
+            assert_eq!(address, contract, "into the wallet contract");
+            assert_eq!(holds_ljtest(&output), None);
+        }
+        assert!(chain.tokens.is_empty());
+        let returned: u64 = chain.returned.parse().unwrap();
+        let fees: u64 = chain.fees.parse().unwrap();
+        assert_eq!(returned + fees + boxes as u64 * 2_000_000, lovelace);
+        println!("{boxes} token boxes, funded {lovelace}: fees {fees}, {returned} back");
+    }
 }
 
 /// A UTxO of the public account (account 0) at `role/index`'s base address.
