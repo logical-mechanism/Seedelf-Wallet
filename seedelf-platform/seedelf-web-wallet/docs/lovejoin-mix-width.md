@@ -13,7 +13,7 @@ Every Lovejoin mix the wallet makes takes three boxes (N = 3) by default: a sess
 **So the width stays three by default.** Four becomes comfortable once a transaction may use about **11 billion steps** (10% to spare). Five needs 15.05 billion. Six needs 21.3 billion, past the 20 billion a whole block may use today.
 
 **Since 1.6.0 four is a choice** (chunk 34's D3): Settings → *Lovejoin* → *Four boxes a mix*, off by default, on every pool. The Mix form and Mix my boxes again's review have the same switch, set as Settings has it until turned. Swaps' and sites' returns go at Settings' width.
-- **A chain that can't go four wide goes three, and says why:** the pool too short for four, a chain longer than one goes, four costing more than the ADA pays for, or four refused when it's built (`widthFor`, `wayOver`). A chain whose four-box build, or the network's check of its first mix, is refused is built again at three, never sent back unmixed.
+- **A chain that can't go four wide goes three, and says why:** the pool too short for four, a chain longer than one goes, four costing more than the ADA pays for, or four refused when it's built (`widthFor`, `wayOver`). A chain whose four-box build, or the network's check of its first mix, is refused is built again at three, never sent back unmixed. Where three takes no box either (the pool has room at neither width), `wayOver` gives no reason: a swap's approval then records the width asked, for its return to decide, and says only that the pool is short, while a chain still goes three, so its refusal quotes three's need (1.6.0's release review, 319-worker#0).
 - **The Mix form at four** stops its stepper at what fits four a mix, and says what three would take. Its build goes three only where the pool changed since, or four won't build.
 - **Mix my boxes again at four** takes as many of the wallet's boxes as fit four a mix, and leaves the rest for the next press. It goes three only where four takes none (`againWay`).
 
@@ -35,7 +35,7 @@ The boxes are made up: fresh registers with their own UTxOs. The three deploymen
 
 Each mix is measured with the wallet's own evaluator (`uplc`) under a limit far past the ledger's, so the widths the ledger refuses are costed too. The fee input is tried first, in the middle and last.
 
-**That it's the wallet's mix:** `lovejoin::mix`, given the same boxes and fee input, declares the same budgets and the same fee, to the step and the lovelace (`the_harness_builds_the_wallets_mix`). The builder refuses five boxes (`the_wallet_refuses_five_boxes`).
+**That it's the wallet's mix:** `lovejoin::mix`, given the same boxes and fee input, declares the same budgets, redeemer by redeemer, uses the same, and pays the same fee for the same size, to the step and the lovelace (`the_harness_builds_the_wallets_mix`). That holds on the classic pools and on the token pool read by reference, at three and four boxes; with that pool's scripts inline, as the wallet reads this preprod test pool, its mix declares what its scripts use (1.6.0's release review, 312#1). Five boxes are refused at measurement, since `mix_logic` alone needs more than the evaluator's cap (`the_wallet_refuses_five_boxes`). A four-box mix whose scripts each fit, but whose sum passes `MAX_TX_BUDGET`, is refused by that sum (`the_wallet_refuses_four_boxes_once_together_they_pass_a_transactions_computation`, under a V3 cost model 2% dearer: 10.08 billion steps; 312#0).
 
 **That the network agrees** (`--ignored`): the same transactions went to Koios's Ogmios on preprod and mainnet, with the made-up UTxOs as `additionalUtxo`. Nothing was signed, sent or paid.
 - At N = 2, 3 and 4, the network's budgets were the wallet's, redeemer by redeemer, on all three deployments.
@@ -136,7 +136,7 @@ At the default depth, four wide gives 16 leaves for 6.07 ₳, between three wide
 
 Chunk 34 (34e, 34f) did this for four. Kept as the list of what a fifth width, or a change of default, would touch.
 
-`lovejoin::mix` already takes any N ≥ 2, measures it, and refuses one over `build::MAX_TX_BUDGET` (10 billion steps, mainnet's limit), which five or more would need raised with the network's. So would the wallet's evaluator's own cap, `eval::MEASURE_LIMIT` (14 billion steps): `mix_logic` alone needs 14.9 billion at five boxes, so five fails measurement whatever `MAX_TX_BUDGET` says. The width lives in:
+`lovejoin::mix` already takes any N ≥ 2, measures it, and refuses one over `build::MAX_TX_BUDGET` (10 billion steps, mainnet's limit), which five or more would need raised with the network's. So would the wallet's evaluator's own cap, `eval::MEASURE_LIMIT` (14 billion steps), which caps a transaction's scripts together, not each, since uplc runs each redeemer on what the ones before it left: `mix_logic` alone needs 14.9 billion at five boxes, so five fails measurement whatever `MAX_TX_BUDGET` says. The width lives in:
 - `seedelf-core/src/lovejoin/mod.rs`:
   - `WIDTHS` and `check_width`, the widths a mix may take (three and four);
   - `mixes_per_box_at`, which is (width^depth − 1)/(width − 1);
@@ -147,7 +147,7 @@ Chunk 34 (34e, 34f) did this for four. Kept as the list of what a fifth width, o
 - `extension/src/background/lovejoin.ts`:
   - `mixesPerBox`;
   - `CHAIN_WINDOW`, whose four in flight assume three mixes a block, and `CHAIN_WINDOW_FOUR`, two for four-box mixes (`chainWindow`);
-  - when a chain asked to go four goes three (`widthFor`, `wayOver`, `againWay`).
+  - when a chain asked to go four goes three (`widthFor`, `wayOver`, `againWay`), and where `wayOver` gives no reason, three taking no box either.
 - The screens' `width ** depth` and costs at a width: Settings (`depthCost`), the Lovejoin page and `LovejoinReturn` (`lovejoinHides`).
 - The words: "three wide" and "up to 9" in the strings, in [privacy.md](privacy.md), in [flows.md](flows.md) and in [architecture.md](architecture.md#lovejoin).
 

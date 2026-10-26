@@ -440,6 +440,31 @@ describe("a pool's Mix form, its collateral's mix and its public side wired (1.6
       const form = page({ cardano, pool: { ...classic, others: 3, free: 3 } });
       expect(held(form, "lovejoin-bootstrap-held-balance")).toBe(`${t("lovejoin.mix.inPublicSpendable")} ${words(adaText("60000000"))}`);
     });
+
+    it("in a token pool, shows what a mix of the most boxes the stepper offers can spend, whatever the count stands at (the last look, LW-4)", () => {
+      /** A pool of 2 ₳ and 100 of a token a box, its name six bytes, as PR #163's LJTEST pool names its own. */
+      const TOK = { policyId: "cc".repeat(28), assetName: "4c4a54455354", quantity: "100" };
+      const tok = (quantity: string) => ({ ...TOK, quantity, fingerprint: "asset1tok", decimals: 0 });
+      const pool = { ...classic, id: "ee".repeat(28), box: { lovelace: "2000000", token: TOK } };
+      seedInitial("private", "public");
+      seam.effects.add("PoolPage");
+      // One box one wave deep: its 2 ₳, its one mix at 0.95 ₳, and the deposit's 1.5 ₳.
+      answer("lovejoin-funding", { lovelace: "4450000", mixes: 1, mixFees: "950000", boxes: 1, depth: 1, delay: "1-6", pool: pool.id });
+      answer("collateral", { state: "set", utxo: collateral, by: "you" });
+      // 6.2 ₳ of ADA alone; two boxes' worth of the token beside 1.2 ₳, picked first; one box's beside 10 ₳, picked for a
+      // third (R3-14's account that goes on to three).
+      answer("utxos", {
+        seedelf: [],
+        cardano: [utxo("d1", "6200000"), utxo("d2", "1200000", { tokens: [tok("200")] }), utxo("d3", "10000000", { tokens: [tok("100")] }), collateral],
+      });
+      const form = page({ cardano: { ...cardano, tokens: [tok("300")] }, pool, pools: [classic, five, pool] });
+      // At one box, the stepper offering three, whose funding is 10.35 ₳: the figure is what three can spend, 17.4 ₳,
+      // never one box's pick, 6.24061 ₳, which grew as + was pressed and sat below what the count offered costs.
+      expect(form).toContain('data-testid="lovejoin-boxes">1 ');
+      expect(form).toMatch(new RegExp(`aria-label="${t("lovejoin.mix.more")}"(?![^>]*disabled)`));
+      expect(held(form, "lovejoin-held-balance")).toContain(`${t("lovejoin.mix.inPublicSpendable")} ${words(adaText("17400000"))}`);
+      expect(held(form, "lovejoin-held-balance")).not.toContain(words(adaText("6240610")));
+    });
   });
 
   describe("Mix my boxes again's switch on its review (320-screens#4, 320-screens#3)", () => {
@@ -554,7 +579,7 @@ describe("the swap form and its approval, wired (1.6.0's review of the fixes, R3
   /** The form's first state, ADA paid; the state after it is what's received. */
   const paysAda = (v: unknown) => (v as { id?: string } | undefined)?.id === "lovelace";
   const seedelf = { lovelace: "50000000", tokens: [], utxos: 2, seedelfs: [], locked: { lovelace: "0", tokens: [], utxos: 0 } };
-  const form = () => render(createElement(NewSwap, { seedelf, onCancel: noop, onStarted: noop } as never));
+  const form = (held = seedelf) => render(createElement(NewSwap, { seedelf: held, onCancel: noop, onStarted: noop } as never));
   /** The amount the form holds, as its field shows it. */
   const amount = (markup: string) => markup.match(/<input[^>]*id="swap-amount"[^>]*value="([^"]*)"/)?.[1];
 
@@ -623,7 +648,7 @@ describe("the swap form and its approval, wired (1.6.0's review of the fixes, R3
       collateralReserve: "1500000",
     });
     /** Max's button for ADA, and the amount field once it holds something: Max's, then the quote, once typing pauses. */
-    function maxThenQuote(typed?: string) {
+    function maxThenQuote(typed?: string, lovelace?: string) {
       seed([paysAda], get);
       seam.effects.add("NewSwap");
       answer("swap-quote", quote);
@@ -635,7 +660,7 @@ describe("the swap form and its approval, wired (1.6.0's review of the fixes, R3
           vi.advanceTimersByTime(600);
         },
       );
-      return form();
+      return form(lovelace ? { ...seedelf, lovelace } : seedelf);
     }
 
     it("follows the amount down to Max once the quote keeps the reserve aside: 50 ₳ less the usual costs, then the quote's", () => {
@@ -647,6 +672,13 @@ describe("the swap form and its approval, wired (1.6.0's review of the fixes, R3
 
     it("leaves an amount typed after Max as typed: typing takes the amount from Max", () => {
       expect(amount(maxThenQuote("36"))).toBe("36");
+    });
+
+    it("never empties the amount where the quote's reserve takes Max to nothing: it stays, and goes without it (the last look, LM-2)", () => {
+      // 14 ₳: Max before the quote is 1 ₳; the quote's 1.5 ₳ kept aside too leaves nothing.
+      const page = maxThenQuote(undefined, "14000000");
+      expect(payloads("swap-quote")).toEqual([expect.objectContaining({ amount: "1000000", tokenIn: "lovelace", tokenOut: MIN })]);
+      expect(amount(page)).toBe("1");
     });
   });
 });

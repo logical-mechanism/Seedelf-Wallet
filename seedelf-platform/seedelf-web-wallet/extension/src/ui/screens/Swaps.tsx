@@ -766,10 +766,11 @@ export function NewSwap({
   const fill = (quantity: string) => setTyped(quantity === "0" ? "" : formatQuantity(quantity, pay.side.decimals));
 
   // Pressed before any quote, Max kept nothing aside for the collateral's mix the quote then names: the amount it set
-  // follows it down, so what's reviewed is Max's, funded with that mix (followMax; 1.6.0's release review, R3-12).
+  // follows it down, so what's reviewed is Max's, funded with that mix (followMax; 1.6.0's release review, R3-12). Never
+  // to nothing: there it stays, funded without that mix (its review of the fixes, LM-2).
   const followed = followMax(maxed, pay.id, raw, max);
   useEffect(() => {
-    if (followed !== undefined) setAmount(followed === "0" ? "" : formatQuantity(followed, pay.side.decimals));
+    if (followed !== undefined) setAmount(formatQuantity(followed, pay.side.decimals));
   }, [followed, pay.side.decimals]);
 
   /** What's received becomes what's paid, and the other way round. */
@@ -1297,9 +1298,10 @@ export function SwapApproval({
   const lovejoinCosts = mixes || tokenBoxes > 0 ? lovejoinOf(mixes ? l : undefined, tokenBoxes > 0 ? way : undefined) : undefined;
   // Its return mixes its collateral: its 5 ₳ comes back later, in a box of its own, giveme.my backing that mix
   // (1.6.0's release review, 323-worker#6, x-privacy#1). Where its funding paid for that, and where a 5 ₳ pool takes
-  // the collateral though the private balance couldn't pay the reserve too, if its fill is ADA, which pays for that mix
-  // as it comes back; a token's fill beside the margin's rest can't, so that 5 ₳ comes back with the rest (R3-9).
-  // Whether the return builds it is decided then: about.
+  // the collateral though the private balance couldn't pay the reserve too, if its fill is ADA and pays for that mix as
+  // it comes back, less the boxes it pays for (the worker's `collateralPool`; its review of the fixes, LM-1); a token's
+  // fill beside the margin's rest can't, so that 5 ₳ comes back with the rest (R3-9). Whether the return builds it is
+  // decided then: about.
   const collateralMixed = !!summary.collateralReserve || (!!summary.collateralPool && adaOut);
   // A cost only where its funding paid for it, which the totals counted as coming back (323-worker#1).
   const mixCost = summary.collateralReserve ? COLLATERAL_MIX_COST : 0n;
@@ -2826,6 +2828,10 @@ export function StopDialog({
   // A swap against the pools has no order to cancel: before it goes out, Stop keeps it from going.
   const ordered = placed && !pools;
   const ifGoing = pools ? IF_SWAPPING : IF_ORDERED;
+  // No box, so no switch, and Stop isn't direct: where its return mixes the collateral first, all but that 5 ₳ comes
+  // back, which comes back later, as the approval says it, never everything for the return's fee alone (1.6.0's review
+  // of the fixes, the last look, LW-1).
+  const mixedBack = !!cost?.collateralMix && !mixes;
   return (
     <Modal
       title={tr("swaps.stop.title")}
@@ -2877,8 +2883,15 @@ export function StopDialog({
               ordered && tr("swaps.stop.cancelFeeToo"),
             ])
           : ordered
-            ? tr("swaps.stop.cancelledDirect")
-            : joinSentences([tr(pools ? "swaps.stop.notSwappedDirect" : "swaps.stop.notPlacedDirect"), ifGoing()])}
+            ? tr(mixedBack ? "swaps.stop.cancelledMixed" : "swaps.stop.cancelledDirect")
+            : joinSentences([
+                tr(
+                  pools
+                    ? mixedBack ? "swaps.stop.notSwappedMixed" : "swaps.stop.notSwappedDirect"
+                    : mixedBack ? "swaps.stop.notPlacedMixed" : "swaps.stop.notPlacedDirect",
+                ),
+                ifGoing(),
+              ])}
       </p>
       {cost?.skipped && (
         <p className="note" data-testid="session-stop-pool">
@@ -2888,10 +2901,11 @@ export function StopDialog({
       {/* Four boxes a mix asked, and it would go three: why (chunk 34's D3). */}
       {lovejoin && <WidthNote fellBack={cost.fellBack} testId="session-stop-width" />}
       {/* Its collateral mixed first, under giveme.my's collateral, wherever Stop doesn't bring it back directly, as the
-          approval says it (1.6.0's release review, L1). With no box, there's no switch, and it isn't direct. */}
+          approval says it (1.6.0's release review, L1). With no box, there's no switch, and it isn't direct. In its own
+          words: the approval's "too" points at GivemeNote, which this dialog doesn't have (the last look, LW-1). */}
       {cost?.collateralMix && (through || !mixes) && (
         <p className="note" data-testid="session-stop-collateral-mix">
-          {tr("swaps.review.privacy.collateralMix")}
+          {tr("swaps.stop.privacy.collateralMix")}
         </p>
       )}
       {cost === undefined && <p className="note">{tr("swaps.stop.working")}</p>}

@@ -1647,8 +1647,8 @@ export interface SwapLovejoin {
   ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number; width?: number; fellBack?: string };
   /**
    * Stop's alone (sessions.ts stopCost): a return through Lovejoin mixes the session's 5 ₳ collateral on its way into
-   * the 5 ₳ pool first, under giveme.my's collateral, as the wallet last read that pool. Its dialog says so (1.6.0's
-   * release review, L1).
+   * the 5 ₳ pool first, under giveme.my's collateral, as the wallet last read that pool, where that return pays for
+   * the mix (sessions.ts tailPaid; 1.6.0's review of the fixes, LM-1). Its dialog says so (1.6.0's release review, L1).
    */
   collateralMix?: true;
   /**
@@ -1931,8 +1931,10 @@ export interface SessionOutSummary extends WithdrawSummary {
   /**
    * A 5 ₳ pool takes the collateral, as Review read it, and its return can build that mix: there too where the private
    * balance didn't pay `collateralReserve` as well (sessions.ts orWithoutReserve), whose return still mixes the
-   * collateral where what's left there pays for it. What a review says of where the 5 ₳ goes follows it; what it
-   * counts as a cost follows `collateralReserve` (1.6.0's release review, R3-9).
+   * collateral where what's left there pays for it. A swap's carries it then only where its fill, as Review expects
+   * it, pays for that mix, less the boxes it pays for (sessions.ts tailPaid; 1.6.0's review of the fixes, LM-1). What a
+   * review says of where the 5 ₳ goes follows it; what it counts as a cost follows `collateralReserve` (1.6.0's release
+   * review, R3-9).
    */
   collateralPool?: true;
   /**

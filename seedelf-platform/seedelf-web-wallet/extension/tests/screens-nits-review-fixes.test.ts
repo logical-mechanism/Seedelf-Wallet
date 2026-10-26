@@ -40,14 +40,14 @@ const words = (markup: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-const html = (element: Parameters<typeof renderToStaticMarkup>[0]) =>
+const html = (element: Parameters<typeof renderToStaticMarkup>[0], hideBalances = false) =>
   renderToStaticMarkup(
     createElement(
       NetworkContext.Provider,
       { value: "preprod" },
       createElement(
         PreferencesContext.Provider,
-        { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances: false }, loaded: true, set: async () => undefined } },
+        { value: { prefs: { ...DEFAULT_PREFERENCES, hideBalances }, loaded: true, set: async () => undefined } },
         element,
       ),
     ),
@@ -125,8 +125,8 @@ describe("Home's banner for one box of Lovejoin's (1.6.0's review of the fixes, 
     confirmations: 1,
     chain: { first: hash, total: 1 },
   } as PendingTx;
-  const banner = (pending: PendingTx) =>
-    words(html(createElement(PendingBanner, { pending, watching: false, onDismiss: () => undefined })));
+  const banner = (pending: PendingTx, hidden = false) =>
+    words(html(createElement(PendingBanner, { pending, watching: false, onDismiss: () => undefined }), hidden));
 
   it("says a Bootstrap's one box is held, and its boxes so", () => {
     expect(banner({ ...done, bootstrap: true, boxes: 1 } as PendingTx)).toContain("In Lovejoin, held there until you bring it back");
@@ -141,5 +141,14 @@ describe("Home's banner for one box of Lovejoin's (1.6.0's review of the fixes, 
   it("says them, as it did, for a watch from before the count", () => {
     expect(banner({ ...done, bootstrap: true })).toContain("In Lovejoin, held there until you bring them back");
     expect(banner(done)).toContain("In Lovejoin, on their way to your private balance");
+  });
+
+  // A count of boxes is an amount (useAmounts' count): with balances hidden, "it" would tell an onlooker it was one box,
+  // 10 ₳ in the classic pool (the last look, LW-2).
+  it("says them while balances are hidden, one box or more, as every count of boxes is said then", () => {
+    expect(banner({ ...done, boxes: 1 } as PendingTx, true)).toContain("In Lovejoin, on their way to your private balance");
+    expect(banner({ ...done, bootstrap: true, boxes: 1 } as PendingTx, true)).toContain("In Lovejoin, held there until you bring them back");
+    expect(banner({ ...done, boxes: 1 } as PendingTx, true)).not.toContain("on its way");
+    expect(banner({ ...done, boxes: 3 } as PendingTx, true)).toContain("In Lovejoin, on their way to your private balance");
   });
 });

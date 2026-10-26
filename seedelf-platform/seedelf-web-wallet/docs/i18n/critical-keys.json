@@ -416,6 +416,7 @@
   "swaps.review.privacy.links",
   "swaps.review.warn.minimum",
   "swaps.slippage.warn.high",
+  "swaps.stop.privacy.collateralMix",
   "swaps.stop.privacy.direct",
   "swaps.warn.found",
   "swaps.warn.impact",

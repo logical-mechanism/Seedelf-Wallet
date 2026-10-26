@@ -385,11 +385,63 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
     const boxed: SwapLovejoin = { ...noBox, boxes: 1, mixes: 1, mixFees: "950000", withdrawFees: "300000" };
     const dialog = (cost: SwapLovejoin, through = true) =>
       text(createElement(StopDialog, { placed: false, cost, through, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined }));
-    expect(dialog({ ...boxed, collateralMix: true })).toContain("giveme.my backs its collateral's mix too, so it sees that mix.");
+    // In its own words, without the approval's "too" (the last look, LW-1, below).
+    expect(dialog({ ...boxed, collateralMix: true })).toContain("giveme.my backs its collateral's mix, so it sees that mix.");
     // Its spare pays no box, and Stop still brings it back through Lovejoin, its collateral mixed first.
-    expect(dialog({ ...noBox, collateralMix: true })).toContain("giveme.my backs its collateral's mix too, so it sees that mix.");
+    expect(dialog({ ...noBox, collateralMix: true })).toContain("giveme.my backs its collateral's mix, so it sees that mix.");
     // Brought back directly, or no pool takes the collateral: nothing of it.
     expect(dialog({ ...boxed, collateralMix: true }, false)).not.toContain("giveme.my backs");
     expect(dialog(boxed)).not.toContain("giveme.my backs");
+  });
+});
+
+// Round 3b's last look (fixer fx-last), LW-1: Stop's dialog where its return mixes the collateral and Stop isn't direct
+// (no box, so no switch) said everything came back for the return's fee alone, then that the collateral was mixed. It
+// says what the approval says: all but the 5 ₳ collateral comes back, and that 5 ₳ later, mixed. Its giveme.my line drops
+// the approval's "too", which points at GivemeNote there, a note this dialog doesn't have.
+describe("1.6.0's review of the fixes, the last look: Stop's dialog says where its 5 ₳ goes where it's mixed (LW-1)", () => {
+  const boxed: SwapLovejoin = { ...noBox, boxes: 1, mixes: 1, mixFees: "950000", withdrawFees: "300000" };
+  const dialog = (cost: SwapLovejoin, { placed = false, pools = false, through = true } = {}) =>
+    text(createElement(StopDialog, { placed, pools, cost, through, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined }));
+  const MIXED = "everything but its 5 ₳ collateral comes back to your private balance, less network fees; the 5 ₳ comes back later, mixed once.";
+
+  it("with no box, never says everything comes back for one fee: all but its 5 ₳, which comes back later, mixed", () => {
+    for (const [placed, pools, lead] of [
+      [false, false, "If no order has gone out yet, none will, and "],
+      [false, true, "If the swap hasn't gone out yet, it won't, and "],
+      [true, false, "The order is cancelled, unless it fills first, and "],
+    ] as const) {
+      const said = dialog({ ...noBox, collateralMix: true }, { placed, pools });
+      expect(said, lead).toContain(lead + MIXED);
+      expect(said, lead).not.toContain("everything comes back to your private balance");
+      expect(said, lead).not.toContain("less the return's network fee");
+      expect(said, lead).not.toContain("The cancel and the return each cost a network fee.");
+    }
+    // Lovejoin's pool short: the same, and why its ADA comes back directly.
+    const short = dialog({ ...noBox, of: 1, skipped: "Right now Lovejoin's pool holds 12 boxes that aren't yours, under the 30 it needs", collateralMix: true });
+    expect(short).toContain(MIXED);
+    expect(short).toContain("under the 30 it needs, so it would come back directly");
+  });
+
+  it("says giveme.my backs that mix in its own words, without the approval's \"too\"", () => {
+    for (const cost of [{ ...noBox, collateralMix: true as const }, { ...boxed, collateralMix: true as const }]) {
+      const said = dialog(cost);
+      expect(said).toContain("giveme.my backs its collateral's mix, so it sees that mix. If that mix can't go, its 5 ₳ box waits unmixed, tied to this session.");
+      expect(said).not.toContain("mix too");
+    }
+  });
+
+  it("is as before where the collateral isn't mixed, or Stop brings it back directly", () => {
+    expect(dialog(noBox)).toContain("everything comes back to your private balance, less the return's network fee.");
+    expect(dialog(noBox, { placed: true })).toContain("The cancel and the return each cost a network fee.");
+    // A box and the switch off: Stop goes directly, its collateral with the rest, as the switch's note says.
+    const direct = dialog({ ...boxed, collateralMix: true }, { through: false });
+    expect(direct).toContain("everything comes back to your private balance, less the return's network fee.");
+    expect(direct).not.toContain(MIXED);
+    expect(direct).not.toContain("giveme.my");
+    // Through Lovejoin with a box: its boxes' words, as before.
+    const through = dialog({ ...boxed, collateralMix: true });
+    expect(through).toContain("Its ADA goes through Lovejoin first");
+    expect(through).not.toContain(MIXED);
   });
 });

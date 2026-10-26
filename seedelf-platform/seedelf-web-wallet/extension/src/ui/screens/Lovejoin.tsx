@@ -2735,8 +2735,8 @@ export function PoolPage({
   const { most: roomMost, three: threeMost, chain: chainCaps } = formRoom(roomWidth, asked?.depth ?? 0, room, four ? roomAt(3) : undefined);
   const funding = asked;
   const width = funding?.width ?? 3;
-  // The side that pays, its ADA and, for a token pool, its token: shown beside the count, and what it pays for. From
-  // the public account, the ADA its chain spends (publicMixAda).
+  // The side that pays, its ADA and, for a token pool, its token: what it pays for (what's shown beside the count is
+  // `shownSide`, below). From the public account, the ADA its chain spends (publicMixAda).
   // Worded by which it is (publicSideOf: 1.6.0's review of the fixes, R3-26, R3-27), and in a token pool what its
   // chain picks for this many boxes (R3-14).
   const { side: publicSide, mixable } = publicSideOf(cardano, accountUtxos, token, boxes);
@@ -2756,6 +2756,10 @@ export function PoolPage({
     tailReserveOf(funding, source, pools),
     mixable ? accountUtxos : undefined,
   );
+  // What's shown beside the count, and named where one box can't go: in a token pool, what the chain picks for the most
+  // boxes the stepper offers, one where none fits. The count's own pick grew as + was pressed, and sat below what the
+  // count offered costs (1.6.0's review of the fixes, the last look, LW-4). The cap above stays count by count.
+  const shownSide = source === "private" ? seedelf : publicSideOf(cardano, accountUtxos, token, most || 1).side;
   // Fewer fit now than the stepper shows (another side chosen, a new read): it comes down to what does (boxesShown).
   useEffect(() => {
     const shown = boxesShown(boxes, most);
@@ -3149,7 +3153,7 @@ export function PoolPage({
         : funding && adaMost < 1
           ? source === "private"
             ? tr("lovejoin.mix.cantAfford", { first: formatAda(firstBox.toString()), held: amounts.ada(seedelf.lovelace) })
-            : cantAffordPublic(formatAda(firstBox.toString()), amounts.ada(side?.lovelace ?? "0"), mixable)
+            : cantAffordPublic(formatAda(firstBox.toString()), amounts.ada(shownSide?.lovelace ?? "0"), mixable)
           : undefined;
   // Then, from the public account, its collateral: on its way, or not set, with the way to set it under the reason.
   const collateralShort = source === "public" && !!collateral && collateral.state !== "set";
@@ -3190,7 +3194,7 @@ export function PoolPage({
       <div className="field" role="tabpanel" id={`lovejoin-panel-${source}`} aria-labelledby={`lovejoin-tab-${source}`}>
         <div className="field-row">
           <label htmlFor="lovejoin-boxes">{tr("lovejoin.mix.boxesOfLabel", { box: boxWords })}</label>
-          <HeldOnSide source={source} side={side} token={token} mixable={mixable} testId="lovejoin-held-balance" />
+          <HeldOnSide source={source} side={shownSide} token={token} mixable={mixable} testId="lovejoin-held-balance" />
         </div>
         <div className="stepper">
           <button type="button" className="icon-button" aria-label={tr("lovejoin.mix.fewer")} disabled={boxes <= 1} onClick={() => setBoxes((b) => b - 1)}>

@@ -14,7 +14,7 @@ import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { LovejoinService, type PoolRef } from "../src/background/lovejoin";
 import { Minswap } from "../src/background/minswap";
-import { SessionService } from "../src/background/sessions";
+import { SessionService, SWAP_MARGIN } from "../src/background/sessions";
 import { t as tr } from "../src/i18n";
 import bundled from "../src/lovejoin-pools.json";
 import { NETWORKS } from "../src/networks";
@@ -317,11 +317,12 @@ describe("1.6.0's release review, round 3b: the collateral's mix on the swap and
     const fund = BigInt(quote.fund.lovelace);
     const paid = await runner(await wallet(fund + 5n * ADA + CHAIN + 3n * ADA)).outBuild("preprod", quote);
     expect(paid).toMatchObject({ collateralReserve: CHAIN.toString(), collateralPool: true });
-    // Short of the reserve: funded without it, and still says the pool takes the collateral, which its return mixes
-    // where what's left pays for that.
+    // Short of the reserve: funded without it. Its return mixes the collateral only where what's left there pays for
+    // that, and this one's fill is MIN beside the margin's 2 ₳, short of what that mix takes coming back directly: so
+    // it isn't said to (the last look, LM-1, where an ADA-out swap's fill pays).
     const short = await runner(await wallet(fund + 5n * ADA + 2n * ADA + ADA / 2n)).outBuild("preprod", quote);
     expect(short.collateralReserve).toBeUndefined();
-    expect(short.collateralPool).toBe(true);
+    expect(short.collateralPool).toBeUndefined();
     // No 5 ₳ pool shown: neither.
     const none = await wallet(1_000n * ADA);
     const plain = await runner(none, pooled(none, [])).outBuild("preprod", quote);
@@ -485,8 +486,15 @@ describe("1.6.0's release review, round 3b: the collateral's mix on the swap and
     const back = await reserved.sessions.backBuild("preprod", 0);
     expect(back.lovejoin?.boxes).toBe(1);
     expect(back.collateralTail).toBeDefined();
-    // Funded without the reserve, the same ADA there: the chain counts its boxes on all of it, the collateral still mixed.
-    expect((await stopped(false)).cost).toMatchObject({ boxes: 2, collateralMix: true });
+    // Funded without the reserve, the same ADA there: the chain counts its boxes on all of it, two, and leaves 0.5 ₳ after
+    // them, short of the 1.5 ₳ that mix takes: none is said, and the chain WebAssembly builds has none (the last look,
+    // LM-1, below).
+    const unreserved = await stopped(false);
+    expect(unreserved.cost.boxes).toBe(2);
+    expect(unreserved.cost.collateralMix).toBeUndefined();
+    const plain = await unreserved.sessions.backBuild("preprod", 0);
+    expect(plain.lovejoin?.boxes).toBe(2);
+    expect(plain.collateralTail).toBeUndefined();
     // Settings keeps the collateral out of the pool: nothing set aside, nothing said.
     const off = (await stopped(true, { lovejoinCollateral: false })).cost;
     expect(off.boxes).toBe(2);
@@ -547,5 +555,151 @@ describe("1.6.0's review of the fixes, R3-8: a funding of one transaction the re
   it("still says a Bootstrap past one transaction's UTxOs in its own words: it pays no reserve to go without", async () => {
     const t = await spread(40, 1_500_000n);
     await expect(runner(t).mixOutBuild("preprod", 3, { bootstrap: true })).rejects.toThrow(tr("sess.bootstrapTooMany"));
+  });
+});
+
+// Round 3b's last look (fixer fx-last): LM-1, what Stop's dialog and a swap's approval say of the collateral's mix follows
+// what the return builds, as WebAssembly builds it, not only whether a 5 ₳ pool takes the collateral; LM-2, the amount
+// Max set before any quote is never followed down to nothing.
+describe("1.6.0's review of the fixes, the last look: the collateral's mix where its return pays for it, and Max never followed to nothing (LM-1, LM-2)", SLOW, () => {
+  /** What each box more takes through the classic pool one wave deep, and what the chain takes besides, as Stop and a review price them. */
+  async function boxPrice(): Promise<{ perBox: bigint; besides: bigint }> {
+    const priced = pooled(await wallet(ADA));
+    const one = BigInt((await priced.funding("preprod", 1)).lovelace);
+    const perBox = BigInt((await priced.funding("preprod", 2)).lovelace) - one;
+    return { perBox, besides: one - perBox };
+  }
+
+  /**
+   * Session 0, a swap that runs itself and comes back through Lovejoin, approved to fund `fund` and funded with the
+   * collateral's mix reserve or not (`reserved`), its account holding `ada` of ADA alone and its 5 ₳ collateral, as L1's
+   * test has it: Stop's cost, and the sessions to build its return with.
+   */
+  async function stopped(reserved: boolean, ada: bigint, fund: bigint) {
+    const t = await wallet(ADA);
+    const out = "ab".repeat(32);
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        {
+          index: 0,
+          ownStake: true,
+          createdAt: t.clock.now,
+          txs: [{ kind: "out", txHash: out, at: t.clock.now, confirmed: true }],
+          swap: { ...minswapEstimate.ask, amountOut: "906594100", minAmountOut: "902083681" },
+          auto: { approved: { minAmountOut: "902083681", fund: { lovelace: fund.toString(), tokens: [] } }, direct: false, lovejoin: { depth: 1, delay: "1-6" } },
+          ...(reserved ? { collateralReserve: true } : {}),
+        },
+      ],
+    });
+    const at = (tx_index: number, value: bigint) =>
+      ({ ...POOL[0]!, tx_hash: out, tx_index, address: sessionSwap.address, payment_cred: sessionSwap.keyHash, value: value.toString(), datum_hash: null, inline_datum: null, asset_list: [] }) as KoiosUtxo;
+    t.koios.addedToAccounts.push(at(0, ada), at(1, 5n * ADA));
+    const sessions = runner(t);
+    await sessions.list("preprod", true);
+    return { sessions, cost: (await sessions.stopCost("preprod", 0))! };
+  }
+
+  it("says Stop's collateral is mixed, with a box, only where what its boxes leave pays for that mix, as the chain WebAssembly builds has it (LM-1)", async () => {
+    const { perBox, besides } = await boxPrice();
+    // One box, funded without the reserve: 1 ₳ left after it, short of the 1.5 ₳ that mix takes; 1.5 ₳, enough.
+    for (const [left, mixed] of [
+      [ADA, false],
+      [CHAIN, true],
+    ] as const) {
+      const ada = besides + perBox + left;
+      const { sessions, cost } = await stopped(false, ada, ada);
+      expect(cost.boxes, `${left} left`).toBe(1);
+      expect(!!cost.collateralMix, `${left} left`).toBe(mixed);
+      const back = await sessions.backBuild("preprod", 0);
+      expect(back.lovejoin?.boxes, `${left} left`).toBe(1);
+      expect(!!back.collateralTail, `${left} left`).toBe(mixed);
+    }
+    // Two boxes, 2 ₳ left after them: mixed, and built so.
+    const two = besides + 2n * perBox + 2n * ADA;
+    const { sessions, cost } = await stopped(false, two, two);
+    expect(cost).toMatchObject({ boxes: 2, collateralMix: true });
+    expect((await sessions.backBuild("preprod", 0)).collateralTail).toBeDefined();
+    // Funded with the reserve, set aside before its box is counted: 0.5 ₳ left after the box, and the reserve beside it
+    // pays for that mix, so mixed, and built so.
+    const fund = besides + perBox + ADA / 2n;
+    const reserved = await stopped(true, fund + CHAIN, fund);
+    expect(reserved.cost).toMatchObject({ boxes: 1, collateralMix: true });
+    const back = await reserved.sessions.backBuild("preprod", 0);
+    expect(back.lovejoin?.boxes).toBe(1);
+    expect(back.collateralTail).toBeDefined();
+  });
+
+  it("says Stop's collateral is mixed, with no box, only where the session's ADA alone pays for that mix coming back directly, its reserve paid or not (LM-1)", async () => {
+    // The approved 2 ₳ pays no box. 2 ₳ of ADA alone at the account: short of the 2.8 ₳ a return that comes back
+    // directly takes for that mix; 3 ₳, enough.
+    for (const reserved of [true, false]) {
+      for (const [ada, mixed] of [
+        [2n * ADA, false],
+        [3n * ADA, true],
+      ] as const) {
+        const what = `${reserved ? "reserved" : "unreserved"}, ${ada}`;
+        const { sessions, cost } = await stopped(reserved, ada, 2n * ADA);
+        expect(cost.boxes, what).toBe(0);
+        expect(!!cost.collateralMix, what).toBe(mixed);
+        expect(!!(await sessions.backBuild("preprod", 0)).collateralTail, what).toBe(mixed);
+      }
+    }
+  });
+
+  it("says an ADA-out swap funded without the reserve mixes its collateral only where its fill, less the boxes it pays for, pays for that mix (LM-1)", async () => {
+    const { perBox, besides } = await boxPrice();
+    const MIN_UNIT = minswapEstimate.ask.tokenOut;
+    const SELL = { ...minswapEstimate.ask, tokenIn: MIN_UNIT, tokenOut: "lovelace", amount: "500" };
+    /** The deposit back beside the fill, and the room: what the review counts as spare besides what the swap gets. */
+    const room = BigInt(minswapEstimate.estimate.deposits) + SWAP_MARGIN;
+    /** Its funding where 500 MIN sell for `out` lovelace: the private balance pays the swap, not the reserve too. */
+    const sold = async (out: bigint) => {
+      const asked = await wallet(ADA);
+      asked.minswap.estimate = { ...minswapEstimate.estimate, amount_out: out.toString(), min_amount_out: ((out * 99n) / 100n).toString() };
+      const quote = await runner(asked).quote("preprod", SELL);
+      // Its costs and its 5 ₳ collateral, with room for the fee and the change: 2 ₳ of it beside the MIN.
+      const t = await wallet(BigInt(quote.fund.lovelace) + 5n * ADA + ADA / 2n);
+      t.koios.added.push({
+        ...ownedUtxos[0]!,
+        tx_hash: "d2".repeat(32),
+        tx_index: 0,
+        value: "2000000",
+        asset_list: [{ policy_id: MIN_UNIT.slice(0, 56), asset_name: MIN_UNIT.slice(56), quantity: "500", decimals: 0, fingerprint: "asset1min" } as never],
+      } as KoiosUtxo);
+      const built = await runner(t).outBuild("preprod", quote);
+      expect(built.collateralReserve, `${out}`).toBeUndefined();
+      return built;
+    };
+    // One box, 1 ₳ of its fill left after it: short; 1.5 ₳: enough.
+    const short = await sold(besides + perBox + ADA - room);
+    expect(short.lovejoin?.boxes).toBe(1);
+    expect(short.collateralPool).toBeUndefined();
+    const enough = await sold(besides + perBox + CHAIN - room);
+    expect(enough.lovejoin?.boxes).toBe(1);
+    expect(enough.collateralPool).toBe(true);
+    // No box: its fill's ADA alone, the deposit back and the room with it, pays for that mix coming back directly.
+    const small = await sold(ADA);
+    expect(small.lovejoin?.boxes).toBe(0);
+    expect(small.collateralPool).toBe(true);
+  });
+
+  it("keeps the amount Max set where the quote's reserve takes Max to nothing, and funds it without the reserve (LM-2)", async () => {
+    const held = 14_000_000n;
+    const t = await wallet(held);
+    const sessions = runner(t);
+    // Pressed before any quote: 14 ₳ less the usual 6 ₳ of costs, the 5 ₳ collateral and 2 ₳ of room, 1 ₳.
+    const first = wholeUnits(maxAdaIn(held.toString()), 6);
+    expect(first).toBe(ADA.toString());
+    // Nothing read of the 5 ₳ pool lately: the quote keeps its reserve aside, as a maybe, and Max with it is nothing.
+    const quoted = await sessions.quote("preprod", { ...minswapEstimate.ask, amount: first });
+    expect(quoted).toMatchObject({ collateralReserve: CHAIN.toString(), collateralMaybe: true });
+    const max = wholeUnits(maxAdaIn(held.toString(), quoted), 6);
+    expect(max).toBe("0");
+    // The amount stays Max's, never emptied, and goes without the reserve, as an amount typed past Max does.
+    expect(followMax(true, "lovelace", first, max)).toBeUndefined();
+    const built = await sessions.outBuild("preprod", quoted);
+    expect(built.collateralReserve).toBeUndefined();
+    expect(built.payments.map((p) => p.lovelace)).toEqual([quoted.fund.lovelace, "5000000"]);
   });
 });

@@ -141,11 +141,13 @@ export function maxAdaIn(held: string, quote?: SwapQuote): string {
  * The ADA amount Max set (`maxed`), followed down to `max` where Max dropped below it, or undefined where it stays:
  * pressed before any quote, Max can't keep aside what the funding adds for its collateral's mix, which the quote then
  * names, so the amount reviewed is Max's and is funded with that mix (1.6.0's release review, R3-12). Never up, so a
- * cost that grows with the amount can't make it go back and forth; nor a token's, whose Max is all of it. Typing, Half,
- * a flip and another token to pay with clear `maxed`.
+ * cost that grows with the amount can't make it go back and forth; nor a token's, whose Max is all of it. Never down to
+ * nothing, where that reserve takes all Max had: the field went empty under the user's press, though the worker funds
+ * the amount without the reserve, as one typed past Max (its review of the fixes, LM-2). Typing, Half, a flip and
+ * another token to pay with clear `maxed`.
  */
 export function followMax(maxed: boolean, pay: string, raw: string | undefined, max: string): string | undefined {
-  return maxed && pay === "lovelace" && raw !== undefined && BigInt(max) < BigInt(raw) ? max : undefined;
+  return maxed && pay === "lovelace" && raw !== undefined && BigInt(max) > 0n && BigInt(max) < BigInt(raw) ? max : undefined;
 }
 
 /** Half of what's held, and never more than `max` (ADA's Max, which leaves its costs). */
