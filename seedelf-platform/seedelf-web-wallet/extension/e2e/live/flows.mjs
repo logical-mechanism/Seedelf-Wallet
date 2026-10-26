@@ -103,7 +103,7 @@ export const FLOWS = {
     await page.getByTestId("pool-details-facts").waitFor({ timeout: 60_000 });
     log("pool:", (await page.getByTestId("pool-details").innerText()).replace(/\n/g, " | "));
     await page.getByRole("button", { name: /^Stake with / }).click();
-    await sendReviewed(page, "stake");
+    await sendReviewed(page, "stake", page.getByRole("button", { name: /^Stake with / }));
     return confirmed(page, "Now staking");
   },
 
@@ -123,7 +123,7 @@ export const FLOWS = {
       log("DRep:", (await page.getByTestId("drep-facts").innerText()).replace(/\n/g, " | "));
     }
     await page.getByRole("button", { name: "Review" }).click();
-    await sendReviewed(page, `vote-${to.startsWith("drep1") ? "drep" : to}`);
+    await sendReviewed(page, `vote-${to.startsWith("drep1") ? "drep" : to}`, page.getByRole("button", { name: "Delegate your vote" }));
     return confirmed(page, "Voting power delegated");
   },
 
@@ -131,7 +131,7 @@ export const FLOWS = {
   async "withdraw-rewards"({ page }) {
     await staking(page);
     await page.getByRole("button", { name: "Withdraw rewards" }).click();
-    await sendReviewed(page, "withdraw-rewards");
+    await sendReviewed(page, "withdraw-rewards", page.getByRole("button", { name: /^Withdraw / }));
     return confirmed(page, "Rewards withdrawn");
   },
 
@@ -139,7 +139,7 @@ export const FLOWS = {
   async unstake({ page }) {
     await staking(page);
     await page.getByRole("button", { name: "Stop staking" }).click();
-    await sendReviewed(page, "unstake");
+    await sendReviewed(page, "unstake", page.getByRole("button", { name: "Stop staking" }));
     return confirmed(page, "Staking stopped");
   },
 

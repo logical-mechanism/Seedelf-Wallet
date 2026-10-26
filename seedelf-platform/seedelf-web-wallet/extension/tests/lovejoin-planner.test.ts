@@ -14,6 +14,7 @@ import { Collateral } from "../src/background/collateral";
 import { handle, SWITCH_AT_STAKE, type Context } from "../src/background/handlers";
 import { KoiosError, type KoiosUtxo } from "../src/background/koios";
 import {
+  CHAIN_CUT,
   CHAIN_WINDOW,
   CHAIN_WINDOW_FOUR,
   evaluable,
@@ -35,10 +36,11 @@ import { SESSION_BACK, SESSION_CHAIN_PREFIX, SessionService, wayOf } from "../sr
 import { SESSION_SPENT } from "../src/background/spent";
 import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
+import type { LovejoinDelay } from "../src/shared/preferences";
 import tokenList from "../src/tokens/list.json";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
+import { busyFor, koiosPreprod, loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const PHRASE = (vectors("cardano_account.json") as Array<{ account: number; phrase: string }>).find(
@@ -1297,6 +1299,7 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
     leaves: Array<{ txHash: string; txIndex: number; pool?: string }>;
     tail?: { deposit: string; mix: string; pool: string; tries: number; scheduled?: true; over?: true; landed?: number };
     ended?: number;
+    delay?: LovejoinDelay;
   };
   type Schedule = {
     chains: TailRecord[];
@@ -1868,6 +1871,327 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
       await t.accounts.add(1);
       await expect(handle({ type: "account-use", index: 1 }, contextOf(t, lj, runner(t, lj)))).rejects.toThrow(SWITCH_AT_STAKE());
       expect(await t.accounts.active()).toBe(0);
+    });
+  });
+
+  // 1.6.0's gate, LIVE-1 (its live run on preprod, wallet B): a lock cut a chain once its deposit and its mixes went,
+  // short of its collateral's deposit and mix and its return. Its return built that rest again as a chain of its own
+  // (Session 11's call 1), which went, and the session closed; yet the cut chain still said it stopped partway on Home,
+  // under Chains and on its mix's card, every box of it mixed, inviting a second mix of what was mixed already.
+  describe("a chain cut with only its return left, and its collateral's mix (1.6.0's gate, LIVE-1)", () => {
+    const sentHashes = (t: T) => t.koios.submitted.map((b) => txIdOf(b));
+    const CLASSIC_MIX_BOX = NETWORKS.preprod.lovejoin!.mixBox;
+
+    /** What `txs` spent gone from Koios's listings, and the change the last of them leaves at the session's account, listed. */
+    function landed(t: T, txs: Step[]): void {
+      for (const tx of txs) for (const o of spent(tx)) t.koios.spent.add(o);
+      const last = txs.at(-1)!;
+      const change = paid(last.txCbor).find((o) => o.address === sessionSwap.address)!;
+      t.koios.addedToAccounts.push(atSession(last.txHash, change.index, String(change.value.ada.lovelace)));
+    }
+
+    /** One box two waves deep, as on the live run: its deposit and four mixes sent, the window holding the rest back. */
+    async function cutAfterMixes(settings: { lovejoinCollateral?: boolean; lovejoinDelay?: LovejoinDelay } = {}) {
+      const set = await setUp("20000000");
+      const { t, sessions } = set;
+      await t.deps.preferences.set({ lovejoinDepth: 2, ...settings });
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      const own = chain.slice(0, 5);
+      expect(own.map((x) => x.kind)).toEqual(["deposit", "mix", "mix", "mix", "mix"]);
+      await sessions.backSubmit("preprod", review.txHash);
+      // Its deposit lands, its mixes wait in the mempool: the fourth goes, and the window holds the rest back.
+      t.koios.confirmations = 1;
+      for (const x of own.slice(1)) t.koios.missing.add(x.txHash);
+      await sessions.runAll("preprod");
+      expect(sentHashes(t)).toEqual(own.map((x) => x.txHash));
+      // The wallet locks meanwhile (auto-lock), and is unlocked once its mixes landed.
+      await t.wallet.lock();
+      await t.wallet.unlock(PASSWORD);
+      for (const x of own) t.koios.missing.delete(x.txHash);
+      landed(t, own);
+      // Its box, mixed all the way, in the classic pool.
+      const leaf = (await schedule(t)).chains.find((c) => c.id === review.txHash)!.leaves.find((l) => !l.pool)!;
+      const by = own.find((x) => x.txHash === leaf.txHash)!;
+      t.koios.addedToAccounts.push(listed(by, paid(by.txCbor).find((o) => o.index === leaf.txIndex)!, CLASSIC_MIX_BOX));
+      return { ...set, review, chain };
+    }
+
+    /** Koios passes the next submit on, and then doesn't answer: the 20 s timeout fires (maybe-sent.test.ts). */
+    function unanswered(t: T): void {
+      const real = t.koios.fetch;
+      let left = 1;
+      t.koios.fetch = async (url, init) => {
+        const answer = await real(url, init);
+        if (url.endsWith("/submittx") && left-- > 0) throw new DOMException("signal timed out", "TimeoutError");
+        return answer;
+      };
+    }
+
+    /** Session 0's transaction `txHash` as its record keeps it. */
+    async function sessionTx(t: T, txHash: string) {
+      type Book = { sessions: Array<{ index: number; txs: Array<{ txHash: string; confirmed?: boolean; summary?: object }> }> };
+      return (await t.store.get<Book>("sessions.preprod"))!.sessions.find((s) => s.index === 0)!.txs.find((x) => x.txHash === txHash);
+    }
+
+    it("reads as the done chain it is once the chain its return built in its place went, before a pool read and after", async () => {
+      const { t, five, lj, sessions, review, chain } = await cutAfterMixes();
+      expect(chain.map((x) => x.kind)).toEqual(["deposit", "mix", "mix", "mix", "mix", "deposit", "mix", "back"]);
+      // Unlocked, its return not built again yet: it stopped, as it says, and its rest is still to come back.
+      expect(await lj.chains("preprod")).toEqual([expect.objectContaining({ session: 0, total: 8, sent: 5, stopped: CHAIN_CUT() })]);
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      // Its return built again: its collateral's deposit and mix, then the return, a chain of its own, and all of it goes.
+      const again = await sessions.backBuild("preprod", 0);
+      const rest = await steps(t);
+      expect(rest.map((x) => x.kind)).toEqual(["deposit", "mix", "back"]);
+      expect(rest[1]).toMatchObject({ tail: true, giveme: true });
+      await sessions.backSubmit("preprod", again.txHash);
+      await sessions.runAll("preprod");
+      expect(sentHashes(t)).toEqual(expect.arrayContaining(rest.map((x) => x.txHash)));
+      // All of it landed: the 5 ₳ box mixed once in its pool, nothing left at the session's account.
+      for (const x of rest) for (const o of spent(x)) t.koios.spent.add(o);
+      const leaf = again.collateralTail!.leaf;
+      t.koios.addedToAccounts.push(listed(rest[1]!, paid(rest[1]!.txCbor).find((o) => o.index === leaf.txIndex)!, five.mixBox));
+      // Nothing of the cut chain is left to do: no mix stopped partway on Home, no row under Chains, its mix's card
+      // done, its box on its way back by itself. The chain built in its place keeps its own card, its 5 ₳ box (316#3).
+      const done = async () => {
+        const held = await lj.held("preprod");
+        expect(held).toMatchObject({ stopped: 0, boxes: 1, notMixed: 0 });
+        expect(await lj.chains("preprod")).toEqual([]);
+        const mixes = await lj.mixes("preprod");
+        expect(mixes.find((e) => e.id === review.txHash)!.chain).toEqual({ total: 8, sent: 5, done: true });
+        expect(mixes.find((e) => e.id === again.txHash)).toMatchObject({
+          shares: [{ pool: five.id, boxes: 1, back: 0, moved: 0 }],
+          chain: { total: 3, sent: 3, done: true },
+        });
+      };
+      await done();
+      const status = await lj.status("preprod");
+      expect(status.chains).toEqual([]);
+      expect(status.notMixed).toEqual([]);
+      await done();
+    });
+
+    it("reads as done once its collateral's mix it left, built again with the return after it, went (tailChain)", async () => {
+      const { t, five, lj, sessions } = await setUp("16000000");
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      const deposit = chain.at(-3)!;
+      await sessions.backSubmit("preprod", review.txHash);
+      // Its deposit, its mix and its collateral's deposit went; that mix waits for them to land, and the wallet locks.
+      expect(sentHashes(t)).toEqual(chain.slice(0, -2).map((x) => x.txHash));
+      await t.wallet.lock();
+      await t.wallet.unlock(PASSWORD);
+      // Landed: its collateral's box in the 5 ₳ pool, that deposit's change at the account.
+      t.koios.confirmations = 1;
+      for (const tx of chain.slice(0, -2)) for (const o of spent(tx)) t.koios.spent.add(o);
+      const box = paid(deposit.txCbor).find((o) => o.index === review.collateralTail!.box.txIndex)!;
+      const change = paid(deposit.txCbor).find((o) => o.address === sessionSwap.address)!;
+      t.koios.addedToAccounts.push(listed(deposit, box, five.mixBox), atSession(deposit.txHash, change.index, String(change.value.ada.lovelace)));
+      // A pool read finds that box the wallet's, not mixed yet: the chain stopped, as it says.
+      await lj.status("preprod");
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      // That mix built again with the return after it, and sent: giveme.my signs, everything before it in.
+      const again = await sessions.backBuild("preprod", 0);
+      const rest = await steps(t);
+      expect(rest.map((x) => x.kind)).toEqual(["mix", "back"]);
+      await sessions.backSubmit("preprod", again.txHash);
+      await sessions.runAll("preprod");
+      expect(sentHashes(t)).toEqual(expect.arrayContaining(rest.map((x) => x.txHash)));
+      // With no pool read since: nothing stopped, no row, its card done.
+      expect((await lj.held("preprod")).stopped).toBe(0);
+      expect(await lj.chains("preprod")).toEqual([]);
+      expect((await lj.mixes("preprod")).find((e) => e.id === review.txHash)!.chain).toEqual({ total: 5, sent: 3, done: true });
+    });
+
+    it("reads as done once its return came back directly, where it had no collateral's mix (Settings' switch off)", async () => {
+      const { t, lj, sessions, review, chain } = await cutAfterMixes({ lovejoinCollateral: false });
+      expect(chain.map((x) => x.kind)).toEqual(["deposit", "mix", "mix", "mix", "mix", "back"]);
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      // What it left comes back directly, its 5 ₳ with it: one transaction, no chain.
+      const back = await sessions.backBuild("preprod", 0);
+      expect((await kept(t)).chain).toBeUndefined();
+      await sessions.backSubmit("preprod", back.txHash);
+      expect(sentHashes(t)).toContain(back.txHash);
+      expect((await lj.held("preprod")).stopped).toBe(0);
+      expect(await lj.chains("preprod")).toEqual([]);
+      expect((await lj.mixes("preprod")).find((e) => e.id === review.txHash)!.chain).toEqual({ total: 6, sent: 5, done: true });
+    });
+
+    it("reads as done once its rest came back directly by its review's switch, nothing of Lovejoin read since the unlock", async () => {
+      const { t, lj, sessions, review } = await cutAfterMixes();
+      // Brought back directly, by the switch: no collateral's mix, no chain, and no page has asked Lovejoin anything.
+      const back = await sessions.backBuild("preprod", 0, true);
+      expect((await kept(t)).chain).toBeUndefined();
+      await sessions.backSubmit("preprod", back.txHash);
+      expect(sentHashes(t)).toContain(back.txHash);
+      expect((await lj.held("preprod")).stopped).toBe(0);
+      expect(await lj.chains("preprod")).toEqual([]);
+      expect((await lj.mixes("preprod")).find((e) => e.id === review.txHash)!.chain).toEqual({ total: 8, sent: 5, done: true });
+    });
+
+    it("still says a chain cut before all its mixes went stopped, its rest come back since: a box of it may wait to be mixed", async () => {
+      const { t, lj, sessions } = await setUp("20000000");
+      await t.deps.preferences.set({ lovejoinDepth: 2 });
+      const review = await sessions.backBuild("preprod", 0);
+      const chain = await steps(t);
+      await sessions.backSubmit("preprod", review.txHash);
+      // The window's four went, its fourth mix not; the wallet locks, and they land.
+      const went = chain.slice(0, 4);
+      expect(sentHashes(t)).toEqual(went.map((x) => x.txHash));
+      await t.wallet.lock();
+      await t.wallet.unlock(PASSWORD);
+      t.koios.confirmations = 1;
+      landed(t, went);
+      // What it left comes back as a chain of its own, its collateral mixed on the way, and all of it goes.
+      const again = await sessions.backBuild("preprod", 0);
+      const rest = await steps(t);
+      expect(rest.map((x) => x.kind)).toEqual(["deposit", "mix", "back"]);
+      await sessions.backSubmit("preprod", again.txHash);
+      await sessions.runAll("preprod");
+      expect(sentHashes(t)).toEqual(expect.arrayContaining(rest.map((x) => x.txHash)));
+      // Its fourth mix never went: it stopped, as it says, everywhere it did.
+      expect(await lj.chains("preprod")).toEqual([expect.objectContaining({ total: 8, sent: 4, stopped: CHAIN_CUT() })]);
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      expect((await lj.mixes("preprod")).find((e) => e.id === review.txHash)!.chain).toMatchObject({ sent: 4, stopped: CHAIN_CUT() });
+    });
+
+    // 1.6.0's gate, last-5's first low: the chain built in its place records no delay of its own (a site's session has
+    // none approved, nor has a mix's), so its record goes three hours after it ended (RECORD_KEEP_MS), while the cut
+    // chain's, with Settings' delay on it, is kept for that delay's least. Read from the later record alone, the cut
+    // chain said it stopped partway again, from then until its own went: up to three hours more at 6–24 h.
+    it("still reads as done once the record of the chain built in its place went before its own, kept by Settings' 6–24 h delay", async () => {
+      const { t, five, lj, sessions, review } = await cutAfterMixes({ lovejoinDelay: "6-24" });
+      const again = await sessions.backBuild("preprod", 0);
+      const rest = await steps(t);
+      expect(rest.map((x) => x.kind)).toEqual(["deposit", "mix", "back"]);
+      await sessions.backSubmit("preprod", again.txHash);
+      await sessions.runAll("preprod");
+      expect(sentHashes(t)).toEqual(expect.arrayContaining(rest.map((x) => x.txHash)));
+      for (const x of rest) for (const o of spent(x)) t.koios.spent.add(o);
+      const leaf = again.collateralTail!.leaf;
+      t.koios.addedToAccounts.push(listed(rest[1]!, paid(rest[1]!.txCbor).find((o) => o.index === leaf.txIndex)!, five.mixBox));
+      // The cut chain keeps Settings' delay on its record, the chain built in its place none.
+      expect((await schedule(t)).chains.map((c) => [c.id, c.delay])).toEqual([
+        [review.txHash, "6-24"],
+        [again.txHash, undefined],
+      ]);
+      expect((await lj.held("preprod")).stopped).toBe(0);
+      // Three hours on, the wallet kept open, a pool read lets the later record go and keeps the cut chain's: still
+      // nothing stopped partway on Home, no row under Chains, its card done.
+      await busyFor(t, 3 * 3_600_000 + 60_000);
+      await lj.status("preprod");
+      expect((await schedule(t)).chains.map((c) => c.id)).toEqual([review.txHash]);
+      expect((await lj.held("preprod")).stopped).toBe(0);
+      expect(await lj.chains("preprod")).toEqual([]);
+      expect((await lj.mixes("preprod")).find((e) => e.id === review.txHash)!.chain).toEqual({ total: 8, sent: 5, done: true });
+    });
+
+    // 1.6.0's gate, last-5's second low: a return that comes back directly marks the cut chain once it's sent
+    // (sendBack). One Koios took but didn't answer, or a lock cut off after its submit, threw before that, and once it
+    // landed nothing marked it: the chain said it stopped partway for as long as its record was kept. On mainnet, with no
+    // 5 ₳ pool shown, every such rest comes back so.
+    it("reads as done once its return, come back directly, is seen on chain after Koios took it without an answer", async () => {
+      const { t, lj, sessions, review } = await cutAfterMixes({ lovejoinCollateral: false });
+      const back = await sessions.backBuild("preprod", 0);
+      expect((await kept(t)).chain).toBeUndefined();
+      // Koios takes it and doesn't answer: maybe sent. It isn't in a block yet.
+      unanswered(t);
+      t.koios.missing.add(back.txHash);
+      await expect(sessions.backSubmit("preprod", back.txHash)).rejects.toBeInstanceOf(KoiosError);
+      expect(sentHashes(t)).toContain(back.txHash);
+      // Not seen on chain, it may never have gone: the cut chain still says it stopped.
+      await sessions.runAll("preprod");
+      const unseen = await sessionTx(t, back.txHash);
+      expect(unseen).toBeDefined();
+      expect(unseen!.confirmed).toBeFalsy();
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      // In a block now: the runner's next pass sees it there and writes its history, and the cut chain is done.
+      t.koios.missing.delete(back.txHash);
+      for (const o of txInputs(t.koios.submitted.find((b) => txIdOf(b) === back.txHash)!)) t.koios.spent.add(o);
+      await sessions.runAll("preprod");
+      const landedBack = await sessionTx(t, back.txHash);
+      expect(landedBack).toMatchObject({ confirmed: true });
+      expect(landedBack!.summary).toBeUndefined();
+      expect((await lj.held("preprod")).stopped).toBe(0);
+      expect(await lj.chains("preprod")).toEqual([]);
+      expect((await lj.mixes("preprod")).find((e) => e.id === review.txHash)!.chain).toEqual({ total: 6, sent: 5, done: true });
+    });
+
+    it("hands on a trap as it marks that chain, never reading on from it, and writes the return's history through any other failure (L3)", async () => {
+      const { t, lj, sessions } = await cutAfterMixes({ lovejoinCollateral: false });
+      const back = await sessions.backBuild("preprod", 0);
+      unanswered(t);
+      await expect(sessions.backSubmit("preprod", back.txHash)).rejects.toBeInstanceOf(KoiosError);
+      // On chain, and the Sessions page's Refresh finds it there. WebAssembly that trapped as Lovejoin marked the chain
+      // is broken for good: the Refresh hands it on, and its answer locks the wallet (sw.ts answerUi).
+      const mark = vi.spyOn(lj, "restBack").mockRejectedValueOnce(new WebAssembly.RuntimeError("unreachable"));
+      await expect(sessions.list("preprod", true)).rejects.toBeInstanceOf(WebAssembly.RuntimeError);
+      // Any other failure is Lovejoin's own: the return's history is written all the same.
+      mark.mockRejectedValueOnce(new Error("Lovejoin's record won't open"));
+      await sessions.list("preprod", true);
+      expect(mark).toHaveBeenCalledTimes(2);
+      expect(await sessionTx(t, back.txHash)).toMatchObject({ confirmed: true });
+      expect((await sessionTx(t, back.txHash))!.summary).toBeUndefined();
+    });
+
+    it("marks no chain recorded after that return was sent: one whose own return is still to come back says it stopped", async () => {
+      const t = await wallet();
+      const lj = pooled(t, []);
+      const sessions = runner(t, lj);
+      const MINUTE = 60_000;
+      // A site's session's first return came back directly, Koios not answering its send; the site paid the session
+      // again meanwhile, and that return went through Lovejoin, a chain cut once its deposit and mixes went.
+      const first = "b1".repeat(32);
+      const summary = { index: 0, lovelace: "9000000", tokens: [], fee: "180000" };
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: t.clock.now - 60 * MINUTE,
+            txs: [
+              { kind: "out", txHash: OUT, at: t.clock.now - 60 * MINUTE, confirmed: true },
+              { kind: "back", txHash: first, at: t.clock.now - 30 * MINUTE, summary },
+            ],
+            site: { origin: "https://example.org" },
+          },
+        ],
+      });
+      const later = "c9".repeat(32);
+      const deposit = "c1".repeat(32);
+      const mixes = ["c2", "c3", "c4", "c5"].map((h) => h.repeat(32));
+      await t.store.set("lovejoin.preprod", {
+        due: [t.clock.now + 60 * MINUTE],
+        chains: [
+          {
+            id: later,
+            session: 0,
+            progress: "seedelf.session.chain.preprod.0",
+            deposit,
+            mixes,
+            leaves: [{ txHash: mixes[3]!, txIndex: 0 }],
+            boxes: 1,
+            total: 6,
+            sent: 5,
+            at: t.clock.now - 20 * MINUTE,
+            scheduled: true,
+            stopped: CHAIN_CUT(),
+            cut: true,
+            ended: t.clock.now - 5 * MINUTE,
+          },
+        ],
+        mixes: [{ id: later, deposit, at: t.clock.now - 20 * MINUTE, session: 0, shares: [{ boxes: 1 }] }],
+      });
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      // The first return is seen on chain now, and its history written: it brought back nothing of that chain's.
+      t.koios.confirmations = 1;
+      await sessions.runAll("preprod");
+      expect(await sessionTx(t, first)).toMatchObject({ confirmed: true });
+      expect((await sessionTx(t, first))!.summary).toBeUndefined();
+      expect((await lj.held("preprod")).stopped).toBe(1);
+      expect((await lj.mixes("preprod")).find((e) => e.id === later)!.chain).toMatchObject({ sent: 5, stopped: CHAIN_CUT() });
     });
   });
 

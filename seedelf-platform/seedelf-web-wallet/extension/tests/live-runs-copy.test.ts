@@ -82,6 +82,8 @@ describe("1.6.0's release review, x-release#2: the live runs", () => {
       shown("staking.changePool"),
       shown("staking.choosePool"),
       shown("pools.stakeWith", "LOGIC"),
+      // A staking review's own button, which says what it does (ST-2): the rewards' withdrawal (1.6.0's live run).
+      shown("staking.send.withdraw", "1.5"),
       // vote: the voting power's button, delegated or not, and the choice.
       shown("staking.change"),
       shown("staking.delegate"),

@@ -4811,6 +4811,12 @@ export class SessionService {
       },
       summary: { index: built.index, lovelace: built.lovelace, tokens: built.tokens, fee: built.fee },
     });
+    // What a chain of the session's that stopped with only its return left had to bring back went with it: that chain
+    // reads as done, not stopped partway (lovejoin.ts restBack; 1.6.0's gate, LIVE-1). A trap is handed on, never read
+    // on from (L3): noteLanded writes this return's history once it lands, as for a send that was cut off.
+    await this.deps.lovejoin?.restBack(network, built.index).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+    });
     const written = await (this.deps.activity?.sent(network, pending, built) ?? Promise.resolve()).then(
       () => true,
       () => false,
@@ -4849,6 +4855,16 @@ export class SessionService {
       } catch {
         // Tried again at the next reading.
       }
+    }
+    // A return whose send threw before sendBack marked what came back with it, on chain now: a chain of the session's
+    // that stopped with only its return left reads as done, not stopped partway, as sendBack has it (lovejoin.ts
+    // restBack; 1.6.0's gate, last-5). Only one recorded by the time that return was sent: one recorded since, the
+    // session paid again, still has its own to come back. A trap is handed on, never read on from (L3).
+    const back = s.txs.filter((t) => t.kind === "back" && t.confirmed && t.summary);
+    if (back.length) {
+      await this.deps.lovejoin?.restBack(network, s.index, Math.max(...back.map((t) => t.at))).catch((e: unknown) => {
+        if (isTrap(e)) throw e;
+      });
     }
     if (!written.size) return s;
     return this.update(network, s.index, (r) => {

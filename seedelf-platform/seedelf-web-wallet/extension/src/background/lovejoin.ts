@@ -1253,6 +1253,13 @@ interface ChainRecord {
   maybe?: { index: number; txHash: string; inputs: string[]; at: number; from?: number; unanswered?: true };
   /** A session's collateral, mixed once on its way into the 5 ₳ pool (the owner, 2026-10-23, Tail). */
   tail?: Tail;
+  /**
+   * It stopped with only its session's rest left (restOnly), and a return of that session that comes back directly
+   * was sent since, or was seen on chain after a send Koios didn't answer (restBack): it reads as done (carriedOf). A
+   * chain built in its place says so by its own record, and a pool read writes it here before that record goes, which
+   * may be hours before this one (sortOut; 1.6.0's gate, last-5).
+   */
+  restBack?: true;
 }
 
 /**
@@ -1940,14 +1947,58 @@ function originOf(b: OutRef, s: Schedule): string | undefined {
   return s.leaves?.[ref(b)] ?? (told?.public ? publicOwner(told.account ?? 0) : undefined);
 }
 
+/** How many of chain `c`'s transactions make its own boxes, sent first: its deposit and its mixes. */
+const ownTxs = (c: ChainRecord) => (c.deposit ? 1 : 0) + c.mixes.length;
+
+/**
+ * Whether chain `c` left its collateral's box in its pool waiting for its mix (Tail `box`): that box's deposit sent,
+ * by `c` or by the chain whose collateral's mix `c` builds again (which sends that mix and the return alone, fewer than
+ * makers and its return), and the mix not.
+ */
+const tailBoxOut = (c: ChainRecord) => !!c.tail && !c.tail.scheduled && (c.sent > ownTxs(c) || makers(c).length >= c.total);
+
+/**
+ * Whether chain `c` left nothing of its own to mix: it sent every transaction that makes one of its boxes, and left no
+ * collateral's box waiting for its mix. What it didn't send was its session's rest: its return, and its collateral's
+ * deposit and mix where that deposit never went, which the session's next return brings back (carriedOf).
+ */
+const restOnly = (c: ChainRecord) => c.sent >= ownTxs(c) && !tailBoxOut(c);
+
+/**
+ * The stopped chains of `s` whose session's return brought their rest back since (1.6.0's gate, LIVE-1): a session's
+ * chain that sent every transaction that makes one of its boxes before it stopped (the usual way: a lock while its
+ * collateral's mix waits for giveme.my), whose rest went since, in a chain of the same session's built in its place,
+ * recorded after it and all sent (buildBack, Session 11's call 1), or in a return that comes back directly
+ * (ChainRecord `restBack`). Where it left its collateral's box waiting for its mix, only a chain that took that box
+ * over and mixed it (tailChain, the same deposit) brought its rest. Every box of such a chain went in and was mixed,
+ * and comes back by itself: the pages show it as the done chain it is (shown, the list of mixes), where it said it
+ * stopped partway, and Mix my boxes again offered to mix what was mixed, for as long as its record was kept. One a
+ * node dropped a transaction of since leaves a box not mixed yet, said as a done chain's is. One stopped before its
+ * last mix still says it stopped, its rest back or not; so does one whose rest is still to come back. One carried by a
+ * chain built in its place keeps that on its own record before that chain's goes (sortOut; 1.6.0's gate, last-5).
+ */
+function carriedOf(s: Schedule): (c: ChainRecord) => boolean {
+  return (c) => {
+    if (c.session === undefined || !c.stopped || !c.ended || c.done || c.maybe || c.sent < ownTxs(c)) return false;
+    if (c.restBack) return true;
+    const at = s.chains.indexOf(c);
+    return (
+      at >= 0 &&
+      s.chains.slice(at + 1).some((d) => d.session === c.session && !!d.done && (!tailBoxOut(c) || d.tail?.deposit === c.tail!.deposit))
+    );
+  };
+}
+
 /**
  * Whether the Lovejoin page and Home show chain `c`: one being sent, or one
  * that stopped with something still to do: boxes it left not mixed yet, a
  * transaction that may have gone through, or boxes no pool read has found
  * yet. One whose boxes were found, and all mixed again or brought back since,
- * isn't.
+ * isn't; nor one whose session's return brought its rest back (`carried`,
+ * carriedOf).
  */
-const shown = (c: ChainRecord) => !c.done && !(c.stopped && c.ended && c.found && c.left === 0 && !c.maybe);
+const shown = (c: ChainRecord, carried: (c: ChainRecord) => boolean) =>
+  !c.done && !carried(c) && !(c.stopped && c.ended && c.found && c.left === 0 && !c.maybe);
 
 /**
  * When chain `c`'s boxes may come back by its own wait (ms): its recorded
@@ -5010,6 +5061,32 @@ export class LovejoinService {
   }
 
   /**
+   * Session `index`'s return that comes back directly was sent (sessions.ts sendBack), or was seen on chain after a
+   * send Koios didn't answer or a lock cut off (noteLanded; 1.6.0's gate, last-5): each chain of its that stopped
+   * with only that rest left (restOnly) reads as done from now (ChainRecord `restBack`, carriedOf; 1.6.0's gate,
+   * LIVE-1). A chain a lock cut is marked so first (cuts). Nothing is written for any other chain. `sentAt`: when that
+   * return was sent, where it's seen later: only a chain recorded by then left it its rest, never one the session
+   * started since, paid again, whose own return is still to come back.
+   */
+  async restBack(network: NetworkName, index: number, sentAt?: number): Promise<void> {
+    if (!this.available(network)) return;
+    await this.cuts(network);
+    const its = (c: ChainRecord) =>
+      c.session === index &&
+      (sentAt === undefined || c.at <= sentAt) &&
+      !!c.ended &&
+      !!c.stopped &&
+      !c.done &&
+      !c.maybe &&
+      !c.restBack &&
+      restOnly(c);
+    if (!(await this.read(network)).chains.some(its)) return;
+    await this.update(network, (s) => {
+      for (const c of s.chains) if (its(c)) c.restBack = true;
+    });
+  }
+
+  /**
    * Marks chain `id`'s transaction `maybe` as one that may have gone through
    * (ChainRecord `maybe`) while it's sent, unless the chain ended, or has a
    * mark already.
@@ -5354,6 +5431,12 @@ export class LovejoinService {
       );
       if (depositors.length) s.depositors = Object.fromEntries(depositors);
       else delete s.depositors;
+      // A chain the one built in its place carries (carriedOf) keeps that on its own record (ChainRecord `restBack`)
+      // before the other's goes: a chain built in its place records no delay of its own (a site's or a mix's session
+      // has none approved), so its record may go hours before the one it carries, kept for Settings' delay's least,
+      // which would read as stopped partway again (1.6.0's gate, last-5's first low).
+      const carried = carriedOf(s);
+      for (const c of s.chains) if (keep(c) && !c.restBack && carried(c)) c.restBack = true;
       s.chains = s.chains.filter(keep);
       // What made a box no record accounts for goes once no read has listed a box it made for a while.
       const origins = Object.entries(s.origins ?? {}).flatMap(([tx, o]): Array<[string, Origin]> =>
@@ -5740,7 +5823,7 @@ export class LovejoinService {
     return {
       available: true,
       ...view(classic!),
-      chains: await this.rows(schedule.chains),
+      chains: await this.rows(schedule),
       ...(classicCrowd ? { crowd: classicCrowd } : {}),
       ...(started.length ? { started } : {}),
       ...(tokens.some(listedHere)
@@ -5780,7 +5863,7 @@ export class LovejoinService {
   async chains(network: NetworkName): Promise<LovejoinChainView[]> {
     if (!this.available(network)) return [];
     await this.cuts(network);
-    return this.rows((await this.read(network)).chains);
+    return this.rows(await this.read(network));
   }
 
   /**
@@ -5793,12 +5876,15 @@ export class LovejoinService {
     if (!this.available(network)) return [];
     await this.cuts(network);
     const schedule = await this.read(network);
+    const carried = carriedOf(schedule);
     return entries(schedule)
       .filter(open)
       .sort((a, b) => a.at - b.at)
       // Its deposit is the hold's to know (bootstrapOf), not the page's; so is whether a read found it (STATE-5).
       .map(({ deposit: _deposit, found: _found, ...e }) => {
         const c = schedule.chains.find((r) => r.id === e.id);
+        // Its session's return brought its rest back: done, as it is, not stopped (carriedOf; 1.6.0's gate, LIVE-1).
+        const done = !!c && (!!c.done || carried(c));
         return {
           ...e,
           shares: e.shares.map((x) => ({ ...(x.pool ? { pool: x.pool } : {}), boxes: x.boxes, back: x.back ?? 0, moved: x.moved ?? 0 })),
@@ -5807,8 +5893,8 @@ export class LovejoinService {
                 chain: {
                   total: c.total,
                   sent: c.sent,
-                  ...(c.done ? { done: true as const } : {}),
-                  ...(c.stopped ? { stopped: c.stopped } : {}),
+                  ...(done ? { done: true as const } : {}),
+                  ...(c.stopped && !done ? { stopped: c.stopped } : {}),
                   ...(c.maybe && c.ended ? { maybeSent: true as const } : {}),
                   ...(c.width ? { width: c.width } : {}),
                 },
@@ -5892,10 +5978,11 @@ export class LovejoinService {
     });
   }
 
-  /** The rows the Lovejoin page lists for `chains`: those it shows (shown), each one's transactions while it's sent. */
-  private rows(chains: ChainRecord[]): Promise<LovejoinChainView[]> {
+  /** The rows the Lovejoin page lists for schedule `s`'s chains: those it shows (shown), each one's transactions while it's sent. */
+  private rows(s: Schedule): Promise<LovejoinChainView[]> {
+    const carried = carriedOf(s);
     return Promise.all(
-      chains.filter(shown).map(async (c) => {
+      s.chains.filter((c) => shown(c, carried)).map(async (c) => {
         const txs = await this.chainTxs(c);
         return {
           ...(c.session !== undefined ? { session: c.session } : {}),
@@ -5959,6 +6046,7 @@ export class LovejoinService {
     await this.cuts(network);
     const schedule = await this.read(network);
     const { due, chains, notMixed, unsure } = schedule;
+    const carried = carriedOf(schedule);
     // What each pool's open Bootstraps hold, as many as their entries still have out there (bootstrapOf), from the
     // list of mixes alone: no due time, so Home's figures left them out, and the private balance dropped with nothing
     // said where it went. Home shows them apart (chunk 34's D2; 1.6.0's release review, MONEY-4).
@@ -5997,7 +6085,7 @@ export class LovejoinService {
       next: due.length ? Math.min(...due) : null,
       notMixed: notMixed ?? 0,
       ...(unsure ? { unsure } : {}),
-      stopped: chains.filter((c) => c.stopped && shown(c)).length,
+      stopped: chains.filter((c) => c.stopped && shown(c, carried)).length,
       ...(classicHeld ? { bootstrap: classicHeld } : {}),
       ...(pools.length ? { pools } : {}),
       ...(schedule.bringing ? { bringing: bringingView(schedule.bringing) } : {}),
