@@ -23,6 +23,7 @@ Every earlier fix round on this wallet introduced new bugs, mostly where two fea
   ```
   Then edit the copy and run `npx vitest run tests/<file>` from `$C/extension`. For Rust, `rsync` `seedelf-platform` without `target` and set `CARGO_TARGET_DIR=$C/target`. Delete the copy before you return.
 - **Never run:**
+  - **never run a binary from `seedelf-data/target/` (or `cargo run` there):** the API server reads `seedelf-data/.env` and connects to home's mainnet db-sync, Kupo, Ogmios and submit API. Only `cargo test`, which runs the offline tests (round 3's review once started the server by mistake);
   - git commands that write;
   - `npm run build*` or `wasm/build.sh` (e2e owns `dist/`; the lead rebuilds `pkg/`);
   - Playwright;

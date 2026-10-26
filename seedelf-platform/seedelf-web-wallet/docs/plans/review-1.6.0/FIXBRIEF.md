@@ -45,6 +45,7 @@ Several lanes edit these at once. Keep each edit small and anchored with the Edi
 
 ## Never run
 
+- **never run a binary from `seedelf-data/target/` (or `cargo run` there):** the API server reads `seedelf-data/.env` and connects to home's mainnet db-sync, Kupo, Ogmios and submit API. Only `cargo test`, which runs the offline tests (round 3's review once started the server by mistake);
 - a formatter for TypeScript, JSON or Markdown (there is no prettier; `cargo fmt` for Rust is fine);
 - e2e or Playwright (the lead runs them);
 - `wasm/build.sh`, or `npm run build*`, `package*`, `lovejoin-pools`, `tokens` or `dreps`;
