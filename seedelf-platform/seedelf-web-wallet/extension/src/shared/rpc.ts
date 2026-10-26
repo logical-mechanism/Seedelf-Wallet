@@ -636,8 +636,12 @@ export interface UtxoLists {
 export type CollateralStatus =
   /** `by`: the wallet took a 5 ₳ UTxO the account held, or you set it. */
   | { state: "set"; utxo: UtxoInfo; by: "wallet" | "you" }
-  /** The payment that makes it is on its way. */
-  | { state: "waiting"; txHash: string }
+  /**
+   * The payment that makes it is on its way. `late`: past its first 10 minutes and still not in a reading, it may have
+   * been dropped, though it's waited for while it can still land (coin-control.ts `collateral`), so the Collateral
+   * page offers to pay it again anyway (1.6.0's review of the fixes, 309#1's leftover).
+   */
+  | { state: "waiting"; txHash: string; late?: true }
   /** `reclaimed`: you returned it, so the wallet doesn't take one by itself. `candidate`: a 5 ₳ UTxO it can be, with no transaction. */
   | { state: "none"; reclaimed: boolean; candidate?: UtxoInfo };
 
@@ -953,6 +957,11 @@ export interface PendingTx {
    * (pending.ts LOVEJOIN_KINDS, its landing's hold) is the same.
    */
   bootstrap?: true;
+  /**
+   * How many boxes a mix or a Bootstrap from the public account puts in (lovejoin.ts publicSubmit), so Home's banner
+   * names one box as one. None in a watch from before it: its words stay plural (1.6.0's review of the fixes).
+   */
+  boxes?: number;
   /**
    * Watched on the private index's feed, which every wallet shares and names
    * no transaction (feed.ts): Home asks every 5 s, as the answer costs a unit
@@ -1590,6 +1599,11 @@ export interface SwapQuote {
    * 323-worker#0). Whether that pool takes the collateral now is read at Review, whose summary says what was added.
    */
   collateralReserve?: string;
+  /**
+   * `collateralReserve` named though no pool read lately says whether that pool takes the collateral: Max keeps it
+   * aside all the same, the private default, and its note says the mix may take it (1.6.0's release review, R3-11).
+   */
+  collateralMaybe?: true;
 }
 
 /**
@@ -1631,6 +1645,12 @@ export interface SwapLovejoin {
    * swap's principal, privacy review §2.8).
    */
   ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number; width?: number; fellBack?: string };
+  /**
+   * Stop's alone (sessions.ts stopCost): a return through Lovejoin mixes the session's 5 ₳ collateral on its way into
+   * the 5 ₳ pool first, under giveme.my's collateral, as the wallet last read that pool. Its dialog says so (1.6.0's
+   * release review, L1).
+   */
+  collateralMix?: true;
   /**
    * The token it gets, through a pool of it (chunk 34's 34e), when it buys one a shown pool takes: as many boxes as
    * the least it asks for makes, in the pool chosen (Change picks another of `pools`, or none). Its boxes' own ADA
@@ -1908,6 +1928,13 @@ export interface SessionOutSummary extends WithdrawSummary {
    * Absent where it won't be.
    */
   collateralReserve?: string;
+  /**
+   * A 5 ₳ pool takes the collateral, as Review read it, and its return can build that mix: there too where the private
+   * balance didn't pay `collateralReserve` as well (sessions.ts orWithoutReserve), whose return still mixes the
+   * collateral where what's left there pays for it. What a review says of where the 5 ₳ goes follows it; what it
+   * counts as a cost follows `collateralReserve` (1.6.0's release review, R3-9).
+   */
+  collateralPool?: true;
   /**
    * A Bootstrap's from the private balance: what its one payment carries beside its boxes and the deposit's reserve
    * for its way back, in lovelace, since it puts up no collateral and its return sweeps the deposit's change alone
@@ -2473,6 +2500,12 @@ export interface LovejoinHeld {
     waiting?: LovejoinBringWait;
     late?: true;
   };
+  /**
+   * Bring every box back now's last run, stopped by Stop on any page or tab (lovejoin.ts stopBringingAllBack): how many
+   * withdraws it sent, and its pool when it was one pool's. A page that saw it go says Stopped, never Done (1.6.0's
+   * release review, L2). None once it's asked again.
+   */
+  bringStopped?: { back: number; pool?: string };
 }
 
 /**

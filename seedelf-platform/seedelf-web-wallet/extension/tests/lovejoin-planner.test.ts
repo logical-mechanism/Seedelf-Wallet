@@ -1724,12 +1724,30 @@ describe("a return's 5 ₳ collateral mixed once into the 5 ₳ pool (the owner,
       const { t, five, sessions, stopped } = await stoppedAtMix();
       // Its deposit went in minutes ago, and its box is listed; then a transaction of the wallet's own spent it.
       const row = t.koios.addedToAccounts.find((u) => u.tx_hash === stopped.tail!.deposit && u.payment_cred === five.mixBox)!;
+      // Spent now, on the wallet's own clock, as every send writes its marks (1.6.0's release review, L4).
       await t.wallet.withKeys(async () =>
-        t.session.set(SESSION_SPENT, { ...((await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {}), [`${row.tx_hash}#${row.tx_index}`]: Date.now() }),
+        t.session.set(SESSION_SPENT, { ...((await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {}), [`${row.tx_hash}#${row.tx_index}`]: t.clock.now }),
       );
       const back = await sessions.backBuild("preprod", 0);
       expect(back.collateralTail).toBeUndefined();
       expect((await schedule(t)).chains.find((c) => c.id === stopped.id)!.tail?.over).toBe(true);
+    });
+
+    // A send's mark of its box held no longer, SPENT_KEEP_MS gone by on the wallet's own clock, says nothing of a send
+    // of the wallet's own now: the box waits for the listing, as any box not listed yet does. Read on the device's clock,
+    // which a test's runs ahead of, the mark never lapsed, and the box was taken for moved at once (1.6.0's release
+    // review, L4).
+    it("reads a send of the wallet's own by the marks it still holds on its own clock, never one held no longer (L4)", async () => {
+      const { t, sessions, deposit, box } = await cutAfterDeposit();
+      t.koios.confirmations = 1;
+      await t.wallet.withKeys(async () =>
+        t.session.set(SESSION_SPENT, {
+          ...((await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {}),
+          [`${deposit.txHash}#${box.index}`]: t.clock.now - 3 * 60 * 60_000,
+        }),
+      );
+      await expect(sessions.backBuild("preprod", 0)).rejects.toThrow(tr("lj.tail.waiting"));
+      expect((await schedule(t)).chains.at(-1)!.tail?.over).toBeUndefined();
     });
 
     it("stops at its collateral's mix once giveme.my kept it waiting a day, and the rest comes back without it (323-worker#8)", async () => {

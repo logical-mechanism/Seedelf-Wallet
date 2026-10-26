@@ -122,10 +122,11 @@ export function sameAsk(a: SwapAsk, b: SwapAsk): boolean {
  * The most ADA a swap can take from `held` lovelace: what's left after its
  * costs, the one-time account's collateral and room for the network fee. The
  * costs are `quote`'s when it's an ADA swap's, else the usual ones. And what
- * a swap's funding adds for its collateral's mix where a 5 ₳ pool is shown
- * (`collateralReserve`, any swap's quote): kept aside, so Max's amount is
- * funded with it, as the most private way is the default; one typed past it
- * is funded without it (1.6.0's release review, 323-worker#0).
+ * a swap's funding adds for its collateral's mix where a 5 ₳ pool takes the
+ * collateral, or nothing read lately says it doesn't (`collateralReserve`,
+ * any swap's quote): kept aside, so Max's amount is funded with it, as the
+ * most private way is the default; one typed past it is funded without it
+ * (1.6.0's release review, 323-worker#0, R3-11).
  */
 export function maxAdaIn(held: string, quote?: SwapQuote): string {
   const priced = quote?.ask.tokenIn === "lovelace";
@@ -134,6 +135,17 @@ export function maxAdaIn(held: string, quote?: SwapQuote): string {
   const reserve = BigInt(quote?.collateralReserve ?? "0");
   const max = BigInt(held) - costs - collateral - reserve - FEE_ROOM;
   return (max > 0n ? max : 0n).toString();
+}
+
+/**
+ * The ADA amount Max set (`maxed`), followed down to `max` where Max dropped below it, or undefined where it stays:
+ * pressed before any quote, Max can't keep aside what the funding adds for its collateral's mix, which the quote then
+ * names, so the amount reviewed is Max's and is funded with that mix (1.6.0's release review, R3-12). Never up, so a
+ * cost that grows with the amount can't make it go back and forth; nor a token's, whose Max is all of it. Typing, Half,
+ * a flip and another token to pay with clear `maxed`.
+ */
+export function followMax(maxed: boolean, pay: string, raw: string | undefined, max: string): string | undefined {
+  return maxed && pay === "lovelace" && raw !== undefined && BigInt(max) < BigInt(raw) ? max : undefined;
 }
 
 /** Half of what's held, and never more than `max` (ADA's Max, which leaves its costs). */

@@ -27,11 +27,14 @@ use std::collections::BTreeMap;
 /// The most a transaction's scripts may use together while measured, not each
 /// of them: `uplc` runs each redeemer on what the ones before it left (1.6.0's
 /// release review, 312#0). It's above the ledger's own limit for a
-/// transaction (10 billion steps and 16.5 million memory units, on preprod and
-/// mainnet in 2026), so a transaction over that is still measured whole, and
-/// each builder refuses it by checking the total against
-/// [`crate::build::MAX_TX_BUDGET`]. Past this, the measure fails first: a
-/// script "went over budget".
+/// transaction (10 billion steps; 16.5 million memory units on mainnet, 17.5
+/// million on preprod, in 2026), so a transaction over that is still measured
+/// whole. A Seedelf spend ([`crate::build::ScriptSpend`]), a mix and a DEX
+/// cancel refuse it by checking the total against
+/// [`crate::build::MAX_TX_BUDGET`]. A Lovejoin withdraw doesn't: the wallet
+/// withdraws one box at a time, and it takes 25 to pass the limit (1.6.0's
+/// review of the fixes, R3-31). Past this, the measure fails first: a script
+/// "went over budget".
 const MEASURE_LIMIT: (u64, u64) = (14_000_000_000, 20_000_000);
 
 /// A UTxO the evaluator can see: where it is, and its output's CBOR.

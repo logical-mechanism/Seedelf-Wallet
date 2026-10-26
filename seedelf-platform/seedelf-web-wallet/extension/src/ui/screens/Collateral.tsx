@@ -15,7 +15,9 @@
 // the status alone (lookAgain). From Settings it waits here, asking about it
 // as Home would: Settings replaces Home, whose watch stops, and the last
 // reading only gives way to a new one once the worker sees the payment land
-// (pending.ts), so the page said "waiting" until Home was opened.
+// (pending.ts), so the page said "waiting" until Home was opened. A payment
+// still waited for 10 minutes on may have been dropped: the page offers to pay
+// it again anyway (WaitingFoot).
 
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n";
@@ -46,6 +48,46 @@ export async function lookAgain(ask: typeof call, txHash: string, inPlace: boole
     if (p?.txHash === txHash && p.confirmations === null && !p.dropped) return undefined;
   }
   return ask("collateral", {});
+}
+
+/**
+ * The page's foot while its payment waits: Done, and once it's `late`, a payment again, the user's choice. A payment a
+ * mempool dropped is still waited for while it can land, up to two hours, and Set collateral was gone all that while,
+ * with public mixes and anything else a collateral backs (1.6.0's review of the fixes, 309#1's leftover). It pays what
+ * Set collateral pays, and refuses nothing; `blocked` says why it can't now, as Set collateral's does. Exported for its
+ * test.
+ */
+export function WaitingFoot({
+  late,
+  busy,
+  blocked,
+  onDone,
+  onAgain,
+}: {
+  late?: boolean;
+  busy: boolean;
+  blocked?: string;
+  onDone: () => void;
+  onAgain: () => void;
+}) {
+  const t = useT();
+  return (
+    <>
+      <button type="button" className="primary" onClick={onDone}>
+        {t("common.done")}
+      </button>
+      {late && (
+        <>
+          <button type="button" className="secondary" onClick={onAgain} disabled={busy || !!blocked} data-testid="collateral-again">
+            {busy ? t("common.building") : t("collateral.payAgain")}
+          </button>
+          <p className="note foot-note" data-testid="collateral-again-note">
+            {blocked ?? t("collateral.warn.bothLand")}
+          </p>
+        </>
+      )}
+    </>
+  );
 }
 
 export function Collateral({
@@ -205,11 +247,7 @@ export function Collateral({
         testId="collateral-waiting"
       />
     );
-    foot = (
-      <button type="button" className="primary" onClick={onBack}>
-        {t("common.done")}
-      </button>
-    );
+    foot = <WaitingFoot late={status.late} busy={busy} blocked={blocked} onDone={onBack} onAgain={set} />;
   } else {
     body = (
       <>

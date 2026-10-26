@@ -337,4 +337,27 @@ mod tests {
         assert!(gather.contains("o.tx_id > $5"), "{gather}");
         assert!(!rest.contains("$5"), "{rest}");
     }
+
+    /// 1.6.0's review of the fixes, R3-16: how far a read gathered stops at
+    /// its block. Past it, a read on would start above the pools launched
+    /// in the 200 to 400 slots between its stable block and db-sync's tip,
+    /// and list them only at the hourly read from the start. Its gather is
+    /// bounded as `found`'s is, so the two read on from the same place.
+    #[test]
+    fn what_a_read_gathered_is_bounded_by_its_block() {
+        let (gather, rest) = GATHERED.split_at(GATHERED.find(") select").expect("a gather"));
+        assert!(
+            gather.contains("a.payment_cred = $1::bytea and o.id > $3 and o.tx_id > $4"),
+            "{gather}"
+        );
+        assert!(!rest.contains("$3") && !rest.contains("$4"), "{rest}");
+        assert!(rest.trim_end().ends_with("where b.slot_no <= $2"), "{rest}");
+        let sql = found_sql();
+        let (gather, rest) = sql.split_at(sql.find(") select").expect("a gather"));
+        assert!(
+            gather.contains("a.payment_cred = $1::bytea and o.id > $4 and o.tx_id > $5"),
+            "{gather}"
+        );
+        assert!(rest.contains("where b.slot_no <= $2 and exists"), "{rest}");
+    }
 }

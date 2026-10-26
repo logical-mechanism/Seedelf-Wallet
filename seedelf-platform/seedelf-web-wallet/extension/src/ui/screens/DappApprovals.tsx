@@ -439,26 +439,30 @@ export function fundingPrivacy(changeLovelace: string): string {
  * Through Lovejoin the way back is a chain (sessions.ts backBuild): a deposit,
  * the mixes, then the return, so two network fees besides the mixes', as a
  * swap's and a mix's costs count them (swapCosts, mixCosts); `perBox` is the
- * mixes and the box's own way back. `collateral`: the funding pays for its
- * collateral's mix (SessionOutSummary `collateralReserve`), whose deposit, mix
- * and box's way back are network fees too, and its 5 ₳ comes back later, in a
- * box of its own, never at once (1.6.0's release review, 323-worker#1,
- * 323-worker#6).
+ * mixes and the box's own way back. `summary`, the funding's, says what of its
+ * collateral's mix: where it pays for that mix (`collateralReserve`), its
+ * deposit, mix and box's way back are network fees too; where a 5 ₳ pool takes
+ * the collateral (`collateralPool`), its reserve paid or not, its 5 ₳ comes
+ * back later, in a box of its own, never at once, as its return mixes it where
+ * what's left pays for that (1.6.0's release review, 323-worker#1,
+ * 323-worker#6, R3-9). Required, so no review can leave it out (R3-1).
  */
 export function FundingWayBack({
   fee,
   lovejoin,
   perBox,
-  collateral = false,
+  summary,
 }: {
   fee: string;
   lovejoin: boolean;
   perBox: string;
-  collateral?: boolean;
+  summary: Pick<SessionOutSummary, "collateralReserve" | "collateralPool">;
 }) {
   const tr = useT();
+  const paid = !!summary.collateralReserve;
+  const collateral = paid || !!summary.collateralPool;
   const back = (lovejoin ? 2n : 1n) * SESSION_FEE_ESTIMATE;
-  const mix = collateral ? COLLATERAL_MIX_COST : 0n;
+  const mix = paid ? COLLATERAL_MIX_COST : 0n;
   return (
     <>
       <h2>{tr("dappUi.back.title")}</h2>
@@ -469,7 +473,7 @@ export function FundingWayBack({
           <Row label={tr("dappUi.back.fee")} value={adaText(toCents(back))} />
         )}
         {lovejoin && <Row label={tr("dappUi.back.lovejoin")} value={tr("dappUi.back.lovejoinValue", { ada: perBox })} />}
-        {collateral && <Row label={tr("lovejoin.collateralMix.label")} value={adaText(toCents(mix))} />}
+        {paid && <Row label={tr("lovejoin.collateralMix.label")} value={adaText(toCents(mix))} />}
         <Row
           label={tr("dappUi.back.bothWays")}
           value={adaText(toCents(BigInt(fee) + back + mix))}
@@ -761,7 +765,7 @@ export function ConnectRequest({
               tokens={forSite?.tokens.length ?? 0}
             />
           </ReviewRows>
-          <FundingWayBack fee={review.fee.total} lovejoin={lovejoinBack} perBox={perBox} collateral={!!review.collateralReserve} />
+          <FundingWayBack fee={review.fee.total} lovejoin={lovejoinBack} perBox={perBox} summary={review} />
           <TxDetailButton txHash={review.txHash} testId="dapp-funding-tx" />
           <Callout tone="privacy" testId="dapp-funding-privacy">
             {fundingPrivacy(review.changeLovelace)}

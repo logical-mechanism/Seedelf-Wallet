@@ -235,6 +235,9 @@ export function PendingBanner({
   // the private balance (1.6.0's release review, 318-worker#0). Every title below names it by `what`.
   const bootstrap = pending.kind === "lovejoin-mix" && !!pending.bootstrap;
   const what = tr(bootstrap ? "pending.sent.lovejoin_bootstrap" : SENT[pending.kind]);
+  // Its boxes, counted, so a mix's or a Bootstrap's one box isn't "them"; plural, as it was, for a watch from before
+  // the count (1.6.0's review of the fixes).
+  const boxes = pending.kind === "lovejoin-mix" ? { count: pending.boxes ?? 2 } : undefined;
   const shared = {
     network: pending.network,
     // A chain through Lovejoin: its first transaction, the one its review showed and the first to land, until the
@@ -278,7 +281,7 @@ export function PendingBanner({
         txHash={pending.txHash}
         firstOf={undefined}
         state="done"
-        title={tr(bootstrap ? "pending.confirmed.lovejoin_bootstrap" : CONFIRMED[pending.kind])}
+        title={tr(bootstrap ? "pending.confirmed.lovejoin_bootstrap" : CONFIRMED[pending.kind], boxes)}
         detail={partsLine}
         onDismiss={watching ? undefined : onDismiss}
       />

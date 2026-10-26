@@ -1106,8 +1106,9 @@ pub const DRAFT_BUDGET: Budget = Budget {
 };
 
 /// The most execution a transaction may use: `max_tx_ex_mem` and
-/// `max_tx_ex_steps` as of epoch 290 on preprod. They have only gone up since
-/// (17.5M memory at epoch 315), so this errs on the safe side.
+/// `max_tx_ex_steps` as of epoch 290 on preprod, and mainnet's at epoch 658.
+/// Preprod's have only gone up since (17.5M memory at epoch 315), so this errs
+/// on the safe side there.
 pub const MAX_TX_BUDGET: Budget = Budget {
     mem: 16_500_000,
     steps: 10_000_000_000,

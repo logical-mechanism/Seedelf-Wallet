@@ -1349,9 +1349,10 @@ describe("a chain's boxes", CHAINS, () => {
     expect((await lovejoin.status("preprod")).notMixed).toEqual([{ txHash: D, txIndex: 3 }]);
     const kept = async () => (await t.store.get<{ chains: Array<{ id: string }> }>("lovejoin.preprod"))!.chains.map((c) => c.id);
 
-    // Mix my boxes again's first mix spends it, and the Lovejoin page reads the pool meanwhile: the record stays.
-    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${D}#3`]: Date.now() }));
-    await lovejoin.status("preprod");
+    // Mix my boxes again's first mix spends it, and the Lovejoin page reads the pool meanwhile: the box is hidden, and the
+    // record stays. Spent on the wallet's own clock, as every send writes its marks (1.6.0's release review, L4).
+    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${D}#3`]: t.clock.now }));
+    expect((await lovejoin.status("preprod")).notMixed).toEqual([]);
     expect(await kept()).toEqual([S.id]);
 
     // That mix never lands, and a lock forgets the spend: the box shows again, not mixed yet, and hours of runs never bring it back.

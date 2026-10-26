@@ -239,43 +239,51 @@ where
     let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
     // Read once a tip, as every other private route's is, not at each request before what's kept is looked at
     // (317-data#2).
-    let (cursor, block) = tokio::time::timeout_at(deadline, state.stable_cursor(tip, stable))
+    let read = tokio::time::timeout_at(deadline, state.stable_cursor(tip, stable))
         .await
-        .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))))?;
-    let key = format!("lovejoin/pools/{cursor}");
-    if let Some(answer) = state.kept(&key) {
-        return Ok(answer);
-    }
-    // Worked out once per cursor, in a task of its own, and kept: a request waits for it until its deadline.
-    let failed = match state.start(&key) {
-        Some(working) => {
-            let list = work(cursor, block);
-            let task = {
-                let (state, key) = (state.clone(), key.clone());
-                tokio::spawn(async move {
-                    let _working = working;
-                    let answer = tokio::time::timeout(WORK_BUDGET, list)
-                        .await
-                        .unwrap_or_else(|_| {
-                            Err(ApiError::Unavailable(anyhow::anyhow!("timed out")))
-                        })?;
-                    state.keep(&key, KEEP_POOLS, answer.clone());
-                    state.keep(LATEST, KEEP_POOLS, answer.clone());
-                    Ok::<_, ApiError>(answer)
-                })
-            };
-            match tokio::time::timeout_at(deadline, task).await {
-                Ok(Ok(Ok(answer))) => return Ok(answer),
-                Ok(Ok(Err(error))) => Some(error),
-                Ok(Err(error)) => Some(ApiError::Unavailable(error.into())),
-                Err(_) => None,
+        .unwrap_or_else(|_| Err(ApiError::Unavailable(anyhow::anyhow!("timed out"))));
+    let failed = match read {
+        // A read that fails or runs late fails as the list would: the cursor moves every 200 slots, so the last
+        // list is most often this very cursor's (1.6.0's review of the fixes, R3-15).
+        Err(error) => Some(error),
+        Ok((cursor, block)) => {
+            let key = format!("lovejoin/pools/{cursor}");
+            if let Some(answer) = state.kept(&key) {
+                return Ok(answer);
+            }
+            // Worked out once per cursor, in a task of its own, and kept: a request waits for it until its
+            // deadline.
+            match state.start(&key) {
+                Some(working) => {
+                    let list = work(cursor, block);
+                    let task = {
+                        let (state, key) = (state.clone(), key.clone());
+                        tokio::spawn(async move {
+                            let _working = working;
+                            let answer = tokio::time::timeout(WORK_BUDGET, list)
+                                .await
+                                .unwrap_or_else(|_| {
+                                    Err(ApiError::Unavailable(anyhow::anyhow!("timed out")))
+                                })?;
+                            state.keep(&key, KEEP_POOLS, answer.clone());
+                            state.keep(LATEST, KEEP_POOLS, answer.clone());
+                            Ok::<_, ApiError>(answer)
+                        })
+                    };
+                    match tokio::time::timeout_at(deadline, task).await {
+                        Ok(Ok(Ok(answer))) => return Ok(answer),
+                        Ok(Ok(Err(error))) => Some(error),
+                        Ok(Err(error)) => Some(ApiError::Unavailable(error.into())),
+                        Err(_) => None,
+                    }
+                }
+                // Another request's task is working it out.
+                None => None,
             }
         }
-        // Another request's task is working it out.
-        None => None,
     };
-    // Meanwhile the last list, and as much when the list fails: kept for an hour, it's a better answer than a 503
-    // that sends the wallet to Koios (317-data#0). 503 before the first.
+    // Meanwhile the last list, and as much when the list or its cursor's read fails: kept for an hour, it's a better
+    // answer than a 503 that sends the wallet to Koios (317-data#0). 503 before the first.
     match (state.kept(LATEST), failed) {
         (Some(latest), failed) => {
             if let Some(ApiError::Unavailable(error)) = &failed
@@ -453,6 +461,44 @@ mod tests {
         )
         .await;
         assert!(matches!(answer, Err(ApiError::Unavailable(_))));
+    }
+
+    /// 1.6.0's review of the fixes, R3-15: the first requests at a new tip
+    /// read the stable cursor, and one that found both private connections
+    /// busy past the pool's 2 s wait answered 503, though the list for that
+    /// very cursor, and the last one, were kept for an hour.
+    #[tokio::test]
+    async fn a_failed_cursor_read_answers_the_last_list() {
+        let state = state();
+        let list = |_, _| async { to_json(&"the list") };
+        let first = pools_with(&state, &tip("aa"), || async { Ok(stable_at()) }, list).await;
+        let busy = || async {
+            Err(ApiError::Unavailable(anyhow::anyhow!(
+                "no connection within 2 s"
+            )))
+        };
+        let answer = pools_with(&state, &tip("bb"), busy, list).await;
+        assert_eq!(answer.unwrap(), first.unwrap());
+        // Before the first list, why.
+        let answer = pools_with(&self::state(), &tip("bb"), busy, list).await;
+        assert!(matches!(answer, Err(ApiError::Unavailable(_))));
+    }
+
+    /// R3-15: a cursor read that ran past the request's 5 s answered 503
+    /// with the last list kept.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_cursor_read_answers_the_last_list() {
+        let state = state();
+        state.keep(LATEST, KEEP_POOLS, Bytes::from_static(LAST));
+        let slow = || async {
+            sleep(Duration::from_secs(6)).await;
+            Ok(stable_at())
+        };
+        let list = |_, _| async { to_json(&"the next list") };
+        let started = Instant::now();
+        let answer = pools_with(&state, &tip("bb"), slow, list).await;
+        assert_eq!(answer.unwrap(), LAST);
+        assert!(started.elapsed() <= READ_TIMEOUT, "{:?}", started.elapsed());
     }
 
     /// 317-data#2: the stable cursor was read of db-sync at every request,

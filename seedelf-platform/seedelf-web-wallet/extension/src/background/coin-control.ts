@@ -69,7 +69,7 @@ export const COLLATERAL_LOVELACE = 5_000_000n;
 /**
  * A collateral payment is waited for at least this long from when it was sent, which is sealed with the choices: so
  * it holds after a lock too, which forgets what the wallet sent (sent-txs.ts). After that, it's waited for while the
- * wallet still keeps it as sent (`collateral`).
+ * wallet still keeps it as sent, and it's late: it may be paid again anyway (`collateral`).
  */
 const WAIT_MS = 10 * 60_000;
 
@@ -369,9 +369,10 @@ export class CoinControlService {
     }
     if (choices.collateral && choices.collateralSentAt) {
       const txHash = choices.collateral.slice(0, choices.collateral.indexOf("#"));
-      if (this.deps.now() - choices.collateralSentAt < WAIT_MS || (await this.onItsWay(network, txHash))) {
-        return { state: "waiting", txHash };
-      }
+      if (this.deps.now() - choices.collateralSentAt < WAIT_MS) return { state: "waiting", txHash };
+      // Past that it's late: still waited for, but a mempool may have dropped it, so the Collateral page offers to pay
+      // it again anyway (1.6.0's review of the fixes, 309#1's leftover).
+      if (await this.onItsWay(network, txHash)) return { state: "waiting", txHash, late: true };
     }
     const candidate = lists.cardano.filter((u) => isCollateralShaped(asKoios(u))).sort(oldestInfoFirst)[0];
     return { state: "none", reclaimed: choices.collateral === null, ...(candidate ? { candidate } : {}) };

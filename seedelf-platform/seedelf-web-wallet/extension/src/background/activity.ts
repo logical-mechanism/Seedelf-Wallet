@@ -492,9 +492,14 @@ export class ActivityService {
     const own = new Map((await this.seedelf(network)).filter((e) => e.kind !== "received").map((e) => [e.txHash, e]));
     // The account's DRep, from its key: its certificates and votes are named for what they did.
     const drep = await ownDrepId(this.deps).catch(() => undefined);
-    // Every pool's mix box the wallet reads, the classic pool's at least (chunk 34): from the device, no request.
+    // Every pool's mix box the wallet reads, the classic pool's at least (chunk 34): from the device, no request. A read
+    // that fails names the classic pool's alone; a trap in it is handed on, so the wallet locks (1.6.0's release review,
+    // L3).
     const classic = NETWORKS[network].lovejoin?.mixBox;
-    const read_ = await this.deps.mixBoxes?.(network).catch(() => undefined);
+    const read_ = await this.deps.mixBoxes?.(network).catch((e: unknown) => {
+      if (isTrap(e)) throw e;
+      return undefined;
+    });
     const mixBox = new Set([...(classic ? [classic] : []), ...(read_ ?? [])]);
     // This account's collateral payments, which only the device knows are: a name, never worth failing the list for.
     const collateral = await collateralPayments(this.deps.store, network, index).catch(() => new Set<string>());

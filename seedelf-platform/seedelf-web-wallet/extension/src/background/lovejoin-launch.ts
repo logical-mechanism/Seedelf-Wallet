@@ -140,7 +140,10 @@ type KeptLaunch = Omit<LovejoinLaunchSummary, "locked" | "fee" | "change" | "poo
   };
 
 export interface LaunchDeps extends ScriptSpendDeps {
-  /** Where the wallet keeps the pools it started, and reads them again: a start of the same values says so (launches). */
+  /**
+   * Where the wallet keeps the pools it started, and reads them again (launches): a start of the same values says so,
+   * and Send asked again for a start that went says it went already.
+   */
   lovejoin: Pick<LovejoinService, "recordLaunch" | "launches">;
   /**
    * The pools shown on a network (lovejoin-pools.ts): a launch of their values would be a copy, never shown. Looked

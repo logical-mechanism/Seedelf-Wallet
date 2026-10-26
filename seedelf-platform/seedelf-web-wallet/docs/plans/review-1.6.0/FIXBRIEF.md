@@ -118,3 +118,17 @@ Round 1 is committed (`fc8561c7`), and **`wasm/pkg` is rebuilt from it**. Every 
 | **S1**: the Lovejoin screens | `sc-lj-1`, `sc-lj-2` | `ui/screens/Lovejoin.tsx`, `LovejoinLaunch.tsx`, `ui/components/BringAllBack.tsx`, Settings' Lovejoin section, their tests |
 | **S2**: the other screens | `sc-o-1`, `sc-o-2` | `ui/screens/Swaps.tsx`, `DappApprovals.tsx`, `SiteSessions.tsx`, `ui/swap.ts`, `Collateral.tsx`, `Home.tsx`, `ui/components/PendingBanner.tsx`, `e2e/extension.spec.ts`, their tests |
 | **W**: the worker's leftovers | `w-left` | `background/sessions.ts`, `lovejoin.ts`, `runs.ts`, their tests |
+
+## Round 3b: the review of the fixes, fixed
+
+Round 3 reviewed both fix rounds: [review/CONFIRMED.md](review/CONFIRMED.md) holds its 31 confirmed findings (`R3-<n>`, no high or medium), each with the skeptics' fixes, and [review/QUESTIONS.md](review/QUESTIONS.md) the open questions and the known leftovers L1–L6 (from [REVIEWBRIEF.md](REVIEWBRIEF.md)). Everything is committed (`56dce2cd`): the list refresh and vitest 5.0.3 included. `wasm/pkg` is current, and no fixer this round changes WebAssembly behaviour, so nothing waits for a rebuild.
+
+The same rules as before: test first, see it fail, fix, mutation-check with the Edit tool; your report in `fixes/<id>.md`; words in three languages; no new refusal the chain wouldn't make (an order, a warning, or a visible choice instead); short UI text.
+
+| Lane | Fixers, in order | Owns |
+|---|---|---|
+| **X**: the collateral's mix reserve, worker and screens agreeing | `fx-reserve-1`, `fx-reserve-2` | `sessions.ts`'s fundings, quotes, Stop and returns; `ui/swap.ts`, `Swaps.tsx`, `DappApprovals.tsx`, `SiteSessions.tsx`; Lovejoin.tsx's Mix form |
+| **Y**: Lovejoin's crediting and Bring every box back now | `fx-lj-1`, `fx-lj-2` | `lovejoin.ts`; Lovejoin.tsx's questions and notes; `BringAllBack.tsx`; `runs.ts`; `activity.ts`' Lovejoin catch |
+| **Z**: the data layer, the nits, two small features; then the wiring tests | `fx-misc` (beside X and Y), then `fx-tests` (after X and Y) | `seedelf-data/`; the nits' lines; `PendingBanner.tsx`, `Collateral.tsx`, `coin-control.ts`; then tests only |
+
+Lanes X and Y both edit `sessions.ts`, `lovejoin.ts` and `Lovejoin.tsx`. The owner of a file makes its big edits; the other lane makes small anchored ones and re-reads first.

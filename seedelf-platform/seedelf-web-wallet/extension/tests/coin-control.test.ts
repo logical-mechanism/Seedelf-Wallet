@@ -156,7 +156,8 @@ describe("a collateral payment on its way (1.6.0's release review, 309#1, 309#2)
     // A congested mempool: not in a block 11 minutes on, and the watch still has it, as it can land for two hours.
     t.clock.now += 11 * 60_000;
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: summary.txHash, confirmations: null });
-    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash });
+    // Late, so the page offers to pay it again anyway (1.6.0's review of the fixes, 309#1's leftover).
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash, late: true });
     // Past its slot, by the chain's clock too: let go, nothing was sent, and setting it is offered again.
     for (let left = VALID_FOR_MS; left > 0; left -= 10 * 60_000) {
       // The user busy all along, so the wallet doesn't lock itself.
@@ -178,7 +179,7 @@ describe("a collateral payment on its way (1.6.0's release review, 309#1, 309#2)
     const other = await t.send.build("preprod", [{ to: THEIRS, lovelace: "2000000", tokens: [] }]);
     await t.send.submit("preprod", other.txHash);
     expect(await t.pending.pending("preprod")).toMatchObject({ txHash: other.txHash });
-    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash });
+    expect(await t.coins.collateral("preprod")).toEqual({ state: "waiting", txHash: summary.txHash, late: true });
     // Two hours after it was sent it can't land (account.ts VALID_FOR_MS), and the balance stops counting it.
     const key = `${SESSION_SENT_PREFIX}preprod`;
     const sent = (await t.session.get<SentTx[]>(key))!;

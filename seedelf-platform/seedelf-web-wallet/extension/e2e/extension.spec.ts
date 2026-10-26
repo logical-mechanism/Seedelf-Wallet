@@ -3097,7 +3097,8 @@ test("Lovejoin: mix in 10 ₳ boxes from either side, with what it costs; a publ
   await expect(page.getByTestId("lovejoin-chain-tx-0-output-list")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await expect(page.getByTestId("lovejoin-chains")).toHaveCount(0);
-  await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on their way to your private balance", { timeout: 20_000 });
+  // One box, named as one (1.6.0's review of the fixes).
+  await expect(page.getByTestId("pending-tx")).toContainText("In Lovejoin, on its way to your private balance", { timeout: 20_000 });
 
   // Home shows the box on its way back, from the device's own schedule; its row opens Lovejoin's page. Sent, the
   // page went back to the hub.

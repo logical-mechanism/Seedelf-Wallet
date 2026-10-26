@@ -27,8 +27,9 @@
 //
 // Both are met again with the token pools every preprod wallet is handed
 // from its first read shown (the bundled head start), the classic pool's
-// plans and transactions against the same record: nothing is recorded for
-// it (1.6.0's release review, x-compat#2).
+// plans, transactions and Koios requests against the same record, but what a
+// shown pool asks of its own: nothing is recorded for it (1.6.0's release
+// review, x-compat#2; its review of the fixes, R3-17).
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -220,18 +221,29 @@ function land(t: ReturnType<typeof testBalances>, bytes: Uint8Array, blockTime: 
 }
 
 /**
- * What's measured rather than planned: a chain's fees, and what they leave.
- * Each mix draws its pool boxes at random, and their order moves its
- * scripts' budgets a little (lovejoin-mix-width.md), so two builds of one
- * plan differ by a few hundred lovelace. Every key named here is compared
- * within MEASURED_SLACK; everything else exactly.
+ * What's measured rather than planned: a return's chain, its fees and what
+ * they leave (`returns`, its review's and its chain's). Each mix draws its
+ * pool boxes at random, and their order moves its scripts' budgets a little
+ * (lovejoin-mix-width.md), so two builds of one plan differ by a few hundred
+ * lovelace. Every key named here is compared within MEASURED_SLACK there;
+ * everything else exactly, the funding grid's planned lovelace too: a name
+ * alone gave it the slack, so a classic plan could drift 0.5% (1.6.0's review
+ * of the fixes, R3-18).
  */
 const MEASURED = new Set(["fee", "fees", "lovelace", "measured"]);
+const MEASURED_IN = ".returns[";
 const MEASURED_SLACK = 0.005;
 
-/** `actual` against `expected`: equal, but for MEASURED's numbers, within MEASURED_SLACK of each other. */
+/** `actual` against `expected`: equal, but for MEASURED's numbers in a return, within MEASURED_SLACK of each other. */
 function nearly(actual: unknown, expected: unknown, path = "", key = ""): string[] {
-  if (MEASURED.has(key) && typeof expected === "string" && /^\d+$/.test(expected) && typeof actual === "string" && /^\d+$/.test(actual)) {
+  if (
+    MEASURED.has(key) &&
+    path.startsWith(MEASURED_IN) &&
+    typeof expected === "string" &&
+    /^\d+$/.test(expected) &&
+    typeof actual === "string" &&
+    /^\d+$/.test(actual)
+  ) {
     const [a, e] = [Number(actual), Number(expected)];
     return Math.abs(a - e) <= Math.max(1, e * MEASURED_SLACK) ? [] : [`${path}: ${actual}, against 1.5.0's ${expected}`];
   }
@@ -685,18 +697,62 @@ function classicPlans(plans: unknown): unknown {
 type After = { trace: Array<{ label: string; result?: unknown; calls?: string[] }>; restored: Record<string, unknown> };
 
 /**
- * `after` but what a token pool shown adds by design: what's asked (calls), since every pool read names every shown
- * pool's mix box (one read for all, never one naming a pool alone), a return reads the pools again for its
- * collateral's 5 ₳ pool, and a token pool's read asks the parameters; and the token pools the hub lists (status's and
- * held's `pools`). Each run's sends, results and schedule are compared whole.
+ * The mix boxes of the pools the head start shows on preprod, each as WebAssembly derives it from the bundled templates
+ * and the pool's seed, as the wallet verifies a pool: what every read of the shown pools names beside the classic
+ * pool's. From the head start itself, so its refresh at each release (`npm run lovejoin-pools`) carries over.
+ */
+function shownMixBoxes(): string[] {
+  const wasm = loadTestWasm();
+  return headStart("preprod")
+    .map((p) => {
+      const pool = "copy" in p ? p.copy : p;
+      return (JSON.parse(wasm.lovejoinVerifyPool(JSON.stringify({ network: "preprod", pool }))) as { mixBoxHash: string }).mixBoxHash;
+    })
+    .filter((box) => box !== MIX_BOX);
+}
+
+/**
+ * A step's Koios requests (or the restore's) as 1.5.0 asked them with the classic pool alone shown, but what a shown
+ * pool asks of its own: the shown pools' mix boxes come out of each read naming them (a read of the pools names every
+ * pool it reads); in the return's step (`back`), its read of the pools for its collateral's 5 ₳ pool goes; and in the
+ * hub's read of the pools (`status`), the parameters a token pool's read asks go. What's left is compared exactly, and
+ * so is every other request: the wallet's own credentials, transactions and UTxOs named, and a read of the shown pools
+ * alone, which leaves one naming nothing (1.6.0's review of the fixes, R3-17).
+ */
+function classicCalls(calls: string[], shown: string[], { back = false, status = false } = {}): string[] {
+  let pools = back;
+  let params = status;
+  return calls.flatMap((call) => {
+    const [path, query, ...named] = call.split(" ");
+    if (path === "credential_utxos" && named.some((c) => shown.includes(c))) {
+      if (pools) {
+        pools = false;
+        return [];
+      }
+      return [[path, query, ...named.filter((c) => !shown.includes(c))].join(" ")];
+    }
+    if (path === "epoch_params" && params) {
+      params = false;
+      return [];
+    }
+    return [call];
+  });
+}
+
+/**
+ * `after` but what a token pool shown adds by design: what's asked of its own (classicCalls), and the token pools the
+ * hub lists (status's and held's `pools`). Each run's sends, results, schedule and every other request are compared
+ * whole: a request beside a pool read, such as one naming the wallet's boxes, isn't left out with what a shown pool
+ * asks (R3-17).
  */
 function classicAfter(after: unknown): unknown {
+  const shown = shownMixBoxes();
   const a = structuredClone(after) as After;
   for (const step of a.trace) {
-    delete step.calls;
+    if (step.calls) step.calls = classicCalls(step.calls, shown, { back: step.label === "bring session 0 back", status: step.label === "status" });
     if (step.result && typeof step.result === "object") delete (step.result as Record<string, unknown>).pools;
   }
-  delete a.restored.calls;
+  a.restored.calls = classicCalls(a.restored.calls as string[], shown, { status: true });
   for (const key of ["status", "held"]) delete (a.restored[key] as Record<string, unknown>).pools;
   return a;
 }

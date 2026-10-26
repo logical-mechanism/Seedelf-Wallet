@@ -270,7 +270,7 @@ describe("a box that comes back paid: the private balance by default, the public
   }
 
   it("asks the escape hatch's question with both payers", () => {
-    const asked = payers((onConfirm, onKeep) => createElement(PaidQuestion, { onConfirm, onKeep }), "lovejoin-paid");
+    const asked = payers((onConfirm, onKeep) => createElement(PaidQuestion, { account: undefined, onConfirm, onKeep }), "lovejoin-paid");
     expectBoth(asked, "lovejoin-paid");
     expect(asked.text).toContain(t("lovejoin.stuck.keep"));
     // What the page asks the worker for, by the payer chosen.
@@ -433,8 +433,9 @@ describe("a stuck pool's reviews never promise a box back after its wait (the cr
     expect(of(publicMix(), "public", STUCK)).toBeUndefined();
     expect(of(publicMix({ again: true }), "public")).toBe(t("lovejoin.review.publicAgainNote"));
     expect(of(publicMix({ again: true }), "public", STUCK)).toBeUndefined();
-    // A Bootstrap's note says its boxes stay until brought back by hand: kept.
-    expect(of(privateMix({ bootstrap: true }), "private", STUCK)).toBe(t("lovejoin.review.bootstrapNote"));
+    // A Bootstrap's note says its boxes stay until brought back by hand: kept. From the private balance, its own, as
+    // it's funded first (1.6.0's review of the fixes, R3-21).
+    expect(of(privateMix({ bootstrap: true }), "private", STUCK)).toBe(t("lovejoin.review.bootstrapNotePrivate"));
     expect(of(publicMix({ bootstrap: true }), "public", STUCK)).toBe(t("lovejoin.review.bootstrapNote"));
   });
 

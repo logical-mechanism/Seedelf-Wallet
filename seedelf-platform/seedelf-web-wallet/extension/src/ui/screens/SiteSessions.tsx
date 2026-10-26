@@ -511,12 +511,14 @@ export function DisconnectSession({
 }
 
 /**
- * Why a top-up puts a new 5 ₳ collateral back, and how it comes back: with the next return, or, where the top-up pays
- * for its mix (`mixed`, SessionOutSummary `collateralReserve`), mixed once at that return and back by itself later,
- * never with it (1.6.0's release review, 323-worker#6). Exported for its test.
+ * Why a top-up puts a new 5 ₳ collateral back, and how it comes back: with the next return, or, where a 5 ₳ pool takes
+ * it (the top-up's `summary`: `collateralPool`, its reserve, `collateralReserve`, paid or not), mixed once at that
+ * return, where what's left pays for that, and back by itself later, never with it (1.6.0's release review,
+ * 323-worker#6, R3-9). Required, so no review can leave it out (R3-1). Exported for its test.
  */
-export function TopUpCollateralNote({ mixed }: { mixed: boolean }) {
+export function TopUpCollateralNote({ summary }: { summary: Pick<SessionOutSummary, "collateralReserve" | "collateralPool"> }) {
   const tr = useT();
+  const mixed = !!summary.collateralReserve || !!summary.collateralPool;
   return (
     <p className="note" data-testid="top-up-collateral">
       {tr(mixed ? "sites.topUp.collateralMixed" : "sites.topUp.collateral")}
@@ -630,7 +632,7 @@ function TopUp({
           />
         </ReviewRows>
         <TxDetailButton txHash={review.txHash} testId="top-up-tx" />
-        {collateral && <TopUpCollateralNote mixed={!!review.collateralReserve} />}
+        {collateral && <TopUpCollateralNote summary={review} />}
         <Callout tone="privacy">{tr("sites.topUp.privacy.links")}</Callout>
         <HistoriesNote histories={review.histories} session={review.index} testId="top-up-histories" />
         <GivemeNote funding />

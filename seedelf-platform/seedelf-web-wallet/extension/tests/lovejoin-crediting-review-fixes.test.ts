@@ -13,12 +13,15 @@ import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
 import { BRING_RUN_MS, LovejoinService, type PoolRef } from "../src/background/lovejoin";
+import { LOCAL_LOVEJOIN_POOLS_PREFIX, PoolDiscovery, serviceDeps, type FoundPool } from "../src/background/lovejoin-pools";
+import { IndexDown, type PrivateIndex } from "../src/background/private-index";
+import { SESSION_SPENT, SPENT_KEEP_MS } from "../src/background/spent";
 import { SESSION_UNLOCKED_AT } from "../src/background/wallet";
 import { boxFrom, madePrivate, merged, type HistoryClass } from "../src/shared/histories";
 import { heldRequest } from "../src/ui/screens/Lovejoin";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
-import { koiosPreprod, loadTestWasm, madeByMix, ownedUtxos, testBalances, vectors } from "./fakes";
+import { busyFor, koiosPreprod, loadTestWasm, madeByMix, memoryArea, ownedUtxos, testBalances, vectors } from "./fakes";
 
 const PASSWORD = "correct horse battery";
 const HOUR = 3_600_000;
@@ -426,6 +429,39 @@ describe("a public deposit's box, its chain's record and its mix gone (1.6.0's r
       expect(origin, `box ${i}`).toEqual({ id: `box:${hash}+public:0`, origin: "own" });
     }
   });
+
+  // The review of the fixes asked whether that tie, gone RECORD_KEEP_MS after no read listed a box there, goes too where
+  // no read covers the pool for that long: a worker restarted while discovery is down. Discovery hands over the pools it
+  // keeps on the device whether or not the data layer answers (lovejoin-pools.ts serviceDeps), so the read still covers
+  // the token pool, and the tie stays.
+  it("keeps whose deposit it was through worker restarts with the data layer down, as discovery hands over the pools it kept", async () => {
+    const t = await wallet();
+    const b1 = "b1".repeat(32);
+    t.koios.addedToAccounts.push(...POOL, ...(await depositBoxes(t, "b1", 2)), ...(await strangers(t)));
+    // A public Bootstrap's: its chain's record and its entry gone, its two boxes still at its deposit.
+    await t.store.set("lovejoin.preprod", { due: [], chains: [], depositors: { [b1]: { account: 0, seen: t.clock.now } } });
+    // What discovery keeps on the device: the token pool, as found once.
+    const local = memoryArea();
+    const view = VIEW as typeof VIEW & { boxLovelace: string };
+    const kept: FoundPool = { id: TOKEN, boxLovelace: view.boxLovelace, token: VIEW.token, ref: TOKEN_POOL, launch: { block: 1, index: 0, tx: FOUND.reference.tx_hash } };
+    await local.set(`${LOCAL_LOVEJOIN_POOLS_PREFIX}preprod`, { height: 0, pools: [kept] });
+    const down = { pools: async () => Promise.reject(new IndexDown("the data layer isn't answering")) } as unknown as PrivateIndex;
+    for (let read = 0; read < 3; read++) {
+      // A worker restarted: a new discovery and a new Lovejoin, nothing handed over yet in either.
+      const discovery = new PoolDiscovery({
+        local,
+        wasm: loadTestWasm(),
+        koios: t.deps.koios,
+        index: async () => down,
+        now: () => t.clock.now,
+        listed: () => new Set([VIEW.token.policyId + VIEW.token.assetName]),
+        headStart: () => ({ height: 0, pools: [] }),
+      });
+      await pooled(t, [], serviceDeps(discovery)).status("preprod");
+      await busyFor(t, 2 * HOUR);
+    }
+    expect(((await sealed(t)) as Sealed & { depositors?: Record<string, { account: number }> }).depositors?.[b1]).toMatchObject({ account: 0 });
+  });
 });
 
 describe("a chain with no box of its own (1.6.0's release review, 316#3)", SLOW, () => {
@@ -511,5 +547,196 @@ describe("a stuck pool's box paid back from the private balance (1.6.0's release
     expect(txInputs(t.koios.submitted.at(-1)!).sort()).toEqual([`${b1}#0`, `${"d1".repeat(32)}#0`].sort());
     // Its history names account 0 alone: no two accounts are tied.
     expect(written[0]!.origin).toEqual(merged([boxFrom(pending.txHash), madePrivate(0)]));
+  });
+
+  /**
+   * A wallet on account 0 whose token pool's boxes can't pay their own way back, its private balance two UTxOs of ADA
+   * alone, `d1` and `d2` of `values`, made private from the public accounts `from` names; what each withdraw it pays for
+   * leaves in the history, kept.
+   */
+  async function stuckPool(values: [string, string], from: [number, number]) {
+    const t = testBalances({ owned: false });
+    await t.wallet.create(PHRASE, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.koios.tip = 110_000_000;
+    t.koios.params = { coins_per_utxo_size: "4800" };
+    t.koios.added.push(await privateUtxo(t, "d1", values[0]), await privateUtxo(t, "d2", values[1]));
+    const classes = new Map<string, HistoryClass>([
+      [`${"d1".repeat(32)}#0`, madePrivate(from[0])],
+      [`${"d2".repeat(32)}#0`, madePrivate(from[1])],
+    ]);
+    const written: Array<{ origin?: HistoryClass }> = [];
+    const wasm = loadTestWasm();
+    const signed = (request: string) => {
+      const { txCbor } = JSON.parse(request) as { txCbor: string };
+      return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
+    };
+    const lj = pooled(t, [TOKEN_POOL], {
+      wasm: { ...wasm, finishLovejoinWithdraw: signed, signScriptSpend: (_key: unknown, request: string) => signed(request) } as typeof wasm,
+      activity: {
+        classes: async () => classes,
+        sent: async (_n: unknown, _p: unknown, summary: { origin?: HistoryClass }) => {
+          written.push(summary);
+        },
+      } as unknown as Deps["activity"],
+    });
+    return { t, lj, written };
+  }
+
+  /**
+   * A mix from public account `account` into the token pool, recorded: deposit `deposit`, then `mixes`, its one box at
+   * the last's output. The first `sent` of them sent; all of them, and over, unless fewer: then a lock cut it.
+   */
+  async function publicMix(lj: LovejoinService, account: number, deposit: string, mixes: string[], sent = 1 + mixes.length): Promise<void> {
+    const txs = [
+      { kind: "deposit" as const, txCbor: "", txHash: deposit, fee: "0" },
+      ...mixes.map((txHash) => ({ kind: "mix" as const, txCbor: "", txHash, fee: "0" })),
+    ];
+    const id = txs.at(-1)!.txHash;
+    await lj.recordChain("preprod", { progress: `test.${id.slice(0, 4)}`, txs, leaves: [at(id, 0)], boxes: 1, pools: { [TOKEN]: 1 }, account });
+    for (let i = 0; i < sent; i++) await lj.chainSent("preprod", id, i);
+    if (sent === txs.length) await lj.chainEnded("preprod", id);
+  }
+
+  const [a0, a1, c0, c1, c2] = ["a0", "a1", "c0", "c1", "c2"].map((x) => x.repeat(32)) as [string, string, string, string, string];
+
+  it("pays for a box a public mix stopped short of mixing with one that names no other account where one pays, as its question says (R3-2)", async () => {
+    // The larger made private from account 0, the smaller from account 1.
+    const { t, lj, written } = await stuckPool(["50000000", "3000000"], [0, 1]);
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "c1"), ...(await strangers(t)));
+    // Account 0's mix, two waves deep: its deposit and first mix went, then a lock cut it. Its box from that mix.
+    await publicMix(lj, 0, c0, [c1, c2], 2);
+    const pool = (await lj.status("preprod")).pools![0]!;
+    expect(pool.notMixed).toEqual([at(c1, 0)]);
+    expect(pool.fromPublic).toEqual([at(c1, 0)]);
+    const pending = await lj.withdrawNow("preprod", at(c1, 0), true, "private");
+    expect(txInputs(t.koios.submitted.at(-1)!).sort()).toEqual([`${c1}#0`, `${"d1".repeat(32)}#0`].sort());
+    // A box a mix made is a box back from Lovejoin by where it sits (PRIV-3): its history names the payer's account alone.
+    expect(written[0]!.origin).toEqual(merged([boxFrom(pending.txHash), madePrivate(0)]));
+  });
+
+  it("brings back, naming no box, the account on screen's own before another account's, with its money first (R3-3)", async () => {
+    // The smaller made private from account 1, the larger from account 0.
+    const { t, lj } = await stuckPool(["3000000", "50000000"], [1, 0]);
+    // Account 1's mix's box has sat in the pool longer than account 0's.
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "a1", true, 9), await tokenBox(t, "c1", true, 5), ...(await strangers(t)));
+    await publicMix(lj, 1, a0, [a1]);
+    await publicMix(lj, 0, c0, [c1]);
+    expect((await lj.status("preprod")).pools![0]!.otherAccounts).toEqual([{ ...at(a1, 0), account: 1 }]);
+    await lj.withdrawNow("preprod", undefined, false, "private", TOKEN);
+    expect(txInputs(t.koios.submitted.at(-1)!).sort()).toEqual([`${c1}#0`, `${"d2".repeat(32)}#0`].sort());
+  });
+
+  it("pays for another account's box, the only one it can take, with that account's money first (R3-3)", async () => {
+    // The larger made private from account 1, whose box it is; the smaller from account 0, the one on screen.
+    const { t, lj, written } = await stuckPool(["50000000", "3000000"], [1, 0]);
+    t.koios.addedToAccounts.push(...POOL, await tokenBox(t, "a1", true, 9), ...(await strangers(t)));
+    await publicMix(lj, 1, a0, [a1]);
+    const pending = await lj.withdrawNow("preprod", undefined, false, "private", TOKEN);
+    expect(txInputs(t.koios.submitted.at(-1)!).sort()).toEqual([`${a1}#0`, `${"d1".repeat(32)}#0`].sort());
+    expect(written[0]!.origin).toEqual(merged([boxFrom(pending.txHash), madePrivate(1)]));
+  });
+});
+
+// A held box Bring every box back now's withdraw went for is counted back against its Bootstrap then, and kept counted
+// (`counted`), so a node dropping that withdraw never counts it twice. Stopped there, the box is free two hours on, and
+// the Bootstrap still held it by count, letting another of its own boxes come back by itself, counted against nothing:
+// it never closed, and held a box of the wallet's in its place for good (1.6.0's release review, R3-5).
+describe("a Bootstrap's box whose withdraw of Bring every box back now a node dropped, then Stop (1.6.0's release review, R3-5)", SLOW, () => {
+  const [b1, b2, f9] = ["b1".repeat(32), "b2".repeat(32), "f9".repeat(32)];
+
+  /**
+   * SPENT_KEEP_MS on, the wallet holds `outpoint` as spent no longer. The listing reads the marks against the device's
+   * clock, which a test's runs years before: the mark goes instead (lovejoin-bring-review-fixes.test.ts, `lapsed`).
+   */
+  async function lapsed(t: T, outpoint: string): Promise<void> {
+    const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {};
+    delete spent[outpoint];
+    await t.session.set(SESSION_SPENT, spent);
+  }
+
+  /**
+   * Bring every box back now in the token pool sends `box`'s withdraw, is out of time then, and is stopped. A node drops
+   * that withdraw: two hours on the wallet holds the box as spent no longer, and Stop's one read goes.
+   */
+  async function droppedThenStopped(t: T, lj: LovejoinService, box: string): Promise<void> {
+    await unlockedAnHourAgo(t);
+    const answer = t.collateral.fetch;
+    t.collateral.fetch = async (url, init) => {
+      const witness = await answer(url, init);
+      t.clock.now += BRING_RUN_MS;
+      return witness;
+    };
+    await lj.bringAllBack("preprod", TOKEN);
+    await lj.withdrawDue("preprod");
+    t.collateral.fetch = answer;
+    await lj.stopBringingAllBack("preprod");
+    expect(withdrawn(t)).toEqual([box]);
+    await busyFor(t, SPENT_KEEP_MS);
+    await lapsed(t, box);
+    expect(await lj.withdrawDue("preprod")).toEqual([]);
+  }
+
+  /** Runs an hour apart, the wallet in use, until `box` was withdrawn `times` times, a day of them at most: then it's on chain. */
+  async function untilSent(t: T, lj: LovejoinService, box: string, times: number): Promise<void> {
+    for (let run = 0; run < 24 && withdrawn(t).filter((b) => b === box).length < times; run++) {
+      await busyFor(t, HOUR);
+      await lj.withdrawDue("preprod");
+    }
+    expect(withdrawn(t).filter((b) => b === box)).toHaveLength(times);
+    t.koios.addedToAccounts = t.koios.addedToAccounts.filter((u) => `${u.tx_hash}#${u.tx_index}` !== box);
+  }
+
+  for (const moved of [false, true]) {
+    it(`holds the boxes it still has out, never the one counted back, which comes back by itself, counted once${moved ? ": one of them moved by someone else's mix" : ""}`, async () => {
+      const t = await wallet();
+      const lj = pooled(t);
+      // B1's three boxes; moved: its third at the wallet's box a stranger's mix made, f9, which no record accounts for.
+      const listed = [...(await depositBoxes(t, "b1", moved ? 2 : 3)), ...(moved ? [await tokenBox(t, "f9", true, 7)] : [])];
+      t.koios.addedToAccounts.push(...POOL, ...listed, ...(await strangers(t)));
+      await bootstrapped(lj, b1, 3);
+      const held = listed.map((u) => at(u.tx_hash, u.tx_index));
+      expect((await lj.status("preprod")).pools![0]!.bootstrap).toEqual(held);
+      await droppedThenStopped(t, lj, `${b1}#0`);
+      // b1#0 was counted back as its withdraw went: B1 holds the two it still has out, and b1#0, free, has a due time.
+      expect(await shares(t)).toEqual([[b1, [{ pool: TOKEN, boxes: 3, back: 1 }]]]);
+      const after = (await lj.status("preprod")).pools![0]!;
+      expect(after.bootstrap).toEqual(held.slice(1));
+      expect(after.due).toHaveLength(1);
+      // It comes back by itself, counted back once.
+      await untilSent(t, lj, `${b1}#0`, 2);
+      expect(await shares(t)).toEqual([[b1, [{ pool: TOKEN, boxes: 3, back: 1 }]]]);
+      // The two held, brought back by hand: B1 is over, and holds no box of the wallet's in its place.
+      for (const box of held.slice(1).reverse()) expect((await bringOneBack(t, lj)).box).toEqual(box);
+      expect(await shares(t)).toEqual([]);
+      t.koios.addedToAccounts.push(await tokenBox(t, "f8", true, 7));
+      expect((await lj.status("preprod")).pools![0]!.bootstrap ?? []).toEqual([]);
+    });
+  }
+
+  it("counts a box someone else's mix moved, brought back by hand, against the Bootstrap it was moved from, a box of that one counted back still listed", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    // B1, older, its two boxes at its deposit. B2's first two at its deposit, its third at the wallet's box a stranger's
+    // mix made, f9; B2's listed first, so the run takes b2#0 first.
+    t.koios.addedToAccounts.push(
+      ...POOL,
+      ...(await depositBoxes(t, "b2", 2)),
+      await tokenBox(t, "f9", true, 7),
+      ...(await depositBoxes(t, "b1", 2)),
+      ...(await strangers(t)),
+    );
+    await bootstrapped(lj, b1, 2);
+    t.clock.now += 60_000;
+    await bootstrapped(lj, b2, 3);
+    await lj.status("preprod");
+    await droppedThenStopped(t, lj, `${b2}#0`);
+    // The page offers the moved box, held for B2, which it counts against: B1 still holds both of its own.
+    expect((await bringOneBack(t, lj)).box).toEqual(at(f9, 0));
+    expect(await shares(t)).toEqual([
+      [b1, [{ pool: TOKEN, boxes: 2 }]],
+      [b2, [{ pool: TOKEN, boxes: 3, back: 2 }]],
+    ]);
+    expect((await lj.status("preprod")).pools![0]!.bootstrap).toEqual([at(b2, 1), at(b1, 0), at(b1, 1)]);
   });
 });

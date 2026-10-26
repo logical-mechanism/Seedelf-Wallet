@@ -985,9 +985,10 @@ describe("a swap that runs itself", () => {
         },
       ],
     });
-    // A transaction Koios didn't answer spent it, and never landed: it's still at the account.
+    // A transaction Koios didn't answer spent it, and never landed: it's still at the account. Spent on the wallet's own
+    // clock, as every send writes its marks (1.6.0's release review, L4).
     t.koios.addedToAccounts.push(atSession("01".repeat(32), 0, "16000000"));
-    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"01".repeat(32)}#0`]: Date.now() }));
+    await t.wallet.withKeys(() => t.session.set(SESSION_SPENT, { [`${"01".repeat(32)}#0`]: t.clock.now }));
     expect((await sessions.list("preprod", true))[0]!.stage).toBe("open");
     expect((await sessions.advance("preprod", 0, true)).stage).toBe("open");
     // Gone from the account: over.

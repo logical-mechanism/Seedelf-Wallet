@@ -2007,9 +2007,10 @@ pub struct BootstrapMostRequest {
 }
 
 /// The most boxes, of `request.most`, a Bootstrap paid from the private
-/// balance puts into the pool under `request.params`: what its funding's
-/// reserve pays the deposit's fee and change for
-/// ([`lovejoin::bootstrap_most`], chunk 34's 34d review, 3).
+/// balance puts into the pool under `request.params`: what its funding's two
+/// reserves, the deposit's and the way back's, pay the deposit and its sweep
+/// back for, each count built ([`lovejoin::bootstrap_most`], chunk 34's 34d
+/// review, 3; 1.6.0's release review, 318-rust#0).
 pub fn bootstrap_most_in(request: BootstrapMostRequest, pool: Option<&PoolRef>) -> Result<usize> {
     let network_flag = network_flag(&request.network)?;
     let protocol = protocol_of(network_flag, pool)?;

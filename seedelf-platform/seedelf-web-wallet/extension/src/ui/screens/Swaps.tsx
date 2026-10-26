@@ -114,6 +114,7 @@ import { withStop } from "../sentence";
 import {
   aboutAda,
   adaShort,
+  followMax,
   fundParts,
   halfOf,
   impactLevel,
@@ -673,6 +674,8 @@ export function NewSwap({
   const [amount, setAmount] = useState("");
   // What the last edit of the amount changed or refused.
   const [note, setNote] = useState<string>();
+  // Max set the amount: it follows Max down (followMax; 1.6.0's release review, R3-12).
+  const [maxed, setMaxed] = useState(false);
   const [slippage, setSlippage] = useState(1);
   const [picking, setPicking] = useState<"pay" | "get">();
   const [settings, setSettings] = useState(false);
@@ -758,8 +761,16 @@ export function NewSwap({
   const setTyped = (value: string) => {
     setAmount(value);
     setNote(undefined);
+    setMaxed(false);
   };
   const fill = (quantity: string) => setTyped(quantity === "0" ? "" : formatQuantity(quantity, pay.side.decimals));
+
+  // Pressed before any quote, Max kept nothing aside for the collateral's mix the quote then names: the amount it set
+  // follows it down, so what's reviewed is Max's, funded with that mix (followMax; 1.6.0's release review, R3-12).
+  const followed = followMax(maxed, pay.id, raw, max);
+  useEffect(() => {
+    if (followed !== undefined) setAmount(followed === "0" ? "" : formatQuantity(followed, pay.side.decimals));
+  }, [followed, pay.side.decimals]);
 
   /** What's received becomes what's paid, and the other way round. */
   function flip() {
@@ -993,7 +1004,10 @@ export function NewSwap({
               <button
                 type="button"
                 className="link"
-                onClick={() => fill(max)}
+                onClick={() => {
+                  fill(max);
+                  setMaxed(true);
+                }}
                 disabled={max === "0"}
                 aria-label={tr("swaps.maxOf", { token: nameOf(pay) })}
                 title={
@@ -1018,6 +1032,7 @@ export function NewSwap({
               onChange={(value, why) => {
                 setAmount(value);
                 setNote(why);
+                setMaxed(false);
               }}
               aria-invalid={tooMuch || undefined}
               autoFocus
@@ -1081,13 +1096,14 @@ export function NewSwap({
         </p>
       )}
       {/* Max is less than the balance: it says why, on the page, not only in its label (DX-4). With what its funding adds
-          for its collateral's mix, kept aside where a 5 ₳ pool is shown (1.6.0's release review, 323-worker#0). */}
+          for its collateral's mix, kept aside where a 5 ₳ pool takes the collateral, and said as what that mix may take
+          where nothing the wallet read lately says it does (1.6.0's release review, 323-worker#0, R3-11). */}
       {pay.id === "lovelace" && max !== "0" && raw === max && (
         <p className="note" data-testid="swap-max-note">
-          {tr(quoted?.quote.collateralReserve ? "swaps.maxNoteMixed" : "swaps.maxNote", {
-            max: amounts.ada(max),
-            aside: amounts.ada((BigInt(held) - BigInt(max)).toString()),
-          })}
+          {tr(
+            !quoted?.quote.collateralReserve ? "swaps.maxNote" : quoted.quote.collateralMaybe ? "swaps.maxNoteMaybe" : "swaps.maxNoteMixed",
+            { max: amounts.ada(max), aside: amounts.ada((BigInt(held) - BigInt(max)).toString()) },
+          )}
         </p>
       )}
       {unverified && get && <Unverified pick={get} />}
@@ -1279,11 +1295,15 @@ export function SwapApproval({
   // token's boxes' mixes and their way back are Lovejoin's costs too; their ADA comes back with each box (34f).
   const paid = summary.payments.reduce((sum, p) => sum + BigInt(p.lovelace), 0n);
   const lovejoinCosts = mixes || tokenBoxes > 0 ? lovejoinOf(mixes ? l : undefined, tokenBoxes > 0 ? way : undefined) : undefined;
-  // Its funding pays for its collateral's mix: a cost too, which the totals counted as coming back, and its 5 ₳ comes
-  // back later, in a box of its own, giveme.my backing that mix (1.6.0's release review, 323-worker#1, 323-worker#6,
-  // x-privacy#1). Whether the return builds it is decided then: about.
-  const collateralMixed = !!summary.collateralReserve;
-  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, lovejoinCosts, collateralMixed ? COLLATERAL_MIX_COST : 0n);
+  // Its return mixes its collateral: its 5 ₳ comes back later, in a box of its own, giveme.my backing that mix
+  // (1.6.0's release review, 323-worker#6, x-privacy#1). Where its funding paid for that, and where a 5 ₳ pool takes
+  // the collateral though the private balance couldn't pay the reserve too, if its fill is ADA, which pays for that mix
+  // as it comes back; a token's fill beside the margin's rest can't, so that 5 ₳ comes back with the rest (R3-9).
+  // Whether the return builds it is decided then: about.
+  const collateralMixed = !!summary.collateralReserve || (!!summary.collateralPool && adaOut);
+  // A cost only where its funding paid for it, which the totals counted as coming back (323-worker#1).
+  const mixCost = summary.collateralReserve ? COLLATERAL_MIX_COST : 0n;
+  const costs = swapCosts(quote, { paid, fee: BigInt(summary.fee.total) }, lovejoinCosts, mixCost);
   // What the funding pays for the swap itself, apart from the token's boxes (34e's fixes' review, 2).
   // Less what it pays for its collateral's mix, which a row of its own shows.
   const forSwap = (BigInt(swapPart!.lovelace) - tokenFund - BigInt(summary.collateralReserve ?? "0")).toString();
@@ -2867,6 +2887,13 @@ export function StopDialog({
       )}
       {/* Four boxes a mix asked, and it would go three: why (chunk 34's D3). */}
       {lovejoin && <WidthNote fellBack={cost.fellBack} testId="session-stop-width" />}
+      {/* Its collateral mixed first, under giveme.my's collateral, wherever Stop doesn't bring it back directly, as the
+          approval says it (1.6.0's release review, L1). With no box, there's no switch, and it isn't direct. */}
+      {cost?.collateralMix && (through || !mixes) && (
+        <p className="note" data-testid="session-stop-collateral-mix">
+          {tr("swaps.review.privacy.collateralMix")}
+        </p>
+      )}
       {cost === undefined && <p className="note">{tr("swaps.stop.working")}</p>}
     </Modal>
   );

@@ -1251,3 +1251,84 @@ describe("a payment in parts checked whole at Send (1.6.0's release review, 321-
     expect(submittedIds(t)).toContain(all[1]!.txHash);
   });
 });
+
+describe("a return that comes back directly, checked against a payment's parts at Send (1.6.0's review of the fixes, R3-4)", SLOW, () => {
+  /** The words both kinds of return are refused in, a chain's and one that comes back directly. */
+  const CONFLICT = "That return spends a UTxO that a payment still being sent in parts spends too. Review it again.";
+
+  /**
+   * A payment in two parts, built, and session 0, a site's, whose funding change F is a bundle the second part spends:
+   * a return of it built now merges into F. Not sent yet.
+   */
+  async function beside() {
+    const { t, tokens } = await walletA(12);
+    const s = services(t);
+    const summary = await s.transfer.build("preprod", [{ to: THEIRS, lovelace: "0", tokens }]);
+    const all = summary.parts!;
+    expect(all.map((p) => !!p.waits)).toEqual([false, true]);
+    const [F] = await ownInputs(t, 1, all);
+    await t.store.set("sessions.preprod", {
+      next: 1,
+      sessions: [
+        { index: 0, ownStake: true, createdAt: t.clock.now, txs: [{ kind: "out", txHash: F!.split("#")[0], at: t.clock.now, confirmed: true }], site: { origin: "https://example.org" } },
+      ],
+    });
+    t.koios.addedToAccounts.push(atSession("c1".repeat(32), 0, "40000000"), atSession("c2".repeat(32), 1, "5000000"), ...CLASSIC_POOL);
+    const sessions = new SessionService({
+      ...t.deps,
+      collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+      store: t.store,
+      minswap: () => new Minswap("https://aggr.monorepo-testnet-preprod.minswap.org/aggregator", t.minswap.fetch),
+      lovejoin: t.lovejoin,
+      sleep: async () => undefined,
+    });
+    return { t, s, summary, all, F: F!, sessions };
+  }
+
+  /** The session's transactions as its record keeps them: what was recorded of a return before it was sent. */
+  const recorded = async (t: T) => (await t.store.get<{ sessions: Array<{ txs: Array<{ kind: string }> }> }>("sessions.preprod"))!.sessions[0]!.txs.map((x) => x.kind);
+
+  it("refuses Bring it back's, sending and recording none of it, where it merges into what a waiting part spends; reviewed again it goes, then the payment's rest", async () => {
+    const { t, s, summary, all, F, sessions } = await beside();
+    // Reviewed before the payment's Send, coming back directly: one transaction, merged into F.
+    const back = await sessions.backBuild("preprod", 0, true);
+    expect(back.lovejoin).toBeUndefined();
+    expect(back.merged).toBe(1);
+    const kept = (await t.wallet.withKeys(() => t.session.get<{ txCbor: string; chain?: unknown }>(SESSION_BACK)))!;
+    expect(kept.chain).toBeUndefined();
+    expect(txInputs(Buffer.from(kept.txCbor, "hex"))).toContain(F);
+
+    // The payment's Send: its first part goes, and the second waits, F reserved for it.
+    await s.transfer.submit("preprod", summary.txHash);
+    expect(submittedIds(t)).toEqual([all[0]!.txHash]);
+    expect((await sending(t)).inputs.has(F)).toBe(true);
+
+    // The return's Send is refused whole, in a chain's words, before it's recorded or anything of it goes.
+    await expect(sessions.backSubmit("preprod", back.txHash)).rejects.toThrow(CONFLICT);
+    expect(submittedIds(t)).toEqual([all[0]!.txHash]);
+    expect(await recorded(t)).toEqual(["out"]);
+
+    // Reviewed again, it leaves F to the payment and goes; then the payment's rest goes, whole.
+    const again = await sessions.backBuild("preprod", 0, true);
+    expect(again.merged ?? 0).toBe(0);
+    await sessions.backSubmit("preprod", again.txHash);
+    expect(submittedIds(t)).toEqual([all[0]!.txHash, again.txHash]);
+    t.koios.confirmations = 1;
+    t.clock.now += LOOK_EVERY_MS + 1;
+    await s.parts.pump("preprod");
+    expect(submittedIds(t)).toContain(all[1]!.txHash);
+  });
+
+  it("lists Bring everything back's as not sent, in the same words, sending and recording none of it", async () => {
+    const { t, s, summary, all, F, sessions } = await beside();
+    const { returns, skipped } = await sessions.claimBuild("preprod", [0], true);
+    expect(skipped).toEqual([]);
+    expect(returns).toHaveLength(1);
+    expect(returns[0]!.merged).toBe(1);
+    await s.transfer.submit("preprod", summary.txHash);
+    expect((await sending(t)).inputs.has(F)).toBe(true);
+    expect(await sessions.claimSubmit("preprod", [returns[0]!.txHash])).toEqual({ sent: [], failed: [{ index: 0, error: CONFLICT }] });
+    expect(submittedIds(t)).toEqual([all[0]!.txHash]);
+    expect(await recorded(t)).toEqual(["out"]);
+  });
+});

@@ -56,18 +56,22 @@ const coversRun = (pool: string | undefined, b: Bringing) => !!b && (pool === un
  * How a page follows Bring every box back now (Settings', no `pool`; or a pool's page's): what each read of
  * lovejoin-held finds, and what each press asks. A run this page saw go, not stopped, that a read no longer finds is
  * over: said once (`done`), with how many it sent (doneOf) and, for a pool's run, its pool, which Settings words it by
- * (321-lj-screens#6); and `over` is called. A read sent before the last press's request answered answers for before
- * it, and is dropped, whether it answers before that request or after: the worker reads its record outside the queue
- * Stop writes it through, so a read sent while Stop went could come back after it, the run still going, and the next
- * read, Stop's done, said the run was over, "Done: 3 back" for a run the user stopped; and one sent while the ask went,
- * the run not there yet, said nothing was left before its first run (1.6.0's release review, 321-lj-screens#0).
- * Exported for its test.
+ * (321-lj-screens#6); and `over` is called. Where the worker marks it stopped by Stop (`bringStopped`), pressed on this
+ * page or another, it's said stopped (`stopped`), with the worker's count: a run Stop deleted read as over, so a page
+ * that didn't press it said Done (1.6.0's release review, L2). A read sent before the last press's request answered
+ * answers for before it, and is dropped, whether it answers before that request or after: the worker reads its record
+ * outside the queue Stop writes it through, so a read sent while Stop went could come back after it, the run still
+ * going, and the next read, Stop's done, said the run was over, "Done: 3 back" for a run the user stopped; and one sent
+ * while the ask went, the run not there yet, said nothing was left before its first run (1.6.0's release review,
+ * 321-lj-screens#0). Exported for its test.
  */
 export function bringFollower(
   pool: string | undefined,
-  show: { bringing: (b: Bringing) => void; done: (count: number | undefined, pool?: string) => void; over: () => void },
+  show: { bringing: (b: Bringing) => void; done: (count: number | undefined, pool?: string, stopped?: true) => void; over: () => void },
 ) {
   let last: Bringing;
+  // The run this page's Stop stopped, until the first read sent after its request answered says how many it sent.
+  let halted: Bringing;
   let presses = 0;
   return {
     /** A read about to be sent: what to do with its answer. */
@@ -75,11 +79,19 @@ export function bringFollower(
       const sent = presses;
       return (held: LovejoinHeld) => {
         if (sent !== presses) return;
-        // Over since the last read, not stopped: every box it found went.
-        if (coversRun(pool, last) && !last!.stopped && !held.bringing) {
-          show.done(doneOf(last!, held), last!.pool);
-          show.over();
+        if (!held.bringing) {
+          const ran = coversRun(pool, last) && !last!.stopped ? last : coversRun(pool, halted) ? halted : undefined;
+          // Stopped, here or on another page: as many as the worker counted when it stopped.
+          if (ran && held.bringStopped) {
+            show.done(held.bringStopped.back, ran.pool, true);
+            show.over();
+          } else if (ran && ran === last) {
+            // Over since the last read, not stopped: every box it found went.
+            show.done(doneOf(ran, held), ran.pool);
+            show.over();
+          }
         }
+        halted = undefined;
         last = held.bringing;
         show.bringing(held.bringing);
       };
@@ -101,6 +113,8 @@ export function bringFollower(
         return every;
       };
       const now: Bringing = stop ? undefined : was ? (pool === undefined ? widened(was) : was) : { back: 0, ...(pool !== undefined ? { pool } : {}) };
+      // Stopped here: the next read says so, with the worker's count, as every other page that saw it go does (L2).
+      halted = stop ? was : undefined;
       last = now;
       show.bringing(now);
     },
@@ -118,7 +132,7 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [done, setDone] = useState<{ count: number; pool?: string }>();
+  const [done, setDone] = useState<{ count: number; pool?: string; stopped?: true }>();
   const over = useRef(onOver);
   over.current = onOver;
   // What this page follows of the runs, and of its presses (bringFollower): one for each network and pool it shows.
@@ -128,7 +142,8 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
     let live = true;
     const follower = bringFollower(pool, {
       bringing: (b) => live && setBringing(b),
-      done: (count, of) => live && setDone(count === undefined ? undefined : { count, ...(of !== undefined ? { pool: of } : {}) }),
+      done: (count, of, stopped) =>
+        live && setDone(count === undefined ? undefined : { count, ...(of !== undefined ? { pool: of } : {}), ...(stopped ? { stopped } : {}) }),
       over: () => live && over.current?.(),
     });
     follow.current = follower;
@@ -166,6 +181,7 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
         other={other}
         done={done?.count}
         donePool={done?.pool !== undefined}
+        doneStopped={done?.stopped === true}
         busy={busy}
         onAsk={() => setAsking(true)}
         onStop={() => void ask(true)}
@@ -192,11 +208,13 @@ export function BringAllBack({ network, pool, shown = true, onOver }: { network:
 /**
  * Its part of the page: the button and what it does, or, while it goes, how many went and are left, to keep the
  * wallet unlocked, what it waits for or why the last box that didn't go didn't, and Stop, which waits out the chain's
- * confirming until one is late; once it stopped, why, and Try again. On a pool's
+ * confirming until one is late; late, one line says what happens to it either way, staying unlocked included (the
+ * owner: one short line beside a button); once it stopped, why, and Try again. On a pool's
  * page (`pool`), in that pool's words, and `other` while another pool's goes. In Settings, one pool's that goes says
  * so, and its button stays, to make it every pool's; one pool's that's over (`donePool`), having sent none, says that
- * pool held nothing of the wallet's, never Lovejoin (1.6.0's release review, 321-lj-screens#6). Every count hides with
- * the balances (privacy review §2.16).
+ * pool held nothing of the wallet's, never Lovejoin (1.6.0's release review, 321-lj-screens#6). One that Stop stopped,
+ * here or on another page (`doneStopped`), says so and how many it sent, never Done (L2). Every count hides with the
+ * balances (privacy review §2.16).
  */
 export function BringAllBackView({
   bringing,
@@ -204,6 +222,7 @@ export function BringAllBackView({
   other = false,
   done,
   donePool = false,
+  doneStopped = false,
   busy,
   onAsk,
   onStop,
@@ -213,6 +232,7 @@ export function BringAllBackView({
   other?: boolean;
   done?: number;
   donePool?: boolean;
+  doneStopped?: boolean;
   busy: boolean;
   onAsk: () => void;
   onStop: () => void;
@@ -253,7 +273,9 @@ export function BringAllBackView({
                 going.left !== undefined && (going.left > 0 || !waiting) && tr("settings.lovejoin.bringLeft", boxes(going.left)),
               ])}
         </span>
-        <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>
+        {/* Late, its own line says to stay unlocked, with what comes of the late withdraw either way: one line beside Stop
+            (the owner), where three stacked up (1.6.0's release review, the review's questions). */}
+        {!going.late && <span className="note">{tr("settings.lovejoin.bringUnlocked")}</span>}
         {/* What it waits for, in place of an older run's reason: a withdraw late, a word of the worker's, a mix kept for
             Send; or the worker's reason, as it caught it: the node's own words may end with no full stop. */}
         {going.late ? (
@@ -295,9 +317,11 @@ export function BringAllBackView({
       )}
       {done !== undefined && (
         <p className="note" data-testid="lovejoin-bring-done">
-          {done
-            ? tr("settings.lovejoin.bringDone", boxes(done))
-            : tr(pool ? "lovejoin.bring.none" : donePool ? "settings.lovejoin.bringNonePool" : "settings.lovejoin.bringNone")}
+          {doneStopped
+            ? tr("settings.lovejoin.bringStoppedSent", boxes(done))
+            : done
+              ? tr("settings.lovejoin.bringDone", boxes(done))
+              : tr(pool ? "lovejoin.bring.none" : donePool ? "settings.lovejoin.bringNonePool" : "settings.lovejoin.bringNone")}
         </p>
       )}
     </>

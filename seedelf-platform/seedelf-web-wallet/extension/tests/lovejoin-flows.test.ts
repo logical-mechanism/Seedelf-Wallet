@@ -249,6 +249,25 @@ describe("Bootstrap, in place of the seed (chunk 34's 34d)", SLOW, () => {
     expect((await mixing.publicSubmit("preprod", mix.txHash)).bootstrap).toBeUndefined();
   });
 
+  it("tells Home's watch how many boxes went, so its banner names one box as one (1.6.0's review of the fixes)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    const pending = new PendingService({ ...t.deps, depositLanded: (n, h) => lj.landedDeposit(n, h) });
+    t.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL);
+    const one = await lj.publicBuild("preprod", 1, { bootstrap: true });
+    expect(await lj.publicSubmit("preprod", one.txHash)).toMatchObject({ kind: "lovejoin-mix", bootstrap: true, boxes: 1 });
+    t.koios.confirmations = 1;
+    await lj.pumpPublic("preprod");
+    expect(await pending.pending("preprod")).toMatchObject({ bootstrap: true, boxes: 1, confirmations: 1 });
+
+    // A mix's count too: its boxes come back by themselves, one or several.
+    const u = await wallet();
+    const mixing = pooled(u);
+    u.koios.addedToAccounts.push(atAccount("e1", "40000000"), atAccount("e5", "5000000"), ...POOL);
+    const mix = await mixing.publicBuild("preprod", 1);
+    expect(await mixing.publicSubmit("preprod", mix.txHash)).toMatchObject({ kind: "lovejoin-mix", boxes: 1 });
+  });
+
   it("goes through a one-time account from the private balance, its boxes held as the public account's are", async () => {
     const t = await wallet();
     const lj = pooled(t);

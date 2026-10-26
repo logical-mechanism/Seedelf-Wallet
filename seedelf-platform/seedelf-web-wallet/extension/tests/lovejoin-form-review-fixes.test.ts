@@ -29,7 +29,21 @@ import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, ownedUtxos, testBalances, vectors } from "./fakes";
 
-const { AgainSwitch, MixList, MixMoves, PrivateReview, mixCosts, mixMost, publicMixAda, reviewHint, tailReserveOf, widthTurned } = LovejoinScreen;
+const {
+  AgainSwitch,
+  CollateralIfLeft,
+  MixList,
+  MixMoves,
+  PrivateReview,
+  mixCosts,
+  mixMost,
+  mixOffer,
+  publicMixAda,
+  publicSideOf,
+  reviewHint,
+  tailReserveOf,
+  widthTurned,
+} = LovejoinScreen;
 
 /** Markup's text, as a person reads it. */
 const words = (markup: string) =>
@@ -131,16 +145,52 @@ describe("the Mix form counts what a mix from the private balance pays for its c
   });
 });
 
-describe("the Mix form's stepper keeps the collateral's reserve aside, and room for the fee and the change's least (1.6.0's release review, 323-worker#0)", () => {
+describe("the Mix form's stepper keeps room for the fee and the change's least (1.6.0's release review, 323-worker#0)", () => {
   const side = (lovelace: bigint) => ({ lovelace: lovelace.toString(), tokens: [] });
-  it("offers a box only where the funding, the 5 ₳, its fee and its change's least are held, the reserve too where it's paid for", () => {
+  it("counts a box only where the funding, the 5 ₳, its fee and its change's least are held, and the reserve too where it's kept aside", () => {
     // 15.3 ₳ and the 5 ₳ kept aside, and about 1.7 ₳ for the funding's fee and the least its change holds today.
     expect(mixMost("private", side(22_300_000n), undefined, ONE, BOX, 10).adaMost).toBe(1);
     expect(mixMost("private", side(22_299_999n), undefined, ONE, BOX, 10).adaMost).toBe(0);
+    // With the collateral's reserve kept aside too: what decides whether the form's figures count it, never its cap
+    // (mixOffer; 1.6.0's review of the fixes, R3-7).
     expect(mixMost("private", side(23_799_999n), undefined, ONE, BOX, 10, 1_500_000n).adaMost).toBe(0);
     expect(mixMost("private", side(23_800_000n), undefined, ONE, BOX, 10, 1_500_000n).adaMost).toBe(1);
     // The public account puts up its own collateral and pays no reserve: nothing set aside there.
     expect(mixMost("public", side(15_300_000n), undefined, ONE, BOX, 10, 1_500_000n).adaMost).toBe(1);
+  });
+});
+
+describe("the Mix form never caps or refuses on its collateral's reserve, and counts it where the count leaves room for it (1.6.0's review of the fixes, R3-7)", () => {
+  const side = (lovelace: bigint) => ({ lovelace: lovelace.toString(), tokens: [] });
+  /** The form at `boxes` boxes of the classic pool, its balance `held`, a 5 ₳ pool taking its collateral (1.5 ₳). */
+  const offer = (held: bigint, boxes = 1, asked = 1_500_000n) => mixOffer("private", side(held), undefined, ONE, BOX, 10, boxes, asked);
+
+  it("offers the box the balance pays without the reserve, counting none in its figures and saying so; the reserve where it fits", () => {
+    // 15.3 ₳, the 5 ₳ and the fee's room: the box goes, as the worker funds it without the reserve (orWithoutReserve).
+    expect(offer(22_300_000n)).toMatchObject({ adaMost: 1, most: 1, tail: 0n, tailShort: true });
+    expect(offer(23_799_999n)).toMatchObject({ adaMost: 1, most: 1, tail: 0n, tailShort: true });
+    // The reserve too: counted in the figures, as the worker builds it, and nothing said.
+    expect(offer(23_800_000n)).toMatchObject({ adaMost: 1, most: 1, tail: 1_500_000n, tailShort: false });
+    // Short of one box without it: refused as before, the reserve never what's short.
+    expect(offer(22_299_999n)).toMatchObject({ adaMost: 0, most: 0, tail: 0n, tailShort: false });
+  });
+
+  it("stops the stepper where the balance stops without the reserve, and counts it at each count that leaves room for it", () => {
+    // Two boxes, 13.8 ₳ each beside the 1.5 ₳: the stepper goes to two without the reserve.
+    expect(offer(36_100_000n, 2)).toMatchObject({ adaMost: 2, most: 2, tail: 0n, tailShort: true });
+    // At one box of those, the reserve fits.
+    expect(offer(36_100_000n, 1)).toMatchObject({ most: 2, tail: 1_500_000n, tailShort: false });
+    expect(offer(37_600_000n, 2)).toMatchObject({ most: 2, tail: 1_500_000n, tailShort: false });
+  });
+
+  it("is the form as before where nothing is asked: no 5 ₳ pool takes the collateral, or the public account pays", () => {
+    expect(offer(22_300_000n, 1, 0n)).toMatchObject({ most: 1, tail: 0n, tailShort: false });
+    expect(mixOffer("public", side(15_300_000n), undefined, ONE, BOX, 10, 1)).toMatchObject({ most: 1, tail: 0n, tailShort: false });
+  });
+
+  it("says so in one line under the stepper, which nothing else says where it's paid or not asked", () => {
+    expect(text(createElement(CollateralIfLeft, { shown: true }))).toBe("At this many, its 5 ₳ collateral is mixed only if enough is left when it comes back.");
+    expect(html(createElement(CollateralIfLeft, { shown: false }))).toBe("");
   });
 });
 
@@ -163,11 +213,77 @@ describe("the public Mix form's cap counts only the ADA its chain spends (1.6.0'
 
   it("its ADA alone, and in a token pool the UTxOs holding its token: never rewards, the collateral, or ADA held with other tokens", () => {
     expect(publicMixAda(account)).toBe("25000000");
-    expect(publicMixAda(account, MIN)).toBe("27000000");
+    // In the MIN pool (100 MIN a box), the 500 MIN's 2 ₳ too, less the least of the output the boxes' rest goes back
+    // in: 1.15939 ₳ for 400 MIN (R3-14, below). Five boxes take it all, and nothing goes back.
+    const MIN_BOX = { ...MIN, quantity: "100000000" };
+    expect(publicMixAda(account, MIN_BOX)).toBe("25840610");
+    expect(publicMixAda(account, MIN_BOX, 5)).toBe("27000000");
     // So one box of 10 ₳ at most, where Home's 63 ₳ (with 8 ₳ of rewards) offered four.
     const held = (lovelace: string) => mixMost("public", { lovelace, tokens: [] }, undefined, ONE, BOX, 10).adaMost;
     expect(held(publicMixAda(account))).toBe(1);
     expect(held("63000000")).toBe(4);
+  });
+});
+
+describe("the public Mix form's cap in a token pool counts what its chain picks, count by count (1.6.0's review of the fixes, R3-14)", () => {
+  const utxo = (lovelace: string, extra: Partial<UtxoInfo> = {}): UtxoInfo => ({ txHash: "aa".repeat(32), index: 0, lovelace, tokens: [], locked: false, ...extra });
+  /** A pool of 2 ₳ and 100 of a token a box, its name six bytes, as PR #163's LJTEST pool names its own. */
+  const TOK = { policyId: "cc".repeat(28), assetName: "4c4a54455354", quantity: "100" };
+  const tok = (quantity: string) => ({ ...TOK, quantity, fingerprint: "asset1tok", decimals: 0 });
+  /**
+   * The least ADA of the output to the account's own base address that gives back 24 to 255 of the token alone, as
+   * core prices it (minimum_address_payment): 160 bytes and its own 109 at 4,310 lovelace a byte. The output is a map of
+   * the 57-byte address and its value, 5 ₳ staged and the one token: 68 bytes, and 41 for the token.
+   */
+  const LEAST = (160n + 109n) * 4_310n;
+  /** One box of the pool, one wave deep: its 2 ₳, its one mix at 0.95 ₳, and the 1.5 ₳ reserve. */
+  const ONE_TOK = { boxes: 1, lovelace: "4450000", mixFees: "950000" };
+  const BOX_TOK = 2_000_000n;
+
+  it("takes the fewest UTxOs holding the token that hold the boxes' worth, the most first, less the least ADA of the output its rest goes back in", () => {
+    const account = [
+      utxo("9000000"),
+      // Three boxes' worth, and half a box's beside 20 ₳: the latter isn't picked while the first holds enough.
+      utxo("5400000", { txHash: "a1".repeat(32), tokens: [tok("300")] }),
+      utxo("20000000", { txHash: "a2".repeat(32), tokens: [tok("50")] }),
+      utxo("5000000", { collateral: true, locked: true }),
+    ];
+    // One or two boxes: the 300's UTxO, 200 or 100 back in an output of its own.
+    expect(publicMixAda(account, TOK, 1)).toBe((9_000_000n + 5_400_000n - LEAST).toString());
+    expect(publicMixAda(account, TOK, 2)).toBe((9_000_000n + 5_400_000n - LEAST).toString());
+    // Three take it all: nothing goes back.
+    expect(publicMixAda(account, TOK, 3)).toBe("14400000");
+  });
+
+  it("gives back the other tokens the UTxOs it picks hold too, in the same output", () => {
+    const NFT = { policyId: "dd".repeat(28), assetName: "4e4654", quantity: "1", fingerprint: "asset1nft", decimals: 0 };
+    const account = [utxo("9000000"), utxo("5400000", { tokens: [tok("100"), NFT] })];
+    // One box takes all 100: the NFT goes back alone, an output of 68 bytes and 37 for it (a three-byte name, one of it).
+    expect(publicMixAda(account, TOK, 1)).toBe((14_400_000n - (160n + 105n) * 4_310n).toString());
+  });
+
+  it("stops the stepper below the first count the pick can't pay, at whatever count it stands", () => {
+    const account = [
+      utxo("5000000"),
+      // Two boxes' worth beside 1.2 ₳, picked first, and one box's beside 10 ₳, picked only for a third.
+      utxo("1200000", { txHash: "a1".repeat(32), tokens: [tok("200")] }),
+      utxo("10000000", { txHash: "a2".repeat(32), tokens: [tok("100")] }),
+    ];
+    /** The form at `boxes` boxes, its figure the pick's for that many (publicSideOf), as the page has it. */
+    const at = (utxos: UtxoInfo[], boxes: number) =>
+      mixOffer("public", publicSideOf({ lovelace: "0", tokens: [tok("300")] }, utxos, TOK, boxes).side, TOK, ONE_TOK, BOX_TOK, 10, boxes, 0n, utxos);
+    // One box: 5 ₳ and 1.2 ₳, less the 100 that goes back, pays 4.45 ₳. Two: exactly the 200, 6.2 ₳, short of 7.4 ₳.
+    // Three take both, 16.2 ₳, past 10.35 ₳: one box at most all the same, since two can't go, where three's figure
+    // alone would offer three, and two the build refuses.
+    expect(at(account, 1)).toMatchObject({ adaMost: 1, most: 1 });
+    expect(at(account, 3)).toMatchObject({ adaMost: 1, most: 1 });
+    // Once two can go it goes on, to three, where one box's figure alone stopped at one: four is more of the token.
+    const richer = [utxo("6200000"), ...account.slice(1)];
+    expect(at(richer, 1)).toMatchObject({ adaMost: 3, most: 3 });
+    // None of the token's UTxOs holds enough for one box: none.
+    expect(at([utxo("50000000"), utxo("1500000", { tokens: [tok("50")] })], 1).adaMost).toBe(0);
+    // The classic pool, ADA alone, needs no pick: as before.
+    expect(mixOffer("public", { lovelace: "25000000", tokens: [] }, undefined, ONE, BOX, 10, 1, 0n, [utxo("25000000")]).most).toBe(1);
   });
 });
 
@@ -377,28 +493,44 @@ function runner(t: T): SessionService {
 }
 
 describe("the Mix form's count is one its funding builds, with the reserve the review then shows (1.6.0's release review, 323-worker#0, 320-screens#2)", SLOW, () => {
-  it("funds the least private balance the stepper offers a box at, its collateral's mix paid for, and the form's total is the review's", async () => {
+  it("funds the least balance the stepper offers a box at without the reserve, and the least its figures count it at with it, the form's total the review's at both (R3-7)", async () => {
     const lj = pooled(await wallet(ADA));
     const funding = await lj.funding("preprod", 1);
-    // The reserve the form counts, by the page's own read of the 5 ₳ pool: what the worker adds at build.
+    // The reserve the form asks, by the page's own read of the 5 ₳ pool: what the worker adds at build where it's paid.
     const pools = poolsOf(await lj.status("preprod"));
-    const tail = tailReserveOf(funding, "private", pools);
-    expect(tail).toBe(CHAIN);
-    // The least private balance at which the stepper offers one box.
-    const offers = (held: bigint) => mixMost("private", { lovelace: held.toString(), tokens: [] }, undefined, funding, BOX, 10, tail).adaMost >= 1;
-    let [low, high] = [BigInt(funding.lovelace), BigInt(funding.lovelace) + 20n * ADA];
-    while (low < high) {
-      const mid = (low + high) / 2n;
-      if (offers(mid)) high = mid;
-      else low = mid + 1n;
+    const asked = tailReserveOf(funding, "private", pools);
+    expect(asked).toBe(CHAIN);
+    const offer = (held: bigint) => mixOffer("private", { lovelace: held.toString(), tokens: [] }, undefined, funding, BOX, 10, 1, asked);
+    /** The least private balance at which `holds` is true of the form at one box. */
+    const least = (holds: (o: ReturnType<typeof offer>) => boolean) => {
+      let [low, high] = [BigInt(funding.lovelace), BigInt(funding.lovelace) + 20n * ADA];
+      while (low < high) {
+        const mid = (low + high) / 2n;
+        if (holds(offer(mid))) high = mid;
+        else low = mid + 1n;
+      }
+      return low;
+    };
+    // The least balance the stepper offers the box at: funded without the reserve (orWithoutReserve), as the form's
+    // figures and its line say. Nothing refuses it.
+    const bare = least((o) => o.most >= 1);
+    expect(offer(bare)).toMatchObject({ tail: 0n, tailShort: true });
+    const without = await runner(await wallet(bare)).mixOutBuild("preprod", 1);
+    expect(without.collateralReserve).toBeUndefined();
+    // The least balance the figures count the reserve at: funded with it.
+    const paid = least((o) => o.tail > 0n);
+    expect(paid > bare).toBe(true);
+    const withIt = await runner(await wallet(paid)).mixOutBuild("preprod", 1);
+    expect(withIt.collateralReserve).toBe(CHAIN.toString());
+    // The form's total, against the review's at both: apart only by the fee's estimate.
+    for (const [built, held] of [
+      [without, bare],
+      [withIt, paid],
+    ] as const) {
+      const leaving = built.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(built.fee.total));
+      const form = mixCosts(funding, "private", BOX, offer(held).tail).leaving;
+      expect(form - leaving < 50_000n && leaving - form < 50_000n).toBe(true);
     }
-    const built = await runner(await wallet(low)).mixOutBuild("preprod", 1);
-    // Built with its reserve, not left out for want of ADA (orWithoutReserve).
-    expect(built.collateralReserve).toBe(CHAIN.toString());
-    // The form's total, against the review's: apart only by the fee's estimate.
-    const leaving = built.payments.reduce((sum, p) => sum + BigInt(p.lovelace), BigInt(built.fee.total));
-    const form = mixCosts(funding, "private", BOX, tail).leaving;
-    expect(form - leaving < 50_000n && leaving - form < 50_000n).toBe(true);
   });
 
   it("counts none where the 5 ₳ pool has too few boxes to draw, as the worker then funds none", async () => {

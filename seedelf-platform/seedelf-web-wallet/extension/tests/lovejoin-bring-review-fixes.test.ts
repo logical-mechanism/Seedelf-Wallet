@@ -13,9 +13,9 @@ import { describe, expect, it } from "vitest";
 import { txInputs } from "../src/background/cbor";
 import { Collateral } from "../src/background/collateral";
 import type { KoiosUtxo } from "../src/background/koios";
-import { BRING_FAILED_RUNS, BRING_LATE_MS, LANDING_MS, LovejoinService, type LovejoinDeps, type PoolRef } from "../src/background/lovejoin";
+import { BRING_FAILED_RUNS, BRING_LATE_MS, LANDING_MS, LovejoinService, TAIL_KEEP_MS, type LovejoinDeps, type PoolRef } from "../src/background/lovejoin";
 import { pendingKey } from "../src/background/pending";
-import { SESSION_SPENT, SPENT_KEEP_MS } from "../src/background/spent";
+import { SPENT_KEEP_MS } from "../src/background/spent";
 import { t as tr } from "../src/i18n";
 import { NETWORKS } from "../src/networks";
 import { doneOf } from "../src/ui/components/BringAllBack";
@@ -524,25 +524,92 @@ describe("a session's collateral's mix waiting for giveme.my (1.6.0's release re
     expect((await lj.held("preprod")).bringing).toEqual({ back: 1, left: 1, waiting: "collateral" });
     expect(await lj.returning("preprod")).toBe(true);
   });
+
+  // Its transactions before the collateral's mix are in a block, as tx_status said (witnessTail), while the pool's
+  // listing, another of Koios's backends, doesn't show their boxes yet: such a chain is taken to be landing, as one all
+  // sent is, LANDING_MS at most (1.6.0's release review, R3-6).
+  it("waits for its boxes while the listing lags, never saying nothing was left, and takes them once listed (R3-6)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, ...(await strangers(t)));
+    await waitingTail(t, lj);
+    await busyFor(t, 60_000);
+    await lj.bringAllBack("preprod");
+    expect(await lj.withdrawDue("preprod")).toEqual([]);
+    expect((await sealed(t)).bringing).toMatchObject({ waiting: "landing" });
+    expect((await sealed(t)).due).toHaveLength(1);
+    expect(doneOf({ back: 0 }, await lj.held("preprod"))).toBeUndefined();
+    // Listed: the run takes the chain's box, the collateral's left to its mix.
+    t.koios.addedToAccounts.push(await classicBox(t, "d1", 0), await tokenBox(t, "e0", true, 0));
+    await busyFor(t, 60_000);
+    expect(await lj.withdrawDue("preprod")).toHaveLength(1);
+    expect(withdrawn(t)).toEqual([`${D1}#0`]);
+  });
+
+  it("keeps its boxes' due times in a box's own run while they may be landing, and sends the box due after (R3-6)", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 300), ...(await strangers(t)));
+    await lj.status("preprod");
+    expect(await lj.withdrawDue("preprod", true)).toEqual([]);
+    // c1 comes due; then the return waits at its collateral's mix, its boxes not listed yet.
+    await busyFor(t, 4 * HOUR);
+    await waitingTail(t, lj);
+    expect((await sealed(t)).due).toHaveLength(2);
+    expect(await lj.withdrawDue("preprod")).toEqual([]);
+    expect((await sealed(t)).due).toHaveLength(2);
+    expect(t.collateral.asked).toEqual([]);
+    // Listed, and LANDING_MS on: c1 goes, and the chain's box keeps its wait.
+    t.koios.addedToAccounts.push(await classicBox(t, "d1", 0), await tokenBox(t, "e0", true, 0));
+    await busyFor(t, LANDING_MS);
+    expect(await lj.withdrawDue("preprod")).toHaveLength(1);
+    expect(withdrawn(t)).toEqual([`${C1}#0`]);
+    const { due } = await sealed(t);
+    expect(due).toHaveLength(1);
+    expect(due[0]! - t.clock.now).toBeGreaterThan(HOUR);
+  });
+
+  // A lock cut that chain at its collateral's mix: its return may build the mix again, with fresh boxes (tailOf). The run
+  // leaves the box to it, as it does while the mix waits, a day at most, rather than bring it back unmixed, which ties
+  // the session's tail deposit to the private balance (private by default; 1.6.0's release review, the review's
+  // questions).
+  it("leaves the collateral's box to its mix once a lock cut its chain, while its return may build that mix again, a day at most", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "d1", 300), await tokenBox(t, "e0", true, 300), ...(await strangers(t)));
+    await waitingTail(t, lj);
+    // The lock wipes where the chain waits and what it reserved.
+    await t.wallet.withKeys(async () => {
+      await t.session.remove("test.f0");
+      await t.session.remove("seedelf.reserved.preprod");
+    });
+    await busyFor(t, 60_000);
+    await lj.bringAllBack("preprod");
+    expect(await lj.withdrawDue("preprod")).toHaveLength(1);
+    expect(withdrawn(t)).toEqual([`${D1}#0`]);
+    await busyFor(t, 60_000);
+    expect(await lj.withdrawDue("preprod")).toEqual([]);
+    expect((await lj.held("preprod")).bringing).toEqual({ back: 1, left: 1, waiting: "collateral" });
+    expect(await lj.tailOf("preprod", 0)).toMatchObject({ id: R0 });
+    // A day after its deposit went in, that mix is never built again: the run brings the box back, not mixed.
+    const kept = (await t.store.get<{ chains: Array<{ tail?: { landed?: number } }> }>("lovejoin.preprod"))!;
+    kept.chains.at(-1)!.tail!.landed! -= TAIL_KEEP_MS;
+    await t.store.set("lovejoin.preprod", kept);
+    await busyFor(t, 60_000);
+    expect(await lj.withdrawDue("preprod")).toHaveLength(1);
+    expect(withdrawn(t)).toEqual([`${D1}#0`, `${T0}#0`]);
+  });
 });
 
 // Two slips wlj-2 found and left, both since a withdraw a node drops leaves its box listed, held as spent for
 // SPENT_KEEP_MS (spent.ts), then free: the run takes it again. That counted it back a second time, Settings' count and
 // the list of mixes both, and took a second due time for it, another box's. And after Stop, offered once the run is late,
-// the box came back with no due time, so nothing brought it back until a read gave it one.
+// the box came back with no due time, so nothing brought it back until a read gave it one. The box is free once the
+// clock has moved SPENT_KEEP_MS on: the pool's listing reads the spent marks on the wallet's own clock, as they're
+// written (1.6.0's release review, L4).
 describe("a withdraw of Bring every box back now that a node dropped (1.6.0's release review, wlj-2's notes)", SLOW, () => {
   const A1 = "a1".repeat(32);
   const C2 = "c2".repeat(32);
-
-  /**
-   * SPENT_KEEP_MS went by since `outpoint` was spent: the wallet holds it as spent no longer. The pool's listing reads
-   * the marks against the device's clock (spent.ts), which a test's runs years before: the mark goes instead.
-   */
-  async function lapsed(t: T, outpoint: string): Promise<void> {
-    const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {};
-    delete spent[outpoint];
-    await t.session.set(SESSION_SPENT, spent);
-  }
 
   /** Chain `id` of the wallet's in the classic pool, recorded and sent whole: its deposit, and its mix, which made its one box at `id#0`. */
   async function mixedOnce(lj: LovejoinService, id: string, delay?: "6-24"): Promise<void> {
@@ -578,7 +645,6 @@ describe("a withdraw of Bring every box back now that a node dropped (1.6.0's re
     await busyFor(t, 60_000);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     await busyFor(t, SPENT_KEEP_MS);
-    await lapsed(t, `${A1}#0`);
     expect(await lj.withdrawDue("preprod")).toHaveLength(1);
     expect(withdrawn(t)).toEqual([`${A1}#0`, `${A1}#0`]);
     // One box back, as Settings says it; c2's mix still open, its box still out; and c2's box keeps its due time.
@@ -605,7 +671,6 @@ describe("a withdraw of Bring every box back now that a node dropped (1.6.0's re
     expect(await lj.returning("preprod")).toBe(true);
     // Free two hours after its withdraw: a read then finds it, with no due time, and gives it one, as any box found.
     await busyFor(t, SPENT_KEEP_MS);
-    await lapsed(t, `${A1}#0`);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     expect((await sealed(t)).due).toHaveLength(2);
     // It comes back by itself at its time, counted back once: c2's mix stays open, its box still out.
@@ -632,8 +697,49 @@ describe("a withdraw of Bring every box back now that a node dropped (1.6.0's re
     t.koios.fetch = real;
     expect((await lj.held("preprod")).bringing).toMatchObject({ back: 1, stopped: expect.any(String) });
     await busyFor(t, SPENT_KEEP_MS);
-    await lapsed(t, `${A1}#0`);
     expect(await lj.withdrawDue("preprod")).toEqual([]);
     expect((await sealed(t)).due).toHaveLength(2);
+  });
+});
+
+// Round 3b, L2: Stop deleted the run's record as its end does, so every page that saw it go, but the one that pressed
+// Stop, said Done. The worker marks the stop, with how many it sent, sealed, until it's asked again (Schedule
+// `bringStopped`), and the page says Stopped (tests/lovejoin-bring-screen-review-fixes.test.ts).
+describe("Bring every box back now stopped by Stop (1.6.0's release review, L2)", SLOW, () => {
+  it("marks the stop with how many it sent and its pool, kept sealed through a restart, until it's asked again", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 60), await classicBox(t, "c2", 60), ...(await strangers(t)));
+    await lj.status("preprod");
+    await lj.bringAllBack("preprod", "classic");
+    expect(await lj.withdrawDue("preprod")).toHaveLength(2);
+    await lj.stopBringingAllBack("preprod");
+    expect((await lj.held("preprod")).bringing).toBeUndefined();
+    expect((await lj.held("preprod")).bringStopped).toEqual({ back: 2, pool: "classic" });
+    // A worker started afresh reads it from the sealed record.
+    expect((await pooled(t).held("preprod")).bringStopped).toEqual({ back: 2, pool: "classic" });
+    // Asked again: the stop is said no more.
+    await lj.bringAllBack("preprod");
+    expect((await lj.held("preprod")).bringStopped).toBeUndefined();
+    expect((await lj.held("preprod")).bringing).toMatchObject({ back: 0 });
+  });
+
+  it("marks no stop for a run that stopped by itself, whose stop Settings says already", async () => {
+    const t = await wallet();
+    const lj = pooled(t);
+    t.koios.addedToAccounts.push(...POOL, await classicBox(t, "c1", 60), ...(await strangers(t)));
+    await lj.bringAllBack("preprod");
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) =>
+      new URL(String(url)).pathname.endsWith("/credential_utxos") ? new Response("down", { status: 500 }) : real(url, init);
+    for (let i = 0; i < BRING_FAILED_RUNS; i++) {
+      await busyFor(t, 60_000);
+      expect(await lj.withdrawDue("preprod")).toEqual([]);
+    }
+    t.koios.fetch = real;
+    expect((await lj.held("preprod")).bringing).toMatchObject({ back: 0, stopped: expect.any(String) });
+    await lj.stopBringingAllBack("preprod");
+    expect((await lj.held("preprod")).bringing).toBeUndefined();
+    expect((await lj.held("preprod")).bringStopped).toBeUndefined();
   });
 });

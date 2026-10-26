@@ -872,8 +872,9 @@ interface Schedule {
   mixes?: MixEntry[];
   /**
    * The pools the wallet started (chunk 34's 34d): kept here, in a record whose
-   * name says nothing new, never in one of their own (§3). For the hub (34f);
-   * no rule reads it, and a pool is read from only once discovery finds it.
+   * name says nothing new, never in one of their own (§3). For the hub (34f),
+   * and the start's two checks (recordLaunch); a pool is read from only once
+   * discovery finds it.
    */
   launches?: LaunchRecord[];
   /**
@@ -899,6 +900,13 @@ interface Schedule {
    * back, as a box found with none does (scheduleFound). It had none: its withdraw took it (wlj-2's notes).
    */
   recheck?: number;
+  /**
+   * Bring every box back now stopped by Stop: how many withdraws it sent, and its pool when it was one pool's. Gone, a
+   * run reads as over on every page that saw it go, so a Stop on another page or tab said Done there: this says Stopped
+   * (BringAllBack.tsx; 1.6.0's release review, L2). Sealed, as the run's own record is, so a worker stopped meanwhile
+   * says it too. Kept until it's asked again.
+   */
+  bringStopped?: { back: number; pool?: string };
 }
 
 /**
@@ -1304,13 +1312,47 @@ const tailWaits = (c: ChainRecord) => !c.ended && !!c.tail && !c.tail.over && !c
 const mixing = (c: ChainRecord) => !c.ended && !tailWaits(c);
 
 /**
+ * Whether chain `c`'s collateral's mix may be built again at `now` (tailOf): its chain no longer being sent (a lock cut
+ * it, giveme.my refused it, a box it drew went), its collateral's deposit sent and its mix not, within TAIL_TRIES builds
+ * and TAIL_KEEP_MS of that deposit going in (or of its chain's end, before that was known). Only the last such chain of
+ * a session is built again (tailBoxes).
+ */
+const tailBuildable = (c: ChainRecord, now: number) =>
+  !!c.tail &&
+  !c.tail.over &&
+  !!c.ended &&
+  !c.tail.scheduled &&
+  c.sent >= c.total - 2 &&
+  c.tail.tries < TAIL_TRIES &&
+  now - (c.tail.landed ?? c.ended) <= TAIL_KEEP_MS;
+
+/**
+ * The collateral's boxes, by `txhash#index`, that a session's collateral's mix will spend at `now`: one whose mix waits
+ * for giveme.my, its chain still being sent (tailWaits), or one its session's return may build again (tailBuildable),
+ * the last chain of each session's with a tail not over, as tailOf takes it. Bring every box back now leaves them to
+ * those mixes (1.6.0's release review, the review's questions).
+ */
+function tailBoxes(s: Schedule, now: number): Set<string> {
+  const last = new Map<number, ChainRecord>();
+  for (const c of s.chains) if (c.session !== undefined && c.tail && !c.tail.over) last.set(c.session, c);
+  const left = s.chains.filter((c) => tailWaits(c) || (c.session !== undefined && last.get(c.session) === c && tailBuildable(c, now)));
+  return new Set(left.map((c) => ref(c.tail!.box)));
+}
+
+/**
  * Whether chain `c` is all sent and its boxes may not all be in their pools yet, at `now`: a chain ends at its last
  * submit (pumpChain), with up to its window still in the mempool, and a pool read lists the tip alone. Until it's known
  * in (ChainRecord `landed`: landedBy, landedDeposit), LANDING_MS at most. Bring every box back now doesn't end
- * meanwhile, and no run drops its boxes' due times (1.6.0's release review, 321-lj-worker#0).
+ * meanwhile, and no run drops its boxes' due times (1.6.0's release review, 321-lj-worker#0). So too one whose
+ * collateral's mix alone waits (tailWaits), LANDING_MS from when what it sent before was first known in a block, as
+ * tx_status said (Tail `landed`): the listing, another of Koios's backends, may not show those boxes yet, and the
+ * withdraws don't wait for that chain (1.6.0's release review, R3-6). Never known in meanwhile, its tail's leaf not made
+ * yet (landedBy): it holds the whole LANDING_MS, as a chain all sent whose last box no read lists does.
  */
 const mayLand = (c: ChainRecord, now: number) =>
-  !!c.done && !c.landed && c.ended !== undefined && now - c.ended < LANDING_MS && makers(c).length > 0;
+  ((!!c.done && c.ended !== undefined && now - c.ended < LANDING_MS) || (tailWaits(c) && now - c.tail!.landed! < LANDING_MS)) &&
+  !c.landed &&
+  makers(c).length > 0;
 
 /**
  * Whether a pool read that lists `listed`, the wallet's boxes, spent or not, finds chain `c` in at `now`, one being sent
@@ -1967,6 +2009,20 @@ const fromPublic = (boxes: OutRef[], s: Schedule) => boxes.filter((b) => account
 const fromAccount = (boxes: OutRef[], s: Schedule, account: number) => boxes.filter((b) => accountOf(originOf(b, s)) === account);
 
 /**
+ * `boxes`, in backOrder's order, as the escape hatch takes one, paid from the private balance or from `active`, the
+ * account on screen: that account's own and those no public account put in first, then another account's, the lowest
+ * first (status's `otherAccounts`). Paid for from here, another account's box ties the two accounts, so it's taken only
+ * where nothing else is, and its question names that account then (1.6.0's release review, R3-3).
+ */
+function hatchOrder(boxes: OutRef[], s: Schedule, active: number): OutRef[] {
+  const rank = (b: OutRef) => {
+    const account = accountOf(originOf(b, s));
+    return account === undefined || account === active ? 0 : 1 + account;
+  };
+  return [...boxes].sort((a, b) => rank(a) - rank(b));
+}
+
+/**
  * The public account whose deposit put box `b` where it is, when one did and no mix has moved it since: a public
  * Bootstrap's box, a 1.5.0 public seed's whose record the update still found, a public mix's cut short at its
  * deposit; after a restore, a deposit Koios said spent that account's UTxO. The deposit spent the account and made the
@@ -2049,6 +2105,7 @@ const empty = (s: Schedule) =>
   !s.launches?.length &&
   !s.copies?.length &&
   !s.bringing &&
+  !s.bringStopped &&
   !Object.keys(s.counted ?? {}).length &&
   s.recheck === undefined;
 
@@ -2154,6 +2211,15 @@ function countBack(s: Schedule, p: string, box: OutRef | undefined, bootstrap = 
 }
 
 /**
+ * The wallet's boxes of `owned` in pool `p` that a Bootstrap may hold: never one a withdraw of Bring every box back now
+ * went for, counted back as it went (Schedule `counted`). A node may drop that withdraw, the box free again two hours
+ * on: held by count, it stood in for a box its Bootstrap still has out, which came back by itself counted against
+ * nothing, and the Bootstrap never closed, holding another box of the wallet's for good. Free, it comes back by itself,
+ * counted once (1.6.0's release review, R3-5).
+ */
+const holdable = (s: Schedule, owned: OutRef[], p: string) => inPool(owned, p).filter((b) => s.counted?.[ref(b)] === undefined);
+
+/**
  * Which open Bootstrap holds box `b` (its MixEntry `id`), as a read that lists `owned`, the wallet's boxes, finds it:
  * the one whose deposit put it there; else, a box someone else's mix moved, the oldest whose deposit went in (`found`,
  * or a box of it there now) with more boxes out than are still where it put them, whose box that was, as bootstrapOf
@@ -2164,7 +2230,8 @@ function countBack(s: Schedule, p: string, box: OutRef | undefined, bootstrap = 
 function holderOf(s: Schedule, owned: OutRef[], b: OutRef): string | undefined {
   const p = poolOf(b);
   const holding = openIn(s, p, true).filter((e) => !e.released);
-  const mine = inPool(owned, p);
+  // As bootstrapOf counts them: a box counted back already is none of a Bootstrap's still out (holdable).
+  const mine = holdable(s, owned, p);
   const there = (e: MixEntry) => mine.filter((x) => x.txHash === depositOf(s, e)).length;
   return (holding.find((e) => depositOf(s, e) === b.txHash) ?? holding.find((e) => (e.found || there(e) > 0) && outIn(e, p) > there(e)))?.id;
 }
@@ -2242,7 +2309,7 @@ const depositOf = (s: Schedule, e: MixEntry) => e.deposit ?? s.chains.find((c) =
  * once it lands (1.6.0's release review, 316#0). None comes back by itself:
  * it gets no due time, isn't counted as not mixed yet, and isn't taken to mix
  * again. Each comes back by hand, and counts against the Bootstrap that held
- * it (holderOf, countBack).
+ * it (holderOf, countBack). Never one counted back already (holdable).
  */
 function bootstrapOf(s: Schedule, owned: OutRef[]): OutRef[] {
   const holding = (s.mixes ?? []).filter((e) => e.bootstrap && !e.released);
@@ -2252,7 +2319,7 @@ function bootstrapOf(s: Schedule, owned: OutRef[]): OutRef[] {
   const held: OutRef[] = [];
   for (const p of new Set(owned.map(poolOf))) {
     const wanted = holding.reduce((n, e) => n + outIn(e, p), 0);
-    const mine = inPool(owned, p);
+    const mine = holdable(s, owned, p);
     const there = (e: MixEntry) => mine.filter((b) => b.txHash === depositOf(s, e)).length;
     const moved = holding.filter((e) => e.found || there(e) > 0).reduce((n, e) => n + Math.max(0, outIn(e, p) - there(e)), 0);
     const order = [...mine.filter((b) => deposits.has(b.txHash)), ...mine.filter((b) => !deposits.has(b.txHash) && !known(b)).slice(0, moved)];
@@ -2378,6 +2445,18 @@ const atThreeOf = (way: Way, count: (w: LovejoinWidth) => number): { atThree?: n
  */
 const narrower = (e: unknown) =>
   !(e instanceof KoiosError || e instanceof WalletLocked || e instanceof StalePool || e instanceof ChainGone || isTrap(e));
+
+/**
+ * A catch that takes any failure for `answer`, as it did, but a trap: WebAssembly that trapped is broken for good, so
+ * it's handed on to where the wallet locks (sw.ts answerUi, runs.ts, as runs.ts' own unlessTrap does), never read on
+ * from (1.6.0's release review, 314-wasm#0, L3).
+ */
+const unlessTrap =
+  <T>(answer: T) =>
+  (e: unknown): T => {
+    if (isTrap(e)) throw e;
+    return answer;
+  };
 
 /**
  * Whether WebAssembly's evaluator takes UTxO `u` (core's eval::refusal): no reference script on it, and an inline datum,
@@ -2638,11 +2717,13 @@ export class LovejoinService {
     network: NetworkName,
     advance = false,
   ): Promise<{ total: number; sent: number; stopped?: string; maybeSent?: true; txs?: LovejoinChainTx[] } | null> {
-    if (advance) await this.pumpPublic(network, 0).catch(() => undefined);
+    // A send that failed is said where the mix stopped, and a look that failed looks again next time: the page reads on.
+    // Never past a trap (unlessTrap; 1.6.0's release review, L3).
+    if (advance) await this.pumpPublic(network, 0).catch(unlessTrap(undefined));
     let s = await this.sendingOf(network);
     // Stopped at a transaction that may have gone through: looked for first, now and then, and said as it now stands.
     if (s?.maybe !== undefined && this.lookDue(network)) {
-      await this.publicUnsettled(network).catch(() => undefined);
+      await this.publicUnsettled(network).catch(unlessTrap(undefined));
       s = await this.sendingOf(network);
     }
     const maybe = (m: unknown) => (m !== undefined ? { maybeSent: true as const } : {});
@@ -2662,7 +2743,7 @@ export class LovejoinService {
     const lastOf = async () => (await this.read(network)).chains.filter((c) => c.session === undefined).at(-1);
     let last = await lastOf();
     if (last?.maybe && this.lookDue(network)) {
-      await this.publicUnsettled(network).catch(() => undefined);
+      await this.publicUnsettled(network).catch(unlessTrap(undefined));
       last = await lastOf();
     }
     return last?.stopped ? { total: last.total, sent: last.sent, stopped: last.stopped, ...maybe(last.maybe) } : null;
@@ -2726,7 +2807,8 @@ export class LovejoinService {
     const found = new Map<string, Pick<Watching, "feed" | "pools">>();
     if (ask.length) {
       const chains = await this.read(network).then((s) => s.chains, () => undefined);
-      const set = chains?.some((c) => c.pools || c.tail) ? await this.readSet(network, true).catch(() => [] as LovejoinPool[]) : [];
+      // A read that fails names each pool by its id, below; a trap is handed on (L3).
+      const set = chains?.some((c) => c.pools || c.tail) ? await this.readSet(network, true).catch(unlessTrap([] as LovejoinPool[])) : [];
       for (const h of ask) {
         const c = chains?.find((r) => r.id === h || makers(r).includes(h));
         if (!chains || !c) {
@@ -2856,15 +2938,19 @@ export class LovejoinService {
    */
   async mixBoxes(network: NetworkName): Promise<string[]> {
     if (!this.available(network)) return [];
-    // Discovery's kept pools, asking nobody, as Activity's comment says (1.6.0's release review, PRIV-4).
-    return (await this.readSet(network, true).catch(() => [this.classic(network)])).map((p) => p.mixBox);
+    // Discovery's kept pools, asking nobody, as Activity's comment says (1.6.0's release review, PRIV-4). The classic
+    // pool's where the read fails, never past a trap (L3).
+    return (await this.readSet(network, true).catch(unlessTrap([this.classic(network)]))).map((p) => p.mixBox);
   }
 
-  /** `pools` as the private index or Koios lists them (a read), by pool, and what the wallet's sent transactions spend. */
+  /**
+   * `pools` as the private index or Koios lists them (a read), by pool, and what the wallet's sent transactions spend:
+   * read on the wallet's own clock, as the withdraws and chains write them (1.6.0's release review, L4).
+   */
   private async listing(network: NetworkName, pools: LovejoinPool[]): Promise<{ rows: Map<string, KoiosUtxo[]>; spent: Set<string> }> {
     if (!pools.length) throw new Error(t("lj.notOnNetwork"));
-    const { wallet, session } = this.deps;
-    const [rows, spent] = await Promise.all([this.poolRows(network, pools), wallet.withKeys(() => spentSet(session))]);
+    const { wallet, session, now } = this.deps;
+    const [rows, spent] = await Promise.all([this.poolRows(network, pools), wallet.withKeys(() => spentSet(session, now()))]);
     return { rows, spent };
   }
 
@@ -3802,27 +3888,40 @@ export class LovejoinService {
    * Nor one under the network's floor (the owner, 2026-10-23): the box mixes with other people's, so it waits for the
    * crowd a mix waits for. Its mix draws two boxes that aren't the wallet's, nor what another of its chains will
    * spend (`owner`'s own aside, built again), so one with fewer is none either. Read as every read is (split), on
-   * every network: a read that fails leaves the collateral out rather than the return.
+   * every network: a read that fails leaves the collateral out rather than the return. A trap is handed on: the build
+   * after it would go on on the broken instance (1.6.0's release review, L3).
    */
   async collateralPool(network: NetworkName, params: unknown, owner?: string): Promise<CollateralPool | undefined> {
     if (!this.available(network)) return undefined;
     const pools = await this.readSet(network, true);
     const pool = pools.find((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
     if (!pool || this.usableNow(network, pool, params)) return undefined;
-    const split = await this.split(network, owner, undefined, pool).catch(() => undefined);
+    const split = await this.split(network, owner, undefined, pool).catch(unlessTrap(undefined));
     if (!split || this.floorShort(network, split.others.length)) return undefined;
     if (free(split.others, split.reserved).length < TAIL_DRAWS) return undefined;
     return { pool, rows: this.real(split) };
   }
 
   /**
-   * Whether the 5 ₳ pool collateralPool reads is shown, as discovery last kept the pools, asking nobody: a swap's quote
-   * as the user types, for its form's Max (sessions.ts quote; 1.6.0's release review, 323-worker#0). Whether it takes
-   * the collateral now, its floor and its free boxes, is collateralPool's, at Review.
+   * Whether the 5 ₳ pool collateralPool reads takes a session's collateral, as the wallet last read it, asking nobody:
+   * a swap's quote as the user types, for its form's Max, and Stop's dialog (sessions.ts quote and stopCost; 1.6.0's
+   * release review, 323-worker#0, R3-11, L1). By collateralPool's rule, as the Mix form's tailReserveOf keeps it: "no"
+   * where none is shown, it took no new box when last measured (usableNow), the data layer's last count of its boxes
+   * is under the network's floor (everyone's boxes, so fewer others still), or a pool read within POOL_ROOM_MS has too
+   * few others or too few free for its mix; "yes" where that read has enough of both; "maybe" where nothing read lately
+   * says. Whether it takes it at Review is collateralPool's, read then.
    */
-  async collateralPoolShown(network: NetworkName): Promise<boolean> {
-    if (!this.available(network)) return false;
-    return (await this.readSet(network, true)).some((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
+  async collateralPoolTakes(network: NetworkName): Promise<"yes" | "no" | "maybe"> {
+    if (!this.available(network)) return "no";
+    const pool = (await this.readSet(network, true)).find((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
+    if (!pool || this.usables.get(`${network}:${pool.id}`)?.why) return "no";
+    const floor = NETWORKS[network].lovejoin?.poolFloor ?? 0;
+    const crowd = floor ? (await this.deps.facts?.(network).catch(() => undefined))?.crowds?.get(pool.id) : undefined;
+    if (crowd && crowd.boxes < floor) return "no";
+    const kept = this.roomsRead.get(network);
+    const room = kept && this.deps.now() - kept.at < POOL_ROOM_MS ? kept.rooms.get(pool.id) : undefined;
+    if (!room) return "maybe";
+    return room.others >= floor && room.free >= TAIL_DRAWS ? "yes" : "no";
   }
 
   /**
@@ -3831,13 +3930,14 @@ export class LovejoinService {
    * again (tailChain) for TAIL_KEEP_MS after its deposit went in, and TAIL_TRIES builds in all: past either it's
    * over, and its box waits, not mixed yet, for Mix my boxes again. With the id of the chain whose record holds it.
    * A chain a lock cut is marked so first (cuts), whatever page asked before: never taken for one still being sent.
+   * Bring every box back now leaves its box to it by the same rule (tailBuildable, tailBoxes).
    */
   async tailOf(network: NetworkName, index: number): Promise<{ id: string; tail: Tail; ended: number } | undefined> {
     if (!this.available(network)) return undefined;
     await this.cuts(network);
     const c = (await this.read(network)).chains.filter((r) => r.session === index && r.tail && !r.tail.over).at(-1);
     if (!c?.tail || !c.ended || c.tail.scheduled || c.sent < c.total - 2) return undefined;
-    if (c.tail.tries >= TAIL_TRIES || this.deps.now() - (c.tail.landed ?? c.ended) > TAIL_KEEP_MS) {
+    if (!tailBuildable(c, this.deps.now())) {
       await this.tailOver(network, c.id);
       return undefined;
     }
@@ -3878,9 +3978,10 @@ export class LovejoinService {
       // In, and known so from now if not before (its day runs from then). A listing behind the feed or tx_status may not
       // show its box yet: taken for moved only once one has had LANDING_MS to, as a chain's boxes are (mayLand), or at
       // once where a send of the wallet's own spent it (Mix my boxes again, Bring one back now). Sooner, the return
-      // would sweep what pays for its mix (323-worker#5).
+      // would sweep what pays for its mix (323-worker#5). The marks read on the wallet's own clock, as they're written
+      // (1.6.0's release review, L4).
       const landed = await this.tailLanded(network, id);
-      const ours = (await this.deps.wallet.withKeys(() => spentSet(this.deps.session))).has(ref(tail.box));
+      const ours = (await this.deps.wallet.withKeys(() => spentSet(this.deps.session, this.deps.now()))).has(ref(tail.box));
       if (!ours && this.deps.now() - landed < LANDING_MS) return "unlisted";
       await this.tailOver(network, id);
       return undefined;
@@ -4374,11 +4475,12 @@ export class LovejoinService {
     const { now } = this.deps;
     // One Send at a time on a network, and never while the last mix from the account is still being sent: its
     // progress stays its own (independent review L30).
-    const { chain, bootstrap } = await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
+    const { chain, bootstrap, boxes } = await this.inTurn(`public.${network}`, () => this.publicStart(network, txHash));
     await this.deps.alarm?.start();
     // The first window now; the Lovejoin page and the alarm send the rest as blocks make room.
     await this.pumpPublic(network, 0);
     // A Bootstrap says so: its boxes are held, and Home's banner mustn't call them on their way back (318-worker#0).
+    // And how many, so one box isn't called them (1.6.0's review of the fixes).
     const pending: PendingTx = {
       kind: "lovejoin-mix",
       network,
@@ -4387,21 +4489,34 @@ export class LovejoinService {
       confirmations: null,
       chain,
       ...(bootstrap ? { bootstrap: true as const } : {}),
+      boxes,
     };
     await this.deps.wallet.withKeys(() => this.deps.session.remove(SESSION_BALANCES_PREFIX + network));
-    // On its pool's feed, as its chain is (watchOf): a token pool's mix never shows in the classic pool's (DATA-1).
-    await watchSent(this.deps, pending, { watch: (await this.watchOf(network, [txHash])).get(txHash) });
+    // On its pool's feed, as its chain is (watchOf): a token pool's mix never shows in the classic pool's (DATA-1). A
+    // trap in the read of its pools is handed on once Home's watch is kept, on the classic pool's feed: the mix went
+    // (1.6.0's release review, L3).
+    let trap: unknown;
+    const watch = await this.watchOf(network, [txHash]).then(
+      (how) => how.get(txHash),
+      (e: unknown) => {
+        if (!isTrap(e)) throw e;
+        trap = e;
+        return undefined;
+      },
+    );
+    await watchSent(this.deps, pending, { watch });
+    if (trap !== undefined) throw trap;
     return pending;
   }
 
   /**
    * Records the mix kept for Send (`txHash`), reserves what it spends, and puts its progress where it's sent from.
-   * Returns what Home's watch names it by, and whether it's a Bootstrap: its kept review goes here.
+   * Returns what Home's watch names it by, whether it's a Bootstrap, and its boxes: its kept review goes here.
    */
   private async publicStart(
     network: NetworkName,
     txHash: string,
-  ): Promise<{ chain: NonNullable<PendingTx["chain"]>; bootstrap: boolean }> {
+  ): Promise<{ chain: NonNullable<PendingTx["chain"]>; bootstrap: boolean; boxes: number }> {
     const { wallet, session, now } = this.deps;
     const built = await wallet.withKeys(() => session.get<KeptPublic>(SESSION_LOVEJOIN_PUBLIC));
     if (!built || built.txHash !== txHash || built.network !== network) throw new Error(NOT_READY());
@@ -4457,7 +4572,7 @@ export class LovejoinService {
         throw e;
       }
     });
-    return { chain: { first: built.chain[0]!.txHash, total: built.chain.length }, bootstrap: !!built.bootstrap };
+    return { chain: { first: built.chain[0]!.txHash, total: built.chain.length }, bootstrap: !!built.bootstrap, boxes: built.boxes };
   }
 
   /**
@@ -4979,11 +5094,12 @@ export class LovejoinService {
    * and a UTxO it spends is spent now, it can't go anymore, whether it did or
    * not ("spent"); unseen as long as the wallet holds what it spends
    * (SPENT_KEEP_MS), it never went ("never"). Undefined while it's still
-   * unsettled, or Koios didn't answer: looked for again next time.
+   * unsettled, or Koios didn't answer: looked for again next time. A trap in the read of its pools for the feed it's
+   * looked for on (watchOf) is handed on (1.6.0's release review, L3).
    */
   private async lookFor(network: NetworkName, m: KeptMaybe): Promise<"in" | "spent" | "never" | undefined> {
     const koios = this.deps.koios(network);
-    const seen = await this.onChain(network, [m.txHash], [m.from ?? m.at]).then((on) => (on.has(m.txHash) ? 1 : null), () => undefined);
+    const seen = await this.onChain(network, [m.txHash], [m.from ?? m.at]).then((on) => (on.has(m.txHash) ? 1 : null), unlessTrap(undefined));
     if (seen === undefined) return undefined;
     if (seen !== null) return "in";
     const rows = (await koios.utxoInfo(m.inputs).catch(() => undefined)) as Array<KoiosUtxo & { is_spent?: boolean }> | undefined;
@@ -5700,9 +5816,12 @@ export class LovejoinService {
   }
 
   /**
-   * Keeps, sealed, that the wallet started pool `launch.id` (chunk 34's 34d):
-   * for the hub, never read by a rule. The pool itself is read from once
-   * discovery finds it, as every wallet's is.
+   * Keeps, sealed, that the wallet started pool `launch.id` (chunk 34's 34d), with its values and the hash its review
+   * showed: for the hub, and for two checks in lovejoin-launch.ts. A start of the same values before a look finds this
+   * one says so on its review (startedBefore), and Send asked again for a review whose start went without the
+   * certificate says it went already (submit's `reviewed`; 1.6.0's release review, 318-worker#1, R3-29). Pruning these,
+   * or dropping `box` or `reviewed`, turns both off. The pool itself is read from once discovery finds it, as every
+   * wallet's is.
    */
   async recordLaunch(network: NetworkName, launch: Omit<LaunchRecord, "at">): Promise<void> {
     const at = this.deps.now();
@@ -5879,6 +5998,7 @@ export class LovejoinService {
       ...(classicHeld ? { bootstrap: classicHeld } : {}),
       ...(pools.length ? { pools } : {}),
       ...(schedule.bringing ? { bringing: bringingView(schedule.bringing) } : {}),
+      ...(schedule.bringStopped ? { bringStopped: { ...schedule.bringStopped } } : {}),
     };
   }
 
@@ -6195,7 +6315,10 @@ export class LovejoinService {
       // Only a box whose making is known now: a record accounts for it, or Koios said a mix made it. Never one
       // Koios said a deposit made, by an answer another lookup kept after the boxes were sorted out (mixedOf).
       const after = await this.read(network);
-      [chosen] = backOrder(free(of(back), reserved).filter(mixedOf(after)), rows, ownLeaves(after), least, this.deps.now());
+      const order = backOrder(free(of(back), reserved).filter(mixedOf(after)), rows, ownLeaves(after), least, this.deps.now());
+      // Paid for (the escape hatch): never another account's box where the account on screen's own, or one no public
+      // account put in, is there to take (hatchOrder, R3-3). A box paying its own way ties no account to another.
+      [chosen] = paid ? hatchOrder(order, after, await this.deps.wallet.withKeys((keys) => keys.account)) : order;
       if (!chosen) {
         // Mix my boxes again refuses while Koios hasn't said of a box (againBoxes): it's never "first" then. Those
         // known not to be mixed are said apart from those Koios hasn't said of, which may be (M14).
@@ -6258,17 +6381,25 @@ export class LovejoinService {
         return;
       }
       s.bringing = { at: this.deps.now(), back: 0, ...(pool !== undefined ? { pool } : {}) };
+      // A new run: the last one's Stop is said no more (Schedule `bringStopped`).
+      delete s.bringStopped;
     });
     await this.deps.alarm?.start().catch(() => undefined);
   }
 
-  /** Stops Bring every box back now, or forgets that it stopped: the boxes left come back as before, each after its own wait. */
+  /**
+   * Stops Bring every box back now, or forgets that it stopped: the boxes left come back as before, each after its own
+   * wait. One going is marked stopped, with how many it sent, so every page that saw it go says Stopped, not Done
+   * (Schedule `bringStopped`; 1.6.0's release review, L2).
+   */
   async stopBringingAllBack(network: NetworkName): Promise<void> {
     if (!this.available(network)) return;
     await this.update(network, (s) => {
       // A withdraw it sent that a node dropped leaves its box with no due time, held as spent until SPENT_KEEP_MS on:
       // the pools are read once then, so it gets one back (Schedule `recheck`; 1.6.0's release review, wlj-2's notes).
       if (s.bringing?.back) s.recheck = this.deps.now() + SPENT_KEEP_MS;
+      const b = s.bringing;
+      if (b && !b.stopped) s.bringStopped = { back: b.back, ...(b.pool !== undefined ? { pool: b.pool } : {}) };
       delete s.bringing;
     });
   }
@@ -6282,7 +6413,8 @@ export class LovejoinService {
    * waits as Bring one back now does: while a chain is being sent or mixes boxes again (not one whose collateral's mix
    * alone waits for giveme.my: tailWaits), while a withdraw that may have gone through is looked for (sent again at
    * once, once due), and while a payment may still go through; and leaves a box a chain or a review of the wallet's
-   * will spend to that, until it's spent or lapses. Each wait is said in a word (Bringing `waiting`, 321-lj-worker#1).
+   * will spend to that, until it's spent or lapses, and a session's collateral's box to its mix while that mix waits or
+   * may be built again, a day at most (tailBoxes). Each wait is said in a word (Bringing `waiting`, 321-lj-worker#1).
    * A box that doesn't go is passed over and its reason kept; a run that sent nothing counts towards BRING_FAILED_RUNS,
    * a wait never. A lock stops the run, and the unlock's goes on. Over once a run finds none of those boxes left, and no
    * chain of the wallet's all sent may still be landing (mayLand, 321-lj-worker#0): its pools' due times and counts go
@@ -6344,17 +6476,21 @@ export class LovejoinService {
       });
     }
     const rows = new Map(reads.flatMap((r) => r.rows).map((u) => [outpoint(u), u]));
-    // What was there when it was asked, and of that, what no chain or review of the wallet's will spend.
+    // What was there when it was asked, and of that, what no chain or review of the wallet's will spend. Nor a session's
+    // collateral's box, left to its mix: while that mix waits for giveme.my, and once a lock or a refusal cut its chain
+    // while its return may build the mix again (tailBoxes, as tailOf has it), a day at most. Brought back unmixed, it
+    // would tie the session's collateral's deposit to the private balance (private by default; 1.6.0's release review,
+    // the review's questions).
     const ours = inScope(owned).filter((b) => !madeSince(b, schedule, rows, asked.at));
-    const takes = free(ours, reserved);
+    const tails = tailBoxes(schedule, now());
+    const takes = free(ours, reserved).filter((b) => !tails.has(ref(b)));
     const held = new Set(bootstrapOf(schedule, owned).map(ref));
     // A box a mix built and kept for Send holds (or a chain stopped at a transaction that may have gone through) was
     // there too: it waits for that to be sent or lapse, said as left and why, an older run's reason gone, rather than
     // end without it. One that lapses leaves it to the next run; one sent spends it, and its boxes keep their waits
-    // (madeSince). A session's collateral's box alone, its mix waiting for giveme.my (tailWaits), is said apart: that
-    // may take a day, and goes whatever this does (x-scenarios-lj#1).
+    // (madeSince). A session's collateral's box alone, left to its mix, is said apart: that may take a day, and goes
+    // whatever this does (x-scenarios-lj#1).
     if (!takes.length && ours.length) {
-      const tails = new Set(schedule.chains.filter(tailWaits).map((c) => ref(c.tail!.box)));
       const collateral = ours.every((b) => tails.has(ref(b)));
       await this.bringSays(network, asked, (b) => {
         b.left = ours.length;
@@ -6659,13 +6795,16 @@ export class LovejoinService {
       // The private balance pays (the owner's call 36): one of its UTxOs of ADA alone goes in beside the box, with its
       // own proof under a one-time key, and comes back with it in one private UTxO, under giveme.my's collateral as any
       // Seedelf spend. Nothing locked or reserved; first one a box back from Lovejoin made, which ties no account; then
-      // one made private from no public account but the one whose deposit made the box, if one did: another's, beside
-      // the box, would tie the two accounts, which the wallet never picks for the user where it needn't (1.6.0's release
-      // review, x-privacy#0); then the smallest. WebAssembly takes the first that pays.
+      // one made private from no public account but the box's, where it's a public account's box: its deposit's (a
+      // Bootstrap's, a seed's), its mix's cut short, or its mix's leaf, as status's `fromPublic` has it. Another's,
+      // beside the box, would tie the two accounts, which the wallet never picks for the user where it needn't, and the
+      // questions say it avoids (1.6.0's release review, x-privacy#0, R3-2, R3-3); then the smallest. WebAssembly takes
+      // the first that pays. What its history ties (`ties`, below) is still the deposit's alone, as PRIV-3 has it.
       const { view, params, utxos, classes, returning, waiting } = await readContract(this.deps, network, known);
       const fromLovejoin = (u: KoiosUtxo) => (classes[outpoint(u)]?.origin === "lovejoin" ? 0 : 1);
-      const deposited = depositAccountOf(await this.read(network), box);
-      const another = (u: KoiosUtxo) => (deposited !== undefined && accountsIn(classes[outpoint(u)]).some((a) => a !== deposited) ? 1 : 0);
+      const schedule = await this.read(network);
+      const owner = depositAccountOf(schedule, box) ?? accountOf(originOf(box, schedule));
+      const another = (u: KoiosUtxo) => (owner !== undefined && accountsIn(classes[outpoint(u)]).some((a) => a !== owner) ? 1 : 0);
       const order = [...utxos].sort(
         (a, b) => fromLovejoin(a) - fromLovejoin(b) || another(a) - another(b) || Number(BigInt(a.value) - BigInt(b.value)),
       );
@@ -6774,9 +6913,15 @@ export class LovejoinService {
     }
     // Sent: what's left is best effort. A lock before its history is written
     // leaves it looked for, and settleWithdrawing writes it once it's seen.
+    // Each step goes whatever the one before did. A trap among them is handed on once they've all run, so the wallet
+    // locks with the withdraw kept as sent and its box counted back, never sent twice (1.6.0's release review, L3).
+    let trap: unknown;
+    const bestEffort = (e: unknown) => {
+      if (isTrap(e)) trap ??= e;
+    };
     // The box comes back into the private balance: the next reading reads that side again, and not the
     // account's (independent review M8), unless the account paid for it (stale).
-    await wallet.withKeys(() => stale(session, network, paid === true)).catch(() => undefined);
+    await wallet.withKeys(() => stale(session, network, paid === true)).catch(bestEffort);
     const pending: PendingTx = { kind: "lovejoin-withdraw", network, txHash: built.txHash, submittedAt: now(), confirmations: null };
     // A token pool's box brings its token back with its ADA. One the public account paid for paid no fee of its own.
     // One its way back ties to a public account is that account's money too (tiedOrigin, PRIV-3); one the private
@@ -6787,8 +6932,9 @@ export class LovejoinService {
       ...(built.token ? { tokens: [built.token] } : {}),
       ...(origin ? { origin } : tiedOrigin(built.txHash, ties)),
     };
-    await this.deps.activity?.sent(network, pending, back).catch(() => undefined);
-    await this.dropWithdrawing(network, built.txHash, false, true).catch(() => undefined);
+    await this.deps.activity?.sent(network, pending, back).catch(bestEffort);
+    await this.dropWithdrawing(network, built.txHash, false, true).catch(bestEffort);
+    if (trap !== undefined) throw trap;
     return pending;
   }
 
@@ -7051,6 +7197,15 @@ export class LovejoinService {
           }
         : {}),
       ...(typeof kept?.recheck === "number" ? { recheck: kept.recheck } : {}),
+      // Kept before a Stop was marked (L2): none. One that doesn't read as one is none too.
+      ...(record(kept?.bringStopped) && typeof kept!.bringStopped!.back === "number"
+        ? {
+            bringStopped: {
+              back: kept!.bringStopped!.back,
+              ...(typeof kept!.bringStopped!.pool === "string" ? { pool: kept!.bringStopped!.pool } : {}),
+            },
+          }
+        : {}),
     };
   }
 

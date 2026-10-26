@@ -17,7 +17,8 @@ import { Minswap } from "../src/background/minswap";
 import { SessionService } from "../src/background/sessions";
 import { t as tr } from "../src/i18n";
 import bundled from "../src/lovejoin-pools.json";
-import { maxAdaIn, wholeUnits } from "../src/ui/swap";
+import { NETWORKS } from "../src/networks";
+import { followMax, maxAdaIn, wholeUnits } from "../src/ui/swap";
 import { bech32 } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { loadTestWasm, minswapEstimate, ownedUtxos, sessionSwap, testBalances, vectors } from "./fakes";
@@ -107,8 +108,8 @@ function pooled(t: T, pools: PoolRef[] = [FIVE.ref]): LovejoinService {
   });
 }
 
-/** The sessions over `lj`, the one-time key's signature and the direct reserve's export stood in for. */
-function runner(t: T, lj: LovejoinService = pooled(t)): SessionService {
+/** The sessions over `lj`, the one-time key's signature and the direct reserve's export stood in for, and `over`'s. */
+function runner(t: T, lj: LovejoinService = pooled(t), over: Partial<ReturnType<typeof loadTestWasm>> = {}): SessionService {
   const wasm = loadTestWasm();
   return new SessionService({
     ...t.deps,
@@ -119,6 +120,7 @@ function runner(t: T, lj: LovejoinService = pooled(t)): SessionService {
         return JSON.stringify({ txCbor, txHash: txIdOf(Uint8Array.from(Buffer.from(txCbor, "hex"))) });
       },
       lovejoinDirectCollateralReserve: () => DIRECT,
+      ...over,
     } as typeof wasm,
     collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
     store: t.store,
@@ -287,5 +289,263 @@ describe("1.6.0's release review: the swap form's Max and the collateral's mix (
       expect(built.collateralReserve, `${pools.length} pools`).toBe(reserve ? reserve.toString() : undefined);
       expect(max).toBe((10n * ADA).toString());
     }
+  });
+});
+
+// Round 3b (fixer fx-reserve-1): the collateral's mix on the swap and site paths, the worker's half. R3-9, a funding the
+// private balance couldn't also pay the reserve for still says a 5 ₳ pool takes the collateral (`collateralPool`), as
+// its return mixes it where what's left pays; R3-10, a swap against the pools whose return comes back directly with its
+// token takes no reserve, since that return can't build the mix; R3-11, a quote's reserve decided by what the wallet
+// last read of the 5 ₳ pool, asking nobody, and named as a maybe where nothing read lately says; R3-12, the amount Max
+// set before any quote, followed down once a quote names the reserve; L1, Stop's dialog pricing its boxes as
+// WebAssembly's chain counts them, the reserve set aside first, and saying the collateral is mixed.
+describe("1.6.0's release review, round 3b: the collateral's mix on the swap and site paths (R3-9, R3-10, R3-11, R3-12, L1)", SLOW, () => {
+  /** MIN's unit: the recorded swap's token. */
+  const MIN_UNIT = minswapEstimate.ask.tokenOut;
+  /** The recorded swap routed against Danogo's pools: one pool, 0.1 ₳ its fee, no deposit, and Minswap's fee. */
+  const leg = minswapEstimate.estimate.paths[0]![0]!;
+  const DANOGO = {
+    ...minswapEstimate.estimate,
+    total_dex_fee: "100000",
+    deposits: "0",
+    aggregator_fee: "850000",
+    paths: [[{ ...leg, dex_fee: "100000", deposits: "0", protocol: "DanogoCLMMV1" }]],
+  };
+
+  it("keeps on a funding without the reserve that a 5 ₳ pool would take its collateral (R3-9)", async () => {
+    const quote = await runner(await wallet(ADA)).quote("preprod", minswapEstimate.ask);
+    const fund = BigInt(quote.fund.lovelace);
+    const paid = await runner(await wallet(fund + 5n * ADA + CHAIN + 3n * ADA)).outBuild("preprod", quote);
+    expect(paid).toMatchObject({ collateralReserve: CHAIN.toString(), collateralPool: true });
+    // Short of the reserve: funded without it, and still says the pool takes the collateral, which its return mixes
+    // where what's left pays for that.
+    const short = await runner(await wallet(fund + 5n * ADA + 2n * ADA + ADA / 2n)).outBuild("preprod", quote);
+    expect(short.collateralReserve).toBeUndefined();
+    expect(short.collateralPool).toBe(true);
+    // No 5 ₳ pool shown: neither.
+    const none = await wallet(1_000n * ADA);
+    const plain = await runner(none, pooled(none, [])).outBuild("preprod", quote);
+    expect(plain.collateralReserve).toBeUndefined();
+    expect(plain.collateralPool).toBeUndefined();
+    // A site's funding, and a top-up that puts a new collateral back, alike.
+    const site = await runner(await wallet(15n * ADA + 3n * ADA)).siteOutBuild("preprod", "https://example.org", (10n * ADA).toString(), []);
+    expect(site.collateralReserve).toBeUndefined();
+    expect(site.collateralPool).toBe(true);
+    const t = await wallet(8n * ADA + 3n * ADA);
+    await siteSession(t);
+    const topUp = await runner(t).topUpBuild("preprod", 0, (3n * ADA).toString(), []);
+    expect(topUp.collateralReserve).toBeUndefined();
+    expect(topUp.collateralPool).toBe(true);
+  });
+
+  it("takes no reserve for a swap against the pools whose return comes back directly with its token, nor names one (R3-10)", async () => {
+    const t = await wallet(1_000n * ADA);
+    t.minswap.estimate = DANOGO;
+    const sessions = runner(t);
+    const quote = await sessions.quote("preprod", minswapEstimate.ask);
+    expect(quote.againstPools).toBe(true);
+    // Its swap pays the session one output, MIN and all the ADA left: a return that comes back directly finds no UTxO of
+    // ADA alone there to pay for the collateral's mix, so none is kept aside or paid for.
+    expect(quote.collateralReserve).toBeUndefined();
+    const out = await sessions.outBuild("preprod", quote);
+    expect(out.collateralReserve).toBeUndefined();
+    expect(out.collateralPool).toBeUndefined();
+    expect(out.payments[0]!.lovelace).toBe(quote.fund.lovelace);
+    // Its MIN into a pool of its own: a chain, whose change pays for the mix, so the reserve, as any swap's.
+    const m = await wallet(1_000n * ADA);
+    m.minswap.estimate = DANOGO;
+    m.koios.addedToAccounts.push(...strangers(m, 20, MIN_POOL, 0x40, "4500000"));
+    const boxed = await runner(m, pooled(m, [FIVE.ref, MIN_POOL.ref])).outBuild("preprod", quote);
+    expect(boxed.lovejoin?.fund).toBeDefined();
+    expect(boxed.collateralReserve).toBe(CHAIN.toString());
+    // MIN sold for ADA against the pools: its fill is ADA alone, which pays for the mix.
+    const selling = await sessions.quote("preprod", { ...minswapEstimate.ask, tokenIn: MIN_UNIT, tokenOut: "lovelace", amount: "500" });
+    expect(selling.againstPools).toBe(true);
+    expect(selling.collateralReserve).toBe(CHAIN.toString());
+  });
+
+  it("names a quote's reserve by what the wallet last read of the 5 ₳ pool, asking nobody, a maybe where nothing read lately says (R3-11)", async () => {
+    const t = await wallet(40n * ADA);
+    // One of other people's boxes in it, where its collateral's mix draws two.
+    t.koios.addedToAccounts = t.koios.addedToAccounts.filter((u) => u.tx_hash !== "82".repeat(32));
+    const lj = pooled(t);
+    const sessions = runner(t, lj);
+    const quoted = async () => {
+      const before = t.koios.calls.length;
+      const quote = await sessions.quote("preprod", minswapEstimate.ask);
+      return { quote, calls: t.koios.calls.length - before };
+    };
+    // Nothing read of it yet: kept aside all the same, the private default, and named as what the mix may take.
+    const unread = await quoted();
+    expect(unread.quote.collateralReserve).toBe(CHAIN.toString());
+    expect(unread.quote.collateralMaybe).toBe(true);
+    // Read as a review reads it: one box free, so it takes no collateral, and nothing is kept aside for it.
+    await lj.rooms("preprod");
+    const read = await quoted();
+    expect(read.quote.collateralReserve).toBeUndefined();
+    expect(read.quote.collateralMaybe).toBeUndefined();
+    expect(BigInt(maxAdaIn("40000000", read.quote)) - BigInt(maxAdaIn("40000000", unread.quote))).toBe(CHAIN);
+    // Asking nobody: as many requests as the quote that knew nothing of it.
+    expect(read.calls).toBe(unread.calls);
+    // Two free, read again: kept aside, and named plainly.
+    t.koios.addedToAccounts.push(...strangers(t, 1, FIVE, 0x82));
+    t.clock.now += 6 * 60_000;
+    await t.wallet.touch();
+    await lj.rooms("preprod");
+    const two = await quoted();
+    expect(two.quote.collateralReserve).toBe(CHAIN.toString());
+    expect(two.quote.collateralMaybe).toBeUndefined();
+  });
+
+  it("names none where the data layer's last count of the 5 ₳ pool is under the network's floor (R3-11)", async () => {
+    const preprod = NETWORKS.preprod.lovejoin!;
+    const floor = preprod.poolFloor;
+    preprod.poolFloor = 3;
+    try {
+      const counted = async (boxes: number) => {
+        const t = await wallet(40n * ADA);
+        const lj = new LovejoinService({
+          ...t.deps,
+          collateral: () => new Collateral("https://www.giveme.my/preprod/collateral/", t.collateral.fetch),
+          store: t.store,
+          pools: async () => [FIVE.ref],
+          random: () => 0.5,
+          facts: async () => ({ launches: new Map(), crowds: new Map([[FIVE.id, { boxes, deposits: boxes, mixed: 0 }]]) }),
+        });
+        return runner(t, lj).quote("preprod", minswapEstimate.ask);
+      };
+      // Two boxes in it, everyone's, under the floor of three: it takes no collateral, so none is kept aside.
+      const under = await counted(2);
+      expect(under.collateralReserve).toBeUndefined();
+      expect(under.collateralMaybe).toBeUndefined();
+      // Five: no pool read lately says how many are other people's, or free, so kept aside, as a maybe.
+      expect(await counted(5)).toMatchObject({ collateralReserve: CHAIN.toString(), collateralMaybe: true });
+    } finally {
+      preprod.poolFloor = floor;
+    }
+  });
+
+  it("funds the amount Max set before any quote, followed down once the quote names the reserve (R3-12)", async () => {
+    const held = 24_500_000n;
+    const t = await wallet(held);
+    const sessions = runner(t);
+    // Pressed before any quote: Max on the usual costs, nothing kept aside for the mix: 11 ₳.
+    const first = wholeUnits(maxAdaIn(held.toString()), 6);
+    expect(first).toBe((11n * ADA).toString());
+    const quoted = await sessions.quote("preprod", { ...minswapEstimate.ask, amount: first });
+    expect(quoted.collateralReserve).toBe(CHAIN.toString());
+    // That quote's Max keeps the reserve aside, 10 ₳, and the amount Max set follows it down.
+    const max = wholeUnits(maxAdaIn(held.toString(), quoted), 6);
+    expect(max).toBe((10n * ADA).toString());
+    const amount = followMax(true, "lovelace", first, max) ?? first;
+    const built = await sessions.outBuild("preprod", await sessions.quote("preprod", { ...minswapEstimate.ask, amount }));
+    expect(built.collateralReserve).toBe(CHAIN.toString());
+    // Typed rather than set by Max, or a token's amount: as it is. Nor ever up.
+    expect(followMax(false, "lovelace", first, max)).toBeUndefined();
+    expect(followMax(true, MIN_UNIT, first, max)).toBeUndefined();
+    expect(followMax(true, "lovelace", max, first)).toBeUndefined();
+  });
+
+  it("prices Stop's boxes on what's left once its reserve is set aside, as WebAssembly's chain does, and says its collateral is mixed (L1)", async () => {
+    // What each box more takes through the classic pool one wave deep, and what the chain takes besides, as Stop prices it.
+    const priced = pooled(await wallet(ADA));
+    const one = BigInt((await priced.funding("preprod", 1)).lovelace);
+    const perBox = BigInt((await priced.funding("preprod", 2)).lovelace) - one;
+    const besides = one - perBox;
+    // Its approved funding pays for one box; with the reserve beside it, two.
+    const fund = besides + 2n * perBox - ADA;
+    const stopped = async (reserved: boolean, prefs: object = {}) => {
+      const t = await wallet(ADA);
+      await t.deps.preferences.set(prefs);
+      const out = "ab".repeat(32);
+      await t.store.set("sessions.preprod", {
+        next: 1,
+        sessions: [
+          {
+            index: 0,
+            ownStake: true,
+            createdAt: t.clock.now,
+            txs: [{ kind: "out", txHash: out, at: t.clock.now, confirmed: true }],
+            swap: { ...minswapEstimate.ask, amountOut: "906594100", minAmountOut: "902083681" },
+            auto: { approved: { minAmountOut: "902083681", fund: { lovelace: fund.toString(), tokens: [] } }, direct: false, lovejoin: { depth: 1, delay: "1-6" } },
+            ...(reserved ? { collateralReserve: true } : {}),
+          },
+        ],
+      });
+      const at = (tx_index: number, value: bigint) =>
+        ({ ...POOL[0]!, tx_hash: out, tx_index, address: sessionSwap.address, payment_cred: sessionSwap.keyHash, value: value.toString(), datum_hash: null, inline_datum: null, asset_list: [] }) as KoiosUtxo;
+      t.koios.addedToAccounts.push(at(0, fund + CHAIN), at(1, 5n * ADA));
+      const sessions = runner(t);
+      await sessions.list("preprod", true);
+      return { sessions, cost: (await sessions.stopCost("preprod", 0))! };
+    };
+    const reserved = await stopped(true);
+    expect(reserved.cost).toMatchObject({ boxes: 1, collateralMix: true });
+    // The chain WebAssembly builds for it: one box, the collateral mixed first, out of its reserve.
+    const back = await reserved.sessions.backBuild("preprod", 0);
+    expect(back.lovejoin?.boxes).toBe(1);
+    expect(back.collateralTail).toBeDefined();
+    // Funded without the reserve, the same ADA there: the chain counts its boxes on all of it, the collateral still mixed.
+    expect((await stopped(false)).cost).toMatchObject({ boxes: 2, collateralMix: true });
+    // Settings keeps the collateral out of the pool: nothing set aside, nothing said.
+    const off = (await stopped(true, { lovejoinCollateral: false })).cost;
+    expect(off.boxes).toBe(2);
+    expect(off.collateralMix).toBeUndefined();
+  });
+});
+
+describe("1.6.0's review of the fixes, R3-8: a funding of one transaction the reserve alone takes past what one spends", SLOW, () => {
+  /** The wallet, its private balance `n` UTxOs of `lovelace` each, as Lovejoin's boxes come back: one UTxO each. */
+  async function spread(n: number, lovelace: bigint): Promise<T> {
+    const t = testBalances({ owned: false });
+    await t.wallet.create(PHRASE, PASSWORD);
+    t.koios.evaluation = AGREES;
+    t.collateral.answer = { status: 200, body: { witness: "a1008182" } };
+    await t.deps.preferences.set({ lovejoinDepth: 1 });
+    t.koios.added.push(
+      ...Array.from({ length: n }, (_, i) => ({ ...ownedUtxos[0]!, tx_hash: (0x200 + i).toString(16).padStart(64, "0"), tx_index: 0, value: lovelace.toString() }) as KoiosUtxo),
+    );
+    t.koios.addedToAccounts.push(...POOL, ...strangers(t, 2));
+    return t;
+  }
+
+  it("tops a site's session up without its direct reserve, as with too little ADA for it, where the reserve takes more UTxOs than one transaction spends", async () => {
+    const t = await spread(40, 1_500_000n);
+    await siteSession(t);
+    // 24 ₳ and the new 5 ₳ take 20 of these UTxOs; the 2.8 ₳ reserve too, 23: past one transaction's computation.
+    const built = await runner(t).topUpBuild("preprod", 0, (24n * ADA).toString(), []);
+    expect(built.collateralReserve).toBeUndefined();
+    expect(built.payments.map((p) => p.lovelace)).toEqual([(24n * ADA).toString(), "5000000"]);
+    // Its note still says a 5 ₳ pool takes the new collateral: it's mixed at the return if what's left pays (R3-9).
+    expect(built.collateralPool).toBe(true);
+  });
+
+  it("goes without it too where the funding with it is past one transaction's size, core's words read as core writes them", async () => {
+    const t = await wallet(40n * ADA);
+    await siteSession(t);
+    const wasm = loadTestWasm();
+    const withReserve = (3n * ADA + BigInt(DIRECT)).toString();
+    // Core's TooLarge (build.rs), both of its sentences, for the funding that carries the reserve: stood in for, since
+    // the reserve adds ADA, not tokens, and a real one needs a transaction of 16 KiB.
+    for (const said of [
+      "This transaction would be 16590 bytes, over the network's limit of 16384. Send fewer tokens, or pay fewer recipients, at once",
+      "One output would hold 5012 bytes of tokens, over the network's limit of 5000. Send fewer tokens at once",
+    ]) {
+      const sessions = runner(t, pooled(t), {
+        buildWithdraw: (key: Parameters<typeof wasm.buildWithdraw>[0], request: string) => {
+          const { payments } = JSON.parse(request) as { payments: Array<{ lovelace: string }> };
+          if (payments[0]!.lovelace === withReserve) throw new Error(said);
+          return wasm.buildWithdraw(key, request);
+        },
+      });
+      const built = await sessions.topUpBuild("preprod", 0, (3n * ADA).toString(), []);
+      expect(built.collateralReserve).toBeUndefined();
+      expect(built.payments.map((p) => p.lovelace)).toEqual([(3n * ADA).toString(), "5000000"]);
+    }
+  });
+
+  it("still says a Bootstrap past one transaction's UTxOs in its own words: it pays no reserve to go without", async () => {
+    const t = await spread(40, 1_500_000n);
+    await expect(runner(t).mixOutBuild("preprod", 3, { bootstrap: true })).rejects.toThrow(tr("sess.bootstrapTooMany"));
   });
 });

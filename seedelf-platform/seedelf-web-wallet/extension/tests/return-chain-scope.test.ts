@@ -192,8 +192,9 @@ describe("a return's chain through Lovejoin kept for Send (independent review L1
     // funding change a chain's last transaction merges into.
     const kept = (await t.session.get<{ chain: Array<{ txCbor: string }> }>(SESSION_BACK))!;
     const [taken] = txInputs(Buffer.from(kept.chain[0]!.txCbor, "hex"));
+    // Spent now, on the wallet's own clock, as every send writes its marks (1.6.0's release review, L4).
     const spent = (await t.session.get<Record<string, number>>(SESSION_SPENT)) ?? {};
-    await t.session.set(SESSION_SPENT, { ...spent, [taken!]: Date.now() });
+    await t.session.set(SESSION_SPENT, { ...spent, [taken!]: t.clock.now });
     await expect(sessions.backSubmit("preprod", review.txHash)).rejects.toThrow(
       "Something this return spends went out in another transaction since you reviewed it. Review it again.",
     );
