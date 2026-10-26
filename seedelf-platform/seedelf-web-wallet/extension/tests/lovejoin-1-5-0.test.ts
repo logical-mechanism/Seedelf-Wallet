@@ -753,9 +753,10 @@ describe("1.5.0's Lovejoin, through token pools (chunk 34's gate)", SLOW, () => 
     it("finishes a 1.5.0 vault left mid-flight by an update as 1.5.0 did, its sends and schedules alike, and a restore finds what 1.5.0's found", async () => {
       const got = (await afterUpdate(recorded.vault, headStart)) as After;
       expect(classicAfter(got)).toEqual(classicAfter(recorded.after));
-      // The hub lists both shown pools all along, as every preprod wallet's does.
+      // The hub lists every shown pool all along, as every preprod wallet's does: each the head start bundles, which
+      // `npm run lovejoin-pools` rewrites at each release.
       const status = got.trace.find((s) => s.label === "status")!.result as { pools?: Array<{ id: string }> };
-      expect(status.pools?.map((p) => p.id).sort()).toEqual([minPool.id, fivePool.id].sort());
+      expect(status.pools?.map((p) => p.id).sort()).toEqual(bundled.map((p) => p.id).sort());
     });
   });
 });
