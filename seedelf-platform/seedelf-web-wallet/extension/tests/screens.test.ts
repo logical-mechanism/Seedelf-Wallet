@@ -586,7 +586,8 @@ describe("a swap's way back, on its approval and at Stop (privacy review §2.7, 
     );
     const short = text(dialog({ ...through, boxes: 0, skipped: "Right now Lovejoin's pool holds 3 boxes that aren't yours, under the 30 it needs" }, true));
     expect(short).toContain("Stop the swap");
-    expect(short).toContain("under the 30 it needs, so it would come back directly");
+    // Its ADA, which the line names since 1.6.0's review of the fixes (last-3c, 5).
+    expect(short).toContain("under the 30 it needs, so its ADA would come back directly");
   });
 });
 

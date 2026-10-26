@@ -123,26 +123,32 @@ of them is the owner's to overrule.
 Lovejoin's token pools, Bootstrap, the collateral's mix and payments in parts
 came in 1.6.0. Each value's words were chosen as it was written, and recorded
 only in the notes of the verified files; the release review gathered them here
-as the values use them, and corrected the few values that strayed. Like the
-section above, these are Claude's choices, the owner's to overrule.
+as the values use them, and corrected the few values that strayed. A second
+pass (2026-10-26) read every key the review added or changed against this
+table, and added a box of its own, backs, a look and the space before ₳. Like
+the section above, these are Claude's choices, the owner's to overrule.
 
 | English | Spanish | Japanese | Note |
 |---|---|---|---|
 | token pool; ADA pool; the classic pool | pool de token; pool de ADA; el pool clásico | トークンプール; ADA プール; クラシックプール | the classic pool is 1.5.0's 10 ₳ one |
-| box value (what each box in a pool holds) | valor de caja | 中身; pools of the same box value: 中身が同じプール | not ボックス額, which reads as an amount of ADA |
-| Start a pool; its start | Iniciar un pool; la puesta en marcha | プールを開始; 開始 | what makes the pool; once it's on chain, es says it "está en marcha" |
+| box value (what each box in a pool holds) | valor de caja | 中身; pools of the same box value: 中身が同じプール | not ボックス額, which reads as an amount of ADA, save for an ADA pool's, which is one (10 ₳ 以外のボックス額) |
+| Start a pool; its start | Iniciar un pool; el inicio, or la puesta en marcha | プールを開始; 開始 | what makes the pool. es uses both for a start, and el inicio where starts are counted (ambos inicios, otro inicio); once it's on chain, es says it "está en marcha". Never arranque, which is the Bootstrap |
 | Help start (a pool short of its floor); Being started | poner en marcha; Poniéndose en marcha | 立ち上げ; 立ち上げ中 | it can't be mixed in yet: never a bare "En marcha", which says it's running |
 | Bootstrap; to bootstrap; Bootstrapping | un arranque; arrancar; Arranque | ブートストラップ; ブートストラップする; ブートストラップ中 | boxes put in with no mix, for others to mix with |
 | held (by a Bootstrap); Held (a tag) | retenida(s); Retenida | 保持; 保持中 | an es tag agrees with the mix, as Completada does |
 | the floor (the boxes not yours a pool must hold before the wallet mixes) | el mínimo | 下限 | |
 | four boxes a mix | cuatro cajas por mezcla | ミックスごとにボックス 4 件 | |
 | the pool of 5 ₳ boxes; the collateral's mix | el pool de cajas de 5 ₳; la mezcla del colateral | 5 ₳ ボックスのプール; コラテラルのミックス | never "the 5 ₳ pool", which read as a pool holding 5 ₳ in all |
+| in a box of its own (the collateral's, mixed once) | en una caja propia | 専用のボックスで | |
+| giveme.my backs (the collateral's mix) | respaldar | 支える | a public account's collateral backing its own mixes, from 1.5.0, is 裏付ける |
+| a look (the wallet's search for pools); once a look finds it | una búsqueda; cuando una búsqueda lo encuentra | 検索; 検索で見つかると | |
 | a copy (of a pool) | una copia | 複製 | |
 | a pool's credential | la credencial | 資格情報 | Lace's, and the transaction details'; not クレデンシャル |
 | sent in parts; only partly sent | por partes; enviado solo en parte | 分けて送信; 一部しか送られませんでした | each part is a transaction: トランザクション N 件 |
 | settled (a transaction that landed, or now can't) | resolverse | 確定するか、確定できなくなる | 確定 alone says it landed |
 | Bring every box back now | Traer todas las cajas de vuelta ahora | すべてのボックスを今すぐ戻す | |
 | change (what a transaction gives back) | el cambio | 釣り銭 | Lace has お釣り; おつり, in two values, says the same |
+| an amount in ₳ | a no-break space (U+00A0) before ₳ | the same | the house's rule in every language (usability review V-7); 15 of the keys 1.6.0's review added or changed had a plain space, in the English too |
 
 ## How a translation is recorded
 

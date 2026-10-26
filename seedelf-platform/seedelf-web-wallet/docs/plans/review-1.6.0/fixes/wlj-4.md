@@ -27,7 +27,7 @@ I first ran a probe of the gate with the head start's pools handed over (deleted
   - `funding`'s `collateralReserve`/`collateralPool` wherever a preprod mix makes mixes: the Mix form's 5 ₳ pool field, reserve's.
   - The swap quote's `ways`/`values`/`fund`: as the user types, MIN's boxes are funded beside the swap. Its `ifStopped` grows too, since a stop would bring their ADA back through the classic pool.
   - The swap review's `ways`: at Review, MIN's pool is empty, so MIN comes back directly.
-  - Every other figure, every return's review and every chain's transactions matched exactly.
+  - Every other figure, every return's review and every chain's transactions matched exactly. (Corrected in the docs round, from fx-tests: the gate compared the funding grid within 0.5% until R3-18, so this was checked to that slack, not exactly; R3-18's exact compare then passed.)
 - **The vault after the update:** no send and no schedule differed. Only these did:
   - the requests: each pool read names all three mix boxes, the return reads the pools once more for its collateral's 5 ₳ pool, and a token pool's read asks the parameters;
   - status's `pools`, in the trace and in the restore.

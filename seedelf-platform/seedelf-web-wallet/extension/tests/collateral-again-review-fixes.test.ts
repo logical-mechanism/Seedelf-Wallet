@@ -104,8 +104,8 @@ describe("the Collateral page while its payment waits (1.6.0's review of the fix
     let asked = 0;
     const late = foot({ late: true, onAgain: () => (asked += 1) });
     expect(words(late)).toContain(t("collateral.payAgain"));
-    expect(words(late)).toContain(t("collateral.warn.bothLand"));
-    expect(t("collateral.warn.bothLand")).toBe("If both land, the first 5 ₳ goes back into your balance.");
+    expect(words(late)).toContain(t("collateral.warn.bothLand").replace(/\s+/g, " "));
+    expect(t("collateral.warn.bothLand")).toBe("If both land, the first 5 ₳ goes back into your balance.");
     const again = buttonIn(late, "collateral-again")!;
     expect(again.props.disabled).toBe(false);
     again.props.onClick();

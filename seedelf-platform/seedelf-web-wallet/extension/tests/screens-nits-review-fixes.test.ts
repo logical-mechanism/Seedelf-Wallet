@@ -96,9 +96,9 @@ describe("the public Mix form's figure, worded by which one feeds it (1.6.0's re
   it("says a mix can spend it only when it's what a mix can spend, and what the account holds otherwise", () => {
     const first = formatAda("15300000");
     expect(cantAffordPublic(first, "9", true)).toBe(t("lovejoin.mix.cantAffordPublic", { first, held: "9" }));
-    expect(cantAffordPublic(first, "9", true)).toContain("Your public account has 9 ₳ a mix can spend.");
+    expect(cantAffordPublic(first, "9", true)).toContain("Your public account has 9\u00a0₳ a mix can spend.");
     // Over Home's figure, 1.5.0's words: the account holds it.
-    expect(cantAffordPublic(first, "10,408.014036", false)).toContain("Your public account holds 10,408.014036 ₳.");
+    expect(cantAffordPublic(first, "10,408.014036", false)).toContain("Your public account holds 10,408.014036\u00a0₳.");
     expect(cantAffordPublic(first, "10,408.014036", false)).not.toContain("a mix can spend");
   });
 

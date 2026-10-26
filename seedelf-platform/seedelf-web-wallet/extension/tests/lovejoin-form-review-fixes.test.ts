@@ -352,9 +352,10 @@ describe("a private mix's reviews where its funding pays for its collateral's mi
     }) as unknown as SessionOutSummary & { mix: LovejoinFunding };
   const NOTE = 'data-testid="lovejoin-collateral-mix-note"';
 
+  // Where it pays for that mix the worker says it's mixed, which its chain keeps the reserve for (fx-promise).
   it("say giveme.my backs and sees that mix, in its own short note, on a mix and on Mix my boxes again", () => {
     for (const mix of [{}, { again: true, owned: 2 }]) {
-      const review = html(createElement(PrivateReview, { summary: summary({ collateralReserve: "1500000" }, mix) }));
+      const review = html(createElement(PrivateReview, { summary: summary({ collateralReserve: "1500000", collateralMix: "mixed" }, mix) }));
       expect(review).toContain(NOTE);
       expect(words(review)).toContain(words(t("swaps.review.privacy.collateralMix")));
       // Where nothing pays for that mix: as before, byte for byte.
@@ -366,10 +367,10 @@ describe("a private mix's reviews where its funding pays for its collateral's mi
   it("no longer say the 5 ₳ comes back with what isn't used: it comes back later, mixed once", () => {
     const hint = (extra: Partial<SessionOutSummary>, mix: Partial<LovejoinFunding> = {}) =>
       reviewHint({ source: "private", summary: summary(extra, mix) } as Parameters<typeof reviewHint>[0]);
-    const tailed = hint({ collateralReserve: "1500000" });
+    const tailed = hint({ collateralReserve: "1500000", collateralMix: "mixed" });
     expect(tailed).toBe(t("lovejoin.review.privateNoteMixed"));
     expect(tailed).not.toMatch(/with the 5 ₳/);
-    expect(hint({ collateralReserve: "1500000" }, { again: true })).toBe(t("lovejoin.review.againNoteMixed"));
+    expect(hint({ collateralReserve: "1500000", collateralMix: "mixed" }, { again: true })).toBe(t("lovejoin.review.againNoteMixed"));
     // Nothing paid for it: the 5 ₳ comes back with the rest, as the notes have said (Session 10's call 2).
     expect(hint({})).toBe(t("lovejoin.review.privateNote"));
     expect(hint({}, { again: true })).toBe(t("lovejoin.review.againNote"));

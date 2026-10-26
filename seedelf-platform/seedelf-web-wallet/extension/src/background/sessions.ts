@@ -61,6 +61,7 @@ import { t } from "../i18n";
 import { NETWORKS, type NetworkName } from "../networks";
 import type {
   AtStake,
+  CollateralMix,
   DappTxSummary,
   LeftBehindUtxo,
   LeftOutUtxo,
@@ -203,6 +204,11 @@ export const SESSION_COLLATERAL = 5_000_000n;
  * which is why a swap takes the chain's reserve (tailReserve; 1.6.0's release review, 323-rust#1).
  */
 export const SWAP_MARGIN = 2_000_000n;
+/**
+ * About what the wallet's own cancel of a swap's order costs (cancelOf), as Stop's dialog counts what comes back: a real
+ * Minswap cancel measured 0.237697 ₳ (seedelf-core's cancel_integrity.json), as ui/swap.ts's SESSION_FEE_ESTIMATE has it.
+ */
+const CANCEL_FEE_ESTIMATE = 250_000n;
 
 /** The pool a swap's review takes the token it gets into (SessionService tokenPool), and those it could. */
 interface TokenChoice {
@@ -1020,6 +1026,18 @@ function tailUnpaid(quote: Pick<SwapQuote, "againstPools" | "ask">, l?: Pick<Swa
   return !!quote.againstPools && quote.ask.tokenOut !== "lovelace" && !l?.boxes && !l?.ways?.some((w) => w.boxes > 0);
 }
 
+/**
+ * Whether what swap `quote`'s funding pays for its collateral's mix (tailReserve) stays there for that mix however its
+ * swap goes, so its review may say the collateral is mixed (CollateralMix; 1.6.0's review of the fixes, fx-promise): a
+ * fill of ADA is ADA alone, an order's or the pools' alike, and a token's boxes (`l`) make a chain, whose change pays
+ * for it, the reserve set aside first (tail_reserve). A token's fill with no box doesn't: approved as an order, it may
+ * still go against the pools (order), whose swap pays the session the token beside all the ADA left, from which a
+ * return that comes back directly can't pay for that mix (tailUnpaid's case).
+ */
+function keepsReserve(quote: Pick<SwapQuote, "ask">, l?: Pick<SwapLovejoin, "ways">): boolean {
+  return quote.ask.tokenOut === "lovelace" || !!l?.ways?.some((w) => w.boxes > 0);
+}
+
 /** A UTxO of ADA alone: no tokens, no datum, no script. A cancel's fee and collateral come from these (cancelOf). */
 function plainAda(u: KoiosUtxo): boolean {
   return !u.asset_list?.length && !u.reference_script && !u.inline_datum && !u.datum_hash;
@@ -1562,11 +1580,13 @@ export class SessionService {
       !!lovejoin?.on && !tailUnpaid(quote, lovejoin) && (await this.collateralIntoPool())
         ? await this.deps.lovejoin!.collateralPoolTakes(network)
         : "no";
+    // What Max's note says of that mix, as its approval would (CollateralMix; 1.6.0's review of the fixes, fx-promise).
+    const mix: CollateralMix = takes === "yes" && keepsReserve(quote, lovejoin) ? "mixed" : "ifLeft";
     return {
       ...quote,
       verified: await this.verified(network, checked.tokenOut),
       ...(lovejoin ? { lovejoin } : {}),
-      ...(takes !== "no" ? { collateralReserve: this.deps.wasm.lovejoinCollateralReserve() } : {}),
+      ...(takes !== "no" ? { collateralReserve: this.deps.wasm.lovejoinCollateralReserve(), collateralMix: mix } : {}),
       ...(takes === "maybe" ? { collateralMaybe: true as const } : {}),
     };
   }
@@ -1591,23 +1611,8 @@ export class SessionService {
     quote: SwapQuote,
     pool = false,
     pools?: Record<string, string | null>,
-    options: { params?: unknown; short?: string; through?: boolean } = {},
-  ): Promise<SwapLovejoin | undefined> {
-    return (await this.lovejoinPriced(network, quote, pool, pools, options))?.lovejoin;
-  }
-
-  /**
-   * lovejoinCost (`lovejoin`), and the ADA after the fill it counts its boxes on (`spare`), with what that leaves once
-   * they're paid for (`left`): whether the return pays for its collateral's mix where its funding set no reserve aside
-   * for it (tailPaid; 1.6.0's review of the fixes, the last look, LM-1).
-   */
-  private async lovejoinPriced(
-    network: NetworkName,
-    quote: SwapQuote,
-    pool = false,
-    pools?: Record<string, string | null>,
     { params, short, through }: { params?: unknown; short?: string; through?: boolean } = {},
-  ): Promise<{ lovejoin: SwapLovejoin; spare: bigint; left: bigint } | undefined> {
+  ): Promise<SwapLovejoin | undefined> {
     if (!this.deps.lovejoin?.available(network)) return undefined;
     const on = through ?? (await this.throughLovejoin());
     const { price, at, skipped, depth, delay, asked } = await this.priced(network, pool && on);
@@ -1628,30 +1633,24 @@ export class SessionService {
       : undefined;
     const width: LovejoinWidth = way?.fellBack ? 3 : asked;
     const token = width === 4 ? four : three;
-    const atWidth = width === 4 ? at[4]! : at[3];
-    const filled = atWidth.price(spare);
+    const filled = (width === 4 ? at[4]! : at[3]).price(spare);
     // Stopped, cancelled or refunded: the funding comes back instead, its boxes' ADA with it, at the width its return
     // would go at from the approved one. A token's carries the token, which no pool was approved for.
     const funded = token ? BigInt(token.fund) : 0n;
     const stopped = price((quote.ask.tokenIn === "lovelace" ? BigInt(quote.fund.lovelace) : 0n) + funded, width);
     const more = (stopped.of ?? stopped.boxes) > (filled.of ?? filled.boxes);
     return {
-      lovejoin: {
-        ...filled,
-        depth,
-        delay,
-        on,
-        ...(width === 4 ? { width } : {}),
-        ...(way?.fellBack ? { fellBack: way.fellBack } : {}),
-        ...(skipped ? { skipped } : {}),
-        ...(more ? { ifStopped: stopped } : {}),
-        ...(token ? { ways: [token.way], ...(funded > 0n ? { fund: token.fund } : {}) } : {}),
-        // What a box holds in each pool the token could go into, for the approval's names and Change (34f).
-        ...(choice?.works.length || choice?.chosen ? { values: valuesOf([...choice.works, ...(choice.chosen ? [choice.chosen] : [])]) } : {}),
-      },
-      spare,
-      // A token's boxes are funded beside the swap's (`fund`), so they take none of it.
-      left: atWidth.left(spare, filled.boxes),
+      ...filled,
+      depth,
+      delay,
+      on,
+      ...(width === 4 ? { width } : {}),
+      ...(way?.fellBack ? { fellBack: way.fellBack } : {}),
+      ...(skipped ? { skipped } : {}),
+      ...(more ? { ifStopped: stopped } : {}),
+      ...(token ? { ways: [token.way], ...(funded > 0n ? { fund: token.fund } : {}) } : {}),
+      // What a box holds in each pool the token could go into, for the approval's names and Change (34f).
+      ...(choice?.works.length || choice?.chosen ? { values: valuesOf([...choice.works, ...(choice.chosen ? [choice.chosen] : [])]) } : {}),
     };
   }
 
@@ -1749,10 +1748,7 @@ export class SessionService {
    * `width`; and three where four can't take what three would, as its
    * return goes (wayOver, 34e's review, 5): `price` from a width down, with
    * the width it went at and why; `at` each width's own, and what D3's rule
-   * weighs (`leg`). `skipped` is three's: four falls back to it. `left`:
-   * what spare ADA leaves once the boxes `price` pays for are paid for, the
-   * chain's change, which pays for the collateral's mix where no reserve was
-   * set aside for it (tailPaid; 1.6.0's review of the fixes, LM-1).
+   * weighs (`leg`). `skipped` is three's: four falls back to it.
    */
   private async priced(network: NetworkName, pool: boolean, fixed?: AutoRecord["lovejoin"], width?: LovejoinWidth) {
     const lovejoin = this.deps.lovejoin!;
@@ -1780,8 +1776,7 @@ export class SessionService {
         };
       };
       const leg = (spare: bigint) => ({ pays: affordable(spare), fits: Math.min(affordable(spare), chainBoxes(one.depth, w), fits), room: fits });
-      const left = (spare: bigint, boxes: number) => spare - besides - BigInt(boxes) * perBox;
-      return { one, price, leg, left };
+      return { one, price, leg };
     };
     const three = await at(3);
     const four = asked === 4 ? await at(4) : undefined;
@@ -1791,13 +1786,8 @@ export class SessionService {
       if (way.width === 4) return { ...four.price(spare), width: 4 as const };
       return { ...three.price(spare), ...(way.fellBack ? { fellBack: way.fellBack } : {}) };
     };
-    // At the width `price` went at.
-    const left = (spare: bigint, upTo: LovejoinWidth = asked) => {
-      const cost = price(spare, upTo);
-      return ("width" in cost ? four! : three).left(spare, cost.boxes);
-    };
     const skipped = room && poolShort(network, room, three.one.depth);
-    return { price, left, at: { 3: three, 4: four }, skipped, depth: three.one.depth, delay: fixed?.delay ?? three.one.delay, asked };
+    return { price, at: { 3: three, 4: four }, skipped, depth: three.one.depth, delay: fixed?.delay ?? three.one.delay, asked };
   }
 
   /**
@@ -1834,13 +1824,12 @@ export class SessionService {
     const params = await this.deps.koios(network).epochParams();
     // Once, at Review, never as the user types: whether Lovejoin's pools take the boxes now (privacy review §2.7).
     // A token it gets through a pool of it has its boxes' ADA funded beside the swap's (chunk 34's 34e).
-    let expected = await this.lovejoinPriced(network, quote, true, pools, { params, through });
-    let lovejoin = expected?.lovejoin;
+    let lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, through });
     // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): the chain's
     // figure, as its margin comes back beside it. None where its return, as `l` has it, can't build that mix
     // (tailUnpaid; 1.6.0's release review, R3-10): the owner's call, back with the rest where it can't be built.
     const tail = await this.tailReserve(network, through ?? (await this.throughLovejoin()), { params });
-    const asked = (l?: SwapLovejoin) => (tailUnpaid(quote, l) ? 0n : tail);
+    const asked = (l?: SwapLovejoin) => (tailUnpaid(quote, l) ? 0n : tail.reserve);
     const fund = (l: SwapLovejoin | undefined, reserve: bigint) =>
       this.buildFunding(
         network,
@@ -1871,8 +1860,7 @@ export class SessionService {
       // mend is thrown as it is, and so is the swap's own funding failing too.
       const mendable = e instanceof WalletLocked || e instanceof KoiosError || e instanceof CollateralError || e instanceof StaleReviewError || isTrap(e);
       if (!lovejoin?.fund || mendable) throw e;
-      expected = await this.lovejoinPriced(network, quote, true, pools, { params, short: t("lj.tokens.skip.warn.balance"), through });
-      lovejoin = expected?.lovejoin;
+      lovejoin = await this.lovejoinCost(network, quote, true, pools, { params, short: t("lj.tokens.skip.warn.balance"), through });
       made = await funded(lovejoin);
     }
     const {
@@ -1921,16 +1909,16 @@ export class SessionService {
       ...(reserve ? { tailReserved: true as const } : {}),
     };
     await this.keepFunding(SESSION_OUT, kept, later);
-    // Whether its return mixes its collateral, which its approval's words follow, its reserve paid or not (R3-9): a 5 ₳
-    // pool takes it, and its funding paid that reserve or, without it, its fill as this review expects it pays for that
-    // mix, less the boxes it pays for (tailPaid; its review of the fixes, the last look, LM-1).
-    const boxes = (lovejoin?.boxes ?? 0) + (lovejoin?.ways ?? []).reduce((n, w) => n + w.boxes, 0);
-    const mixes = !!asked(lovejoin) && (!!reserve || (!!expected && (await this.tailPaid(network, boxes, expected.left, expected.spare, params))));
+    // What its approval says of its collateral's mix, wherever a 5 ₳ pool takes it, its reserve paid or not (R3-9), or
+    // may, its read having failed (tailReserve's `may`; fx-may), never where its return can't build it: mixed where that
+    // reserve is paid and the swap's fill keeps it for that mix, whichever way the swap goes; mixed only if enough is
+    // left otherwise (CollateralMix; 1.6.0's review of the fixes, fx-promise).
+    const mix: CollateralMix = reserve && keepsReserve(quote, lovejoin) ? "mixed" : "ifLeft";
     return {
       ...summary,
       ...(lovejoin ? { lovejoin } : {}),
       ...(reserve ? { collateralReserve: reserve.toString() } : {}),
-      ...(mixes ? { collateralPool: true as const } : {}),
+      ...(asked(lovejoin) || (tail.may && !tailUnpaid(quote, lovejoin)) ? { collateralMix: mix } : {}),
     };
   }
 
@@ -1943,7 +1931,8 @@ export class SessionService {
     const address = (await this.accounts(network, [{ index, ownStake: true }])).get(index)!.address;
     // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): what that takes
     // with nothing else left, since a site may spend all but the reserve. Without it where it isn't paid for too.
-    const asked = await this.tailReserve(network, await this.throughLovejoin(), { direct: true });
+    const tail = await this.tailReserve(network, await this.throughLovejoin(), { direct: true });
+    const asked = tail.reserve;
     const {
       built: { summary, txCbor, seed, first, later },
       reserve,
@@ -1967,11 +1956,13 @@ export class SessionService {
       ...(reserve ? { tailReserved: true as const } : {}),
     };
     await this.keepFunding(SESSION_SITE_OUT, kept, later);
-    // Whether a 5 ₳ pool takes its collateral, which its review's words follow, its reserve paid or not (R3-9).
+    // What its review says of its collateral's mix, wherever a 5 ₳ pool takes it, its reserve paid or not (R3-9), or
+    // may, its read having failed (fx-may): mixed only if enough is left, since what the site's transactions leave
+    // decides, and its return's own review says which (CollateralMix; 1.6.0's review of the fixes, fx-promise).
     return {
       ...summary,
       ...(reserve ? { collateralReserve: reserve.toString() } : {}),
-      ...(asked ? { collateralPool: true as const } : {}),
+      ...(asked || tail.may ? { collateralMix: "ifLeft" as const } : {}),
     };
   }
 
@@ -2095,7 +2086,8 @@ export class SessionService {
     // Its collateral, mixed on its way into a 5 ₳ pool as it comes back, paid for too (tailReserve): in the one UTxO
     // that pays the mixes, whose change pays that mix too, and its chain's deposit's reserve the sweep after it. Not a
     // Bootstrap's, which puts up no collateral (buildBack).
-    const asked = mix.bootstrap ? 0n : await this.tailReserve(network, true, { params });
+    const tail = mix.bootstrap ? undefined : await this.tailReserve(network, true, { params });
+    const asked = tail?.reserve ?? 0n;
     // A Bootstrap's way back in its place (1.6.0's release review, 318-rust#0): with no collateral its return is a
     // sweep of the deposit's change alone, whose Seedelf output must hold its least after the sweep's fee, and the
     // deposit's reserve leaves too little for that. WebAssembly's figure, the one privateBootstrapMost builds its cap
@@ -2140,11 +2132,15 @@ export class SessionService {
       ...(back ? { backReserved: true as const } : {}),
     };
     await this.keepFunding(SESSION_MIX_OUT, kept, later);
+    // What its review says of its collateral's mix, wherever a 5 ₳ pool takes it, or may, its read having failed
+    // (fx-may): mixed where its reserve is paid, which its chain sets aside before its boxes (tail_reserve); mixed only
+    // if enough is left where it isn't (CollateralMix; 1.6.0's review of the fixes, fx-promise).
     return {
       ...summary,
       mix,
       ...(reserve ? { collateralReserve: reserve.toString() } : {}),
       ...(back ? { bootstrapReserve: back.toString() } : {}),
+      ...(asked || tail?.may ? { collateralMix: reserve ? ("mixed" as const) : ("ifLeft" as const) } : {}),
     };
   }
 
@@ -2204,7 +2200,8 @@ export class SessionService {
     // mix takes with nothing else left, as a site's funding has it (tailReserve). Without it where it isn't paid for
     // too.
     const fresh = !held.some(collateralFits);
-    const asked = fresh ? await this.tailReserve(network, await this.throughLovejoin(s), { direct: true }) : 0n;
+    const tail = fresh ? await this.tailReserve(network, await this.throughLovejoin(s), { direct: true }) : undefined;
+    const asked = tail?.reserve ?? 0n;
     const payments = (reserve: bigint) =>
       fresh
         ? [
@@ -2221,11 +2218,11 @@ export class SessionService {
     );
     const kept: Omit<KeptFunding, "builtAt"> = { ...summary, txCbor, seed, ...(reserve ? { tailReserved: true as const } : {}) };
     await keep(this.deps, SESSION_TOP_UP, kept);
-    // Whether a 5 ₳ pool takes its new collateral, which its note follows, its reserve paid or not (R3-9).
+    // What its note says of its new collateral's mix, as a site's funding has it (R3-9; fx-promise; fx-may).
     return {
       ...summary,
       ...(reserve ? { collateralReserve: reserve.toString() } : {}),
-      ...(asked ? { collateralPool: true as const } : {}),
+      ...(asked || tail?.may ? { collateralMix: "ifLeft" as const } : {}),
     };
   }
 
@@ -3261,52 +3258,76 @@ export class SessionService {
    * §2.8): the boxes the ADA at the session's account pays for, as its last
    * reading found it, and until its order fills, its funding's ADA too (a
    * cancel or a refund brings that back), all as Lovejoin's pool has room
-   * for now (a read kept five minutes). And whether its collateral is mixed
-   * on its way into the 5 ₳ pool first (`collateralMix`), as that read has
-   * the pool: what its funding paid for that mix is then set aside before
-   * the boxes are counted, as WebAssembly's chain sets it aside, so the
-   * dialog never names a box more than the return makes (1.6.0's release
-   * review, L1), and only where the return pays for that mix (tailPaid; its
-   * review of the fixes, the last look, LM-1). Null when it comes back
-   * directly: approved that way, or where Lovejoin isn't.
+   * for now (a read kept five minutes). An order of ADA out, on chain, counts
+   * as its cancel brings it back: its own ADA, the funding's less Minswap's
+   * fee and the margin its change already holds, less the cancel's fee; an
+   * order of a token, as nothing, since its cancel gives the token back beside
+   * all the ADA (1.6.0's review of the fixes, fx-promise; last-3c's fourth).
+   * And what its dialog says of its collateral's mix on its way into the 5 ₳
+   * pool first (`collateralMix`), as that read has the pool: what its funding
+   * paid for that mix is set aside before the boxes are counted, as
+   * WebAssembly's chain sets it aside, so the dialog never names a box more
+   * than the return makes (1.6.0's release review, L1). Null when it comes
+   * back directly: approved that way, or where Lovejoin isn't.
    */
   async stopCost(network: NetworkName, index: number): Promise<SwapLovejoin | null> {
     const s = await this.automatic(network, index);
     if (s.mix || !this.deps.lovejoin?.available(network) || !(await this.throughLovejoin(s))) return null;
     const rows = this.seen.get(`${network}:${index}`);
+    const auto = s.auto!;
+    const adaIn = s.swap?.tokenIn === "lovelace";
+    // The swap sent last, while nothing of it has come back, filled or refunded: an order Stop cancels, or a swap
+    // against the pools, which lands as it is or not at all.
+    const sent = s.txs.filter((t) => t.kind === "swap" && !t.unsent).at(-1);
+    const out = !!sent && !auto.filled && !auto.refunded;
     // Its token's boxes' ADA too, funded beside the swap's, which comes back with it (its fixes' review, 5).
-    const funded = s.auto!.filled
-      ? 0n
-      : (s.swap?.tokenIn === "lovelace" ? BigInt(s.auto!.approved.fund.lovelace) : 0n) + BigInt(s.auto!.lovejoin?.fund ?? "0");
+    const funded = auto.filled ? 0n : (adaIn ? BigInt(auto.approved.fund.lovelace) : 0n) + BigInt(auto.lovejoin?.fund ?? "0");
     // As deep and as long as the swap was approved (independent review L21), and as wide: three for a swap from
     // before approvals kept a way, as its return goes (wayOf).
-    const { price, left, skipped, depth, delay } = await this.priced(network, true, s.auto!.lovejoin, s.auto!.lovejoin ? undefined : 3);
-    // Its collateral goes into the 5 ₳ pool first, as its return puts it (buildBack's intoPool), where the account holds
-    // it, Settings has it go in and that pool takes it, by the read just made (a read that failed says it may), asking
-    // nobody more; paid for from the ADA of ADA alone there, which a token's UTxO isn't. Its funding's reserve for that
-    // mix is set aside first, as WebAssembly's chain sets it aside (tail_reserve), and the boxes are counted on the rest.
+    const { price, skipped, depth, delay } = await this.priced(network, true, auto.lovejoin, auto.lovejoin ? undefined : 3);
+    // Its collateral may go into the 5 ₳ pool first, as its return puts it (buildBack's intoPool): the account holds it,
+    // and ADA alone to pay for that mix, which a token's UTxO isn't, or a swap out that may bring some; Settings has it
+    // go in; and that pool isn't known to refuse it, by the read just made (a read that failed says it may), asking
+    // nobody more. Its funding's reserve for that mix is then set aside first, as WebAssembly's chain sets it aside
+    // (tail_reserve), and the boxes are counted on the rest. While its funding is on its way, as the page shows it
+    // (fundingState), the account is counted as that funding will leave it: its 5 ₳ collateral, and for an ADA swap ADA
+    // alone beside it, as once it lands; a token's is the token beside all the ADA (1.6.0's review of the fixes,
+    // fx-may; last-3d, 1). So too once it's confirmed but, before any swap is sent, the reading doesn't list every part
+    // of it yet: Koios behind the chain, as the runner itself waits on, or a worker started again before its first read
+    // (the last look at fx-may, 1). A funding found short or never stays out: what came decides.
+    const funding = fundingState(s, rows).state;
+    const listed = new Set((rows ?? []).map((u) => u.tx_hash));
+    const landing =
+      funding === "funding" || (funding === "landed" && !sent && fundingOf(s).some((t) => !listed.has(t.txHash)));
     const spare = rows ? spareOf(returnable(s, rows)) : 0n;
-    const intoPool =
-      !!rows?.some(collateralFits) &&
-      spare > 0n &&
+    const mayMix =
+      (!!rows?.some(collateralFits) || landing) &&
+      (spare > 0n || out || (landing && adaIn)) &&
       (await this.collateralIntoPool()) &&
       (await this.deps.lovejoin!.collateralPoolTakes(network)) !== "no";
-    const aside = intoPool && s.collateralReserve ? BigInt(this.deps.wasm.lovejoinCollateralReserve()) : 0n;
+    const aside = mayMix && s.collateralReserve ? BigInt(this.deps.wasm.lovejoinCollateralReserve()) : 0n;
     const held = spare > aside ? spare - aside : 0n;
-    const counted = held > funded ? held : funded;
-    const cost = price(counted);
-    // Said mixed only where the return pays for that mix (LM-1): with a box or more, from that reserve, set aside, or
-    // from what the boxes leave; with none, it comes back directly, every UTxO of ADA alone paying, the reserve's too.
-    const mixed =
-      intoPool &&
-      ((cost.boxes > 0 && aside > 0n) || (await this.tailPaid(network, cost.boxes, left(counted), spare > funded ? spare : funded)));
+    // What its return will hold: what's there once filled or refunded; with an order on chain, what its cancel brings
+    // back too, never its fee, nor the order's, already paid; before then, or with a swap against the pools out, at
+    // least the funding's ADA, which comes back as it is if nothing lands.
+    const ordered = out && !sent!.againstPools && s.txs.some((t) => t.kind === "swap" && t.confirmed);
+    const cancelled = adaIn
+      ? held + BigInt(auto.approved.fund.lovelace) - BigInt(auto.approved.aggregatorFee ?? "0") - SWAP_MARGIN - CANCEL_FEE_ESTIMATE
+      : 0n;
+    const counted = auto.filled || auto.refunded ? held : ordered ? (cancelled > 0n ? cancelled : 0n) : held > funded ? held : funded;
+    // Said mixed only where its funding paid that reserve and its return keeps it for that mix whatever the swap out
+    // does: not where Stop's cancel of an order of a token gives the token back beside all the ADA (cancel_orders), nor
+    // while a swap against the pools may yet land, a token's beside all of it, or not, a token's funding as it was. Mixed
+    // only if enough is left wherever else it may go (CollateralMix; 1.6.0's review of the fixes, fx-promise; last-3c).
+    const keeps = !out || (!sent!.againstPools && adaIn);
+    const mix: CollateralMix | undefined = !mayMix ? undefined : s.collateralReserve && keeps ? "mixed" : "ifLeft";
     return {
-      ...cost,
+      ...price(counted),
       depth,
       delay,
       on: true,
       ...(skipped ? { skipped } : {}),
-      ...(mixed ? { collateralMix: true as const } : {}),
+      ...(mix ? { collateralMix: mix } : {}),
     };
   }
 
@@ -4581,40 +4602,28 @@ export class SessionService {
    * sweep after them needs more, which a mix's chain leaves from its deposit's reserve, and a swap from its margin less
    * the order's fee (SWAP_MARGIN), its fill carrying the sweep's least. `direct`: a session whose return may come back
    * directly with nothing else left, a site's or its top-up's, takes what that needs, priced from the parameters
-   * (1.6.0's release review, 323-rust#1; 2.8 ₳ today).
+   * (1.6.0's release review, 323-rust#1; 2.8 ₳ today). `may`: none added, its look at that pool having failed, though
+   * the pool may take the collateral all the same as the session comes back, which its review says (CollateralMix).
    */
   private async tailReserve(
     network: NetworkName,
     through: boolean,
     { params, direct = false }: { params?: unknown; direct?: boolean } = {},
-  ): Promise<bigint> {
+  ): Promise<{ reserve: bigint; may?: true }> {
     const lovejoin = this.deps.lovejoin;
-    if (!through || !lovejoin?.available(network) || !(await this.collateralIntoPool())) return 0n;
+    if (!through || !lovejoin?.available(network) || !(await this.collateralIntoPool())) return { reserve: 0n };
     const read = params ?? (await this.deps.koios(network).epochParams());
     // A look that fails funds without the reserve; a trap in it is handed on, never built on (1.6.0's release review, L3).
-    const pool = await lovejoin.collateralPool(network, read).catch((e: unknown) => {
+    const pool = await lovejoin.collateralPool(network, read, undefined, true).catch((e: unknown) => {
       if (isTrap(e)) throw e;
-      return undefined;
+      return "failed" as const;
     });
-    if (!pool) return 0n;
+    // Failed, that pool may still take it, unless what the wallet last read of it says it won't: a failed read is a
+    // maybe, as the quote and Stop have it (collateralPoolTakes; 1.6.0's review of the fixes, fx-may; last-3d, 2).
+    if (pool === "failed") return (await lovejoin.collateralPoolTakes(network)) === "no" ? { reserve: 0n } : { reserve: 0n, may: true };
+    if (!pool) return { reserve: 0n };
     const { wasm } = this.deps;
-    return BigInt(direct ? wasm.lovejoinDirectCollateralReserve(JSON.stringify(read)) : wasm.lovejoinCollateralReserve());
-  }
-
-  /**
-   * Whether a session's return pays for its collateral's mix where its funding set no reserve aside for it, as
-   * WebAssembly builds that mix (1.6.0's review of the fixes, the last look, LM-1). With `boxes`, a chain, it's paid
-   * from the chain's change, so where what the spare ADA leaves once they're paid for (`left`, priced) holds the chain's
-   * reserve, the same boxes counted as with that reserve set aside (tail_reserve). With none, the return comes back
-   * directly, paid from its ADA alone (`ada`), where that holds what such a return takes (direct_tail). Short of either,
-   * the collateral comes back with the rest, and Stop's dialog and a swap's approval said it was mixed. `params`: as
-   * read for it; read here otherwise, and a read that fails says no: nothing says a mix goes that it can't price.
-   */
-  private async tailPaid(network: NetworkName, boxes: number, left: bigint, ada: bigint, params?: unknown): Promise<boolean> {
-    const { wasm } = this.deps;
-    if (boxes > 0) return left >= BigInt(wasm.lovejoinCollateralReserve());
-    const read = params ?? (await this.deps.koios(network).epochParams().catch(() => undefined));
-    return read !== undefined && ada >= BigInt(wasm.lovejoinDirectCollateralReserve(JSON.stringify(read)));
+    return { reserve: BigInt(direct ? wasm.lovejoinDirectCollateralReserve(JSON.stringify(read)) : wasm.lovejoinCollateralReserve()) };
   }
 
   /**

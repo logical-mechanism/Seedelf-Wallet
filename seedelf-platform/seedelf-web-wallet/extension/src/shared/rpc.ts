@@ -1561,6 +1561,17 @@ export interface SwapTokenInfo {
   verified: boolean;
 }
 
+/**
+ * What a review, Stop's dialog or the swap form's Max says of a session's 5 ₳ collateral being mixed on its way into a
+ * pool of 5 ₳ boxes as the session comes back, by one rule, decided where its way back is known (sessions.ts; 1.6.0's
+ * review of the fixes, fx-promise, after last-3c): `mixed`, where its funding paid that mix's reserve and its return
+ * keeps it for that mix, whatever the swap does, so its screen says so, with giveme.my's line; `ifLeft`, wherever else
+ * a 5 ₳ pool may take it (Settings' switch on, the pool not known to refuse): mixed only if enough is left as it comes
+ * back, giveme.my's part said so it holds either way. None where no mix can go. What a screen counts as a cost follows
+ * the reserve paid (`collateralReserve`), never these words.
+ */
+export type CollateralMix = "mixed" | "ifLeft";
+
 /** Minswap's quote for a swap, and what a private session for it is funded with. Amounts are decimal strings in smallest units. */
 export interface SwapQuote {
   network: NetworkName;
@@ -1601,9 +1612,14 @@ export interface SwapQuote {
   collateralReserve?: string;
   /**
    * `collateralReserve` named though no pool read lately says whether that pool takes the collateral: Max keeps it
-   * aside all the same, the private default, and its note says the mix may take it (1.6.0's release review, R3-11).
+   * aside all the same, the private default (1.6.0's release review, R3-11). `collateralMix` is then `ifLeft`.
    */
   collateralMaybe?: true;
+  /**
+   * What Max's note says of the collateral's mix `collateralReserve` is kept aside for (CollateralMix): `mixed` where
+   * the pool takes it as last read and the swap's fill keeps the reserve for it; `ifLeft` otherwise. With the reserve.
+   */
+  collateralMix?: CollateralMix;
 }
 
 /**
@@ -1646,11 +1662,11 @@ export interface SwapLovejoin {
    */
   ifStopped?: { boxes: number; mixes: number; mixFees: string; withdrawFees: string; of?: number; width?: number; fellBack?: string };
   /**
-   * Stop's alone (sessions.ts stopCost): a return through Lovejoin mixes the session's 5 ₳ collateral on its way into
-   * the 5 ₳ pool first, under giveme.my's collateral, as the wallet last read that pool, where that return pays for
-   * the mix (sessions.ts tailPaid; 1.6.0's review of the fixes, LM-1). Its dialog says so (1.6.0's release review, L1).
+   * Stop's alone (sessions.ts stopCost): what its dialog says of the session's 5 ₳ collateral being mixed on its way
+   * into the 5 ₳ pool first, under giveme.my's collateral, wherever Stop doesn't bring it back directly (CollateralMix;
+   * 1.6.0's release review, L1; its review of the fixes, fx-promise).
    */
-  collateralMix?: true;
+  collateralMix?: CollateralMix;
   /**
    * The token it gets, through a pool of it (chunk 34's 34e), when it buys one a shown pool takes: as many boxes as
    * the least it asks for makes, in the pool chosen (Change picks another of `pools`, or none). Its boxes' own ADA
@@ -1929,14 +1945,13 @@ export interface SessionOutSummary extends WithdrawSummary {
    */
   collateralReserve?: string;
   /**
-   * A 5 ₳ pool takes the collateral, as Review read it, and its return can build that mix: there too where the private
-   * balance didn't pay `collateralReserve` as well (sessions.ts orWithoutReserve), whose return still mixes the
-   * collateral where what's left there pays for it. A swap's carries it then only where its fill, as Review expects
-   * it, pays for that mix, less the boxes it pays for (sessions.ts tailPaid; 1.6.0's review of the fixes, LM-1). What a
-   * review says of where the 5 ₳ goes follows it; what it counts as a cost follows `collateralReserve` (1.6.0's release
-   * review, R3-9).
+   * What its review says of that mix (CollateralMix), where a 5 ₳ pool takes the collateral as Review read it and its
+   * return can build that mix, `collateralReserve` paid or not (sessions.ts orWithoutReserve; 1.6.0's release review,
+   * R3-9), or may, that read having failed (tailReserve's `may`; fx-may): `mixed` only where the reserve is paid and the return's way keeps it (a mix's chain, a swap's ADA fill or
+   * its token's boxes), never on a site's, whose return holds what the site leaves. What a review counts as a cost
+   * follows `collateralReserve` (1.6.0's review of the fixes, fx-promise).
    */
-  collateralPool?: true;
+  collateralMix?: CollateralMix;
   /**
    * A Bootstrap's from the private balance: what its one payment carries beside its boxes and the deposit's reserve
    * for its way back, in lovelace, since it puts up no collateral and its return sweeps the deposit's change alone

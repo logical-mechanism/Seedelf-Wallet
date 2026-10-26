@@ -10,11 +10,12 @@ import { describe, expect, it } from "vitest";
 
 import { t } from "../src/i18n";
 import { DEFAULT_PREFERENCES } from "../src/shared/preferences";
-import type { SessionOutSummary, SessionView, SwapLovejoin, SwapQuote } from "../src/shared/rpc";
+import type { LovejoinFunding, SessionOutSummary, SessionView, SwapLovejoin, SwapQuote } from "../src/shared/rpc";
 import { SendButton } from "../src/ui/components/SendButton";
 import { NetworkContext } from "../src/ui/network";
 import { PreferencesContext } from "../src/ui/preferences";
 import { FundingWayBack } from "../src/ui/screens/DappApprovals";
+import { PrivateReview, reviewHint } from "../src/ui/screens/Lovejoin";
 import { TopUpCollateralNote } from "../src/ui/screens/SiteSessions";
 import { Session, StopDialog, SwapApproval } from "../src/ui/screens/Swaps";
 import { swapCosts } from "../src/ui/swap";
@@ -84,6 +85,13 @@ const funding = (reserve: boolean): SessionOutSummary => ({
   left: 0,
   ...(reserve ? { collateralReserve: "1500000" } : {}),
 });
+/**
+ * Its funding with the reserve where the worker says its return keeps it for that mix, so the approval says it's mixed
+ * (CollateralMix; 1.6.0's review of the fixes, fx-promise): an ADA fill's, or a token's with boxes of its own.
+ */
+const mixedFunding = (): SessionOutSummary => ({ ...funding(true), collateralMix: "mixed" });
+/** A site's funding or top-up with the reserve: what the site leaves decides that mix, so only if enough is left (fx-promise). */
+const siteFunding = (): SessionOutSummary => ({ ...funding(true), collateralMix: "ifLeft" });
 
 /** Its spare ADA pays for no 10 ₳ box (the reproduction's): it comes back directly, and its collateral's mix still goes. */
 const noBox: SwapLovejoin = { boxes: 0, depth: 1, mixes: 0, mixFees: "0", withdrawFees: "0", delay: "1-6", on: true };
@@ -147,9 +155,10 @@ describe("1.6.0's release review: a site's funding review counts the collateral'
 
 describe("1.6.0's release review: where the reviews that pay for the collateral's mix say its 5 ₳ goes (323-worker#6, gap-3#2)", () => {
   it("a site's funding review never says the 5 ₳ comes back at once", () => {
-    const mixed = text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: funding(true) }));
+    // Mixed only if enough is left, since 1.6.0's review of the fixes (fx-promise): what the site leaves decides.
+    const mixed = text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: siteFunding() }));
     expect(mixed).not.toContain("the 5 ₳ come back at once");
-    expect(mixed).toContain("Lovejoin mixes the spare ADA in 10 ₳ boxes and the 5 ₳ once, in a box of its own");
+    expect(mixed).toContain("Lovejoin mixes the spare ADA in 10 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left");
     expect(mixed).toContain("The rest comes back at once.");
     // Paid nothing for, as before: the 5 ₳ comes back with the rest.
     expect(text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary: funding(false) }))).toContain(
@@ -158,14 +167,16 @@ describe("1.6.0's release review: where the reviews that pay for the collateral'
   });
 
   it("a site's top-up never says its new 5 ₳ comes back with the next return", () => {
-    const mixed = text(createElement(TopUpCollateralNote, { summary: funding(true) }));
+    const mixed = text(createElement(TopUpCollateralNote, { summary: siteFunding() }));
     expect(mixed).not.toContain("comes back with the next return");
-    expect(mixed).toContain("At the next return it's mixed once, in a box of its own, then comes back by itself.");
+    expect(mixed).toContain(
+      "At the next return it's mixed once, in a box of its own, only if enough is left, then comes back by itself; if not, it comes back with that return.",
+    );
     expect(text(createElement(TopUpCollateralNote, { summary: funding(false) }))).toContain("It comes back with the next return.");
   });
 
   it("a swap's approval never says everything left comes back at once or directly, its 5 ₳ included", () => {
-    const mixed = approval(funding(true));
+    const mixed = approval(mixedFunding());
     expect(mixed).not.toContain("The proceeds and everything left, directly");
     expect(mixed).not.toContain("so it all comes back at once");
     expect(mixed).toContain("The proceeds and the rest directly; its 5 ₳ collateral in a Lovejoin box, later");
@@ -179,14 +190,14 @@ describe("1.6.0's release review: where the reviews that pay for the collateral'
   it("each of the Plan's ways back, with its 5 ₳ in a box of its own", () => {
     // Its spare ADA in a box too: an ADA→token swap's Plan.
     const boxed: SwapLovejoin = { ...noBox, boxes: 1, mixes: 1, mixFees: "950000", withdrawFees: "300000" };
-    expect(approval(funding(true), boxed)).toContain("The proceeds and the rest at once; spare ADA and its 5 ₳ collateral in Lovejoin boxes, later");
+    expect(approval(mixedFunding(), boxed)).toContain("The proceeds and the rest at once; spare ADA and its 5 ₳ collateral in Lovejoin boxes, later");
     expect(approval(funding(false), boxed)).toContain("The proceeds and the rest at once; spare ADA in Lovejoin boxes, later");
   });
 });
 
 describe("1.6.0's release review: a swap's approval says giveme.my sees its collateral's mix (x-privacy#1)", () => {
   it("where its funding pays for that mix, beside what giveme.my sees of the payment", () => {
-    const mixed = approval(funding(true));
+    const mixed = approval(mixedFunding());
     expect(mixed).toContain("giveme.my backs its collateral's mix too, so it sees that mix.");
     expect(mixed).toContain("If that mix can't go, its 5 ₳ box waits unmixed, tied to this session.");
     expect(approval(funding(false))).not.toContain("giveme.my backs its collateral's mix");
@@ -214,7 +225,8 @@ describe("1.6.0's release review: where Lovejoin's pool takes nothing, the swap'
     const dialog = text(
       createElement(StopDialog, { placed: false, cost: short, through: true, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined }),
     );
-    expect(dialog).toContain("so it would come back directly");
+    // Its ADA, which the line says since 1.6.0's review of the fixes (last-3c, 5).
+    expect(dialog).toContain("so its ADA would come back directly");
     expect(dialog).not.toContain("three at a time");
   });
 
@@ -302,24 +314,25 @@ describe("1.6.0's release review: the transaction under a retry's Details (322#0
 
 // Round 3b (fixer fx-reserve-1): what a review says of the collateral's mix follows what the return will do, from the
 // summary the worker built (R3-1, R3-9), and Stop's dialog says it too (L1). A funding the private balance couldn't
-// also pay the reserve for keeps `collateralPool`: a 5 ₳ pool takes the collateral all the same, and the return mixes it
-// where what's left pays for that.
+// also pay the reserve for keeps saying a 5 ₳ pool takes the collateral, which the return mixes where what's left pays
+// for that: since 1.6.0's review of the fixes (fx-promise), mixed only if enough is left (`collateralMix`).
 describe("1.6.0's release review, round 3b: the reviews' collateral words follow what the return does (R3-1, R3-9, L1)", () => {
   /** A funding with its reserve (a pool takes the collateral), funded without it while a pool takes it, or with neither. */
-  const paid = (): SessionOutSummary => ({ ...funding(false), collateralReserve: "2800000", collateralPool: true });
-  const fallback = (): SessionOutSummary => ({ ...funding(false), collateralPool: true });
+  const paid = (): SessionOutSummary => ({ ...funding(false), collateralReserve: "2800000", collateralMix: "ifLeft" });
+  const fallback = (): SessionOutSummary => ({ ...funding(false), collateralMix: "ifLeft" });
   const plain = () => funding(false);
   const wayBack = (summary: SessionOutSummary) => text(createElement(FundingWayBack, { fee: "233208", lovejoin: true, perBox: "4.1", summary }));
+  const MIXED_ONCE = "Lovejoin mixes the spare ADA in 10 ₳ boxes, and the 5 ₳ once, in a box of its own, only if enough is left";
 
   it("a site's funding review counts the mix only where its reserve is paid, and says the 5 ₳ is mixed wherever a pool takes it (R3-1, R3-9)", () => {
     const reserved = wayBack(paid());
     expect(reserved).toContain("Its collateral's mix, about 1.5 ₳");
     expect(reserved).toContain("Network fees both ways, about 2.23 ₳");
-    expect(reserved).toContain("Lovejoin mixes the spare ADA in 10 ₳ boxes and the 5 ₳ once, in a box of its own");
+    expect(reserved).toContain(MIXED_ONCE);
     // Funded without the reserve, a pool taking the collateral all the same: mixed where what's left pays, and no cost
     // row for what it didn't pay.
     const without = wayBack(fallback());
-    expect(without).toContain("Lovejoin mixes the spare ADA in 10 ₳ boxes and the 5 ₳ once, in a box of its own");
+    expect(without).toContain(MIXED_ONCE);
     expect(without).not.toContain("the 5 ₳ come back at once");
     expect(without).not.toContain("Its collateral's mix");
     expect(without).toContain("Network fees both ways, about 0.73 ₳");
@@ -329,8 +342,9 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
 
   it("a site's top-up says its new 5 ₳ is mixed wherever a pool takes it, its reserve paid or not (R3-1, R3-9)", () => {
     const note = (summary: SessionOutSummary) => text(createElement(TopUpCollateralNote, { summary }));
-    expect(note(paid())).toContain("At the next return it's mixed once, in a box of its own, then comes back by itself.");
-    expect(note(fallback())).toContain("At the next return it's mixed once, in a box of its own, then comes back by itself.");
+    const mixedOnce = "At the next return it's mixed once, in a box of its own, only if enough is left, then comes back by itself;";
+    expect(note(paid())).toContain(mixedOnce);
+    expect(note(fallback())).toContain(mixedOnce);
     expect(note(plain())).toContain("It comes back with the next return.");
   });
 
@@ -362,22 +376,25 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
       }),
     );
 
-  it("a swap's approval funded without the reserve: an ADA-out swap's fill pays for the mix, so it says so, an ADA-in one's can't (R3-9)", () => {
-    // MIN for ADA: its fill is ADA alone, which pays for that mix, as giveme.my sees.
+  it("a swap's approval funded without the reserve: mixed only if enough is left, its fill ADA or a token, never said mixed (R3-9; fx-promise)", () => {
+    // MIN for ADA: its fill is ADA alone, which may pay for that mix as it comes back, or not, after its boxes and fees.
+    // As text() reads it: its no-break space before ₳ is whitespace there.
+    const ifLeft = t("lovejoin.collateralMix.privacy.ifLeft").replace(/\s+/g, " ");
     const out = selling(fallback());
-    expect(out).toContain("Too little spare ADA for a Lovejoin box, so all but its 5 ₳ collateral comes back at once.");
-    expect(out).toContain("The proceeds and the rest directly; its 5 ₳ collateral in a Lovejoin box, later");
-    expect(out).toContain("giveme.my backs its collateral's mix too, so it sees that mix.");
+    expect(out).toContain("Too little spare ADA for a Lovejoin box, so it all comes back at once.");
+    expect(out).toContain("The proceeds and everything left, directly");
+    expect(out).toContain(ifLeft);
+    expect(out).not.toContain("giveme.my backs its collateral's mix too");
     // Nothing paid for it beside the swap: no cost row for it, the cost comes from what comes back.
     expect(out).not.toContain("Its collateral's mix, about");
-    // Its fill pays nothing a pool doesn't take: as before.
+    // No pool takes it: as before.
     expect(selling(plain())).toContain("The proceeds and everything left, directly");
-    expect(selling(plain())).not.toContain("giveme.my backs its collateral's mix");
-    // ADA for MIN: its fill is MIN beside too little ADA for that mix, so it comes back with the rest, as said.
+    expect(selling(plain())).not.toContain(ifLeft);
+    // ADA for MIN: a stop or a refund may leave enough for it, so the same words.
     const into = approval(fallback());
     expect(into).toContain("The proceeds and everything left, directly");
-    expect(into).toContain("Too little spare ADA for a Lovejoin box, so it all comes back at once.");
-    expect(into).not.toContain("giveme.my backs its collateral's mix");
+    expect(into).toContain(ifLeft);
+    expect(into).not.toContain("giveme.my backs its collateral's mix too");
     expect(into).not.toContain("Its collateral's mix, about");
   });
 
@@ -386,11 +403,11 @@ describe("1.6.0's release review, round 3b: the reviews' collateral words follow
     const dialog = (cost: SwapLovejoin, through = true) =>
       text(createElement(StopDialog, { placed: false, cost, through, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined }));
     // In its own words, without the approval's "too" (the last look, LW-1, below).
-    expect(dialog({ ...boxed, collateralMix: true })).toContain("giveme.my backs its collateral's mix, so it sees that mix.");
+    expect(dialog({ ...boxed, collateralMix: "mixed" })).toContain("giveme.my backs its collateral's mix, so it sees that mix.");
     // Its spare pays no box, and Stop still brings it back through Lovejoin, its collateral mixed first.
-    expect(dialog({ ...noBox, collateralMix: true })).toContain("giveme.my backs its collateral's mix, so it sees that mix.");
+    expect(dialog({ ...noBox, collateralMix: "mixed" })).toContain("giveme.my backs its collateral's mix, so it sees that mix.");
     // Brought back directly, or no pool takes the collateral: nothing of it.
-    expect(dialog({ ...boxed, collateralMix: true }, false)).not.toContain("giveme.my backs");
+    expect(dialog({ ...boxed, collateralMix: "mixed" }, false)).not.toContain("giveme.my backs");
     expect(dialog(boxed)).not.toContain("giveme.my backs");
   });
 });
@@ -411,20 +428,20 @@ describe("1.6.0's review of the fixes, the last look: Stop's dialog says where i
       [false, true, "If the swap hasn't gone out yet, it won't, and "],
       [true, false, "The order is cancelled, unless it fills first, and "],
     ] as const) {
-      const said = dialog({ ...noBox, collateralMix: true }, { placed, pools });
+      const said = dialog({ ...noBox, collateralMix: "mixed" }, { placed, pools });
       expect(said, lead).toContain(lead + MIXED);
       expect(said, lead).not.toContain("everything comes back to your private balance");
       expect(said, lead).not.toContain("less the return's network fee");
       expect(said, lead).not.toContain("The cancel and the return each cost a network fee.");
     }
     // Lovejoin's pool short: the same, and why its ADA comes back directly.
-    const short = dialog({ ...noBox, of: 1, skipped: "Right now Lovejoin's pool holds 12 boxes that aren't yours, under the 30 it needs", collateralMix: true });
+    const short = dialog({ ...noBox, of: 1, skipped: "Right now Lovejoin's pool holds 12 boxes that aren't yours, under the 30 it needs", collateralMix: "mixed" });
     expect(short).toContain(MIXED);
-    expect(short).toContain("under the 30 it needs, so it would come back directly");
+    expect(short).toContain("under the 30 it needs, so its ADA would come back directly");
   });
 
   it("says giveme.my backs that mix in its own words, without the approval's \"too\"", () => {
-    for (const cost of [{ ...noBox, collateralMix: true as const }, { ...boxed, collateralMix: true as const }]) {
+    for (const cost of [{ ...noBox, collateralMix: "mixed" as const }, { ...boxed, collateralMix: "mixed" as const }]) {
       const said = dialog(cost);
       expect(said).toContain("giveme.my backs its collateral's mix, so it sees that mix. If that mix can't go, its 5 ₳ box waits unmixed, tied to this session.");
       expect(said).not.toContain("mix too");
@@ -435,13 +452,155 @@ describe("1.6.0's review of the fixes, the last look: Stop's dialog says where i
     expect(dialog(noBox)).toContain("everything comes back to your private balance, less the return's network fee.");
     expect(dialog(noBox, { placed: true })).toContain("The cancel and the return each cost a network fee.");
     // A box and the switch off: Stop goes directly, its collateral with the rest, as the switch's note says.
-    const direct = dialog({ ...boxed, collateralMix: true }, { through: false });
+    const direct = dialog({ ...boxed, collateralMix: "mixed" }, { through: false });
     expect(direct).toContain("everything comes back to your private balance, less the return's network fee.");
     expect(direct).not.toContain(MIXED);
     expect(direct).not.toContain("giveme.my");
     // Through Lovejoin with a box: its boxes' words, as before.
-    const through = dialog({ ...boxed, collateralMix: true });
+    const through = dialog({ ...boxed, collateralMix: "mixed" });
     expect(through).toContain("Its ADA goes through Lovejoin first");
     expect(through).not.toContain(MIXED);
+  });
+});
+
+// The collateral's mix by one rule (fixer fx-promise, after the last look at round 3c's fixes, review/last-3c.md). Each
+// screen says it one of three ways, from what the worker decided (`collateralMix`): mixed, in its definite words with
+// giveme.my's line, where its funding paid the reserve and the return keeps it for that mix; mixed only if enough is
+// left, giveme.my's part said so it holds either way, wherever else a 5 ₳ pool may take it; nothing where no mix can go.
+// What each counts as a cost follows the reserve paid, never the words.
+describe("1.6.0's review of the fixes, fx-promise: each screen says the collateral's mix one of three ways (last-3c)", () => {
+  const DEFINITE = "giveme.my backs its collateral's mix too, so it sees that mix.";
+  const STOP_DEFINITE = "giveme.my backs its collateral's mix, so it sees that mix.";
+  // As text() reads it: its no-break space before ₳ is whitespace there.
+  const IF_LEFT = () => t("lovejoin.collateralMix.privacy.ifLeft").replace(/\s+/g, " ");
+  const COST = "Its collateral's mix, about 1.5 ₳";
+  const boxed: SwapLovejoin = { ...noBox, boxes: 1, mixes: 1, mixFees: "950000", withdrawFees: "300000" };
+  /** The swap's funding, its reserve paid or not, the worker's word for the collateral's mix. */
+  const summaryOf = (reserve: boolean, mix?: "mixed" | "ifLeft"): SessionOutSummary => ({ ...funding(reserve), ...(mix ? { collateralMix: mix } : {}) });
+
+  it("the swap approval: mixed, only if enough is left, or nothing, its cost row on the reserve alone", () => {
+    for (const l of [noBox, boxed]) {
+      const box = l.boxes ? "a box" : "no box";
+      const mixed = approval(summaryOf(true, "mixed"), l);
+      expect(mixed, box).toContain(DEFINITE);
+      expect(mixed, box).toContain("its 5 ₳ collateral in");
+      expect(mixed, box).not.toContain(IF_LEFT());
+      expect(mixed, box).toContain(COST);
+      // Paid for, its fill not keeping the reserve for that mix (a token's, which may come against the pools): only if
+      // enough is left, its cost still counted, never the definite words.
+      const paid = approval(summaryOf(true, "ifLeft"), l);
+      expect(paid, box).not.toContain(DEFINITE);
+      expect(paid, box).not.toContain("its 5 ₳ collateral in");
+      expect(paid, box).toContain(IF_LEFT());
+      expect(paid, box).toContain(COST);
+      // Not paid for, a pool taking it: the same words, no cost row.
+      const short = approval(summaryOf(false, "ifLeft"), l);
+      expect(short, box).toContain(IF_LEFT());
+      expect(short, box).not.toContain(DEFINITE);
+      expect(short, box).not.toContain("Its collateral's mix");
+      // No mix can go: nothing of it.
+      const plain = approval(summaryOf(false), l);
+      expect(plain, box).not.toContain(IF_LEFT());
+      expect(plain, box).not.toContain("giveme.my backs its collateral's mix");
+      expect(plain, box).not.toContain("its 5 ₳ collateral in");
+    }
+    // No box: where it's mixed all but the 5 ₳ comes back at once; otherwise it all does, the line saying when it may not.
+    expect(approval(summaryOf(true, "mixed"))).toContain("so all but its 5 ₳ collateral comes back at once.");
+    expect(approval(summaryOf(false, "ifLeft"))).toContain("so it all comes back at once.");
+  });
+
+  const dialog = (cost: SwapLovejoin, { placed = false, pools = false, through = true } = {}) =>
+    text(createElement(StopDialog, { placed, pools, cost, through, onThrough: () => undefined, busy: false, onStop: () => undefined, onClose: () => undefined }));
+
+  it("Stop's dialog: mixed, only if enough is left, or nothing, and nothing where Stop brings it back directly", () => {
+    // No box, so no switch: mixed, all but its 5 ₳ comes back and the 5 ₳ later; only if enough is left, everything
+    // comes back, no fee named for it alone; nothing, everything for the return's fee.
+    for (const [placed, pools, lead] of [
+      [false, false, "If no order has gone out yet, none will, and "],
+      [false, true, "If the swap hasn't gone out yet, it won't, and "],
+      [true, false, "The order is cancelled, unless it fills first, and "],
+    ] as const) {
+      const mixed = dialog({ ...noBox, collateralMix: "mixed" }, { placed, pools });
+      expect(mixed, lead).toContain(lead + "everything but its 5 ₳ collateral comes back to your private balance, less network fees; the 5 ₳ comes back later, mixed once.");
+      expect(mixed, lead).toContain(STOP_DEFINITE);
+      expect(mixed, lead).not.toContain(IF_LEFT());
+      const ifLeft = dialog({ ...noBox, collateralMix: "ifLeft" }, { placed, pools });
+      expect(ifLeft, lead).toContain(lead + "everything comes back to your private balance.");
+      expect(ifLeft, lead).not.toContain("less the return's network fee");
+      expect(ifLeft, lead).not.toContain("everything but its 5 ₳");
+      expect(ifLeft, lead).not.toContain(STOP_DEFINITE);
+      expect(ifLeft, lead).toContain(IF_LEFT());
+      const plain = dialog(noBox, { placed, pools });
+      expect(plain, lead).not.toContain(IF_LEFT());
+      expect(plain, lead).not.toContain("giveme.my backs");
+    }
+    expect(dialog({ ...noBox, collateralMix: "ifLeft" }, { placed: true })).toContain("The cancel costs a network fee too.");
+    expect(dialog(noBox)).toContain("everything comes back to your private balance, less the return's network fee.");
+    // A box, through Lovejoin: its boxes' words, and the collateral's line by the rule; directly, none.
+    expect(dialog({ ...boxed, collateralMix: "mixed" })).toContain(STOP_DEFINITE);
+    const ifLeft = dialog({ ...boxed, collateralMix: "ifLeft" });
+    expect(ifLeft).toContain("Its ADA goes through Lovejoin first");
+    expect(ifLeft).toContain(IF_LEFT());
+    expect(ifLeft).not.toContain(STOP_DEFINITE);
+    for (const collateralMix of ["mixed", "ifLeft"] as const) {
+      const direct = dialog({ ...boxed, collateralMix }, { through: false });
+      expect(direct, collateralMix).not.toContain(IF_LEFT());
+      expect(direct, collateralMix).not.toContain("giveme.my");
+    }
+  });
+
+  it("Stop's dialog: with Lovejoin's pool short, its ADA comes back directly, never the 5 ₳ said mixed just before it (last-3c, 5)", () => {
+    const short = dialog({ ...noBox, of: 1, skipped: "Right now Lovejoin's pool holds 12 boxes that aren't yours, under the 30 it needs", collateralMix: "mixed" });
+    expect(short).toContain("the 5 ₳ comes back later, mixed once.");
+    expect(short).toContain("under the 30 it needs, so its ADA would come back directly, tied to this session on chain.");
+  });
+
+  it("a site's funding review and its top-up: only if enough is left wherever a pool may take it, never mixed, its cost row on the reserve alone", () => {
+    const wayBack = (summary: SessionOutSummary, lovejoin = true) => text(createElement(FundingWayBack, { fee: "233208", lovejoin, perBox: "4.1", summary }));
+    const note = (summary: SessionOutSummary) => text(createElement(TopUpCollateralNote, { summary }));
+    // What the site leaves decides whether that mix goes, its reserve paid or not, so a worker's "mixed" would say no more.
+    for (const [summary, cost] of [
+      [summaryOf(true, "ifLeft"), true],
+      [summaryOf(false, "ifLeft"), false],
+      [summaryOf(true, "mixed"), true],
+    ] as const) {
+      const what = `${summary.collateralReserve ?? "no reserve"} ${summary.collateralMix}`;
+      const back = wayBack(summary);
+      expect(back, what).toContain("and the 5 ₳ once, in a box of its own, only if enough is left");
+      expect(back, what).not.toContain("the 5 ₳ come back at once");
+      expect(back.includes("Its collateral's mix, about 1.5 ₳"), what).toBe(cost);
+      const topUp = note(summary);
+      expect(topUp, what).toContain("At the next return it's mixed once, in a box of its own, only if enough is left");
+      expect(topUp, what).not.toContain("It comes back with the next return.");
+    }
+    // No mix can go: back with the rest, as before.
+    expect(wayBack(summaryOf(false))).toContain("The rest and the 5 ₳ come back at once.");
+    expect(wayBack(summaryOf(false), false)).toContain("straight into your private balance, the 5 ₳ kept aside too.");
+    expect(note(summaryOf(false))).toContain("It comes back with the next return.");
+    expect(note(summaryOf(false))).not.toContain("only if enough is left");
+  });
+
+  it("a mix's review: mixed, only if enough is left, or nothing, on a mix and on Mix my boxes again", () => {
+    const mixOf = (mix?: "mixed" | "ifLeft", again = false) =>
+      ({
+        ...funding(mix === "mixed"),
+        ...(mix ? { collateralMix: mix } : {}),
+        mix: { boxes: 1, lovelace: "15300000", mixes: 4, mixFees: "3800000", depth: 2, delay: "1-6", ...(again ? { again: true, owned: 1 } : {}) },
+      }) as unknown as SessionOutSummary & { mix: LovejoinFunding };
+    const hint = (summary: SessionOutSummary & { mix: LovejoinFunding }) => reviewHint({ source: "private", summary });
+    for (const again of [false, true]) {
+      const which = again ? "again" : "a mix";
+      const mixed = text(createElement(PrivateReview, { summary: mixOf("mixed", again) }));
+      expect(mixed, which).toContain(DEFINITE);
+      expect(mixed, which).not.toContain(IF_LEFT());
+      expect(hint(mixOf("mixed", again)), which).toBe(t(again ? "lovejoin.review.againNoteMixed" : "lovejoin.review.privateNoteMixed"));
+      const ifLeft = text(createElement(PrivateReview, { summary: mixOf("ifLeft", again) }));
+      expect(ifLeft, which).toContain(IF_LEFT());
+      expect(ifLeft, which).not.toContain(DEFINITE);
+      expect(hint(mixOf("ifLeft", again)), which).toBe(t(again ? "lovejoin.review.againNote" : "lovejoin.review.privateNote"));
+      const plain = text(createElement(PrivateReview, { summary: mixOf(undefined, again) }));
+      expect(plain, which).not.toContain(IF_LEFT());
+      expect(plain, which).not.toContain("giveme.my backs its collateral's mix");
+    }
   });
 });

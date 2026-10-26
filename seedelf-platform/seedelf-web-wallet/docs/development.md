@@ -12,7 +12,7 @@ This is how we run and test the extension before a release goes to the Chrome We
 - **Open PRs into `main`.**
   - CI ([web-wallet.yml](../../../.github/workflows/web-wallet.yml)) runs on pull requests into any branch that touch `seedelf-platform/`.
   - Direct pushes don't trigger it, so go through a PR even for a docs change.
-  - **Merge only once its check is green on every step.** Nothing runs on `main` after the merge, so a PR merged red leaves `main` red with nothing to show it: #323 merged a minute after its run failed, and no e2e ran on its tree (1.6.0's release review).
+  - **Merge only once its check is green on every step,** never while it's still running. Nothing of the wallet's runs on `main` after the merge (`continuous-integration.yml` runs there, but checks only the Aiken contracts), so a PR merged red leaves `main` red with nothing to show it: #323 merged while its check was still running, which failed 12 minutes later at *Extension unit tests*, and no e2e ran on its tree (1.6.0's release review).
 - **Never name a branch `web-wallet/<x>.<y>.<z>`** — that's the tag namespace (`web-wallet/1.0.0`), and a branch and tag sharing a name makes `git checkout` ambiguous.
 
 **The old branch:**

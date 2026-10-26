@@ -1,6 +1,6 @@
 # Fixer w-left (round 2, Lane W): the worker's leftovers
 
-Five items: 321-parts-worker#3's second half, 314-wasm#0's defence in depth, rr-1's note on acrossOf (319-rust#0's worker half), wlj-2's two slips in Bring every box back now, and wlj-1's test name. All five are done. Each fix has a test that failed on today's tree for the item's reason, and each hunk was mutation-checked.
+Five items: 321-parts-worker#3's second half, 314-wasm#0's defence in depth, rr-1's note on acrossOf (319-rust#0's worker half), wlj-2's two slips in Bring every box back now, and wlj-1's test name. All five are done. Each fix has a test that failed on today's tree for the item's reason, and each hunk was mutation-checked. (Corrected in the docs round, from fx-tests: four of 314-wasm#0's `runs.ts` catches had no test until R3-19, whose test traps at each of the run's six steps.)
 
 **No test needs the pkg rebuilt.** No Rust changed.
 

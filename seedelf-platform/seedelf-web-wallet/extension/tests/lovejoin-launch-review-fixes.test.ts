@@ -62,7 +62,7 @@ describe("a pool the wallet started that no look has found (1.6.0's release revi
       expect(said, `${minutes} min`).not.toContain("about 10 minutes after its block");
       expect(said, `${minutes} min`).toContain("hasn't shown.");
       expect(said, `${minutes} min`).toContain(
-        "Its start may not have gone through, or an earlier start of the same values did: then yours is a copy, never shown, and what it locked is gone for good.",
+        "Its start may not have gone through, or an earlier start of the same values did. If an earlier one did, yours is a copy, never shown, and what it locked is gone for good.",
       );
     }
     // Each start its own line, when it was sent with it.

@@ -88,6 +88,7 @@ import {
   mixesPerBox,
   useSessionsWhile,
   WidthNote,
+  CollateralMixLine,
   CollateralReserveRow,
 } from "../components/LovejoinReturn";
 import { Modal } from "../components/Modal";
@@ -163,9 +164,10 @@ const bootstraps = (r: Reviewed) => !!(r.source === "private" ? r.summary.mix.bo
  * the review's rows and callouts. A Bootstrap has its own note on either side: nothing is mixed, and its boxes stay
  * until brought back by hand. None for a mix in a pool whose boxes can't pay their own way back (`cantComeBack`): each
  * note ends in each box coming back after its wait, which isn't so there, and the review's callout says how they come
- * back (session 5's cross-area review, M1). From the private balance, where the funding pays for its collateral's mix
- * (`collateralReserve`), the 5 ₳ isn't said to come back with what isn't used: it's mixed once, and comes back later
- * (1.6.0's release review, 323-worker#6, gap-3#2). A Bootstrap from the private balance is funded first, its deposit
+ * back (session 5's cross-area review, M1). From the private balance, where the worker says its collateral is mixed
+ * (`collateralMix`: its funding pays for that mix, which its chain sets aside), the 5 ₳ isn't said to come back with
+ * what isn't used: it's mixed once, and comes back later (1.6.0's release review, 323-worker#6, gap-3#2; its review of
+ * the fixes, fx-promise). A Bootstrap from the private balance is funded first, its deposit
  * once that lands and what's left back after: its note said the deposit went now, in one transaction, which only the
  * public account's does (1.6.0's review of the fixes, R3-21). Exported for its test.
  */
@@ -173,7 +175,7 @@ export function reviewHint(r: Reviewed, cantComeBack?: CantComeBack): string | u
   if (bootstraps(r)) return t(r.source === "private" ? "lovejoin.review.bootstrapNotePrivate" : "lovejoin.review.bootstrapNote");
   if (cantComeBack) return undefined;
   if (r.source === "private") {
-    const mixed = !!r.summary.collateralReserve;
+    const mixed = r.summary.collateralMix === "mixed";
     if (r.summary.mix.again) return t(mixed ? "lovejoin.review.againNoteMixed" : "lovejoin.review.againNote");
     return t(mixed ? "lovejoin.review.privateNoteMixed" : "lovejoin.review.privateNote");
   }
@@ -3797,24 +3799,20 @@ export function PrivateReview({
       )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-private-histories" />
       <GivemeNote funding />
-      <CollateralMixNote reserve={summary.collateralReserve} />
+      <CollateralMixNote summary={summary} />
     </>
   );
 }
 
 /**
- * That giveme.my backs and sees the collateral's mix too, where the funding pays for that mix: it runs by itself as the
- * session comes back, so it's said where the funding is approved, in the swap approval's words, as a return reviewed by
- * hand says it (CollateralTailNote; 1.6.0's release review, x-privacy#1). Nothing otherwise.
+ * That giveme.my backs and sees the collateral's mix too: it runs by itself as the session comes back, so it's said
+ * where the funding is approved, in the swap approval's words, as a return reviewed by hand says it (CollateralTailNote;
+ * 1.6.0's release review, x-privacy#1). Mixed where the funding pays for that mix; mixed only if enough is left where a
+ * 5 ₳ pool may take it otherwise; nothing where none can (the worker's `collateralMix`; its review of the fixes,
+ * fx-promise).
  */
-function CollateralMixNote({ reserve }: { reserve?: string }) {
-  const tr = useT();
-  if (!reserve) return null;
-  return (
-    <p className="note" data-testid="lovejoin-collateral-mix-note">
-      {tr("swaps.review.privacy.collateralMix")}
-    </p>
-  );
+function CollateralMixNote({ summary }: { summary: Pick<SessionOutSummary, "collateralMix"> }) {
+  return <CollateralMixLine mix={summary.collateralMix} mixed="swaps.review.privacy.collateralMix" testId="lovejoin-collateral-mix-note" />;
 }
 
 /** Mix my boxes again: the one-time account's funding, then the fan-out of the boxes in the pool. */
@@ -3882,7 +3880,7 @@ function AgainReview({
       )}
       <HistoriesNote histories={summary.histories} session={summary.index} testId="lovejoin-again-histories" />
       <GivemeNote funding />
-      <CollateralMixNote reserve={summary.collateralReserve} />
+      <CollateralMixNote summary={summary} />
     </>
   );
 }

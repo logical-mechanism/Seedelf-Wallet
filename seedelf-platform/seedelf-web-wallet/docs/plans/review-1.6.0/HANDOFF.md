@@ -4,7 +4,7 @@
 
 ## Read this first
 
-- **`main`'s Web Wallet CI is red, and has been since PR #323.** Run 40109672647 on `a6ab608d` (its tree is `499768f6`'s) failed at *Extension unit tests*: 2 Vitest failures, so the build, e2e, `e2e:data` and the store package's e2e never ran. #323 merged a minute later. `web-wallet.yml` runs on `pull_request` only, so `main` looks green.
+- **`main`'s Web Wallet CI is red, and has been since PR #323.** Run 40109672647 on `a6ab608d` (its tree is `499768f6`'s) failed at *Extension unit tests*: 2 Vitest failures, so the build, e2e, `e2e:data` and the store package's e2e never ran. #323 merged 26 seconds after that run started, 12 minutes before it failed (corrected from "a minute later" by the docs check, `review/docs-check.md`). `web-wallet.yml` runs on `pull_request` only, so `main` looks green.
 - **The cause is the release blocker:** `62162483` ("a Bootstrap is funded with no collateral") broke every private Bootstrap. Its session holds 1.5 ₳ beside the boxes, and the deposit's change, about 1.33 ₳, can't pay its sweep back (a Seedelf output's least is 1.456780 ₳, plus the fee). So the chain fails, the session comes back directly with a second fee, and no box goes in. Findings 318-rust#0, 323-rust#0 and x-scenarios-lj#0, the same bug found three times.
 - **This commit's code is unfinished, and none of it was compiled or tested after the crash.** Start with `cargo fmt --all -- --check`, clippy and the tests below.
 
@@ -112,7 +112,7 @@ None blocks the release; each has a recommendation.
 - **Four boxes a mix can cost a later token its box** in a return across pools: it comes back directly where three wide would mix it (319-rust#1, 319-worker#1; 34e's open call 8). *Leave for 1.6.0:* four wide is off by default, and mainnet has no token pools yet.
 - **At one wave deep, a return carrying a token caps its deposit at 64 boxes,** so up to 33 more 10 ₳ boxes come back directly than in 1.5.0 (319-worker#2). *Accept:* only very large returns at depth 1.
 - **A session's return can wait up to a day on giveme.my** for its collateral's mix, with no way to bring it back sooner (323-worker#3, x-scenarios-sessions#3). Session 11 chose this. The fix round corrects its words (323-worker#2) and lets withdraws go meanwhile (x-scenarios-lj#1). *Recommend* an "unmixed, now" way out after a few hours: soon after 1.6.0, or in it if the live run shows giveme.my slow.
-- **A lock silently cuts a payment's waiting parts** (321-parts-worker#2; 10b's call 1). The fix round adds the warnings: the lock countdown and Remove wallet name them (gap-3#6, gap-1#1).
+- **A lock silently cuts a payment's waiting parts** (321-parts-worker#2; 10b's call 1). The fix round adds the warnings: the lock countdown and Remove wallet name them (gap-3#6, gap-1#1). And once the part watched lands after an unlock, Home says the payment went only in part, never that it's confirmed: the watch keeps how far it went, sealed (321-parts-worker#0). What waits still lives in session storage, so a lock still cuts it (wss-1).
 - **Transaction details opens only a payment's first part** (321-parts-worker#5). *Later*, as recorded.
 - **Bring every box back now can say Done** while a box someone else's mix moved after a later chain is left (321-lj-worker#3; item 5's call, "only what's there now"). *Leave.*
 - **A session funded without the reserve pays its collateral's mix from what was coming back** (323-worker#7; Session 11's call 3). *Leave.*

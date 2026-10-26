@@ -3889,14 +3889,17 @@ export class LovejoinService {
    * crowd a mix waits for. Its mix draws two boxes that aren't the wallet's, nor what another of its chains will
    * spend (`owner`'s own aside, built again), so one with fewer is none either. Read as every read is (split), on
    * every network: a read that fails leaves the collateral out rather than the return. A trap is handed on: the build
-   * after it would go on on the broken instance (1.6.0's release review, L3).
+   * after it would go on on the broken instance (1.6.0's release review, L3). `tell`: a read that fails is thrown,
+   * not answered as none, for a funding's look to tell the two apart (sessions.ts tailReserve): that pool may still
+   * take the collateral as the session comes back (1.6.0's review of the fixes, fx-may; last-3d, 2).
    */
-  async collateralPool(network: NetworkName, params: unknown, owner?: string): Promise<CollateralPool | undefined> {
+  async collateralPool(network: NetworkName, params: unknown, owner?: string, tell = false): Promise<CollateralPool | undefined> {
     if (!this.available(network)) return undefined;
     const pools = await this.readSet(network, true);
     const pool = pools.find((p) => !p.token && p.ref && !p.copy && p.lovelace === COLLATERAL_LOVELACE);
     if (!pool || this.usableNow(network, pool, params)) return undefined;
-    const split = await this.split(network, owner, undefined, pool).catch(unlessTrap(undefined));
+    const read = this.split(network, owner, undefined, pool);
+    const split = await (tell ? read : read.catch(unlessTrap(undefined)));
     if (!split || this.floorShort(network, split.others.length)) return undefined;
     if (free(split.others, split.reserved).length < TAIL_DRAWS) return undefined;
     return { pool, rows: this.real(split) };
@@ -3904,8 +3907,8 @@ export class LovejoinService {
 
   /**
    * Whether the 5 ₳ pool collateralPool reads takes a session's collateral, as the wallet last read it, asking nobody:
-   * a swap's quote as the user types, for its form's Max, and Stop's dialog (sessions.ts quote and stopCost; 1.6.0's
-   * release review, 323-worker#0, R3-11, L1). By collateralPool's rule, as the Mix form's tailReserveOf keeps it: "no"
+   * a swap's quote as the user types, for its form's Max, Stop's dialog, and a funding's look after a read that failed
+   * (sessions.ts quote, stopCost and tailReserve; 1.6.0's release review, 323-worker#0, R3-11, L1, fx-may). By collateralPool's rule, as the Mix form's tailReserveOf keeps it: "no"
    * where none is shown, it took no new box when last measured (usableNow), the data layer's last count of its boxes
    * is under the network's floor (everyone's boxes, so fewer others still), or a pool read within POOL_ROOM_MS has too
    * few others or too few free for its mix; "yes" where that read has enough of both; "maybe" where nothing read lately

@@ -526,4 +526,21 @@ describe("a trap under a catch that takes any failure (1.6.0's release review, L
     for (const [what, trap] of traps()) await expect(funded(trap), what).rejects.toBe(trap);
     expect((await funded(new Error("The server didn't answer."))).collateralReserve).toBeUndefined();
   });
+
+  it("tells a funding's look at the 5 ₳ pool a read that fails, rather than answer none, a trap handed on as ever (1.6.0's review of the fixes, fx-may; last-3d, 2)", async () => {
+    const params = async (t: T) => (await t.deps.koios().epochParams()) as unknown;
+    for (const [what, trap] of traps()) {
+      const t = await wallet();
+      let reads = 0;
+      const lj = lovejoin(t, async () => (++reads > 1 ? [FIVE, TOKEN_POOL] : [FIVE]), onToken(trap));
+      await expect(lj.collateralPool("preprod", await params(t), undefined, true), what).rejects.toBe(trap);
+    }
+    const t = await wallet();
+    const lj = lovejoin(t, async () => [FIVE]);
+    const real = t.koios.fetch;
+    t.koios.fetch = async (url, init) => (String(url).includes("/credential_utxos") ? new Response("down", { status: 500 }) : real(url, init));
+    await expect(lj.collateralPool("preprod", await params(t), undefined, true)).rejects.toThrow();
+    // Asked as a return asks, the same failure is none: the collateral comes back with the rest, rather than no return.
+    expect(await lj.collateralPool("preprod", await params(t))).toBeUndefined();
+  });
 });

@@ -1,6 +1,6 @@
-# Calls for the owner: every fixer's list (fix rounds 1, 2 and 3b)
+# Calls for the owner: every fixer's list (fix rounds 1 to 4)
 
-Claude-made choices the owner may overturn, warnings put in place of refusals, and what was left and why. HANDOFF.md's own list of owner's calls is separate.
+Claude-made choices the owner may overturn, warnings put in place of refusals, and what was left and why. HANDOFF.md's own list of owner's calls is separate. A note in brackets after a call says what a later round changed of it.
 
 ## Round 1
 
@@ -77,7 +77,7 @@ Claude-made choices the owner may overturn, warnings put in place of refusals, a
 - The money: a site's session and a top-up that pays a new collateral now add 2.8 ₳ (today's parameters) instead of 1.5 ₳ where a 5 ₳ pool would take the collateral. It's live on preprod, and dormant on mainnet until a 5 ₳ pool holds 30 other people's boxes. What isn't used comes back. The alternative: keep 1.5 ₳ and say the collateral is mixed only where enough is left at the return.
 - Swaps keep 1.5 ₳, relying on SWAP_MARGIN less the order's fee coming back beside the reserve, with the fill carrying the sweep's least (measured at both byte prices). If SWAP_MARGIN is lowered, revisit; its doc now says so.
 - In a swap the reserve is left out before the token's boxes; at 9978654a the boxes went first.
-- The fallback says nothing: a funding without the reserve shows no For its collateral's mix row, as with Settings' switch off. Words, if wanted, are the screens round's.
+- The fallback says nothing: a funding without the reserve shows no For its collateral's mix row, as with Settings' switch off. Words, if wanted, are the screens round's. [Since fx-promise there's still no row, but wherever a pool may take the collateral, the review says it's mixed only if enough is left when it comes back.]
 - Rounding up to 0.1 ₳ and planning the tail's mix on MIX_FEE_ESTIMATE leave the figure 0.137 ₳ over the least that builds today.
 - Not fixed (a WebAssembly change beyond these findings): a direct return whose ADA sits only in token UTxOs has no ADA-only UTxO to pay for the collateral's mix, whatever the reserve. For example, a swap against the pools whose transaction puts the token and the change in one output.
 - Not fixed (screens round): 323-worker#0's form half (swap Max and shortfall, the Mix stepper, FEE_ROOM), and counting lovejoin-funding's new field (320-screens#2, 321-lj-screens#3, with 321-lj-screens#4).
@@ -145,8 +145,8 @@ Claude-made choices the owner may overturn, warnings put in place of refusals, a
 ### sc-lj-1
 
 - The collateral's mix counts as a cost on the form, where it applies: 'Mixing 10 ₳ costs about 6.35 ₳ (63.5%)', with its own part row, so the rows still add up.
-- The stepper keeps the reserve aside (private by default): in a ~1.5 ₳ window it offers one box fewer than a funding without the collateral's mix would pay for. Settings' collateral switch turns that off. It's not a refusal: Review and the worker's fallback are unchanged.
-- FEE_ROOM is 2 ₳ (the fee and the change's least) for the Mix stepper and the Bootstrap form alike: a 1 ₳ bend on classic-only screens, now said before Review where the funding refused it at Review.
+- The stepper keeps the reserve aside (private by default): in a ~1.5 ₳ window it offers one box fewer than a funding without the collateral's mix would pay for. Settings' collateral switch turns that off. It's not a refusal: Review and the worker's fallback are unchanged. [fx-reserve-2, R3-7: the stepper no longer keeps it aside, and the figures count it only where that many boxes leave room for it, a line saying the collateral is mixed only if enough is left otherwise. "It's not a refusal" is now true: the form never refuses on the reserve.]
+- FEE_ROOM is 2 ₳ (the fee and the change's least) for the Mix stepper and the Bootstrap form alike: a 1 ₳ bend on classic-only screens, now said before Review where the funding refused it at Review. [fx-reserve-2: its "where the funding refused it at Review" no longer applies.]
 - The public side's held figure and cap show what a mix can spend, not Home's public figure. cantAffordPublic's words changed to match.
 - The review hints change only where the collateral is mixed (*NoteMixed); the general wording waits for Session 10's call 2.
 - The x-privacy#1 note reuses sc-o-1's swap note (one critical key for both approvals), short, under the giveme.my note.
@@ -165,7 +165,7 @@ Claude-made choices the owner may overturn, warnings put in place of refusals, a
 
 ### sc-o-1
 
-- adaShort doesn't count the collateral's reserve: a balance short of it is funded without it, and refusing would be a guard the chain doesn't make. Max keeps it aside by default. An amount typed past it silently loses the collateral's mix (round-1 reserve call 4). Option: a note when the quote names a reserve but the summary has none.
+- adaShort doesn't count the collateral's reserve: a balance short of it is funded without it, and refusing would be a guard the chain doesn't make. Max keeps it aside by default. An amount typed past it silently loses the collateral's mix (round-1 reserve call 4). Option: a note when the quote names a reserve but the summary has none. [fx-reserve-1: it's funded without the reserve, not without the mix; its collateral is still mixed at the return where what's left pays. Since fx-promise the approval says so: mixed only if enough is left.]
 - Max keeps the reserve aside wherever a 5 ₳ pool is shown in discovery's set, without checking its floor or free boxes (no pool read as the user types). Where a shown pool is under its floor, Max leaves 1.5 ₳ more than the funding takes.
 - FEE_ROOM is 2 ₳. A Max over many UTxOs, or whose change holds many tokens, can still need more, and Review says so.
 - The costs notes (swaps.costs.note*) are unchanged: the collateral's mix is its own labelled row instead. Option: name its deposit and mix in the note.
@@ -173,7 +173,7 @@ Claude-made choices the owner may overturn, warnings put in place of refusals, a
 - By-hand 5 ₳ notes (swaps.collateral.note, swaps.backCollateral.note) are not reworded: their reviews pay no reserve, and they're Session 10's call-2 class.
 - A swap approval whose only Lovejoin part is the collateral's mix (no box) shows no switch; that mix can be turned off only in Settings. Not changed.
 - No giveme.my line on site and top-up funding reviews: their returns are reviewed by hand, where CollateralTailNote says it first.
-- Not fixed (Lane W's worker logic): stopCost prices Stop's boxes on spare with the reserve in, so at the boundary it names one box more. Suggested: held = spare - (s.collateralReserve ? lovejoinCollateralReserve() : 0), plus a planner boundary test.
+- Not fixed (Lane W's worker logic): stopCost prices Stop's boxes on spare with the reserve in, so at the boundary it names one box more. Suggested: held = spare - (s.collateralReserve ? lovejoinCollateralReserve() : 0), plus a planner boundary test. [Done in round 3b, L1: the reserve is set aside first.]
 - Small anchored edit in S1's Lovejoin.tsx (the Start mix button) for 320-screens#3; sc-lj-1's scope doesn't include it.
 
 ### sc-o-2
@@ -198,23 +198,23 @@ Claude-made choices the owner may overturn, warnings put in place of refusals, a
 ### fx-reserve-1
 
 - R3-10 option (a), not taken per the brief: WebAssembly's direct_tail would pay the collateral's mix from a token UTxO's ADA, its tokens going back as the deposit's token change. That needs Rust and a pkg rebuild. It would cover the pools' direct return, a swap approved as an order that Minswap routes to the pools at build time (option (b) still misses that one: the reserve is taken and the mix can't be built), and site sessions whose dApp leaves its ADA beside tokens.
-- An ADA-out swap funded without the reserve gets the mixed words but no cost row, since the cost row stays on the reserve. The mix's fees, about 1.2 ₳, come out of what comes back, so 'Comes back' reads high by about that much.
-- An ADA-in swap without the reserve never names the collateral's mix for its stop or refund path, whose return could build it. Stop's dialog now says it when stopping. The skeptic's short clause on the approval's ifStopped line is left to the owner.
-- A site's funding or top-up without the reserve, with a pool taking the collateral, says the 5 ₳ is mixed once. That's true where the site leaves ADA alone to pay for it, and the return's own review (CollateralTailNote) says whether it is before anything is sent. The alternative was keying on the reserve alone.
+- An ADA-out swap funded without the reserve gets the mixed words but no cost row, since the cost row stays on the reserve. The mix's fees, about 1.2 ₳, come out of what comes back, so 'Comes back' reads high by about that much. [No longer arises since fx-promise: the mixed words need the reserve paid. Without it the approval says mixed only if enough is left, and 'Comes back' counts the 5 ₳ and no mix's fees, as if it weren't mixed.]
+- An ADA-in swap without the reserve never names the collateral's mix for its stop or refund path, whose return could build it. Stop's dialog now says it when stopping. The skeptic's short clause on the approval's ifStopped line is left to the owner. [Since fx-promise, its approval says the collateral is mixed only if enough is left, wherever a pool takes it, which covers a stop or a refund too.]
+- A site's funding or top-up without the reserve, with a pool taking the collateral, says the 5 ₳ is mixed once. That's true where the site leaves ADA alone to pay for it, and the return's own review (CollateralTailNote) says whether it is before anything is sent. The alternative was keying on the reserve alone. [Since fx-promise, a site's funding and top-up say mixed only if enough is left, reserve paid or not, and never mixed outright.]
 - R3-11: 'maybe' keeps the reserve (the private default). A pool read older than 5 minutes counts as unknown, never as a refusal. The data layer's crowd count is trusted whatever its age, since it refreshes with each pool read. On preprod, 'maybe' is the swap form's usual state until a review reads the pools.
 - R3-12: Max's flag survives a change of the token received; only the pay token clears it, as the skeptic suggested. It follows Max down only.
-- Stop's dialog shows the line on 'maybe' (when the dialog's pool read failed), as a disclosure. It also shows with no box, because then there's no switch and Stop isn't direct.
-- The Stop line reuses swaps.review.privacy.collateralMix ('giveme.my backs its collateral's mix too…') rather than a new key, which would need its own back-translation.
+- Stop's dialog shows the line on 'maybe' (when the dialog's pool read failed), as a disclosure. It also shows with no box, because then there's no switch and Stop isn't direct. [Since fx-promise the line is the definite one only where the reserve was paid and nothing out can merge it, and says mixed only if enough is left otherwise.]
+- The Stop line reuses swaps.review.privacy.collateralMix ('giveme.my backs its collateral's mix too…') rather than a new key, which would need its own back-translation. [Round 3c, LW-1, gave Stop its own key without the "too", swaps.stop.privacy.collateralMix, which waits for the back-translation.]
 
 ### fx-reserve-2
 
 - R3-7's line hedges ('mixed only if enough is left when it comes back') rather than the lead's 'isn't mixed', which the code shows is sometimes false: buildBack's intoPool and WebAssembly's with_return still build the collateral's tail from the chain's change where it pays. It's a .privacy. key, so critical.
 - R3-7's band: where the balance pays the reserve but the form's FEE_ROOM (2 ₳) says it doesn't, about 0.3 ₳ wide, the form's figures leave the reserve out and the line shows, though the review then counts it. The review is right; the form is conservative by FEE_ROOM's own design.
-- The Mix reviews (PrivateReview, AgainReview) say nothing new for a mix funded without the reserve where a 5 ₳ pool takes its collateral. Session 10's call 2 kept their notes, and their giveme.my note stays tied to the reserve. fx-reserve-1 offered collateralPool on mixFunding's summary and the same line on the review; not done, since it would reopen that call.
+- The Mix reviews (PrivateReview, AgainReview) say nothing new for a mix funded without the reserve where a 5 ₳ pool takes its collateral. Session 10's call 2 kept their notes, and their giveme.my note stays tied to the reserve. fx-reserve-1 offered collateralPool on mixFunding's summary and the same line on the review; not done, since it would reopen that call. [Reversed by fx-promise: they now say the 5 ₳ is mixed only if enough is left, with giveme.my's part. Their ⓘ notes stay as Session 10's call 2 kept them.]
 - R3-14's Rust half, not made: chain_from_account_at taking more UTxOs holding the token before refusing, where ADA alone doesn't cover the need. It would make the pick monotone, so the stepper could offer a count above a gap (today, where one and three pay but two doesn't, it stops at one), and it removes a refusal the chain wouldn't make. Token pools only, so the classic pool stays byte-identical; needs a pkg rebuild.
 - R3-14 prices the output that gives tokens back at today's 4,310 lovelace a byte (LEAST_PER_BYTE), as FEE_ROOM's comment does. A dearer byte would let the stepper offer at most one count that the build then honestly refuses, until the constant moves.
 - R3-14's ties: between UTxOs holding as much of the token, the form picks the one with less ADA first, while the build takes Koios's order. The form may offer a box fewer, never more.
-- R3-14: the public held figure in a token pool now follows the stepper's count on the Mix form, and the Bootstrap form's own count there.
+- R3-14: the public held figure in a token pool now follows the stepper's count on the Mix form, and the Bootstrap form's own count there. [Round 3c, LW-4: on the Mix form it's the pick for the most boxes the stepper offers, one where none fits; it follows the count on the Bootstrap form only.]
 - R3-8's TooLarge half is matched on core's two TooLarge sentences, not on the shared 'over the network's limit' phrase. The reserve adds ADA, not tokens, so only more inputs can reach it.
 - Left as they were: Settings' collateral switch is greyed while returns are off even though a mix still pays the reserve (R3-7's context, older than this round, Settings' lane). A top-up that is still too many UTxOs without the reserve still shows core's raw words; mapping them through short.ts's tooMany() is older and separate.
 
@@ -252,4 +252,67 @@ Claude-made choices the owner may overturn, warnings put in place of refusals, a
 - R3-17 sets aside only what a shown pool asks of its own, by name: the shown boxes in each read, the return's one pool read and the status read's one epoch_params. Any other new read fails the case, so a refresh that changes how pools are read fails loudly and classicCalls needs adjusting.
 - The harness seeds await-only states (reviews) by position. A state added before the seeded slot fails the test with 'a seed … met a state starting …' rather than passing.
 - Not covered: Home's two-window watch (behind an await; needs e2e), and what any press does after its await (Stop's halted, widthTurned's take, Collateral's onSent). Those stay with their rules' tests: bringFollower, widthTurned, lookAgain.
+
+## Round 3c
+
+### fx-last
+
+- LM-1's thresholds were on the safe side of WebAssembly's, so between them the return could mix the collateral while Stop's dialog or the approval didn't say so. [Moot since fx-promise: nothing is predicted.]
+- A parameters read that failed in Stop's dialog (no box, the collateral going into the pool) said nothing mixed. [Moot since fx-promise: Stop's dialog reads no parameters.]
+- An ADA-to-token swap funded without the reserve no longer carried collateralPool, and nothing shown changed. [Since fx-promise its approval says the 5 ₳ is mixed only if enough is left.]
+- A token-out chain (the token's boxes, no ADA box) was priced as "a box" on the ADA spare alone, so without the reserve it was never flagged. [Since fx-promise a token with boxes of its own keeps the reserve: mixed where it was paid, only if enough is left where it wasn't.]
+- LW-1's notes aren't named .privacy., like their *Direct siblings and noBoxMixed; the giveme.my line, which says what giveme.my sees, is. They say "less network fees" rather than naming each fee.
+- LW-1 kept the pool-short line ("…, so it would come back directly…") after the mixed note. [fx-promise, last-3c's 5: "so its ADA would come back directly", since "it" read as the 5 ₳.]
+- LW-4 takes the pick at most || 1, not Math.max(boxes, most): the same once boxesShown clamps the count.
+- LM-2: while the amount Max set stays above a Max of nothing, Max's button is off and no note says why. No new words, as the finding asked.
+- The four new keys' provenance under WW/docs/i18n/ went in with the fix, since i18n.test.ts fails on an es/ja key without one.
+- LW-3 (the Mix form against its review, in a band about 0.3 ₳ wide) is the owner's, untouched.
+
+### docs-a
+
+- The policy's Effective date and its header's "updated for …" list are left as they are (x-privacy#4, x-release#4): one edit for both. The list doesn't name the collateral's mix.
+- No Changes line for the restore scan's new ask, since the server learns nothing it didn't hold. [docs-c added one, under the rule of a dated entry for every data-handling change.]
+- The two policy sentences on the reserve's fallback are docs-a's words.
+- keys-and-accounts.md's *Put in 5 ₳ to cancel* is made true now, though docs-1 suggested waiting. The screens' by-hand notes (swaps.collateral.note, swaps.backCollateral.note) are unchanged (sc-o-1's call 6, Session 10's call 2).
+- The store's alarms justification doesn't name Bring every box back now, nor Stop's later read: a summary, not false, so left, since an edit means one more paste at upload.
+
+### docs-b
+
+- The handoff note's heading is "1.6.0's release gate", not "prepared for the Web Store", while the live run and the back-translation are open. Rename it at the record PR if wanted. [Round 4 recorded the back-translation; the live run is still open.]
+- The recommendation on making the Web Wallet check required (yes, with a job that always reports) is docs-b's: HANDOFF gave none.
+- Earlier plan sections got short pointers where their text is now false, not rewrites; what's added is recorded only in Session 12.
+- The CLI-only finding (321-parts-rust#0) is recorded in post-release-roadmap for the CLI's next change.
+- development.md's "merge only on green" rule and its TypeScript row go beyond the three items asked.
+
+## Round 3d
+
+### fx-promise
+
+- An ADA-to-token swap whose token gets no box is never said mixed, reserve paid or not: the commonest swap shows the conditional line, and Max's note what the mix "may take". Approved as an order, Minswap may still build it against the pools, and that return can't pay for the mix (fx-reserve-1's call on R3-10). To overturn: let keepsReserve take an order-approved token fill, accepting that re-route; or R3-10's option (a) in Rust, which makes it moot.
+- A site's funding and top-up never say mixed outright, reserve paid or not: the dApp decides what's left, and a funded token puts the reserve in a token UTxO. The return's own review says which.
+- The approval's conditional case keeps the plain Plan step and no-box line ("the rest at once", "it all comes back at once"), qualified by the line under giveme.my's note, as the Mix form's figures are by its collateral-if-left line. Conditional variants of those five keys would be exact, at five more keys in three languages.
+- The conditional line keeps "if that mix can't go, its 5 ₳ box waits unmixed, tied to this session" (never drop what it ties): two sentences, about 38 words.
+- The mixed case rests on what the reserve and the swap's margin leave, not on a measured threshold: 3.2 ₳ or more of ADA alone on every path, against the 2.66 ₳ a direct tail takes. A session holding less with the reserve paid would be said mixed; no real path reaches it.
+- Stop counts a swap still out (an order sent and not yet seen, or a swap against the pools not landed) as one that may bring ADA alone: it says the conditional line, not nothing, though the account holds no ADA alone yet. [Round 4 does the same while the funding is on its way, or confirmed but, before any swap is sent, not yet listed: the account is counted as that funding will leave it (fx-may; last-3e, 1).]
+- CANCEL_FEE_ESTIMATE is 0.25 ₳, above Minswap's measured 0.2377 ₳. A dearer cancel (a SundaeSwap V3 or Plutus V1 order's) could leave Stop's dialog a box high at the very edge.
+- collateralMaybe stays on the quote, though Max's note now follows collateralMix.
+- The two site notes reuse their keys (noteLovejoinMixed, collateralMixed), now carrying conditional words: no new key, the same translation work.
+- The Mix review's ⓘ in the conditional case keeps privateNote's "comes back with the 5 ₳ kept aside" (Session 10's call 2), qualified by the line.
+- LW-3 is unchanged, the owner's.
+
+### docs-c
+
+- The policy's lines on the collateral's mix now say it goes into a pool of 5 ₳ boxes "where one holds enough other people's boxes and enough of the session's ADA is left, not held with tokens, to pay for the mix", and the escape hatch's public payer ties the two accounts for another account's box. The words are docs-c's.
+- The restore scan's new ask has a sentence in the 18 October entry, and the policy's own bullet on that look names it, though the server learns nothing it didn't list (docs-a's call reversed, under the owner's rule).
+- `bringStopped` is named in the policy's Lovejoin row and the 18 October entry, rather than cleared once a page has shown it, which would be code.
+- architecture.md's "No catch swallows a trap" now says what holds. The three calls that still drop one (the docs check's 1) go to post-release-roadmap's *Left by 1.6.0's release review*; they're a few lines of code if the lead would rather fix them now.
+- The plan's *For the owner* gains item 8, the ADA-to-token words, recommended kept for 1.6.0.
+
+## Round 4
+
+### fx-may
+
+- A review whose read of the 5 ₳ pool fails funds without the reserve, even where the private balance would pay it: the lead's brief, and the rule tailReserve's comment has stated since L3 ("a look that fails funds without the reserve"). The quote's Max kept the reserve aside on the same maybe, the private default there. To overturn: fund with the reserve on a maybe. That mix is then paid for whatever's left (1.5 ₳, or 2.8 ₳ for a site's), the reserve comes back with the change if the mix doesn't go, and it's the more private default by the owner's rule.
+- A failed read is a maybe unless what the wallet last read says that pool takes none (collateralPoolTakes), so the fundings agree with the quote and Stop. To overturn: always a maybe on a failed read, the finding's own words.
+- Stop counts a funding as on its way while the page shows it so (fundingState), a funding in parts included. Not guarded: a funding in parts whose first part, the collateral's, was found missed while a later part may still land would be said to bring the 5 ₳. That can't happen in practice: parts sent together share their clock, so they're found missed together, and a part held for the one before never goes once that one is missed. Not tested. [The lead's fix after the look at fx-may counts a funding the same way once it's confirmed but, before any swap is sent, not yet listed (last-3e, 1); a funding found short, its collateral's part missed, says nothing of that mix, now pinned by a test (last-3e, 2). The edge above stays untested.]
 

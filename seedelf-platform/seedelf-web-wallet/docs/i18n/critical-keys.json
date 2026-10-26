@@ -175,6 +175,7 @@
   "lovejoin.bootstrap.warn.allStuck",
   "lovejoin.bootstrap.warn.floor",
   "lovejoin.collateralBox.privacy.note",
+  "lovejoin.collateralMix.privacy.ifLeft",
   "lovejoin.launch.privacy.fromPrivate",
   "lovejoin.launch.privacy.fromPublic",
   "lovejoin.launch.privacy.private",

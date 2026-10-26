@@ -1046,6 +1046,7 @@
   "lovejoin.collateralReserve.label": "machine",
   "lovejoin.collateralReserve.value": "machine",
   "lovejoin.collateralMix.label": "machine",
+  "lovejoin.collateralMix.privacy.ifLeft": "machine",
   "lovejoin.collateralBox.privacy.note_many": "mtpe",
   "lovejoin.collateralBox.privacy.note_one": "mtpe",
   "lovejoin.collateralBox.privacy.note_other": "mtpe",

@@ -511,14 +511,15 @@ export function DisconnectSession({
 }
 
 /**
- * Why a top-up puts a new 5 ₳ collateral back, and how it comes back: with the next return, or, where a 5 ₳ pool takes
- * it (the top-up's `summary`: `collateralPool`, its reserve, `collateralReserve`, paid or not), mixed once at that
- * return, where what's left pays for that, and back by itself later, never with it (1.6.0's release review,
- * 323-worker#6, R3-9). Required, so no review can leave it out (R3-1). Exported for its test.
+ * Why a top-up puts a new 5 ₳ collateral back, and how it comes back: with the next return, or, where a 5 ₳ pool may
+ * take it (the top-up's `summary`: `collateralMix`, its reserve, `collateralReserve`, paid or not), mixed once at that
+ * return only if enough is left then, since what the site's transactions leave decides, and back by itself later
+ * (1.6.0's release review, 323-worker#6, R3-9; its review of the fixes, fx-promise). Required, so no review can leave
+ * it out (R3-1). Exported for its test.
  */
-export function TopUpCollateralNote({ summary }: { summary: Pick<SessionOutSummary, "collateralReserve" | "collateralPool"> }) {
+export function TopUpCollateralNote({ summary }: { summary: Pick<SessionOutSummary, "collateralReserve" | "collateralMix"> }) {
   const tr = useT();
-  const mixed = !!summary.collateralReserve || !!summary.collateralPool;
+  const mixed = !!summary.collateralMix;
   return (
     <p className="note" data-testid="top-up-collateral">
       {tr(mixed ? "sites.topUp.collateralMixed" : "sites.topUp.collateral")}

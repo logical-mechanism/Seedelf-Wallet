@@ -7,10 +7,10 @@
 // user chooses Lovejoin, it says Lovejoin has had no third-party audit:
 // Lovejoin's own docs say so, and no copy here may say otherwise.
 import { useEffect, useRef, useState } from "react";
-import { joinSentences, t, useT } from "../../i18n";
+import { type I18nKey, joinSentences, t, useT } from "../../i18n";
 
 import type { NetworkName } from "../../networks";
-import type { LovejoinBoxValue, LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
+import type { CollateralMix, LovejoinBoxValue, LovejoinTokenWay, SessionBackSummary, SessionView } from "../../shared/rpc";
 import { call } from "../background";
 import { adaText, formatAda } from "../format";
 import { boxText, CLASSIC_BOX } from "../lovejoin-pools";
@@ -474,6 +474,23 @@ export function CollateralTailNote({ back }: { back: SessionBackSummary }) {
     <Callout tone="privacy" testId="collateral-box-note">
       {tr("lovejoin.collateralBox.privacy.note", { count: 1 })}
     </Callout>
+  );
+}
+
+/**
+ * What a review or Stop's dialog says of giveme.my and the session's collateral's mix that runs by itself as the session
+ * comes back, by the one rule the worker decides it by (`mix`, CollateralMix; 1.6.0's review of the fixes, fx-promise):
+ * mixed, in the screen's own words (`mixed`: the approval's, which follow GivemeNote, or Stop's); mixed only if enough
+ * is left, where it may not be, its giveme.my part said so it holds either way; nothing where no mix can go. A return
+ * reviewed by hand says it as it's built (CollateralTailNote).
+ */
+export function CollateralMixLine({ mix, mixed, testId }: { mix?: CollateralMix; mixed: I18nKey; testId: string }) {
+  const tr = useT();
+  if (!mix) return null;
+  return (
+    <p className="note" data-testid={testId}>
+      {tr(mix === "mixed" ? mixed : "lovejoin.collateralMix.privacy.ifLeft")}
+    </p>
   );
 }
 

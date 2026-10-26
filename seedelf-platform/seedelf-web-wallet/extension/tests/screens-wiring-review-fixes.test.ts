@@ -396,9 +396,33 @@ describe("a pool's Mix form, its collateral's mix and its public side wired (1.6
     expect(row(form, "lovejoin-mix-moves", t("lovejoin.collateralReserve.label"))).toBeUndefined();
     expect(row(form, "lovejoin-mix-moves", t("lovejoin.mix.totalPrivate"))).toBe(ada(toCents(20_550_000n)));
     expect(row(form, "lovejoin-mix-cost", t("lovejoin.collateralMix.label"))).toBeUndefined();
-    expect(words(form)).toContain(t("lovejoin.mix.privacy.collateralIfLeft"));
+    expect(words(form)).toContain(t("lovejoin.mix.privacy.collateralIfLeft").replace(/\s+/g, " "));
     expect(form).toContain('data-testid="lovejoin-boxes">1 ');
     expect(has(form, "lovejoin-boxes-none")).toBe(false);
+  });
+
+  it("says its collateral's mix one of three ways: its reserve counted, mixed only if enough is left, or nothing where no 5 ₳ pool takes it (1.6.0's review of the fixes, fx-promise)", () => {
+    const formOf = (answered: object, props: Record<string, unknown> = {}) => {
+      seam.reset();
+      seam.effects.add("PoolPage");
+      answer("lovejoin-funding", answered);
+      return page(props);
+    };
+    const { collateralReserve: _reserve, collateralPool: _pool, ...plain } = funding;
+    for (const [what, form, counted, ifLeft] of [
+      // This many boxes leave room for its reserve: the funding pays it, and the chain keeps it for that mix.
+      ["counted", formOf(funding), true, false],
+      // They don't: funded without it, the 5 ₳ mixed only if enough is left when it comes back.
+      ["short", formOf(funding, { seedelf: seedelf("23000000") }), false, true],
+      // No 5 ₳ pool asked for (none shown, or Settings' switch off), or the page's read has it short of its floor.
+      ["no pool", formOf(plain, { seedelf: seedelf("23000000") }), false, false],
+      ["under its floor", formOf(funding, { seedelf: seedelf("23000000"), pools: [classic, { ...five, others: 1 }] }), false, false],
+    ] as const) {
+      expect(!!row(form, "lovejoin-mix-moves", t("lovejoin.collateralReserve.label")), what).toBe(counted);
+      expect(!!row(form, "lovejoin-mix-moves", t("lovejoin.collateralBox.label")), what).toBe(counted);
+      expect(!!row(form, "lovejoin-mix-cost", t("lovejoin.collateralMix.label")), what).toBe(counted);
+      expect(has(form, "lovejoin-collateral-if-left"), what).toBe(ifLeft);
+    }
   });
 
   describe("from the public account (321-lj-screens#1, R3-14, R3-26, R3-27)", () => {
@@ -680,16 +704,39 @@ describe("the swap form and its approval, wired (1.6.0's review of the fixes, R3
       expect(payloads("swap-quote")).toEqual([expect.objectContaining({ amount: "1000000", tokenIn: "lovelace", tokenOut: MIN })]);
       expect(amount(page)).toBe("1");
     });
+
+    it("says what Max keeps aside for the collateral's mix by the approval's rule: its mix, what it may take, or nothing (1.6.0's review of the fixes, fx-promise)", () => {
+      for (const [extra, says] of [
+        [{ collateralReserve: "1500000", collateralMix: "mixed" }, "network fee and its collateral's mix, or comes back"],
+        [{ collateralReserve: "1500000", collateralMix: "ifLeft" }, "network fee and what its collateral's mix may take, or comes back"],
+        [{}, "pays the swap's costs and network fee, or comes back"],
+      ] as const) {
+        seam.reset();
+        seed([paysAda], get);
+        seam.effects.add("NewSwap");
+        answer("swap-quote", (ask: { amount: string }) => {
+          const { collateralReserve: _kept, ...plain } = quote(ask);
+          return { ...plain, ...extra };
+        });
+        on((name, props) => name === "button" && props.title === t("swaps.maxAda"), (props) => (props.onClick as () => void)());
+        on(
+          (name, props) => name === "AmountField" && props.value !== "",
+          () => vi.advanceTimersByTime(600),
+        );
+        const note = words(form()).match(/Max is [^:]*:/)?.[0];
+        expect(note, says).toContain(says);
+      }
+    });
   });
 });
 
 describe("a site's funding review and its top-up's, counting what the summary they review says (1.6.0's review of the fixes, R3-1)", () => {
   /**
    * A site's session funded or topped up, built: 24 ₳ for the site, its payment carrying the collateral's mix reserve
-   * too where the funding pays it (`collateralReserve`), the 5 ₳ collateral, and the fee. `collateralPool`: a 5 ₳ pool
-   * takes the collateral, its reserve paid or not.
+   * too where the funding pays it (`collateralReserve`), the 5 ₳ collateral, and the fee. `collateralMix`: a 5 ₳ pool
+   * may take the collateral, its reserve paid or not, so it's mixed only if enough is left (fx-promise).
    */
-  const built = (extra: { collateralReserve?: string; collateralPool?: true } = {}) => ({
+  const built = (extra: { collateralReserve?: string; collateralMix?: "mixed" | "ifLeft" } = {}) => ({
     network: "preprod",
     txHash: TX,
     index: 0,
@@ -730,8 +777,8 @@ describe("a site's funding review and its top-up's, counting what the summary th
       );
     };
 
-    it("pays the reserve: the site's figure less it, its own row, the mix in the way back's fees, the 5 ₳ said mixed", () => {
-      const page = funding(built({ collateralReserve: RESERVE, collateralPool: true }));
+    it("pays the reserve: the site's figure less it, its own row, the mix in the way back's fees, the 5 ₳ said mixed only if enough is left", () => {
+      const page = funding(built({ collateralReserve: RESERVE, collateralMix: "ifLeft" }));
       expect(row(page, "dapp-funding-rows", t("dappUi.forTheSite"))).toBe(ada("24000000"));
       expect(row(page, "dapp-funding-rows", t("lovejoin.collateralReserve.label"))).toBe(words(t("lovejoin.collateralReserve.value", { ada: formatAda(RESERVE) })));
       expect(row(page, "dapp-funding-back", t("lovejoin.collateralMix.label"))).toBe(ada(toCents(COLLATERAL_MIX_COST)));
@@ -739,9 +786,9 @@ describe("a site's funding review and its top-up's, counting what the summary th
       expect(words(page)).toContain(words(t("dappUi.back.privacy.noteLovejoinMixed")));
     });
 
-    it("without it, counts no mix, and says the 5 ₳ is mixed where a pool takes it, back at once where none does", () => {
+    it("without it, counts no mix, and says the 5 ₳ is mixed only if enough is left where a pool takes it, back at once where none does", () => {
       for (const [summary, note] of [
-        [built({ collateralPool: true }), "dappUi.back.privacy.noteLovejoinMixed"],
+        [built({ collateralMix: "ifLeft" }), "dappUi.back.privacy.noteLovejoinMixed"],
         [built(), "dappUi.back.privacy.noteLovejoin"],
       ] as const) {
         seam.reset();
@@ -772,16 +819,16 @@ describe("a site's funding review and its top-up's, counting what the summary th
       );
     };
 
-    it("pays the reserve: the top-up less it, its own row, the new 5 ₳ said mixed at the next return", () => {
-      const page = topUp(built({ collateralReserve: RESERVE, collateralPool: true }));
+    it("pays the reserve: the top-up less it, its own row, the new 5 ₳ said mixed at the next return only if enough is left", () => {
+      const page = topUp(built({ collateralReserve: RESERVE, collateralMix: "ifLeft" }));
       expect(row(page, "top-up-review", t("sites.topUp.amount"))).toBe(ada("24000000"));
       expect(row(page, "top-up-review", t("lovejoin.collateralReserve.label"))).toBe(words(t("lovejoin.collateralReserve.value", { ada: formatAda(RESERVE) })));
       expect(words(page)).toContain(words(t("sites.topUp.collateralMixed")));
     });
 
-    it("without it, no reserve row, and its 5 ₳ said mixed where a pool takes it, back with the next return where none does", () => {
+    it("without it, no reserve row, and its 5 ₳ said mixed only if enough is left where a pool takes it, back with the next return where none does", () => {
       for (const [summary, note] of [
-        [built({ collateralPool: true }), "sites.topUp.collateralMixed"],
+        [built({ collateralMix: "ifLeft" }), "sites.topUp.collateralMixed"],
         [built(), "sites.topUp.collateral"],
       ] as const) {
         seam.reset();

@@ -441,11 +441,13 @@ export function fundingPrivacy(changeLovelace: string): string {
  * swap's and a mix's costs count them (swapCosts, mixCosts); `perBox` is the
  * mixes and the box's own way back. `summary`, the funding's, says what of its
  * collateral's mix: where it pays for that mix (`collateralReserve`), its
- * deposit, mix and box's way back are network fees too; where a 5 ₳ pool takes
- * the collateral (`collateralPool`), its reserve paid or not, its 5 ₳ comes
- * back later, in a box of its own, never at once, as its return mixes it where
- * what's left pays for that (1.6.0's release review, 323-worker#1,
- * 323-worker#6, R3-9). Required, so no review can leave it out (R3-1).
+ * deposit, mix and box's way back are network fees too; where a 5 ₳ pool may
+ * take the collateral (`collateralMix`), its reserve paid or not, its 5 ₳ is
+ * mixed once, in a box of its own, only if enough is left when it comes back,
+ * since what the site's transactions leave decides, and the return's own review
+ * says which before anything is sent (1.6.0's release review, 323-worker#1,
+ * 323-worker#6, R3-9; its review of the fixes, fx-promise). Required, so no
+ * review can leave it out (R3-1).
  */
 export function FundingWayBack({
   fee,
@@ -456,11 +458,12 @@ export function FundingWayBack({
   fee: string;
   lovejoin: boolean;
   perBox: string;
-  summary: Pick<SessionOutSummary, "collateralReserve" | "collateralPool">;
+  summary: Pick<SessionOutSummary, "collateralReserve" | "collateralMix">;
 }) {
   const tr = useT();
   const paid = !!summary.collateralReserve;
-  const collateral = paid || !!summary.collateralPool;
+  // A site's return holds what the site leaves, so a worker's "mixed" says no more than "only if enough is left" here.
+  const collateral = !!summary.collateralMix;
   const back = (lovejoin ? 2n : 1n) * SESSION_FEE_ESTIMATE;
   const mix = paid ? COLLATERAL_MIX_COST : 0n;
   return (
